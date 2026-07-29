@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+node_modules/
+.next/
+out/
+coverage/
+
+.env.local
+.env.*.local
+
+.process/
+.trae/
+
+# local-only AI collaboration drafts; not part of the committed baseline
+CONTEXT.md
