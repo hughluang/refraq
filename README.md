@@ -18,17 +18,17 @@ These define the business identity of refraq:
 
 These are the enabling capabilities required to operate the platform in a controlled environment:
 
-- Administrators, accounts, and login
+- Users (people), accounts, and login
 - Sessions and authenticated state
-- Roles and permissions
-- User and organization management
+- Configurable roles and a fixed permission catalog
+- Reserved Client principals for later machine access
 
 ## Current Status
 
 The repository is currently in the foundation stage.
 The product identity is defined, while the implementation is still a scaffold for the first delivery slices.
 
-The current delivery slice focuses on the **Management Console** and the **Management Foundation** (administrator login, session, and permission control). Business **Data Product Capabilities** are planned for later phases.
+The current delivery slice focuses on the **Management Console** and the **Management Foundation** (User login, session, Role management, and permission control). Business **Data Product Capabilities** are planned for later phases.
 
 At this stage, the repository includes:
 

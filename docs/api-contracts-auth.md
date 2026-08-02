@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document defines the initial backend API contracts required for the first login/permission slice.
+This document defines the backend API contracts for Management Console login and session.
 
 These contracts serve the **Management Console** and its **Management Foundation** slice of refraq. They are enabling capabilities, not the product identity.
 
@@ -25,32 +25,39 @@ These contracts are intentionally small:
 
 ```json
 {
-  "id": "admin_001",
+  "id": "user_001",
   "account": "root",
   "display_name": "System Admin",
-  "role": "super_admin",
+  "role_id": "role_super_admin",
+  "role_key": "super_admin",
+  "role_name": "Super Admin",
   "permissions": [
+    "console:access",
     "dashboard:read",
-    "admins:read",
-    "admins:write",
-    "system:manage"
-  ]
+    "users:read",
+    "users:write",
+    "roles:read",
+    "roles:write"
+  ],
+  "identity_source": "local"
 }
 ```
+
+`role_id`, `role_key`, and `role_name` are `null` when the User has no Role. Console login never returns that state because login requires `console:access`.
 
 ### Error Response
 
 ```json
 {
   "code": "AUTH_INVALID_CREDENTIALS",
-  "message": "账号或密码错误"
+  "message": "Invalid account or password"
 }
 ```
 
 Fields:
 
-- `code`: stable machine-readable error code
-- `message`: user-facing message for the current locale or default language
+- `code`: stable machine-readable error code; clients SHOULD localize UI copy by `code`
+- `message`: English default fallback string; not a locale-negotiated field in this slice
 
 ## 4. `POST /auth/login`
 
@@ -68,16 +75,21 @@ Fields:
 ```json
 {
   "user": {
-    "id": "admin_001",
+    "id": "user_001",
     "account": "root",
     "display_name": "System Admin",
-    "role": "super_admin",
+    "role_id": "role_super_admin",
+    "role_key": "super_admin",
+    "role_name": "Super Admin",
     "permissions": [
+      "console:access",
       "dashboard:read",
-      "admins:read",
-      "admins:write",
-      "system:manage"
-    ]
+      "users:read",
+      "users:write",
+      "roles:read",
+      "roles:write"
+    ],
+    "identity_source": "local"
   }
 }
 ```
@@ -94,7 +106,7 @@ Additional behavior:
 ```json
 {
   "code": "AUTH_INVALID_CREDENTIALS",
-  "message": "账号或密码错误"
+  "message": "Invalid account or password"
 }
 ```
 
@@ -103,7 +115,16 @@ Additional behavior:
 ```json
 {
   "code": "AUTH_ACCOUNT_DISABLED",
-  "message": "账号已被禁用"
+  "message": "This account is disabled"
+}
+```
+
+`403` missing console access (no role, or role without `console:access`):
+
+```json
+{
+  "code": "AUTH_CONSOLE_ACCESS_REQUIRED",
+  "message": "This account cannot sign in to the console"
 }
 ```
 
@@ -122,29 +143,14 @@ Requires a valid session cookie.
 
 ### Success Response: `200`
 
-```json
-{
-  "user": {
-    "id": "admin_001",
-    "account": "root",
-    "display_name": "System Admin",
-    "role": "super_admin",
-    "permissions": [
-      "dashboard:read",
-      "admins:read",
-      "admins:write",
-      "system:manage"
-    ]
-  }
-}
-```
+Same `user` shape as login success.
 
 ### Failure Response: `401`
 
 ```json
 {
   "code": "AUTH_UNAUTHENTICATED",
-  "message": "未登录或登录已失效"
+  "message": "Not signed in or session expired"
 }
 ```
 
@@ -182,7 +188,7 @@ Status: `403`
 ```json
 {
   "code": "AUTH_FORBIDDEN",
-  "message": "无权限执行当前操作"
+  "message": "You do not have permission for this action"
 }
 ```
 
@@ -203,6 +209,7 @@ The first implementation should include tests for:
 - login success
 - login wrong password
 - login disabled account
+- login without `console:access`
 - `GET /auth/me` with valid session
 - `GET /auth/me` without session
 - logout success

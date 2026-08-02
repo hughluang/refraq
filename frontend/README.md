@@ -1,25 +1,32 @@
 # refraq Frontend
 
-This directory contains the frontend foundation for refraq, the data product integration platform.
+Management Console UI for refraq (Management Foundation first slice: login, session, RBAC).
 
-## Responsibility
-
-The frontend is the implementation home for the **Management Console** (the current delivery slice's administrator-facing UI surface), user workflows, route protection, and future data-product-facing UI experiences.
-
-The Management Console is the UI surface for the current slice, not the product identity of refraq.
-
-## Key Stack
+## Stack
 
 - Next.js App Router
 - TypeScript
+- Mantine v9
+- Refine (`@refinedev/core` headless) + `@refinedev/nextjs-router`
+- react-i18next
 
-## Current Stage
+## Layout
 
-The frontend is still in scaffold form and currently includes:
+- `src/app/` — routes only (`/login`, `/403`, `/console/**`)
+- `src/features/` — resource UI slices (e.g. users, roles)
+- `src/providers/` — Refine auth/data/access/i18n/notification bridges
+- `src/components/` — shared layout and feedback UI
+- `src/lib/` — API helper
+- `src/locales/` — translation dictionaries
 
-- `src/app/`: route entrypoints and layouts
-- `src/providers/`: future auth, data, access-control, and i18n providers
-- `src/components/`: shared UI components
-- `src/locales/`: locale resources
+Browser calls are same-origin via Next rewrite: `/api/*` → backend (`REFRAQ_API_UPSTREAM`).
 
-It does not yet include live backend integration, completed business pages, or generated API types.
+## Commands
+
+```bash
+npm install
+npm run dev
+npm run build
+```
+
+Default admin credentials come from backend `.env` (`INITIAL_ADMIN_ACCOUNT` / `INITIAL_ADMIN_PASSWORD`).

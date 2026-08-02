@@ -76,13 +76,13 @@ Must not contain:
 
 Responsibilities:
 
-- Hold Management Foundation domain code (auth, permission, administrator management) that does not belong to generic transport or storage layers
+- Hold Management Foundation domain code (auth, permission, user/role management) that does not belong to generic transport or storage layers
 
 Recommended subdomains for the first slice:
 
-- `admin/auth.py`
 - `admin/permissions.py`
-- `admin/session.py`
+- `admin/session_store.py`
+- `admin/deps.py`
 
 ### `backend/tests/`
 
@@ -105,12 +105,25 @@ Responsibilities:
 
 - Route tree
 - Layouts
-- Page entry files
+- Thin page entry files (prefer re-exporting from `features/`)
 
 Must not contain:
 
 - Long-lived API client state
 - Raw permission rules duplicated from backend
+- Large resource CRUD orchestration (belongs in `features/`)
+
+### `frontend/src/features/`
+
+Responsibilities:
+
+- Resource-scoped UI slices (types, list/create/edit views)
+- Page-level orchestration that uses Refine hooks
+
+Must not contain:
+
+- Framework provider wiring (belongs in `providers/`)
+- Authoritative permission matrix (backend remains source of truth)
 
 ### `frontend/src/providers/`
 
@@ -120,7 +133,8 @@ Responsibilities:
 - Auth provider
 - Data provider
 - Access-control provider
-- i18n provider
+- i18n provider (create the Refine adapter inside a `react-i18next` `useTranslation` subscriber such as `RefineRoot`; do not remount the tree with a locale `key` to refresh UI)
+- Notification provider
 
 This is the main integration layer for the first login/permission slice.
 
@@ -129,7 +143,7 @@ This is the main integration layer for the first login/permission slice.
 Responsibilities:
 
 - Reusable UI building blocks
-- Small presentation-focused components
+- Shared layout shells and feedback primitives
 
 Must not contain:
 
@@ -166,7 +180,8 @@ Responsibilities:
 
 ### Frontend
 
-- `app/` -> `providers/`, `components/`, `lib/`
+- `app/` -> `features/`, `providers/`, `components/`, `lib/`
+- `features/` -> `providers/` (hooks/types only via Refine), `components/`, `lib/`
 - `providers/` -> `lib/`
 - `components/` -> `lib/` only for light helpers
 
@@ -186,4 +201,6 @@ For the login/permission slice, each concern should land here:
 - Session lookup: `backend/admin/` or `backend/repositories/`
 - Current-user fetch and logout wiring: `frontend/src/providers/`
 - Login page UI: `frontend/src/app/login/`
-- Protected layout behavior: `frontend/src/app/(dashboard)/`
+- Protected layout behavior: `frontend/src/app/console/`
+- User resource UI: `frontend/src/features/users/`
+- Role resource UI: `frontend/src/features/roles/`

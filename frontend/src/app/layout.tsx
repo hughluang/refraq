@@ -1,19 +1,25 @@
+import { ColorSchemeScript, mantineHtmlProps } from "@mantine/core";
 import type { Metadata } from "next";
-import React from "react";
+import type { ReactNode } from "react";
+
+import { AppProviders } from "@/app/providers";
+
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "refraq",
-  description: "refraq data product integration platform",
+  title: "Refraq",
+  description: "Data Product Integration Platform",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en-US">
-      <body>{children}</body>
+    <html lang="zh-CN" {...mantineHtmlProps}>
+      <head>
+        <ColorSchemeScript defaultColorScheme="light" />
+      </head>
+      <body>
+        <AppProviders>{children}</AppProviders>
+      </body>
     </html>
   );
 }

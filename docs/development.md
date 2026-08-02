@@ -41,10 +41,12 @@ This document records the stable development conventions for contributors workin
 
 ## Suggested Reading Order
 
-For auth and admin work, read in this order:
+For Management Foundation auth/RBAC work, read in this order:
 
 1. `docs/architecture.md`
 2. `docs/modules.md`
 3. `docs/business-login-auth.md`
 4. `docs/api-contracts-auth.md`
-5. `docs/env.md`
+5. `docs/api-contracts-users.md`
+6. `docs/api-contracts-roles.md`
+7. `docs/env.md`

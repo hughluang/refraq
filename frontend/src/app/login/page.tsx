@@ -1,8 +1,7 @@
-export default function LoginPage() {
-  return (
-    <main>
-      <h1>Login</h1>
-      <p>This page will host the refraq platform sign-in experience.</p>
-    </main>
-  );
+import LoginPage from "@/app/login/LoginClient";
+
+export const dynamic = "force-dynamic";
+
+export default function Page() {
+  return <LoginPage />;
 }

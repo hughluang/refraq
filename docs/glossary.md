@@ -1,11 +1,17 @@
-# refraq Glossary
+# Refraq Glossary
 
 ## Product Identity
 
+### Refraq
+
+The human-facing brand name of the product.
+Avoid lowercase `refraq` in user-visible strings; avoid a Other translation of the brand.
+
 ### refraq
 
-A standalone data business platform that unifies data-facing workflows and management capabilities in one product.
-Avoid describing it as a scaffold only or an auth demo.
+The technical identifier for the same product (repository, packages, cookies, env vars, machine tokens).
+Avoid title-case `Refraq` for technical identifiers.
+Avoid describing the product as a scaffold only or an auth demo.
 
 ### Data Business Platform
 
@@ -15,7 +21,9 @@ Avoid describing it as an auth shell or a generic admin starter.
 ### Data Product Integration Platform
 
 An internal platform that integrates data from distributed business systems and turns it into unified, consumable data products.
-This is the preferred, more specific product identity of refraq.
+This is the preferred, more specific product identity of Refraq.
+UI copy is locale-specific and will grow beyond the first locales; translate the product-identity phrase for each locale, keep the brand `Refraq` in Latin script, and follow that locale's natural casing (English UI uses Title Case).
+Avoid hard-coding one locale's phrasing as the only product name, or treating the current locale set as closed.
 Avoid describing it as a generic admin platform or an auth-first product.
 
 ### Data Product Capability
@@ -30,51 +38,75 @@ Avoid treating it as the core product identity or the differentiating business c
 
 ### Management Console
 
-The administrator-facing UI surface of refraq for the current delivery slice, not the product identity.
-Avoid treating it as the product definition, a standalone admin project, or a synonym for refraq itself.
+The operator-facing UI surface of Refraq for the current delivery slice, not the product identity.
+For the current slice this is a docs/domain term, not user-visible UI copy.
+Avoid treating it as the product definition, a standalone admin project, or a synonym for Refraq itself.
 
 ## People And Access
 
+### User
+
+A person identity in the Management Foundation (local today; LDAP later).
+A User may or may not hold a Role that grants Management Console access.
+Avoid using User for machine integration principals.
+
 ### Administrator
 
-An internal user allowed to access and operate the refraq Management Console.
-This document does not use "customer user" or "end user" for the first slice.
+Historical / colloquial label for a User who can operate the Management Console.
+Not a separate entity; console access is conferred by Role permissions (notably `console:access`).
+Avoid modeling Administrator as its own table or API resource.
 
 ### Account
 
-The login identifier used by an Administrator.
+The login identifier used by a User.
 Initially modeled as a single username-like field.
 Avoid calling it a user id or employee id.
 
+### Identity Source
+
+Where a User's credentials and directory attributes originate.
+The current slice uses `local` only; `ldap` is reserved for a later integration.
+Avoid treating identity source as a role or permission.
+
+### Client
+
+A machine integration principal that will consume APIs or product capabilities with its own credentials.
+Distinct from User (people). Token / credential management for Clients is out of scope for the current slice.
+Avoid calling a Client a User or an Administrator.
+Avoid conflating Client with Serving-layer "消费方" (product delivery target).
+
 ### Session
 
-Server-managed authenticated state created after successful login and carried through a cookie.
+Server-managed authenticated state created after successful console login and carried through a cookie.
 Avoid calling it a token or a permanent login.
 
 ### Current User
 
-The administrator resolved from the active session for the current request.
+The User resolved from the active session for the current request.
 
 ### Role
 
-A named access level assigned to an Administrator.
-The first version uses `super_admin`, `operator`, and `viewer`.
+A named, configurable access bundle assigned to at most one Role per User (nullable).
+Roles bind a subset of the fixed Permission catalog.
+Seeded roles include locked `super_admin` and editable `operator`.
 Avoid calling it a job title or department.
 
 ### Permission
 
-A concrete allowed action expressed as `resource:action`, such as `dashboard:read`.
+A concrete allowed action expressed as `resource:action`, such as `dashboard:read` or `console:access`.
+Chosen only from a fixed catalog when editing Roles.
 Avoid reducing it to a menu or a page label.
+Avoid free-form permission strings invented in the UI.
 
 ## Auth Concepts
 
 ### Authentication
 
-The process of proving administrator identity, primarily through login and session validation.
+The process of proving User identity, primarily through login and session validation.
 
 ### Authorization
 
-The process of deciding whether an authenticated administrator can access a route or perform an action.
+The process of deciding whether an authenticated User can access a route or perform an action, based on their Role's permissions.
 
 ### Protected Route
 
