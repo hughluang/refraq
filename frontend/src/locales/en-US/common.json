@@ -12,6 +12,7 @@
   "auth.login.error.network": "Cannot reach the service, please try again",
   "auth.logout": "Log out",
   "layout.consoleTitle": "Refraq",
+  "layout.language": "Language",
   "layout.nav.home": "Home",
   "users.title": "Users",
   "users.create": "New user",

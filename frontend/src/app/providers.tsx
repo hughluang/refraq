@@ -2,7 +2,6 @@
 
 import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
-import "@/providers/i18n";
 
 import { MantineProvider, createTheme } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";

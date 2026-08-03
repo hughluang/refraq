@@ -1,46 +1,69 @@
 "use client";
 
-import { Button, Group } from "@mantine/core";
-import { useGetLocale, useSetLocale } from "@refinedev/core";
-import { useEffect } from "react";
+import { Button, Menu } from "@mantine/core";
+import { useChangeLanguage, useT } from "next-i18next/client";
 
-import { SUPPORTED_LOCALES, type Locale } from "@/providers/i18n";
+import {
+  getDefaultLocale,
+  getLocaleNativeLabel,
+  isLocale,
+  LOCALE_CATALOG,
+  LOCALE_COOKIE_NAME,
+  type Locale,
+} from "@/providers/locale-catalog";
 
-const LABELS: Record<Locale, string> = {
-  "zh-CN": "Chinese",
-  "en-US": "EN",
-};
-
-function syncDocumentLang(locale: Locale) {
-  if (typeof document !== "undefined") {
-    document.documentElement.lang = locale;
-  }
+function LanguageIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18" />
+      <path d="M12 3a14 14 0 0 1 0 18" />
+      <path d="M12 3a14 14 0 0 0 0 18" />
+    </svg>
+  );
 }
 
 export function LangSwitcher() {
-  const getLocale = useGetLocale();
-  const locale = (getLocale() as Locale) || "zh-CN";
-  const changeLocale = useSetLocale();
-
-  useEffect(() => {
-    syncDocumentLang(locale);
-  }, [locale]);
+  const { i18n, t } = useT("common");
+  const changeLanguage = useChangeLanguage(LOCALE_COOKIE_NAME);
+  const current = i18n.resolvedLanguage ?? i18n.language;
+  const locale: Locale = isLocale(current) ? current : getDefaultLocale();
 
   return (
-    <Group gap={4}>
-      {SUPPORTED_LOCALES.map((code) => (
+    <Menu position="bottom-end" withinPortal>
+      <Menu.Target>
         <Button
-          key={code}
-          size="compact-xs"
-          variant={locale === code ? "filled" : "subtle"}
-          onClick={() => {
-            changeLocale(code);
-            syncDocumentLang(code);
-          }}
+          variant="subtle"
+          size="compact-sm"
+          leftSection={<LanguageIcon />}
+          aria-label={t("layout.language")}
         >
-          {LABELS[code]}
+          {getLocaleNativeLabel(locale)}
         </Button>
-      ))}
-    </Group>
+      </Menu.Target>
+      <Menu.Dropdown>
+        {LOCALE_CATALOG.map((entry) => (
+          <Menu.Item
+            key={entry.code}
+            disabled={entry.code === locale}
+            onClick={() => {
+              void changeLanguage(entry.code);
+            }}
+          >
+            {entry.nativeLabel}
+          </Menu.Item>
+        ))}
+      </Menu.Dropdown>
+    </Menu>
   );
 }

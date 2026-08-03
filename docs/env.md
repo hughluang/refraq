@@ -26,7 +26,7 @@ Current `frontend/.env.example` defines:
 
 - `NEXT_PUBLIC_REFRAQ_API_BASE_URL=/api`
 - `REFRAQ_API_UPSTREAM=http://127.0.0.1:8000`
-- `NEXT_PUBLIC_DEFAULT_LOCALE=zh-CN`
+- `NEXT_PUBLIC_DEFAULT_LOCALE=en-US`
 
 ## 3. Local Convention (Unified)
 

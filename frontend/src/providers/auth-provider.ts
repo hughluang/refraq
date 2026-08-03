@@ -2,7 +2,7 @@ import type { AuthActionResponse, AuthProvider } from "@refinedev/core";
 
 import { apiClient, ApiError } from "@/lib/api";
 import { loginRedirectWithFrom } from "@/lib/return-path";
-import { i18n } from "@/providers/i18n";
+import { translateKey } from "@/providers/i18n-runtime";
 import {
   getCurrentUser,
   isSignedOutLocally,
@@ -36,22 +36,22 @@ function isApiError(value: unknown): value is ApiError {
 }
 
 function loginFailureError(error: unknown): AuthActionResponse["error"] {
-  const name = i18n.t("auth.login.title");
+  const name = translateKey("auth.login.title");
   if (!isApiError(error)) {
-    return { name, message: i18n.t("auth.login.error.network") };
+    return { name, message: translateKey("auth.login.error.network") };
   }
   if (error.status === 401) {
     return {
       name,
-      message: i18n.t("auth.login.error.invalidCredentials"),
+      message: translateKey("auth.login.error.invalidCredentials"),
       statusCode: error.status,
     };
   }
   if (error.status === 403) {
     const message =
       error.code === "AUTH_CONSOLE_ACCESS_REQUIRED"
-        ? i18n.t("auth.login.error.consoleAccess")
-        : i18n.t("auth.login.error.disabled");
+        ? translateKey("auth.login.error.consoleAccess")
+        : translateKey("auth.login.error.disabled");
     return {
       name,
       message,

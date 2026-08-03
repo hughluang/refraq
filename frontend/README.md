@@ -8,7 +8,7 @@ Management Console UI for refraq (Management Foundation first slice: login, sess
 - TypeScript
 - Mantine v9
 - Refine (`@refinedev/core` headless) + `@refinedev/nextjs-router`
-- react-i18next
+- next-i18next (App Router, cookie locale) + react-i18next
 
 ## Layout
 

@@ -12,6 +12,7 @@
   "auth.login.error.network": "无法连接到服务，请稍后重试",
   "auth.logout": "退出登录",
   "layout.consoleTitle": "Refraq",
+  "layout.language": "语言",
   "layout.nav.home": "首页",
   "users.title": "用户",
   "users.create": "新建用户",

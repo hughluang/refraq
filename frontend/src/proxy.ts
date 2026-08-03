@@ -1,8 +1,13 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { createProxy } from "next-i18next/proxy";
+import { NextRequest, NextResponse } from "next/server";
+
+import i18nConfig from "../i18n.config";
 
 const PROTECTED_PREFIXES = ["/console"];
 
 const PUBLIC_PATHS = new Set(["/login", "/403"]);
+
+const i18nProxy = createProxy(i18nConfig);
 
 function isProtectedPath(pathname: string): boolean {
   return PROTECTED_PREFIXES.some(
@@ -10,24 +15,44 @@ function isProtectedPath(pathname: string): boolean {
   );
 }
 
+/** Strip Accept-Language so detection is cookie → fallback only. */
+function requestWithoutAcceptLanguage(request: NextRequest): NextRequest {
+  const headers = new Headers(request.headers);
+  headers.delete("accept-language");
+  return new NextRequest(request.url, {
+    method: request.method,
+    headers,
+  });
+}
+
+function copyCookies(from: NextResponse, to: NextResponse): void {
+  for (const cookie of from.cookies.getAll()) {
+    to.cookies.set(cookie);
+  }
+}
+
 export function proxy(request: NextRequest): NextResponse {
+  const i18nResponse = i18nProxy(requestWithoutAcceptLanguage(request));
+
   const { pathname, search } = request.nextUrl;
 
   if (PUBLIC_PATHS.has(pathname) || !isProtectedPath(pathname)) {
-    return NextResponse.next();
+    return i18nResponse;
   }
 
   if (request.cookies.get("refraq_sid")) {
-    return NextResponse.next();
+    return i18nResponse;
   }
 
   const loginUrl = request.nextUrl.clone();
   loginUrl.pathname = "/login";
   // Return path uses the `from` query param (consumed by LoginClient after login).
   loginUrl.search = `?from=${encodeURIComponent(pathname + search)}`;
-  return NextResponse.redirect(loginUrl);
+  const redirect = NextResponse.redirect(loginUrl);
+  copyCookies(i18nResponse, redirect);
+  return redirect;
 }
 
 export const config = {
-  matcher: ["/console", "/console/:path*"],
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
 };
