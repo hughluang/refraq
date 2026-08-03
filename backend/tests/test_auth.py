@@ -11,17 +11,17 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("REFRAQ_SKIP_SEED", "1")
 
 from backend.admin.security import hash_password  # noqa: E402
-from backend.admin.session_store import (  # noqa: E402
-    SessionStore,
-    reset_session_store,
-)
 from backend.main import app  # noqa: E402
 from backend.repositories.role_store import (  # noqa: E402
-    RoleStore,
+    MemoryRoleStore,
     reset_role_store,
 )
+from backend.repositories.session_store import (  # noqa: E402
+    MemorySessionStore,
+    reset_session_store,
+)
 from backend.repositories.user_store import (  # noqa: E402
-    UserStore,
+    MemoryUserStore,
     reset_user_store,
 )
 
@@ -31,9 +31,9 @@ def store_bundle():
     reset_user_store()
     reset_role_store()
     reset_session_store()
-    role_store = RoleStore()
+    role_store = MemoryRoleStore()
     role_store.seed_defaults()
-    user_store = UserStore()
+    user_store = MemoryUserStore()
     super_admin = role_store.get_by_key("super_admin")
     assert super_admin is not None
     user_store.create_user(
@@ -43,7 +43,7 @@ def store_bundle():
         role_id=super_admin.id,
         status="active",
     )
-    session_store = SessionStore()
+    session_store = MemorySessionStore()
     yield user_store, role_store, session_store
     app.dependency_overrides.clear()
     reset_user_store()
@@ -54,8 +54,8 @@ def store_bundle():
 @pytest.fixture
 def client(store_bundle):
     user_store, role_store, session_store = store_bundle
-    from backend.admin.session_store import get_session_store
     from backend.repositories.role_store import get_role_store
+    from backend.repositories.session_store import get_session_store
     from backend.repositories.user_store import get_user_store
 
     app.dependency_overrides[get_user_store] = lambda: user_store
@@ -192,10 +192,12 @@ def test_me_with_expired_session_returns_unauthenticated(
 def test_logout_delete_cookie_matches_secure_attrs(
     store_bundle, client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from backend.config import Settings, get_settings
+    from backend.core.config import Settings, get_settings
 
+    # Env wins over init for BaseSettings; force prod for Secure cookie attrs.
+    monkeypatch.setenv("REFRAQ_ENV", "prod")
     secure_settings = Settings(
-        refraq_env="prod",
+        store_backend="memory",
         admin_session_secret="test-secret",
         admin_session_ttl_hours=8,
         initial_admin_account="root",
@@ -257,7 +259,7 @@ def test_healthz_remains_accessible(client: TestClient) -> None:
 
 
 def test_session_purge_is_lazy() -> None:
-    store = SessionStore()
+    store = MemorySessionStore()
     sid = store.create("user_x", ttl_seconds=1)
     time.sleep(1.1)
     assert store.get(sid) is None

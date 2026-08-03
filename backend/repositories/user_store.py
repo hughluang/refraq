@@ -1,4 +1,4 @@
-"""In-memory User repository for the Management Foundation."""
+"""User repository ports and adapters for the Management Foundation."""
 
 from __future__ import annotations
 
@@ -6,7 +6,10 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal
+from functools import lru_cache
+from typing import Literal, Protocol
+
+from backend.core.config import get_settings
 
 UserStatus = Literal["active", "disabled"]
 IdentitySource = Literal["local"]
@@ -25,7 +28,34 @@ class UserRecord:
     created_at: datetime = field(default_factory=datetime.utcnow)
 
 
-class UserStore:
+class UserStore(Protocol):
+    def count(self) -> int: ...
+
+    def get_by_id(self, user_id: str) -> UserRecord | None: ...
+
+    def get_by_account(self, account: str) -> UserRecord | None: ...
+
+    def list_users(self) -> list[UserRecord]: ...
+
+    def count_by_role_id(self, role_id: str) -> int: ...
+
+    def create_user(
+        self,
+        *,
+        account: str,
+        display_name: str,
+        password_hash: str,
+        role_id: str | None,
+        status: UserStatus = "active",
+        identity_source: IdentitySource = "local",
+    ) -> UserRecord: ...
+
+    def update_status(self, user_id: str, status: UserStatus) -> UserRecord | None: ...
+
+    def update_last_login(self, user_id: str, when: datetime) -> None: ...
+
+
+class MemoryUserStore:
     def __init__(self) -> None:
         self._by_id: dict[str, UserRecord] = {}
         self._by_account: dict[str, str] = {}
@@ -101,19 +131,158 @@ class UserStore:
                 record.last_login_at = when
 
 
-_store_singleton: UserStore | None = None
-_store_lock = threading.Lock()
+class SqlUserStore:
+    def count(self) -> int:
+        from backend.core.db import session_scope
+        from backend.admin.models import UserRow
+
+        with session_scope() as session:
+            return session.query(UserRow).count()
+
+    def get_by_id(self, user_id: str) -> UserRecord | None:
+        from backend.core.db import session_scope
+        from backend.admin.models import UserRow
+
+        with session_scope() as session:
+            row = session.get(UserRow, user_id)
+            return _row_to_user(row) if row else None
+
+    def get_by_account(self, account: str) -> UserRecord | None:
+        from backend.core.db import session_scope
+        from backend.admin.models import UserRow
+        from sqlalchemy import select
+
+        with session_scope() as session:
+            row = session.scalar(select(UserRow).where(UserRow.account == account))
+            return _row_to_user(row) if row else None
+
+    def list_users(self) -> list[UserRecord]:
+        from backend.core.db import session_scope
+        from backend.admin.models import UserRow
+        from sqlalchemy import select
+
+        with session_scope() as session:
+            rows = session.scalars(
+                select(UserRow).order_by(UserRow.created_at, UserRow.id)
+            ).all()
+            return [_row_to_user(row) for row in rows]
+
+    def count_by_role_id(self, role_id: str) -> int:
+        from backend.core.db import session_scope
+        from backend.admin.models import UserRow
+        from sqlalchemy import func, select
+
+        with session_scope() as session:
+            return int(
+                session.scalar(
+                    select(func.count()).select_from(UserRow).where(UserRow.role_id == role_id)
+                )
+                or 0
+            )
+
+    def create_user(
+        self,
+        *,
+        account: str,
+        display_name: str,
+        password_hash: str,
+        role_id: str | None,
+        status: UserStatus = "active",
+        identity_source: IdentitySource = "local",
+    ) -> UserRecord:
+        from backend.core.db import session_scope
+        from backend.admin.models import UserRow
+        from sqlalchemy import select
+        from sqlalchemy.exc import IntegrityError
+
+        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        created_at = datetime.utcnow()
+        try:
+            with session_scope() as session:
+                existing = session.scalar(select(UserRow).where(UserRow.account == account))
+                if existing is not None:
+                    from backend.admin.errors import UserAccountDuplicate
+
+                    raise UserAccountDuplicate()
+                row = UserRow(
+                    id=user_id,
+                    account=account,
+                    display_name=display_name,
+                    password_hash=password_hash,
+                    role_id=role_id,
+                    status=status,
+                    identity_source=identity_source,
+                    created_at=created_at,
+                )
+                session.add(row)
+                session.flush()
+                return _row_to_user(row)
+        except IntegrityError as exc:
+            from backend.admin.errors import UserAccountDuplicate
+
+            raise UserAccountDuplicate() from exc
+
+    def update_status(self, user_id: str, status: UserStatus) -> UserRecord | None:
+        from backend.core.db import session_scope
+        from backend.admin.models import UserRow
+
+        with session_scope() as session:
+            row = session.get(UserRow, user_id)
+            if row is None:
+                return None
+            row.status = status
+            session.flush()
+            return _row_to_user(row)
+
+    def update_last_login(self, user_id: str, when: datetime) -> None:
+        from backend.core.db import session_scope
+        from backend.admin.models import UserRow
+
+        with session_scope() as session:
+            row = session.get(UserRow, user_id)
+            if row is not None:
+                row.last_login_at = when
 
 
+def _row_to_user(row: object) -> UserRecord:
+    from backend.admin.models import UserRow
+
+    assert isinstance(row, UserRow)
+    return UserRecord(
+        id=row.id,
+        account=row.account,
+        display_name=row.display_name,
+        password_hash=row.password_hash,
+        role_id=row.role_id,
+        status=row.status,  # type: ignore[arg-type]
+        identity_source=row.identity_source,  # type: ignore[arg-type]
+        last_login_at=row.last_login_at,
+        created_at=row.created_at,
+    )
+
+
+# Back-compat alias used by tests that construct MemoryUserStore as UserStore historically
+UserStoreImpl = MemoryUserStore
+
+
+_memory_singleton: MemoryUserStore | None = None
+_memory_lock = threading.Lock()
+
+
+@lru_cache
 def get_user_store() -> UserStore:
-    global _store_singleton
-    with _store_lock:
-        if _store_singleton is None:
-            _store_singleton = UserStore()
-        return _store_singleton
+    settings = get_settings()
+    if settings.store_backend == "memory":
+        global _memory_singleton
+        with _memory_lock:
+            if _memory_singleton is None:
+                _memory_singleton = MemoryUserStore()
+            return _memory_singleton
+    return SqlUserStore()
 
 
 def reset_user_store() -> None:
-    global _store_singleton
-    with _store_lock:
-        _store_singleton = None
+    global _memory_singleton
+    with _memory_lock:
+        _memory_singleton = None
+    get_user_store.cache_clear()

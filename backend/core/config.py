@@ -1,0 +1,80 @@
+"""Environment-driven settings for the Management Foundation."""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+from typing import Literal
+
+from pydantic import Field, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+StoreBackend = Literal["memory", "persistent"]
+
+# backend/core/config.py -> repo root (cwd-independent for debug / alternate launches)
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+# Later files override earlier ones — backend/.env wins over repo-root .env.
+_ENV_FILES = tuple(
+    str(path)
+    for path in (_REPO_ROOT / ".env", _REPO_ROOT / "backend" / ".env")
+    if path.is_file()
+)
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=_ENV_FILES or None,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    refraq_env: str = Field(default="dev", validation_alias="REFRAQ_ENV")
+    refraq_api_host: str = Field(default="127.0.0.1", validation_alias="REFRAQ_API_HOST")
+    refraq_api_port: int = Field(default=8000, validation_alias="REFRAQ_API_PORT")
+    store_backend: StoreBackend = Field(
+        default="persistent",
+        validation_alias="REFRAQ_STORE_BACKEND",
+    )
+    database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
+    redis_url: str | None = Field(default=None, validation_alias="REDIS_URL")
+    admin_session_secret: str = Field(
+        default="change-me",
+        validation_alias="ADMIN_SESSION_SECRET",
+    )
+    admin_session_ttl_hours: int = Field(
+        default=8,
+        validation_alias="ADMIN_SESSION_TTL_HOURS",
+    )
+    initial_admin_account: str = Field(
+        default="root",
+        validation_alias="INITIAL_ADMIN_ACCOUNT",
+    )
+    initial_admin_password: str = Field(
+        default="change-me",
+        validation_alias="INITIAL_ADMIN_PASSWORD",
+    )
+
+    @model_validator(mode="after")
+    def _require_backing_urls_when_persistent(self) -> Settings:
+        if self.store_backend == "persistent":
+            missing: list[str] = []
+            if not self.database_url:
+                missing.append("DATABASE_URL")
+            if not self.redis_url:
+                missing.append("REDIS_URL")
+            if missing:
+                raise ValueError(
+                    "persistent Store Backend requires "
+                    + ", ".join(missing)
+                    + "; memory mode is for automated tests only"
+                )
+        return self
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+def reset_settings_cache() -> None:
+    get_settings.cache_clear()

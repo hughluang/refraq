@@ -12,9 +12,9 @@ from backend.admin.errors import (
     UserSelfDisableForbidden,
 )
 from backend.admin.security import hash_password
-from backend.admin.session_store import SessionStore, get_session_store
 from backend.admin.user_payload import build_user_summary
 from backend.repositories.role_store import RoleStore, get_role_store
+from backend.repositories.session_store import SessionStore, get_session_store
 from backend.repositories.user_store import UserRecord, UserStore, get_user_store
 from backend.schemas.user import (
     CreateUserRequest,

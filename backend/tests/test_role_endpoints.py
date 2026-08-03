@@ -10,17 +10,17 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("REFRAQ_SKIP_SEED", "1")
 
 from backend.admin.security import hash_password  # noqa: E402
-from backend.admin.session_store import (  # noqa: E402
-    SessionStore,
-    reset_session_store,
-)
 from backend.main import app  # noqa: E402
 from backend.repositories.role_store import (  # noqa: E402
-    RoleStore,
+    MemoryRoleStore,
     reset_role_store,
 )
+from backend.repositories.session_store import (  # noqa: E402
+    MemorySessionStore,
+    reset_session_store,
+)
 from backend.repositories.user_store import (  # noqa: E402
-    UserStore,
+    MemoryUserStore,
     reset_user_store,
 )
 
@@ -30,9 +30,9 @@ def store_bundle():
     reset_user_store()
     reset_role_store()
     reset_session_store()
-    role_store = RoleStore()
+    role_store = MemoryRoleStore()
     role_store.seed_defaults()
-    user_store = UserStore()
+    user_store = MemoryUserStore()
     super_admin = role_store.get_by_key("super_admin")
     operator = role_store.get_by_key("operator")
     assert super_admin is not None and operator is not None
@@ -48,7 +48,7 @@ def store_bundle():
         password_hash=hash_password("op-pass"),
         role_id=operator.id,
     )
-    session_store = SessionStore()
+    session_store = MemorySessionStore()
     yield user_store, role_store, session_store
     app.dependency_overrides.clear()
     reset_user_store()
@@ -59,8 +59,8 @@ def store_bundle():
 @pytest.fixture
 def client(store_bundle):
     user_store, role_store, session_store = store_bundle
-    from backend.admin.session_store import get_session_store
     from backend.repositories.role_store import get_role_store
+    from backend.repositories.session_store import get_session_store
     from backend.repositories.user_store import get_user_store
 
     app.dependency_overrides[get_user_store] = lambda: user_store

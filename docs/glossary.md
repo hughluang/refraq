@@ -73,12 +73,22 @@ Avoid treating identity source as a role or permission.
 A machine integration principal that will consume APIs or product capabilities with its own credentials.
 Distinct from User (people). Token / credential management for Clients is out of scope for the current slice.
 Avoid calling a Client a User or an Administrator.
-Avoid conflating Client with Serving-layer "消费方" (product delivery target).
+Avoid conflating Client with Serving-layer "consumer" (product delivery target).
 
 ### Session
 
 Server-managed authenticated state created after successful console login and carried through a cookie.
 Avoid calling it a token or a permanent login.
+
+### Backing Service
+
+A replaceable attached store for shared or durable state (for example Postgres or Redis), selected through configuration.
+Avoid treating process memory or sticky load-balancer affinity as the production source of Session or User truth.
+
+### Store Backend
+
+Which adapter class implements Foundation User, Role, and Session ports: `memory` (automated tests only) or `persistent` (default runtime; Postgres + Redis).
+Avoid inferring memory mode from missing URLs, or documenting `memory` as a supported production setting.
 
 ### Current User
 

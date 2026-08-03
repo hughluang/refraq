@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document records the current environment variables and the expected local-development conventions.
+This document records the current environment variables and the expected local-development and self-deploy conventions.
 
 These conventions serve the first delivery slice (the **Management Console** and its **Management Foundation**). They are not specific to any product-defining **Data Product Capability**.
 
@@ -15,10 +15,15 @@ Current `backend/.env.example` defines:
 - `REFRAQ_ENV=dev`
 - `REFRAQ_API_HOST=127.0.0.1`
 - `REFRAQ_API_PORT=8000`
+- `REFRAQ_STORE_BACKEND=persistent`
+- `DATABASE_URL=postgresql+psycopg://refraq:refraq@127.0.0.1:5432/refraq`
+- `REDIS_URL=redis://127.0.0.1:6379/0`
 - `ADMIN_SESSION_SECRET=change-me`
 - `ADMIN_SESSION_TTL_HOURS=8`
 - `INITIAL_ADMIN_ACCOUNT=root`
 - `INITIAL_ADMIN_PASSWORD=change-me`
+
+`REFRAQ_STORE_BACKEND=memory` is for automated tests only. Do not use it in production examples.
 
 ### Frontend
 
@@ -28,14 +33,18 @@ Current `frontend/.env.example` defines:
 - `REFRAQ_API_UPSTREAM=http://127.0.0.1:8000`
 - `NEXT_PUBLIC_DEFAULT_LOCALE=en-US`
 
+`REFRAQ_API_UPSTREAM` is read at **Next.js build time** for rewrites. Local `next dev` uses the env file; deploy images pass it as a Docker build-arg (typically `http://api:8000`).
+
 ## 3. Local Convention (Unified)
 
 - backend host: `127.0.0.1`
 - backend port: `8000`
 - browser API base URL: `/api` (same-origin)
-- Next.js rewrite upstream: `http://127.0.0.1:8000`
+- Next.js rewrite upstream: `http://127.0.0.1:8000` (dev)
 
 The Management Console talks to the backend through a Next.js rewrite so the session cookie is set on the frontend origin and `proxy.ts` can see `refraq_sid`.
+
+Self-deploy Compose exposes only the web service to browsers; the API stays on the internal network.
 
 ## 4. Variable Ownership
 
@@ -44,15 +53,20 @@ The Management Console talks to the backend through a Next.js rewrite so the ses
 - `REFRAQ_ENV`
 - `REFRAQ_API_HOST`
 - `REFRAQ_API_PORT`
+- `REFRAQ_STORE_BACKEND` (`persistent` default; `memory` tests only)
+- `DATABASE_URL` (required when `persistent`)
+- `REDIS_URL` (required when `persistent`)
 - `ADMIN_SESSION_SECRET` (reserved for future signed-cookie usage; v1 sessions are server-managed)
 - `ADMIN_SESSION_TTL_HOURS`
 - `INITIAL_ADMIN_ACCOUNT`
 - `INITIAL_ADMIN_PASSWORD`
+- `REFRAQ_INTEGRATION_DATABASE_URL` (pytest `@pytest.mark.integration` only; default `…/refraq_test`)
+- `REFRAQ_INTEGRATION_REDIS_URL` (integration only; default `redis://127.0.0.1:6379/1`)
 
 ### Frontend-Owned Variables
 
 - `NEXT_PUBLIC_REFRAQ_API_BASE_URL` (browser-facing base; default `/api`)
-- `REFRAQ_API_UPSTREAM` (server-side rewrite target for Next.js)
+- `REFRAQ_API_UPSTREAM` (server-side rewrite target; build-time for production images)
 - `NEXT_PUBLIC_DEFAULT_LOCALE`
 
 ## 5. Usage Rules
@@ -62,7 +76,10 @@ The Management Console talks to the backend through a Next.js rewrite so the ses
 - Do not commit real secrets
 - Do not change API port in code and forget to update frontend env
 - The initial admin password is meant for first-time local development only; rotate it before any non-local deployment
+- Missing `DATABASE_URL` / `REDIS_URL` with `persistent` must fail fast; never silently fall back to memory
+- Settings dotenv load order: repo-root `.env` then `backend/.env` (later wins). Prefer `backend/.env` as the local canonical file
+- Integration tests must not reuse interactive `DATABASE_URL` / `REDIS_URL`; they use `REFRAQ_INTEGRATION_*` defaults so Compose live data stays intact
 
 ## 6. Initial Admin Seeding
 
-On backend startup, if the administrator store is empty, a single `super_admin` record is created from `INITIAL_ADMIN_ACCOUNT` and `INITIAL_ADMIN_PASSWORD`. The display name defaults to the account value. Subsequent restarts do not re-seed.
+On backend startup, if the user store is empty, default roles are ensured and a single `super_admin` user is created from `INITIAL_ADMIN_ACCOUNT` and `INITIAL_ADMIN_PASSWORD`. The display name defaults to the account value. Subsequent restarts do not re-seed. Multiple replicas remain safe because seeding is gated on an empty user store.

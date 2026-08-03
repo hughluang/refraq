@@ -1,21 +1,17 @@
 # refraq Backend
 
-This directory contains the backend foundation for refraq, the data product integration platform.
+This directory contains the backend for refraq, the data product integration platform.
 
 ## Responsibility
 
-The backend is the implementation home for API contracts, platform services, and domain logic. For the current slice it carries the **Management Foundation** (authentication, authorization, administrator management); in later phases it will carry the **Data Product Capabilities** behind refraq's data product workflows.
+The backend owns API contracts, Management Foundation domain rules (auth, RBAC), and persistence adapters.
+User/Role data lives in Postgres; Session state lives in Redis when `REFRAQ_STORE_BACKEND=persistent`.
 
-## Current Stage
+## Run
 
-The backend is still in scaffold form and currently includes:
+- Dev dependencies: from repo root, `docker compose up -d`
+- Install: `uv pip install -r backend/requirements.txt` (or pip in a venv)
+- Official start (migrate then serve): `python -m backend.core.entry`
+- Tests: `pytest backend/tests -q` (memory); `pytest backend/tests -q -m integration` with Compose up (isolated `refraq_test` + Redis DB `1`)
 
-- `main.py`: FastAPI entrypoint and `GET /healthz`
-- `config.py`: runtime settings for the scaffold stage
-- `admin/`: future platform and access-control domain logic
-- `routers/`: future route definitions
-- `repositories/`: future data access layer
-- `schemas/`: future request and response models
-- `tests/`: backend tests
-
-It does not yet include production business APIs, persistence models, migrations, or completed authentication flows.
+See `docs/development.md` and `docs/env.md`.

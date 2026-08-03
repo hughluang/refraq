@@ -18,10 +18,10 @@ from backend.admin.errors import (
     AuthInvalidCredentials,
 )
 from backend.admin.security import verify_password
-from backend.admin.session_store import SessionStore, get_session_store
 from backend.admin.user_payload import build_current_user
-from backend.config import Settings, get_settings
+from backend.core.config import Settings, get_settings
 from backend.repositories.role_store import RoleStore, get_role_store
+from backend.repositories.session_store import SessionStore, get_session_store
 from backend.repositories.user_store import UserRecord, UserStore, get_user_store
 from backend.schemas.auth import (
     LoginRequest,

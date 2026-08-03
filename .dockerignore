@@ -1,0 +1,11 @@
+.venv/
+**/__pycache__/
+**/*.pyc
+.git/
+.process/
+frontend/.next/
+**/.turbo/
+**/coverage/
+backend/.env
+frontend/.env
+docs/

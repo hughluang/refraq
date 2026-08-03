@@ -1,0 +1,16 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "free-port-12000",
+      "type": "shell",
+      "command": "fuser -k 12000/tcp 2>/dev/null || true; sleep 0.3; ss -ltn | grep -q ':12000' && echo 'port still busy' && exit 1 || echo 'port 12000 free'",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false
+      }
+    }
+  ]
+}

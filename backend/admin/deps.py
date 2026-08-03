@@ -8,9 +8,9 @@ from fastapi import Cookie, Depends, Request
 
 from backend.admin.errors import AuthForbidden, AuthUnauthenticated
 from backend.admin.permissions import Permission, permissions_include
-from backend.admin.session_store import SessionStore, get_session_store
-from backend.config import Settings, get_settings
+from backend.core.config import Settings, get_settings
 from backend.repositories.role_store import RoleStore, get_role_store
+from backend.repositories.session_store import SessionStore, get_session_store
 from backend.repositories.user_store import UserRecord, UserStore, get_user_store
 
 SESSION_COOKIE_NAME = "refraq_sid"

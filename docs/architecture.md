@@ -16,23 +16,25 @@ This repository is intentionally split into:
 
 ### In Scope
 
-The first slice implements the Management Foundation:
+The Management Foundation slice includes:
 
 - User login (people; `identity_source=local`)
 - Current-user query
 - Logout
 - Configurable Role + fixed Permission catalog
 - Permission-based route and action control
-- Future management resource handling under the same auth model
+- Persistent User/Role storage (Postgres) and shared Session storage (Redis)
+- Official API entrypoint (migrate under advisory lock, then serve)
+- Dev dependency Compose and a self-deploy Compose example (web + api + backing services)
 
 ### Out of Scope For Current Phase
 
-- Customer-facing product features
+- Customer-facing Data Product Capability features
 - Migration of legacy system code
-- Docker / compose integration
-- ORM and Alembic
 - SSO, OAuth, MFA, LDAP protocol integration, and third-party identity providers
 - Client / Token management APIs
+- Empty pre-created domain packages for future capabilities
+- Sliding session TTL and cross-origin browser access to the API
 
 ## 3. High-Level Topology
 
@@ -45,6 +47,7 @@ The backend owns:
 - User identity model
 - Role and permission evaluation
 - HTTP error semantics for unauthenticated and unauthorized access
+- Schema migration via the official entrypoint (not app lifespan)
 
 ### Frontend
 
@@ -54,6 +57,13 @@ The frontend owns:
 - Protected page routing
 - Fetching current user state
 - Hiding or disabling actions based on permissions returned by backend
+
+### Deploy Shape
+
+Self-deploy exposes the Management Console (web) to browsers.
+The browser calls same-origin `/api`; Next.js rewrites to the internal API service.
+`REFRAQ_API_UPSTREAM` is fixed at frontend image build time for deploy.
+Postgres and Redis are **Backing Services**; app processes stay share-nothing.
 
 ## 4. Auth Architecture
 
@@ -74,6 +84,8 @@ Reason:
 5. Frontend calls `GET /auth/me` on refresh or protected-route entry
 6. Backend derives current user from the session cookie
 7. Logout invalidates session and clears cookie
+
+Session expiry is absolute (set at creation; lookup does not renew TTL).
 
 ## 5. Permission Model
 
@@ -108,21 +120,18 @@ The repository should follow these dependency rules:
 - `repositories` must not import frontend concepts
 - Business rules must not be buried inside UI components
 
-## 8. Initial Technical Risks
+## 8. Persistence And Evolution
 
-### Placeholder Infrastructure
+- Default **Store Backend** is `persistent` (Postgres for User/Role, Redis for Session).
+- `memory` exists for automated tests only; missing URLs must not silently select memory.
+- Shared infrastructure (settings, engine, `DeclarativeBase`, Redis) lives under `backend/core/`. Business ORM tables live in domain packages (Foundation: `backend/admin/models.py`); add further vertical-slice packages when Data Product Capabilities arrive rather than a global models tree.
+- Module layout stays a modular monolith: add capability packages when real code arrives; do not pre-scaffold empty domain trees.
+- Directory structure aids maintainability; multi-instance correctness depends on **Backing Services**, not sticky sessions.
+- See `docs/adr/0001-postgres-redis-foundation-stores.md`.
 
-There is no database layer, migration system, or persistent session store yet.
-The first auth implementation keeps interfaces small enough to evolve later:
-user records, roles, and sessions live in in-memory stores behind repository
-abstractions, so the call sites do not change when a real store is introduced.
+### Port Configuration
 
-### Port Configuration (Resolved)
-
-The earlier frontend default of `6068` against a backend default of `8000`
-has been unified. The local convention is backend `127.0.0.1:8000`, with the
-browser calling same-origin `/api` and Next.js rewriting to the backend
-upstream. See `docs/env.md` §3.
+Local convention: backend `127.0.0.1:8000`, browser same-origin `/api`, Next.js rewrite to the backend upstream. See `docs/env.md` §3.
 
 ## 9. Architecture Rule Summary
 
@@ -131,3 +140,4 @@ upstream. See `docs/env.md` §3.
 - `refraq` stays independent from the old system
 - Login, session, and permission belong to the Management Foundation, not the product identity
 - New features must fit the login/session/permission model instead of inventing parallel auth flows
+- Shared state belongs in Backing Services; grow modules with real capabilities only

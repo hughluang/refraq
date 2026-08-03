@@ -13,26 +13,58 @@ The module layout below serves the current delivery slice: the **Management Cons
 Responsibilities:
 
 - Create FastAPI app
-- Register routers
-- Expose health and framework-level startup configuration
+- Register routers (including health probes)
+- Run idempotent seed when stores are empty
 
 Must not contain:
 
 - Permission logic
 - Data access logic
+- Schema migrations
+- Probe route implementations (belong in `routers/health.py`)
 - Large request validation blocks
 
-### `backend/config.py`
+### `backend/core/`
 
 Responsibilities:
 
-- Centralize environment-driven runtime settings
-- Expose typed configuration for app startup and auth configuration
+- Shared infrastructure used by Foundation and future capability packages
+- `core/config.py`: environment-driven settings via pydantic-settings (Store Backend, backing-service URLs)
+- `core/db.py`: SQLAlchemy `DeclarativeBase`, engine, and session factory for Postgres
+- `core/redis_client.py`: Redis client factory for Session storage
+- `core/entry.py`: official product start path (advisory-locked Alembic upgrade, then serve); exit non-zero on lock timeout or migration failure
 
 Must not contain:
 
 - Business rules
-- Derived per-request state
+- HTTP route handlers
+- Domain-specific ORM table definitions (those live in domain packages such as `admin/models.py`)
+
+### `backend/admin/models.py`
+
+Responsibilities:
+
+- Define Foundation ORM table models (User, Role) against the shared `DeclarativeBase` in `core/db.py`
+- Register tables onto `Base.metadata` for Alembic autogenerate
+
+Must not contain:
+
+- API request/response shapes (those belong in `schemas/`)
+- Engine/session/Redis wiring (those belong in `core/`)
+
+Future Data Product Capabilities add their own `<capability>/models.py` the same way. Alembic must import every domain model module so autogenerate sees the full schema.
+
+### `backend/alembic/`
+
+Responsibilities:
+
+- Schema migration scripts and Alembic environment
+- Read `DATABASE_URL` from settings (or alembic.ini override) and apply revisions
+
+Must not contain:
+
+- Business rules
+- Runtime request handling
 
 ### `backend/routers/`
 
@@ -64,25 +96,31 @@ Must not contain:
 
 Responsibilities:
 
-- Encapsulate data access
-- Present clear interfaces for loading users, sessions, and future business resources
+- Encapsulate data access for User, Role, and Session
+- Present clear ports with `memory` and `persistent` adapters
 
 Must not contain:
 
 - HTTP concerns
 - UI-facing formatting logic
+- Auth policy decisions (belong in `admin/`)
 
 ### `backend/admin/`
 
 Responsibilities:
 
-- Hold Management Foundation domain code (auth, permission, user/role management) that does not belong to generic transport or storage layers
+- Hold Management Foundation domain code (auth, permission, cookie/deps) that does not belong to generic transport or storage layers
 
 Recommended subdomains for the first slice:
 
+- `admin/models.py` (Foundation ORM tables)
 - `admin/permissions.py`
-- `admin/session_store.py`
 - `admin/deps.py`
+- `admin/security.py`
+
+Must not own Session persistence implementations (those live under `repositories/`).
+
+Do not pre-create empty packages for future Data Product Capabilities.
 
 ### `backend/tests/`
 
@@ -91,11 +129,13 @@ Responsibilities:
 - Prove route behavior
 - Prove auth error semantics
 - Lock permission behavior before frontend integration
+- Optional `@pytest.mark.integration` against local Compose Postgres/Redis (isolated `refraq_test` + Redis DB `1`)
 
 Priority:
 
-- API-level tests first
+- API-level tests first (default `memory` Store Backend)
 - Domain tests second
+- Integration tests third (local only in this slice)
 
 ## 3. Frontend Modules
 
@@ -181,10 +221,12 @@ To add a locale: add `locales/<code>/common.json`, register it in `i18n.config.t
 
 ### Backend
 
-- `main.py` -> `config.py`, `routers/`
+- `core/entry.py` -> `core/config`, Alembic, ASGI app (`backend.main`)
+- `main.py` -> `core/`, `routers/`, `repositories/`
+- `alembic/` -> `core/` (Base) + import every domain `models` module
 - `routers/` -> `schemas/`, `admin/`, `repositories/`
-- `admin/` -> `repositories/`, `schemas/` when needed
-- `repositories/` -> storage adapters or in-memory data sources
+- `admin/` -> `repositories/`, `schemas/` when needed; may use `core/` for settings; owns Foundation ORM in `admin/models.py`
+- `repositories/` -> `core/` (db/redis), domain models (e.g. `admin.models`), and memory adapters
 
 ### Frontend
 
@@ -206,7 +248,7 @@ For the login/permission slice, each concern should land here:
 
 - Login API contract: `backend/schemas/` + `backend/routers/`
 - Credential verification and session issuance: `backend/admin/`
-- Session lookup: `backend/admin/` or `backend/repositories/`
+- Session persistence and lookup: `backend/repositories/`
 - Current-user fetch and logout wiring: `frontend/src/providers/`
 - Login page UI: `frontend/src/app/login/`
 - Protected layout behavior: `frontend/src/app/console/`

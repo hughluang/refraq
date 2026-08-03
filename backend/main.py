@@ -11,10 +11,11 @@ from fastapi.responses import JSONResponse
 
 from backend.admin.errors import AuthError
 from backend.admin.security import hash_password
-from backend.config import Settings, get_settings
+from backend.core.config import Settings, get_settings
 from backend.repositories.role_store import SUPER_ADMIN_KEY, get_role_store
 from backend.repositories.user_store import get_user_store
 from backend.routers.auth import router as auth_router_instance
+from backend.routers.health import router as health_router
 from backend.routers.roles import router as roles_router
 from backend.routers.users import router as users_router
 from backend.schemas.auth import ErrorResponse
@@ -64,11 +65,7 @@ async def auth_error_handler(_: Request, exc: AuthError) -> JSONResponse:
     )
 
 
-@app.get("/healthz")
-def healthz() -> dict[str, str]:
-    return {"status": "ok", "env": settings.refraq_env}
-
-
+app.include_router(health_router)
 app.include_router(auth_router_instance)
 app.include_router(users_router)
 app.include_router(roles_router)

@@ -2,25 +2,35 @@
   "version": "0.2.0",
   "configurations": [
     {
-        "name": "FastAPI: Run Server (uvicorn)",
-        "type": "debugpy",
-        "request": "launch",
-        "module": "uvicorn",
-        "args": [
-            "backend.main:app",
-            "--host", "127.0.0.1",
-            "--port", "12000"
-        ],
-        "envFile": "${workspaceFolder}/backend/.env",
-        "cwd": "${workspaceFolder}",
-        "env": { "PYTHONPATH": "${workspaceFolder}" }
+      "name": "FastAPI: Run Server (uvicorn)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "module": "uvicorn",
+      "args": [
+        "backend.main:app",
+        "--host", "127.0.0.1",
+        "--port", "12000"
+      ],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/backend/.env",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
+        "VIRTUAL_ENV": "${workspaceFolder}/.venv",
+        "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "preLaunchTask": "free-port-12000"
     },
     {
       "name": "Python: Current File",
       "type": "debugpy",
       "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
       "program": "${file}",
       "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/backend/.env",
       "env": { "PYTHONPATH": "${workspaceFolder}" },
       "console": "integratedTerminal",
       "justMyCode": true
@@ -29,9 +39,11 @@
       "name": "Python: Pytest Current File",
       "type": "debugpy",
       "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
       "module": "pytest",
       "args": ["${file}", "-v", "-s"],
       "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/backend/.env",
       "env": { "PYTHONPATH": "${workspaceFolder}" },
       "console": "integratedTerminal",
       "justMyCode": true
@@ -40,9 +52,11 @@
       "name": "Python: Pytest All Tests",
       "type": "debugpy",
       "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
       "module": "pytest",
       "args": ["backend/tests", "-v"],
       "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/backend/.env",
       "env": { "PYTHONPATH": "${workspaceFolder}" },
       "console": "integratedTerminal",
       "justMyCode": true
