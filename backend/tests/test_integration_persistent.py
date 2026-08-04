@@ -117,7 +117,7 @@ def persistent_client(monkeypatch: pytest.MonkeyPatch):
 
     reset_settings_cache()
     main_mod.settings = main_mod.get_settings()
-    main_mod._seed_initial_data(main_mod.settings)
+    main_mod._bootstrap_site(main_mod.settings)
 
     with TestClient(main_mod.app) as client:
         yield client

@@ -21,6 +21,11 @@ const RESOURCE_PERMISSIONS: Record<string, Record<string, string>> = {
     list: "dashboard:read",
     show: "dashboard:read",
   },
+  settings: {
+    list: "settings:read",
+    show: "settings:read",
+    edit: "settings:write",
+  },
 };
 
 function evaluate(resource: string | undefined, action: string): CanReturnType {

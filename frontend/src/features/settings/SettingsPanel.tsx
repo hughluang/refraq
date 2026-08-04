@@ -1,0 +1,201 @@
+"use client";
+
+import {
+  Button,
+  Group,
+  NumberInput,
+  Stack,
+  Text,
+  TextInput,
+  Title,
+} from "@mantine/core";
+import {
+  CanAccess,
+  useCan,
+  useNotification,
+  useTranslate,
+} from "@refinedev/core";
+import { useCallback, useEffect, useState } from "react";
+
+import { PageError } from "@/components/feedback/PageError";
+import { PageLoader } from "@/components/feedback/PageLoader";
+import {
+  clearPlatformSettingsOverride,
+  fetchPlatformSettings,
+  patchPlatformSettings,
+} from "@/features/settings/api";
+import type { PlatformSettings } from "@/features/settings/types";
+import { ApiError } from "@/lib/api";
+
+export function SettingsPanel() {
+  const t = useTranslate();
+  const { open } = useNotification();
+  const { data: canWrite } = useCan({ resource: "settings", action: "edit" });
+  const [settings, setSettings] = useState<PlatformSettings | null>(null);
+  const [ttl, setTtl] = useState<number | string>(8);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await fetchPlatformSettings();
+      setSettings(data);
+      setTtl(data.admin_session_ttl_hours);
+    } catch (err) {
+      setSettings(null);
+      setError(
+        err instanceof ApiError ? err.detail : t("common.error.loadFailed"),
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [t]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function onSave() {
+    const value = typeof ttl === "number" ? ttl : Number(ttl);
+    if (!Number.isInteger(value) || value < 1 || value > 168) {
+      open?.({
+        type: "error",
+        message: t("settings.title"),
+        description: t("settings.validation.ttl"),
+      });
+      return;
+    }
+    setSaving(true);
+    try {
+      const data = await patchPlatformSettings(value);
+      setSettings(data);
+      setTtl(data.admin_session_ttl_hours);
+      open?.({
+        type: "success",
+        message: t("settings.title"),
+        description: t("settings.save.success"),
+      });
+    } catch (err) {
+      open?.({
+        type: "error",
+        message: t("settings.title"),
+        description:
+          err instanceof ApiError ? err.detail : t("common.error"),
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onClear() {
+    setClearing(true);
+    try {
+      const data = await clearPlatformSettingsOverride();
+      setSettings(data);
+      setTtl(data.admin_session_ttl_hours);
+      open?.({
+        type: "success",
+        message: t("settings.title"),
+        description: t("settings.clear.success"),
+      });
+    } catch (err) {
+      open?.({
+        type: "error",
+        message: t("settings.title"),
+        description:
+          err instanceof ApiError ? err.detail : t("common.error"),
+      });
+    } finally {
+      setClearing(false);
+    }
+  }
+
+  return (
+    <CanAccess
+      resource="settings"
+      action="list"
+      fallback={
+        <Stack gap="sm">
+          <Title order={2}>{t("settings.title")}</Title>
+          <Text c="dimmed">{t("settings.forbidden")}</Text>
+        </Stack>
+      }
+    >
+      <Stack gap="md" maw={480}>
+        <div>
+          <Title order={2}>{t("settings.title")}</Title>
+          <Text size="sm" c="dimmed" mt={4}>
+            {t("settings.description")}
+          </Text>
+        </div>
+
+        {loading ? <PageLoader /> : null}
+        {!loading && error ? (
+          <PageError message={error} onRetry={() => void load()} />
+        ) : null}
+        {!loading && !error && settings ? (
+          <>
+            <NumberInput
+              label={t("settings.fields.ttl")}
+              description={t("settings.fields.ttl.hint")}
+              value={ttl}
+              onChange={setTtl}
+              min={1}
+              max={168}
+              allowDecimal={false}
+              disabled={!canWrite?.can}
+            />
+            {canWrite?.can ? (
+              <Stack gap="xs">
+                <Group gap="sm">
+                  <Button loading={saving} onClick={() => void onSave()}>
+                    {t("settings.save")}
+                  </Button>
+                  <Button
+                    variant="light"
+                    loading={clearing}
+                    disabled={
+                      settings.admin_session_ttl_hours_source !== "override"
+                    }
+                    onClick={() => void onClear()}
+                  >
+                    {t("settings.clearOverride")}
+                  </Button>
+                </Group>
+                <Text size="xs" c="dimmed">
+                  {t("settings.hint.override")}
+                </Text>
+              </Stack>
+            ) : null}
+            <TextInput
+              label={t("settings.fields.source")}
+              description={t("settings.fields.source.hint")}
+              value={
+                settings.admin_session_ttl_hours_source === "override"
+                  ? t("settings.fields.source.override")
+                  : t("settings.fields.source.env")
+              }
+              readOnly
+            />
+            <TextInput
+              label={t("settings.fields.default")}
+              description={t("settings.fields.default.hint")}
+              value={String(settings.admin_session_ttl_hours_default)}
+              readOnly
+            />
+            <TextInput
+              label={t("settings.fields.env")}
+              description={t("settings.fields.env.hint")}
+              value={settings.refraq_env}
+              readOnly
+            />
+          </>
+        ) : null}
+      </Stack>
+    </CanAccess>
+  );
+}

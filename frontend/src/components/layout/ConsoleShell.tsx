@@ -5,6 +5,7 @@ import {
   Burger,
   Button,
   Group,
+  Stack,
   Text,
   Title,
 } from "@mantine/core";
@@ -12,14 +13,19 @@ import { useDisclosure } from "@mantine/hooks";
 import {
   useGetIdentity,
   useLogout,
-  useMenu,
   useTranslate,
 } from "@refinedev/core";
 import type { ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 
-import { AuthorizedNavLink } from "@/components/layout/AuthorizedNavLink";
+import { PageError } from "@/components/feedback/PageError";
+import { PageLoader } from "@/components/feedback/PageLoader";
+import { ConsoleNavLink } from "@/components/layout/ConsoleNavLink";
 import { LangSwitcher } from "@/components/LangSwitcher";
+import { fetchConsoleNavigation } from "@/features/console/api";
+import type { NavigationGroup } from "@/features/console/types";
+import { ApiError } from "@/lib/api";
 import type { CurrentUser } from "@/providers/session-store";
 
 type ConsoleShellProps = { children: ReactNode };
@@ -30,9 +36,29 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
   const [opened, { toggle }] = useDisclosure();
   const { data: user } = useGetIdentity<CurrentUser>();
   const { mutate: logout, isPending } = useLogout();
-  const { menuItems } = useMenu();
+  const [groups, setGroups] = useState<NavigationGroup[] | null>(null);
+  const [navError, setNavError] = useState<string | null>(null);
+  const [navLoading, setNavLoading] = useState(true);
 
-  const navigableMenuItems = menuItems.filter((item) => item.route);
+  const loadNavigation = useCallback(async () => {
+    setNavLoading(true);
+    setNavError(null);
+    try {
+      const data = await fetchConsoleNavigation();
+      setGroups(data.groups);
+    } catch (error) {
+      setGroups(null);
+      setNavError(
+        error instanceof ApiError ? error.detail : "navigation_load_failed",
+      );
+    } finally {
+      setNavLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadNavigation();
+  }, [loadNavigation]);
 
   return (
     <AppShell
@@ -82,16 +108,37 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
       </AppShell.Header>
 
       <AppShell.Navbar p="sm">
-        {navigableMenuItems.map((item) => (
-          <AuthorizedNavLink
-            key={item.key}
-            item={item}
-            pathname={pathname}
-            onNavigate={() => {
-              if (opened) toggle();
-            }}
+        {navLoading ? <PageLoader /> : null}
+        {!navLoading && navError ? (
+          <PageError
+            message={
+              navError === "navigation_load_failed"
+                ? t("layout.nav.error")
+                : navError
+            }
+            onRetry={() => void loadNavigation()}
           />
-        ))}
+        ) : null}
+        {!navLoading && !navError && groups
+          ? groups.map((group) => (
+              <Stack key={group.id} gap={2} mb="sm">
+                <Text size="xs" c="dimmed" tt="uppercase" px="sm" fw={600}>
+                  {t(group.label_key)}
+                </Text>
+                {group.modules.map((module) => (
+                  <ConsoleNavLink
+                    key={module.id}
+                    labelKey={module.label_key}
+                    href={module.route}
+                    pathname={pathname}
+                    onNavigate={() => {
+                      if (opened) toggle();
+                    }}
+                  />
+                ))}
+              </Stack>
+            ))
+          : null}
       </AppShell.Navbar>
 
       <AppShell.Main>{children}</AppShell.Main>

@@ -106,15 +106,18 @@ Role is a first-class entity. Each User may hold **at most one** Role (`role_id`
 
 ### Locked system role: `super_admin`
 
-- Seeded at startup
-- `key` cannot be changed
+- **System Role**: product-owned; identity is stable (`id` / `key`)
+- Inserted by **Site Bootstrap** when the role store is empty
+- Kept aligned to the full Permission catalog by **Foundation Upgrade** (`python -m backend.core.upgrade` or the upgrade phase of `python -m backend.core.entry`) — not by ordinary process lifespan on a non-empty store
+- `key` cannot be changed via Role APIs
 - Cannot be deleted
-- Permissions are always the full Permission catalog and cannot be edited
+- Permissions are always the full Permission catalog and cannot be edited via Role APIs (`ROLE_LOCKED`)
 
 ### Seeded ordinary role: `operator`
 
-- Seeded at startup with `console:access` and `dashboard:read`
+- Inserted by **Site Bootstrap** when the role store is empty, with `console:access` and `dashboard:read`
 - Display name and permissions are editable
+- **Foundation Upgrade** never resets this role
 - May be deleted only when no User references it
 
 ### Custom roles
@@ -137,12 +140,16 @@ Fixed Permission catalog for this slice:
 - `users:write`
 - `roles:read`
 - `roles:write`
+- `settings:read`
+- `settings:write`
 
 Rules:
 
 - New permissions enter the catalog in code/docs first; Role UI only checkboxes catalog entries
 - Free-form permission strings are rejected
 - Frontend checks are UX only; backend remains authoritative
+- Seeded `operator` keeps `console:access` + `dashboard:read` only (no `settings:*`)
+- Session TTL used at login is the **effective** value (env or Settings Override); changing TTL does not rewrite existing sessions — see `docs/api-contracts-settings.md`
 
 ## 9. Route Protection Rule
 
@@ -157,6 +164,8 @@ Rules:
 - protected endpoints require a valid session
 - user-management endpoints require `users:read` / `users:write`
 - role-management endpoints require `roles:read` / `roles:write`
+- platform settings endpoints require `settings:read` / `settings:write`
+- console navigation requires `console:access` (module visibility filtered separately)
 
 ## 10. Logout Rule
 

@@ -24,7 +24,7 @@ The Management Foundation slice includes:
 - Configurable Role + fixed Permission catalog
 - Permission-based route and action control
 - Persistent User/Role storage (Postgres) and shared Session storage (Redis)
-- Official API entrypoint (migrate under advisory lock, then serve)
+- Official Foundation Upgrade (migrate under advisory lock, ensure System Role) and entrypoint (upgrade then serve)
 - Dev dependency Compose and a self-deploy Compose example (web + api + backing services)
 
 ### Out of Scope For Current Phase
@@ -47,7 +47,8 @@ The backend owns:
 - User identity model
 - Role and permission evaluation
 - HTTP error semantics for unauthenticated and unauthorized access
-- Schema migration via the official entrypoint (not app lifespan)
+- Schema migration and System Role ensure via Foundation Upgrade / official entrypoint (not app lifespan permission reconcile)
+- Site Bootstrap on lifespan only when stores are empty (see `docs/adr/0003-foundation-upgrade-vs-bootstrap.md`)
 
 ### Frontend
 
@@ -92,7 +93,8 @@ Session expiry is absolute (set at creation; lookup does not renew TTL).
 The first version uses RBAC with **Role** as a first-class entity.
 
 - People are **User** records; each User has at most one Role (nullable).
-- Permissions are chosen from a fixed catalog (`console:access`, `dashboard:read`, `users:*`, `roles:*`).
+- Permissions are chosen from a fixed catalog (`console:access`, `dashboard:read`, `users:*`, `roles:*`, `settings:*`).
+- Console side navigation is served from a backend-seeded module catalog (`GET /console/navigation`); see `docs/adr/0002-console-navigation-catalog.md`.
 - Seeded roles: locked `super_admin` (full catalog) and editable `operator` (`console:access` + `dashboard:read`).
 - Machine principals are reserved as **Client** and are out of scope for this slice.
 - Console login requires the User's Role to include `console:access`.

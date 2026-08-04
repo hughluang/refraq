@@ -15,15 +15,18 @@ from backend.core.config import Settings, get_settings
 from backend.repositories.role_store import SUPER_ADMIN_KEY, get_role_store
 from backend.repositories.user_store import get_user_store
 from backend.routers.auth import router as auth_router_instance
+from backend.routers.console import router as console_router
 from backend.routers.health import router as health_router
 from backend.routers.roles import router as roles_router
+from backend.routers.settings import router as settings_router
 from backend.routers.users import router as users_router
 from backend.schemas.auth import ErrorResponse
 
 settings = get_settings()
 
 
-def _seed_initial_data(target_settings: Settings) -> None:
+def _bootstrap_site(target_settings: Settings) -> None:
+    """Site Bootstrap: empty-store seed only. Does not align System Role permissions."""
     if os.getenv("REFRAQ_SKIP_SEED") == "1":
         return
     roles = get_role_store()
@@ -46,7 +49,7 @@ def _seed_initial_data(target_settings: Settings) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    _seed_initial_data(settings)
+    _bootstrap_site(settings)
     yield
 
 
@@ -69,3 +72,5 @@ app.include_router(health_router)
 app.include_router(auth_router_instance)
 app.include_router(users_router)
 app.include_router(roles_router)
+app.include_router(console_router)
+app.include_router(settings_router)

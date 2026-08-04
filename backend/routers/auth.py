@@ -18,6 +18,7 @@ from backend.admin.errors import (
     AuthInvalidCredentials,
 )
 from backend.admin.security import verify_password
+from backend.admin.settings_override import get_effective_admin_session_ttl_hours
 from backend.admin.user_payload import build_current_user
 from backend.core.config import Settings, get_settings
 from backend.repositories.role_store import RoleStore, get_role_store
@@ -51,7 +52,7 @@ def login(
     if "console:access" not in permissions:
         raise AuthConsoleAccessRequired()
 
-    ttl_seconds = settings.admin_session_ttl_hours * 3600
+    ttl_seconds = get_effective_admin_session_ttl_hours(settings) * 3600
     session_id = sessions.create(record.id, ttl_seconds)
     cookie_attrs = session_cookie_attrs(settings)
     response.set_cookie(

@@ -49,6 +49,11 @@ export function RefineRoot({ children }: RefineRootProps) {
           edit: "/console/roles/:id",
           meta: { label: "roles.title" },
         },
+        {
+          name: "settings",
+          list: "/console/settings",
+          meta: { label: "settings.title" },
+        },
       ]}
       options={{
         syncWithLocation: true,

@@ -37,8 +37,11 @@ This document records the stable development conventions for contributors workin
 
 - Install dependencies: `python -m pip install -r backend/requirements.txt`
 - Copy env: `cp backend/.env.example backend/.env` (and point URLs at Compose)
-- Official start (migrate then serve): `python -m backend.core.entry`
-- Dev reload after schema is current: `uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000`
+- Foundation Upgrade (schema + System Role ensure, no serve): `python -m backend.core.upgrade`
+- Official start (upgrade then serve): `python -m backend.core.entry`
+- Dev reload after schema/roles are current: `uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000`
+  - Direct `uvicorn` runs **Site Bootstrap** only (empty stores). It does **not** realign `super_admin` when Permission catalog keys are added.
+  - After catalog or System Role semantics change, run `python -m backend.core.upgrade` (or use `entry`). If Platform Settings is missing from the nav for Super Admin, upgrade first.
 - Run API tests (memory Store Backend via conftest): `pytest backend/tests -q`
 - Run integration tests (Compose must be up): `pytest backend/tests -q -m integration`
   - Uses isolated stores by default: Postgres DB `refraq_test` + Redis logical DB `1` (does not TRUNCATE/FLUSH interactive `refraq` / Redis `0`)
@@ -65,9 +68,13 @@ For Management Foundation auth/RBAC work, read in this order:
 2. `docs/architecture.md`
 3. `docs/modules.md`
 4. `docs/adr/0001-postgres-redis-foundation-stores.md`
-5. `docs/business-login-auth.md`
-6. `docs/business-management-console.md` (Console shell IA and module mount contract)
-7. `docs/api-contracts-auth.md`
-8. `docs/api-contracts-users.md`
-9. `docs/api-contracts-roles.md`
-10. `docs/env.md`
+5. `docs/adr/0002-console-navigation-catalog.md`
+6. `docs/adr/0003-foundation-upgrade-vs-bootstrap.md`
+7. `docs/business-login-auth.md`
+8. `docs/business-management-console.md` (Console shell IA and module mount contract)
+9. `docs/api-contracts-auth.md`
+10. `docs/api-contracts-users.md`
+11. `docs/api-contracts-roles.md`
+12. `docs/api-contracts-console.md`
+13. `docs/api-contracts-settings.md`
+14. `docs/env.md`

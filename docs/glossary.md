@@ -42,6 +42,37 @@ The operator-facing UI surface of Refraq for the current delivery slice, not the
 For the current slice this is a docs/domain term, not user-visible UI copy.
 Avoid treating it as the product definition, a standalone admin project, or a synonym for Refraq itself.
 
+### Console Module
+
+A first-class Management Console capability mounted in structural navigation (for example Workbench home, Users, Roles, Platform Settings).
+Declared in the backend code-seeded catalog; Foundation modules are always present.
+Avoid treating it as a toggleable app install, a microservice name, or a Plugin.
+
+### Console Navigation
+
+The permission-filtered, grouped side-nav payload derived from the Console Module catalog for the current User.
+Served by the backend navigation API; labels are i18n keys.
+Avoid building side-nav truth only from frontend static menus.
+
+### Platform Settings
+
+The Console Module for platform system parameters (non-secret operational configuration exposed in the Console).
+Distinct from Administration master data (Users / Roles).
+Avoid conflating it with user preferences or Data Product governance.
+
+### Settings Override
+
+An in-process runtime overlay over env-backed Settings for a narrow writable set (session TTL in this slice).
+Restart clears it; it is not a Store Backend and must not mutate `core` Settings objects as the source of truth.
+Avoid calling it persistent configuration or feature flags.
+
+### Plugin
+
+An optional sub-capability extension under a Console Module (future).
+Not a top-level Console Module enable/disable mechanism.
+Out of scope for the current Foundation console-infra slice.
+Avoid using Plugin as a synonym for Console Module.
+
 ## People And Access
 
 ### User
@@ -101,9 +132,27 @@ Roles bind a subset of the fixed Permission catalog.
 Seeded roles include locked `super_admin` and editable `operator`.
 Avoid calling it a job title or department.
 
+### System Role
+
+The product-owned locked Role `super_admin`: stable identity, not editable via Role APIs, permissions always equal the current Permission catalog.
+Aligned only by **Foundation Upgrade**, not by ordinary Role edits or Site Bootstrap on a non-empty store.
+Avoid calling every seeded role a System Role (`operator` is a seeded ordinary role).
+
+### Foundation Upgrade
+
+The official product upgrade path: schema migration under advisory lock, then ensure of the System Role.
+Does not create or rewrite Users, and does not reset editable roles.
+Invoked as `python -m backend.core.upgrade` or as the first phase of `python -m backend.core.entry`.
+
+### Site Bootstrap
+
+First-time empty-store initialization: insert seed roles when none exist; create the initial admin User when no users exist.
+Does not realign permissions on an already-present System Role.
+Runs from the API process lifespan (and must not be confused with Foundation Upgrade).
+
 ### Permission
 
-A concrete allowed action expressed as `resource:action`, such as `dashboard:read` or `console:access`.
+A concrete allowed action expressed as `resource:action`, such as `dashboard:read`, `console:access`, or `settings:read`.
 Chosen only from a fixed catalog when editing Roles.
 Avoid reducing it to a menu or a page label.
 Avoid free-form permission strings invented in the UI.

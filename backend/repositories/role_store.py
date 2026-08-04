@@ -15,7 +15,12 @@ from backend.core.config import get_settings
 
 ROLE_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 SUPER_ADMIN_KEY = "super_admin"
+SUPER_ADMIN_ID = "role_super_admin"
+SUPER_ADMIN_NAME = "Super Admin"
 OPERATOR_KEY = "operator"
+OPERATOR_ID = "role_operator"
+OPERATOR_NAME = "Operator"
+OPERATOR_DEFAULT_PERMISSIONS: tuple[str, ...] = ("console:access", "dashboard:read")
 
 
 @dataclass
@@ -30,6 +35,8 @@ class RoleRecord:
 
 class RoleStore(Protocol):
     def seed_defaults(self) -> None: ...
+
+    def ensure_super_admin(self) -> RoleRecord: ...
 
     def count(self) -> int: ...
 
@@ -65,27 +72,48 @@ class MemoryRoleStore:
         self._lock = threading.Lock()
 
     def seed_defaults(self) -> None:
+        """Site Bootstrap: insert seed roles only when the store is empty."""
         with self._lock:
             if self._by_id:
                 return
             self._insert_locked(
                 RoleRecord(
-                    id="role_super_admin",
+                    id=SUPER_ADMIN_ID,
                     key=SUPER_ADMIN_KEY,
-                    name="Super Admin",
+                    name=SUPER_ADMIN_NAME,
                     permissions=list(ALL_PERMISSIONS),
                     locked=True,
                 )
             )
             self._insert_locked(
                 RoleRecord(
-                    id="role_operator",
+                    id=OPERATOR_ID,
                     key=OPERATOR_KEY,
-                    name="Operator",
-                    permissions=["console:access", "dashboard:read"],
+                    name=OPERATOR_NAME,
+                    permissions=list(OPERATOR_DEFAULT_PERMISSIONS),
                     locked=False,
                 )
             )
+
+    def ensure_super_admin(self) -> RoleRecord:
+        """Foundation Upgrade path: upsert locked System Role to full catalog."""
+        with self._lock:
+            role_id = self._by_key.get(SUPER_ADMIN_KEY)
+            if role_id is None:
+                record = RoleRecord(
+                    id=SUPER_ADMIN_ID,
+                    key=SUPER_ADMIN_KEY,
+                    name=SUPER_ADMIN_NAME,
+                    permissions=list(ALL_PERMISSIONS),
+                    locked=True,
+                )
+                self._insert_locked(record)
+                return record
+            record = self._by_id[role_id]
+            record.name = SUPER_ADMIN_NAME
+            record.permissions = list(ALL_PERMISSIONS)
+            record.locked = True
+            return record
 
     def _insert_locked(self, record: RoleRecord) -> None:
         self._by_id[record.id] = record
@@ -176,6 +204,7 @@ class MemoryRoleStore:
 
 class SqlRoleStore:
     def seed_defaults(self) -> None:
+        """Site Bootstrap: insert seed roles only when the store is empty."""
         from backend.core.db import session_scope
         from backend.admin.models import RoleRow
         from sqlalchemy import select
@@ -184,26 +213,52 @@ class SqlRoleStore:
             existing = session.scalar(select(RoleRow.id).limit(1))
             if existing is not None:
                 return
+            now = time.time()
             session.add(
                 RoleRow(
-                    id="role_super_admin",
+                    id=SUPER_ADMIN_ID,
                     key=SUPER_ADMIN_KEY,
-                    name="Super Admin",
+                    name=SUPER_ADMIN_NAME,
+                    permissions=list(ALL_PERMISSIONS),
+                    locked=True,
+                    created_at=now,
+                )
+            )
+            session.add(
+                RoleRow(
+                    id=OPERATOR_ID,
+                    key=OPERATOR_KEY,
+                    name=OPERATOR_NAME,
+                    permissions=list(OPERATOR_DEFAULT_PERMISSIONS),
+                    locked=False,
+                    created_at=now,
+                )
+            )
+
+    def ensure_super_admin(self) -> RoleRecord:
+        """Foundation Upgrade path: upsert locked System Role to full catalog."""
+        from backend.core.db import session_scope
+        from backend.admin.models import RoleRow
+        from sqlalchemy import select
+
+        with session_scope() as session:
+            row = session.scalar(select(RoleRow).where(RoleRow.key == SUPER_ADMIN_KEY))
+            if row is None:
+                row = RoleRow(
+                    id=SUPER_ADMIN_ID,
+                    key=SUPER_ADMIN_KEY,
+                    name=SUPER_ADMIN_NAME,
                     permissions=list(ALL_PERMISSIONS),
                     locked=True,
                     created_at=time.time(),
                 )
-            )
-            session.add(
-                RoleRow(
-                    id="role_operator",
-                    key=OPERATOR_KEY,
-                    name="Operator",
-                    permissions=["console:access", "dashboard:read"],
-                    locked=False,
-                    created_at=time.time(),
-                )
-            )
+                session.add(row)
+            else:
+                row.name = SUPER_ADMIN_NAME
+                row.permissions = list(ALL_PERMISSIONS)
+                row.locked = True
+            session.flush()
+            return _row_to_role(row)
 
     def count(self) -> int:
         from backend.core.db import session_scope

@@ -55,7 +55,9 @@ Purpose: return the fixed Permission catalog for Role editing UIs.
     { "key": "users:read", "description": "List and view users" },
     { "key": "users:write", "description": "Create users and change user status" },
     { "key": "roles:read", "description": "List roles and the permission catalog" },
-    { "key": "roles:write", "description": "Create, update, and delete roles" }
+    { "key": "roles:write", "description": "Create, update, and delete roles" },
+    { "key": "settings:read", "description": "View platform system parameters" },
+    { "key": "settings:write", "description": "Change platform system parameters" }
   ]
 }
 ```
@@ -81,7 +83,9 @@ Purpose: list Role records.
         "users:read",
         "users:write",
         "roles:read",
-        "roles:write"
+        "roles:write",
+        "settings:read",
+        "settings:write"
       ],
       "locked": true,
       "user_count": 1

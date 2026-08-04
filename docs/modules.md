@@ -14,13 +14,14 @@ Responsibilities:
 
 - Create FastAPI app
 - Register routers (including health probes)
-- Run idempotent seed when stores are empty
+- Run **Site Bootstrap** when stores are empty (seed roles + initial admin); must not realign System Role permissions on non-empty stores
 
 Must not contain:
 
 - Permission logic
 - Data access logic
 - Schema migrations
+- Foundation Upgrade orchestration (belongs in `core/upgrade.py`)
 - Probe route implementations (belong in `routers/health.py`)
 - Large request validation blocks
 
@@ -32,11 +33,12 @@ Responsibilities:
 - `core/config.py`: environment-driven settings via pydantic-settings (Store Backend, backing-service URLs)
 - `core/db.py`: SQLAlchemy `DeclarativeBase`, engine, and session factory for Postgres
 - `core/redis_client.py`: Redis client factory for Session storage
-- `core/entry.py`: official product start path (advisory-locked Alembic upgrade, then serve); exit non-zero on lock timeout or migration failure
+- `core/upgrade.py`: **Foundation Upgrade** (advisory-locked Alembic migrate, then call domain System Role ensure); exit non-zero on failure
+- `core/entry.py`: official product start path (run Foundation Upgrade, then serve); exit non-zero if upgrade fails (does not serve)
 
 Must not contain:
 
-- Business rules
+- Business rules for what a System Role is (those live in `admin/`; `core` only orchestrates)
 - HTTP route handlers
 - Domain-specific ORM table definitions (those live in domain packages such as `admin/models.py`)
 
@@ -111,14 +113,19 @@ Responsibilities:
 
 - Hold Management Foundation domain code (auth, permission, cookie/deps) that does not belong to generic transport or storage layers
 
-Recommended subdomains for the first slice:
+Recommended subdomains for the Foundation console infra slice:
 
 - `admin/models.py` (Foundation ORM tables)
 - `admin/permissions.py`
 - `admin/deps.py`
 - `admin/security.py`
+- `admin/console_modules.py` (code-seeded Console Module catalog)
+- `admin/settings_override.py` (in-process Settings Override; not Store Backend)
+- `admin/system_roles.py` (System Role ensure for Foundation Upgrade)
 
 Must not own Session persistence implementations (those live under `repositories/`).
+
+Do not put Console Module catalog, Settings Override, or System Role ensure rules into `backend/core/`.
 
 Do not pre-create empty packages for future Data Product Capabilities.
 
@@ -221,7 +228,8 @@ To add a locale: add `locales/<code>/common.json`, register it in `i18n.config.t
 
 ### Backend
 
-- `core/entry.py` -> `core/config`, Alembic, ASGI app (`backend.main`)
+- `core/upgrade.py` -> `core/config`, Alembic, `admin/system_roles` (orchestration only)
+- `core/entry.py` -> `core/upgrade`, ASGI app (`backend.main`)
 - `main.py` -> `core/`, `routers/`, `repositories/`
 - `alembic/` -> `core/` (Base) + import every domain `models` module
 - `routers/` -> `schemas/`, `admin/`, `repositories/`
@@ -254,3 +262,6 @@ For the login/permission slice, each concern should land here:
 - Protected layout behavior: `frontend/src/app/console/`
 - User resource UI: `frontend/src/features/users/`
 - Role resource UI: `frontend/src/features/roles/`
+- Console navigation API: `backend/routers/console.py` + `admin/console_modules.py`
+- Platform settings API: `backend/routers/settings.py` + `admin/settings_override.py`
+- Settings UI: `frontend/src/features/settings/`

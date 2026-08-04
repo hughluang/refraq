@@ -11,6 +11,8 @@ Permission = Literal[
     "users:write",
     "roles:read",
     "roles:write",
+    "settings:read",
+    "settings:write",
 ]
 
 ALL_PERMISSIONS: tuple[Permission, ...] = (
@@ -20,6 +22,8 @@ ALL_PERMISSIONS: tuple[Permission, ...] = (
     "users:write",
     "roles:read",
     "roles:write",
+    "settings:read",
+    "settings:write",
 )
 
 PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
@@ -29,6 +33,8 @@ PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
     "users:write": "Create users and change user status",
     "roles:read": "List roles and the permission catalog",
     "roles:write": "Create, update, and delete roles",
+    "settings:read": "View platform system parameters",
+    "settings:write": "Change platform system parameters",
 }
 
 CATALOG_SET: frozenset[str] = frozenset(ALL_PERMISSIONS)

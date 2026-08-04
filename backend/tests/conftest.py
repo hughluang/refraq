@@ -11,6 +11,7 @@ os.environ.pop("REDIS_URL", None)
 
 import pytest
 
+from backend.admin.settings_override import reset_settings_override
 from backend.core.config import reset_settings_cache
 from backend.core.db import reset_db_singletons
 from backend.core.redis_client import reset_redis_singleton
@@ -19,6 +20,7 @@ from backend.repositories.session_store import reset_session_store
 from backend.repositories.user_store import reset_user_store
 
 reset_settings_cache()
+reset_settings_override()
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -31,6 +33,7 @@ def pytest_configure(config: pytest.Config) -> None:
 @pytest.fixture(autouse=True)
 def _reset_foundation_singletons() -> None:
     reset_settings_cache()
+    reset_settings_override()
     reset_user_store()
     reset_role_store()
     reset_session_store()
@@ -42,4 +45,5 @@ def _reset_foundation_singletons() -> None:
     reset_session_store()
     reset_db_singletons()
     reset_redis_singleton()
+    reset_settings_override()
     reset_settings_cache()
