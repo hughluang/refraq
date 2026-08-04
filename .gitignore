@@ -8,6 +8,7 @@ node_modules/
 out/
 coverage/
 *.tsbuildinfo
+next-env.d.ts
 
 .DS_Store
 
@@ -22,3 +23,4 @@ coverage/
 CONTEXT.md
 docs/adr/
 docs/product-core/
+scripts/
