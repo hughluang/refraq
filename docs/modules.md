@@ -105,7 +105,7 @@ Must not contain:
 
 - HTTP concerns
 - UI-facing formatting logic
-- Auth policy decisions (belong in `admin/`)
+- Auth / Role policy decisions (belong in `admin/`; RoleStore is persistence CRUD only)
 
 ### `backend/admin/`
 
@@ -121,7 +121,7 @@ Recommended subdomains for the Foundation console infra slice:
 - `admin/security.py`
 - `admin/console_modules.py` (code-seeded Console Module catalog)
 - `admin/settings_override.py` (in-process Settings Override; not Store Backend)
-- `admin/system_roles.py` (System Role ensure for Foundation Upgrade)
+- `admin/roles.py` (Role domain: System Role ensure, Site Bootstrap seed, write invariants)
 
 Must not own Session persistence implementations (those live under `repositories/`).
 
@@ -228,9 +228,9 @@ To add a locale: add `locales/<code>/common.json`, register it in `i18n.config.t
 
 ### Backend
 
-- `core/upgrade.py` -> `core/config`, Alembic, `admin/system_roles` (orchestration only)
+- `core/upgrade.py` -> `core/config`, Alembic, `admin/roles` (orchestration only)
 - `core/entry.py` -> `core/upgrade`, ASGI app (`backend.main`)
-- `main.py` -> `core/`, `routers/`, `repositories/`
+- `main.py` -> `core/`, `routers/`, `repositories/`, `admin/` (Site Bootstrap seed / initial admin)
 - `alembic/` -> `core/` (Base) + import every domain `models` module
 - `routers/` -> `schemas/`, `admin/`, `repositories/`
 - `admin/` -> `repositories/`, `schemas/` when needed; may use `core/` for settings; owns Foundation ORM in `admin/models.py`

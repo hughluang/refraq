@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Response, status
 
+from backend.admin import roles as role_domain
 from backend.admin.deps import require_permission
-from backend.admin.errors import RoleInUse, RoleLocked, RoleNotFound
+from backend.admin.errors import RoleInUse, RoleNotFound
 from backend.admin.permissions import ALL_PERMISSIONS, PERMISSION_DESCRIPTIONS
 from backend.repositories.role_store import RoleRecord, RoleStore, get_role_store
 from backend.repositories.user_store import UserRecord, UserStore, get_user_store
@@ -67,7 +68,8 @@ def create_role(
     roles: RoleStore = Depends(get_role_store),
     users: UserStore = Depends(get_user_store),
 ) -> RoleResponse:
-    record = roles.create_role(
+    record = role_domain.create_role(
+        roles,
         key=payload.key,
         name=payload.name,
         permissions=payload.permissions,
@@ -96,9 +98,8 @@ def update_role(
     roles: RoleStore = Depends(get_role_store),
     users: UserStore = Depends(get_user_store),
 ) -> RoleResponse:
-    if roles.get_by_id(role_id) is None:
-        raise RoleNotFound()
-    record = roles.update_role(
+    record = role_domain.update_role(
+        roles,
         role_id,
         name=payload.name,
         permissions=payload.permissions,
@@ -118,9 +119,8 @@ def delete_role(
     record = roles.get_by_id(role_id)
     if record is None:
         raise RoleNotFound()
-    if record.locked:
-        raise RoleLocked()
-    if users.count_by_role_id(role_id) > 0:
+    # Prefer RoleLocked (domain) over RoleInUse when a locked role still has users.
+    if not record.locked and users.count_by_role_id(role_id) > 0:
         raise RoleInUse()
-    roles.delete_role(role_id)
+    role_domain.delete_role(roles, role_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

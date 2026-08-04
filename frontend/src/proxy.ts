@@ -54,5 +54,7 @@ export function proxy(request: NextRequest): NextResponse {
 }
 
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
+  // Exclude all `/_next/*` (including webpack-hmr websocket) so Turbopack HMR
+  // is not broken by this proxy; static/image alone is not enough.
+  matcher: ["/((?!api|_next/|favicon.ico).*)"],
 };

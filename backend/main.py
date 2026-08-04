@@ -12,7 +12,8 @@ from fastapi.responses import JSONResponse
 from backend.admin.errors import AuthError
 from backend.admin.security import hash_password
 from backend.core.config import Settings, get_settings
-from backend.repositories.role_store import SUPER_ADMIN_KEY, get_role_store
+from backend.admin.roles import SUPER_ADMIN_KEY, seed_roles
+from backend.repositories.role_store import get_role_store
 from backend.repositories.user_store import get_user_store
 from backend.routers.auth import router as auth_router_instance
 from backend.routers.console import router as console_router
@@ -30,7 +31,7 @@ def _bootstrap_site(target_settings: Settings) -> None:
     if os.getenv("REFRAQ_SKIP_SEED") == "1":
         return
     roles = get_role_store()
-    roles.seed_defaults()
+    seed_roles(roles)
     users = get_user_store()
     if users.count() > 0:
         return

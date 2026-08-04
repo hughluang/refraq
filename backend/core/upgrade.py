@@ -12,8 +12,9 @@ from alembic.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
 
-from backend.admin.system_roles import ensure_system_role
+from backend.admin.roles import ensure_system_role
 from backend.core.config import get_settings
+from backend.repositories.role_store import get_role_store
 
 # Stable 64-bit signed key derived from product identity (not a generic magic number).
 _ADVISORY_LOCK_KEY = int.from_bytes(
@@ -70,7 +71,7 @@ def _run_under_advisory_lock(database_url: str, *, ensure_roles: bool) -> None:
             try:
                 command.upgrade(_alembic_config(database_url), "head")
                 if ensure_roles:
-                    ensure_system_role()
+                    ensure_system_role(get_role_store())
             finally:
                 conn.execute(
                     text("SELECT pg_advisory_unlock(:key)"),

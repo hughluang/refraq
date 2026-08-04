@@ -2,25 +2,13 @@
 
 from __future__ import annotations
 
-import re
 import threading
 import time
-import uuid
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Protocol
 
-from backend.admin.permissions import ALL_PERMISSIONS, normalize_permissions
 from backend.core.config import get_settings
-
-ROLE_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
-SUPER_ADMIN_KEY = "super_admin"
-SUPER_ADMIN_ID = "role_super_admin"
-SUPER_ADMIN_NAME = "Super Admin"
-OPERATOR_KEY = "operator"
-OPERATOR_ID = "role_operator"
-OPERATOR_NAME = "Operator"
-OPERATOR_DEFAULT_PERMISSIONS: tuple[str, ...] = ("console:access", "dashboard:read")
 
 
 @dataclass
@@ -34,10 +22,6 @@ class RoleRecord:
 
 
 class RoleStore(Protocol):
-    def seed_defaults(self) -> None: ...
-
-    def ensure_super_admin(self) -> RoleRecord: ...
-
     def count(self) -> int: ...
 
     def get_by_id(self, role_id: str) -> RoleRecord | None: ...
@@ -46,23 +30,11 @@ class RoleStore(Protocol):
 
     def list_roles(self) -> list[RoleRecord]: ...
 
-    def create_role(
-        self,
-        *,
-        key: str,
-        name: str,
-        permissions: list[str],
-    ) -> RoleRecord: ...
+    def insert(self, record: RoleRecord) -> None: ...
 
-    def update_role(
-        self,
-        role_id: str,
-        *,
-        name: str | None = None,
-        permissions: list[str] | None = None,
-    ) -> RoleRecord | None: ...
+    def save(self, record: RoleRecord) -> None: ...
 
-    def delete_role(self, role_id: str) -> RoleRecord | None: ...
+    def delete(self, role_id: str) -> RoleRecord | None: ...
 
 
 class MemoryRoleStore:
@@ -70,54 +42,6 @@ class MemoryRoleStore:
         self._by_id: dict[str, RoleRecord] = {}
         self._by_key: dict[str, str] = {}
         self._lock = threading.Lock()
-
-    def seed_defaults(self) -> None:
-        """Site Bootstrap: insert seed roles only when the store is empty."""
-        with self._lock:
-            if self._by_id:
-                return
-            self._insert_locked(
-                RoleRecord(
-                    id=SUPER_ADMIN_ID,
-                    key=SUPER_ADMIN_KEY,
-                    name=SUPER_ADMIN_NAME,
-                    permissions=list(ALL_PERMISSIONS),
-                    locked=True,
-                )
-            )
-            self._insert_locked(
-                RoleRecord(
-                    id=OPERATOR_ID,
-                    key=OPERATOR_KEY,
-                    name=OPERATOR_NAME,
-                    permissions=list(OPERATOR_DEFAULT_PERMISSIONS),
-                    locked=False,
-                )
-            )
-
-    def ensure_super_admin(self) -> RoleRecord:
-        """Foundation Upgrade path: upsert locked System Role to full catalog."""
-        with self._lock:
-            role_id = self._by_key.get(SUPER_ADMIN_KEY)
-            if role_id is None:
-                record = RoleRecord(
-                    id=SUPER_ADMIN_ID,
-                    key=SUPER_ADMIN_KEY,
-                    name=SUPER_ADMIN_NAME,
-                    permissions=list(ALL_PERMISSIONS),
-                    locked=True,
-                )
-                self._insert_locked(record)
-                return record
-            record = self._by_id[role_id]
-            record.name = SUPER_ADMIN_NAME
-            record.permissions = list(ALL_PERMISSIONS)
-            record.locked = True
-            return record
-
-    def _insert_locked(self, record: RoleRecord) -> None:
-        self._by_id[record.id] = record
-        self._by_key[record.key] = record.id
 
     def count(self) -> int:
         with self._lock:
@@ -141,125 +65,34 @@ class MemoryRoleStore:
                 key=lambda record: (0 if record.locked else 1, record.key),
             )
 
-    def create_role(
-        self,
-        *,
-        key: str,
-        name: str,
-        permissions: list[str],
-    ) -> RoleRecord:
-        from backend.admin.errors import RoleInvalidKey, RoleKeyDuplicate
+    def insert(self, record: RoleRecord) -> None:
+        from backend.admin.errors import RoleKeyDuplicate
 
-        if not ROLE_KEY_RE.match(key):
-            raise RoleInvalidKey()
-        normalized = normalize_permissions(permissions)
         with self._lock:
-            if key in self._by_key:
+            if record.key in self._by_key or record.id in self._by_id:
                 raise RoleKeyDuplicate()
-            role_id = f"role_{uuid.uuid4().hex[:12]}"
-            record = RoleRecord(
-                id=role_id,
-                key=key,
-                name=name,
-                permissions=normalized,
-                locked=False,
-            )
-            self._insert_locked(record)
-            return record
+            self._by_id[record.id] = record
+            self._by_key[record.key] = record.id
 
-    def update_role(
-        self,
-        role_id: str,
-        *,
-        name: str | None = None,
-        permissions: list[str] | None = None,
-    ) -> RoleRecord | None:
-        from backend.admin.errors import RoleLocked
-
+    def save(self, record: RoleRecord) -> None:
         with self._lock:
-            record = self._by_id.get(role_id)
+            previous = self._by_id.get(record.id)
+            if previous is None:
+                return
+            previous.name = record.name
+            previous.permissions = record.permissions
+            previous.locked = record.locked
+
+    def delete(self, role_id: str) -> RoleRecord | None:
+        with self._lock:
+            record = self._by_id.pop(role_id, None)
             if record is None:
                 return None
-            if record.locked:
-                raise RoleLocked()
-            if name is not None:
-                record.name = name
-            if permissions is not None:
-                record.permissions = normalize_permissions(permissions)
-            return record
-
-    def delete_role(self, role_id: str) -> RoleRecord | None:
-        from backend.admin.errors import RoleLocked
-
-        with self._lock:
-            record = self._by_id.get(role_id)
-            if record is None:
-                return None
-            if record.locked:
-                raise RoleLocked()
-            self._by_id.pop(role_id, None)
             self._by_key.pop(record.key, None)
             return record
 
 
 class SqlRoleStore:
-    def seed_defaults(self) -> None:
-        """Site Bootstrap: insert seed roles only when the store is empty."""
-        from backend.core.db import session_scope
-        from backend.admin.models import RoleRow
-        from sqlalchemy import select
-
-        with session_scope() as session:
-            existing = session.scalar(select(RoleRow.id).limit(1))
-            if existing is not None:
-                return
-            now = time.time()
-            session.add(
-                RoleRow(
-                    id=SUPER_ADMIN_ID,
-                    key=SUPER_ADMIN_KEY,
-                    name=SUPER_ADMIN_NAME,
-                    permissions=list(ALL_PERMISSIONS),
-                    locked=True,
-                    created_at=now,
-                )
-            )
-            session.add(
-                RoleRow(
-                    id=OPERATOR_ID,
-                    key=OPERATOR_KEY,
-                    name=OPERATOR_NAME,
-                    permissions=list(OPERATOR_DEFAULT_PERMISSIONS),
-                    locked=False,
-                    created_at=now,
-                )
-            )
-
-    def ensure_super_admin(self) -> RoleRecord:
-        """Foundation Upgrade path: upsert locked System Role to full catalog."""
-        from backend.core.db import session_scope
-        from backend.admin.models import RoleRow
-        from sqlalchemy import select
-
-        with session_scope() as session:
-            row = session.scalar(select(RoleRow).where(RoleRow.key == SUPER_ADMIN_KEY))
-            if row is None:
-                row = RoleRow(
-                    id=SUPER_ADMIN_ID,
-                    key=SUPER_ADMIN_KEY,
-                    name=SUPER_ADMIN_NAME,
-                    permissions=list(ALL_PERMISSIONS),
-                    locked=True,
-                    created_at=time.time(),
-                )
-                session.add(row)
-            else:
-                row.name = SUPER_ADMIN_NAME
-                row.permissions = list(ALL_PERMISSIONS)
-                row.locked = True
-            session.flush()
-            return _row_to_role(row)
-
     def count(self) -> int:
         from backend.core.db import session_scope
         from backend.admin.models import RoleRow
@@ -294,69 +127,42 @@ class SqlRoleStore:
             records = [_row_to_role(row) for row in rows]
             return sorted(records, key=lambda record: (0 if record.locked else 1, record.key))
 
-    def create_role(
-        self,
-        *,
-        key: str,
-        name: str,
-        permissions: list[str],
-    ) -> RoleRecord:
-        from backend.admin.errors import RoleInvalidKey, RoleKeyDuplicate
+    def insert(self, record: RoleRecord) -> None:
+        from backend.admin.errors import RoleKeyDuplicate
         from backend.core.db import session_scope
         from backend.admin.models import RoleRow
-        from sqlalchemy import select
         from sqlalchemy.exc import IntegrityError
 
-        if not ROLE_KEY_RE.match(key):
-            raise RoleInvalidKey()
-        normalized = normalize_permissions(permissions)
-        role_id = f"role_{uuid.uuid4().hex[:12]}"
-        created_at = time.time()
         try:
             with session_scope() as session:
-                existing = session.scalar(select(RoleRow).where(RoleRow.key == key))
-                if existing is not None:
-                    raise RoleKeyDuplicate()
-                row = RoleRow(
-                    id=role_id,
-                    key=key,
-                    name=name,
-                    permissions=normalized,
-                    locked=False,
-                    created_at=created_at,
+                session.add(
+                    RoleRow(
+                        id=record.id,
+                        key=record.key,
+                        name=record.name,
+                        permissions=list(record.permissions),
+                        locked=record.locked,
+                        created_at=record.created_at,
+                    )
                 )
-                session.add(row)
                 session.flush()
-                return _row_to_role(row)
         except IntegrityError as exc:
             raise RoleKeyDuplicate() from exc
 
-    def update_role(
-        self,
-        role_id: str,
-        *,
-        name: str | None = None,
-        permissions: list[str] | None = None,
-    ) -> RoleRecord | None:
-        from backend.admin.errors import RoleLocked
+    def save(self, record: RoleRecord) -> None:
         from backend.core.db import session_scope
         from backend.admin.models import RoleRow
 
         with session_scope() as session:
-            row = session.get(RoleRow, role_id)
+            row = session.get(RoleRow, record.id)
             if row is None:
-                return None
-            if row.locked:
-                raise RoleLocked()
-            if name is not None:
-                row.name = name
-            if permissions is not None:
-                row.permissions = normalize_permissions(permissions)
+                return
+            row.name = record.name
+            row.permissions = list(record.permissions)
+            row.locked = record.locked
             session.flush()
-            return _row_to_role(row)
 
-    def delete_role(self, role_id: str) -> RoleRecord | None:
-        from backend.admin.errors import RoleLocked
+    def delete(self, role_id: str) -> RoleRecord | None:
         from backend.core.db import session_scope
         from backend.admin.models import RoleRow
 
@@ -364,8 +170,6 @@ class SqlRoleStore:
             row = session.get(RoleRow, role_id)
             if row is None:
                 return None
-            if row.locked:
-                raise RoleLocked()
             record = _row_to_role(row)
             session.delete(row)
             return record
@@ -399,7 +203,6 @@ def get_role_store() -> RoleStore:
         with _memory_lock:
             if _memory_singleton is None:
                 _memory_singleton = MemoryRoleStore()
-                _memory_singleton.seed_defaults()
             return _memory_singleton
     return SqlRoleStore()
 

@@ -12,6 +12,7 @@ os.environ.setdefault("REFRAQ_SKIP_SEED", "1")
 
 from backend.admin.security import hash_password  # noqa: E402
 from backend.main import app  # noqa: E402
+from backend.admin.roles import create_role, seed_roles  # noqa: E402
 from backend.repositories.role_store import (  # noqa: E402
     MemoryRoleStore,
     reset_role_store,
@@ -32,7 +33,7 @@ def store_bundle():
     reset_role_store()
     reset_session_store()
     role_store = MemoryRoleStore()
-    role_store.seed_defaults()
+    seed_roles(role_store)
     user_store = MemoryUserStore()
     super_admin = role_store.get_by_key("super_admin")
     assert super_admin is not None
@@ -122,7 +123,8 @@ def test_login_without_console_access_is_rejected(
     store_bundle, client: TestClient
 ) -> None:
     user_store, role_store, _ = store_bundle
-    no_console = role_store.create_role(
+    no_console = create_role(
+        role_store,
         key="no_console",
         name="No Console",
         permissions=["dashboard:read"],

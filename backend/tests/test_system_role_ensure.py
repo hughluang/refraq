@@ -7,21 +7,22 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.admin.permissions import ALL_PERMISSIONS
-from backend.admin.system_roles import ensure_system_role
-from backend.repositories.role_store import (
+from backend.admin.roles import (
     OPERATOR_DEFAULT_PERMISSIONS,
     OPERATOR_KEY,
     SUPER_ADMIN_ID,
     SUPER_ADMIN_KEY,
     SUPER_ADMIN_NAME,
-    MemoryRoleStore,
-    RoleRecord,
+    create_role,
+    ensure_system_role,
+    seed_roles,
 )
+from backend.repositories.role_store import MemoryRoleStore, RoleRecord
 
 
 def test_ensure_aligns_stale_super_admin_permissions() -> None:
     store = MemoryRoleStore()
-    store._insert_locked(
+    store.insert(
         RoleRecord(
             id=SUPER_ADMIN_ID,
             key=SUPER_ADMIN_KEY,
@@ -30,7 +31,7 @@ def test_ensure_aligns_stale_super_admin_permissions() -> None:
             locked=True,
         )
     )
-    store._insert_locked(
+    store.insert(
         RoleRecord(
             id="role_operator",
             key=OPERATOR_KEY,
@@ -60,7 +61,7 @@ def test_ensure_aligns_stale_super_admin_permissions() -> None:
 
 def test_ensure_creates_missing_super_admin() -> None:
     store = MemoryRoleStore()
-    store._insert_locked(
+    store.insert(
         RoleRecord(
             id="role_operator",
             key=OPERATOR_KEY,
@@ -80,7 +81,7 @@ def test_ensure_creates_missing_super_admin() -> None:
 
 def test_ensure_does_not_change_custom_role() -> None:
     store = MemoryRoleStore()
-    store._insert_locked(
+    store.insert(
         RoleRecord(
             id=SUPER_ADMIN_ID,
             key=SUPER_ADMIN_KEY,
@@ -89,7 +90,8 @@ def test_ensure_does_not_change_custom_role() -> None:
             locked=False,
         )
     )
-    custom = store.create_role(
+    custom = create_role(
+        store,
         key="analyst",
         name="Analyst",
         permissions=["console:access", "dashboard:read"],
@@ -106,14 +108,14 @@ def test_ensure_does_not_change_custom_role() -> None:
     assert super_admin.name == SUPER_ADMIN_NAME
 
 
-def test_seed_defaults_insert_once_does_not_realign() -> None:
+def test_seed_roles_insert_once_does_not_realign() -> None:
     store = MemoryRoleStore()
-    store.seed_defaults()
+    seed_roles(store)
     stale = store.get_by_key(SUPER_ADMIN_KEY)
     assert stale is not None
     stale.permissions = ["console:access"]
 
-    store.seed_defaults()
+    seed_roles(store)
 
     after = store.get_by_key(SUPER_ADMIN_KEY)
     assert after is not None
@@ -128,7 +130,7 @@ def test_run_upgrade_calls_ensure_after_migrate() -> None:
     def fake_upgrade(cfg: object, rev: str) -> None:
         calls.append(f"migrate:{rev}")
 
-    def fake_ensure() -> RoleRecord:
+    def fake_ensure(_roles: object) -> RoleRecord:
         calls.append("ensure")
         return RoleRecord(
             id=SUPER_ADMIN_ID,
