@@ -22,6 +22,7 @@ import { useRouter } from "next/navigation";
 import { PageError } from "@/components/feedback/PageError";
 import { PageLoader } from "@/components/feedback/PageLoader";
 import { PageChrome } from "@/components/layout/PageChrome";
+import { ModuleId } from "@/features/console/module-identity";
 import type {
   PermissionCatalogEntry,
   RoleFormValues,
@@ -41,7 +42,7 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
   const [catalogError, setCatalogError] = useState<string | null>(null);
 
   const roleQuery = useOne<RoleRow>({
-    resource: "roles",
+    resource: ModuleId.roles,
     id: roleId ?? "",
     queryOptions: { enabled: mode === "edit" && Boolean(roleId) },
   });
@@ -110,7 +111,7 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
     if (mode === "create") {
       createRole(
         {
-          resource: "roles",
+          resource: ModuleId.roles,
           values,
           successNotification: {
             message: t("roles.title"),
@@ -137,7 +138,7 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
     if (!roleId) return;
     updateRole(
       {
-        resource: "roles",
+        resource: ModuleId.roles,
         id: roleId,
         values: { name: values.name, permissions: values.permissions },
         successNotification: {

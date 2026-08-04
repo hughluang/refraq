@@ -6,6 +6,10 @@ import { useChangeLanguage } from "next-i18next/client";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
+import {
+  toRefineResources,
+  useModuleIdentityStore,
+} from "@/features/console/module-identity";
 import { accessControlProvider } from "@/providers/access-control-provider";
 import { authProvider } from "@/providers/auth-provider";
 import { dataProvider } from "@/providers/data-provider";
@@ -21,6 +25,9 @@ export function RefineRoot({ children }: RefineRootProps) {
   const changeLanguage = useChangeLanguage(LOCALE_COOKIE_NAME);
   bindClientI18n(i18n);
   const i18nProvider = createI18nProvider(t, i18n, changeLanguage);
+  const status = useModuleIdentityStore((state) => state.status);
+  const modules = useModuleIdentityStore((state) => state.modules);
+  const resources = status === "ready" ? toRefineResources(modules) : [];
 
   return (
     <Refine
@@ -30,31 +37,7 @@ export function RefineRoot({ children }: RefineRootProps) {
       routerProvider={routerProvider}
       i18nProvider={i18nProvider}
       notificationProvider={notificationProvider}
-      resources={[
-        {
-          name: "dashboard",
-          list: "/console",
-          meta: { label: "layout.nav.home", icon: undefined },
-        },
-        {
-          name: "users",
-          list: "/console/users",
-          create: "/console/users/new",
-          meta: { label: "users.title" },
-        },
-        {
-          name: "roles",
-          list: "/console/roles",
-          create: "/console/roles/new",
-          edit: "/console/roles/:id",
-          meta: { label: "roles.title" },
-        },
-        {
-          name: "settings",
-          list: "/console/settings",
-          meta: { label: "settings.title" },
-        },
-      ]}
+      resources={resources}
       options={{
         syncWithLocation: true,
         warnWhenUnsavedChanges: true,

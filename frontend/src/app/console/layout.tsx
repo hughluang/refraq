@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { PageCanAccess } from "@/components/access/PageCanAccess";
 import { PageLoader } from "@/components/feedback/PageLoader";
 import { ConsoleShell } from "@/components/layout/ConsoleShell";
+import { ModuleIdentityGate } from "@/features/console/module-identity";
 
 export default function ConsoleLayout({ children }: { children: ReactNode }) {
   return (
@@ -17,7 +18,9 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
       loading={<PageLoader />}
     >
       <ConsoleShell>
-        <PageCanAccess>{children}</PageCanAccess>
+        <ModuleIdentityGate>
+          <PageCanAccess>{children}</PageCanAccess>
+        </ModuleIdentityGate>
       </ConsoleShell>
     </Authenticated>
   );

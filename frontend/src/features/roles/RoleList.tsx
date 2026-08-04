@@ -15,15 +15,19 @@ import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
 import { PageLoader } from "@/components/feedback/PageLoader";
 import { PageChrome } from "@/components/layout/PageChrome";
+import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import type { RoleRow } from "@/features/roles/types";
 import { ApiError } from "@/lib/api";
 
 export function RoleList() {
   const t = useTranslate();
-  const { data: canWrite } = useCan({ resource: "roles", action: "create" });
+  const { data: canWrite } = useCan({
+    resource: ModuleId.roles,
+    action: ModuleAction.create,
+  });
   const { tableQuery, currentPage, pageCount, setCurrentPage } =
     useTable<RoleRow>({
-      resource: "roles",
+      resource: ModuleId.roles,
       pagination: { mode: "client", pageSize: 20 },
     });
   const { mutate: deleteRole, mutation } = useDelete();
@@ -37,7 +41,7 @@ export function RoleList() {
     if (!pending) return;
     deleteRole(
       {
-        resource: "roles",
+        resource: ModuleId.roles,
         id: pending.id,
         successNotification: {
           message: t("roles.title"),
@@ -58,7 +62,7 @@ export function RoleList() {
   }
 
   const createAction = (
-    <CanAccess resource="roles" action="create">
+    <CanAccess resource={ModuleId.roles} action={ModuleAction.create}>
       <Button component={Link} href="/console/roles/new" size="sm">
         {t("roles.create")}
       </Button>
@@ -134,7 +138,7 @@ export function RoleList() {
                   <Table.Td>{row.user_count}</Table.Td>
                   <Table.Td>
                     <Group gap="xs">
-                      <CanAccess resource="roles" action="edit">
+                      <CanAccess resource={ModuleId.roles} action={ModuleAction.edit}>
                         <Button
                           component={Link}
                           href={`/console/roles/${row.id}`}
@@ -145,7 +149,7 @@ export function RoleList() {
                           {t("roles.edit")}
                         </Button>
                       </CanAccess>
-                      <CanAccess resource="roles" action="delete">
+                      <CanAccess resource={ModuleId.roles} action={ModuleAction.delete}>
                         <Button
                           size="xs"
                           variant="light"

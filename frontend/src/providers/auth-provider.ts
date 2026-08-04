@@ -1,5 +1,6 @@
 import type { AuthActionResponse, AuthProvider } from "@refinedev/core";
 
+import { useModuleIdentityStore } from "@/features/console/module-identity";
 import { apiClient, ApiError } from "@/lib/api";
 import { loginRedirectWithFrom } from "@/lib/return-path";
 import { translateKey } from "@/providers/i18n-runtime";
@@ -9,6 +10,11 @@ import {
   useSessionStore,
   type CurrentUser,
 } from "@/providers/session-store";
+
+function clearClientSession() {
+  useSessionStore.getState().clear();
+  useModuleIdentityStore.getState().reset();
+}
 
 type LoginParams = { account: string; password: string };
 
@@ -86,7 +92,7 @@ export const authProvider: RefineAuth = {
       // performs a hard navigation after success.
       return { success: true };
     } catch (error) {
-      useSessionStore.getState().clear();
+      clearClientSession();
       return {
         success: false,
         error: loginFailureError(error),
@@ -99,7 +105,7 @@ export const authProvider: RefineAuth = {
       await apiClient<{ success: boolean }>("/auth/logout", { method: "POST" });
     } catch (error) {
       if (isApiError(error) && error.status === 401) {
-        useSessionStore.getState().clear();
+        clearClientSession();
         // Omit redirectTo; ConsoleShell hard-navigates after success.
         return { success: true };
       }
@@ -114,7 +120,7 @@ export const authProvider: RefineAuth = {
           : new Error("logout failed"),
       };
     }
-    useSessionStore.getState().clear();
+    clearClientSession();
     // Omit redirectTo so Refine useLogout does not soft-navigate; ConsoleShell
     // performs a hard navigation after success.
     return { success: true };
@@ -128,7 +134,7 @@ export const authProvider: RefineAuth = {
       await fetchMe();
       return { authenticated: true };
     } catch {
-      useSessionStore.getState().clear();
+      clearClientSession();
       return unauthenticatedCheckResponse();
     }
   },
@@ -157,7 +163,7 @@ export const authProvider: RefineAuth = {
       return identity.permissions;
     } catch (error) {
       if (isApiError(error) && error.status === 401) {
-        useSessionStore.getState().clear();
+        clearClientSession();
         return [];
       }
       return getCurrentUser()?.permissions ?? [];
@@ -167,7 +173,7 @@ export const authProvider: RefineAuth = {
   async onError(error) {
     if (isApiError(error)) {
       if (error.status === 401) {
-        useSessionStore.getState().clear();
+        clearClientSession();
         return { redirectTo: loginRedirectWithFrom(), logout: true };
       }
       if (error.status === 403 && error.code === "AUTH_FORBIDDEN") {

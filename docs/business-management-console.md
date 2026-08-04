@@ -49,7 +49,7 @@ Refraq is a domain management system. Top-level Foundation modules are always pr
 | Unified AppShell zones | Top bar (global utility) + side nav (structural navigation) + main work area |
 | Session identity and current-user context | Who is using the console, role summary, logout, and session expiry |
 | Permission-driven navigation | `GET /console/navigation` returns only modules the user may access |
-| Console Module catalog (code seed) | Modules declare group, route, nav permission, i18n keys in backend code |
+| Console Module catalog (code seed) | Modules declare group, routes, actions → permissions, i18n keys in backend code |
 | Management IA zones | Workbench, Administration, Platform settings |
 | Platform system parameters | Real settings API (session TTL overlay); not an empty nav stub |
 | Shared page chrome | Breadcrumb or back, page title, primary actions, content, empty / unauthorized states |
@@ -138,8 +138,10 @@ flowchart TB
   end
 
   Catalog["Console Module catalog seed"] --> NavAPI["GET /console/navigation"]
+  Catalog --> IdAPI["GET /console/module-identities"]
   RBAC["RBAC decision"] --> NavAPI
   NavAPI --> SideNav
+  IdAPI --> Main
   RBAC --> Main
   TopBar --> Main
   SideNav --> Main
@@ -155,8 +157,8 @@ Each Console Module declaration includes at least:
 | --- | --- |
 | Module id | Stable technical name (e.g. `users`, `roles`, `settings`) |
 | Nav group | `workbench` / `admin` / `settings` / … |
-| Route entry | Primary list/home path for the side nav |
-| Nav permission | Permission key required to see the entry |
+| Routes | List (nav entry) plus optional create/edit paths for SPA wiring |
+| Actions | Refine action → Permission; `list` is also the nav visibility permission |
 | Label key | i18n key for the module label |
 | Group label key | i18n key for the group label |
 
@@ -164,8 +166,8 @@ Rules:
 
 - The shell builds the side nav from navigation API results (catalog × current-user permissions).
 - Foundation modules have no enabled/disabled state; visibility is permission-only.
-- Frontend Refine `resources` stay statically declared for routing/CRUD and must use the same module ids and routes as the catalog.
-- When Data Product modules arrive, add seed entries and pages; do not rewrite top-bar / side-nav duty narrative.
+- SPA Refine resources and UX ACL adapt from `GET /console/module-identities` (unfiltered Console Module Identity); the frontend does not hand-maintain a parallel catalog.
+- When Data Product modules arrive, extend the backend seed and add pages; do not rewrite top-bar / side-nav duty narrative.
 
 ## 7. Platform Settings (System Parameters)
 
@@ -196,7 +198,7 @@ For this slice:
 
 1. An authorized administrator can complete user / role governance and adjust session TTL.
 2. Any signed-in user sees only authorized nav entries; direct visits without permission get explainable feedback.
-3. A new Foundation module appears by extending the backend seed and frontend resources without rewriting shell narrative.
+3. A new Foundation module appears by extending the backend seed (identity + nav) and adding frontend pages/adapters without rewriting shell narrative.
 
 ## 9. Anti-Patterns
 
@@ -211,8 +213,8 @@ For this slice:
 
 ## 10. Delivery Order (Business)
 
-1. Lock contracts: module catalog fields, navigation API, settings API.
-2. Backend: permissions, catalog, navigation, settings override + effective TTL on login.
+1. Lock contracts: module catalog fields, navigation API, module-identity API, settings API.
+2. Backend: permissions, catalog, navigation, module identities, settings override + effective TTL on login.
 3. Frontend: shell consumes navigation; settings page; Refine/accessControl alignment.
 4. Defer: reserved nav groups policy, persisted override, audit, Plugins.
 

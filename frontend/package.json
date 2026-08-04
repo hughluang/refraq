@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "dotenv -e .env -- next dev --turbopack -p ${PORT:-3000}",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test": "vitest run"
   },
   "dependencies": {
     "@mantine/core": "^9.5.0",
@@ -28,6 +29,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "dotenv-cli": "^11.0.0",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^3.2.4"
   }
 }

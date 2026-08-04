@@ -1,8 +1,8 @@
-# refraq API Contracts: Console Navigation
+# refraq API Contracts: Console Navigation and Module Identity
 
 ## 1. Purpose
 
-This document defines the Management Console navigation API backed by the code-seeded **Console Module** catalog.
+This document defines the Management Console navigation and module-identity APIs backed by the code-seeded **Console Module** catalog.
 
 Transport rules match `docs/api-contracts-auth.md` §2.
 
@@ -10,9 +10,11 @@ Related business rules: `docs/business-management-console.md`.
 
 ## 2. Concepts
 
-- **Console Module catalog**: fixed seed in backend code (ids, groups, routes, nav permissions, i18n keys). Not writable at runtime.
-- **Navigation response**: catalog entries the current User may see, grouped, already filtered by Permission.
+- **Console Module catalog**: fixed seed in backend code (ids, groups, routes, actions → permissions, i18n keys). Not writable at runtime.
+- **Console Navigation**: catalog entries the current User may see, grouped, already filtered by `actions.list` Permission.
+- **Console Module Identity**: unfiltered UX identity for every Foundation module (routes + action → permission). Used by the SPA for Refine wiring and page/feature ACL; not a second registration surface.
 - Labels are **i18n keys**; the frontend translates them.
+- Nav visibility permission is `actions.list` (no separate `nav_permission` field).
 
 ## 3. `GET /console/navigation`
 
@@ -72,6 +74,7 @@ Rules:
 
 - Groups with zero visible modules are omitted
 - Module order and group order follow the seed catalog
+- Each module `route` is `routes.list` from the seed
 - `/auth/me` does not include the navigation tree
 
 ### Errors
@@ -81,11 +84,87 @@ Rules:
 | `401` | No valid session |
 | `403` | Authenticated but lacking `console:access` |
 
-## 4. Seed Catalog (this slice)
+## 4. `GET /console/module-identities`
 
-| Module id | Group | Route | Nav permission |
-| --- | --- | --- | --- |
-| `dashboard` | `workbench` | `/console` | `dashboard:read` |
-| `users` | `admin` | `/console/users` | `users:read` |
-| `roles` | `admin` | `/console/roles` | `roles:read` |
-| `settings` | `settings` | `/console/settings` | `settings:read` |
+Purpose: return the full Foundation Console Module Identity catalog for SPA routing and UX ACL.
+
+- Requires: authenticated session and `console:access`
+- **Not** filtered by per-module permissions (contrast with navigation)
+- Does **not** include group or sort fields (those remain navigation-only)
+
+### Response: `200`
+
+```json
+{
+  "modules": [
+    {
+      "id": "dashboard",
+      "label_key": "layout.nav.home",
+      "routes": { "list": "/console", "create": null, "edit": null },
+      "actions": {
+        "list": "dashboard:read",
+        "create": null,
+        "edit": null,
+        "delete": null
+      }
+    },
+    {
+      "id": "users",
+      "label_key": "users.title",
+      "routes": {
+        "list": "/console/users",
+        "create": "/console/users/new",
+        "edit": null
+      },
+      "actions": {
+        "list": "users:read",
+        "create": "users:write",
+        "edit": "users:write",
+        "delete": "users:write"
+      }
+    },
+    {
+      "id": "roles",
+      "label_key": "roles.title",
+      "routes": {
+        "list": "/console/roles",
+        "create": "/console/roles/new",
+        "edit": "/console/roles/:id"
+      },
+      "actions": {
+        "list": "roles:read",
+        "create": "roles:write",
+        "edit": "roles:write",
+        "delete": "roles:write"
+      }
+    },
+    {
+      "id": "settings",
+      "label_key": "settings.title",
+      "routes": { "list": "/console/settings", "create": null, "edit": null },
+      "actions": {
+        "list": "settings:read",
+        "create": null,
+        "edit": "settings:write",
+        "delete": null
+      }
+    }
+  ]
+}
+```
+
+### Errors
+
+| Status | Condition |
+| --- | --- |
+| `401` | No valid session |
+| `403` | Authenticated but lacking `console:access` |
+
+## 5. Seed Catalog (this slice)
+
+| Module id | Group | `routes.list` | `actions.list` (nav) | Other actions |
+| --- | --- | --- | --- | --- |
+| `dashboard` | `workbench` | `/console` | `dashboard:read` | — |
+| `users` | `admin` | `/console/users` | `users:read` | create/edit/delete → `users:write`; create route `/console/users/new` |
+| `roles` | `admin` | `/console/roles` | `roles:read` | create/edit/delete → `roles:write`; create `/console/roles/new`; edit `/console/roles/:id` |
+| `settings` | `settings` | `/console/settings` | `settings:read` | edit → `settings:write` |

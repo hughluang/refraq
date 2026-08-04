@@ -1,4 +1,4 @@
-"""Console navigation response schemas."""
+"""Console navigation and module-identity response schemas."""
 
 from __future__ import annotations
 
@@ -19,3 +19,27 @@ class NavigationGroupResponse(BaseModel):
 
 class NavigationResponse(BaseModel):
     groups: list[NavigationGroupResponse] = Field(default_factory=list)
+
+
+class ModuleRoutesResponse(BaseModel):
+    list: str
+    create: str | None = None
+    edit: str | None = None
+
+
+class ModuleActionsResponse(BaseModel):
+    list: str
+    create: str | None = None
+    edit: str | None = None
+    delete: str | None = None
+
+
+class ModuleIdentityResponse(BaseModel):
+    id: str
+    label_key: str
+    routes: ModuleRoutesResponse
+    actions: ModuleActionsResponse
+
+
+class ModuleIdentitiesResponse(BaseModel):
+    modules: list[ModuleIdentityResponse] = Field(default_factory=list)

@@ -1,14 +1,18 @@
-"""Console navigation router implementing docs/api-contracts-console.md."""
+"""Console navigation and module-identity router."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from backend.admin.console_modules import build_navigation
+from backend.admin.console_modules import build_module_identities, build_navigation
 from backend.admin.deps import require_permission, resolve_user_permissions
 from backend.repositories.role_store import RoleStore, get_role_store
 from backend.repositories.user_store import UserRecord
 from backend.schemas.console import (
+    ModuleActionsResponse,
+    ModuleIdentitiesResponse,
+    ModuleIdentityResponse,
+    ModuleRoutesResponse,
     NavigationGroupResponse,
     NavigationModuleResponse,
     NavigationResponse,
@@ -39,5 +43,32 @@ def get_navigation(
                 ],
             )
             for group in groups
+        ]
+    )
+
+
+@router.get("/module-identities", response_model=ModuleIdentitiesResponse)
+def get_module_identities(
+    _user: UserRecord = Depends(require_permission("console:access")),
+) -> ModuleIdentitiesResponse:
+    identities = build_module_identities()
+    return ModuleIdentitiesResponse(
+        modules=[
+            ModuleIdentityResponse(
+                id=module.id,
+                label_key=module.label_key,
+                routes=ModuleRoutesResponse(
+                    list=module.routes.list,
+                    create=module.routes.create,
+                    edit=module.routes.edit,
+                ),
+                actions=ModuleActionsResponse(
+                    list=module.actions.list,
+                    create=module.actions.create,
+                    edit=module.actions.edit,
+                    delete=module.actions.delete,
+                ),
+            )
+            for module in identities
         ]
     )

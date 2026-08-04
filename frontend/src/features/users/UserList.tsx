@@ -23,6 +23,7 @@ import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
 import { PageLoader } from "@/components/feedback/PageLoader";
 import { PageChrome } from "@/components/layout/PageChrome";
+import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { UserRoleBadge } from "@/features/users/UserRoleBadge";
 import type { UserRow, UserStatus } from "@/features/users/types";
 import { ApiError } from "@/lib/api";
@@ -31,10 +32,13 @@ import type { CurrentUser } from "@/providers/session-store";
 export function UserList() {
   const t = useTranslate();
   const { data: identity } = useGetIdentity<CurrentUser>();
-  const { data: canWrite } = useCan({ resource: "users", action: "create" });
+  const { data: canWrite } = useCan({
+    resource: ModuleId.users,
+    action: ModuleAction.create,
+  });
   const { tableQuery, currentPage, pageCount, setCurrentPage } =
     useTable<UserRow>({
-      resource: "users",
+      resource: ModuleId.users,
       pagination: { mode: "client", pageSize: 20 },
     });
   const { mutate: updateStatus, mutation } = useUpdate<UserRow>();
@@ -50,7 +54,7 @@ export function UserList() {
       pending.status === "active" ? "disabled" : "active";
     updateStatus(
       {
-        resource: "users",
+        resource: ModuleId.users,
         id: pending.id,
         values: { status: next },
         meta: { action: "status" },
@@ -75,7 +79,7 @@ export function UserList() {
   }
 
   const createAction = (
-    <CanAccess resource="users" action="create">
+    <CanAccess resource={ModuleId.users} action={ModuleAction.create}>
       <Button component={Link} href="/console/users/new" size="sm">
         {t("users.create")}
       </Button>

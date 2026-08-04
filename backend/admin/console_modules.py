@@ -1,4 +1,4 @@
-"""Code-seeded Console Module catalog for Management Console navigation."""
+"""Code-seeded Console Module catalog for Management Console navigation and UX identity."""
 
 from __future__ import annotations
 
@@ -8,13 +8,28 @@ from backend.admin.permissions import Permission, permissions_include
 
 
 @dataclass(frozen=True, slots=True)
+class ModuleRoutes:
+    list: str
+    create: str | None = None
+    edit: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ModuleActions:
+    list: Permission
+    create: Permission | None = None
+    edit: Permission | None = None
+    delete: Permission | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ConsoleModuleSeed:
     id: str
     group_id: str
     group_label_key: str
     label_key: str
-    route: str
-    nav_permission: Permission
+    routes: ModuleRoutes
+    actions: ModuleActions
     group_order: int
     module_order: int
 
@@ -25,8 +40,8 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="workbench",
         group_label_key="layout.navGroup.workbench",
         label_key="layout.nav.home",
-        route="/console",
-        nav_permission="dashboard:read",
+        routes=ModuleRoutes(list="/console"),
+        actions=ModuleActions(list="dashboard:read"),
         group_order=10,
         module_order=10,
     ),
@@ -35,8 +50,16 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="admin",
         group_label_key="layout.navGroup.admin",
         label_key="users.title",
-        route="/console/users",
-        nav_permission="users:read",
+        routes=ModuleRoutes(
+            list="/console/users",
+            create="/console/users/new",
+        ),
+        actions=ModuleActions(
+            list="users:read",
+            create="users:write",
+            edit="users:write",
+            delete="users:write",
+        ),
         group_order=20,
         module_order=10,
     ),
@@ -45,8 +68,17 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="admin",
         group_label_key="layout.navGroup.admin",
         label_key="roles.title",
-        route="/console/roles",
-        nav_permission="roles:read",
+        routes=ModuleRoutes(
+            list="/console/roles",
+            create="/console/roles/new",
+            edit="/console/roles/:id",
+        ),
+        actions=ModuleActions(
+            list="roles:read",
+            create="roles:write",
+            edit="roles:write",
+            delete="roles:write",
+        ),
         group_order=20,
         module_order=20,
     ),
@@ -55,8 +87,11 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="settings",
         group_label_key="layout.navGroup.settings",
         label_key="settings.title",
-        route="/console/settings",
-        nav_permission="settings:read",
+        routes=ModuleRoutes(list="/console/settings"),
+        actions=ModuleActions(
+            list="settings:read",
+            edit="settings:write",
+        ),
         group_order=30,
         module_order=10,
     ),
@@ -77,12 +112,20 @@ class NavigationGroup:
     modules: tuple[NavigationModule, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ModuleIdentity:
+    id: str
+    label_key: str
+    routes: ModuleRoutes
+    actions: ModuleActions
+
+
 def build_navigation(permissions: list[str] | tuple[str, ...]) -> list[NavigationGroup]:
     """Return grouped modules the caller may see (permission-filtered)."""
     visible = [
         module
         for module in CONSOLE_MODULE_CATALOG
-        if permissions_include(permissions, module.nav_permission)
+        if permissions_include(permissions, module.actions.list)
     ]
     visible.sort(key=lambda item: (item.group_order, item.module_order, item.id))
 
@@ -114,8 +157,21 @@ def build_navigation(permissions: list[str] | tuple[str, ...]) -> list[Navigatio
             NavigationModule(
                 id=module.id,
                 label_key=module.label_key,
-                route=module.route,
+                route=module.routes.list,
             )
         )
     flush()
     return groups
+
+
+def build_module_identities() -> list[ModuleIdentity]:
+    """Return the full Foundation module identity catalog (unfiltered, no groups)."""
+    return [
+        ModuleIdentity(
+            id=module.id,
+            label_key=module.label_key,
+            routes=module.routes,
+            actions=module.actions,
+        )
+        for module in CONSOLE_MODULE_CATALOG
+    ]

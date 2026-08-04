@@ -18,6 +18,7 @@ import Link from "next/link";
 
 import { PageLoader } from "@/components/feedback/PageLoader";
 import { PageChrome } from "@/components/layout/PageChrome";
+import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import type { RoleRow } from "@/features/roles/types";
 import type { UserCreateValues } from "@/features/users/types";
 import { ApiError } from "@/lib/api";
@@ -25,12 +26,12 @@ import { ApiError } from "@/lib/api";
 export function UserCreateForm() {
   const t = useTranslate();
   const rolesQuery = useList<RoleRow>({
-    resource: "roles",
+    resource: ModuleId.roles,
     pagination: { mode: "off" },
   });
   const { onFinish, formLoading } = useRefineForm<UserCreateValues>({
-    resource: "users",
-    action: "create",
+    resource: ModuleId.users,
+    action: ModuleAction.create,
     redirect: "list",
     successNotification: {
       message: t("users.title"),

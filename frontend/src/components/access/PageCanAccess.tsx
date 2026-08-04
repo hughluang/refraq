@@ -1,12 +1,15 @@
 "use client";
 
-import { useCan, useResourceParams } from "@refinedev/core";
+import { useCan } from "@refinedev/core";
 import type { ReactNode } from "react";
 import { usePathname } from "next/navigation";
 
 import { ForbiddenState } from "@/components/feedback/ForbiddenState";
 import { PageLoader } from "@/components/feedback/PageLoader";
-import { matchResourceAction } from "@/lib/match-resource-action";
+import {
+  matchPath,
+  useModuleIdentityStore,
+} from "@/features/console/module-identity";
 
 type PageCanAccessProps = {
   children: ReactNode;
@@ -14,8 +17,8 @@ type PageCanAccessProps = {
 
 export function PageCanAccess({ children }: PageCanAccessProps) {
   const pathname = usePathname();
-  const { resources } = useResourceParams();
-  const matched = matchResourceAction(pathname, resources);
+  const modules = useModuleIdentityStore((state) => state.modules);
+  const matched = matchPath(pathname, modules);
 
   const { data, isLoading } = useCan({
     resource: matched?.resource ?? "",

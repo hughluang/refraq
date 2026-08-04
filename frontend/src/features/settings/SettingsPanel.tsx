@@ -18,6 +18,7 @@ import { useCallback, useEffect, useState } from "react";
 import { PageError } from "@/components/feedback/PageError";
 import { PageLoader } from "@/components/feedback/PageLoader";
 import { PageChrome } from "@/components/layout/PageChrome";
+import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
   clearPlatformSettingsOverride,
   fetchPlatformSettings,
@@ -29,7 +30,10 @@ import { ApiError } from "@/lib/api";
 export function SettingsPanel() {
   const t = useTranslate();
   const { open } = useNotification();
-  const { data: canWrite } = useCan({ resource: "settings", action: "edit" });
+  const { data: canWrite } = useCan({
+    resource: ModuleId.settings,
+    action: ModuleAction.edit,
+  });
   const [settings, setSettings] = useState<PlatformSettings | null>(null);
   const [ttl, setTtl] = useState<number | string>(8);
   const [loading, setLoading] = useState(true);

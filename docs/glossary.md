@@ -54,6 +54,12 @@ The permission-filtered, grouped side-nav payload derived from the Console Modul
 Served by the backend navigation API; labels are i18n keys.
 Avoid building side-nav truth only from frontend static menus.
 
+### Console Module Identity
+
+The UX identity of a Console Module: stable id, label key, list/create/edit routes, and Refine action → Permission map.
+Authored only in the backend Console Module catalog seed; bootstrapped to the SPA unfiltered (separate from Console Navigation).
+Avoid treating it as a second frontend catalog, as navigation grouping, or as the security authority for API calls.
+
 ### Platform Settings
 
 The Console Module for platform system parameters (non-secret operational configuration exposed in the Console).
