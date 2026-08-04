@@ -5,25 +5,21 @@ import { getCurrentUser } from "@/providers/session-store";
 const RESOURCE_PERMISSIONS: Record<string, Record<string, string>> = {
   users: {
     list: "users:read",
-    show: "users:read",
     edit: "users:write",
     create: "users:write",
     delete: "users:write",
   },
   roles: {
     list: "roles:read",
-    show: "roles:read",
     edit: "roles:write",
     create: "roles:write",
     delete: "roles:write",
   },
   dashboard: {
     list: "dashboard:read",
-    show: "dashboard:read",
   },
   settings: {
     list: "settings:read",
-    show: "settings:read",
     edit: "settings:write",
   },
 };
@@ -40,7 +36,7 @@ function evaluate(resource: string | undefined, action: string): CanReturnType {
   if (!required) return { can: false, reason: "unsupported_action" };
   return user.permissions.includes(required)
     ? { can: true }
-    : { can: false, reason: "missing_permission" };
+    : { can: false, reason: required };
 }
 
 export const accessControlProvider: AccessControlProvider = {

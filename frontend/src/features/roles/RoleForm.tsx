@@ -7,11 +7,9 @@ import {
   Stack,
   Text,
   TextInput,
-  Title,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import {
-  CanAccess,
   useCreate,
   useOne,
   useTranslate,
@@ -23,6 +21,7 @@ import { useRouter } from "next/navigation";
 
 import { PageError } from "@/components/feedback/PageError";
 import { PageLoader } from "@/components/feedback/PageLoader";
+import { PageChrome } from "@/components/layout/PageChrome";
 import type {
   PermissionCatalogEntry,
   RoleFormValues,
@@ -105,7 +104,6 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sync once when role loads
   }, [mode, roleQuery.result]);
 
-  const action = mode === "create" ? "create" : "edit";
   const saving = createMutation.isPending || updateMutation.isPending;
 
   function submit(values: RoleFormValues) {
@@ -169,18 +167,19 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
   }
 
   if (mode === "edit" && roleQuery.result?.locked) {
-    return <PageError message={t("roles.lockedHint")} />;
+    return (
+      <PageChrome title={t("roles.edit.title")}>
+        <PageError message={t("roles.lockedHint")} />
+      </PageChrome>
+    );
   }
 
   return (
-    <CanAccess
-      resource="roles"
-      action={action}
-      fallback={<PageError message={t("forbidden.description")} />}
+    <PageChrome
+      title={
+        mode === "create" ? t("roles.create.title") : t("roles.edit.title")
+      }
     >
-      <Title order={3} mb="md">
-        {mode === "create" ? t("roles.create.title") : t("roles.edit.title")}
-      </Title>
       {catalogError ? (
         <PageError message={catalogError} />
       ) : catalog === null ? (
@@ -237,6 +236,6 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
           </Stack>
         </form>
       )}
-    </CanAccess>
+    </PageChrome>
   );
 }

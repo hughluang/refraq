@@ -7,7 +7,6 @@ import {
   Modal,
   Switch,
   Table,
-  Title,
 } from "@mantine/core";
 import {
   CanAccess,
@@ -23,6 +22,7 @@ import { useState } from "react";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
 import { PageLoader } from "@/components/feedback/PageLoader";
+import { PageChrome } from "@/components/layout/PageChrome";
 import { UserRoleBadge } from "@/features/users/UserRoleBadge";
 import type { UserRow, UserStatus } from "@/features/users/types";
 import { ApiError } from "@/lib/api";
@@ -74,34 +74,35 @@ export function UserList() {
     );
   }
 
+  const createAction = (
+    <CanAccess resource="users" action="create">
+      <Button component={Link} href="/console/users/new" size="sm">
+        {t("users.create")}
+      </Button>
+    </CanAccess>
+  );
+
   if (error) {
     const message =
       error instanceof ApiError
-        ? error.status === 403
-          ? t("forbidden.description")
-          : error.detail
+        ? error.detail
         : t("common.error.loadFailed");
     return (
-      <>
-        <Title order={3} mb="md">
-          {t("users.title")}
-        </Title>
+      <PageChrome
+        title={t("users.title")}
+        description={t("users.description")}
+      >
         <PageError message={message} onRetry={() => tableQuery.refetch()} />
-      </>
+      </PageChrome>
     );
   }
 
   return (
-    <>
-      <Group justify="space-between" mb="md">
-        <Title order={3}>{t("users.title")}</Title>
-        <CanAccess resource="users" action="create">
-          <Button component={Link} href="/console/users/new" size="sm">
-            {t("users.create")}
-          </Button>
-        </CanAccess>
-      </Group>
-
+    <PageChrome
+      title={t("users.title")}
+      description={t("users.description")}
+      actions={createAction}
+    >
       {isLoading ? (
         <PageLoader />
       ) : rows.length === 0 ? (
@@ -207,6 +208,6 @@ export function UserList() {
           </Button>
         </Group>
       </Modal>
-    </>
+    </PageChrome>
   );
 }

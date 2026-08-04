@@ -7,10 +7,8 @@ import {
   Stack,
   Text,
   TextInput,
-  Title,
 } from "@mantine/core";
 import {
-  CanAccess,
   useCan,
   useNotification,
   useTranslate,
@@ -19,6 +17,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { PageError } from "@/components/feedback/PageError";
 import { PageLoader } from "@/components/feedback/PageLoader";
+import { PageChrome } from "@/components/layout/PageChrome";
 import {
   clearPlatformSettingsOverride,
   fetchPlatformSettings,
@@ -115,24 +114,11 @@ export function SettingsPanel() {
   }
 
   return (
-    <CanAccess
-      resource="settings"
-      action="list"
-      fallback={
-        <Stack gap="sm">
-          <Title order={2}>{t("settings.title")}</Title>
-          <Text c="dimmed">{t("settings.forbidden")}</Text>
-        </Stack>
-      }
+    <PageChrome
+      title={t("settings.title")}
+      description={t("settings.description")}
     >
       <Stack gap="md" maw={480}>
-        <div>
-          <Title order={2}>{t("settings.title")}</Title>
-          <Text size="sm" c="dimmed" mt={4}>
-            {t("settings.description")}
-          </Text>
-        </div>
-
         {loading ? <PageLoader /> : null}
         {!loading && error ? (
           <PageError message={error} onRetry={() => void load()} />
@@ -196,6 +182,6 @@ export function SettingsPanel() {
           </>
         ) : null}
       </Stack>
-    </CanAccess>
+    </PageChrome>
   );
 }

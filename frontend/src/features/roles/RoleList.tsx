@@ -1,6 +1,6 @@
 "use client";
 
-import { Badge, Button, Group, Modal, Table, Text, Title } from "@mantine/core";
+import { Badge, Button, Group, Modal, Table, Text } from "@mantine/core";
 import {
   CanAccess,
   useCan,
@@ -14,6 +14,7 @@ import { useState } from "react";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
 import { PageLoader } from "@/components/feedback/PageLoader";
+import { PageChrome } from "@/components/layout/PageChrome";
 import type { RoleRow } from "@/features/roles/types";
 import { ApiError } from "@/lib/api";
 
@@ -56,34 +57,35 @@ export function RoleList() {
     );
   }
 
+  const createAction = (
+    <CanAccess resource="roles" action="create">
+      <Button component={Link} href="/console/roles/new" size="sm">
+        {t("roles.create")}
+      </Button>
+    </CanAccess>
+  );
+
   if (error) {
     const message =
       error instanceof ApiError
-        ? error.status === 403
-          ? t("forbidden.description")
-          : error.detail
+        ? error.detail
         : t("common.error.loadFailed");
     return (
-      <>
-        <Title order={3} mb="md">
-          {t("roles.title")}
-        </Title>
+      <PageChrome
+        title={t("roles.title")}
+        description={t("roles.description")}
+      >
         <PageError message={message} onRetry={() => tableQuery.refetch()} />
-      </>
+      </PageChrome>
     );
   }
 
   return (
-    <>
-      <Group justify="space-between" mb="md">
-        <Title order={3}>{t("roles.title")}</Title>
-        <CanAccess resource="roles" action="create">
-          <Button component={Link} href="/console/roles/new" size="sm">
-            {t("roles.create")}
-          </Button>
-        </CanAccess>
-      </Group>
-
+    <PageChrome
+      title={t("roles.title")}
+      description={t("roles.description")}
+      actions={createAction}
+    >
       {isLoading ? (
         <PageLoader />
       ) : rows.length === 0 ? (
@@ -208,6 +210,6 @@ export function RoleList() {
           </Button>
         </Group>
       </Modal>
-    </>
+    </PageChrome>
   );
 }

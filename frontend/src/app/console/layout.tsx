@@ -3,6 +3,7 @@
 import { Authenticated } from "@refinedev/core";
 import type { ReactNode } from "react";
 
+import { PageCanAccess } from "@/components/access/PageCanAccess";
 import { PageLoader } from "@/components/feedback/PageLoader";
 import { ConsoleShell } from "@/components/layout/ConsoleShell";
 
@@ -15,7 +16,9 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
       appendCurrentPathToQuery={false}
       loading={<PageLoader />}
     >
-      <ConsoleShell>{children}</ConsoleShell>
+      <ConsoleShell>
+        <PageCanAccess>{children}</PageCanAccess>
+      </ConsoleShell>
     </Authenticated>
   );
 }

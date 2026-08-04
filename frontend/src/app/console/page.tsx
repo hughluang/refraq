@@ -1,9 +1,10 @@
 "use client";
 
-import { Stack, Text, Title } from "@mantine/core";
+import { Text } from "@mantine/core";
 import { useGetIdentity, useTranslate } from "@refinedev/core";
 
 import { PageLoader } from "@/components/feedback/PageLoader";
+import { PageChrome } from "@/components/layout/PageChrome";
 import type { CurrentUser } from "@/providers/session-store";
 
 export default function ConsoleHomePage() {
@@ -15,8 +16,7 @@ export default function ConsoleHomePage() {
   }
 
   return (
-    <Stack gap="md">
-      <Title order={2}>{t("app.title")}</Title>
+    <PageChrome title={t("app.title")} description={t("dashboard.description")}>
       {user ? (
         <Text>
           {user.display_name} ({user.account})
@@ -25,6 +25,6 @@ export default function ConsoleHomePage() {
       ) : (
         <Text c="dimmed">{t("common.empty")}</Text>
       )}
-    </Stack>
+    </PageChrome>
   );
 }

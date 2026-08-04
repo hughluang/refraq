@@ -7,19 +7,17 @@ import {
   Select,
   Stack,
   TextInput,
-  Title,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import {
-  CanAccess,
   useForm as useRefineForm,
   useList,
   useTranslate,
 } from "@refinedev/core";
 import Link from "next/link";
 
-import { PageError } from "@/components/feedback/PageError";
 import { PageLoader } from "@/components/feedback/PageLoader";
+import { PageChrome } from "@/components/layout/PageChrome";
 import type { RoleRow } from "@/features/roles/types";
 import type { UserCreateValues } from "@/features/users/types";
 import { ApiError } from "@/lib/api";
@@ -70,14 +68,7 @@ export function UserCreateForm() {
   }));
 
   return (
-    <CanAccess
-      resource="users"
-      action="create"
-      fallback={<PageError message={t("forbidden.description")} />}
-    >
-      <Title order={3} mb="md">
-        {t("users.create.title")}
-      </Title>
+    <PageChrome title={t("users.create.title")}>
       {rolesQuery.query.isLoading ? (
         <PageLoader />
       ) : (
@@ -127,6 +118,6 @@ export function UserCreateForm() {
           </Stack>
         </form>
       )}
-    </CanAccess>
+    </PageChrome>
   );
 }
