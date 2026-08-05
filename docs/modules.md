@@ -4,7 +4,7 @@
 
 This document defines what each module is responsible for, what it may depend on, and what it must not absorb.
 
-The module layout below serves the current delivery slice: the **Management Console** and its **Management Foundation** (auth, session, permission). Product identity stays with Data Product Capabilities, which will add their own modules in later phases.
+The module layout below covers the **Management Console**, **Management Foundation**, and the upcoming **metadata foundation** package. Later Data Product catalog / Entity modules arrive only with real code.
 
 ## 2. Backend Modules
 
@@ -54,7 +54,7 @@ Must not contain:
 - API request/response shapes (those belong in `schemas/`)
 - Engine/session/Redis wiring (those belong in `core/`)
 
-Future Data Product Capabilities add their own `<capability>/models.py` the same way. Alembic must import every domain model module so autogenerate sees the full schema.
+Metadata foundation adds `backend/metadata/models.py` the same way when implementation starts. Later Data Product capabilities follow the same pattern. Alembic must import every domain model module so autogenerate sees the full schema.
 
 ### `backend/alembic/`
 
@@ -127,7 +127,34 @@ Must not own Session persistence implementations (those live under `repositories
 
 Do not put Console Module catalog, Settings Override, or System Role ensure rules into `backend/core/`.
 
-Do not pre-create empty packages for future Data Product Capabilities.
+User PAT and management audit persistence may live under `admin/` (Foundation-adjacent) or a dedicated submodule; Connection/catalog/ingestion domain logic belongs in `backend/metadata/` when code arrives.
+
+Do not pre-create empty packages for future capabilities before implementation.
+
+### `backend/metadata/` (when implemented)
+
+Responsibilities:
+
+- Source System / Connection domain models and services
+- Connector adapters (PostgreSQL, MSSQL, Oracle)
+- Ingestion job orchestration hooks (enqueue API side; worker entry may live beside `core/entry`)
+- Catalog object / semantics / join / controlled query services
+- MCP tool handlers that delegate to the same services
+
+Must not contain:
+
+- Generic Settings / engine factories (stay in `core/`)
+- Session cookie issuance (stay in `admin/` + repositories)
+- Pre-scaffolded empty subpackages for Entity / Data Product catalog
+
+### Ingestion worker process
+
+Responsibilities:
+
+- Consume Redis-backed queue jobs and run collectors
+- Update Ingestion Job status and catalog snapshots
+
+Must not serve interactive Console HTTP traffic. Document start command alongside Foundation Upgrade / `backend.core.entry` in `docs/env.md` when implemented.
 
 ### `backend/tests/`
 

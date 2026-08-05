@@ -6,6 +6,7 @@ This directory contains the backend for refraq, the data product integration pla
 
 The backend owns API contracts, Management Foundation domain rules (auth, RBAC), and persistence adapters.
 User/Role data lives in Postgres; Session state lives in Redis when `REFRAQ_STORE_BACKEND=persistent`.
+Next implementation phase adds the metadata foundation under `backend/metadata/` when code arrives (`docs/business-metadata.md`); do not pre-create empty packages.
 
 ## Run
 

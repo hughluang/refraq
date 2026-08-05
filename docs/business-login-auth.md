@@ -79,12 +79,12 @@ The first version uses server-managed sessions.
 Session rules:
 
 - session is created on successful login
-- session is required for protected APIs
-- logout invalidates the current session
+- protected APIs require a valid **Session or User PAT** (see `docs/business-user-tokens.md`); Console browser flows use Session
+- logout invalidates the current session (does not revoke PATs unless a separate revoke is performed)
 - expired or invalid sessions behave as unauthenticated
-- disabling a User invalidates all of that User's sessions immediately
-- after disable, requests that still present a former session cookie are treated as unauthenticated (`401`)
-- re-enabling a User does not restore prior sessions; the User must sign in again
+- disabling a User invalidates all of that User's sessions immediately and must reject that User's PATs (`401`)
+- after disable, requests that still present a former session cookie or that User's PAT are treated as unauthenticated (`401`)
+- re-enabling a User does not restore prior sessions; the User must sign in again (existing non-revoked PATs remain subject to expiry/revoke rules in the tokens doc)
 
 Recommended first-version session policy:
 
@@ -132,7 +132,7 @@ Role is a first-class entity. Each User may hold **at most one** Role (`role_id`
 
 Permission must be checked in backend using `resource + action` strings from the Role's bound set.
 
-Fixed Permission catalog for this slice:
+Fixed Permission catalog (Foundation + metadata foundation extensions):
 
 - `console:access`
 - `dashboard:read`
@@ -142,13 +142,20 @@ Fixed Permission catalog for this slice:
 - `roles:write`
 - `settings:read`
 - `settings:write`
+- `sources:read` / `sources:write`
+- `metadata:read` / `metadata:write`
+- `ingestion:run`
+- `query:run`
+- `tokens:read` / `tokens:write`
+- `audit:read`
 
 Rules:
 
 - New permissions enter the catalog in code/docs first; Role UI only checkboxes catalog entries
 - Free-form permission strings are rejected
 - Frontend checks are UX only; backend remains authoritative
-- Seeded `operator` keeps `console:access` + `dashboard:read` only (no `settings:*`)
+- Seeded `operator` keeps `console:access` + `dashboard:read` only (no `settings:*`, no metadata write/query/token/audit by default)
+- Metadata permission meanings: `docs/business-metadata.md` §6; User PAT: `docs/business-user-tokens.md`
 - Session TTL used at login is the **effective** value (env or Settings Override); changing TTL does not rewrite existing sessions — see `docs/api-contracts-settings.md`
 
 ## 9. Route Protection Rule
@@ -161,10 +168,11 @@ Rules:
 
 ### Backend
 
-- protected endpoints require a valid session
+- protected endpoints require a valid Session or User PAT
 - user-management endpoints require `users:read` / `users:write`
 - role-management endpoints require `roles:read` / `roles:write`
 - platform settings endpoints require `settings:read` / `settings:write`
+- metadata / token / audit endpoints use permissions in §8 and `docs/business-metadata.md`
 - console navigation requires `console:access` (module visibility filtered separately)
 
 ## 10. Logout Rule
@@ -181,24 +189,34 @@ Calling logout while already unauthenticated may still return success for simpli
 
 ## 11. Audit-Oriented Events
 
-The first version should be written so these events can be logged later:
+Foundation login paths should remain easy to audit:
 
 - login success
 - login failure
 - logout
 - forbidden access
 
-Persistent audit storage is not required in the current scaffold phase, but code paths should make those events easy to add.
+Persistent storage for those Foundation auth events is still not required by this document.
+Management-plane audit for metadata, secrets, User PAT, and controlled query is defined in `docs/business-metadata.md` and is in scope for the metadata foundation phase.
 
-## 12. Business Non-Goals
+## 12. Dual Auth Transport (Session And User PAT)
 
-The current slice does not require:
+- Console browser flows continue to use **Session** cookies as defined above.
+- Non-browser API and MCP clients use **User PAT** Bearer credentials (`docs/business-user-tokens.md`).
+- Both resolve to the same **User** and Role **Permission** evaluation.
+- Do not treat Session id as a PAT; do not treat PAT as a **Client** credential.
+
+## 13. Business Non-Goals
+
+The Foundation login/permission slice does not require:
 
 - password reset
 - email verification
 - MFA
 - SSO / LDAP protocol integration (field `identity_source` only)
-- Client / Token management APIs
+- Client / machine-token management APIs
 - multi-role assignment per User
 - free-form custom permissions outside the catalog
 - hard delete of User records
+
+User PAT (person-owned Bearer tokens) is specified in `docs/business-user-tokens.md` for the metadata foundation phase and is not a Client API.

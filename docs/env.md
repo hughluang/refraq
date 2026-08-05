@@ -4,7 +4,7 @@
 
 This document records the current environment variables and the expected local-development and self-deploy conventions.
 
-These conventions serve the first delivery slice (the **Management Console** and its **Management Foundation**). They are not specific to any product-defining **Data Product Capability**.
+These conventions serve the **Management Console**, **Management Foundation**, and the **metadata foundation** phase (secrets master key, ingestion queue/worker). Data Product catalog capabilities may add further variables later.
 
 ## 2. Current Files
 
@@ -22,8 +22,12 @@ Current `backend/.env.example` defines:
 - `ADMIN_SESSION_TTL_HOURS=8`
 - `INITIAL_ADMIN_ACCOUNT=root`
 - `INITIAL_ADMIN_PASSWORD=change-me`
+- `REFRAQ_SECRETS_MASTER_KEY=change-me-secrets-master-key` (metadata foundation: encrypt Connection secrets at rest)
+- `REFRAQ_INGESTION_QUEUE_KEY=refraq:ingestion:jobs` (Redis list/stream key name for ingestion jobs; exact structure is implementation-defined)
+- `REFRAQ_INGESTION_WORKER_CONCURRENCY=1` (worker parallelism hint)
 
 `REFRAQ_STORE_BACKEND=memory` is for automated tests only. Do not use it in production examples.
+Metadata foundation variables are required when running ingestion/secret features; Foundation-only local login may still boot without them until those code paths are exercised.
 
 ### Frontend
 
@@ -60,6 +64,9 @@ Self-deploy Compose exposes only the web service to browsers; the API stays on t
 - `ADMIN_SESSION_TTL_HOURS`
 - `INITIAL_ADMIN_ACCOUNT`
 - `INITIAL_ADMIN_PASSWORD`
+- `REFRAQ_SECRETS_MASTER_KEY` (required to store/read Connection secrets)
+- `REFRAQ_INGESTION_QUEUE_KEY`
+- `REFRAQ_INGESTION_WORKER_CONCURRENCY`
 - `REFRAQ_INTEGRATION_DATABASE_URL` (pytest `@pytest.mark.integration` only; default `…/refraq_test`)
 - `REFRAQ_INTEGRATION_REDIS_URL` (integration only; default `redis://127.0.0.1:6379/1`)
 
@@ -83,3 +90,17 @@ Self-deploy Compose exposes only the web service to browsers; the API stays on t
 ## 6. Initial Admin Seeding
 
 On backend startup, if the user store is empty, default roles are ensured and a single `super_admin` user is created from `INITIAL_ADMIN_ACCOUNT` and `INITIAL_ADMIN_PASSWORD`. The display name defaults to the account value. Subsequent restarts do not re-seed. Multiple replicas remain safe because seeding is gated on an empty user store.
+
+## 7. Metadata Worker
+
+When metadata ingestion is implemented:
+
+- API process: enqueue only (`docs/api-contracts-ingestion.md`)
+- Worker process: consume Redis queue and run connectors (start command to be documented beside `python -m backend.core.entry`, e.g. `python -m backend.metadata.worker`)
+- Both share `DATABASE_URL`, `REDIS_URL`, and `REFRAQ_SECRETS_MASTER_KEY`
+- Do not run long collection inside the interactive API request path (`docs/adr/0004-redis-queue-for-ingestion.md`)
+
+## 8. Secret Handling
+
+- Never commit real `REFRAQ_SECRETS_MASTER_KEY`, admin passwords, or Connection passwords
+- Rotating `REFRAQ_SECRETS_MASTER_KEY` requires a documented re-encrypt procedure before it is safe in production; until then treat the key as stable per environment

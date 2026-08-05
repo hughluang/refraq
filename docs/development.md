@@ -13,7 +13,7 @@ This document records the stable development conventions for contributors workin
 ## Documentation Rules
 
 - Root `README.md` is product-facing and should stay focused on repository identity and product value.
-- Root `CONTEXT.md` records principles and tendencies (not implementation steps).
+- Root `CONTEXT.md` is the domain language glossary (terms and relationships only; not implementation steps). Keep it aligned with `docs/glossary.md`.
 - Documents under `docs/` are the committed source of truth for architecture, business rules, API contracts, and development conventions.
 - Architecture decisions that are hard to reverse live under `docs/adr/`.
 - Local process files belong in `.process/` and are not part of the committed baseline.
@@ -23,6 +23,7 @@ This document records the stable development conventions for contributors workin
 
 - Prefer small, verifiable changes.
 - Before editing, read the nearest README and the relevant document under `docs/`.
+- For metadata-phase work, start with `docs/business-metadata.md` and `CONTEXT.md`.
 - When code and documents disagree, resolve the mismatch instead of inventing new behavior silently.
 - Grow capability modules only when real code arrives; do not pre-create empty domain packages.
 
@@ -62,16 +63,29 @@ This document records the stable development conventions for contributors workin
 
 ## Suggested Reading Order
 
-For Management Foundation auth/RBAC work, read in this order:
+### Metadata foundation (current next phase)
+
+1. `CONTEXT.md`
+2. `docs/business-metadata.md`
+3. `docs/business-user-tokens.md`
+4. `docs/business-management-console.md` (`metadata` nav group)
+5. `docs/api-contracts-sources.md`, `docs/api-contracts-ingestion.md`, `docs/api-contracts-metadata.md`
+6. `docs/api-contracts-tokens.md`, `docs/api-contracts-audit.md`, `docs/api-contracts-metadata-mcp.md`
+7. `docs/adr/0004-redis-queue-for-ingestion.md`, `docs/adr/0005-app-encrypted-connection-secrets.md`
+8. `docs/architecture.md`, `docs/modules.md`, `docs/env.md`
+
+Treat `docs/product-core/*` as **long-horizon** reference only (files are marked superseded for near-term sequencing).
+
+### Management Foundation auth/RBAC
 
 1. `CONTEXT.md`
 2. `docs/architecture.md`
 3. `docs/modules.md`
 4. `docs/adr/0001-postgres-redis-foundation-stores.md`
-5. `docs/adr/0002-console-navigation-catalog.md`
-6. `docs/adr/0003-foundation-upgrade-vs-bootstrap.md`
+5. `docs/adr/0002-console-navigation-catalog.md` (cite by full filename; another `0002-*.md` exists)
+6. `docs/adr/0003-foundation-upgrade-vs-bootstrap.md` (cite by full filename; another `0003-*.md` exists)
 7. `docs/business-login-auth.md`
-8. `docs/business-management-console.md` (Console shell IA and module mount contract)
+8. `docs/business-management-console.md`
 9. `docs/api-contracts-auth.md`
 10. `docs/api-contracts-users.md`
 11. `docs/api-contracts-roles.md`

@@ -7,10 +7,10 @@ This document defines the User management endpoints for the **Management Console
 These contracts complement `docs/api-contracts-auth.md` and `docs/api-contracts-roles.md`. They follow the same transport rules:
 
 - Content type: `application/json`
-- Authentication: session cookie (see `docs/api-contracts-auth.md` §2)
-- All endpoints require a valid session
-- `401` is returned when the session is missing or invalid
-- `403` is returned when the caller is logged in but lacks the required permission
+- Authentication: Session cookie or User PAT Bearer (see `docs/api-contracts-auth.md` §2, `docs/api-contracts-tokens.md`)
+- All endpoints require a valid authenticated User
+- `401` is returned when authentication is missing or invalid
+- `403` is returned when the caller is authenticated but lacks the required permission
 
 The former `/admins` resource is retired; clients must use `/users`.
 
@@ -163,4 +163,5 @@ When `status` is set to `disabled`, the backend invalidates all sessions belongi
 
 - Hard delete of User records is intentionally not exposed.
 - Password rotation, password reset, and self-service profile changes are out of scope.
-- LDAP sync and Client / Token management are out of scope.
+- LDAP sync and **Client** (machine principal) credential management are out of scope.
+- **User PAT** is specified separately in `docs/api-contracts-tokens.md` / `docs/business-user-tokens.md` (not a Client API).

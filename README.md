@@ -14,6 +14,14 @@ These define the business identity of refraq:
 - Support shared business entities and consumer-facing delivery layers for different use cases
 - Enable governed, reusable, and auditable data consumption across internal teams
 
+### Metadata Foundation
+
+The near-term substrate for product identity (documented; implementation next):
+
+- Source Systems, Connections, and metadata ingestion
+- Catalog structure, semantics, joins, and controlled read-only query
+- User PAT and MCP access; companion secrets, queue/worker, and management audit
+
 ### Management Foundation
 
 These are the enabling capabilities required to operate the platform in a controlled environment:
@@ -21,25 +29,21 @@ These are the enabling capabilities required to operate the platform in a contro
 - Users (people), accounts, and login
 - Sessions and authenticated state
 - Configurable roles and a fixed permission catalog
-- Reserved Client principals for later machine access
+- User PAT for non-browser API/MCP (person-owned); Client machine principals reserved for later
 
 ## Current Status
 
-The repository is currently in the foundation stage.
-The product identity is defined, while the implementation is still a scaffold for the first delivery slices.
-
-The current delivery slice focuses on the **Management Console** and the **Management Foundation** (User login, session, Role management, and permission control). Business **Data Product Capabilities** are planned for later phases.
+The Management Console login, session, permission, users, roles, and system-parameters slice is complete.
+The next delivery phase is the **metadata foundation** (Source Systems, ingestion, MCP, User PAT, companion base). Start at [`docs/business-metadata.md`](docs/business-metadata.md), [`docs/business-user-tokens.md`](docs/business-user-tokens.md), and root [`CONTEXT.md`](CONTEXT.md). **Data Product** catalog / Entity capabilities remain later and are not delivered yet.
 
 At this stage, the repository includes:
 
-- a FastAPI backend foundation in `backend/`
-- a Next.js frontend foundation in `frontend/`
-- initial project documentation and architectural boundaries
-
-It does not yet include full business APIs, production data workflows, or completed platform UI flows.
+- a FastAPI backend for Foundation auth, users, roles, console navigation, and settings
+- a Next.js Management Console for those Foundation flows
+- project documentation for Foundation and the planned metadata foundation under `docs/`
 
 ## Repository Structure
 
 - `backend/`: backend foundation for APIs, platform services, and future domain implementation
 - `frontend/`: frontend foundation for the platform console and user-facing workflows
-- `docs/`: project documentation that captures architecture, modules, and execution planning
+- `docs/`: committed source of truth for architecture, business rules, and API contracts (process checklists stay in `.process/`)

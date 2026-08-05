@@ -1,6 +1,6 @@
 # refraq Frontend
 
-Management Console UI for refraq (Management Foundation first slice: login, session, RBAC).
+Management Console UI for refraq. Management Foundation (login, session, RBAC) is delivered; next phase is the metadata foundation (`docs/business-metadata.md`).
 
 ## Stack
 

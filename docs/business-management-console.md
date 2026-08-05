@@ -9,7 +9,7 @@ It answers what the console business base must provide. It does not prescribe vi
 Related boundaries:
 
 - **Management Foundation** (login, session, users, roles, permissions) is the enabling layer; rules live in `docs/business-login-auth.md`.
-- **Data Product Capabilities** are the product identity; this document only reserves mount points for them and does not define the data-product object model.
+- **Data Product Capabilities** remain the long-term product identity; this document defines Console shell mounts. Metadata foundation modules mount under group `metadata` (see `docs/business-metadata.md`). Data Product catalog / Entity modules are still deferred.
 - Permission decisions are authoritative in the backend; frontend show/hide only improves UX. See `docs/architecture.md`.
 - Navigation catalog decision: `docs/adr/0002-console-navigation-catalog.md`.
 
@@ -26,19 +26,19 @@ The Console shell must grow from a flat nav into an extensible base: stable zone
 1. **Separate top-bar and side-nav duties** (global utility vs structural navigation)
 2. **Permission-driven navigation** from a backend Console Module catalog
 3. **Module registration = backend code seed** (not runtime enable/disable, not DB menu CRUD)
-4. **Separate Administration and Platform Settings** from future Data Product primary nav
-5. **Thin slice / TVP**: Foundation delivers people · permissions · shell · mount contract
+4. **Separate Administration and Platform Settings** from metadata and future Data Product primary nav
+5. **Thin slice / TVP**: Foundation delivered people · permissions · shell · mount contract; metadata foundation fills the `metadata` group next
 
 Refraq is a domain management system. Top-level Foundation modules are always present; access differs only by Permission. Optional **Plugin** extensions under a module are out of scope for this slice.
 
 ## 3. Principles
 
 1. **The Console is the platform product’s primary UI**; the goal is lower cognitive load, not a menu of microservice names.
-2. **Foundation delivers people · permissions · shell · mount contract**; the Data Product phase fills that contract with discoverable, requestable, governable capabilities.
+2. **Foundation delivers people · permissions · shell · mount contract**; metadata foundation fills the `metadata` group; later Data Product phases add discoverable, requestable, governable product capabilities.
 3. **Structural navigation lives in the side nav**; account, logout, language, and personal preferences belong in top-bar utility navigation, not the side nav.
 4. **Menus are generated from “module catalog × permission decisions”** on the backend; no permission means no entry; deep-link visits must get an explainable unauthorized state.
 5. **Frontend and backend share one permission language** (resource + action); UI filtering is not a security boundary.
-6. **Management master data (users / roles) and platform settings** stay separate from the future Data Product primary nav.
+6. **Management master data (users / roles / user tokens) and platform settings** stay separate from the `metadata` group and from future Data Product primary nav.
 
 ## 4. Capability Priorities
 
@@ -65,14 +65,23 @@ Refraq is a domain management system. Top-level Foundation modules are always pr
 | Audit / security foundation entry | Traceable admin-action entry can be thin |
 | Persisted Settings Override | Survive restart / multi-replica (deferred from in-process overlay) |
 
-### 4.3 P2 — Defer to Data Product Capabilities
+### 4.3 Metadata foundation — next delivery (not Foundation P0)
+
+| Capability | Business meaning |
+| --- | --- |
+| `metadata` nav group | Source Systems, catalog browse, ingestion visibility |
+| Source / Connection / structure ingestion | See `docs/business-metadata.md` |
+| User PAT module | Person-owned Bearer tokens under Administration (`tokens`) |
+| Management-plane audit read | Thin audit browser when `audit:read` is granted |
+
+### 4.4 P2 — Defer to later Data Product Capabilities
 
 | Capability | Business meaning |
 | --- | --- |
 | Data product catalog and discovery | Search/browse, owners, trust signals |
 | Persona / role-custom navigation | Different jobs see different primary nav |
 | Access request and contract / policy workflows | Marketplace-style request, approve, compliance |
-| Asset operations and runtime visibility | Runs, lineage, deployment health |
+| Asset operations and runtime visibility | Runs, lineage, deployment health beyond metadata ingestion jobs |
 | Entity detail extension slots | One page composing multiple capability widgets |
 | Plugin under a Console Module | Optional sub-capability extension (not top-level module toggle) |
 
@@ -94,17 +103,23 @@ Refraq is a domain management system. Top-level Foundation modules are always pr
 
 The side nav carries only module structural navigation and **renders entries returned by `GET /console/navigation`**.
 
-Groups and modules for this Foundation slice:
+Groups and modules:
 
-| Group | Modules |
-| --- | --- |
-| Workbench | Home (`dashboard`) |
-| Administration | Users, Roles |
-| Platform settings | System parameters (`settings`) |
+| Group | Group id | Modules |
+| --- | --- | --- |
+| Workbench | `workbench` | Home (`dashboard`) |
+| Administration | `admin` | Users, Roles, User PAT (`tokens`) |
+| Platform settings | `settings` | System parameters (`settings`) |
+| Metadata | `metadata` | Sources (`sources`), Catalog (`catalog`), Ingestion (`ingestion`) |
 
-Reserved future groups (Data products / Integration & runtime / Governance) are **not implemented** in this slice (no hide-vs-empty product policy yet).
+Notes:
 
-**Forbidden**: putting account, logout, or language in the side nav; organizing first-level nav by internal service names; treating Foundation modules as enable/disable toggles.
+- Foundation P0 shipped Workbench / Administration (Users, Roles) / Platform settings.
+- Metadata foundation adds group id **`metadata`** and Administration module **`tokens`**. Module field details: `docs/business-metadata.md`, `docs/business-user-tokens.md`.
+- Retired reserved label: do **not** use “Integration & runtime” as the group id or primary English label for this mount; the stable id is `metadata`.
+- Still reserved for later (not implemented): Data products, Governance (and any persona composer). Hide-vs-empty product policy for empty future groups remains deferred.
+
+**Forbidden**: putting account, logout, or language in the side nav; organizing first-level nav by internal service names; treating Foundation modules as enable/disable toggles; mounting Source/Connection under Administration.
 
 ### 5.3 Main — Shared Main Work Area Regions
 
@@ -127,8 +142,9 @@ flowchart TB
 
   subgraph SideNav["Side nav · structural navigation"]
     G1["Workbench"]
-    G2["Administration · users/roles"]
+    G2["Administration · users/roles/tokens"]
     G3["Platform settings"]
+    G4["Metadata · sources/catalog/ingestion"]
   end
 
   subgraph Main["Main work area"]
@@ -156,7 +172,7 @@ Each Console Module declaration includes at least:
 | Field (business meaning) | Notes |
 | --- | --- |
 | Module id | Stable technical name (e.g. `users`, `roles`, `settings`) |
-| Nav group | `workbench` / `admin` / `settings` / … |
+| Nav group | `workbench` / `admin` / `settings` / `metadata` / … |
 | Routes | List (nav entry) plus optional create/edit paths for SPA wiring |
 | Actions | Refine action → Permission; `list` is also the nav visibility permission |
 | Label key | i18n key for the module label |
@@ -167,7 +183,7 @@ Rules:
 - The shell builds the side nav from navigation API results (catalog × current-user permissions).
 - Foundation modules have no enabled/disabled state; visibility is permission-only.
 - SPA Refine resources and UX ACL adapt from `GET /console/module-identities` (unfiltered Console Module Identity); the frontend does not hand-maintain a parallel catalog.
-- When Data Product modules arrive, extend the backend seed and add pages; do not rewrite top-bar / side-nav duty narrative.
+- When metadata or later Data Product modules arrive, extend the backend seed and add pages; do not rewrite top-bar / side-nav duty narrative.
 
 ## 7. Platform Settings (System Parameters)
 
@@ -182,17 +198,17 @@ For this slice:
 - Secrets and initial admin credentials are never exposed
 - Permissions: `settings:read` (view / nav), `settings:write` (patch / clear override); seeded `operator` does not include them
 
-## 8. Foundation Vs Data Product Boundary
+## 8. Foundation Vs Metadata Vs Data Product Boundary
 
-| Must ship in Foundation | Defer to Data Product phase |
-| --- | --- |
-| Login / session / logout | Data product object model and catalog browse |
-| Users, roles, permission assignment | Domain browse tree, glossary, tag universe |
-| Permission-filtered grouped side nav from backend catalog | Persona navigation composer |
-| Console Module code-seed contract | Real data-product module content / Plugin under modules |
-| Administration and Platform Settings mounts | Self-serve access marketplace, contract editing |
-| System parameters API (TTL override) | Persisted multi-replica settings, audit log of patches |
-| Top bar: mark, user menu, language | Full global metadata search, notification center |
+| Foundation (delivered) | Metadata foundation (next) | Later Data Product phase |
+| --- | --- | --- |
+| Login / session / logout | Source / Connection / ingestion / catalog | Data Product object model and catalog browse |
+| Users, roles, permission assignment | User PAT; management-plane audit for metadata | Persona navigation composer |
+| Permission-filtered grouped side nav | `metadata` nav group modules | Self-serve access marketplace |
+| Console Module code-seed contract | MCP metadata tool surface | Entity detail extension slots / Plugins |
+| Administration and Platform Settings | Encrypted Connection secrets; queue worker | Persisted multi-replica Settings Override (unless blocked earlier) |
+| System parameters API (TTL override) | Controlled read-only query (slice D) | Notification center / global search productization |
+| Top bar: mark, user menu, language | | |
 
 **Foundation success criteria**:
 
@@ -216,13 +232,16 @@ For this slice:
 1. Lock contracts: module catalog fields, navigation API, module-identity API, settings API.
 2. Backend: permissions, catalog, navigation, module identities, settings override + effective TTL on login.
 3. Frontend: shell consumes navigation; settings page; Refine/accessControl alignment.
-4. Defer: reserved nav groups policy, persisted override, audit, Plugins.
+4. Defer (Foundation-era): persisted Settings Override, Plugins, empty future-group policy.
+5. Metadata foundation: follow `docs/business-metadata.md` delivery slices; keep shell contract stable.
 
-Implementation order follows `.process/AGENTS.md`: business rules → API → backend → frontend → verify → update docs.
+Local implementation order follows `.process/AGENTS.md` (business rules → API → backend → frontend → verify → update docs). Authoritative business truth remains under `docs/`.
 
 ## 11. References
 
 - `docs/api-contracts-console.md`
 - `docs/api-contracts-settings.md`
+- `docs/business-metadata.md`
+- `docs/business-user-tokens.md`
 - `docs/adr/0002-console-navigation-catalog.md`
 - Industry notes (non-normative): Refine Authorization, React-Admin Permissions, Cloudscape Service navigation, Grafana-style code navtree + server prune

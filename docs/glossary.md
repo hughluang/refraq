@@ -9,9 +9,10 @@ Avoid lowercase `refraq` in user-visible strings; avoid a Other translation of t
 
 ### refraq
 
-The technical identifier for the same product (repository, packages, cookies, env vars, machine tokens).
+The technical identifier for the same product (repository, packages, cookies, env vars).
 Avoid title-case `Refraq` for technical identifiers.
 Avoid describing the product as a scaffold only or an auth demo.
+Avoid using “machine tokens” here as a synonym for **User PAT** or **Client** credentials.
 
 ### Data Business Platform
 
@@ -38,8 +39,8 @@ Avoid treating it as the core product identity or the differentiating business c
 
 ### Management Console
 
-The operator-facing UI surface of Refraq for the current delivery slice, not the product identity.
-For the current slice this is a docs/domain term, not user-visible UI copy.
+The operator-facing UI surface of Refraq, not the product identity.
+This is a docs/domain term, not user-visible UI copy.
 Avoid treating it as the product definition, a standalone admin project, or a synonym for Refraq itself.
 
 ### Console Module
@@ -76,7 +77,7 @@ Avoid calling it persistent configuration or feature flags.
 
 An optional sub-capability extension under a Console Module (future).
 Not a top-level Console Module enable/disable mechanism.
-Out of scope for the current Foundation console-infra slice.
+Out of scope for Foundation and for the metadata foundation phase.
 Avoid using Plugin as a synonym for Console Module.
 
 ## People And Access
@@ -104,18 +105,25 @@ Avoid calling it a user id or employee id.
 Where a User's credentials and directory attributes originate.
 The current slice uses `local` only; `ldap` is reserved for a later integration.
 Avoid treating identity source as a role or permission.
+Avoid conflating Identity Source with **Source System** (enterprise data systems).
 
 ### Client
 
 A machine integration principal that will consume APIs or product capabilities with its own credentials.
-Distinct from User (people). Token / credential management for Clients is out of scope for the current slice.
+Distinct from User (people). Client credential management remains out of scope for the metadata foundation phase.
 Avoid calling a Client a User or an Administrator.
-Avoid conflating Client with Serving-layer "consumer" (product delivery target).
+Avoid conflating Client with **User PAT** (person-owned Bearer credentials) or Serving-layer "consumer" (product delivery target).
 
 ### Session
 
 Server-managed authenticated state created after successful console login and carried through a cookie.
-Avoid calling it a token or a permanent login.
+Avoid calling it a User PAT, a Bearer token, or a permanent login.
+
+### User PAT
+
+A revocable personal access token owned by a User for non-browser API and MCP access (`Authorization: Bearer`).
+Coexists with Console Session cookies; authenticates the same User and Role permissions.
+Avoid calling it a Client token, a Session id reused as Bearer, or a machine principal.
 
 ### Backing Service
 
@@ -129,7 +137,7 @@ Avoid inferring memory mode from missing URLs, or documenting `memory` as a supp
 
 ### Current User
 
-The User resolved from the active session for the current request.
+The User resolved from the active Session or User PAT for the current request.
 
 ### Role
 
@@ -158,16 +166,56 @@ Runs from the API process lifespan (and must not be confused with Foundation Upg
 
 ### Permission
 
-A concrete allowed action expressed as `resource:action`, such as `dashboard:read`, `console:access`, or `settings:read`.
+A concrete allowed action expressed as `resource:action`, such as `dashboard:read`, `console:access`, `settings:read`, or `sources:read`.
 Chosen only from a fixed catalog when editing Roles.
 Avoid reducing it to a menu or a page label.
 Avoid free-form permission strings invented in the UI.
+
+## Metadata Foundation
+
+### Source System
+
+A logical business system whose data refraq integrates (for example U9 or MES).
+Has a stable key, display name, and type; not a login directory.
+Avoid calling it Identity Source, Connection, or Client.
+
+### Connection
+
+A technical endpoint attached to a Source System: reachability, database/schema scope, encrypted credentials, and instance identity.
+A Source System has one or more Connections.
+Avoid calling the Connection the Source System, or treating Identity Source as a Connection.
+
+### Instance Key
+
+A stable discriminator on a Connection used to disambiguate collected metadata identity across environments or physical instances of the same Source System.
+Avoid relying on database name alone when multiple instances can share a name.
+
+### Ingestion Job
+
+A queued unit of work that collects metadata through one Connection (structure, and later semantics/join as slices allow).
+API enqueues; a worker consumes via an external queue backed by Redis.
+Avoid running long collection inside the request that serves the Management Console API.
+
+### Catalog Object
+
+A collected structural unit (table, view, or equivalent) under a Source System / Connection instance, including columns and optional DDL.
+Avoid calling a Catalog Object a Data Product or Business Entity.
+
+### Metadata Nav Group
+
+The Console Navigation group with stable id `metadata` for Source Systems, ingestion visibility, and catalog browsing modules.
+Avoid mounting these modules under Administration or a Data products group; avoid the retired reserved label "Integration & runtime" for this group.
+
+### Management Audit Event
+
+A persisted record of a sensitive management-plane action (who, when, resource, action, result) for metadata and related credentials.
+Avoid treating it as a full platform SIEM or a substitute for application access logs.
 
 ## Auth Concepts
 
 ### Authentication
 
-The process of proving User identity, primarily through login and session validation.
+The process of proving User identity, through Console login/Session validation or User PAT Bearer validation.
 
 ### Authorization
 
@@ -175,7 +223,7 @@ The process of deciding whether an authenticated User can access a route or perf
 
 ### Protected Route
 
-A frontend route that requires a valid authenticated session.
+A frontend route that requires a valid authenticated Session (Console); APIs may equivalently accept a User PAT.
 
 ### Forbidden
 
@@ -184,7 +232,7 @@ Mapped to HTTP `403`.
 
 ### Unauthenticated
 
-The state where no valid session is present.
+The state where no valid Session or User PAT is present.
 Mapped to HTTP `401`.
 
 ### API Contract

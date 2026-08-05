@@ -12,7 +12,7 @@ Related business rules: `docs/business-management-console.md`.
 
 - **Console Module catalog**: fixed seed in backend code (ids, groups, routes, actions → permissions, i18n keys). Not writable at runtime.
 - **Console Navigation**: catalog entries the current User may see, grouped, already filtered by `actions.list` Permission.
-- **Console Module Identity**: unfiltered UX identity for every Foundation module (routes + action → permission). Used by the SPA for Refine wiring and page/feature ACL; not a second registration surface.
+- **Console Module Identity**: unfiltered UX identity for every seeded module including Foundation and metadata-group modules (routes + action → permission). Used by the SPA for Refine wiring and page/feature ACL; not a second registration surface.
 - Labels are **i18n keys**; the frontend translates them.
 - Nav visibility permission is `actions.list` (no separate `nav_permission` field).
 
@@ -20,7 +20,7 @@ Related business rules: `docs/business-management-console.md`.
 
 Purpose: return grouped side-nav entries for the current session.
 
-- Requires: authenticated session and `console:access`
+- Requires: authenticated User (Session or User PAT) and `console:access`
 - Does **not** require per-module permissions to call the endpoint; missing module permissions simply omit those modules (and empty groups)
 
 ### Response: `200`
@@ -81,14 +81,14 @@ Rules:
 
 | Status | Condition |
 | --- | --- |
-| `401` | No valid session |
+| `401` | No valid authentication (Session or User PAT) |
 | `403` | Authenticated but lacking `console:access` |
 
 ## 4. `GET /console/module-identities`
 
-Purpose: return the full Foundation Console Module Identity catalog for SPA routing and UX ACL.
+Purpose: return the full seeded Console Module Identity catalog (Foundation and metadata-group modules) for SPA routing and UX ACL.
 
-- Requires: authenticated session and `console:access`
+- Requires: authenticated User (Session or User PAT) and `console:access`
 - **Not** filtered by per-module permissions (contrast with navigation)
 - Does **not** include group or sort fields (those remain navigation-only)
 
@@ -157,7 +157,7 @@ Purpose: return the full Foundation Console Module Identity catalog for SPA rout
 
 | Status | Condition |
 | --- | --- |
-| `401` | No valid session |
+| `401` | No valid authentication (Session or User PAT) |
 | `403` | Authenticated but lacking `console:access` |
 
 ## 5. Seed Catalog (this slice)

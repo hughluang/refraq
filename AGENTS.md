@@ -3,7 +3,7 @@
 `refraq` is a standalone **Data Product Integration Platform** (a Data Business Platform).
 New refraq implementation work belongs only in `backend/` and `frontend/`.
 
-The current delivery slice is the **Management Console** and its **Management Foundation** (administrator login, session, permission control). Login/session/permission are enabling capabilities, not the product identity.
+The Management Foundation login/session/permission slice (Management Console) is delivered. Next implementation phase is the **metadata foundation** (Source Systems, ingestion, MCP, User PAT, companion base) — see `docs/business-metadata.md`. Data Product catalog / Entity remain later. Process pointer: `.process/AGENTS.md`; source of truth stays under `docs/`.
 
 ## Repository Rules
 
@@ -19,7 +19,8 @@ For repository structure and long-lived development guidance, read:
 1. `docs/development.md`
 2. `docs/architecture.md`
 3. `docs/modules.md`
-4. domain or contract documents under `docs/` that match the task
+4. domain or contract documents under `docs/` that match the task (metadata: `docs/business-metadata.md`, `docs/business-user-tokens.md`, matching `docs/api-contracts-*.md`)
+5. root `CONTEXT.md` for domain language
 
 ## Notes
 

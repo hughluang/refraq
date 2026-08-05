@@ -15,8 +15,9 @@ These contracts are intentionally small:
 ## 2. Transport Rules
 
 - Content type: `application/json`
-- Authentication transport: session cookie
+- Authentication transport for Management Console: session cookie
 - Frontend must send requests with credentials included
+- Metadata foundation and automation may alternatively authenticate with **User PAT** Bearer (`docs/api-contracts-tokens.md`); protected endpoints accept Session **or** PAT
 - Protected endpoints return `401` for unauthenticated requests and `403` for insufficient permission
 
 ## 3. Shared Response Shapes
@@ -139,7 +140,7 @@ Purpose:
 ### Request
 
 No body.
-Requires a valid session cookie.
+Requires a valid **Session cookie or User PAT** Bearer (`docs/api-contracts-tokens.md`).
 
 ### Success Response: `200`
 
@@ -153,6 +154,8 @@ Same `user` shape as login success.
   "message": "Not signed in or session expired"
 }
 ```
+
+(`message` is a default English fallback; PAT failures may use `AUTH_PAT_INVALID` where that code is more specific.)
 
 ## 6. `POST /auth/logout`
 

@@ -49,7 +49,7 @@ Shape in §3.
 
 | Status | Condition |
 | --- | --- |
-| `401` | No valid session |
+| `401` | No valid authentication (Session or User PAT) |
 | `403` | Missing `settings:read` |
 
 ## 5. `PATCH /settings`
@@ -81,7 +81,7 @@ Updated platform settings shape (§3) with `admin_session_ttl_hours_source` = `o
 
 | Status | Condition |
 | --- | --- |
-| `401` | No valid session |
+| `401` | No valid authentication (Session or User PAT) |
 | `403` | Missing `settings:write` |
 | `422` | Validation failure (range / unknown fields) |
 
@@ -99,7 +99,7 @@ Platform settings shape (§3) with `admin_session_ttl_hours_source` = `env` and 
 
 | Status | Condition |
 | --- | --- |
-| `401` | No valid session |
+| `401` | No valid authentication (Session or User PAT) |
 | `403` | Missing `settings:write` |
 
 ## 7. Non-Goals (this slice)

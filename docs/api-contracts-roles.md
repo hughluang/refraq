@@ -57,10 +57,21 @@ Purpose: return the fixed Permission catalog for Role editing UIs.
     { "key": "roles:read", "description": "List roles and the permission catalog" },
     { "key": "roles:write", "description": "Create, update, and delete roles" },
     { "key": "settings:read", "description": "View platform system parameters" },
-    { "key": "settings:write", "description": "Change platform system parameters" }
+    { "key": "settings:write", "description": "Change platform system parameters" },
+    { "key": "sources:read", "description": "List and view Source Systems and Connections" },
+    { "key": "sources:write", "description": "Create and update Source Systems and Connections" },
+    { "key": "metadata:read", "description": "Browse catalog objects, semantics, and joins" },
+    { "key": "metadata:write", "description": "Write semantics and join edges" },
+    { "key": "ingestion:run", "description": "Enqueue and manage metadata ingestion jobs" },
+    { "key": "query:run", "description": "Run controlled read-only SQL against a Connection" },
+    { "key": "tokens:read", "description": "List own User PAT metadata" },
+    { "key": "tokens:write", "description": "Create and revoke own User PATs" },
+    { "key": "audit:read", "description": "Read management-plane audit events" }
   ]
 }
 ```
+
+Catalog meanings for metadata-phase keys: `docs/business-metadata.md` §6 and `docs/business-user-tokens.md`.
 
 ## 4. `GET /roles`
 
