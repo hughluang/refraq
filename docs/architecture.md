@@ -38,8 +38,8 @@ The Management Foundation slice includes:
 
 ### In Scope For Metadata Foundation Phase
 
-- Source System / Connection registry, metadata ingestion, catalog browse, semantics, joins, controlled read-only query
-- User PAT for API/MCP; Celery platform async runtime (Redis broker) + Ingestion Job / Scheduled Task in Postgres; encrypted Connection secrets; management-plane audit
+- Source / Connection registry, structure **Jobs**, catalog browse, semantics, joins, controlled read-only query
+- User PAT for API/MCP; Celery platform async runtime (Redis broker) + **Job** / Scheduled Task in Postgres; encrypted Connection secrets; management-plane audit
 - See `docs/business-metadata.md`
 
 ## 3. High-Level Topology
@@ -137,7 +137,8 @@ The repository should follow these dependency rules:
 - Shared infrastructure (settings, engine, `DeclarativeBase`, Redis) lives under `backend/core/`. Business ORM tables live in domain packages (Foundation: `backend/admin/models.py`; metadata: `backend/metadata/`; Celery/Scheduled Task: `backend/worker/`).
 - Module layout stays a modular monolith: add capability packages when real code arrives; do not pre-scaffold empty domain trees.
 - Directory structure aids maintainability; multi-instance correctness depends on **Backing Services**, not sticky sessions.
-- Metadata ingestion uses an out-of-process queue and worker with Redis as broker (`docs/adr/0004-redis-queue-for-ingestion.md`); the default runtime is Celery (`docs/adr/0006-celery-platform-async-runtime.md`). Connection secrets are app-encrypted in Postgres (`docs/adr/0005-app-encrypted-connection-secrets.md`).
+- Structure and other long-running **Jobs** use an out-of-process queue and worker with Redis as broker (`docs/adr/0004-redis-queue-for-ingestion.md`); the default runtime is Celery (`docs/adr/0006-celery-platform-async-runtime.md`). Job shape: `docs/adr/0008-job-generic-input.md`. Connection secrets are app-encrypted in Postgres (`docs/adr/0005-app-encrypted-connection-secrets.md`).
+- Catalog identity is Source-scoped (`docs/adr/0007-source-owns-catalog-identity.md`).
 - See `docs/adr/0001-postgres-redis-foundation-stores.md`.
 
 ### Port Configuration

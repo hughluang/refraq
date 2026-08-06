@@ -18,7 +18,7 @@ These define the business identity of refraq:
 
 The near-term substrate for product identity (documented; implementation next):
 
-- Source Systems, Connections, and metadata ingestion
+- Sources, Connections, and metadata ingestion
 - Catalog structure, semantics, joins, and controlled read-only query
 - User PAT and MCP access; companion secrets, queue/worker, and management audit
 
@@ -34,7 +34,7 @@ These are the enabling capabilities required to operate the platform in a contro
 ## Current Status
 
 The Management Console login, session, permission, users, roles, and system-parameters slice is complete.
-The next delivery phase is the **metadata foundation** (Source Systems, ingestion, MCP, User PAT, companion base). Start at [`docs/business-metadata.md`](docs/business-metadata.md), [`docs/business-user-tokens.md`](docs/business-user-tokens.md), and root [`CONTEXT.md`](CONTEXT.md). **Data Product** catalog / Entity capabilities remain later and are not delivered yet.
+The next delivery phase is the **metadata foundation** (Sources, ingestion, MCP, User PAT, companion base). Start at [`docs/business-metadata.md`](docs/business-metadata.md), [`docs/business-user-tokens.md`](docs/business-user-tokens.md), and root [`CONTEXT.md`](CONTEXT.md). **Data Product** catalog / Entity capabilities remain later and are not delivered yet.
 
 At this stage, the repository includes:
 

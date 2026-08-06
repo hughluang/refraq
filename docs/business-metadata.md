@@ -2,7 +2,7 @@
 
 ## 1. Scope
 
-This document defines the **metadata foundation** phase for refraq: Source Systems, Connections, metadata ingestion, catalog browsing, semantics and join enrichment, controlled read-only query, Management Console mounts under the `metadata` nav group, MCP exposure, and the companion system base required to operate that surface safely.
+This document defines the **metadata foundation** phase for refraq: Sources, Connections, metadata ingestion, catalog browsing, semantics and join enrichment, controlled read-only query, Management Console mounts under the `metadata` nav group, MCP exposure, and the companion system base required to operate that surface safely.
 
 Related boundaries:
 
@@ -10,6 +10,8 @@ Related boundaries:
 - **User PAT** rules live in `docs/business-user-tokens.md`.
 - Console shell and module registration contract: `docs/business-management-console.md`.
 - Terminology: `docs/glossary.md` and root `CONTEXT.md`.
+- Source / catalog identity: `docs/adr/0007-source-owns-catalog-identity.md`.
+- Job shape: `docs/adr/0008-job-generic-input.md`.
 - This phase does **not** define Business Entity, Data Product catalog, Serving delivery, or Access Contract marketplace workflows.
 
 These rules are the working source of truth unless superseded by a later ADR or business document.
@@ -18,7 +20,7 @@ These rules are the working source of truth unless superseded by a later ADR or 
 
 ### 2.1 Gap
 
-Foundation P0 delivered people, permissions, and Console mount contract. Product identity still requires an authoritative in-product path from enterprise systems to governed data outputs. Without Source / Connection / collection / MCP inside refraq, later Entity and Data Product work has no substrate.
+Foundation P0 delivered people, permissions, and Console mount contract. Product identity still requires an authoritative in-product path from registered data origins to governed data outputs. Without Source / Connection / collection / MCP inside refraq, later Entity and Data Product work has no substrate.
 
 ### 2.2 Confirmed Direction
 
@@ -27,92 +29,119 @@ Foundation P0 delivered people, permissions, and Console mount contract. Product
 3. **Phase north star** — metadata capability face comparable to structure + semantics + join + controlled query, plus companion base (secrets, Celery worker/beat, User PAT, management audit, permissions, `metadata` nav).
 4. **Deliver in slices A→B→C→D** with companion base started alongside A — not a single big-bang milestone.
 5. **Defer** Entity, Data Product catalog, Serving, Access marketplace, Client management, and Console P1 cosmetics (scope/search/theme/notifications).
+6. **Source is the catalog owner** — not limited to enterprise systems; `kind` leaves room for later non-live origins (for example CSV).
 
 ## 3. Principles
 
-1. **Source System is the business identity; Connection is the technical attachment.**
-2. **Metadata identity must be instance-aware** via Connection **Instance Key** (and optional filter scope).
-3. **Long collection never blocks the API process** — enqueue Ingestion Jobs; workers execute.
+1. **Source is the business/catalog identity** (including database-kind scope such as database name and schema); **Connection is only live reachability and credentials** (host, port, user/secret, engine).
+2. **Catalog Object identity is Source-scoped only** — not Connection-scoped.
+3. **Long work never blocks the API process** — enqueue **Jobs**; workers execute.
 4. **Credentials are secrets** — encrypted at rest in Postgres; never returned in full by APIs; never written to Settings Override or logs.
 5. **Backend Permission catalog is authoritative** for Console, REST, and MCP.
 6. **MCP authenticates a User** (Session or User PAT), not an anonymous service key and not a Client in this phase.
 7. **Write honesty** for semantics and joins — evidence-backed join edges; incomplete understanding stays incomplete (open questions allowed); do not invent business meaning.
 8. **Controlled query is read-only** with platform guards, not a general SQL console.
+9. **Kind extensibility** — slice A implements Source `kind=database` only; other Source kinds are planned extension points, not delivered in this phase.
+10. **Job is an independent durable execution** — discriminated by Job `kind`, carrying a generic `input` payload; not owned by Connection. Domains provide enqueue/list facades.
 
 ## 4. Object Model
 
-### 4.1 Source System
+### 4.1 Source
 
 Fields (business meaning):
 
 | Field | Notes |
 | --- | --- |
 | id | Stable technical identifier |
-| key | Stable unique key (e.g. `mes`, `u9`) |
+| key | Stable unique key (e.g. `mes-prod`, `u9-uat`) |
 | name | Display name |
-| system_type | Business/system family label (opaque string catalog may grow) |
+| kind | Collection modality; slice A: `database`. Catalog may grow (e.g. `file`) without renaming Source |
 | status | `active` / `disabled` |
 | description | Optional |
+| database_name | Required when `kind=database`; catalog/DB scope (engine-specific: database, service/SID, etc.) |
+| schema_filter | Optional when `kind=database`; schema (or equivalent) scope for collection |
 
 Rules:
 
-- Disabling a Source System blocks new ingestion and new Connections from becoming active for collection until re-enabled (existing catalog snapshots remain readable unless later retention rules say otherwise).
+- Distinct environments or physical instances are **distinct Sources** (separate keys and catalogs).
+- For `kind=database`, **business/catalog scope** (what is being integrated: database name, schema filter) lives on the Source — not on Connection.
+- Disabling a Source blocks new ingestion and new Connections from becoming active for collection until re-enabled (existing catalog snapshots remain readable unless later retention rules say otherwise).
+- Non-`database` kinds are out of scope for slice A implementation; models and APIs must not hard-code that every Source requires a Connection. Kind-specific scope fields for non-database kinds arrive with those kinds.
 
 ### 4.2 Connection
 
 | Field | Notes |
 | --- | --- |
 | id | Stable technical identifier |
-| source_system_id | Parent Source System |
+| source_id | Parent Source (`kind=database` in slice A) |
 | name | Display name |
-| engine | `postgresql` \| `mssql` \| `oracle` in slice A |
-| instance_key | Required; unique per Source System |
-| endpoint | Host/port and engine-specific locator fields |
-| database_name / schema filter | Scope for collection where applicable |
-| secret_ref | Encrypted credential material (never plaintext in API responses) |
+| engine | `postgresql` \| `mssql` \| `oracle` in slice A (wire/protocol family) |
+| host / port | Reachability; engine-specific endpoint extras allowed (e.g. SSL flags) without carrying catalog scope |
+| secret_ref | Encrypted credential material (username/password or equivalent; never plaintext in API responses) |
 | status | `active` / `disabled` |
 | is_collection_active | Whether this Connection may run full metadata ingestion |
 
 Rules:
 
-- Cardinality: Source System **1—N** Connection.
-- Runtime policy for early slices: at most **one** Connection with `is_collection_active=true` per `(source_system_id, instance_key)` for full metadata ingestion.
-- Prefer **one Connection + filter** over multiple unscoped full-ingest Connections that target the same logical asset set.
-- Parallel multi-Connection ingestion for the same Source System is a later runtime relaxation and requires scope-aware delete semantics before enablement.
+- Connection carries **only** how to reach and authenticate the live endpoint. It does **not** own `database_name` / schema scope.
+- Ingestion and controlled query compose runtime access as **Source scope + Connection endpoint/credentials**.
+- Cardinality: Source **0—N** Connection (database Sources typically 1—N; future non-live kinds may use zero Connections and a different attachment).
+- Runtime policy for early slices: at most **one** Connection with `is_collection_active=true` per Source for full metadata ingestion.
+- Prefer a single collection-active Connection per Source; do not encode catalog partitioning by multiplying Connections.
+- Parallel multi-Connection ingestion for the same Source is a later runtime relaxation and requires scope-aware delete semantics before enablement.
 - Read replicas are not a default Connection purpose for metadata collection; prefer primary / authoritative endpoints.
+- Connection is not the catalog identity; rotating host/port/secret must not mint a new Source or orphan Catalog Objects of that Source.
 
-### 4.3 Ingestion Job
+### 4.3 Job
+
+Platform durable asynchronous execution (see root `CONTEXT.md`). Metadata structure collection is one Job `kind`, not the definition of Job.
 
 | Field | Notes |
 | --- | --- |
 | id | Job id |
-| connection_id | Target Connection |
-| kind | `structure` \| `semantics_refresh` \| … as slices add |
+| kind | `structure` \| `semantics_refresh` \| … as slices/domains add |
 | status | `queued` \| `running` \| `succeeded` \| `failed` \| `cancelled` |
+| input | Generic object; domain interprets per `kind`. Slice A database structure: includes `source_id` and `connection_id` |
 | created_by | User id |
 | timestamps / error summary | Operational visibility |
 
 Rules:
 
-- Creating a job requires `ingestion:run` and a usable Connection secret.
+- Job is **not** owned by Connection or Source. Do not treat `connection_id` / `source_id` as universal Job columns — they live in `input` when required.
+- Metadata enqueue/list for Source-scoped work uses the **Source facade** (`docs/api-contracts-jobs.md`): `POST/GET /sources/{id}/jobs`.
+- Creating a structure Job requires `ingestion:run` (permission string retained until migration) and, for database Sources, a usable Connection secret in `input`.
 - Jobs are durable records; queue transport is Redis-backed via Celery (see `docs/adr/0004-redis-queue-for-ingestion.md`, `docs/adr/0006-celery-platform-async-runtime.md`).
+- Successful structure Jobs write/refresh **Catalog Objects** on the Source identified in `input`.
+- Console module id `ingestion` remains until an implementation migration; product copy says Job.
 
 ### 4.4 Catalog Object And Columns
 
-Collected structure includes object identity (under Source System + Instance Key), object type, name, columns (name, type, nullable), and DDL when available.
+Collected structure includes object identity **under Source**, object type, name, columns (name, type, nullable), and DDL when available.
+Optional provenance may record which Connection last collected the snapshot; provenance is not part of identity.
 Later slices attach business semantics and join edges to these objects/columns.
+
+### 4.5 Future foresight — non-database Source kinds (not delivered in A–D)
+
+Planned shape only; no Attachment APIs, ORM, or Console flows in this phase:
+
+- A later Source `kind` (for example `file`) remains a **Source** with Catalog Objects under it — not a parallel identity.
+- Live **Connection** stays optional (often zero). File bytes or external URI are expected to use a distinct **Attachment** (or equivalent) concept — not Connection.
+- Structure refresh is still a **Job** with `kind=structure`; domain targets (Source, Attachment id/URI, format hints) live in Job `input`, via a Source (or kind-specific) facade.
+- Do not force file/static origins through Connection; do not promote Attachment fields onto universal Job columns.
+- Full Attachment cardinality, versioning, blob storage, and reference-data governance remain out of scope until that phase is grilled and documented.
 
 ## 5. Delivery Slices
 
 | Slice | Business delivery |
 | --- | --- |
 | **Companion base** (with A) | User PAT; Connection secret encryption; Celery worker/beat + Scheduled Task; Job status APIs; Permission catalog extensions; `metadata` Console nav group; management-plane audit |
-| **A** | Source/Connection CRUD; PostgreSQL + MSSQL + Oracle structure collection; Console browse; MCP read-only structure tools |
+| **A** | Source/Connection CRUD for `kind=database`; PostgreSQL + MSSQL + Oracle structure collection; Console browse; MCP read-only structure tools |
 | **B** | Object/column business name and description read/write via API and MCP |
 | **C** | Join graph with evidence threshold for writes |
 | **D** | Controlled read-only query (`run_sql`) with guards and audit |
 
-Slice B–D must not ship before A’s structure substrate exists for the same Connection.
+Slice B–D must not ship before A’s structure substrate exists for the same Source.
+Non-database Source kinds (e.g. CSV) are **not** in slices A–D.
 
 ## 6. Permission Catalog (Metadata)
 
@@ -120,11 +149,11 @@ Fixed catalog additions (exact strings are normative for Roles UI):
 
 | Permission | Meaning |
 | --- | --- |
-| `sources:read` | List/view Source Systems and Connections (non-secret fields) |
+| `sources:read` | List/view Sources and Connections (non-secret fields) |
 | `sources:write` | Create/update/disable Sources and Connections; set secrets |
 | `metadata:read` | Browse Catalog Objects, columns, DDL, semantics, joins |
 | `metadata:write` | Write semantics and join edges |
-| `ingestion:run` | Enqueue/cancel structure (and later) ingestion jobs; view jobs for permitted sources |
+| `ingestion:run` | Enqueue/cancel **Jobs** (structure and later kinds) via domain facades; view Jobs on those facades. Permission key retained; product language is Job. |
 | `query:run` | Execute controlled read-only SQL against a Connection |
 | `tokens:read` | List own User PAT metadata (never full token after creation) |
 | `tokens:write` | Create/revoke own User PATs |
@@ -145,9 +174,9 @@ Initial modules (ids stable):
 
 | Module id | Purpose | list permission |
 | --- | --- | --- |
-| `sources` | Source Systems and nested Connection management | `sources:read` |
+| `sources` | Sources and nested Connection management | `sources:read` |
 | `catalog` | Browse Catalog Objects / columns | `metadata:read` |
-| `ingestion` | Ingestion Job list and trigger entry points | `ingestion:run` (list) |
+| `ingestion` | Job list and trigger entry points (module id retained until migration; UI says Job) | `ingestion:run` (list) |
 
 User PAT management is **not** in this group; see `docs/business-user-tokens.md` (Administration module `tokens`).
 
@@ -158,12 +187,12 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
 - APIs may acknowledge `has_secret` / last-rotated metadata; they must not return plaintext secrets.
 - External Vault/KMS is out of scope for this phase (see `docs/adr/0005-app-encrypted-connection-secrets.md`).
 
-## 9. Ingestion Runtime
+## 9. Structure Job Runtime (database)
 
-- API validates and enqueues; worker processes execute connectors.
+- Source facade validates and enqueues; worker processes execute connectors.
 - Slice A connectors: **PostgreSQL**, **MSSQL**, **Oracle**.
-- Structure collection persists object inventory, columns, and DDL when obtainable.
-- Failed jobs leave prior successful snapshots readable unless a job explicitly replaces them under documented replace semantics.
+- Structure collection persists object inventory, columns, and DDL when obtainable, keyed by Source.
+- Failed Jobs leave prior successful snapshots readable unless a Job explicitly replaces them under documented replace semantics.
 
 ## 10. Semantics And Joins (Slices B–C)
 
@@ -192,7 +221,7 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
 Persist management-plane events for at least:
 
 - Source / Connection create/update/disable and secret set/rotate
-- Ingestion Job enqueue / cancel / terminal failure (summary)
+- Job enqueue / cancel / terminal failure (summary)
 - Semantics and join writes
 - User PAT create / revoke
 - Controlled query execution
@@ -202,9 +231,9 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 
 ## 14. Success Criteria (Phase)
 
-1. An authorized User can register Source Systems and Connections for PostgreSQL, MSSQL, and Oracle under Console group `metadata`, enqueue structure ingestion, and browse Catalog Objects.
+1. An authorized User can register database Sources and Connections for PostgreSQL, MSSQL, and Oracle under Console group `metadata`, enqueue structure **Jobs**, and browse Catalog Objects under each Source.
 2. MCP clients using a User PAT can exercise slice-appropriate tools; mutating calls are attributable to that User in audit.
-3. Connection secrets are never stored or logged in plaintext; ingestion does not block the API process.
+3. Connection secrets are never stored or logged in plaintext; long-running Jobs do not block the API process.
 4. Roles can grant read-only metadata access without granting Connection write, query, or PAT management.
 5. Documentation under `docs/` matches behavior; refraq is the sole authoritative registry (no `dbmeta` dual-read).
 
@@ -222,13 +251,16 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - Migrating or dual-reading legacy `dbmeta` datasets
 - Pre-creating empty domain packages before implementation code arrives
 - Treating read replicas as standard metadata Connection targets
+- Delivering non-database Source kinds (CSV/file import, Attachment APIs, etc.) in this phase — foresight only in §4.5
 
 ## 16. References
 
+- `docs/adr/0007-source-owns-catalog-identity.md`
+- `docs/adr/0008-job-generic-input.md`
 - `docs/business-user-tokens.md`
 - `docs/business-management-console.md`
 - `docs/api-contracts-sources.md`
-- `docs/api-contracts-ingestion.md`
+- `docs/api-contracts-jobs.md`
 - `docs/api-contracts-metadata.md`
 - `docs/api-contracts-tokens.md`
 - `docs/api-contracts-audit.md`

@@ -127,7 +127,7 @@ Must not own Session persistence implementations (those live under `repositories
 
 Do not put Console Module catalog, Settings Override, or System Role ensure rules into `backend/core/`.
 
-User PAT and management audit persistence may live under `admin/` (Foundation-adjacent) or a dedicated submodule; Connection/catalog/ingestion domain logic belongs in `backend/metadata/` when code arrives.
+User PAT and management audit persistence may live under `admin/` (Foundation-adjacent) or a dedicated submodule; Connection/catalog/structure-Job domain logic belongs in `backend/metadata/` when code arrives.
 
 Do not pre-create empty packages for future capabilities before implementation.
 
@@ -137,7 +137,7 @@ Responsibilities:
 
 - Celery application factory and process entry (`celery -A backend.worker.app`)
 - **Scheduled Task** ORM, system schedule seed, and Postgres-backed Beat scheduler
-- Platform system tasks (for example stuck Ingestion Job reaper)
+- Platform system tasks (for example stuck **Job** reaper)
 
 Must not contain:
 
@@ -150,15 +150,16 @@ Deploy **one** Beat replica. See `docs/adr/0006-celery-platform-async-runtime.md
 
 Responsibilities:
 
-- Source System / Connection domain models and services
+- Source / Connection domain models and services
 - Connector adapters (PostgreSQL, MSSQL, Oracle)
-- Ingestion Job model, status machine, and Celery task modules that register with `backend.worker.app`
+- Domain facade for Source-scoped **Jobs** (structure enqueue/list); Celery task modules register with `backend.worker.app`
 - Enqueue helpers (API side: persist Job then `apply_async` after commit)
 - Catalog object / semantics / join / controlled query services
 - MCP tool handlers that delegate to the same services
 
 Must not contain:
 
+- Owning the platform **Job** table long-term (migrate Job ORM/lifecycle to `backend/worker/` or `backend/jobs/` when aligning generic `input`; metadata keeps facades and kind handlers only)
 - Generic Settings / engine factories (stay in `core/`)
 - Celery app / Beat scheduler ownership (stay in `worker/`)
 - Session cookie issuance (stay in `admin/` + repositories)
@@ -168,8 +169,8 @@ Must not contain:
 
 Responsibilities:
 
-- Consume Celery tasks (ingestion and platform system tasks) and run collectors/handlers
-- Update Ingestion Job status (and later catalog snapshots) in Postgres
+- Consume Celery tasks (domain Jobs and platform system tasks) and run collectors/handlers
+- Update **Job** status (and later catalog snapshots) in Postgres
 
 Must not serve interactive Console HTTP traffic. Start commands: `docs/env.md` §7.
 

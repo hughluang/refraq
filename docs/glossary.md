@@ -105,7 +105,7 @@ Avoid calling it a user id or employee id.
 Where a User's credentials and directory attributes originate.
 The current slice uses `local` only; `ldap` is reserved for a later integration.
 Avoid treating identity source as a role or permission.
-Avoid conflating Identity Source with **Source System** (enterprise data systems).
+Avoid conflating Identity Source with **Source** (registered data origins).
 
 ### Client
 
@@ -173,45 +173,46 @@ Avoid free-form permission strings invented in the UI.
 
 ## Metadata Foundation
 
-### Source System
+### Source
 
-A logical business system whose data refraq integrates (for example U9 or MES).
-Has a stable key, display name, and type; not a login directory.
-Avoid calling it Identity Source, Connection, or Client.
+A registered data origin whose catalog refraq owns. Slice A covers live databases (for example U9 or MES); later kinds may include static imports such as CSV.
+Has a stable key, display name, `kind`, and kind-specific catalog scope (for database: database name and optional schema filter); not a login directory.
+Avoid calling it Identity Source, Connection, or Client. Avoid assuming every Source is an enterprise application.
 
 ### Connection
 
-A technical endpoint attached to a Source System: reachability, database/schema scope, encrypted credentials, and instance identity.
-A Source System has one or more Connections.
-Avoid calling the Connection the Source System, or treating Identity Source as a Connection.
+Live reachability and credentials for a Source that needs them: host, port, engine, encrypted username/secret (database endpoints in slice A).
+Does not own database name or schema scope; collectors compose Source scope with Connection endpoint.
+A Source may have one or more Connections; catalog identity stays on the Source.
+Avoid calling the Connection the Source, or treating Identity Source as a Connection.
+Avoid forcing non-live Source kinds through Connection.
+Avoid putting catalog scope on Connection.
 
-### Instance Key
+### Job
 
-A stable discriminator on a Connection used to disambiguate collected metadata identity across environments or physical instances of the same Source System.
-Avoid relying on database name alone when multiple instances can share a name.
-
-### Ingestion Job
-
-A single durable execution of metadata collection through one Connection (structure, and later semantics/join as slices allow).
+A single durable asynchronous execution with an observable lifecycle (queued → running → terminal), discriminated by kind, carrying only a generic input payload that each domain interprets.
+Domains expose enqueue/list facades (for example under Source for structure work); the Job record is not owned by Connection or Source.
 API (or a **Scheduled Task**) enqueues; a Celery worker executes; operator-visible status lives on the Postgres job record.
-Avoid running long collection inside the request that serves the Management Console API.
-Avoid treating an Ingestion Job as a **Scheduled Task**, or reading Celery result/Flower as the product lifecycle.
+Avoid calling it an Ingestion Job. Avoid running long work inside the Management Console API request.
+Avoid treating a Job as a **Scheduled Task**, or reading Celery result/Flower as the product lifecycle.
+Avoid promoting domain foreign keys into universal Job fields.
 
 ### Scheduled Task
 
 A platform schedule definition (interval or cron) stored in Postgres that triggers work when due.
-Celery Beat reads these rows (single Beat replica). Distinct from any one **Ingestion Job** instance.
+Celery Beat reads these rows (single Beat replica). Distinct from any one **Job** instance.
 Avoid storing product schedules only in Redis Beat state or static code when operators need to change them.
 
 ### Catalog Object
 
-A collected structural unit (table, view, or equivalent) under a Source System / Connection instance, including columns and optional DDL.
+A collected structural unit (table, view, or equivalent) under exactly one Source, including columns and optional DDL.
 Avoid calling a Catalog Object a Data Product or Business Entity.
+Avoid binding catalog identity to a Connection.
 
 ### Metadata Nav Group
 
-The Console Navigation group with stable id `metadata` for Source Systems, ingestion visibility, and catalog browsing modules.
-Avoid mounting these modules under Administration or a Data products group; avoid the retired reserved label "Integration & runtime" for this group.
+The Console Navigation group with stable id `metadata` for Sources, Job visibility (module id may still be `ingestion` until migrated), and catalog browsing modules.
+Avoid mounting these modules under Administration or a Data products group.
 
 ### Management Audit Event
 

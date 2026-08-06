@@ -69,8 +69,8 @@ Refraq is a domain management system. Top-level Foundation modules are always pr
 
 | Capability | Business meaning |
 | --- | --- |
-| `metadata` nav group | Source Systems, catalog browse, ingestion visibility |
-| Source / Connection / structure ingestion | See `docs/business-metadata.md` |
+| `metadata` nav group | Sources, catalog browse, Job visibility |
+| Source / Connection / structure Jobs | See `docs/business-metadata.md` |
 | User PAT module | Person-owned Bearer tokens under Administration (`tokens`) |
 | Management-plane audit read | Thin audit browser when `audit:read` is granted |
 
@@ -81,7 +81,7 @@ Refraq is a domain management system. Top-level Foundation modules are always pr
 | Data product catalog and discovery | Search/browse, owners, trust signals |
 | Persona / role-custom navigation | Different jobs see different primary nav |
 | Access request and contract / policy workflows | Marketplace-style request, approve, compliance |
-| Asset operations and runtime visibility | Runs, lineage, deployment health beyond metadata ingestion jobs |
+| Asset operations and runtime visibility | Runs, lineage, deployment health beyond metadata Jobs |
 | Entity detail extension slots | One page composing multiple capability widgets |
 | Plugin under a Console Module | Optional sub-capability extension (not top-level module toggle) |
 
@@ -110,13 +110,12 @@ Groups and modules:
 | Workbench | `workbench` | Home (`dashboard`) |
 | Administration | `admin` | Users, Roles, User PAT (`tokens`) |
 | Platform settings | `settings` | System parameters (`settings`) |
-| Metadata | `metadata` | Sources (`sources`), Catalog (`catalog`), Ingestion (`ingestion`) |
+| Metadata | `metadata` | Sources (`sources`), Catalog (`catalog`), Jobs UI (`ingestion` module id until migration) |
 
 Notes:
 
 - Foundation P0 shipped Workbench / Administration (Users, Roles) / Platform settings.
 - Metadata foundation adds group id **`metadata`** and Administration module **`tokens`**. Module field details: `docs/business-metadata.md`, `docs/business-user-tokens.md`.
-- Retired reserved label: do **not** use “Integration & runtime” as the group id or primary English label for this mount; the stable id is `metadata`.
 - Still reserved for later (not implemented): Data products, Governance (and any persona composer). Hide-vs-empty product policy for empty future groups remains deferred.
 
 **Forbidden**: putting account, logout, or language in the side nav; organizing first-level nav by internal service names; treating Foundation modules as enable/disable toggles; mounting Source/Connection under Administration.
@@ -144,7 +143,7 @@ flowchart TB
     G1["Workbench"]
     G2["Administration · users/roles/tokens"]
     G3["Platform settings"]
-    G4["Metadata · sources/catalog/ingestion"]
+    G4["Metadata · sources/catalog/jobs"]
   end
 
   subgraph Main["Main work area"]
@@ -202,7 +201,7 @@ For this slice:
 
 | Foundation (delivered) | Metadata foundation (next) | Later Data Product phase |
 | --- | --- | --- |
-| Login / session / logout | Source / Connection / ingestion / catalog | Data Product object model and catalog browse |
+| Login / session / logout | Source / Connection / Jobs / catalog | Data Product object model and catalog browse |
 | Users, roles, permission assignment | User PAT; management-plane audit for metadata | Persona navigation composer |
 | Permission-filtered grouped side nav | `metadata` nav group modules | Self-serve access marketplace |
 | Console Module code-seed contract | MCP metadata tool surface | Entity detail extension slots / Plugins |

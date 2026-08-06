@@ -21,9 +21,8 @@ Slice availability:
 ```json
 {
   "id": "obj_01",
-  "source_system_id": "src_mes",
-  "connection_id": "conn_mes_prod",
-  "instance_key": "prod",
+  "source_id": "src_mes_prod",
+  "collected_from_connection_id": "conn_mes_prod",
   "object_type": "table",
   "schema_name": "dbo",
   "name": "WORK_ORDER",
@@ -44,13 +43,14 @@ Slice availability:
 }
 ```
 
+Identity is `source_id` (+ object coordinates). `collected_from_connection_id` is optional provenance only.
 Semantics fields are null until slice B writes them.
 
 ## 3. Browse Endpoints (A+)
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/sources/{id}/objects` | `metadata:read` | List objects (query: `instance_key`, name search) |
+| `GET` | `/sources/{id}/objects` | `metadata:read` | List objects (query: name search) |
 | `GET` | `/objects/{id}` | `metadata:read` | Object detail including columns |
 | `GET` | `/objects/{id}/ddl` | `metadata:read` | DDL text when stored |
 
