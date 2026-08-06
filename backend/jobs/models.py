@@ -1,23 +1,23 @@
-"""ORM for Ingestion Job rows."""
+"""ORM for platform Job rows."""
 
 from __future__ import annotations
 
 from datetime import datetime
 
 from sqlalchemy import DateTime, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.core.db import Base
 
 
-class IngestionJobRow(Base):
-    __tablename__ = "ingestion_jobs"
+class JobRow(Base):
+    __tablename__ = "jobs"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    connection_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    source_system_id: Mapped[str] = mapped_column(String(64), nullable=False)
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    input: Mapped[dict] = mapped_column(JSONB, nullable=False)
     created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     celery_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)

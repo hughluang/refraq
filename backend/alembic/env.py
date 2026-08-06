@@ -9,7 +9,7 @@ from sqlalchemy import engine_from_config, pool
 
 from backend.core.db import Base
 import backend.admin.models  # noqa: F401 — register Foundation tables
-import backend.metadata.models  # noqa: F401 — register metadata tables
+import backend.jobs.models  # noqa: F401 — register Job tables
 import backend.worker.models  # noqa: F401 — register Scheduled Task tables
 
 config = context.config

@@ -24,8 +24,8 @@ Current `backend/.env.example` defines:
 - `INITIAL_ADMIN_PASSWORD=change-me`
 - `REFRAQ_SECRETS_MASTER_KEY=change-me-secrets-master-key` (metadata foundation: encrypt Connection secrets at rest)
 - `CELERY_BROKER_URL=redis://127.0.0.1:6379/2` (Celery broker; prefer a logical DB separate from Session `REDIS_URL`)
-- `REFRAQ_INGESTION_WORKER_CONCURRENCY=1` (Celery worker concurrency hint)
-- `REFRAQ_INGESTION_RUNNING_TIMEOUT_SEC=3600` (stuck `running` **Job** reaper threshold; env name retained until migration)
+- `REFRAQ_JOB_WORKER_CONCURRENCY=1` (Celery worker concurrency hint)
+- `REFRAQ_JOB_RUNNING_TIMEOUT_SEC=3600` (stuck `running` **Job** reaper threshold)
 
 `REFRAQ_STORE_BACKEND=memory` is for automated tests only. Do not use it in production examples.
 Metadata foundation variables are required when running ingestion/secret features; Foundation-only local login may still boot without them until those code paths are exercised.
@@ -67,8 +67,8 @@ Self-deploy Compose exposes only the web service to browsers; the API stays on t
 - `INITIAL_ADMIN_PASSWORD`
 - `REFRAQ_SECRETS_MASTER_KEY` (required to store/read Connection secrets)
 - `CELERY_BROKER_URL` (required when running Celery worker/beat; default same host Redis DB `2`)
-- `REFRAQ_INGESTION_WORKER_CONCURRENCY`
-- `REFRAQ_INGESTION_RUNNING_TIMEOUT_SEC`
+- `REFRAQ_JOB_WORKER_CONCURRENCY`
+- `REFRAQ_JOB_RUNNING_TIMEOUT_SEC`
 - `REFRAQ_INTEGRATION_DATABASE_URL` (pytest `@pytest.mark.integration` only; default `…/refraq_test`)
 - `REFRAQ_INTEGRATION_REDIS_URL` (integration only; default `redis://127.0.0.1:6379/1`)
 - `REFRAQ_INTEGRATION_CELERY_BROKER_URL` (integration only; default `redis://127.0.0.1:6379/3`)
@@ -99,7 +99,7 @@ On backend startup, if the user store is empty, default roles are ensured and a 
 Platform async runtime (`docs/adr/0006-celery-platform-async-runtime.md`):
 
 - API process: create durable Job rows and enqueue via Celery after commit (`docs/api-contracts-jobs.md`)
-- Worker: `celery -A backend.worker.app worker --concurrency="${REFRAQ_INGESTION_WORKER_CONCURRENCY:-1}"`
+- Worker: `celery -A backend.worker.app worker --concurrency="${REFRAQ_JOB_WORKER_CONCURRENCY:-1}"`
 - Beat (single replica): `celery -A backend.worker.app beat` — reads **Scheduled Task** rows from Postgres; do not run multiple Beat replicas
 - Worker and Beat share `DATABASE_URL`, `CELERY_BROKER_URL`, and (when decrypting secrets) `REFRAQ_SECRETS_MASTER_KEY`
 - No Celery result backend; operator-visible status and logs live on Postgres Job rows

@@ -170,5 +170,5 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation and 
 | `tokens` | `admin` | `/console/tokens` | `tokens:read` | create/edit/delete → `tokens:write` |
 | `sources` | `metadata` | `/console/sources` | `sources:read` | create/edit/delete → `sources:write` |
 | `catalog` | `metadata` | `/console/catalog` | `metadata:read` | — |
-| `ingestion` | `metadata` | `/console/ingestion` | `ingestion:run` | — |
+| `jobs` | `metadata` | `/console/jobs` | `jobs:run` | — |
 | `settings` | `settings` | `/console/settings` | `settings:read` | edit → `settings:write` |

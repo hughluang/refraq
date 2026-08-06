@@ -94,11 +94,11 @@ EXPECTED_IDENTITIES = {
             "delete": None,
         },
     },
-    "ingestion": {
-        "label_key": "ingestion.title",
-        "routes": {"list": "/console/ingestion", "create": None, "edit": None},
+    "jobs": {
+        "label_key": "jobs.title",
+        "routes": {"list": "/console/jobs", "create": None, "edit": None},
         "actions": {
-            "list": "ingestion:run",
+            "list": "jobs:run",
             "create": None,
             "edit": None,
             "delete": None,

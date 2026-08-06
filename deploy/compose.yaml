@@ -36,8 +36,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/2
       REFRAQ_SECRETS_MASTER_KEY: change-me-secrets-master-key
-      REFRAQ_INGESTION_WORKER_CONCURRENCY: "1"
-      REFRAQ_INGESTION_RUNNING_TIMEOUT_SEC: "3600"
+      REFRAQ_JOB_WORKER_CONCURRENCY: "1"
+      REFRAQ_JOB_RUNNING_TIMEOUT_SEC: "3600"
       ADMIN_SESSION_SECRET: change-me-in-production
       ADMIN_SESSION_TTL_HOURS: 8
       INITIAL_ADMIN_ACCOUNT: root
@@ -79,8 +79,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/2
       REFRAQ_SECRETS_MASTER_KEY: change-me-secrets-master-key
-      REFRAQ_INGESTION_WORKER_CONCURRENCY: "1"
-      REFRAQ_INGESTION_RUNNING_TIMEOUT_SEC: "3600"
+      REFRAQ_JOB_WORKER_CONCURRENCY: "1"
+      REFRAQ_JOB_RUNNING_TIMEOUT_SEC: "3600"
     depends_on:
       postgres:
         condition: service_healthy
@@ -101,7 +101,7 @@ services:
       DATABASE_URL: postgresql+psycopg://refraq:refraq@postgres:5432/refraq
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/2
-      REFRAQ_INGESTION_RUNNING_TIMEOUT_SEC: "3600"
+      REFRAQ_JOB_RUNNING_TIMEOUT_SEC: "3600"
     depends_on:
       postgres:
         condition: service_healthy

@@ -172,15 +172,14 @@ def reset_schedule_store() -> None:
 def ensure_system_schedules() -> None:
     """Idempotent seed for platform Scheduled Tasks (reaper)."""
     store = get_schedule_store()
-    existing = store.get_by_key(REAPER_SCHEDULE_KEY)
-    now = datetime.utcnow()
-    if existing is not None:
+    if store.get_by_key(REAPER_SCHEDULE_KEY) is not None:
         return
+    now = datetime.utcnow()
     store.upsert(
         ScheduledTaskRecord(
             id=f"sched_{uuid.uuid4().hex[:12]}",
             key=REAPER_SCHEDULE_KEY,
-            name="Reap stuck ingestion jobs",
+            name="Reap stuck jobs",
             enabled=True,
             interval_seconds=60,
             cron=None,

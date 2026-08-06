@@ -109,10 +109,10 @@ Rules:
 
 - Job is **not** owned by Connection or Source. Do not treat `connection_id` / `source_id` as universal Job columns — they live in `input` when required.
 - Metadata enqueue/list for Source-scoped work uses the **Source facade** (`docs/api-contracts-jobs.md`): `POST/GET /sources/{id}/jobs`.
-- Creating a structure Job requires `ingestion:run` (permission string retained until migration) and, for database Sources, a usable Connection secret in `input`.
+- Creating a structure Job requires `jobs:run` and, for database Sources, a usable Connection secret in `input`.
 - Jobs are durable records; queue transport is Redis-backed via Celery (see `docs/adr/0004-redis-queue-for-ingestion.md`, `docs/adr/0006-celery-platform-async-runtime.md`).
 - Successful structure Jobs write/refresh **Catalog Objects** on the Source identified in `input`.
-- Console module id `ingestion` remains until an implementation migration; product copy says Job.
+- Console module id `jobs`.
 
 ### 4.4 Catalog Object And Columns
 
@@ -153,7 +153,7 @@ Fixed catalog additions (exact strings are normative for Roles UI):
 | `sources:write` | Create/update/disable Sources and Connections; set secrets |
 | `metadata:read` | Browse Catalog Objects, columns, DDL, semantics, joins |
 | `metadata:write` | Write semantics and join edges |
-| `ingestion:run` | Enqueue/cancel **Jobs** (structure and later kinds) via domain facades; view Jobs on those facades. Permission key retained; product language is Job. |
+| `jobs:run` | Enqueue/cancel **Jobs** (structure and later kinds) via domain facades; view Jobs on those facades |
 | `query:run` | Execute controlled read-only SQL against a Connection |
 | `tokens:read` | List own User PAT metadata (never full token after creation) |
 | `tokens:write` | Create/revoke own User PATs |
@@ -162,7 +162,7 @@ Fixed catalog additions (exact strings are normative for Roles UI):
 Rules:
 
 - Seeded `super_admin` always receives the full current catalog (including these entries) via Foundation Upgrade / System Role ensure.
-- Seeded `operator` does **not** receive `sources:write`, `metadata:write`, `ingestion:run`, `query:run`, `tokens:*`, or `audit:read` by default.
+- Seeded `operator` does **not** receive `sources:write`, `metadata:write`, `jobs:run`, `query:run`, `tokens:*`, or `audit:read` by default.
 - No object-level ACL in this phase.
 - Nav visibility for modules uses each module’s `list` action Permission (same Console Module contract as Foundation).
 
@@ -176,7 +176,7 @@ Initial modules (ids stable):
 | --- | --- | --- |
 | `sources` | Sources and nested Connection management | `sources:read` |
 | `catalog` | Browse Catalog Objects / columns | `metadata:read` |
-| `ingestion` | Job list and trigger entry points (module id retained until migration; UI says Job) | `ingestion:run` (list) |
+| `jobs` | Job list and trigger entry points | `jobs:run` (list) |
 
 User PAT management is **not** in this group; see `docs/business-user-tokens.md` (Administration module `tokens`).
 

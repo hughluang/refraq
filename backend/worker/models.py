@@ -10,8 +10,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.core.db import Base
 
-REAPER_SCHEDULE_KEY = "ingestion_reap_stuck_running"
-REAPER_TASK_NAME = "backend.worker.tasks.reap_stuck_ingestion_jobs"
+REAPER_SCHEDULE_KEY = "jobs_reap_stuck_running"
+REAPER_TASK_NAME = "backend.worker.tasks.reap_stuck_jobs"
 
 
 class ScheduledTaskRow(Base):

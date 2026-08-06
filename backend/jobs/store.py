@@ -1,4 +1,4 @@
-"""Ingestion Job status machine and store adapters."""
+"""Job status machine and store adapters."""
 
 from __future__ import annotations
 
@@ -7,24 +7,23 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
 from backend.core.config import get_settings
 
 JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 TERMINAL: frozenset[str] = frozenset({"succeeded", "failed", "cancelled"})
 
-ERROR_HANDLER_UNAVAILABLE = "INGESTION_HANDLER_UNAVAILABLE"
-ERROR_WORKER_LOST = "INGESTION_WORKER_LOST"
+ERROR_HANDLER_UNAVAILABLE = "JOB_HANDLER_UNAVAILABLE"
+ERROR_WORKER_LOST = "JOB_WORKER_LOST"
 
 
 @dataclass
-class IngestionJobRecord:
+class JobRecord:
     id: str
-    connection_id: str
-    source_system_id: str
     kind: str
     status: JobStatus
+    input: dict[str, Any]
     created_by: str | None
     celery_task_id: str | None
     error_code: str | None
@@ -36,40 +35,39 @@ class IngestionJobRecord:
 
 class MemoryJobStore:
     def __init__(self) -> None:
-        self._by_id: dict[str, IngestionJobRecord] = {}
+        self._by_id: dict[str, JobRecord] = {}
         self._lock = threading.Lock()
 
-    def create(self, record: IngestionJobRecord) -> IngestionJobRecord:
+    def create(self, record: JobRecord) -> JobRecord:
         with self._lock:
             self._by_id[record.id] = record
             return record
 
-    def get(self, job_id: str) -> IngestionJobRecord | None:
+    def get(self, job_id: str) -> JobRecord | None:
         with self._lock:
             return self._by_id.get(job_id)
 
-    def save(self, record: IngestionJobRecord) -> IngestionJobRecord:
+    def save(self, record: JobRecord) -> JobRecord:
         with self._lock:
             self._by_id[record.id] = record
             return record
 
-    def list_by_status(self, status: JobStatus) -> list[IngestionJobRecord]:
+    def list_by_status(self, status: JobStatus) -> list[JobRecord]:
         with self._lock:
             return [r for r in self._by_id.values() if r.status == status]
 
 
 class SqlJobStore:
-    def create(self, record: IngestionJobRecord) -> IngestionJobRecord:
+    def create(self, record: JobRecord) -> JobRecord:
         from backend.core.db import session_scope
-        from backend.metadata.models import IngestionJobRow
+        from backend.jobs.models import JobRow
 
         with session_scope() as session:
-            row = IngestionJobRow(
+            row = JobRow(
                 id=record.id,
-                connection_id=record.connection_id,
-                source_system_id=record.source_system_id,
                 kind=record.kind,
                 status=record.status,
+                input=dict(record.input),
                 created_by=record.created_by,
                 celery_task_id=record.celery_task_id,
                 error_code=record.error_code,
@@ -82,23 +80,24 @@ class SqlJobStore:
             session.flush()
             return _row_to_job(row)
 
-    def get(self, job_id: str) -> IngestionJobRecord | None:
+    def get(self, job_id: str) -> JobRecord | None:
         from backend.core.db import session_scope
-        from backend.metadata.models import IngestionJobRow
+        from backend.jobs.models import JobRow
 
         with session_scope() as session:
-            row = session.get(IngestionJobRow, job_id)
+            row = session.get(JobRow, job_id)
             return _row_to_job(row) if row else None
 
-    def save(self, record: IngestionJobRecord) -> IngestionJobRecord:
+    def save(self, record: JobRecord) -> JobRecord:
         from backend.core.db import session_scope
-        from backend.metadata.models import IngestionJobRow
+        from backend.jobs.models import JobRow
 
         with session_scope() as session:
-            row = session.get(IngestionJobRow, record.id)
+            row = session.get(JobRow, record.id)
             if row is None:
                 raise KeyError(record.id)
             row.status = record.status
+            row.input = dict(record.input)
             row.celery_task_id = record.celery_task_id
             row.error_code = record.error_code
             row.error_summary = record.error_summary
@@ -107,29 +106,28 @@ class SqlJobStore:
             session.flush()
             return _row_to_job(row)
 
-    def list_by_status(self, status: JobStatus) -> list[IngestionJobRecord]:
+    def list_by_status(self, status: JobStatus) -> list[JobRecord]:
         from sqlalchemy import select
 
         from backend.core.db import session_scope
-        from backend.metadata.models import IngestionJobRow
+        from backend.jobs.models import JobRow
 
         with session_scope() as session:
             rows = session.scalars(
-                select(IngestionJobRow).where(IngestionJobRow.status == status)
+                select(JobRow).where(JobRow.status == status)
             ).all()
             return [_row_to_job(row) for row in rows]
 
 
-def _row_to_job(row: object) -> IngestionJobRecord:
-    from backend.metadata.models import IngestionJobRow
+def _row_to_job(row: object) -> JobRecord:
+    from backend.jobs.models import JobRow
 
-    assert isinstance(row, IngestionJobRow)
-    return IngestionJobRecord(
+    assert isinstance(row, JobRow)
+    return JobRecord(
         id=row.id,
-        connection_id=row.connection_id,
-        source_system_id=row.source_system_id,
         kind=row.kind,
         status=row.status,  # type: ignore[arg-type]
+        input=dict(row.input),
         created_by=row.created_by,
         celery_task_id=row.celery_task_id,
         error_code=row.error_code,
@@ -169,18 +167,16 @@ def new_job_id() -> str:
 
 def create_queued_job(
     *,
-    connection_id: str,
-    source_system_id: str,
-    kind: str = "structure",
+    kind: str,
+    input: dict[str, Any],
     created_by: str | None = None,
-) -> IngestionJobRecord:
+) -> JobRecord:
     now = datetime.utcnow()
-    record = IngestionJobRecord(
+    record = JobRecord(
         id=new_job_id(),
-        connection_id=connection_id,
-        source_system_id=source_system_id,
         kind=kind,
         status="queued",
+        input=dict(input),
         created_by=created_by,
         celery_task_id=None,
         error_code=None,
@@ -192,7 +188,7 @@ def create_queued_job(
     return get_job_store().create(record)
 
 
-def mark_running(job_id: str, *, celery_task_id: str | None = None) -> IngestionJobRecord | None:
+def mark_running(job_id: str, *, celery_task_id: str | None = None) -> JobRecord | None:
     store = get_job_store()
     record = store.get(job_id)
     if record is None:
@@ -211,7 +207,7 @@ def mark_failed(
     *,
     error_code: str,
     error_summary: str,
-) -> IngestionJobRecord | None:
+) -> JobRecord | None:
     store = get_job_store()
     record = store.get(job_id)
     if record is None:
@@ -225,7 +221,7 @@ def mark_failed(
     return store.save(record)
 
 
-def mark_succeeded(job_id: str) -> IngestionJobRecord | None:
+def mark_succeeded(job_id: str) -> JobRecord | None:
     store = get_job_store()
     record = store.get(job_id)
     if record is None:
@@ -239,7 +235,7 @@ def mark_succeeded(job_id: str) -> IngestionJobRecord | None:
 
 def reap_stuck_running_jobs() -> int:
     """Mark running jobs past timeout as failed. Does not re-enqueue."""
-    timeout = get_settings().refraq_ingestion_running_timeout_sec
+    timeout = get_settings().refraq_job_running_timeout_sec
     cutoff = datetime.utcnow() - timedelta(seconds=timeout)
     store = get_job_store()
     reaped = 0

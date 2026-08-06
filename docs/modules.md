@@ -146,20 +146,33 @@ Must not contain:
 
 Deploy **one** Beat replica. See `docs/adr/0006-celery-platform-async-runtime.md` and `docs/env.md` §7.
 
+### `backend/jobs/`
+
+Responsibilities:
+
+- Platform **Job** ORM (`jobs` table), store adapters, and lifecycle status machine
+- Opaque generic `input` payload; no domain foreign keys as universal columns
+- Shared helpers used by domain enqueue paths and the stuck-Job reaper
+
+Must not contain:
+
+- Domain collector / Source facade HTTP (stay in `metadata/` / routers)
+- Celery app / Beat scheduler ownership (stay in `worker/`)
+
 ### `backend/metadata/` (when implemented)
 
 Responsibilities:
 
 - Source / Connection domain models and services
 - Connector adapters (PostgreSQL, MSSQL, Oracle)
-- Domain facade for Source-scoped **Jobs** (structure enqueue/list); Celery task modules register with `backend.worker.app`
+- Domain facade for Source-scoped **Jobs** (structure enqueue/list); Celery kind-handler tasks register with `backend.worker.app`
 - Enqueue helpers (API side: persist Job then `apply_async` after commit)
 - Catalog object / semantics / join / controlled query services
 - MCP tool handlers that delegate to the same services
 
 Must not contain:
 
-- Owning the platform **Job** table long-term (migrate Job ORM/lifecycle to `backend/worker/` or `backend/jobs/` when aligning generic `input`; metadata keeps facades and kind handlers only)
+- Owning the platform **Job** table (lives in `backend/jobs/`)
 - Generic Settings / engine factories (stay in `core/`)
 - Celery app / Beat scheduler ownership (stay in `worker/`)
 - Session cookie issuance (stay in `admin/` + repositories)

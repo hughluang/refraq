@@ -27,7 +27,7 @@ def create_celery_app() -> Celery:
         result_backend=None,
         task_ignore_result=True,
         task_track_started=False,
-        worker_concurrency=get_settings().refraq_ingestion_worker_concurrency,
+        worker_concurrency=get_settings().refraq_job_worker_concurrency,
         imports=(
             "backend.metadata.tasks",
             "backend.worker.tasks",

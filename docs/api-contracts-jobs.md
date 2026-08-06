@@ -5,7 +5,7 @@
 Contracts for enqueueing and observing platform **Jobs** via domain facades (metadata / Source surfaces in this phase).
 
 Business rules: `docs/business-metadata.md`, root `CONTEXT.md`.
-Auth: Session or User PAT. Permissions: `ingestion:run` unless noted (string retained until a later migration; product language is Job).
+Auth: Session or User PAT. Permissions: `jobs:run` unless noted.
 
 ## 2. Job Shape
 
@@ -40,10 +40,10 @@ Rules:
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/sources/{id}/jobs` | `ingestion:run` | Enqueue a Job for this Source (domain facade) |
-| `GET` | `/sources/{id}/jobs` | `ingestion:run` | List Jobs related to this Source (domain facade) |
-| `GET` | `/jobs/{id}` | `ingestion:run` | Get Job by id |
-| `POST` | `/jobs/{id}/cancel` | `ingestion:run` | Cancel if not terminal |
+| `POST` | `/sources/{id}/jobs` | `jobs:run` | Enqueue a Job for this Source (domain facade) |
+| `GET` | `/sources/{id}/jobs` | `jobs:run` | List Jobs related to this Source (domain facade) |
+| `GET` | `/jobs/{id}` | `jobs:run` | Get Job by id |
+| `POST` | `/jobs/{id}/cancel` | `jobs:run` | Cancel if not terminal |
 
 ### `POST /sources/{id}/jobs` body (Slice A structure)
 
@@ -80,10 +80,9 @@ Stable aliases of older draft codes (`INGESTION_*`) must not be reintroduced in 
 
 - Slice A: `kind=structure` only on the Source facade for database Sources.
 - Later slices/domains may add kinds and additional facade routes; unknown kind → `400` with stable code.
-- Console module id `ingestion` and permission `ingestion:run` remain until an implementation migration; UI copy says Job.
+- Console module id `jobs`; permission `jobs:run`.
 
 ## 6. Non-Goals
 
 - Global `POST /jobs` as the only create path in this phase (platform store may still be shared; HTTP create goes through domain facades)
 - Promoting `source_id` / `connection_id` to universal Job fields
-- Renaming permission / Console module ids in this document revision

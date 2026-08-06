@@ -71,7 +71,7 @@ This document records the stable development conventions for contributors workin
 4. `docs/business-management-console.md` (`metadata` nav group)
 5. `docs/api-contracts-sources.md`, `docs/api-contracts-jobs.md`, `docs/api-contracts-metadata.md`
 6. `docs/api-contracts-tokens.md`, `docs/api-contracts-audit.md`, `docs/api-contracts-metadata-mcp.md`
-7. `docs/adr/0004-redis-queue-for-ingestion.md`, `docs/adr/0005-app-encrypted-connection-secrets.md`, `docs/adr/0006-celery-platform-async-runtime.md`, `docs/adr/0008-job-generic-input.md`
+7. `docs/adr/0004-redis-queue-for-ingestion.md`, `docs/adr/0005-app-encrypted-connection-secrets.md`, `docs/adr/0006-celery-platform-async-runtime.md`, `docs/adr/0007-source-owns-catalog-identity.md`, `docs/adr/0008-job-generic-input.md`
 8. `docs/architecture.md`, `docs/modules.md`, `docs/env.md`
 
 Treat `docs/product-core/*` as **long-horizon** reference only (files are marked superseded for near-term sequencing).

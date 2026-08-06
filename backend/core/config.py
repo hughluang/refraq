@@ -61,13 +61,13 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="CELERY_BROKER_URL",
     )
-    refraq_ingestion_worker_concurrency: int = Field(
+    refraq_job_worker_concurrency: int = Field(
         default=1,
-        validation_alias="REFRAQ_INGESTION_WORKER_CONCURRENCY",
+        validation_alias="REFRAQ_JOB_WORKER_CONCURRENCY",
     )
-    refraq_ingestion_running_timeout_sec: int = Field(
+    refraq_job_running_timeout_sec: int = Field(
         default=3600,
-        validation_alias="REFRAQ_INGESTION_RUNNING_TIMEOUT_SEC",
+        validation_alias="REFRAQ_JOB_RUNNING_TIMEOUT_SEC",
     )
 
     @model_validator(mode="after")

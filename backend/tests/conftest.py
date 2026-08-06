@@ -20,7 +20,7 @@ from backend.repositories.role_store import reset_role_store
 from backend.repositories.session_store import reset_session_store
 from backend.repositories.token_store import reset_token_store
 from backend.repositories.user_store import reset_user_store
-from backend.metadata.jobs import reset_job_store
+from backend.jobs.store import reset_job_store
 from backend.worker.schedules import reset_schedule_store
 
 reset_settings_cache()

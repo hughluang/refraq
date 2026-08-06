@@ -211,7 +211,7 @@ Avoid binding catalog identity to a Connection.
 
 ### Metadata Nav Group
 
-The Console Navigation group with stable id `metadata` for Sources, Job visibility (module id may still be `ingestion` until migrated), and catalog browsing modules.
+The Console Navigation group with stable id `metadata` for Sources, Jobs, and catalog browsing modules.
 Avoid mounting these modules under Administration or a Data products group.
 
 ### Management Audit Event

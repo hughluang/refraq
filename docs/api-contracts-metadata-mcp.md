@@ -26,8 +26,8 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 | `list_objects` | `metadata:read` | Catalog Objects under a Source |
 | `get_object` | `metadata:read` | Object + columns |
 | `get_object_ddl` | `metadata:read` | DDL when present |
-| `enqueue_structure_job` | `ingestion:run` | Enqueue structure Job (Source facade) |
-| `get_job` | `ingestion:run` | Job status |
+| `enqueue_structure_job` | `jobs:run` | Enqueue structure Job (Source facade) |
+| `get_job` | `jobs:run` | Job status |
 
 ## 4. Slice B — Semantics
 

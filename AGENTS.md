@@ -3,7 +3,7 @@
 `refraq` is a standalone **Data Product Integration Platform** (a Data Business Platform).
 New refraq implementation work belongs only in `backend/` and `frontend/`.
 
-The Management Foundation login/session/permission slice (Management Console) is delivered. Next implementation phase is the **metadata foundation** (Sources, ingestion, MCP, User PAT, companion base) — see `docs/business-metadata.md`. Data Product catalog / Entity remain later. Process pointer: `.process/AGENTS.md`; source of truth stays under `docs/`.
+The Management Foundation login/session/permission slice (Management Console) is delivered. Next implementation phase is the **metadata foundation** (Sources, Jobs, MCP, User PAT, companion base) — see `docs/business-metadata.md`. Data Product catalog / Entity remain later. Process pointer: `.process/AGENTS.md`; source of truth stays under `docs/`.
 
 ## Repository Rules
 

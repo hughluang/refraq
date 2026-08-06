@@ -144,7 +144,7 @@ Fixed Permission catalog (Foundation + metadata foundation extensions):
 - `settings:write`
 - `sources:read` / `sources:write`
 - `metadata:read` / `metadata:write`
-- `ingestion:run`
+- `jobs:run`
 - `query:run`
 - `tokens:read` / `tokens:write`
 - `audit:read`
