@@ -84,9 +84,14 @@ def test_super_admin_sees_all_seed_modules(client: TestClient) -> None:
     response = client.get("/console/navigation")
     assert response.status_code == 200
     groups = {group["id"]: group for group in response.json()["groups"]}
-    assert set(groups) == {"workbench", "admin", "settings"}
+    assert set(groups) == {"workbench", "admin", "metadata", "settings"}
     assert [m["id"] for m in groups["workbench"]["modules"]] == ["dashboard"]
-    assert [m["id"] for m in groups["admin"]["modules"]] == ["users", "roles"]
+    assert [m["id"] for m in groups["admin"]["modules"]] == ["users", "roles", "tokens"]
+    assert [m["id"] for m in groups["metadata"]["modules"]] == [
+        "sources",
+        "catalog",
+        "ingestion",
+    ]
     assert [m["id"] for m in groups["settings"]["modules"]] == ["settings"]
     assert groups["settings"]["modules"][0]["label_key"] == "settings.title"
     assert groups["settings"]["modules"][0]["route"] == "/console/settings"

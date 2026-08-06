@@ -24,7 +24,7 @@ Foundation P0 delivered people, permissions, and Console mount contract. Product
 
 1. **Productize into refraq** — Source registration, ingestion, catalog, MCP, and companion base live in this repository; external `dbmeta` is design reference only.
 2. **Empty rebuild** — do not migrate or dual-read legacy `dbmeta` data; operators re-register Sources and re-collect.
-3. **Phase north star** — metadata capability face comparable to structure + semantics + join + controlled query, plus companion base (secrets, queue/worker, User PAT, management audit, permissions, `metadata` nav).
+3. **Phase north star** — metadata capability face comparable to structure + semantics + join + controlled query, plus companion base (secrets, Celery worker/beat, User PAT, management audit, permissions, `metadata` nav).
 4. **Deliver in slices A→B→C→D** with companion base started alongside A — not a single big-bang milestone.
 5. **Defer** Entity, Data Product catalog, Serving, Access marketplace, Client management, and Console P1 cosmetics (scope/search/theme/notifications).
 
@@ -95,7 +95,7 @@ Rules:
 Rules:
 
 - Creating a job requires `ingestion:run` and a usable Connection secret.
-- Jobs are durable records; queue transport is Redis-backed (see `docs/adr/0004-redis-queue-for-ingestion.md`).
+- Jobs are durable records; queue transport is Redis-backed via Celery (see `docs/adr/0004-redis-queue-for-ingestion.md`, `docs/adr/0006-celery-platform-async-runtime.md`).
 
 ### 4.4 Catalog Object And Columns
 
@@ -106,7 +106,7 @@ Later slices attach business semantics and join edges to these objects/columns.
 
 | Slice | Business delivery |
 | --- | --- |
-| **Companion base** (with A) | User PAT; Connection secret encryption; Redis queue + worker; Job status APIs; Permission catalog extensions; `metadata` Console nav group; management-plane audit |
+| **Companion base** (with A) | User PAT; Connection secret encryption; Celery worker/beat + Scheduled Task; Job status APIs; Permission catalog extensions; `metadata` Console nav group; management-plane audit |
 | **A** | Source/Connection CRUD; PostgreSQL + MSSQL + Oracle structure collection; Console browse; MCP read-only structure tools |
 | **B** | Object/column business name and description read/write via API and MCP |
 | **C** | Join graph with evidence threshold for writes |
@@ -234,4 +234,5 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - `docs/api-contracts-audit.md`
 - `docs/api-contracts-metadata-mcp.md`
 - `docs/adr/0004-redis-queue-for-ingestion.md`
+- `docs/adr/0006-celery-platform-async-runtime.md`
 - `docs/adr/0005-app-encrypted-connection-secrets.md`

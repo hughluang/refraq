@@ -13,6 +13,15 @@ Permission = Literal[
     "roles:write",
     "settings:read",
     "settings:write",
+    "sources:read",
+    "sources:write",
+    "metadata:read",
+    "metadata:write",
+    "ingestion:run",
+    "query:run",
+    "tokens:read",
+    "tokens:write",
+    "audit:read",
 ]
 
 ALL_PERMISSIONS: tuple[Permission, ...] = (
@@ -24,6 +33,15 @@ ALL_PERMISSIONS: tuple[Permission, ...] = (
     "roles:write",
     "settings:read",
     "settings:write",
+    "sources:read",
+    "sources:write",
+    "metadata:read",
+    "metadata:write",
+    "ingestion:run",
+    "query:run",
+    "tokens:read",
+    "tokens:write",
+    "audit:read",
 )
 
 PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
@@ -35,6 +53,15 @@ PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
     "roles:write": "Create, update, and delete roles",
     "settings:read": "View platform system parameters",
     "settings:write": "Change platform system parameters",
+    "sources:read": "List and view Source Systems and Connections",
+    "sources:write": "Create and update Source Systems and Connections",
+    "metadata:read": "Browse catalog objects, semantics, and joins",
+    "metadata:write": "Write semantics and join edges",
+    "ingestion:run": "Enqueue and manage metadata ingestion jobs",
+    "query:run": "Run controlled read-only SQL against a Connection",
+    "tokens:read": "List own User PAT metadata",
+    "tokens:write": "Create and revoke own User PATs",
+    "audit:read": "Read management audit events",
 }
 
 CATALOG_SET: frozenset[str] = frozenset(ALL_PERMISSIONS)

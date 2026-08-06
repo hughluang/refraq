@@ -131,30 +131,47 @@ User PAT and management audit persistence may live under `admin/` (Foundation-ad
 
 Do not pre-create empty packages for future capabilities before implementation.
 
+### `backend/worker/` (when implemented)
+
+Responsibilities:
+
+- Celery application factory and process entry (`celery -A backend.worker.app`)
+- **Scheduled Task** ORM, system schedule seed, and Postgres-backed Beat scheduler
+- Platform system tasks (for example stuck Ingestion Job reaper)
+
+Must not contain:
+
+- Domain collector logic (stay in `metadata/`)
+- Interactive Console HTTP routes
+
+Deploy **one** Beat replica. See `docs/adr/0006-celery-platform-async-runtime.md` and `docs/env.md` §7.
+
 ### `backend/metadata/` (when implemented)
 
 Responsibilities:
 
 - Source System / Connection domain models and services
 - Connector adapters (PostgreSQL, MSSQL, Oracle)
-- Ingestion job orchestration hooks (enqueue API side; worker entry may live beside `core/entry`)
+- Ingestion Job model, status machine, and Celery task modules that register with `backend.worker.app`
+- Enqueue helpers (API side: persist Job then `apply_async` after commit)
 - Catalog object / semantics / join / controlled query services
 - MCP tool handlers that delegate to the same services
 
 Must not contain:
 
 - Generic Settings / engine factories (stay in `core/`)
+- Celery app / Beat scheduler ownership (stay in `worker/`)
 - Session cookie issuance (stay in `admin/` + repositories)
 - Pre-scaffolded empty subpackages for Entity / Data Product catalog
 
-### Ingestion worker process
+### Celery worker process
 
 Responsibilities:
 
-- Consume Redis-backed queue jobs and run collectors
-- Update Ingestion Job status and catalog snapshots
+- Consume Celery tasks (ingestion and platform system tasks) and run collectors/handlers
+- Update Ingestion Job status (and later catalog snapshots) in Postgres
 
-Must not serve interactive Console HTTP traffic. Document start command alongside Foundation Upgrade / `backend.core.entry` in `docs/env.md` when implemented.
+Must not serve interactive Console HTTP traffic. Start commands: `docs/env.md` §7.
 
 ### `backend/tests/`
 

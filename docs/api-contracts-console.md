@@ -167,4 +167,8 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation and 
 | `dashboard` | `workbench` | `/console` | `dashboard:read` | — |
 | `users` | `admin` | `/console/users` | `users:read` | create/edit/delete → `users:write`; create route `/console/users/new` |
 | `roles` | `admin` | `/console/roles` | `roles:read` | create/edit/delete → `roles:write`; create `/console/roles/new`; edit `/console/roles/:id` |
+| `tokens` | `admin` | `/console/tokens` | `tokens:read` | create/edit/delete → `tokens:write` |
+| `sources` | `metadata` | `/console/sources` | `sources:read` | create/edit/delete → `sources:write` |
+| `catalog` | `metadata` | `/console/catalog` | `metadata:read` | — |
+| `ingestion` | `metadata` | `/console/ingestion` | `ingestion:run` | — |
 | `settings` | `settings` | `/console/settings` | `settings:read` | edit → `settings:write` |

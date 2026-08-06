@@ -57,6 +57,38 @@ class AuthForbidden(AuthError):
         return "You do not have permission for this action"
 
 
+class AuthPatInvalid(AuthError):
+    code = "AUTH_PAT_INVALID"
+    http_status = 401
+
+    def _default_message(self) -> str:
+        return "Invalid, expired, or revoked personal access token"
+
+
+class TokenNotFound(AuthError):
+    code = "TOKEN_NOT_FOUND"
+    http_status = 404
+
+    def _default_message(self) -> str:
+        return "Token not found"
+
+
+class TokenInvalidExpiresAt(AuthError):
+    code = "TOKEN_INVALID_EXPIRES_AT"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "expires_at must be in the future"
+
+
+class AuditEventNotFound(AuthError):
+    code = "AUDIT_EVENT_NOT_FOUND"
+    http_status = 404
+
+    def _default_message(self) -> str:
+        return "Audit event not found"
+
+
 class UserAccountDuplicate(AuthError):
     code = "USER_ACCOUNT_DUPLICATE"
     http_status = 409

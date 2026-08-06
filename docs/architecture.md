@@ -39,7 +39,7 @@ The Management Foundation slice includes:
 ### In Scope For Metadata Foundation Phase
 
 - Source System / Connection registry, metadata ingestion, catalog browse, semantics, joins, controlled read-only query
-- User PAT for API/MCP; Redis-backed ingestion queue + worker; encrypted Connection secrets; management-plane audit
+- User PAT for API/MCP; Celery platform async runtime (Redis broker) + Ingestion Job / Scheduled Task in Postgres; encrypted Connection secrets; management-plane audit
 - See `docs/business-metadata.md`
 
 ## 3. High-Level Topology
@@ -134,10 +134,10 @@ The repository should follow these dependency rules:
 
 - Default **Store Backend** is `persistent` (Postgres for User/Role, Redis for Session).
 - `memory` exists for automated tests only; missing URLs must not silently select memory.
-- Shared infrastructure (settings, engine, `DeclarativeBase`, Redis) lives under `backend/core/`. Business ORM tables live in domain packages (Foundation: `backend/admin/models.py`; metadata: `backend/metadata/` when implementation starts).
+- Shared infrastructure (settings, engine, `DeclarativeBase`, Redis) lives under `backend/core/`. Business ORM tables live in domain packages (Foundation: `backend/admin/models.py`; metadata: `backend/metadata/`; Celery/Scheduled Task: `backend/worker/`).
 - Module layout stays a modular monolith: add capability packages when real code arrives; do not pre-scaffold empty domain trees.
 - Directory structure aids maintainability; multi-instance correctness depends on **Backing Services**, not sticky sessions.
-- Metadata ingestion uses a Redis-backed external queue and worker (`docs/adr/0004-redis-queue-for-ingestion.md`); Connection secrets are app-encrypted in Postgres (`docs/adr/0005-app-encrypted-connection-secrets.md`).
+- Metadata ingestion uses an out-of-process queue and worker with Redis as broker (`docs/adr/0004-redis-queue-for-ingestion.md`); the default runtime is Celery (`docs/adr/0006-celery-platform-async-runtime.md`). Connection secrets are app-encrypted in Postgres (`docs/adr/0005-app-encrypted-connection-secrets.md`).
 - See `docs/adr/0001-postgres-redis-foundation-stores.md`.
 
 ### Port Configuration

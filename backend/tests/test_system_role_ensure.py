@@ -49,6 +49,11 @@ def test_ensure_aligns_stale_super_admin_permissions() -> None:
     assert result.permissions == list(ALL_PERMISSIONS)
     assert "settings:read" in result.permissions
     assert "settings:write" in result.permissions
+    assert "tokens:read" in result.permissions
+    assert "tokens:write" in result.permissions
+    assert "audit:read" in result.permissions
+    assert "sources:read" in result.permissions
+    assert "ingestion:run" in result.permissions
 
     operator = store.get_by_key(OPERATOR_KEY)
     assert operator is not None

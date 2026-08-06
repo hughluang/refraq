@@ -30,6 +30,11 @@ describe("toRefineResources", () => {
         meta: { label: "roles.title" },
       },
       {
+        name: "tokens",
+        list: "/console/tokens",
+        meta: { label: "tokens.title" },
+      },
+      {
         name: "settings",
         list: "/console/settings",
         meta: { label: "settings.title" },
@@ -75,6 +80,13 @@ describe("matchPath", () => {
     expect(matchPath("/console/roles/abc", MODULE_IDENTITY_FIXTURE)).toEqual({
       resource: "roles",
       action: "edit",
+    });
+  });
+
+  it("matches tokens list route", () => {
+    expect(matchPath("/console/tokens", MODULE_IDENTITY_FIXTURE)).toEqual({
+      resource: "tokens",
+      action: "list",
     });
   });
 

@@ -53,6 +53,22 @@ class Settings(BaseSettings):
         default="change-me",
         validation_alias="INITIAL_ADMIN_PASSWORD",
     )
+    refraq_secrets_master_key: str | None = Field(
+        default=None,
+        validation_alias="REFRAQ_SECRETS_MASTER_KEY",
+    )
+    celery_broker_url: str | None = Field(
+        default=None,
+        validation_alias="CELERY_BROKER_URL",
+    )
+    refraq_ingestion_worker_concurrency: int = Field(
+        default=1,
+        validation_alias="REFRAQ_INGESTION_WORKER_CONCURRENCY",
+    )
+    refraq_ingestion_running_timeout_sec: int = Field(
+        default=3600,
+        validation_alias="REFRAQ_INGESTION_RUNNING_TIMEOUT_SEC",
+    )
 
     @model_validator(mode="after")
     def _require_backing_urls_when_persistent(self) -> Settings:

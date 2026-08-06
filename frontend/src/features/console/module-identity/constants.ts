@@ -3,6 +3,7 @@ export const ModuleId = {
   dashboard: "dashboard",
   users: "users",
   roles: "roles",
+  tokens: "tokens",
   settings: "settings",
 } as const;
 

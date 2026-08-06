@@ -64,6 +64,46 @@ EXPECTED_IDENTITIES = {
             "delete": "roles:write",
         },
     },
+    "tokens": {
+        "label_key": "tokens.title",
+        "routes": {"list": "/console/tokens", "create": None, "edit": None},
+        "actions": {
+            "list": "tokens:read",
+            "create": "tokens:write",
+            "edit": "tokens:write",
+            "delete": "tokens:write",
+        },
+    },
+    "sources": {
+        "label_key": "sources.title",
+        "routes": {"list": "/console/sources", "create": None, "edit": None},
+        "actions": {
+            "list": "sources:read",
+            "create": "sources:write",
+            "edit": "sources:write",
+            "delete": "sources:write",
+        },
+    },
+    "catalog": {
+        "label_key": "catalog.title",
+        "routes": {"list": "/console/catalog", "create": None, "edit": None},
+        "actions": {
+            "list": "metadata:read",
+            "create": None,
+            "edit": None,
+            "delete": None,
+        },
+    },
+    "ingestion": {
+        "label_key": "ingestion.title",
+        "routes": {"list": "/console/ingestion", "create": None, "edit": None},
+        "actions": {
+            "list": "ingestion:run",
+            "create": None,
+            "edit": None,
+            "delete": None,
+        },
+    },
     "settings": {
         "label_key": "settings.title",
         "routes": {"list": "/console/settings", "create": None, "edit": None},

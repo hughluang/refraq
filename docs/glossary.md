@@ -192,9 +192,16 @@ Avoid relying on database name alone when multiple instances can share a name.
 
 ### Ingestion Job
 
-A queued unit of work that collects metadata through one Connection (structure, and later semantics/join as slices allow).
-API enqueues; a worker consumes via an external queue backed by Redis.
+A single durable execution of metadata collection through one Connection (structure, and later semantics/join as slices allow).
+API (or a **Scheduled Task**) enqueues; a Celery worker executes; operator-visible status lives on the Postgres job record.
 Avoid running long collection inside the request that serves the Management Console API.
+Avoid treating an Ingestion Job as a **Scheduled Task**, or reading Celery result/Flower as the product lifecycle.
+
+### Scheduled Task
+
+A platform schedule definition (interval or cron) stored in Postgres that triggers work when due.
+Celery Beat reads these rows (single Beat replica). Distinct from any one **Ingestion Job** instance.
+Avoid storing product schedules only in Redis Beat state or static code when operators need to change them.
 
 ### Catalog Object
 

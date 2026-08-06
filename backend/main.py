@@ -15,11 +15,13 @@ from backend.core.config import Settings, get_settings
 from backend.admin.roles import SUPER_ADMIN_KEY, seed_roles
 from backend.repositories.role_store import get_role_store
 from backend.repositories.user_store import get_user_store
+from backend.routers.audit import router as audit_router
 from backend.routers.auth import router as auth_router_instance
 from backend.routers.console import router as console_router
 from backend.routers.health import router as health_router
 from backend.routers.roles import router as roles_router
 from backend.routers.settings import router as settings_router
+from backend.routers.tokens import router as tokens_router
 from backend.routers.users import router as users_router
 from backend.schemas.auth import ErrorResponse
 
@@ -75,3 +77,5 @@ app.include_router(users_router)
 app.include_router(roles_router)
 app.include_router(console_router)
 app.include_router(settings_router)
+app.include_router(tokens_router)
+app.include_router(audit_router)

@@ -34,6 +34,10 @@ services:
       REFRAQ_STORE_BACKEND: persistent
       DATABASE_URL: postgresql+psycopg://refraq:refraq@postgres:5432/refraq
       REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/2
+      REFRAQ_SECRETS_MASTER_KEY: change-me-secrets-master-key
+      REFRAQ_INGESTION_WORKER_CONCURRENCY: "1"
+      REFRAQ_INGESTION_RUNNING_TIMEOUT_SEC: "3600"
       ADMIN_SESSION_SECRET: change-me-in-production
       ADMIN_SESSION_TTL_HOURS: 8
       INITIAL_ADMIN_ACCOUNT: root
@@ -55,6 +59,56 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+
+  worker:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    command:
+      [
+        "celery",
+        "-A",
+        "backend.worker.app",
+        "worker",
+        "--concurrency=1",
+      ]
+    environment:
+      REFRAQ_ENV: prod
+      REFRAQ_STORE_BACKEND: persistent
+      DATABASE_URL: postgresql+psycopg://refraq:refraq@postgres:5432/refraq
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/2
+      REFRAQ_SECRETS_MASTER_KEY: change-me-secrets-master-key
+      REFRAQ_INGESTION_WORKER_CONCURRENCY: "1"
+      REFRAQ_INGESTION_RUNNING_TIMEOUT_SEC: "3600"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+  # Run exactly one Beat replica (Postgres Scheduled Task SSOT; do not scale).
+  beat:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    command: ["celery", "-A", "backend.worker.app", "beat"]
+    environment:
+      REFRAQ_ENV: prod
+      REFRAQ_STORE_BACKEND: persistent
+      DATABASE_URL: postgresql+psycopg://refraq:refraq@postgres:5432/refraq
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/2
+      REFRAQ_INGESTION_RUNNING_TIMEOUT_SEC: "3600"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
 
   web:
     build:
