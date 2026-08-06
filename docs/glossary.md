@@ -183,10 +183,12 @@ Avoid calling it Identity Source, Connection, or Client. Avoid assuming every So
 
 Live reachability and credentials for a Source that needs them: host, port, engine, encrypted username/secret (database endpoints in slice A).
 Does not own database name or schema scope; collectors compose Source scope with Connection endpoint.
-A Source may have one or more Connections; catalog identity stays on the Source.
+A database Source has at most one Connection (strict 1:1 once registered); switch endpoint or secret on that row, do not add a second Connection.
+Catalog identity stays on the Source.
 Avoid calling the Connection the Source, or treating Identity Source as a Connection.
 Avoid forcing non-live Source kinds through Connection.
 Avoid putting catalog scope on Connection.
+Avoid modeling standby or replica endpoints as extra Connections for the same Source.
 
 ### Job
 

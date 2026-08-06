@@ -39,7 +39,6 @@ For `kind=database`, `database_name` is required; `schema_filter` is optional ca
   "host": "db.example.internal",
   "port": 1521,
   "status": "active",
-  "is_collection_active": true,
   "has_secret": true,
   "secret_updated_at": "2026-08-05T01:00:00Z"
 }
@@ -47,13 +46,14 @@ For `kind=database`, `database_name` is required; `schema_filter` is optional ca
 
 Connection is reachability + credentials only. Catalog scope (`database_name`, `schema_filter`) lives on the parent Source.
 Multi-environment catalogs are separate Sources.
+A database Source has **at most one** Connection (strict 1:1 once created).
 
 ### Error
 
 ```json
 {
-  "code": "CONNECTION_COLLECTION_ACTIVE_CONFLICT",
-  "message": "Another connection is already collection-active for this source"
+  "code": "SOURCE_CONNECTION_EXISTS",
+  "message": "This source already has a connection"
 }
 ```
 
@@ -65,7 +65,7 @@ Multi-environment catalogs are separate Sources.
 | `POST` | `/sources` | `sources:write` | Create |
 | `GET` | `/sources/{id}` | `sources:read` | Get |
 | `PATCH` | `/sources/{id}` | `sources:write` | Update fields / status |
-| `GET` | `/sources/{id}/connections` | `sources:read` | List Connections for source |
+| `GET` | `/sources/{id}/connections` | `sources:read` | List Connections for source (0 or 1 item) |
 
 ### `POST /sources` body
 
@@ -84,9 +84,9 @@ Multi-environment catalogs are separate Sources.
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/sources/{id}/connections` | `sources:write` | Create Connection (includes secret once) |
+| `POST` | `/sources/{id}/connections` | `sources:write` | Create the Connection (includes secret once); fails if one already exists |
 | `GET` | `/connections/{id}` | `sources:read` | Get Connection (no secret) |
-| `PATCH` | `/connections/{id}` | `sources:write` | Update non-secret fields / flags |
+| `PATCH` | `/connections/{id}` | `sources:write` | Update non-secret fields (host/port/engine/name/status) — endpoint switch in place |
 | `PUT` | `/connections/{id}/secret` | `sources:write` | Rotate secret |
 
 ### `POST .../connections` body (example)
@@ -97,7 +97,6 @@ Multi-environment catalogs are separate Sources.
   "engine": "oracle",
   "host": "db.example.internal",
   "port": 1521,
-  "is_collection_active": true,
   "secret": {
     "username": "meta_reader",
     "password": "not-a-real-password"
@@ -109,7 +108,8 @@ Rules:
 
 - Response never echoes `secret`.
 - Parent Source must be `kind=database` (slice A); creating a Connection on an unsupported kind returns a stable error.
-- Enforcing one active full-ingest Connection per Source returns `CONNECTION_COLLECTION_ACTIVE_CONFLICT` when violated.
+- Database Source ↔ Connection is **1:1**: a second create returns `SOURCE_CONNECTION_EXISTS`.
+- Switch endpoint or credentials by `PATCH` / `PUT .../secret` on the existing Connection — do not create another Connection for the same Source.
 - Engines in slice A: `postgresql`, `mssql`, `oracle`.
 - Collectors open the live session using Connection host/port/engine/secret composed with the parent Source's `database_name` / `schema_filter`.
 
@@ -117,5 +117,6 @@ Rules:
 
 - Import from external `dbmeta`
 - Non-database Source kinds (CSV/file) and their attachment APIs
+- Multiple Connections per Source, standby Connection rows, or `is_collection_active` selection flags
 - Connection test that returns row data (optional `POST /connections/{id}/test` may return reachability only in implementation; not required to expose query results)
 - Putting catalog scope (`database_name`, schema) on Connection

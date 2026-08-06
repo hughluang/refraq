@@ -65,7 +65,7 @@ Rules:
 
 - Distinct environments or physical instances are **distinct Sources** (separate keys and catalogs).
 - For `kind=database`, **business/catalog scope** (what is being integrated: database name, schema filter) lives on the Source — not on Connection.
-- Disabling a Source blocks new ingestion and new Connections from becoming active for collection until re-enabled (existing catalog snapshots remain readable unless later retention rules say otherwise).
+- Disabling a Source blocks new ingestion until re-enabled (existing catalog snapshots remain readable unless later retention rules say otherwise).
 - Non-`database` kinds are out of scope for slice A implementation; models and APIs must not hard-code that every Source requires a Connection. Kind-specific scope fields for non-database kinds arrive with those kinds.
 
 ### 4.2 Connection
@@ -79,17 +79,15 @@ Rules:
 | host / port | Reachability; engine-specific endpoint extras allowed (e.g. SSL flags) without carrying catalog scope |
 | secret_ref | Encrypted credential material (username/password or equivalent; never plaintext in API responses) |
 | status | `active` / `disabled` |
-| is_collection_active | Whether this Connection may run full metadata ingestion |
 
 Rules:
 
 - Connection carries **only** how to reach and authenticate the live endpoint. It does **not** own `database_name` / schema scope.
 - Ingestion and controlled query compose runtime access as **Source scope + Connection endpoint/credentials**.
-- Cardinality: Source **0—N** Connection (database Sources typically 1—N; future non-live kinds may use zero Connections and a different attachment).
-- Runtime policy for early slices: at most **one** Connection with `is_collection_active=true` per Source for full metadata ingestion.
-- Prefer a single collection-active Connection per Source; do not encode catalog partitioning by multiplying Connections.
-- Parallel multi-Connection ingestion for the same Source is a later runtime relaxation and requires scope-aware delete semantics before enablement.
-- Read replicas are not a default Connection purpose for metadata collection; prefer primary / authoritative endpoints.
+- Cardinality for `kind=database`: Source **0 or 1** Connection (strict **1:1** once registered). Creating a second Connection on the same Source is rejected.
+- Future non-live kinds may use zero Connections and a different attachment; do not force every Source kind through Connection.
+- Endpoint or credential change is a **switch on the same Connection** (update host/port/engine and/or rotate secret) — not a second Connection row, and not a new Source.
+- Prefer the authoritative / primary endpoint; do not register read replicas as alternate Connections for the same Source.
 - Connection is not the catalog identity; rotating host/port/secret must not mint a new Source or orphan Catalog Objects of that Source.
 
 ### 4.3 Job
@@ -117,7 +115,7 @@ Rules:
 ### 4.4 Catalog Object And Columns
 
 Collected structure includes object identity **under Source**, object type, name, columns (name, type, nullable), and DDL when available.
-Optional provenance may record which Connection last collected the snapshot; provenance is not part of identity.
+Optional provenance may record that the Source's Connection last collected the snapshot; provenance is not part of identity.
 Later slices attach business semantics and join edges to these objects/columns.
 
 ### 4.5 Future foresight — non-database Source kinds (not delivered in A–D)
@@ -206,8 +204,8 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
 - Allowed: single read-only statement (SELECT or engine-equivalent).
 - Reject: DDL, DML, multi-statement batches, and anything the platform cannot classify as read-only.
 - Enforce timeout and maximum row count.
-- Execute only through a specified Connection; audit every attempt (statement summary or hash, User, Connection, outcome).
-- Prefer Connections whose DB user is itself read-only as defense in depth; platform guards remain mandatory.
+- Execute through the Source's Connection; audit every attempt (statement summary or hash, User, Connection, outcome).
+- Prefer a Connection DB user that is itself read-only as defense in depth; platform guards remain mandatory.
 
 ## 12. MCP
 
@@ -250,7 +248,8 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - Write SQL / unrestricted SQL consoles
 - Migrating or dual-reading legacy `dbmeta` datasets
 - Pre-creating empty domain packages before implementation code arrives
-- Treating read replicas as standard metadata Connection targets
+- Multiple Connections per database Source (standby rows, replica targets, or collection-active flags)
+- Treating read replicas as alternate Connection targets for the same Source
 - Delivering non-database Source kinds (CSV/file import, Attachment APIs, etc.) in this phase — foresight only in §4.5
 
 ## 16. References

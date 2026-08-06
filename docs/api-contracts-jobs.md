@@ -57,7 +57,7 @@ Rules:
 Rules:
 
 - Path `{id}` is the Source; the facade validates the Source, builds Job `input` (at least `source_id` from the path + body fields such as `connection_id`), persists the Job, and enqueues the worker after commit.
-- For database structure Jobs, resolve `connection_id` from the body or, if omitted, from the Source's single collection-active Connection. The Connection must belong to that Source, be usable, and have a secret; otherwise return a stable error.
+- For database structure Jobs, resolve `connection_id` from the body or, if omitted, from the Source's sole Connection. The Connection must belong to that Source, be usable, and have a secret; otherwise return a stable error. Body `connection_id`, when present, must match that Connection.
 - Response `202` returns the Job shape. Work runs asynchronously on a worker.
 
 ### `GET /sources/{id}/jobs`

@@ -22,7 +22,7 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 | --- | --- | --- |
 | `search_sources` | `sources:read` | Search/list Sources |
 | `get_source` | `sources:read` | Source detail |
-| `list_connections` | `sources:read` | Connections for a source (no secrets) |
+| `list_connections` | `sources:read` | The Source's Connection if any (0 or 1; no secrets) |
 | `list_objects` | `metadata:read` | Catalog Objects under a Source |
 | `get_object` | `metadata:read` | Object + columns |
 | `get_object_ddl` | `metadata:read` | DDL when present |
