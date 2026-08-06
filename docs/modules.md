@@ -168,7 +168,7 @@ Responsibilities:
 - Domain facade for Source-scoped **Jobs** (structure enqueue/list); Celery kind-handler tasks register with `backend.worker.app`
 - Enqueue helpers (API side: persist Job then `apply_async` after commit)
 - Catalog object / semantics / join / controlled query services
-- MCP tool handlers that delegate to the same services
+- MCP tool handlers (`backend/metadata/mcp_server.py`) that delegate to the same services
 
 Must not contain:
 

@@ -35,6 +35,21 @@ describe("toRefineResources", () => {
         meta: { label: "tokens.title" },
       },
       {
+        name: "sources",
+        list: "/console/sources",
+        meta: { label: "sources.title" },
+      },
+      {
+        name: "catalog",
+        list: "/console/catalog",
+        meta: { label: "catalog.title" },
+      },
+      {
+        name: "jobs",
+        list: "/console/jobs",
+        meta: { label: "jobs.title" },
+      },
+      {
         name: "settings",
         list: "/console/settings",
         meta: { label: "settings.title" },
@@ -86,6 +101,21 @@ describe("matchPath", () => {
   it("matches tokens list route", () => {
     expect(matchPath("/console/tokens", MODULE_IDENTITY_FIXTURE)).toEqual({
       resource: "tokens",
+      action: "list",
+    });
+  });
+
+  it("matches metadata module routes", () => {
+    expect(matchPath("/console/sources", MODULE_IDENTITY_FIXTURE)).toEqual({
+      resource: "sources",
+      action: "list",
+    });
+    expect(matchPath("/console/catalog", MODULE_IDENTITY_FIXTURE)).toEqual({
+      resource: "catalog",
+      action: "list",
+    });
+    expect(matchPath("/console/jobs", MODULE_IDENTITY_FIXTURE)).toEqual({
+      resource: "jobs",
       action: "list",
     });
   });

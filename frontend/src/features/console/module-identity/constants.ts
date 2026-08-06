@@ -4,6 +4,9 @@ export const ModuleId = {
   users: "users",
   roles: "roles",
   tokens: "tokens",
+  sources: "sources",
+  catalog: "catalog",
+  jobs: "jobs",
   settings: "settings",
 } as const;
 

@@ -55,6 +55,39 @@ export const MODULE_IDENTITY_FIXTURE: ModuleIdentity[] = [
     },
   },
   {
+    id: "sources",
+    label_key: "sources.title",
+    routes: { list: "/console/sources", create: null, edit: null },
+    actions: {
+      list: "sources:read",
+      create: "sources:write",
+      edit: "sources:write",
+      delete: "sources:write",
+    },
+  },
+  {
+    id: "catalog",
+    label_key: "catalog.title",
+    routes: { list: "/console/catalog", create: null, edit: null },
+    actions: {
+      list: "metadata:read",
+      create: null,
+      edit: null,
+      delete: null,
+    },
+  },
+  {
+    id: "jobs",
+    label_key: "jobs.title",
+    routes: { list: "/console/jobs", create: null, edit: null },
+    actions: {
+      list: "jobs:run",
+      create: null,
+      edit: null,
+      delete: null,
+    },
+  },
+  {
     id: "settings",
     label_key: "settings.title",
     routes: { list: "/console/settings", create: null, edit: null },

@@ -26,6 +26,7 @@ Current `backend/.env.example` defines:
 - `CELERY_BROKER_URL=redis://127.0.0.1:6379/2` (Celery broker; prefer a logical DB separate from Session `REDIS_URL`)
 - `REFRAQ_JOB_WORKER_CONCURRENCY=1` (Celery worker concurrency hint)
 - `REFRAQ_JOB_RUNNING_TIMEOUT_SEC=3600` (stuck `running` **Job** reaper threshold)
+- `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD=0.75` (abort structure catalog write when absent ratio exceeds this)
 
 `REFRAQ_STORE_BACKEND=memory` is for automated tests only. Do not use it in production examples.
 Metadata foundation variables are required when running ingestion/secret features; Foundation-only local login may still boot without them until those code paths are exercised.
@@ -69,6 +70,7 @@ Self-deploy Compose exposes only the web service to browsers; the API stays on t
 - `CELERY_BROKER_URL` (required when running Celery worker/beat; default same host Redis DB `2`)
 - `REFRAQ_JOB_WORKER_CONCURRENCY`
 - `REFRAQ_JOB_RUNNING_TIMEOUT_SEC`
+- `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD`
 - `REFRAQ_INTEGRATION_DATABASE_URL` (pytest `@pytest.mark.integration` only; default `…/refraq_test`)
 - `REFRAQ_INTEGRATION_REDIS_URL` (integration only; default `redis://127.0.0.1:6379/1`)
 - `REFRAQ_INTEGRATION_CELERY_BROKER_URL` (integration only; default `redis://127.0.0.1:6379/3`)

@@ -21,6 +21,8 @@ from backend.routers.console import router as console_router
 from backend.routers.health import router as health_router
 from backend.routers.roles import router as roles_router
 from backend.routers.settings import router as settings_router
+from backend.routers.jobs import router as jobs_router
+from backend.routers.sources import router as sources_router
 from backend.routers.tokens import router as tokens_router
 from backend.routers.users import router as users_router
 from backend.schemas.auth import ErrorResponse
@@ -79,3 +81,5 @@ app.include_router(console_router)
 app.include_router(settings_router)
 app.include_router(tokens_router)
 app.include_router(audit_router)
+app.include_router(sources_router)
+app.include_router(jobs_router)

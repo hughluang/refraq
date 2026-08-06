@@ -14,7 +14,6 @@ from backend.core.config import get_settings
 JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 TERMINAL: frozenset[str] = frozenset({"succeeded", "failed", "cancelled"})
 
-ERROR_HANDLER_UNAVAILABLE = "JOB_HANDLER_UNAVAILABLE"
 ERROR_WORKER_LOST = "JOB_WORKER_LOST"
 
 
@@ -55,6 +54,34 @@ class MemoryJobStore:
     def list_by_status(self, status: JobStatus) -> list[JobRecord]:
         with self._lock:
             return [r for r in self._by_id.values() if r.status == status]
+
+    def list_for_source(
+        self,
+        source_id: str,
+        *,
+        kind: str | None = None,
+        status: JobStatus | None = None,
+    ) -> list[JobRecord]:
+        with self._lock:
+            items = [
+                r
+                for r in self._by_id.values()
+                if r.input.get("source_id") == source_id
+            ]
+            if kind is not None:
+                items = [r for r in items if r.kind == kind]
+            if status is not None:
+                items = [r for r in items if r.status == status]
+            return sorted(items, key=lambda r: r.created_at, reverse=True)
+
+    def has_active_structure_job(self, source_id: str) -> bool:
+        with self._lock:
+            return any(
+                r.kind == "structure"
+                and r.status not in TERMINAL
+                and r.input.get("source_id") == source_id
+                for r in self._by_id.values()
+            )
 
 
 class SqlJobStore:
@@ -117,6 +144,39 @@ class SqlJobStore:
                 select(JobRow).where(JobRow.status == status)
             ).all()
             return [_row_to_job(row) for row in rows]
+
+    def list_for_source(
+        self,
+        source_id: str,
+        *,
+        kind: str | None = None,
+        status: JobStatus | None = None,
+    ) -> list[JobRecord]:
+        from sqlalchemy import select
+
+        from backend.core.db import session_scope
+        from backend.jobs.models import JobRow
+
+        with session_scope() as session:
+            rows = session.scalars(select(JobRow)).all()
+            items = [
+                _row_to_job(row)
+                for row in rows
+                if isinstance(row.input, dict)
+                and row.input.get("source_id") == source_id
+            ]
+            if kind is not None:
+                items = [r for r in items if r.kind == kind]
+            if status is not None:
+                items = [r for r in items if r.status == status]
+            return sorted(items, key=lambda r: r.created_at, reverse=True)
+
+    def has_active_structure_job(self, source_id: str) -> bool:
+        return any(
+            True
+            for _ in self.list_for_source(source_id, kind="structure")
+            if _.status not in TERMINAL
+        )
 
 
 def _row_to_job(row: object) -> JobRecord:
@@ -229,6 +289,18 @@ def mark_succeeded(job_id: str) -> JobRecord | None:
     if record.status in TERMINAL:
         return record
     record.status = "succeeded"
+    record.finished_at = datetime.utcnow()
+    return store.save(record)
+
+
+def mark_cancelled(job_id: str) -> JobRecord | None:
+    store = get_job_store()
+    record = store.get(job_id)
+    if record is None:
+        return None
+    if record.status in TERMINAL:
+        return record
+    record.status = "cancelled"
     record.finished_at = datetime.utcnow()
     return store.save(record)
 

@@ -73,8 +73,19 @@ Domain list semantics for “Jobs related to this Source” (for example Jobs wh
 | `JOB_SECRET_MISSING` | No usable Connection secret when required |
 | `JOB_INPUT_INVALID` | Kind/input failed domain validation |
 | `JOB_NOT_CANCELLABLE` | Job already terminal |
+| `JOB_ALREADY_ACTIVE` | Non-terminal structure Job already exists for this Source |
+| `JOB_CONNECTION_MISMATCH` | Body `connection_id` does not match the Source's sole Connection |
+| `JOB_FAIL_SAFE` | Absent ratio exceeded fail-safe threshold; catalog unchanged |
+| `JOB_COLLECT_FAILED` | Connector collect aborted; catalog unchanged |
+| `JOB_CONNECTION_FAILED` | Connector could not open the live endpoint |
 
 Stable aliases of older draft codes (`INGESTION_*`) must not be reintroduced in new clients.
+
+### Structure single-flight
+
+Enqueue of `kind=structure` rejects with `JOB_ALREADY_ACTIVE` when the Job store already has a
+non-terminal structure Job whose `input.source_id` matches the path Source. Authority is the
+Postgres/memory Job table, not Celery.
 
 ## 5. Slice Notes
 

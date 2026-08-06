@@ -190,7 +190,25 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
 - Source facade validates and enqueues; worker processes execute connectors.
 - Slice A connectors: **PostgreSQL**, **MSSQL**, **Oracle**.
 - Structure collection persists object inventory, columns, and DDL when obtainable, keyed by Source.
-- Failed Jobs leave prior successful snapshots readable unless a Job explicitly replaces them under documented replace semantics.
+- **Current catalog** is authoritative (not a per-Job version history). Natural key:
+  `(source_id, schema_name, name, object_type)`. Surrogate ids are preserved across successful refreshes.
+- **Success-only commit:** only a Job that reaches a complete successful collect may mutate catalog.
+  Failed, cancelled, or aborted collects leave the prior successful catalog unchanged (no absent marks).
+- **In-scope absent:** after a complete collect, objects previously present within the Job's schema
+  scope (`schema_filter` when set) that are missing from the collect are marked `is_present=false`
+  (tombstone). Out-of-scope objects are not bulk-absent when the filter shrinks.
+- **Fail-safe:** if the fraction of in-scope present objects that would become absent exceeds
+  `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD` (default `0.75`), the Job fails with `JOB_FAIL_SAFE` and
+  writes nothing.
+- **Semantics preservation:** structure upserts whitelist structural columns only; never overwrite
+  `business_name` / `business_description` (or later join edges).
+- **Structure single-flight:** at most one non-terminal `kind=structure` Job per Source
+  (`JOB_ALREADY_ACTIVE`). Enforced on the Job store (not a Celery lock). Re-run = new Job after
+  terminal status.
+- Collectors compose **Source scope + Connection endpoint/credentials**. Introspection uses
+  engine-native catalogs (`pg_catalog`, `sys.*`, `ALL_`/`DBA_`).
+- Collection account guidance: prefer least privilege (PostgreSQL schema `USAGE` + catalog read;
+  MSSQL `VIEW DEFINITION`; Oracle `SELECT_CATALOG_ROLE` or equivalent).
 
 ## 10. Semantics And Joins (Slices B–C)
 

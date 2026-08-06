@@ -21,6 +21,8 @@ from backend.repositories.session_store import reset_session_store
 from backend.repositories.token_store import reset_token_store
 from backend.repositories.user_store import reset_user_store
 from backend.jobs.store import reset_job_store
+from backend.metadata.catalog.store import reset_catalog_store
+from backend.metadata.sources.store import reset_source_store
 from backend.worker.schedules import reset_schedule_store
 
 reset_settings_cache()
@@ -44,6 +46,8 @@ def _reset_foundation_singletons() -> None:
     reset_token_store()
     reset_audit_store()
     reset_job_store()
+    reset_source_store()
+    reset_catalog_store()
     reset_schedule_store()
     reset_db_singletons()
     reset_redis_singleton()
@@ -54,6 +58,8 @@ def _reset_foundation_singletons() -> None:
     reset_token_store()
     reset_audit_store()
     reset_job_store()
+    reset_source_store()
+    reset_catalog_store()
     reset_schedule_store()
     reset_db_singletons()
     reset_redis_singleton()

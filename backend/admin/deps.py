@@ -143,3 +143,23 @@ def require_permission(permission: Permission) -> Callable[[UserRecord], UserRec
 
 def get_actor_token_id(request: Request) -> str | None:
     return getattr(request.state, "actor_token_id", None)
+
+
+def resolve_user_from_bearer(secret: str) -> UserRecord:
+    """Resolve an active User from a raw PAT secret (MCP / non-HTTP callers)."""
+    tokens = get_token_store()
+    users = get_user_store()
+    record = tokens.get_by_hash(hash_token(secret))
+    now = datetime.utcnow()
+    if (
+        record is None
+        or record.revoked_at is not None
+        or record.expires_at <= now
+    ):
+        raise AuthPatInvalid()
+    user = users.get_by_id(record.user_id)
+    if user is None or user.status != "active":
+        raise AuthPatInvalid()
+    tokens.touch_last_used(record.id, now)
+    return user
+
