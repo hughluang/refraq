@@ -1,1 +1,1 @@
-"""Source / Connection package."""
+"""Source package (catalog identity + embedded reachability)."""

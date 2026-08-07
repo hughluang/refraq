@@ -14,15 +14,14 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 - Missing/invalid auth → tool error mapped from `401`
 - Authenticated but lacking permission → mapped from `403` with required permission named when practical
 - Mutations write management audit events
-- No tool returns Connection plaintext secrets or PAT secrets
+- No tool returns Source plaintext secrets or PAT secrets
 
 ## 3. Slice A — Structure (read)
 
 | Tool | Permission | Purpose |
 | --- | --- | --- |
 | `search_sources` | `sources:read` | Search/list Sources |
-| `get_source` | `sources:read` | Source detail |
-| `list_connections` | `sources:read` | The Source's Connection if any (0 or 1; no secrets) |
+| `get_source` | `sources:read` | Source detail (projected `access`; secrets stripped) |
 | `list_objects` | `metadata:read` | Catalog Objects under a Source |
 | `get_object` | `metadata:read` | Object + columns |
 | `get_object_ddl` | `metadata:read` | DDL when present |
@@ -51,7 +50,7 @@ Write discipline: fill gaps; do not invent; use open_questions when evidence is 
 
 | Tool | Permission | Purpose |
 | --- | --- | --- |
-| `run_sql` | `query:run` | Read-only single statement via Connection id |
+| `run_sql` | `query:run` | Read-only single statement via Source id |
 
 Guards match `docs/api-contracts-metadata.md` §6.
 

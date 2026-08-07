@@ -10,7 +10,7 @@ from backend.metadata.connectors.base import (
     CollectedColumn,
     CollectedObject,
     CollectedStructure,
-    ConnectionEndpoint,
+    SourceEndpoint,
     ConnectorError,
 )
 
@@ -18,17 +18,17 @@ from backend.metadata.connectors.base import (
 class MssqlConnector:
     engine = "mssql"
 
-    def test_connection(self, endpoint: ConnectionEndpoint) -> None:
+    def test_connection(self, endpoint: SourceEndpoint) -> None:
         eng = self._engine(endpoint)
         try:
             with eng.connect() as conn:
                 conn.execute(text("SELECT 1"))
         except Exception as exc:  # noqa: BLE001
-            raise ConnectorError("JOB_CONNECTION_FAILED", str(exc)) from exc
+            raise ConnectorError("JOB_ENDPOINT_FAILED", str(exc)) from exc
         finally:
             eng.dispose()
 
-    def collect_structure(self, endpoint: ConnectionEndpoint) -> CollectedStructure:
+    def collect_structure(self, endpoint: SourceEndpoint) -> CollectedStructure:
         eng = self._engine(endpoint)
         try:
             with eng.connect() as conn:
@@ -105,7 +105,13 @@ class MssqlConnector:
             for r in rows
         ]
 
-    def _engine(self, endpoint: ConnectionEndpoint):
+    def _engine(self, endpoint: SourceEndpoint):
+        mode = endpoint.ssl_mode or "disable"
+        if mode != "disable" or endpoint.ssl_root_cert or endpoint.ssl_client_cert or endpoint.ssl_client_key:
+            raise ConnectorError(
+                "JOB_ENDPOINT_FAILED",
+                "MSSQL TLS is not supported in this slice; use ssl_mode=disable",
+            )
         # Prefer pymssql URL; requires pymssql installed.
         user = quote_plus(endpoint.username)
         password = quote_plus(endpoint.password)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from mcp.server import MCPServer
 
@@ -15,12 +14,11 @@ from backend.metadata.catalog.store import get_catalog_store, require_object
 from backend.metadata.enqueue import enqueue_job
 from backend.metadata.errors import (
     JobAlreadyActive,
-    JobConnectionDisabled,
-    JobSecretMissing,
+    JobInputInvalid,
     JobSourceDisabled,
     SourceNotFound,
 )
-from backend.metadata.sources.store import get_source_store
+from backend.metadata.sources.store import SourceRecord, get_source_store
 from backend.repositories.role_store import get_role_store
 from backend.repositories.user_store import UserRecord
 
@@ -48,6 +46,28 @@ def _err(exc: Exception) -> str:
     return json.dumps({"error": {"code": "MCP_ERROR", "message": str(exc)}})
 
 
+def _source_public(s: SourceRecord) -> dict:
+    from backend.metadata.connectors.specs import project_access
+    from backend.metadata.sources.access import decrypt_access_blob
+
+    access = None
+    if s.engine and s.access_ciphertext:
+        access = project_access(s.engine, decrypt_access_blob(s.access_ciphertext))
+    return {
+        "id": s.id,
+        "key": s.key,
+        "name": s.name,
+        "kind": s.kind,
+        "status": s.status,
+        "description": s.description,
+        "database_name": s.database_name,
+        "schema_filter": s.schema_filter,
+        "engine": s.engine,
+        "access": access,
+        "has_access": s.has_access,
+    }
+
+
 @mcp.tool()
 def search_sources(authorization: str, q: str | None = None) -> str:
     """Search/list Sources (sources:read)."""
@@ -62,22 +82,7 @@ def search_sources(authorization: str, q: str | None = None) -> str:
                 for s in items
                 if ql in s.key.lower() or ql in s.name.lower()
             ]
-        return json.dumps(
-            {
-                "items": [
-                    {
-                        "id": s.id,
-                        "key": s.key,
-                        "name": s.name,
-                        "kind": s.kind,
-                        "status": s.status,
-                        "database_name": s.database_name,
-                        "schema_filter": s.schema_filter,
-                    }
-                    for s in items
-                ]
-            }
-        )
+        return json.dumps({"items": [_source_public(s) for s in items]})
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
@@ -91,47 +96,7 @@ def get_source(authorization: str, source_id: str) -> str:
         s = get_source_store().get_source(source_id)
         if s is None:
             raise SourceNotFound()
-        return json.dumps(
-            {
-                "id": s.id,
-                "key": s.key,
-                "name": s.name,
-                "kind": s.kind,
-                "status": s.status,
-                "description": s.description,
-                "database_name": s.database_name,
-                "schema_filter": s.schema_filter,
-            }
-        )
-    except Exception as exc:  # noqa: BLE001
-        return _err(exc)
-
-
-@mcp.tool()
-def list_connections(authorization: str, source_id: str) -> str:
-    """List the Source Connection if any (0 or 1; sources:read)."""
-    try:
-        user = _user_from_token(authorization)
-        _require(user, "sources:read")
-        store = get_source_store()
-        if store.get_source(source_id) is None:
-            raise SourceNotFound()
-        conn = store.get_connection_for_source(source_id)
-        items: list[dict[str, Any]] = []
-        if conn:
-            items.append(
-                {
-                    "id": conn.id,
-                    "source_id": conn.source_id,
-                    "name": conn.name,
-                    "engine": conn.engine,
-                    "host": conn.host,
-                    "port": conn.port,
-                    "status": conn.status,
-                    "has_secret": conn.has_secret,
-                }
-            )
-        return json.dumps({"items": items})
+        return json.dumps(_source_public(s))
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
@@ -212,7 +177,6 @@ def get_object_ddl(authorization: str, object_id: str) -> str:
 def enqueue_structure_job(
     authorization: str,
     source_id: str,
-    connection_id: str | None = None,
 ) -> str:
     """Enqueue a structure Job via Source facade (jobs:run)."""
     try:
@@ -224,22 +188,13 @@ def enqueue_structure_job(
             raise SourceNotFound()
         if source.status != "active":
             raise JobSourceDisabled()
-        connection = sources.get_connection_for_source(source_id)
-        if connection is None:
-            raise JobSecretMissing("Source has no Connection")
-        if connection_id and connection_id != connection.id:
-            from backend.metadata.errors import JobConnectionMismatch
-
-            raise JobConnectionMismatch()
-        if connection.status != "active":
-            raise JobConnectionDisabled()
-        if not connection.has_secret:
-            raise JobSecretMissing()
+        if not source.engine or not source.access_ciphertext:
+            raise JobInputInvalid("Source has no access configuration")
         if get_job_store().has_active_structure_job(source_id):
             raise JobAlreadyActive()
         job = create_queued_job(
             kind="structure",
-            input={"source_id": source_id, "connection_id": connection.id},
+            input={"source_id": source_id},
             created_by=user.id,
         )
         enqueue_job(job)

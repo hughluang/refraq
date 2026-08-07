@@ -10,7 +10,7 @@ from backend.metadata.connectors.base import (
     CollectedColumn,
     CollectedObject,
     CollectedStructure,
-    ConnectionEndpoint,
+    SourceEndpoint,
     ConnectorError,
 )
 
@@ -20,17 +20,17 @@ SYSTEM_SCHEMAS = frozenset({"pg_catalog", "information_schema", "pg_toast"})
 class PostgresqlConnector:
     engine = "postgresql"
 
-    def test_connection(self, endpoint: ConnectionEndpoint) -> None:
+    def test_connection(self, endpoint: SourceEndpoint) -> None:
         eng = self._engine(endpoint)
         try:
             with eng.connect() as conn:
                 conn.execute(text("SELECT 1"))
         except Exception as exc:  # noqa: BLE001 — map driver errors
-            raise ConnectorError("JOB_CONNECTION_FAILED", str(exc)) from exc
+            raise ConnectorError("JOB_ENDPOINT_FAILED", str(exc)) from exc
         finally:
             eng.dispose()
 
-    def collect_structure(self, endpoint: ConnectionEndpoint) -> CollectedStructure:
+    def collect_structure(self, endpoint: SourceEndpoint) -> CollectedStructure:
         eng = self._engine(endpoint)
         try:
             with eng.connect() as conn:
@@ -132,7 +132,9 @@ class PostgresqlConnector:
             return None
         return None
 
-    def _engine(self, endpoint: ConnectionEndpoint):
+    def _engine(self, endpoint: SourceEndpoint):
+        from backend.metadata.connectors.tls import postgres_connect_args, tls_temp_files
+
         user = quote_plus(endpoint.username)
         password = quote_plus(endpoint.password)
         db = quote_plus(endpoint.database_name)
@@ -140,4 +142,17 @@ class PostgresqlConnector:
             f"postgresql+psycopg://{user}:{password}"
             f"@{endpoint.host}:{endpoint.port}/{db}"
         )
-        return create_engine(url, pool_pre_ping=True)
+        tls_cm = tls_temp_files(endpoint)
+        paths = tls_cm.__enter__()
+        connect_args = postgres_connect_args(endpoint, paths)
+        eng = create_engine(url, pool_pre_ping=True, connect_args=connect_args)
+        original_dispose = eng.dispose
+
+        def dispose(*args, **kwargs):  # noqa: ANN002, ANN003
+            try:
+                return original_dispose(*args, **kwargs)
+            finally:
+                tls_cm.__exit__(None, None, None)
+
+        eng.dispose = dispose  # type: ignore[method-assign]
+        return eng

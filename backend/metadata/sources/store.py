@@ -1,8 +1,7 @@
-"""Source and Connection store ports/adapters."""
+"""Source store ports/adapters (encrypted access blob on Source)."""
 
 from __future__ import annotations
 
-import json
 import threading
 import uuid
 from dataclasses import dataclass, replace
@@ -11,20 +10,22 @@ from functools import lru_cache
 from typing import Any, Protocol
 
 from backend.core.config import get_settings
-from backend.core.secrets import decrypt_secret, encrypt_secret
 from backend.metadata.errors import (
-    ConnectionEngineUnsupported,
-    ConnectionNotFound,
-    SourceConnectionExists,
-    SourceConnectionKindInvalid,
+    SourceAccessRequired,
     SourceKeyDuplicate,
     SourceKindUnsupported,
+    SourceNotDisabled,
     SourceNotFound,
     SourceValidationError,
 )
+from backend.metadata.sources.access import (
+    SUPPORTED_ENGINES,
+    decrypt_access_blob,
+    encrypt_access_blob,
+    validate_access,
+)
 
 SUPPORTED_KINDS = frozenset({"database"})
-SUPPORTED_ENGINES = frozenset({"postgresql", "mssql", "oracle"})
 
 
 @dataclass
@@ -37,43 +38,19 @@ class SourceRecord:
     description: str | None
     database_name: str | None
     schema_filter: str | None
-    created_at: datetime
-    updated_at: datetime
-
-
-@dataclass
-class ConnectionRecord:
-    id: str
-    source_id: str
-    name: str
-    engine: str
-    host: str
-    port: int
-    status: str
-    secret_ciphertext: str | None
-    secret_updated_at: datetime | None
+    engine: str | None
+    access_ciphertext: str | None
+    access_updated_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
     @property
-    def has_secret(self) -> bool:
-        return bool(self.secret_ciphertext)
+    def has_access(self) -> bool:
+        return bool(self.access_ciphertext)
 
 
 def new_source_id() -> str:
     return f"src_{uuid.uuid4().hex[:12]}"
-
-
-def new_connection_id() -> str:
-    return f"conn_{uuid.uuid4().hex[:12]}"
-
-
-def encode_secret_payload(secret: dict[str, str]) -> str:
-    return encrypt_secret(json.dumps(secret, separators=(",", ":")))
-
-
-def decode_secret_payload(ciphertext: str) -> dict[str, Any]:
-    return json.loads(decrypt_secret(ciphertext))
 
 
 class SourceStore(Protocol):
@@ -87,21 +64,13 @@ class SourceStore(Protocol):
 
     def save_source(self, record: SourceRecord) -> SourceRecord: ...
 
-    def get_connection(self, connection_id: str) -> ConnectionRecord | None: ...
-
-    def get_connection_for_source(self, source_id: str) -> ConnectionRecord | None: ...
-
-    def create_connection(self, record: ConnectionRecord) -> ConnectionRecord: ...
-
-    def save_connection(self, record: ConnectionRecord) -> ConnectionRecord: ...
+    def delete_source(self, source_id: str) -> bool: ...
 
 
 class MemorySourceStore:
     def __init__(self) -> None:
         self._sources: dict[str, SourceRecord] = {}
         self._by_key: dict[str, str] = {}
-        self._connections: dict[str, ConnectionRecord] = {}
-        self._by_source: dict[str, str] = {}
         self._lock = threading.Lock()
 
     def list_sources(self) -> list[SourceRecord]:
@@ -141,29 +110,14 @@ class MemorySourceStore:
             self._sources[record.id] = record
             return record
 
-    def get_connection(self, connection_id: str) -> ConnectionRecord | None:
+    def delete_source(self, source_id: str) -> bool:
         with self._lock:
-            return self._connections.get(connection_id)
-
-    def get_connection_for_source(self, source_id: str) -> ConnectionRecord | None:
-        with self._lock:
-            conn_id = self._by_source.get(source_id)
-            return self._connections.get(conn_id) if conn_id else None
-
-    def create_connection(self, record: ConnectionRecord) -> ConnectionRecord:
-        with self._lock:
-            if record.source_id in self._by_source:
-                raise SourceConnectionExists()
-            self._connections[record.id] = record
-            self._by_source[record.source_id] = record.id
-            return record
-
-    def save_connection(self, record: ConnectionRecord) -> ConnectionRecord:
-        with self._lock:
-            if record.id not in self._connections:
-                raise ConnectionNotFound()
-            self._connections[record.id] = record
-            return record
+            existing = self._sources.pop(source_id, None)
+            if existing is None:
+                return False
+            if self._by_key.get(existing.key) == source_id:
+                del self._by_key[existing.key]
+            return True
 
 
 class SqlSourceStore:
@@ -213,6 +167,9 @@ class SqlSourceStore:
                 description=record.description,
                 database_name=record.database_name,
                 schema_filter=record.schema_filter,
+                engine=record.engine,
+                access_ciphertext=record.access_ciphertext,
+                access_updated_at=record.access_updated_at,
                 created_at=record.created_at,
                 updated_at=record.updated_at,
             )
@@ -240,6 +197,9 @@ class SqlSourceStore:
             row.description = record.description
             row.database_name = record.database_name
             row.schema_filter = record.schema_filter
+            row.engine = record.engine
+            row.access_ciphertext = record.access_ciphertext
+            row.access_updated_at = record.access_updated_at
             row.updated_at = record.updated_at
             try:
                 session.flush()
@@ -247,71 +207,17 @@ class SqlSourceStore:
                 raise SourceKeyDuplicate() from exc
             return _row_to_source(row)
 
-    def get_connection(self, connection_id: str) -> ConnectionRecord | None:
+    def delete_source(self, source_id: str) -> bool:
         from backend.core.db import session_scope
-        from backend.metadata.models import ConnectionRow
+        from backend.metadata.models import SourceRow
 
         with session_scope() as session:
-            row = session.get(ConnectionRow, connection_id)
-            return _row_to_connection(row) if row else None
-
-    def get_connection_for_source(self, source_id: str) -> ConnectionRecord | None:
-        from sqlalchemy import select
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import ConnectionRow
-
-        with session_scope() as session:
-            row = session.scalars(
-                select(ConnectionRow).where(ConnectionRow.source_id == source_id)
-            ).first()
-            return _row_to_connection(row) if row else None
-
-    def create_connection(self, record: ConnectionRecord) -> ConnectionRecord:
-        from sqlalchemy.exc import IntegrityError
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import ConnectionRow
-
-        with session_scope() as session:
-            row = ConnectionRow(
-                id=record.id,
-                source_id=record.source_id,
-                name=record.name,
-                engine=record.engine,
-                host=record.host,
-                port=record.port,
-                status=record.status,
-                secret_ciphertext=record.secret_ciphertext,
-                secret_updated_at=record.secret_updated_at,
-                created_at=record.created_at,
-                updated_at=record.updated_at,
-            )
-            session.add(row)
-            try:
-                session.flush()
-            except IntegrityError as exc:
-                raise SourceConnectionExists() from exc
-            return _row_to_connection(row)
-
-    def save_connection(self, record: ConnectionRecord) -> ConnectionRecord:
-        from backend.core.db import session_scope
-        from backend.metadata.models import ConnectionRow
-
-        with session_scope() as session:
-            row = session.get(ConnectionRow, record.id)
+            row = session.get(SourceRow, source_id)
             if row is None:
-                raise ConnectionNotFound()
-            row.name = record.name
-            row.engine = record.engine
-            row.host = record.host
-            row.port = record.port
-            row.status = record.status
-            row.secret_ciphertext = record.secret_ciphertext
-            row.secret_updated_at = record.secret_updated_at
-            row.updated_at = record.updated_at
+                return False
+            session.delete(row)
             session.flush()
-            return _row_to_connection(row)
+            return True
 
 
 def _row_to_source(row: object) -> SourceRecord:
@@ -327,25 +233,9 @@ def _row_to_source(row: object) -> SourceRecord:
         description=row.description,
         database_name=row.database_name,
         schema_filter=row.schema_filter,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-    )
-
-
-def _row_to_connection(row: object) -> ConnectionRecord:
-    from backend.metadata.models import ConnectionRow
-
-    assert isinstance(row, ConnectionRow)
-    return ConnectionRecord(
-        id=row.id,
-        source_id=row.source_id,
-        name=row.name,
         engine=row.engine,
-        host=row.host,
-        port=row.port,
-        status=row.status,
-        secret_ciphertext=row.secret_ciphertext,
-        secret_updated_at=row.secret_updated_at,
+        access_ciphertext=row.access_ciphertext,
+        access_updated_at=row.access_updated_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -382,11 +272,21 @@ def create_source(
     description: str | None,
     database_name: str | None,
     schema_filter: str | None,
+    engine: str | None,
+    access: dict[str, Any] | None,
 ) -> SourceRecord:
     if kind not in SUPPORTED_KINDS:
         raise SourceKindUnsupported()
-    if kind == "database" and not database_name:
-        raise SourceValidationError("database_name is required for database Sources")
+    ciphertext: str | None = None
+    access_updated_at: datetime | None = None
+    if kind == "database":
+        if not database_name:
+            raise SourceValidationError("database_name is required for database Sources")
+        if not engine or access is None:
+            raise SourceAccessRequired()
+        access = validate_access(engine, access)
+        ciphertext = encrypt_access_blob(access)
+        access_updated_at = datetime.utcnow()
     now = datetime.utcnow()
     record = SourceRecord(
         id=new_source_id(),
@@ -397,6 +297,9 @@ def create_source(
         description=description,
         database_name=database_name,
         schema_filter=schema_filter,
+        engine=engine,
+        access_ciphertext=ciphertext,
+        access_updated_at=access_updated_at,
         created_at=now,
         updated_at=now,
     )
@@ -411,6 +314,8 @@ def update_source(
     status: str | None = None,
     database_name: str | None = None,
     schema_filter: str | None | object = ...,
+    engine: str | None = None,
+    access: dict[str, Any] | None | object = ...,
 ) -> SourceRecord:
     store = get_source_store()
     existing = store.get_source(source_id)
@@ -429,88 +334,39 @@ def update_source(
         updated.database_name = database_name
     if schema_filter is not ...:
         updated.schema_filter = schema_filter  # type: ignore[assignment]
+    if engine is not None:
+        if engine not in SUPPORTED_ENGINES:
+            from backend.metadata.errors import SourceEngineUnsupported
+
+            raise SourceEngineUnsupported()
+        updated.engine = engine
+    if access is not ...:
+        eng = engine if engine is not None else updated.engine
+        if eng is None:
+            raise SourceAccessRequired()
+        validated = validate_access(eng, access)  # type: ignore[arg-type]
+        updated.access_ciphertext = encrypt_access_blob(validated)
+        updated.access_updated_at = datetime.utcnow()
+    elif engine is not None and updated.access_ciphertext:
+        # Re-validate existing blob against new engine (usually requires full replace)
+        existing_access = decrypt_access_blob(updated.access_ciphertext)
+        validated = validate_access(engine, existing_access)
+        updated.access_ciphertext = encrypt_access_blob(validated)
+        updated.access_updated_at = datetime.utcnow()
     updated.updated_at = datetime.utcnow()
     return store.save_source(updated)
 
 
-def create_connection(
-    *,
-    source_id: str,
-    name: str,
-    engine: str,
-    host: str,
-    port: int,
-    secret: dict[str, str],
-) -> ConnectionRecord:
+def delete_source(source_id: str) -> SourceRecord:
     store = get_source_store()
-    source = store.get_source(source_id)
-    if source is None:
+    existing = store.get_source(source_id)
+    if existing is None:
         raise SourceNotFound()
-    if source.kind != "database":
-        raise SourceConnectionKindInvalid()
-    if engine not in SUPPORTED_ENGINES:
-        raise ConnectionEngineUnsupported()
-    if store.get_connection_for_source(source_id) is not None:
-        raise SourceConnectionExists()
-    now = datetime.utcnow()
-    record = ConnectionRecord(
-        id=new_connection_id(),
-        source_id=source_id,
-        name=name,
-        engine=engine,
-        host=host,
-        port=port,
-        status="active",
-        secret_ciphertext=encode_secret_payload(secret),
-        secret_updated_at=now,
-        created_at=now,
-        updated_at=now,
-    )
-    return store.create_connection(record)
+    if existing.status != "disabled":
+        raise SourceNotDisabled()
+    from backend.metadata.catalog.store import get_catalog_store
 
-
-def update_connection(
-    connection_id: str,
-    *,
-    name: str | None = None,
-    engine: str | None = None,
-    host: str | None = None,
-    port: int | None = None,
-    status: str | None = None,
-) -> ConnectionRecord:
-    store = get_source_store()
-    existing = store.get_connection(connection_id)
-    if existing is None:
-        raise ConnectionNotFound()
-    updated = replace(existing)
-    if name is not None:
-        updated.name = name
-    if engine is not None:
-        if engine not in SUPPORTED_ENGINES:
-            raise ConnectionEngineUnsupported()
-        updated.engine = engine
-    if host is not None:
-        updated.host = host
-    if port is not None:
-        updated.port = port
-    if status is not None:
-        if status not in {"active", "disabled"}:
-            raise SourceValidationError("Invalid status")
-        updated.status = status
-    updated.updated_at = datetime.utcnow()
-    return store.save_connection(updated)
-
-
-def rotate_connection_secret(connection_id: str, secret: dict[str, str]) -> ConnectionRecord:
-    store = get_source_store()
-    existing = store.get_connection(connection_id)
-    if existing is None:
-        raise ConnectionNotFound()
-    now = datetime.utcnow()
-    updated = replace(
-        existing,
-        secret_ciphertext=encode_secret_payload(secret),
-        secret_updated_at=now,
-        updated_at=now,
-    )
-    return store.save_connection(updated)
+    get_catalog_store().delete_objects_for_source(source_id)
+    if not store.delete_source(source_id):
+        raise SourceNotFound()
+    return existing

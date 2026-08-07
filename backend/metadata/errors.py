@@ -1,4 +1,4 @@
-"""Domain errors for metadata foundation Source / Connection / Job / Catalog."""
+"""Domain errors for metadata foundation Source / Job / Catalog."""
 
 from __future__ import annotations
 
@@ -11,6 +11,14 @@ class SourceNotFound(AuthError):
 
     def _default_message(self) -> str:
         return "Source not found"
+
+
+class SourceNotDisabled(AuthError):
+    code = "SOURCE_NOT_DISABLED"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Source must be disabled before delete"
 
 
 class SourceKeyDuplicate(AuthError):
@@ -29,36 +37,36 @@ class SourceKindUnsupported(AuthError):
         return "Source kind is not supported in this slice"
 
 
-class SourceConnectionExists(AuthError):
-    code = "SOURCE_CONNECTION_EXISTS"
-    http_status = 409
-
-    def _default_message(self) -> str:
-        return "This source already has a connection"
-
-
-class SourceConnectionKindInvalid(AuthError):
-    code = "SOURCE_CONNECTION_KIND_INVALID"
+class SourceAccessRequired(AuthError):
+    code = "SOURCE_ACCESS_REQUIRED"
     http_status = 400
 
     def _default_message(self) -> str:
-        return "Connections require a database Source"
+        return "A database source requires engine and access"
 
 
-class ConnectionNotFound(AuthError):
-    code = "CONNECTION_NOT_FOUND"
-    http_status = 404
+class SourceAccessInvalid(AuthError):
+    code = "SOURCE_ACCESS_INVALID"
+    http_status = 400
 
     def _default_message(self) -> str:
-        return "Connection not found"
+        return "Source access is invalid for this engine"
 
 
-class ConnectionEngineUnsupported(AuthError):
-    code = "CONNECTION_ENGINE_UNSUPPORTED"
+class SourceEngineUnsupported(AuthError):
+    code = "SOURCE_ENGINE_UNSUPPORTED"
     http_status = 400
 
     def _default_message(self) -> str:
         return "Engine is not supported"
+
+
+class SourceSecretRequired(AuthError):
+    code = "SOURCE_SECRET_REQUIRED"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Source access credentials are required for this probe"
 
 
 class CatalogObjectNotFound(AuthError):
@@ -77,20 +85,12 @@ class JobSourceDisabled(AuthError):
         return "Source is not usable for jobs"
 
 
-class JobConnectionDisabled(AuthError):
-    code = "JOB_CONNECTION_DISABLED"
-    http_status = 400
-
-    def _default_message(self) -> str:
-        return "Connection is not usable for this job"
-
-
 class JobSecretMissing(AuthError):
     code = "JOB_SECRET_MISSING"
     http_status = 400
 
     def _default_message(self) -> str:
-        return "Connection secret is missing"
+        return "Source access is missing"
 
 
 class JobInputInvalid(AuthError):
@@ -123,14 +123,6 @@ class JobNotFound(AuthError):
 
     def _default_message(self) -> str:
         return "Job not found"
-
-
-class JobConnectionMismatch(AuthError):
-    code = "JOB_CONNECTION_MISMATCH"
-    http_status = 400
-
-    def _default_message(self) -> str:
-        return "connection_id does not match the source connection"
 
 
 class SourceValidationError(AuthError):

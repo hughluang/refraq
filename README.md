@@ -18,7 +18,7 @@ These define the business identity of refraq:
 
 The near-term substrate for product identity (documented; implementation next):
 
-- Sources, Connections, and structure Jobs
+- Sources (embedded reachability for database kinds) and structure Jobs
 - Catalog structure, semantics, joins, and controlled read-only query
 - User PAT and MCP access; companion secrets, queue/worker, and management audit
 

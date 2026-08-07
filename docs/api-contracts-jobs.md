@@ -15,8 +15,7 @@ Auth: Session or User PAT. Permissions: `jobs:run` unless noted.
   "kind": "structure",
   "status": "queued",
   "input": {
-    "source_id": "src_mes_prod",
-    "connection_id": "conn_mes_prod"
+    "source_id": "src_mes_prod"
   },
   "created_by_user_id": "user_001",
   "created_at": "2026-08-05T02:00:00Z",
@@ -31,10 +30,10 @@ Status: `queued` | `running` | `succeeded` | `failed` | `cancelled`.
 
 Rules:
 
-- **Job** is a durable asynchronous execution record. It is not owned by Connection or Source.
+- **Job** is a durable asynchronous execution record. It is not owned by Source.
 - Public Job fields are lifecycle + `kind` + generic **`input`** (object). Domains interpret `input` per `kind`.
-- No universal `source_id` / `connection_id` columns on Job; those appear inside `input` when the kind requires them.
-- Slice A `kind=structure` for `kind=database` Sources: `input` includes `source_id` and `connection_id`.
+- No universal `source_id` columns on Job; domain ids appear inside `input` when the kind requires them.
+- Slice A `kind=structure` for `kind=database` Sources: `input` includes `source_id` only. Workers load reachability from the Source.
 
 ## 3. Endpoints
 
@@ -49,15 +48,14 @@ Rules:
 
 ```json
 {
-  "kind": "structure",
-  "connection_id": "conn_mes_prod"
+  "kind": "structure"
 }
 ```
 
 Rules:
 
-- Path `{id}` is the Source; the facade validates the Source, builds Job `input` (at least `source_id` from the path + body fields such as `connection_id`), persists the Job, and enqueues the worker after commit.
-- For database structure Jobs, resolve `connection_id` from the body or, if omitted, from the Source's sole Connection. The Connection must belong to that Source, be usable, and have a secret; otherwise return a stable error. Body `connection_id`, when present, must match that Connection.
+- Path `{id}` is the Source; the facade validates the Source, builds Job `input` (`source_id` from the path), persists the Job, and enqueues the worker after commit.
+- For database structure Jobs, the Source must be usable and have a secret; otherwise return a stable error.
 - Response `202` returns the Job shape. Work runs asynchronously on a worker.
 
 ### `GET /sources/{id}/jobs`
@@ -69,15 +67,13 @@ Domain list semantics for “Jobs related to this Source” (for example Jobs wh
 | code | When |
 | --- | --- |
 | `JOB_SOURCE_DISABLED` | Source not usable |
-| `JOB_CONNECTION_DISABLED` | Connection not usable for this kind |
-| `JOB_SECRET_MISSING` | No usable Connection secret when required |
-| `JOB_INPUT_INVALID` | Kind/input failed domain validation |
+| `JOB_SECRET_MISSING` | No usable Source secret when required |
+| `JOB_INPUT_INVALID` | Kind/input failed domain validation (including missing Source `engine`/`access`) |
 | `JOB_NOT_CANCELLABLE` | Job already terminal |
 | `JOB_ALREADY_ACTIVE` | Non-terminal structure Job already exists for this Source |
-| `JOB_CONNECTION_MISMATCH` | Body `connection_id` does not match the Source's sole Connection |
 | `JOB_FAIL_SAFE` | Absent ratio exceeded fail-safe threshold; catalog unchanged |
 | `JOB_COLLECT_FAILED` | Connector collect aborted; catalog unchanged |
-| `JOB_CONNECTION_FAILED` | Connector could not open the live endpoint |
+| `JOB_ENDPOINT_FAILED` | Connector could not open the live endpoint |
 
 Stable aliases of older draft codes (`INGESTION_*`) must not be reintroduced in new clients.
 
@@ -96,4 +92,4 @@ Postgres/memory Job table, not Celery.
 ## 6. Non-Goals
 
 - Global `POST /jobs` as the only create path in this phase (platform store may still be shared; HTTP create goes through domain facades)
-- Promoting `source_id` / `connection_id` to universal Job fields
+- Promoting `source_id` to universal Job fields

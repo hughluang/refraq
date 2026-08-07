@@ -31,7 +31,6 @@ class JobResponse(BaseModel):
 
 class EnqueueStructureJobRequest(BaseModel):
     kind: Literal["structure"] = "structure"
-    connection_id: str | None = None
 
 
 class CatalogColumnOut(BaseModel):
@@ -48,7 +47,6 @@ class CatalogColumnOut(BaseModel):
 class CatalogObjectOut(BaseModel):
     id: str
     source_id: str
-    collected_from_connection_id: str | None
     object_type: str
     schema_name: str
     name: str

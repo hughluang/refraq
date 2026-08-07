@@ -20,12 +20,9 @@ from backend.metadata.enqueue import enqueue_job
 from backend.metadata.errors import (
     CatalogObjectNotFound,
     JobAlreadyActive,
-    JobConnectionDisabled,
-    JobConnectionMismatch,
     JobInputInvalid,
     JobNotCancellable,
     JobNotFound,
-    JobSecretMissing,
     JobSourceDisabled,
     SourceNotFound,
 )
@@ -81,7 +78,6 @@ def _object_out(record, *, include_columns: bool) -> CatalogObjectOut:
     return CatalogObjectOut(
         id=record.id,
         source_id=record.source_id,
-        collected_from_connection_id=record.collected_from_connection_id,
         object_type=record.object_type,
         schema_name=record.schema_name,
         name=record.name,
@@ -112,22 +108,15 @@ def enqueue_source_job(
     if source.kind != "database":
         raise JobInputInvalid("structure jobs require a database Source")
 
-    connection = sources.get_connection_for_source(source_id)
-    if connection is None:
-        raise JobInputInvalid("Source has no Connection")
-    if payload.connection_id and payload.connection_id != connection.id:
-        raise JobConnectionMismatch()
-    if connection.status != "active":
-        raise JobConnectionDisabled()
-    if not connection.has_secret:
-        raise JobSecretMissing()
+    if not source.engine or not source.access_ciphertext:
+        raise JobInputInvalid("Source has no access configuration")
 
     if get_job_store().has_active_structure_job(source_id):
         raise JobAlreadyActive()
 
     job = create_queued_job(
         kind="structure",
-        input={"source_id": source_id, "connection_id": connection.id},
+        input={"source_id": source_id},
         created_by=user.id,
     )
     enqueue_job(job)

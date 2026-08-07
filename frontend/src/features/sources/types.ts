@@ -1,3 +1,31 @@
+export type Engine = "postgresql" | "mssql" | "oracle";
+
+export type SourceAccess = Record<string, unknown>;
+
+export type JsonSchemaProperty = {
+  type?: string | string[];
+  description?: string;
+  default?: unknown;
+  enum?: string[];
+  minimum?: number;
+  maximum?: number;
+  minLength?: number;
+  maxLength?: number;
+  "x-secret"?: boolean;
+  additionalProperties?: JsonSchemaProperty | boolean;
+  properties?: Record<string, JsonSchemaProperty>;
+  propertyNames?: JsonSchemaProperty;
+};
+
+export type ConnectorSpec = {
+  $id?: string;
+  title?: string;
+  type?: string;
+  required?: string[];
+  additionalProperties?: boolean;
+  properties?: Record<string, JsonSchemaProperty>;
+};
+
 export type Source = {
   id: string;
   key: string;
@@ -7,24 +35,15 @@ export type Source = {
   description: string | null;
   database_name: string | null;
   schema_filter: string | null;
-};
-
-export type Connection = {
-  id: string;
-  source_id: string;
-  name: string;
-  engine: string;
-  host: string;
-  port: number;
-  status: string;
-  has_secret: boolean;
-  secret_updated_at: string | null;
+  engine: string | null;
+  access: SourceAccess | null;
+  has_access: boolean;
+  access_updated_at: string | null;
 };
 
 export type CatalogObject = {
   id: string;
   source_id: string;
-  collected_from_connection_id: string | null;
   object_type: string;
   schema_name: string;
   name: string;

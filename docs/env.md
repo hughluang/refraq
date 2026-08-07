@@ -22,7 +22,7 @@ Current `backend/.env.example` defines:
 - `ADMIN_SESSION_TTL_HOURS=8`
 - `INITIAL_ADMIN_ACCOUNT=root`
 - `INITIAL_ADMIN_PASSWORD=change-me`
-- `REFRAQ_SECRETS_MASTER_KEY=change-me-secrets-master-key` (metadata foundation: encrypt Connection secrets at rest)
+- `REFRAQ_SECRETS_MASTER_KEY=change-me-secrets-master-key` (metadata foundation: encrypt Source secrets at rest)
 - `CELERY_BROKER_URL=redis://127.0.0.1:6379/2` (Celery broker; prefer a logical DB separate from Session `REDIS_URL`)
 - `REFRAQ_JOB_WORKER_CONCURRENCY=1` (Celery worker concurrency hint)
 - `REFRAQ_JOB_RUNNING_TIMEOUT_SEC=3600` (stuck `running` **Job** reaper threshold)
@@ -66,7 +66,7 @@ Self-deploy Compose exposes only the web service to browsers; the API stays on t
 - `ADMIN_SESSION_TTL_HOURS`
 - `INITIAL_ADMIN_ACCOUNT`
 - `INITIAL_ADMIN_PASSWORD`
-- `REFRAQ_SECRETS_MASTER_KEY` (required to store/read Connection secrets)
+- `REFRAQ_SECRETS_MASTER_KEY` (required to store/read Source secrets)
 - `CELERY_BROKER_URL` (required when running Celery worker/beat; default same host Redis DB `2`)
 - `REFRAQ_JOB_WORKER_CONCURRENCY`
 - `REFRAQ_JOB_RUNNING_TIMEOUT_SEC`
@@ -109,5 +109,5 @@ Platform async runtime (`docs/adr/0006-celery-platform-async-runtime.md`):
 
 ## 8. Secret Handling
 
-- Never commit real `REFRAQ_SECRETS_MASTER_KEY`, admin passwords, or Connection passwords
+- Never commit real `REFRAQ_SECRETS_MASTER_KEY`, admin passwords, or Source database passwords
 - Rotating `REFRAQ_SECRETS_MASTER_KEY` requires a documented re-encrypt procedure before it is safe in production; until then treat the key as stable per environment

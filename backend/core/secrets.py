@@ -1,4 +1,4 @@
-"""Application-level encrypt/decrypt for Connection secrets (ADR 0005)."""
+"""Application-level encrypt/decrypt for Source secrets (ADR 0005)."""
 
 from __future__ import annotations
 

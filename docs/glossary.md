@@ -182,23 +182,13 @@ Avoid free-form permission strings invented in the UI.
 
 A registered data origin whose catalog refraq owns. Slice A covers live databases (for example U9 or MES); later kinds may include static imports such as CSV.
 Has a stable key, display name, `kind`, and kind-specific catalog scope (for database: database name and optional schema filter); not a login directory.
-Avoid calling it Identity Source, Connection, or Client. Avoid assuming every Source is an enterprise application.
-
-### Connection
-
-Live reachability and credentials for a Source that needs them: host, port, engine, encrypted username/secret (database endpoints in slice A).
-Does not own database name or schema scope; collectors compose Source scope with Connection endpoint.
-A database Source has at most one Connection (strict 1:1 once registered); switch endpoint or secret on that row, do not add a second Connection.
-Catalog identity stays on the Source.
-Avoid calling the Connection the Source, or treating Identity Source as a Connection.
-Avoid forcing non-live Source kinds through Connection.
-Avoid putting catalog scope on Connection.
-Avoid modeling standby or replica endpoints as extra Connections for the same Source.
+For `kind=database`, the Source also carries `engine` and a per-engine validated `access` document (secrets inside; whole document encrypted at rest). Non-database kinds may omit those fields.
+Avoid calling it Identity Source or Client. Avoid assuming every Source is an enterprise application. Avoid treating reachability as a separate reusable entity.
 
 ### Job
 
 A single durable asynchronous execution with an observable lifecycle (queued → running → terminal), discriminated by kind, carrying only a generic input payload that each domain interprets.
-Domains expose enqueue/list facades (for example under Source for structure work); the Job record is not owned by Connection or Source.
+Domains expose enqueue/list facades (for example under Source for structure work); the Job record is not owned by Source.
 API (or a **Scheduled Task**) enqueues; a Celery worker executes; operator-visible status lives on the Postgres job record.
 Avoid calling it an Ingestion Job. Avoid running long work inside the Management Console API request.
 Avoid treating a Job as a **Scheduled Task**, or reading Celery result/Flower as the product lifecycle.
@@ -214,7 +204,7 @@ Avoid storing product schedules only in Redis Beat state or static code when ope
 
 A collected structural unit (table, view, or equivalent) under exactly one Source, including columns and optional DDL.
 Avoid calling a Catalog Object a Data Product or Business Entity.
-Avoid binding catalog identity to a Connection.
+Avoid treating catalog identity as anything other than Source-scoped.
 
 ### Metadata Nav Group
 

@@ -22,7 +22,6 @@ Slice availability:
 {
   "id": "obj_01",
   "source_id": "src_mes_prod",
-  "collected_from_connection_id": "conn_mes_prod",
   "object_type": "table",
   "schema_name": "dbo",
   "name": "WORK_ORDER",
@@ -43,7 +42,7 @@ Slice availability:
 }
 ```
 
-Identity is `source_id` (+ object coordinates). `collected_from_connection_id` is optional provenance only.
+Identity is `source_id` (+ object coordinates). `collected_at` is optional provenance only.
 Semantics fields are null until slice B writes them.
 
 ## 3. Browse Endpoints (A+)
@@ -88,7 +87,7 @@ Reject joins that lack evidence with `JOIN_EVIDENCE_REQUIRED`.
 
 ## 6. Controlled Query (D)
 
-### `POST /connections/{id}/query`
+### `POST /sources/{id}/query`
 
 Permission: `query:run`.
 
@@ -121,4 +120,4 @@ Errors:
 | `QUERY_TIMEOUT` | Exceeded timeout |
 | `QUERY_ROW_LIMIT` | Rejected before run if max_rows above platform cap |
 
-Every attempt writes a management audit event (statement summary or hash, never Connection secret).
+Every attempt writes a management audit event (statement summary or hash, never Source secret).

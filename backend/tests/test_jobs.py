@@ -48,10 +48,9 @@ def _eager_celery(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_stub_job_marks_failed_when_source_missing() -> None:
     job = create_queued_job(
         kind="structure",
-        input={"source_id": "src_missing", "connection_id": "conn_1"},
+        input={"source_id": "src_missing"},
         created_by="user_1",
     )
-    assert not hasattr(job, "connection_id")
     assert not hasattr(job, "source_id")
     assert job.input["source_id"] == "src_missing"
     enqueue_job(job)
@@ -71,8 +70,8 @@ def test_unknown_kind_marks_failed() -> None:
     assert stored.error_code == "JOB_INPUT_INVALID"
 
 
-def test_create_job_without_connection_id_in_input() -> None:
-    """Store accepts opaque input; connection_id is not required at platform layer."""
+def test_create_job_with_source_id_in_input() -> None:
+    """Store accepts opaque input; source_id is not a universal Job column."""
     job = create_queued_job(
         kind="structure",
         input={"source_id": "src_1"},
@@ -81,7 +80,6 @@ def test_create_job_without_connection_id_in_input() -> None:
     assert stored is not None
     assert stored.input == {"source_id": "src_1"}
     assert stored.status == "queued"
-    assert not hasattr(stored, "connection_id")
     assert not hasattr(stored, "source_id")
 
 

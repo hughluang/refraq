@@ -127,7 +127,7 @@ Must not own Session persistence implementations (those live under `repositories
 
 Do not put Console Module catalog, Settings Override, or System Role ensure rules into `backend/core/`.
 
-User PAT and management audit persistence may live under `admin/` (Foundation-adjacent) or a dedicated submodule; Connection/catalog/structure-Job domain logic belongs in `backend/metadata/` when code arrives.
+User PAT and management audit persistence may live under `admin/` (Foundation-adjacent) or a dedicated submodule; Source/catalog/structure-Job domain logic belongs in `backend/metadata/` when code arrives.
 
 Do not pre-create empty packages for future capabilities before implementation.
 
@@ -163,7 +163,7 @@ Must not contain:
 
 Responsibilities:
 
-- Source / Connection domain models and services
+- Source domain models and services (embedded reachability for database kinds)
 - Connector adapters (PostgreSQL, MSSQL, Oracle)
 - Domain facade for Source-scoped **Jobs** (structure enqueue/list); Celery kind-handler tasks register with `backend.worker.app`
 - Enqueue helpers (API side: persist Job then `apply_async` after commit)

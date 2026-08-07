@@ -1,8 +1,9 @@
-"""Source / Connection / Job facade API tests."""
+"""Source / Job facade API tests (encrypted access blob)."""
 
 from __future__ import annotations
 
 import os
+from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -29,7 +30,6 @@ from backend.metadata.catalog.store import (  # noqa: E402
 from backend.metadata.sources.store import reset_source_store  # noqa: E402
 from backend.repositories.role_store import get_role_store, reset_role_store  # noqa: E402
 from backend.repositories.user_store import get_user_store, reset_user_store  # noqa: E402
-from datetime import datetime  # noqa: E402
 
 
 @pytest.fixture()
@@ -67,85 +67,218 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
         yield test_client
 
 
-def test_source_connection_one_to_one(client: TestClient) -> None:
-    created = client.post(
+def _access(
+    host: str = "127.0.0.1",
+    port: int = 5432,
+    username: str = "u",
+    password: str = "p",
+    ssl_mode: str = "require",
+    extra: dict | None = None,
+) -> dict:
+    return {
+        "host": host,
+        "port": port,
+        "username": username,
+        "password": password,
+        "ssl_mode": ssl_mode,
+        "extra": extra if extra is not None else {},
+    }
+
+
+def _make_source(
+    client: TestClient,
+    key: str = "mes-prod",
+    database_name: str = "MES",
+    *,
+    password: str = "p",
+) -> dict:
+    resp = client.post(
         "/sources",
         json={
-            "key": "mes-prod",
-            "name": "MES",
+            "key": key,
+            "name": key,
+            "kind": "database",
+            "database_name": database_name,
+            "engine": "postgresql",
+            "access": _access(password=password),
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()["source"]
+    assert body["has_access"] is True
+    assert "password" not in (body.get("access") or {})
+    assert body["engine"] == "postgresql"
+    assert body["access"]["host"] == "127.0.0.1"
+    return body
+
+
+def test_access_schema_endpoint(client: TestClient) -> None:
+    resp = client.get("/sources/access-schema/postgresql")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["engine"] == "postgresql"
+    assert body["schema"]["$id"] == "postgresql.access.v1"
+    assert body["schema"]["properties"]["password"]["x-secret"] is True
+    assert "require" in body["schema"]["properties"]["ssl_mode"]["enum"]
+    assert "ssl_root_cert" in body["schema"]["properties"]
+
+    mssql = client.get("/sources/access-schema/mssql")
+    assert mssql.status_code == 200, mssql.text
+    mssql_schema = mssql.json()["schema"]
+    assert mssql_schema["properties"]["ssl_mode"]["enum"] == ["disable"]
+    assert "ssl_root_cert" not in mssql_schema["properties"]
+
+
+def test_mssql_rejects_tls_ssl_mode(client: TestClient) -> None:
+    resp = client.post(
+        "/sources",
+        json={
+            "key": "mssql-tls",
+            "name": "MSSQL TLS",
+            "kind": "database",
+            "database_name": "app",
+            "engine": "mssql",
+            "access": {
+                "host": "127.0.0.1",
+                "port": 1433,
+                "username": "u",
+                "password": "p",
+                "ssl_mode": "require",
+                "extra": {},
+            },
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "SOURCE_ACCESS_INVALID"
+
+
+def test_source_requires_access(client: TestClient) -> None:
+    resp = client.post(
+        "/sources",
+        json={
+            "key": "no-access",
+            "name": "NoAccess",
             "kind": "database",
             "database_name": "MES",
-        },
-    )
-    assert created.status_code == 201
-    source_id = created.json()["source"]["id"]
-
-    conn = client.post(
-        f"/sources/{source_id}/connections",
-        json={
-            "name": "primary",
             "engine": "postgresql",
-            "host": "127.0.0.1",
-            "port": 5432,
-            "secret": {"username": "u", "password": "p"},
         },
     )
-    assert conn.status_code == 201
-    assert conn.json()["connection"]["has_secret"] is True
-    assert "secret" not in conn.json()["connection"]
-    assert "password" not in str(conn.json())
-
-    second = client.post(
-        f"/sources/{source_id}/connections",
-        json={
-            "name": "standby",
-            "engine": "postgresql",
-            "host": "127.0.0.1",
-            "port": 5432,
-            "secret": {"username": "u", "password": "p"},
-        },
-    )
-    assert second.status_code == 409
-    assert second.json()["code"] == "SOURCE_CONNECTION_EXISTS"
+    assert resp.status_code == 422
 
 
-def test_structure_job_single_flight(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    from backend.metadata import runner as runner_mod
-
-    def _slow_fail(job_id: str) -> dict[str, str]:
-        from backend.jobs.store import mark_running
-
-        mark_running(job_id, celery_task_id=job_id)
-        # Leave running without finishing so second enqueue conflicts.
-        return {"status": "running"}
-
-    monkeypatch.setattr(runner_mod, "run_structure_job", _slow_fail)
-
-    source = client.post(
+def test_source_rejects_unknown_access_keys(client: TestClient) -> None:
+    resp = client.post(
         "/sources",
         json={
-            "key": "s1",
-            "name": "S1",
+            "key": "bad-access",
+            "name": "Bad",
             "kind": "database",
-            "database_name": "db",
-        },
-    ).json()["source"]
-    client.post(
-        f"/sources/{source['id']}/connections",
-        json={
-            "name": "c",
+            "database_name": "MES",
             "engine": "postgresql",
-            "host": "127.0.0.1",
-            "port": 5432,
-            "secret": {"username": "u", "password": "p"},
+            "access": {**_access(), "sslmode": "require"},
         },
     )
-    # Bypass celery: create queued then mark running via store for single-flight
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "SOURCE_ACCESS_INVALID"
+
+
+def test_source_create_update_access(client: TestClient) -> None:
+    source = _make_source(client, key="top")
+    listed = client.get("/sources")
+    assert listed.status_code == 200
+    assert any(s["id"] == source["id"] for s in listed.json()["items"])
+
+    patched = client.patch(
+        f"/sources/{source['id']}",
+        json={"access": _access(host="10.0.0.1", port=6543, password="p2")},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["source"]["access"]["host"] == "10.0.0.1"
+    assert patched.json()["source"]["access"]["port"] == 6543
+    assert "password" not in patched.json()["source"]["access"]
+
+    full = client.get(f"/sources/{source['id']}/access")
+    assert full.status_code == 200
+    assert full.json()["access"]["password"] == "p2"
+    assert full.json()["access"]["ssl_mode"] == "require"
+
+
+def test_delete_source_requires_disabled(client: TestClient) -> None:
+    source = _make_source(client, key="del-active")
+    resp = client.delete(f"/sources/{source['id']}")
+    assert resp.status_code == 409
+    assert resp.json()["code"] == "SOURCE_NOT_DISABLED"
+
+
+def test_delete_disabled_source_and_catalog(client: TestClient) -> None:
+    source = _make_source(client, key="del-ok")
+    now = datetime.utcnow()
+    get_catalog_store().replace_structure_snapshot(
+        source_id=source["id"],
+        job_id="job_del",
+        objects=[
+            CatalogObjectRecord(
+                id="obj_del",
+                source_id=source["id"],
+                object_type="table",
+                schema_name="public",
+                name="t1",
+                ddl=None,
+                is_present=True,
+                business_name=None,
+                business_description=None,
+                last_structure_job_id="job_del",
+                collected_at=now,
+                created_at=now,
+                updated_at=now,
+                columns=[
+                    CatalogColumnRecord(
+                        id="col_del",
+                        object_id="obj_del",
+                        name="id",
+                        ordinal=0,
+                        data_type="int",
+                        nullable=False,
+                        is_present=True,
+                        business_name=None,
+                        business_description=None,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                ],
+            )
+        ],
+        schema_scope=None,
+    )
+    assert get_catalog_store().list_present_for_source(source["id"])
+
+    disabled = client.patch(
+        f"/sources/{source['id']}",
+        json={"status": "disabled"},
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["source"]["status"] == "disabled"
+
+    deleted = client.delete(f"/sources/{source['id']}")
+    assert deleted.status_code == 204
+
+    listed = client.get("/sources")
+    assert listed.status_code == 200
+    assert all(s["id"] != source["id"] for s in listed.json()["items"])
+
+    missing = client.get(f"/sources/{source['id']}")
+    assert missing.status_code == 404
+    assert missing.json()["code"] == "SOURCE_NOT_FOUND"
+    assert get_catalog_store().list_objects(source["id"]) == []
+
+
+def test_structure_job_single_flight(client: TestClient) -> None:
+    source = _make_source(client, key="s1", database_name="db")
     from backend.jobs.store import create_queued_job, mark_running
 
     job = create_queued_job(
         kind="structure",
-        input={"source_id": source["id"], "connection_id": "x"},
+        input={"source_id": source["id"]},
     )
     mark_running(job.id)
 
@@ -157,41 +290,224 @@ def test_structure_job_single_flight(client: TestClient, monkeypatch: pytest.Mon
     assert resp.json()["code"] == "JOB_ALREADY_ACTIVE"
 
 
-def test_job_connection_id_mismatch(client: TestClient) -> None:
-    source = client.post(
-        "/sources",
-        json={
-            "key": "s2",
-            "name": "S2",
-            "kind": "database",
-            "database_name": "db",
-        },
-    ).json()["source"]
-    conn = client.post(
-        f"/sources/{source['id']}/connections",
-        json={
-            "name": "c",
-            "engine": "postgresql",
-            "host": "127.0.0.1",
-            "port": 5432,
-            "secret": {"username": "u", "password": "p"},
-        },
-    ).json()["connection"]
+def test_structure_job_input_only_source_id(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.metadata import runner as runner_mod
 
+    monkeypatch.setattr(
+        runner_mod,
+        "run_structure_job",
+        lambda job_id: {"status": "succeeded"},
+    )
+    source = _make_source(client, key="s2", database_name="db")
     resp = client.post(
         f"/sources/{source['id']}/jobs",
-        json={"kind": "structure", "connection_id": "conn_other"},
+        json={"kind": "structure"},
     )
-    assert resp.status_code == 400
-    assert resp.json()["code"] == "JOB_CONNECTION_MISMATCH"
-    assert conn["id"]
+    assert resp.status_code == 202, resp.text
+    job = resp.json()["job"]
+    assert job["input"] == {"source_id": source["id"]}
+    assert "connection_id" not in job["input"]
+
+
+def test_source_probe_draft_success(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.repositories.audit_store import get_audit_store, reset_audit_store
+
+    reset_audit_store()
+
+    class OkConnector:
+        engine = "postgresql"
+
+        def test_connection(self, endpoint) -> None:  # noqa: ANN001
+            assert endpoint.database_name == "postgres"
+            assert endpoint.host == "127.0.0.1"
+            assert endpoint.password == "p"
+            assert endpoint.ssl_mode == "require"
+            return None
+
+        def collect_structure(self, endpoint):  # noqa: ANN001
+            raise AssertionError("not used")
+
+    monkeypatch.setattr(
+        "backend.metadata.sources.probe.get_connector",
+        lambda engine: OkConnector(),
+    )
+
+    resp = client.post(
+        "/sources/test",
+        json={
+            "engine": "postgresql",
+            "access": _access(),
+            "database_name": "postgres",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is True
+    assert body.get("code") is None
+
+    events, _ = get_audit_store().list_events(action="source.test")
+    assert len(events) == 1
+    assert events[0].resource_id == "draft"
+    assert events[0].result == "success"
+    assert "password" not in str(events[0].detail)
+
+
+def test_source_probe_draft_failure(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.metadata.connectors.base import ConnectorError
+    from backend.repositories.audit_store import get_audit_store, reset_audit_store
+
+    reset_audit_store()
+
+    class FailConnector:
+        engine = "postgresql"
+
+        def test_connection(self, endpoint) -> None:  # noqa: ANN001
+            raise ConnectorError("JOB_ENDPOINT_FAILED", "refused")
+
+        def collect_structure(self, endpoint):  # noqa: ANN001
+            raise AssertionError("not used")
+
+    monkeypatch.setattr(
+        "backend.metadata.sources.probe.get_connector",
+        lambda engine: FailConnector(),
+    )
+
+    resp = client.post(
+        "/sources/test",
+        json={
+            "engine": "postgresql",
+            "access": _access(),
+            "database_name": "postgres",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["code"] == "SOURCE_TEST_FAILED"
+    assert "refused" in body["message"]
+
+    events, _ = get_audit_store().list_events(action="source.test")
+    assert len(events) == 1
+    assert events[0].result == "failure"
+
+
+def test_source_probe_stored_uses_access(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.repositories.audit_store import get_audit_store, reset_audit_store
+
+    reset_audit_store()
+    source = _make_source(client, key="probe-stored")
+
+    seen: dict[str, str] = {}
+
+    class OkConnector:
+        engine = "postgresql"
+
+        def test_connection(self, endpoint) -> None:  # noqa: ANN001
+            seen["username"] = endpoint.username
+            seen["password"] = endpoint.password
+            seen["database_name"] = endpoint.database_name
+            return None
+
+        def collect_structure(self, endpoint):  # noqa: ANN001
+            raise AssertionError("not used")
+
+    monkeypatch.setattr(
+        "backend.metadata.sources.probe.get_connector",
+        lambda engine: OkConnector(),
+    )
+
+    resp = client.post(
+        f"/sources/{source['id']}/test",
+        json={"database_name": "MES"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ok"] is True
+    assert seen["username"] == "u"
+    assert seen["password"] == "p"
+    assert seen["database_name"] == "MES"
+
+    events, _ = get_audit_store().list_events(action="source.test")
+    assert any(e.resource_id == source["id"] and e.result == "success" for e in events)
+
+
+def test_source_probe_timeout_returns_promptly(monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    from backend.metadata.sources import probe as probe_mod
+
+    monkeypatch.setattr(probe_mod, "PROBE_TIMEOUT_SECONDS", 0.2)
+
+    class HangConnector:
+        engine = "postgresql"
+
+        def test_connection(self, endpoint) -> None:  # noqa: ANN001
+            time.sleep(30)
+
+        def collect_structure(self, endpoint):  # noqa: ANN001
+            raise AssertionError("not used")
+
+    monkeypatch.setattr(probe_mod, "get_connector", lambda engine: HangConnector())
+
+    started = time.monotonic()
+    result = probe_mod.run_source_probe(
+        engine="postgresql",
+        access=_access(),
+        database_name="db",
+    )
+    elapsed = time.monotonic() - started
+
+    assert result.ok is False
+    assert result.code == "SOURCE_TEST_TIMEOUT"
+    assert elapsed < 2.0
+
+
+def test_source_probe_requires_database_name(client: TestClient) -> None:
+    resp = client.post(
+        "/sources/test",
+        json={
+            "engine": "postgresql",
+            "access": _access(),
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_source_probe_forbidden_without_write(client: TestClient) -> None:
+    operator = get_role_store().get_by_key("operator")
+    assert operator is not None
+    get_user_store().create_user(
+        account="ops",
+        display_name="Ops",
+        password_hash=hash_password("secret"),
+        role_id=operator.id,
+        status="active",
+    )
+    login = client.post("/auth/login", json={"account": "ops", "password": "secret"})
+    assert login.status_code == 200
+
+    resp = client.post(
+        "/sources/test",
+        json={
+            "engine": "postgresql",
+            "access": _access(),
+            "database_name": "postgres",
+        },
+    )
+    assert resp.status_code == 403
 
 
 def test_fail_safe_aborts_without_absent() -> None:
     reset_catalog_store()
     now = datetime.utcnow()
     store = get_catalog_store()
-    # Seed present objects
     seeded = []
     for i in range(4):
         oid = f"obj_{i}"
@@ -199,7 +515,6 @@ def test_fail_safe_aborts_without_absent() -> None:
             CatalogObjectRecord(
                 id=oid,
                 source_id="src_1",
-                collected_from_connection_id="conn_1",
                 object_type="table",
                 schema_name="public",
                 name=f"t{i}",
@@ -230,18 +545,13 @@ def test_fail_safe_aborts_without_absent() -> None:
         )
     store.replace_structure_snapshot(
         source_id="src_1",
-        connection_id="conn_1",
         job_id="job_old",
         objects=seeded,
         schema_scope=None,
     )
-    # Collect returns only 1 of 4 -> 75% absent == threshold boundary with >
-    # threshold 0.75 means ratio > 0.75 aborts; 3/4 = 0.75 should NOT abort
-    # Use threshold 0.5 so 0.75 aborts
     with pytest.raises(CatalogWriteAborted) as exc:
         apply_structure_snapshot(
             source_id="src_1",
-            connection_id="conn_1",
             job_id="job_new",
             collected=[seeded[0]],
             schema_scope=None,
@@ -260,14 +570,11 @@ def test_collect_failure_does_not_absent(monkeypatch: pytest.MonkeyPatch) -> Non
     reset_job_store()
     os.environ["REFRAQ_SECRETS_MASTER_KEY"] = "test-secrets-master-key"
 
-    from backend.metadata.connectors.base import ConnectorError
-    from backend.metadata.sources.store import create_connection, create_source
-    from backend.metadata.runner import run_structure_job
     from backend.jobs.store import create_queued_job
-    from backend.metadata.catalog.store import (
-        CatalogObjectRecord,
-        get_catalog_store,
-    )
+    from backend.metadata.catalog.store import CatalogObjectRecord, get_catalog_store
+    from backend.metadata.connectors.base import ConnectorError
+    from backend.metadata.runner import run_structure_job
+    from backend.metadata.sources.store import create_source
 
     source = create_source(
         key="fail-src",
@@ -276,25 +583,17 @@ def test_collect_failure_does_not_absent(monkeypatch: pytest.MonkeyPatch) -> Non
         description=None,
         database_name="db",
         schema_filter=None,
-    )
-    conn = create_connection(
-        source_id=source.id,
-        name="c",
         engine="postgresql",
-        host="127.0.0.1",
-        port=5432,
-        secret={"username": "u", "password": "p"},
+        access=_access(),
     )
     now = datetime.utcnow()
     get_catalog_store().replace_structure_snapshot(
         source_id=source.id,
-        connection_id=conn.id,
         job_id="old",
         objects=[
             CatalogObjectRecord(
                 id="obj_keep",
                 source_id=source.id,
-                collected_from_connection_id=conn.id,
                 object_type="table",
                 schema_name="public",
                 name="kept",
@@ -327,7 +626,7 @@ def test_collect_failure_does_not_absent(monkeypatch: pytest.MonkeyPatch) -> Non
     )
     job = create_queued_job(
         kind="structure",
-        input={"source_id": source.id, "connection_id": conn.id},
+        input={"source_id": source.id},
     )
     result = run_structure_job(job.id)
     assert result["status"] == "failed"

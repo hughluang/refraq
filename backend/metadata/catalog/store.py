@@ -32,7 +32,6 @@ class CatalogColumnRecord:
 class CatalogObjectRecord:
     id: str
     source_id: str
-    collected_from_connection_id: str | None
     object_type: str
     schema_name: str
     name: str
@@ -72,11 +71,12 @@ class CatalogStore(Protocol):
         self,
         *,
         source_id: str,
-        connection_id: str,
         job_id: str,
         objects: list[CatalogObjectRecord],
         schema_scope: str | None,
     ) -> None: ...
+
+    def delete_objects_for_source(self, source_id: str) -> None: ...
 
 
 class MemoryCatalogStore:
@@ -115,7 +115,6 @@ class MemoryCatalogStore:
         self,
         *,
         source_id: str,
-        connection_id: str,
         job_id: str,
         objects: list[CatalogObjectRecord],
         schema_scope: str | None,
@@ -187,7 +186,6 @@ class MemoryCatalogStore:
                         )
                 self._objects[match.id] = replace(
                     match,
-                    collected_from_connection_id=connection_id,
                     ddl=incoming.ddl,
                     is_present=True,
                     last_structure_job_id=job_id,
@@ -196,6 +194,16 @@ class MemoryCatalogStore:
                     columns=sorted(new_cols, key=lambda c: c.ordinal),
                     # business_* preserved on match
                 )
+
+    def delete_objects_for_source(self, source_id: str) -> None:
+        with self._lock:
+            to_drop = [
+                oid
+                for oid, obj in self._objects.items()
+                if obj.source_id == source_id
+            ]
+            for oid in to_drop:
+                del self._objects[oid]
 
 
 class SqlCatalogStore:
@@ -257,7 +265,6 @@ class SqlCatalogStore:
         self,
         *,
         source_id: str,
-        connection_id: str,
         job_id: str,
         objects: list[CatalogObjectRecord],
         schema_scope: str | None,
@@ -299,7 +306,6 @@ class SqlCatalogStore:
                     obj = CatalogObjectRow(
                         id=incoming.id,
                         source_id=source_id,
-                        collected_from_connection_id=connection_id,
                         object_type=incoming.object_type,
                         schema_name=incoming.schema_name,
                         name=incoming.name,
@@ -331,7 +337,6 @@ class SqlCatalogStore:
                         )
                     continue
 
-                row.collected_from_connection_id = connection_id
                 row.ddl = incoming.ddl
                 row.is_present = True
                 row.last_structure_job_id = job_id
@@ -372,6 +377,25 @@ class SqlCatalogStore:
                         prev.updated_at = now
             session.flush()
 
+    def delete_objects_for_source(self, source_id: str) -> None:
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+
+        from backend.core.db import session_scope
+        from backend.metadata.models import CatalogObjectRow
+
+        with session_scope() as session:
+            rows = list(
+                session.scalars(
+                    select(CatalogObjectRow)
+                    .where(CatalogObjectRow.source_id == source_id)
+                    .options(selectinload(CatalogObjectRow.columns))
+                ).all()
+            )
+            for row in rows:
+                session.delete(row)
+            session.flush()
+
 
 def _row_to_object(row: object) -> CatalogObjectRecord:
     from backend.metadata.models import CatalogObjectRow
@@ -396,7 +420,6 @@ def _row_to_object(row: object) -> CatalogObjectRecord:
     return CatalogObjectRecord(
         id=row.id,
         source_id=row.source_id,
-        collected_from_connection_id=row.collected_from_connection_id,
         object_type=row.object_type,
         schema_name=row.schema_name,
         name=row.name,
@@ -447,7 +470,6 @@ class CatalogWriteAborted(Exception):
 def apply_structure_snapshot(
     *,
     source_id: str,
-    connection_id: str,
     job_id: str,
     collected: list[CatalogObjectRecord],
     schema_scope: str | None,
@@ -481,7 +503,6 @@ def apply_structure_snapshot(
             )
     store.replace_structure_snapshot(
         source_id=source_id,
-        connection_id=connection_id,
         job_id=job_id,
         objects=collected,
         schema_scope=schema_scope,

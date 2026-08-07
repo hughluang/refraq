@@ -70,7 +70,7 @@ Refraq is a domain management system. Top-level Foundation modules are always pr
 | Capability | Business meaning |
 | --- | --- |
 | `metadata` nav group | Sources, catalog browse, Job visibility |
-| Source / Connection / structure Jobs | See `docs/business-metadata.md` |
+| Sources / structure Jobs | See `docs/business-metadata.md` |
 | User PAT module | Person-owned Bearer tokens under Administration (`tokens`) |
 | Management-plane audit read | Thin audit browser when `audit:read` is granted |
 
@@ -118,7 +118,7 @@ Notes:
 - Metadata foundation adds group id **`metadata`** and Administration module **`tokens`**. Module field details: `docs/business-metadata.md`, `docs/business-user-tokens.md`.
 - Still reserved for later (not implemented): Data products, Governance (and any persona composer). Hide-vs-empty product policy for empty future groups remains deferred.
 
-**Forbidden**: putting account, logout, or language in the side nav; organizing first-level nav by internal service names; treating Foundation modules as enable/disable toggles; mounting Source/Connection under Administration.
+**Forbidden**: putting account, logout, or language in the side nav; organizing first-level nav by internal service names; treating Foundation modules as enable/disable toggles; mounting Sources under Administration.
 
 ### 5.3 Main — Shared Main Work Area Regions
 
@@ -201,11 +201,11 @@ For this slice:
 
 | Foundation (delivered) | Metadata foundation (next) | Later Data Product phase |
 | --- | --- | --- |
-| Login / session / logout | Source / Connection / Jobs / catalog | Data Product object model and catalog browse |
+| Login / session / logout | Sources / Jobs / catalog | Data Product object model and catalog browse |
 | Users, roles, permission assignment | User PAT; management-plane audit for metadata | Persona navigation composer |
 | Permission-filtered grouped side nav | `metadata` nav group modules | Self-serve access marketplace |
 | Console Module code-seed contract | MCP metadata tool surface | Entity detail extension slots / Plugins |
-| Administration and Platform Settings | Encrypted Connection secrets; queue worker | Persisted multi-replica Settings Override (unless blocked earlier) |
+| Administration and Platform Settings | Encrypted Source secrets; queue worker | Persisted multi-replica Settings Override (unless blocked earlier) |
 | System parameters API (TTL override) | Controlled read-only query (slice D) | Notification center / global search productization |
 | Top bar: mark, user menu, language | | |
 

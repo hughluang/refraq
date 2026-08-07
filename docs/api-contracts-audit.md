@@ -16,12 +16,12 @@ Auth: Session or User PAT.
   "created_at": "2026-08-05T02:10:00Z",
   "actor_user_id": "user_001",
   "actor_token_id": null,
-  "resource_type": "connection",
-  "resource_id": "conn_mes_prod",
+  "resource_type": "source",
+  "resource_id": "src_mes_prod",
   "action": "secret.rotate",
   "result": "success",
   "detail": {
-    "summary": "Connection secret rotated"
+    "summary": "Source secret rotated"
   }
 }
 ```
@@ -29,7 +29,7 @@ Auth: Session or User PAT.
 Rules:
 
 - `detail` must not contain plaintext secrets or full PAT secrets.
-- Controlled query events may store SQL summary/hash and row truncation flags, not Connection passwords.
+- Controlled query events may store SQL summary/hash and row truncation flags, not Source passwords.
 - `actor_token_id` set when the action was authenticated via User PAT.
 
 ## 3. Endpoints

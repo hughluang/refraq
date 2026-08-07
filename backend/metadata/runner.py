@@ -21,14 +21,12 @@ from backend.metadata.catalog.store import (
 )
 from backend.metadata.connectors.base import (
     CollectedStructure,
-    ConnectionEndpoint,
     ConnectorError,
+    endpoint_from_access,
 )
 from backend.metadata.connectors.registry import get_connector
-from backend.metadata.sources.store import (
-    decode_secret_payload,
-    get_source_store,
-)
+from backend.metadata.sources.access import decrypt_access_blob
+from backend.metadata.sources.store import get_source_store
 
 
 def run_structure_job(job_id: str) -> dict[str, str]:
@@ -47,62 +45,57 @@ def run_structure_job(job_id: str) -> dict[str, str]:
         return {"status": "failed", "error_code": "JOB_INPUT_INVALID"}
 
     source_id = current.input.get("source_id")
-    connection_id = current.input.get("connection_id")
-    if not isinstance(source_id, str) or not isinstance(connection_id, str):
+    if not isinstance(source_id, str):
         mark_failed(
             job_id,
             error_code="JOB_INPUT_INVALID",
-            error_summary="structure job requires source_id and connection_id",
+            error_summary="structure job requires source_id",
         )
         return {"status": "failed", "error_code": "JOB_INPUT_INVALID"}
 
     sources = get_source_store()
     source = sources.get_source(source_id)
-    connection = sources.get_connection(connection_id)
-    if source is None or connection is None:
+    if source is None:
         mark_failed(
             job_id,
             error_code="JOB_INPUT_INVALID",
-            error_summary="Source or Connection not found",
+            error_summary="Source not found",
         )
         return {"status": "failed", "error_code": "JOB_INPUT_INVALID"}
 
     if _cancelled(job_id):
         return {"status": "cancelled"}
 
-    if not connection.secret_ciphertext:
+    if not source.engine or not source.access_ciphertext:
         mark_failed(
             job_id,
-            error_code="JOB_SECRET_MISSING",
-            error_summary="Connection secret is missing",
+            error_code="JOB_INPUT_INVALID",
+            error_summary="Source has no access configuration",
         )
-        return {"status": "failed", "error_code": "JOB_SECRET_MISSING"}
+        return {"status": "failed", "error_code": "JOB_INPUT_INVALID"}
 
-    connector = get_connector(connection.engine)
+    connector = get_connector(source.engine)
     if connector is None:
         mark_failed(
             job_id,
             error_code="JOB_CONNECTOR_UNAVAILABLE",
-            error_summary=f"No connector for engine {connection.engine}",
+            error_summary=f"No connector for engine {source.engine}",
         )
         return {"status": "failed", "error_code": "JOB_CONNECTOR_UNAVAILABLE"}
 
     try:
-        secret = decode_secret_payload(connection.secret_ciphertext)
+        access = decrypt_access_blob(source.access_ciphertext)
     except Exception as exc:  # noqa: BLE001
         mark_failed(
             job_id,
             error_code="JOB_SECRET_MISSING",
-            error_summary=f"Secret decrypt failed: {exc}",
+            error_summary=f"Access decrypt failed: {exc}",
         )
         return {"status": "failed", "error_code": "JOB_SECRET_MISSING"}
 
-    endpoint = ConnectionEndpoint(
-        engine=connection.engine,
-        host=connection.host,
-        port=connection.port,
-        username=str(secret.get("username", "")),
-        password=str(secret.get("password", "")),
+    endpoint = endpoint_from_access(
+        engine=source.engine,
+        access=access,
         database_name=source.database_name or "",
         schema_filter=source.schema_filter,
     )
@@ -123,7 +116,6 @@ def run_structure_job(job_id: str) -> dict[str, str]:
 
     records = _to_catalog_records(
         source_id=source_id,
-        connection_id=connection_id,
         job_id=job_id,
         collected=collected,
     )
@@ -131,7 +123,6 @@ def run_structure_job(job_id: str) -> dict[str, str]:
     try:
         apply_structure_snapshot(
             source_id=source_id,
-            connection_id=connection_id,
             job_id=job_id,
             collected=records,
             schema_scope=source.schema_filter,
@@ -141,9 +132,6 @@ def run_structure_job(job_id: str) -> dict[str, str]:
         mark_failed(job_id, error_code=exc.code, error_summary=exc.message)
         return {"status": "failed", "error_code": exc.code}
 
-    # Cancel was checked immediately before write; mutation is durable.
-    # If a concurrent cancel won the race after commit, mark_succeeded is a
-    # no-op on terminal rows — return the store's actual status.
     final = mark_succeeded(job_id)
     if final is None:
         return {"status": "missing"}
@@ -160,7 +148,6 @@ def _cancelled(job_id: str) -> bool:
 def _to_catalog_records(
     *,
     source_id: str,
-    connection_id: str,
     job_id: str,
     collected: CollectedStructure,
 ) -> list[CatalogObjectRecord]:
@@ -188,7 +175,6 @@ def _to_catalog_records(
             CatalogObjectRecord(
                 id=object_id,
                 source_id=source_id,
-                collected_from_connection_id=connection_id,
                 object_type=obj.object_type,
                 schema_name=obj.schema_name,
                 name=obj.name,
