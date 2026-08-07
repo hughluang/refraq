@@ -19,6 +19,7 @@ import {
 import { useChangeLanguage } from "next-i18next/client";
 import { useEffect, useState } from "react";
 
+import { DisplayField } from "@/components/display/DisplayField";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { patchAccountProfile } from "@/features/account/api";
 import { PasswordSection } from "@/features/account/PasswordSection";
@@ -117,20 +118,17 @@ export function AccountPanel() {
       <Stack gap="xl">
         <Stack gap="sm">
           <Title order={4}>{t("account.section.identity")}</Title>
-          <TextInput
+          <DisplayField
             label={t("account.fields.account")}
-            value={identity?.account ?? ""}
-            readOnly
+            value={identity?.account}
           />
-          <TextInput
+          <DisplayField
             label={t("account.fields.role")}
             value={identity?.role_name ?? t("users.roles.none")}
-            readOnly
           />
-          <TextInput
+          <DisplayField
             label={t("account.fields.identitySource")}
-            value={identity?.identity_source ?? ""}
-            readOnly
+            value={identity?.identity_source}
           />
         </Stack>
 

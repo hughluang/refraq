@@ -6,7 +6,6 @@ import {
   NumberInput,
   Stack,
   Text,
-  TextInput,
 } from "@mantine/core";
 import {
   useCan,
@@ -15,6 +14,7 @@ import {
 } from "@refinedev/core";
 import { useCallback, useEffect, useState } from "react";
 
+import { DisplayField } from "@/components/display/DisplayField";
 import { PageError } from "@/components/feedback/PageError";
 import { PageLoader } from "@/components/feedback/PageLoader";
 import { PageChrome } from "@/components/layout/PageChrome";
@@ -161,7 +161,7 @@ export function SettingsPanel() {
                 </Text>
               </Stack>
             ) : null}
-            <TextInput
+            <DisplayField
               label={t("settings.fields.source")}
               description={t("settings.fields.source.hint")}
               value={
@@ -169,19 +169,16 @@ export function SettingsPanel() {
                   ? t("settings.fields.source.override")
                   : t("settings.fields.source.env")
               }
-              readOnly
             />
-            <TextInput
+            <DisplayField
               label={t("settings.fields.default")}
               description={t("settings.fields.default.hint")}
               value={String(settings.admin_session_ttl_hours_default)}
-              readOnly
             />
-            <TextInput
+            <DisplayField
               label={t("settings.fields.env")}
               description={t("settings.fields.env.hint")}
               value={settings.refraq_env}
-              readOnly
             />
           </>
         ) : null}
