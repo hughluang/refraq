@@ -79,9 +79,19 @@ export function CatalogBrowse() {
   if (loading) return <PageLoader />;
   if (error) return <PageError message={error} />;
 
+  const refreshAction = (
+    <Button size="sm" variant="light" onClick={() => void loadObjects()}>
+      {t("catalog.refresh")}
+    </Button>
+  );
+
   return (
-    <PageChrome title={t("catalog.title")} description={t("catalog.description")}>
-      <Group mb="md" align="flex-end">
+    <PageChrome
+      title={t("catalog.title")}
+      description={t("catalog.description")}
+      actions={refreshAction}
+    >
+      <Group mb="md">
         <Select
           label={t("catalog.fields.source")}
           data={sources.map((s) => ({ value: s.id, label: `${s.key} — ${s.name}` }))}
@@ -96,9 +106,6 @@ export function CatalogBrowse() {
           onChange={(e) => setQ(e.currentTarget.value)}
           w={220}
         />
-        <Button variant="light" onClick={() => void loadObjects()}>
-          {t("catalog.refresh")}
-        </Button>
       </Group>
 
       {!sourceId || items.length === 0 ? (

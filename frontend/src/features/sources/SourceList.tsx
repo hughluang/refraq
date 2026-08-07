@@ -3,13 +3,11 @@
 import {
   Badge,
   Button,
-  Group,
   Modal,
   NumberInput,
   Select,
   Stack,
   Table,
-  Text,
   TextInput,
   Textarea,
 } from "@mantine/core";
@@ -159,6 +157,14 @@ export function SourceList() {
     }
   }
 
+  const createAction = (
+    <CanAccess resource={ModuleId.sources} action={ModuleAction.create}>
+      <Button size="sm" onClick={() => setCreateOpen(true)}>
+        {t("sources.create")}
+      </Button>
+    </CanAccess>
+  );
+
   if (loading) {
     return <PageLoader />;
   }
@@ -167,18 +173,11 @@ export function SourceList() {
   }
 
   return (
-    <PageChrome title={t("sources.title")} description={t("sources.description")}>
-      <Group justify="space-between" mb="md">
-        <Text c="dimmed" size="sm">
-          {t("sources.hint.oneConnection")}
-        </Text>
-        <CanAccess resource={ModuleId.sources} action={ModuleAction.create}>
-          <Button onClick={() => setCreateOpen(true)}>
-            {t("sources.create")}
-          </Button>
-        </CanAccess>
-      </Group>
-
+    <PageChrome
+      title={t("sources.title")}
+      description={t("sources.description")}
+      actions={createAction}
+    >
       {items.length === 0 ? (
         <EmptyState message={t("sources.empty")} />
       ) : (

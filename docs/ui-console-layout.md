@@ -2,9 +2,16 @@
 
 ## Purpose
 
-Design-language rules for how Management Console pages use horizontal space in the AppShell main area.
+Design-language rules for Management Console page layout: the shared page-header convention and how pages use horizontal space in the AppShell main area.
 
 Related: `docs/business-management-console.md`, `docs/development.md`.
+
+## Page Header
+
+1. **Page title, description, and page-level actions render only through `PageChrome`** (`frontend/src/components/layout/PageChrome.tsx`). Pages must not hand-roll header rows or place page actions inside the content area.
+2. **`SectionHeader` is the single title/description/actions layout primitive** (`frontend/src/components/layout/SectionHeader.tsx`). `PageChrome` composes it at heading order 2; embedded page sections (for example User PAT inside Account Center) use it at heading order 4.
+3. **Header action buttons use `size="sm"`** so every page header reads the same height.
+4. **Content toolbars hold filter controls only** (source selectors, search inputs). Action buttons belong to the header `actions` slot, not to toolbars.
 
 ## Principles
 

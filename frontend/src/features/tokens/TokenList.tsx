@@ -10,7 +10,6 @@ import {
   Table,
   Text,
   TextInput,
-  Title,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import {
@@ -24,6 +23,7 @@ import { useState } from "react";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
 import { PageLoader } from "@/components/feedback/PageLoader";
+import { SectionHeader } from "@/components/layout/SectionHeader";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
   createToken,
@@ -235,7 +235,11 @@ export function TokenList() {
         : t("common.error.loadFailed");
     return (
       <Stack gap="sm">
-        <Title order={4}>{t("tokens.title")}</Title>
+        <SectionHeader
+          title={t("tokens.title")}
+          description={t("tokens.description")}
+          order={4}
+        />
         <PageError message={message} onRetry={() => tableQuery.refetch()} />
       </Stack>
     );
@@ -243,15 +247,12 @@ export function TokenList() {
 
   return (
     <Stack gap="sm">
-      <Group justify="space-between" align="flex-start">
-        <div>
-          <Title order={4}>{t("tokens.title")}</Title>
-          <Text size="sm" c="dimmed">
-            {t("tokens.description")}
-          </Text>
-        </div>
-        {createAction}
-      </Group>
+      <SectionHeader
+        title={t("tokens.title")}
+        description={t("tokens.description")}
+        actions={createAction}
+        order={4}
+      />
 
       {isLoading ? (
         <PageLoader />

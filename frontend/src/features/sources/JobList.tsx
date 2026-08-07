@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  Badge,
-  Button,
-  Group,
-  Select,
-  Table,
-  Text,
-} from "@mantine/core";
+import { Badge, Button, Select, Table, Text } from "@mantine/core";
 import {
   CanAccess,
   useCan,
@@ -93,51 +86,58 @@ export function JobList() {
   if (loading) return <PageLoader />;
   if (error) return <PageError message={error} />;
 
+  const listActions = (
+    <>
+      <Button size="sm" variant="light" onClick={() => void loadJobs()}>
+        {t("jobs.refresh")}
+      </Button>
+      <CanAccess resource={ModuleId.jobs} action={ModuleAction.list}>
+        <Button
+          size="sm"
+          loading={busy}
+          disabled={!sourceId || !canRun?.can}
+          onClick={async () => {
+            if (!sourceId) return;
+            setBusy(true);
+            try {
+              await enqueueStructureJob(sourceId);
+              open?.({
+                type: "success",
+                message: t("jobs.enqueue.success"),
+              });
+              await loadJobs();
+            } catch (err) {
+              open?.({
+                type: "error",
+                message:
+                  err instanceof ApiError ? err.detail : String(err),
+              });
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {t("jobs.enqueue")}
+        </Button>
+      </CanAccess>
+    </>
+  );
+
   return (
-    <PageChrome title={t("jobs.title")} description={t("jobs.description")}>
-      <Group mb="md" justify="space-between" align="flex-end">
-        <Select
-          label={t("jobs.fields.source")}
-          data={sources.map((s) => ({ value: s.id, label: `${s.key} — ${s.name}` }))}
-          value={sourceId}
-          onChange={setSourceId}
-          searchable
-          w={320}
-        />
-        <Group>
-          <Button variant="light" onClick={() => void loadJobs()}>
-            {t("jobs.refresh")}
-          </Button>
-          <CanAccess resource={ModuleId.jobs} action={ModuleAction.list}>
-            <Button
-              loading={busy}
-              disabled={!sourceId || !canRun?.can}
-              onClick={async () => {
-                if (!sourceId) return;
-                setBusy(true);
-                try {
-                  await enqueueStructureJob(sourceId);
-                  open?.({
-                    type: "success",
-                    message: t("jobs.enqueue.success"),
-                  });
-                  await loadJobs();
-                } catch (err) {
-                  open?.({
-                    type: "error",
-                    message:
-                      err instanceof ApiError ? err.detail : String(err),
-                  });
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              {t("jobs.enqueue")}
-            </Button>
-          </CanAccess>
-        </Group>
-      </Group>
+    <PageChrome
+      title={t("jobs.title")}
+      description={t("jobs.description")}
+      actions={listActions}
+    >
+      <Select
+        mb="md"
+        label={t("jobs.fields.source")}
+        data={sources.map((s) => ({ value: s.id, label: `${s.key} — ${s.name}` }))}
+        value={sourceId}
+        onChange={setSourceId}
+        searchable
+        w={320}
+      />
 
       {!sourceId || items.length === 0 ? (
         <EmptyState message={t("jobs.empty")} />
