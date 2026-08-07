@@ -5,7 +5,7 @@ export function tokenStatus(
   now: Date = new Date(),
 ): TokenStatus {
   if (token.revoked_at) {
-    return "revoked";
+    return "deactivated";
   }
   if (new Date(token.expires_at).getTime() <= now.getTime()) {
     return "expired";

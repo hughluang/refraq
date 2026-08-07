@@ -5,6 +5,7 @@ import {
   Burger,
   Button,
   Group,
+  Menu,
   Stack,
   Text,
   Title,
@@ -15,9 +16,11 @@ import {
   useLogout,
   useTranslate,
 } from "@refinedev/core";
+import { useChangeLanguage } from "next-i18next/client";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useTranslation } from "react-i18next";
 
 import { PageError } from "@/components/feedback/PageError";
 import { PageLoader } from "@/components/feedback/PageLoader";
@@ -26,16 +29,27 @@ import { LangSwitcher } from "@/components/LangSwitcher";
 import { fetchConsoleNavigation } from "@/features/console/api";
 import type { NavigationGroup } from "@/features/console/types";
 import { ApiError } from "@/lib/api";
-import type { CurrentUser } from "@/providers/session-store";
+import {
+  isLocale,
+  LOCALE_COOKIE_NAME,
+} from "@/providers/locale-catalog";
+import {
+  useSessionStore,
+  type CurrentUser,
+} from "@/providers/session-store";
 
 type ConsoleShellProps = { children: ReactNode };
 
 export function ConsoleShell({ children }: ConsoleShellProps) {
   const t = useTranslate();
   const pathname = usePathname();
+  const router = useRouter();
   const [opened, { toggle }] = useDisclosure();
   const { data: user } = useGetIdentity<CurrentUser>();
+  const accountLocale = useSessionStore((s) => s.user?.locale);
   const { mutate: logout, isPending } = useLogout();
+  const changeLanguage = useChangeLanguage(LOCALE_COOKIE_NAME);
+  const { i18n } = useTranslation();
   const [groups, setGroups] = useState<NavigationGroup[] | null>(null);
   const [navError, setNavError] = useState<string | null>(null);
   const [navLoading, setNavLoading] = useState(true);
@@ -60,6 +74,23 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
     void loadNavigation();
   }, [loadNavigation]);
 
+  // Apply persisted account locale on identity restore / profile updates.
+  // Read from session store (updated by setUser), not Refine identity cache —
+  // the latter stays stale across LangSwitcher patches and would race-revert
+  // an in-flight changeLanguage when this effect re-runs.
+  useEffect(() => {
+    if (!accountLocale || !isLocale(accountLocale)) {
+      return;
+    }
+    const current = i18n.resolvedLanguage ?? i18n.language;
+    if (current === accountLocale) {
+      return;
+    }
+    void changeLanguage(accountLocale);
+    // Only react to account locale changes — not changeLanguage identity churn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
+  }, [accountLocale]);
+
   return (
     <AppShell
       header={{ height: 56 }}
@@ -77,32 +108,39 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
             <Title order={4}>{t("layout.consoleTitle")}</Title>
           </Group>
           <Group gap="sm">
-            {user ? (
-              <Text size="sm" c="dimmed">
-                {user.account}
-                {user.role_name ? ` (${user.role_name})` : ""}
-              </Text>
-            ) : null}
             <LangSwitcher />
-            <Button
-              size="xs"
-              variant="light"
-              loading={isPending}
-              onClick={() =>
-                logout(undefined, {
-                  onSuccess: (result) => {
-                    if (!result.success) {
-                      return;
+            {user ? (
+              <Menu position="bottom-end" withinPortal>
+                <Menu.Target>
+                  <Button size="xs" variant="subtle">
+                    {user.account}
+                    {user.role_name ? ` (${user.role_name})` : ""}
+                  </Button>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  <Menu.Item onClick={() => router.push("/console/account")}>
+                    {t("account.title")}
+                  </Menu.Item>
+                  <Menu.Divider />
+                  <Menu.Item
+                    color="red"
+                    disabled={isPending}
+                    onClick={() =>
+                      logout(undefined, {
+                        onSuccess: (result) => {
+                          if (!result.success) {
+                            return;
+                          }
+                          window.location.assign("/login");
+                        },
+                      })
                     }
-                    // Hard navigation avoids Refine soft go() + invalidateAuthStore
-                    // races that refetch /auth/me after the session is cleared.
-                    window.location.assign("/login");
-                  },
-                })
-              }
-            >
-              {t("auth.logout")}
-            </Button>
+                  >
+                    {t("auth.logout")}
+                  </Menu.Item>
+                </Menu.Dropdown>
+              </Menu>
+            ) : null}
           </Group>
         </Group>
       </AppShell.Header>

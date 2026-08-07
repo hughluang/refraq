@@ -23,6 +23,8 @@ The former `/admins` resource is retired; clients must use `/users`.
   "id": "user_001",
   "account": "root",
   "display_name": "System Admin",
+  "email": null,
+  "locale": "en-US",
   "role_id": "role_super_admin",
   "role_key": "super_admin",
   "role_name": "Super Admin",
@@ -34,6 +36,8 @@ The former `/admins` resource is retired; clients must use `/users`.
 
 `role_id`, `role_key`, and `role_name` may be `null` when the User has no Role.
 `last_login_at` may be `null` if the User has never signed in.
+`email` may be `null` (optional contact; not unique, not verified).
+`locale` is a supported Console locale code; new Users default to the platform default locale unless provided.
 
 ### Error Response
 
@@ -61,6 +65,8 @@ Purpose: list User records.
       "id": "user_001",
       "account": "root",
       "display_name": "System Admin",
+      "email": null,
+      "locale": "en-US",
       "role_id": "role_super_admin",
       "role_key": "super_admin",
       "role_name": "Super Admin",
@@ -84,12 +90,15 @@ Purpose: create a new User.
 {
   "account": "alice",
   "display_name": "Alice",
+  "email": "alice@example.com",
   "password": "initial-secret",
   "role_id": "role_operator"
 }
 ```
 
 `role_id` may be `null` or omitted to create a User without a Role.
+`email` is optional; omit or `null` for no contact email.
+`locale` may be omitted; the server applies the default supported locale.
 
 ### Success Response: `201`
 
@@ -99,6 +108,8 @@ Purpose: create a new User.
     "id": "user_002",
     "account": "alice",
     "display_name": "Alice",
+    "email": "alice@example.com",
+    "locale": "en-US",
     "role_id": "role_operator",
     "role_key": "operator",
     "role_name": "Operator",
@@ -141,6 +152,8 @@ When `status` is set to `disabled`, the backend invalidates all sessions belongi
     "id": "user_002",
     "account": "alice",
     "display_name": "Alice",
+    "email": "alice@example.com",
+    "locale": "en-US",
     "role_id": "role_operator",
     "role_key": "operator",
     "role_name": "Operator",
@@ -162,6 +175,7 @@ When `status` is set to `disabled`, the backend invalidates all sessions belongi
 ## 6. Non-Goals for this slice
 
 - Hard delete of User records is intentionally not exposed.
-- Password rotation, password reset, and self-service profile changes are out of scope.
+- Password reset / forgot-password flows remain out of scope (self-service password change for the current User is `docs/api-contracts-account.md`).
 - LDAP sync and **Client** (machine principal) credential management are out of scope.
 - **User PAT** is specified separately in `docs/api-contracts-tokens.md` / `docs/business-user-tokens.md` (not a Client API).
+- Self-service profile, locale, and password for the current User are specified in `docs/api-contracts-account.md` / `docs/business-account.md`.

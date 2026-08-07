@@ -10,11 +10,11 @@ import {
   Table,
   Text,
   TextInput,
+  Title,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import {
   CanAccess,
-  useCan,
   useNotification,
   useTable,
   useTranslate,
@@ -24,9 +24,13 @@ import { useState } from "react";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
 import { PageLoader } from "@/components/feedback/PageLoader";
-import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
-import { createToken, revokeToken } from "@/features/tokens/api";
+import {
+  createToken,
+  deactivateToken,
+  deleteToken,
+  restoreToken,
+} from "@/features/tokens/api";
 import {
   datetimeLocalToIso,
   defaultExpiresLocalValue,
@@ -39,7 +43,7 @@ import { ApiError } from "@/lib/api";
 const STATUS_COLOR: Record<TokenStatus, string> = {
   active: "green",
   expired: "gray",
-  revoked: "red",
+  deactivated: "yellow",
 };
 
 type CreateFormValues = {
@@ -47,13 +51,10 @@ type CreateFormValues = {
   expires_at: string;
 };
 
+/** User PAT section for Account Center. */
 export function TokenList() {
   const t = useTranslate();
   const { open } = useNotification();
-  const { data: canWrite } = useCan({
-    resource: ModuleId.tokens,
-    action: ModuleAction.create,
-  });
   const { tableQuery, currentPage, pageCount, setCurrentPage } =
     useTable<TokenMetadata>({
       resource: ModuleId.tokens,
@@ -63,10 +64,12 @@ export function TokenList() {
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [secret, setSecret] = useState<string | null>(null);
-  const [pendingRevoke, setPendingRevoke] = useState<TokenMetadata | null>(
+  const [pendingDeactivate, setPendingDeactivate] =
+    useState<TokenMetadata | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<TokenMetadata | null>(
     null,
   );
-  const [revoking, setRevoking] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
 
   const form = useForm<CreateFormValues>({
     initialValues: {
@@ -129,27 +132,73 @@ export function TokenList() {
     }
   }
 
-  async function confirmRevoke() {
-    if (!pendingRevoke) return;
-    setRevoking(true);
+  async function confirmDeactivate() {
+    if (!pendingDeactivate) return;
+    setActionBusy(true);
     try {
-      await revokeToken(pendingRevoke.id);
+      await deactivateToken(pendingDeactivate.id);
       open?.({
         type: "success",
         message: t("tokens.title"),
-        description: t("tokens.revoke.success"),
+        description: t("tokens.deactivate.success"),
       });
-      setPendingRevoke(null);
+      setPendingDeactivate(null);
       await tableQuery.refetch();
     } catch (err) {
       open?.({
         type: "error",
         message: t("tokens.title"),
         description:
-          err instanceof ApiError ? err.detail : t("tokens.revoke.error"),
+          err instanceof ApiError ? err.detail : t("tokens.deactivate.error"),
       });
     } finally {
-      setRevoking(false);
+      setActionBusy(false);
+    }
+  }
+
+  async function onRestore(row: TokenMetadata) {
+    setActionBusy(true);
+    try {
+      await restoreToken(row.id);
+      open?.({
+        type: "success",
+        message: t("tokens.title"),
+        description: t("tokens.restore.success"),
+      });
+      await tableQuery.refetch();
+    } catch (err) {
+      open?.({
+        type: "error",
+        message: t("tokens.title"),
+        description:
+          err instanceof ApiError ? err.detail : t("tokens.restore.error"),
+      });
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setActionBusy(true);
+    try {
+      await deleteToken(pendingDelete.id);
+      open?.({
+        type: "success",
+        message: t("tokens.title"),
+        description: t("tokens.delete.success"),
+      });
+      setPendingDelete(null);
+      await tableQuery.refetch();
+    } catch (err) {
+      open?.({
+        type: "error",
+        message: t("tokens.title"),
+        description:
+          err instanceof ApiError ? err.detail : t("tokens.delete.error"),
+      });
+    } finally {
+      setActionBusy(false);
     }
   }
 
@@ -185,33 +234,29 @@ export function TokenList() {
         ? error.detail
         : t("common.error.loadFailed");
     return (
-      <PageChrome
-        title={t("tokens.title")}
-        description={t("tokens.description")}
-      >
+      <Stack gap="sm">
+        <Title order={4}>{t("tokens.title")}</Title>
         <PageError message={message} onRetry={() => tableQuery.refetch()} />
-      </PageChrome>
+      </Stack>
     );
   }
 
   return (
-    <PageChrome
-      title={t("tokens.title")}
-      description={t("tokens.description")}
-      actions={createAction}
-    >
+    <Stack gap="sm">
+      <Group justify="space-between" align="flex-start">
+        <div>
+          <Title order={4}>{t("tokens.title")}</Title>
+          <Text size="sm" c="dimmed">
+            {t("tokens.description")}
+          </Text>
+        </div>
+        {createAction}
+      </Group>
+
       {isLoading ? (
         <PageLoader />
       ) : rows.length === 0 ? (
-        <EmptyState
-          action={
-            canWrite?.can ? (
-              <Button size="xs" onClick={openCreate}>
-                {t("tokens.create")}
-              </Button>
-            ) : undefined
-          }
-        />
+        <EmptyState />
       ) : (
         <Table highlightOnHover striped withTableBorder>
           <Table.Thead>
@@ -228,7 +273,7 @@ export function TokenList() {
           <Table.Tbody>
             {rows.map((row) => {
               const status = tokenStatus(row);
-              const canRevoke = status !== "revoked";
+              const isDeactivated = status === "deactivated";
               return (
                 <Table.Tr key={row.id}>
                   <Table.Td>{row.name}</Table.Td>
@@ -252,15 +297,38 @@ export function TokenList() {
                       resource={ModuleId.tokens}
                       action={ModuleAction.delete}
                     >
-                      <Button
-                        size="xs"
-                        variant="light"
-                        color="red"
-                        disabled={!canRevoke || revoking}
-                        onClick={() => setPendingRevoke(row)}
-                      >
-                        {t("tokens.revoke")}
-                      </Button>
+                      <Group gap="xs" wrap="nowrap">
+                        {isDeactivated ? (
+                          <>
+                            <Button
+                              size="xs"
+                              variant="light"
+                              disabled={actionBusy}
+                              onClick={() => void onRestore(row)}
+                            >
+                              {t("tokens.restore")}
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="light"
+                              color="red"
+                              disabled={actionBusy}
+                              onClick={() => setPendingDelete(row)}
+                            >
+                              {t("tokens.delete")}
+                            </Button>
+                          </>
+                        ) : (
+                          <Button
+                            size="xs"
+                            variant="light"
+                            disabled={actionBusy}
+                            onClick={() => setPendingDeactivate(row)}
+                          >
+                            {t("tokens.deactivate")}
+                          </Button>
+                        )}
+                      </Group>
                     </CanAccess>
                   </Table.Td>
                 </Table.Tr>
@@ -352,29 +420,63 @@ export function TokenList() {
       </Modal>
 
       <Modal
-        opened={pendingRevoke !== null}
-        onClose={() => setPendingRevoke(null)}
-        title={t("tokens.revoke.confirmTitle")}
+        opened={pendingDeactivate !== null}
+        onClose={() => setPendingDeactivate(null)}
+        title={t("tokens.deactivate.confirmTitle")}
         centered
       >
         <Text size="sm" mb="md">
-          {pendingRevoke
-            ? t("tokens.revoke.confirmBody", { name: pendingRevoke.name })
+          {pendingDeactivate
+            ? t("tokens.deactivate.confirmBody", {
+                name: pendingDeactivate.name,
+              })
             : null}
         </Text>
         <Group justify="flex-end">
           <Button
             variant="default"
-            onClick={() => setPendingRevoke(null)}
-            disabled={revoking}
+            onClick={() => setPendingDeactivate(null)}
+            disabled={actionBusy}
           >
             {t("common.cancel")}
           </Button>
-          <Button color="red" loading={revoking} onClick={() => void confirmRevoke()}>
+          <Button
+            loading={actionBusy}
+            onClick={() => void confirmDeactivate()}
+          >
             {t("common.confirm")}
           </Button>
         </Group>
       </Modal>
-    </PageChrome>
+
+      <Modal
+        opened={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        title={t("tokens.delete.confirmTitle")}
+        centered
+      >
+        <Text size="sm" mb="md">
+          {pendingDelete
+            ? t("tokens.delete.confirmBody", { name: pendingDelete.name })
+            : null}
+        </Text>
+        <Group justify="flex-end">
+          <Button
+            variant="default"
+            onClick={() => setPendingDelete(null)}
+            disabled={actionBusy}
+          >
+            {t("common.cancel")}
+          </Button>
+          <Button
+            color="red"
+            loading={actionBusy}
+            onClick={() => void confirmDelete()}
+          >
+            {t("common.confirm")}
+          </Button>
+        </Group>
+      </Modal>
+    </Stack>
   );
 }

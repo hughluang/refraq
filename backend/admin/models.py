@@ -30,6 +30,8 @@ class UserRow(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     account: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
     display_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    locale: Mapped[str] = mapped_column(String(16), nullable=False, default="en-US")
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     role_id: Mapped[str | None] = mapped_column(
         String(64),
@@ -60,6 +62,7 @@ class UserPatRow(Base):
     prefix: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

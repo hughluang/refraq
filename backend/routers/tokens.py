@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Request, Response, status
 
 from backend.admin.audit import persist_audit_event
 from backend.admin.deps import get_actor_token_id, require_permission
-from backend.admin.errors import TokenInvalidExpiresAt, TokenNotFound
+from backend.admin.errors import (
+    TokenInvalidExpiresAt,
+    TokenNotDeactivated,
+    TokenNotFound,
+)
 from backend.repositories.token_store import (
     TokenRecord,
     TokenStore,
@@ -37,6 +41,12 @@ def _to_metadata(record: TokenRecord) -> TokenMetadata:
         created_at=record.created_at,
         last_used_at=record.last_used_at,
     )
+
+
+def _owned_visible(record: TokenRecord | None, user_id: str) -> TokenRecord:
+    if record is None or record.user_id != user_id or record.deleted_at is not None:
+        raise TokenNotFound()
+    return record
 
 
 @router.get("/tokens", response_model=TokenListResponse)
@@ -85,25 +95,73 @@ def create_token(
     return CreateTokenResponse(token=_to_metadata(record), secret=secret)
 
 
-@router.post("/tokens/{token_id}/revoke", response_model=TokenResponse)
-def revoke_token(
+@router.post("/tokens/{token_id}/deactivate", response_model=TokenResponse)
+def deactivate_token(
     token_id: str,
     request: Request,
     user: UserRecord = Depends(require_permission("tokens:write")),
     tokens: TokenStore = Depends(get_token_store),
 ) -> TokenResponse:
-    existing = tokens.get_by_id(token_id)
-    if existing is None or existing.user_id != user.id:
-        raise TokenNotFound()
-    record = tokens.revoke(token_id, when=datetime.utcnow())
+    _owned_visible(tokens.get_by_id(token_id), user.id)
+    record = tokens.deactivate(token_id, when=datetime.utcnow())
     assert record is not None
     persist_audit_event(
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),
         resource_type="user_pat",
         resource_id=record.id,
-        action="token.revoke",
+        action="token.deactivate",
         result="success",
         detail={"name": record.name, "prefix": record.prefix},
     )
     return TokenResponse(token=_to_metadata(record))
+
+
+@router.post("/tokens/{token_id}/restore", response_model=TokenResponse)
+def restore_token(
+    token_id: str,
+    request: Request,
+    user: UserRecord = Depends(require_permission("tokens:write")),
+    tokens: TokenStore = Depends(get_token_store),
+) -> TokenResponse:
+    _owned_visible(tokens.get_by_id(token_id), user.id)
+    record = tokens.restore(token_id)
+    assert record is not None
+    persist_audit_event(
+        actor_user_id=user.id,
+        actor_token_id=get_actor_token_id(request),
+        resource_type="user_pat",
+        resource_id=record.id,
+        action="token.restore",
+        result="success",
+        detail={"name": record.name, "prefix": record.prefix},
+    )
+    return TokenResponse(token=_to_metadata(record))
+
+
+@router.delete(
+    "/tokens/{token_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def delete_token(
+    token_id: str,
+    request: Request,
+    user: UserRecord = Depends(require_permission("tokens:write")),
+    tokens: TokenStore = Depends(get_token_store),
+) -> Response:
+    existing = _owned_visible(tokens.get_by_id(token_id), user.id)
+    if existing.revoked_at is None:
+        raise TokenNotDeactivated()
+    record = tokens.soft_delete(token_id, when=datetime.utcnow())
+    assert record is not None
+    persist_audit_event(
+        actor_user_id=user.id,
+        actor_token_id=get_actor_token_id(request),
+        resource_type="user_pat",
+        resource_id=record.id,
+        action="token.delete",
+        result="success",
+        detail={"name": record.name, "prefix": record.prefix},
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

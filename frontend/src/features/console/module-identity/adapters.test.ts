@@ -31,7 +31,6 @@ describe("toRefineResources", () => {
       },
       {
         name: "tokens",
-        list: "/console/tokens",
         meta: { label: "tokens.title" },
       },
       {
@@ -98,11 +97,8 @@ describe("matchPath", () => {
     });
   });
 
-  it("matches tokens list route", () => {
-    expect(matchPath("/console/tokens", MODULE_IDENTITY_FIXTURE)).toEqual({
-      resource: "tokens",
-      action: "list",
-    });
+  it("does not match removed /console/tokens path", () => {
+    expect(matchPath("/console/tokens", MODULE_IDENTITY_FIXTURE)).toBeNull();
   });
 
   it("matches metadata module routes", () => {

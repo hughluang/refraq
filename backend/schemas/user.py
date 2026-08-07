@@ -15,6 +15,8 @@ class UserSummary(BaseModel):
     id: str
     account: str
     display_name: str
+    email: str | None = None
+    locale: str = "en-US"
     role_id: str | None
     role_key: str | None
     role_name: str | None
@@ -32,6 +34,8 @@ class CreateUserRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=256)
     role_id: str | None = None
+    email: str | None = Field(default=None, max_length=256)
+    locale: str | None = Field(default=None, max_length=16)
 
 
 class CreateUserResponse(BaseModel):

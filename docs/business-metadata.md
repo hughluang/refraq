@@ -154,7 +154,7 @@ Fixed catalog additions (exact strings are normative for Roles UI):
 | `jobs:run` | Enqueue/cancel **Jobs** (structure and later kinds) via domain facades; view Jobs on those facades |
 | `query:run` | Execute controlled read-only SQL against a Connection |
 | `tokens:read` | List own User PAT metadata (never full token after creation) |
-| `tokens:write` | Create/revoke own User PATs |
+| `tokens:write` | Create/deactivate/restore/soft-delete (deactivated only) own User PATs |
 | `audit:read` | Read management audit events |
 
 Rules:
@@ -239,7 +239,7 @@ Persist management-plane events for at least:
 - Source / Connection create/update/disable and secret set/rotate
 - Job enqueue / cancel / terminal failure (summary)
 - Semantics and join writes
-- User PAT create / revoke
+- User PAT create / deactivate / restore / soft-delete
 - Controlled query execution
 
 Each event: actor User id, timestamp, resource type/id, action, result (`success` / `failure`), optional detail payload without secrets.

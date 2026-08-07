@@ -88,6 +88,7 @@ def _user_from_bearer(
     if (
         record is None
         or record.revoked_at is not None
+        or record.deleted_at is not None
         or record.expires_at <= now
     ):
         raise AuthPatInvalid()
@@ -154,6 +155,7 @@ def resolve_user_from_bearer(secret: str) -> UserRecord:
     if (
         record is None
         or record.revoked_at is not None
+        or record.deleted_at is not None
         or record.expires_at <= now
     ):
         raise AuthPatInvalid()

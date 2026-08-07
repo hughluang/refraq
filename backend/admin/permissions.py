@@ -60,7 +60,7 @@ PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
     "jobs:run": "Enqueue and manage Jobs (structure and later kinds)",
     "query:run": "Run controlled read-only SQL against a Connection",
     "tokens:read": "List own User PAT metadata",
-    "tokens:write": "Create and revoke own User PATs",
+    "tokens:write": "Create, deactivate, restore, and soft-delete (deactivated only) own User PATs",
     "audit:read": "Read management audit events",
 }
 

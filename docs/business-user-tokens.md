@@ -32,36 +32,39 @@ Client (machine principal) credential management remains out of scope.
 | prefix | Non-secret prefix for identification in lists |
 | scopes | Optional future narrowing; v1 inherits full Role permissions |
 | expires_at | Required expiry |
-| revoked_at | Null until revoked |
+| revoked_at | Null until deactivated; cleared on restore |
+| deleted_at | Null until soft-deleted; never cleared |
 | created_at / last_used_at | Operational |
 
 Rules:
 
 - Plaintext token is returned **only** in the create response.
 - List/get APIs return metadata never the secret.
-- Revocation is immediate for subsequent requests.
-- Expired or revoked tokens yield `401` with a distinct stable error code.
+- List APIs omit soft-deleted tokens (`deleted_at` set); management APIs treat them as not found.
+- **Deactivate** sets `revoked_at` and is immediate for subsequent requests; **restore** clears `revoked_at`.
+- **Delete** is allowed only while the token is deactivated (`revoked_at` set). It is soft: sets `deleted_at`, hides the token from the UI/list, keeps the row in the database, and cannot be restored through the product surface.
+- Expired, deactivated, or soft-deleted tokens yield `401` with a distinct stable error code.
 - Disabled Users cannot authenticate with PAT.
 - Users without `console:access` may still use PAT for permitted API/MCP calls if their Role includes the relevant resource permissions; Console login rules are unchanged.
 
-## 4. Permissions And Console Module
+## 4. Permissions And Console Surface
 
 | Permission | Meaning |
 | --- | --- |
 | `tokens:read` | List own PAT metadata |
-| `tokens:write` | Create and revoke own PATs |
+| `tokens:write` | Create, deactivate, restore, and soft-delete (deactivated only) own PATs |
 
 - Users manage **only their own** tokens in this phase (no admin impersonation API).
-- Console Module id: `tokens`
-- Nav group: `admin` (Administration), not `metadata`
-- Module `list` permission: `tokens:read`
+- Console Module id: `tokens` remains for Refine ACL / module identity (`tokens:read` / `tokens:write`).
+- **User PAT** UI lives in **Account Center** (`docs/business-account.md`); it is **not** a sidebar navigation item and has no Console page route (`routes.list` is null).
+- Account Center shell access does not require `tokens:*`; the Token section is shown only when the caller has `tokens:read`.
 
 ## 5. Transport And Auth Resolution
 
 - Protected endpoints accept **either** valid Session cookie **or** valid User PAT Bearer.
 - Exactly one principal resolution path per request; do not mix partial credentials in conflicting ways.
 - MCP tools use the same resolution and Permission checks.
-- Audit events for PAT create/revoke and for actions performed via PAT record the User id (and token id where relevant, never plaintext).
+- Audit events for PAT create/deactivate/restore/delete and for actions performed via PAT record the User id (and token id where relevant, never plaintext).
 
 ## 6. Non-Goals
 
@@ -70,9 +73,11 @@ Rules:
 - Client credentials / machine tokens
 - Admin listing of all users’ plaintext-capable tokens
 - Scope narrowing UI (may be added later; v1 = Role permissions)
+- Hard-delete or admin restore of soft-deleted PATs
 
 ## 7. References
 
 - `docs/api-contracts-tokens.md`
 - `docs/api-contracts-auth.md` (Session remains cookie-based)
+- `docs/business-account.md`
 - `docs/business-metadata.md`

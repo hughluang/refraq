@@ -54,6 +54,7 @@ This document records the stable development conventions for contributors workin
 - Run dev server: `npm run dev`
 - Run lint: `npm run lint`
 - Run build: `npm run build`
+- Management Console content width: `docs/ui-console-layout.md` (section containers full width; internal controls own their own width)
 
 ### Self-deploy example
 
@@ -67,10 +68,10 @@ This document records the stable development conventions for contributors workin
 
 1. `CONTEXT.md`
 2. `docs/business-metadata.md`
-3. `docs/business-user-tokens.md`
+3. `docs/business-user-tokens.md`, `docs/business-account.md`
 4. `docs/business-management-console.md` (`metadata` nav group)
 5. `docs/api-contracts-sources.md`, `docs/api-contracts-jobs.md`, `docs/api-contracts-metadata.md`
-6. `docs/api-contracts-tokens.md`, `docs/api-contracts-audit.md`, `docs/api-contracts-metadata-mcp.md`
+6. `docs/api-contracts-tokens.md`, `docs/api-contracts-account.md`, `docs/api-contracts-audit.md`, `docs/api-contracts-metadata-mcp.md`
 7. `docs/adr/0004-redis-queue-for-ingestion.md`, `docs/adr/0005-app-encrypted-connection-secrets.md`, `docs/adr/0006-celery-platform-async-runtime.md`, `docs/adr/0007-source-owns-catalog-identity.md`, `docs/adr/0008-job-generic-input.md`
 8. `docs/architecture.md`, `docs/modules.md`, `docs/env.md`
 
@@ -86,9 +87,10 @@ Treat `docs/product-core/*` as **long-horizon** reference only (files are marked
 6. `docs/adr/0003-foundation-upgrade-vs-bootstrap.md` (cite by full filename; another `0003-*.md` exists)
 7. `docs/business-login-auth.md`
 8. `docs/business-management-console.md`
-9. `docs/api-contracts-auth.md`
-10. `docs/api-contracts-users.md`
-11. `docs/api-contracts-roles.md`
-12. `docs/api-contracts-console.md`
-13. `docs/api-contracts-settings.md`
-14. `docs/env.md`
+9. `docs/ui-console-layout.md` (Console main-area width)
+10. `docs/api-contracts-auth.md`
+11. `docs/api-contracts-users.md`
+12. `docs/api-contracts-roles.md`
+13. `docs/api-contracts-console.md`
+14. `docs/api-contracts-settings.md`
+15. `docs/env.md`

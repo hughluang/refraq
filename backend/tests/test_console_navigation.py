@@ -86,7 +86,7 @@ def test_super_admin_sees_all_seed_modules(client: TestClient) -> None:
     groups = {group["id"]: group for group in response.json()["groups"]}
     assert set(groups) == {"workbench", "admin", "metadata", "settings"}
     assert [m["id"] for m in groups["workbench"]["modules"]] == ["dashboard"]
-    assert [m["id"] for m in groups["admin"]["modules"]] == ["users", "roles", "tokens"]
+    assert [m["id"] for m in groups["admin"]["modules"]] == ["users", "roles"]
     assert [m["id"] for m in groups["metadata"]["modules"]] == [
         "sources",
         "catalog",

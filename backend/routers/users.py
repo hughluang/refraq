@@ -6,11 +6,13 @@ from fastapi import APIRouter, Depends, status
 
 from backend.admin.deps import require_permission
 from backend.admin.errors import (
+    AccountInvalidLocale,
     UserInvalidRole,
     UserInvalidStatus,
     UserNotFound,
     UserSelfDisableForbidden,
 )
+from backend.admin.locales import DEFAULT_LOCALE, is_supported_locale
 from backend.admin.security import hash_password
 from backend.admin.user_payload import build_user_summary
 from backend.repositories.role_store import RoleStore, get_role_store
@@ -54,12 +56,22 @@ def create_user(
     if role_id is not None and roles.get_by_id(role_id) is None:
         raise UserInvalidRole()
 
+    locale = payload.locale or DEFAULT_LOCALE
+    if not is_supported_locale(locale):
+        raise AccountInvalidLocale()
+
+    email = payload.email.strip() if payload.email else None
+    if email == "":
+        email = None
+
     record = users.create_user(
         account=payload.account,
         display_name=payload.display_name,
         password_hash=hash_password(payload.password),
         role_id=role_id,
         status="active",
+        email=email,
+        locale=locale,
     )
     return CreateUserResponse(user=build_user_summary(record, roles))
 

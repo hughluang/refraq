@@ -9,6 +9,7 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Literal, Protocol
 
+from backend.admin.locales import DEFAULT_LOCALE
 from backend.core.config import get_settings
 
 UserStatus = Literal["active", "disabled"]
@@ -24,6 +25,8 @@ class UserRecord:
     role_id: str | None
     status: UserStatus
     identity_source: IdentitySource = "local"
+    email: str | None = None
+    locale: str = DEFAULT_LOCALE
     last_login_at: datetime | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
 
@@ -48,11 +51,25 @@ class UserStore(Protocol):
         role_id: str | None,
         status: UserStatus = "active",
         identity_source: IdentitySource = "local",
+        email: str | None = None,
+        locale: str = DEFAULT_LOCALE,
     ) -> UserRecord: ...
 
     def update_status(self, user_id: str, status: UserStatus) -> UserRecord | None: ...
 
     def update_last_login(self, user_id: str, when: datetime) -> None: ...
+
+    def update_profile(
+        self,
+        user_id: str,
+        *,
+        display_name: str | None = None,
+        email: str | None = None,
+        set_email: bool = False,
+        locale: str | None = None,
+    ) -> UserRecord | None: ...
+
+    def update_password_hash(self, user_id: str, password_hash: str) -> UserRecord | None: ...
 
 
 class MemoryUserStore:
@@ -96,6 +113,8 @@ class MemoryUserStore:
         role_id: str | None,
         status: UserStatus = "active",
         identity_source: IdentitySource = "local",
+        email: str | None = None,
+        locale: str = DEFAULT_LOCALE,
     ) -> UserRecord:
         with self._lock:
             if account in self._by_account:
@@ -111,6 +130,8 @@ class MemoryUserStore:
                 role_id=role_id,
                 status=status,
                 identity_source=identity_source,
+                email=email,
+                locale=locale,
             )
             self._by_id[user_id] = record
             self._by_account[account] = user_id
@@ -129,6 +150,35 @@ class MemoryUserStore:
             record = self._by_id.get(user_id)
             if record is not None:
                 record.last_login_at = when
+
+    def update_profile(
+        self,
+        user_id: str,
+        *,
+        display_name: str | None = None,
+        email: str | None = None,
+        set_email: bool = False,
+        locale: str | None = None,
+    ) -> UserRecord | None:
+        with self._lock:
+            record = self._by_id.get(user_id)
+            if record is None:
+                return None
+            if display_name is not None:
+                record.display_name = display_name
+            if set_email:
+                record.email = email
+            if locale is not None:
+                record.locale = locale
+            return record
+
+    def update_password_hash(self, user_id: str, password_hash: str) -> UserRecord | None:
+        with self._lock:
+            record = self._by_id.get(user_id)
+            if record is None:
+                return None
+            record.password_hash = password_hash
+            return record
 
 
 class SqlUserStore:
@@ -189,6 +239,8 @@ class SqlUserStore:
         role_id: str | None,
         status: UserStatus = "active",
         identity_source: IdentitySource = "local",
+        email: str | None = None,
+        locale: str = DEFAULT_LOCALE,
     ) -> UserRecord:
         from backend.core.db import session_scope
         from backend.admin.models import UserRow
@@ -208,6 +260,8 @@ class SqlUserStore:
                     id=user_id,
                     account=account,
                     display_name=display_name,
+                    email=email,
+                    locale=locale,
                     password_hash=password_hash,
                     role_id=role_id,
                     status=status,
@@ -243,6 +297,43 @@ class SqlUserStore:
             if row is not None:
                 row.last_login_at = when
 
+    def update_profile(
+        self,
+        user_id: str,
+        *,
+        display_name: str | None = None,
+        email: str | None = None,
+        set_email: bool = False,
+        locale: str | None = None,
+    ) -> UserRecord | None:
+        from backend.core.db import session_scope
+        from backend.admin.models import UserRow
+
+        with session_scope() as session:
+            row = session.get(UserRow, user_id)
+            if row is None:
+                return None
+            if display_name is not None:
+                row.display_name = display_name
+            if set_email:
+                row.email = email
+            if locale is not None:
+                row.locale = locale
+            session.flush()
+            return _row_to_user(row)
+
+    def update_password_hash(self, user_id: str, password_hash: str) -> UserRecord | None:
+        from backend.core.db import session_scope
+        from backend.admin.models import UserRow
+
+        with session_scope() as session:
+            row = session.get(UserRow, user_id)
+            if row is None:
+                return None
+            row.password_hash = password_hash
+            session.flush()
+            return _row_to_user(row)
+
 
 def _row_to_user(row: object) -> UserRecord:
     from backend.admin.models import UserRow
@@ -256,6 +347,8 @@ def _row_to_user(row: object) -> UserRecord:
         role_id=row.role_id,
         status=row.status,  # type: ignore[arg-type]
         identity_source=row.identity_source,  # type: ignore[arg-type]
+        email=row.email,
+        locale=row.locale or DEFAULT_LOCALE,
         last_login_at=row.last_login_at,
         created_at=row.created_at,
     )

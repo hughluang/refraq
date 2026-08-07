@@ -2,10 +2,10 @@
 
 ## 1. Purpose
 
-Contracts for **User PAT** create/list/revoke.
+Contracts for **User PAT** create/list/deactivate/restore/soft-delete.
 
 Business rules: `docs/business-user-tokens.md`.
-Auth for these endpoints: Session cookie **or** User PAT (a PAT may revoke itself).
+Auth for these endpoints: Session cookie **or** User PAT (a PAT may deactivate or delete itself).
 Permissions: `tokens:read` / `tokens:write`. Users act only on their own tokens.
 
 ## 2. Token Metadata Shape
@@ -22,12 +22,14 @@ Permissions: `tokens:read` / `tokens:write`. Users act only on their own tokens.
 }
 ```
 
+`revoked_at` is the deactivate timestamp. Soft-deleted tokens are omitted from responses; `deleted_at` is not exposed.
+
 ## 3. Endpoints
 
 ### `GET /tokens`
 
 - Permission: `tokens:read`
-- Returns `{ "items": [ /* metadata shapes */ ] }`
+- Returns `{ "items": [ /* metadata shapes */ ] }` (excludes soft-deleted)
 
 ### `POST /tokens`
 
@@ -61,10 +63,28 @@ Response `201`:
 
 `secret` appears only here.
 
-### `POST /tokens/{id}/revoke`
+### `POST /tokens/{id}/deactivate`
 
 - Permission: `tokens:write`
-- Response `200` with updated metadata (`revoked_at` set)
+- Sets `revoked_at` (idempotent if already deactivated)
+- Soft-deleted id → `404` `TOKEN_NOT_FOUND`
+- Response `200` with updated metadata
+
+### `POST /tokens/{id}/restore`
+
+- Permission: `tokens:write`
+- Clears `revoked_at` (idempotent if already active)
+- Soft-deleted id → `404` `TOKEN_NOT_FOUND`
+- Response `200` with updated metadata
+- Auth still fails if `expires_at` is in the past
+
+### `DELETE /tokens/{id}`
+
+- Permission: `tokens:write`
+- Soft-delete: sets `deleted_at`; row remains in DB
+- Requires the token to be deactivated (`revoked_at` set); otherwise `409` `TOKEN_NOT_DEACTIVATED`
+- Already soft-deleted or unknown id → `404` `TOKEN_NOT_FOUND`
+- Response `204`
 
 ## 4. Using A PAT
 
@@ -72,7 +92,7 @@ Response `201`:
 Authorization: Bearer rfq_pat_ab12...full-secret
 ```
 
-- Invalid/expired/revoked → `401` with `AUTH_PAT_INVALID` (or equivalent stable code)
+- Invalid / expired / deactivated / soft-deleted → `401` with `AUTH_PAT_INVALID` (or equivalent stable code)
 - Valid PAT with insufficient permission → `403` as usual
 
 ## 5. Auth Contract Interaction

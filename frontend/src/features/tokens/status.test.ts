@@ -19,14 +19,14 @@ function token(overrides: Partial<TokenMetadata> = {}): TokenMetadata {
 describe("tokenStatus", () => {
   const now = new Date("2026-08-06T00:00:00Z");
 
-  it("returns active when not revoked and not expired", () => {
+  it("returns active when not deactivated and not expired", () => {
     expect(tokenStatus(token(), now)).toBe("active");
   });
 
-  it("returns revoked when revoked_at is set", () => {
+  it("returns deactivated when revoked_at is set", () => {
     expect(
       tokenStatus(token({ revoked_at: "2026-08-06T00:00:00Z" }), now),
-    ).toBe("revoked");
+    ).toBe("deactivated");
   });
 
   it("returns expired when past expires_at", () => {
@@ -35,7 +35,7 @@ describe("tokenStatus", () => {
     ).toBe("expired");
   });
 
-  it("prefers revoked over expired", () => {
+  it("prefers deactivated over expired", () => {
     expect(
       tokenStatus(
         token({
@@ -44,6 +44,6 @@ describe("tokenStatus", () => {
         }),
         now,
       ),
-    ).toBe("revoked");
+    ).toBe("deactivated");
   });
 });

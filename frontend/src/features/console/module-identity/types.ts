@@ -1,5 +1,6 @@
 export type ModuleRoutes = {
-  list: string;
+  /** Null for identity-only modules with no Console page (e.g. tokens in Account Center). */
+  list: string | null;
   create?: string | null;
   edit?: string | null;
 };

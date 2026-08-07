@@ -9,7 +9,9 @@ from backend.admin.permissions import Permission, permissions_include
 
 @dataclass(frozen=True, slots=True)
 class ModuleRoutes:
-    list: str
+    """Page routes for a module. `list` may be None for identity-only modules (no Console page)."""
+
+    list: str | None
     create: str | None = None
     edit: str | None = None
 
@@ -87,7 +89,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="admin",
         group_label_key="layout.navGroup.admin",
         label_key="tokens.title",
-        routes=ModuleRoutes(list="/console/tokens"),
+        routes=ModuleRoutes(list=None),
         actions=ModuleActions(
             list="tokens:read",
             create="tokens:write",
@@ -175,7 +177,8 @@ def build_navigation(permissions: list[str] | tuple[str, ...]) -> list[Navigatio
     visible = [
         module
         for module in CONSOLE_MODULE_CATALOG
-        if permissions_include(permissions, module.actions.list)
+        if module.routes.list is not None
+        and permissions_include(permissions, module.actions.list)
     ]
     visible.sort(key=lambda item: (item.group_order, item.module_order, item.id))
 
@@ -203,6 +206,7 @@ def build_navigation(permissions: list[str] | tuple[str, ...]) -> list[Navigatio
             flush()
             current_group_id = module.group_id
             group_label_key = module.group_label_key
+        assert module.routes.list is not None
         buffer.append(
             NavigationModule(
                 id=module.id,

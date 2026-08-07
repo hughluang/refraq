@@ -18,9 +18,22 @@ export function createToken(body: CreateTokenRequest) {
   });
 }
 
-export async function revokeToken(id: string) {
-  const data = await apiClient<{ token: TokenMetadata }>(`/tokens/${id}/revoke`, {
-    method: "POST",
-  });
+export async function deactivateToken(id: string) {
+  const data = await apiClient<{ token: TokenMetadata }>(
+    `/tokens/${id}/deactivate`,
+    { method: "POST" },
+  );
   return data.token;
+}
+
+export async function restoreToken(id: string) {
+  const data = await apiClient<{ token: TokenMetadata }>(
+    `/tokens/${id}/restore`,
+    { method: "POST" },
+  );
+  return data.token;
+}
+
+export function deleteToken(id: string) {
+  return apiClient<void>(`/tokens/${id}`, { method: "DELETE" });
 }

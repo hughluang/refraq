@@ -75,7 +75,9 @@ Rules:
 - Groups with zero visible modules are omitted
 - Module order and group order follow the seed catalog
 - Each module `route` is `routes.list` from the seed
+- Modules with `routes.list` null (for example `tokens`, identity-only / embedded in Account Center) are omitted from navigation even when the caller has `actions.list`; they remain in module-identities for ACL
 - `/auth/me` does not include the navigation tree
+- Account Center (`/console/account`) is not a Console Module; see `docs/business-account.md`
 
 ### Errors
 
@@ -167,7 +169,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation and 
 | `dashboard` | `workbench` | `/console` | `dashboard:read` | — |
 | `users` | `admin` | `/console/users` | `users:read` | create/edit/delete → `users:write`; create route `/console/users/new` |
 | `roles` | `admin` | `/console/roles` | `roles:read` | create/edit/delete → `roles:write`; create `/console/roles/new`; edit `/console/roles/:id` |
-| `tokens` | `admin` | `/console/tokens` | `tokens:read` | create/edit/delete → `tokens:write` |
+| `tokens` | `admin` (identity only; **not** in navigation) | `null` (no Console page; UI in Account Center) | `tokens:read` | create/edit/delete → `tokens:write`; see `docs/business-account.md` |
 | `sources` | `metadata` | `/console/sources` | `sources:read` | create/edit/delete → `sources:write` |
 | `catalog` | `metadata` | `/console/catalog` | `metadata:read` | — |
 | `jobs` | `metadata` | `/console/jobs` | `jobs:run` | — |

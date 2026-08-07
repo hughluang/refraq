@@ -29,9 +29,11 @@ export function toRefineResources(modules: ModuleIdentity[]): IResourceItem[] {
   return modules.map((module) => {
     const resource: IResourceItem = {
       name: module.id,
-      list: module.routes.list,
       meta: { label: module.label_key },
     };
+    if (module.routes.list) {
+      resource.list = module.routes.list;
+    }
     if (module.routes.create) {
       resource.create = module.routes.create;
     }

@@ -83,46 +83,103 @@ def _login(client: TestClient) -> None:
     assert response.status_code == 200
 
 
-def test_create_list_revoke_token(client: TestClient) -> None:
-    _login(client)
+def _create_token(client: TestClient, name: str = "mcp-local") -> tuple[str, str]:
     expires = (datetime.utcnow() + timedelta(days=30)).isoformat() + "Z"
-    created = client.post("/tokens", json={"name": "mcp-local", "expires_at": expires})
+    created = client.post("/tokens", json={"name": name, "expires_at": expires})
     assert created.status_code == 201
     body = created.json()
-    assert body["secret"].startswith("rfq_pat_")
-    assert "secret" not in body["token"]
-    token_id = body["token"]["id"]
+    return body["token"]["id"], body["secret"]
+
+
+def test_create_list_deactivate_restore_token(client: TestClient) -> None:
+    _login(client)
+    token_id, secret = _create_token(client)
+    assert secret.startswith("rfq_pat_")
 
     listed = client.get("/tokens")
     assert listed.status_code == 200
     assert len(listed.json()["items"]) == 1
     assert "secret" not in listed.json()["items"][0]
 
-    secret = body["secret"]
     me = client.get("/auth/me", headers={"Authorization": f"Bearer {secret}"})
     # Session cookie still present and preferred — still 200
     assert me.status_code == 200
 
-    revoked = client.post(f"/tokens/{token_id}/revoke")
-    assert revoked.status_code == 200
-    assert revoked.json()["token"]["revoked_at"] is not None
+    deactivated = client.post(f"/tokens/{token_id}/deactivate")
+    assert deactivated.status_code == 200
+    assert deactivated.json()["token"]["revoked_at"] is not None
 
-    # Clear cookies so Bearer is used
     client.cookies.clear()
     me_pat = client.get("/auth/me", headers={"Authorization": f"Bearer {secret}"})
     assert me_pat.status_code == 401
     assert me_pat.json()["code"] == "AUTH_PAT_INVALID"
 
-    events = client.get("/audit/events")
-    # no session — need re-login for audit
+    _login(client)
+    restored = client.post(f"/tokens/{token_id}/restore")
+    assert restored.status_code == 200
+    assert restored.json()["token"]["revoked_at"] is None
+
+    client.cookies.clear()
+    me_again = client.get("/auth/me", headers={"Authorization": f"Bearer {secret}"})
+    assert me_again.status_code == 200
+    assert me_again.json()["user"]["account"] == "root"
+
     _login(client)
     events = client.get("/audit/events")
     assert events.status_code == 200
     actions = {item["action"] for item in events.json()["items"]}
     assert "token.create" in actions
-    assert "token.revoke" in actions
+    assert "token.deactivate" in actions
+    assert "token.restore" in actions
     for item in events.json()["items"]:
         assert "secret" not in item["detail"]
+
+
+def test_soft_delete_requires_deactivate(client: TestClient) -> None:
+    _login(client)
+    token_id, _secret = _create_token(client, name="still-active")
+
+    rejected = client.delete(f"/tokens/{token_id}")
+    assert rejected.status_code == 409
+    assert rejected.json()["code"] == "TOKEN_NOT_DEACTIVATED"
+
+    listed = client.get("/tokens")
+    assert listed.status_code == 200
+    assert len(listed.json()["items"]) == 1
+
+
+def test_soft_delete_hides_token_and_invalidates_auth(client: TestClient) -> None:
+    _login(client)
+    token_id, secret = _create_token(client, name="to-delete")
+
+    deactivated = client.post(f"/tokens/{token_id}/deactivate")
+    assert deactivated.status_code == 200
+
+    deleted = client.delete(f"/tokens/{token_id}")
+    assert deleted.status_code == 204
+
+    listed = client.get("/tokens")
+    assert listed.status_code == 200
+    assert listed.json()["items"] == []
+
+    missing = client.post(f"/tokens/{token_id}/deactivate")
+    assert missing.status_code == 404
+    assert missing.json()["code"] == "TOKEN_NOT_FOUND"
+
+    again = client.delete(f"/tokens/{token_id}")
+    assert again.status_code == 404
+    assert again.json()["code"] == "TOKEN_NOT_FOUND"
+
+    client.cookies.clear()
+    me_pat = client.get("/auth/me", headers={"Authorization": f"Bearer {secret}"})
+    assert me_pat.status_code == 401
+    assert me_pat.json()["code"] == "AUTH_PAT_INVALID"
+
+    _login(client)
+    events = client.get("/audit/events")
+    assert events.status_code == 200
+    actions = {item["action"] for item in events.json()["items"]}
+    assert "token.delete" in actions
 
 
 def test_bearer_auth_me_without_session(client: TestClient, store_bundle) -> None:

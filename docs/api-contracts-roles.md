@@ -65,7 +65,7 @@ Purpose: return the fixed Permission catalog for Role editing UIs.
     { "key": "jobs:run", "description": "Enqueue and manage Jobs (structure and later kinds)" },
     { "key": "query:run", "description": "Run controlled read-only SQL against a Connection" },
     { "key": "tokens:read", "description": "List own User PAT metadata" },
-    { "key": "tokens:write", "description": "Create and revoke own User PATs" },
+    { "key": "tokens:write", "description": "Create, deactivate, restore, and soft-delete (deactivated only) own User PATs" },
     { "key": "audit:read", "description": "Read management-plane audit events" }
   ]
 }

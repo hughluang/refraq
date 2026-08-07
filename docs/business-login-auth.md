@@ -80,11 +80,11 @@ Session rules:
 
 - session is created on successful login
 - protected APIs require a valid **Session or User PAT** (see `docs/business-user-tokens.md`); Console browser flows use Session
-- logout invalidates the current session (does not revoke PATs unless a separate revoke is performed)
+- logout invalidates the current session (does not deactivate or soft-delete PATs unless a separate token action is performed)
 - expired or invalid sessions behave as unauthenticated
 - disabling a User invalidates all of that User's sessions immediately and must reject that User's PATs (`401`)
 - after disable, requests that still present a former session cookie or that User's PAT are treated as unauthenticated (`401`)
-- re-enabling a User does not restore prior sessions; the User must sign in again (existing non-revoked PATs remain subject to expiry/revoke rules in the tokens doc)
+- re-enabling a User does not restore prior sessions; the User must sign in again (existing non-deactivated, non-deleted PATs remain subject to expiry/deactivate/delete rules in the tokens doc)
 
 Recommended first-version session policy:
 

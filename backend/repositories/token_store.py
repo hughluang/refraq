@@ -26,6 +26,7 @@ class TokenRecord:
     prefix: str
     expires_at: datetime
     revoked_at: datetime | None
+    deleted_at: datetime | None
     created_at: datetime
     last_used_at: datetime | None
 
@@ -59,7 +60,11 @@ class TokenStore(Protocol):
         expires_at: datetime,
     ) -> TokenRecord: ...
 
-    def revoke(self, token_id: str, *, when: datetime) -> TokenRecord | None: ...
+    def deactivate(self, token_id: str, *, when: datetime) -> TokenRecord | None: ...
+
+    def restore(self, token_id: str) -> TokenRecord | None: ...
+
+    def soft_delete(self, token_id: str, *, when: datetime) -> TokenRecord | None: ...
 
     def touch_last_used(self, token_id: str, when: datetime) -> None: ...
 
@@ -72,7 +77,11 @@ class MemoryTokenStore:
 
     def list_for_user(self, user_id: str) -> list[TokenRecord]:
         with self._lock:
-            items = [r for r in self._by_id.values() if r.user_id == user_id]
+            items = [
+                r
+                for r in self._by_id.values()
+                if r.user_id == user_id and r.deleted_at is None
+            ]
             return sorted(items, key=lambda r: (r.created_at, r.id), reverse=True)
 
     def get_by_id(self, token_id: str) -> TokenRecord | None:
@@ -105,6 +114,7 @@ class MemoryTokenStore:
                 prefix=prefix,
                 expires_at=expires_at,
                 revoked_at=None,
+                deleted_at=None,
                 created_at=datetime.utcnow(),
                 last_used_at=None,
             )
@@ -112,13 +122,29 @@ class MemoryTokenStore:
             self._by_hash[token_hash] = token_id
             return record
 
-    def revoke(self, token_id: str, *, when: datetime) -> TokenRecord | None:
+    def deactivate(self, token_id: str, *, when: datetime) -> TokenRecord | None:
         with self._lock:
             record = self._by_id.get(token_id)
-            if record is None:
+            if record is None or record.deleted_at is not None:
                 return None
             if record.revoked_at is None:
                 record.revoked_at = when
+            return record
+
+    def restore(self, token_id: str) -> TokenRecord | None:
+        with self._lock:
+            record = self._by_id.get(token_id)
+            if record is None or record.deleted_at is not None:
+                return None
+            record.revoked_at = None
+            return record
+
+    def soft_delete(self, token_id: str, *, when: datetime) -> TokenRecord | None:
+        with self._lock:
+            record = self._by_id.get(token_id)
+            if record is None or record.deleted_at is not None:
+                return None
+            record.deleted_at = when
             return record
 
     def touch_last_used(self, token_id: str, when: datetime) -> None:
@@ -138,7 +164,10 @@ class SqlTokenStore:
         with session_scope() as session:
             rows = session.scalars(
                 select(UserPatRow)
-                .where(UserPatRow.user_id == user_id)
+                .where(
+                    UserPatRow.user_id == user_id,
+                    UserPatRow.deleted_at.is_(None),
+                )
                 .order_by(UserPatRow.created_at.desc(), UserPatRow.id.desc())
             ).all()
             return [_row_to_token(row) for row in rows]
@@ -186,6 +215,7 @@ class SqlTokenStore:
                 prefix=prefix,
                 expires_at=expires_at,
                 revoked_at=None,
+                deleted_at=None,
                 created_at=created_at,
                 last_used_at=None,
             )
@@ -193,16 +223,40 @@ class SqlTokenStore:
             session.flush()
             return _row_to_token(row)
 
-    def revoke(self, token_id: str, *, when: datetime) -> TokenRecord | None:
+    def deactivate(self, token_id: str, *, when: datetime) -> TokenRecord | None:
         from backend.admin.models import UserPatRow
         from backend.core.db import session_scope
 
         with session_scope() as session:
             row = session.get(UserPatRow, token_id)
-            if row is None:
+            if row is None or row.deleted_at is not None:
                 return None
             if row.revoked_at is None:
                 row.revoked_at = when
+            session.flush()
+            return _row_to_token(row)
+
+    def restore(self, token_id: str) -> TokenRecord | None:
+        from backend.admin.models import UserPatRow
+        from backend.core.db import session_scope
+
+        with session_scope() as session:
+            row = session.get(UserPatRow, token_id)
+            if row is None or row.deleted_at is not None:
+                return None
+            row.revoked_at = None
+            session.flush()
+            return _row_to_token(row)
+
+    def soft_delete(self, token_id: str, *, when: datetime) -> TokenRecord | None:
+        from backend.admin.models import UserPatRow
+        from backend.core.db import session_scope
+
+        with session_scope() as session:
+            row = session.get(UserPatRow, token_id)
+            if row is None or row.deleted_at is not None:
+                return None
+            row.deleted_at = when
             session.flush()
             return _row_to_token(row)
 
@@ -228,6 +282,7 @@ def _row_to_token(row: object) -> TokenRecord:
         prefix=row.prefix,
         expires_at=row.expires_at,
         revoked_at=row.revoked_at,
+        deleted_at=row.deleted_at,
         created_at=row.created_at,
         last_used_at=row.last_used_at,
     )

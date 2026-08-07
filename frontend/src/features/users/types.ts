@@ -4,6 +4,8 @@ export type UserRow = {
   id: string;
   account: string;
   display_name: string;
+  email: string | null;
+  locale: string;
   role_id: string | null;
   role_key: string | null;
   role_name: string | null;

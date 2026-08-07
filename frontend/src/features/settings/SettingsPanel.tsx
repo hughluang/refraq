@@ -122,7 +122,7 @@ export function SettingsPanel() {
       title={t("settings.title")}
       description={t("settings.description")}
     >
-      <Stack gap="md" maw={480}>
+      <Stack gap="md">
         {loading ? <PageLoader /> : null}
         {!loading && error ? (
           <PageError message={error} onRetry={() => void load()} />

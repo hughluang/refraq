@@ -22,4 +22,4 @@ export type CreateTokenResponse = {
   secret: string;
 };
 
-export type TokenStatus = "active" | "expired" | "revoked";
+export type TokenStatus = "active" | "expired" | "deactivated";

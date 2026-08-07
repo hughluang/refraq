@@ -46,7 +46,7 @@ export const MODULE_IDENTITY_FIXTURE: ModuleIdentity[] = [
   {
     id: "tokens",
     label_key: "tokens.title",
-    routes: { list: "/console/tokens", create: null, edit: null },
+    routes: { list: null, create: null, edit: null },
     actions: {
       list: "tokens:read",
       create: "tokens:write",

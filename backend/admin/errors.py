@@ -81,6 +81,14 @@ class TokenInvalidExpiresAt(AuthError):
         return "expires_at must be in the future"
 
 
+class TokenNotDeactivated(AuthError):
+    code = "TOKEN_NOT_DEACTIVATED"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Token must be deactivated before delete"
+
+
 class AuditEventNotFound(AuthError):
     code = "AUDIT_EVENT_NOT_FOUND"
     http_status = 404
@@ -175,3 +183,52 @@ class RoleNotFound(AuthError):
 
     def _default_message(self) -> str:
         return "Role not found"
+
+
+class AccountProfileEmpty(AuthError):
+    code = "ACCOUNT_PROFILE_EMPTY"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "At least one profile field is required"
+
+
+class AccountInvalidLocale(AuthError):
+    code = "ACCOUNT_INVALID_LOCALE"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Unsupported locale"
+
+
+class AccountInvalidDisplayName(AuthError):
+    code = "ACCOUNT_INVALID_DISPLAY_NAME"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Invalid display name"
+
+
+class AccountPasswordNotLocal(AuthError):
+    code = "ACCOUNT_PASSWORD_NOT_LOCAL"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Password change is only available for local identity"
+
+
+class AccountPasswordInvalid(AuthError):
+    code = "ACCOUNT_PASSWORD_INVALID"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Current password is incorrect or new password is invalid"
+
+
+class AccountPasswordSessionRequired(AuthError):
+    code = "ACCOUNT_PASSWORD_SESSION_REQUIRED"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Password change requires a console session"
+

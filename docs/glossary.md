@@ -121,9 +121,14 @@ Avoid calling it a User PAT, a Bearer token, or a permanent login.
 
 ### User PAT
 
-A revocable personal access token owned by a User for non-browser API and MCP access (`Authorization: Bearer`).
+A personal access token owned by a User for non-browser API and MCP access (`Authorization: Bearer`); may be deactivated (restorable) or soft-deleted.
 Coexists with Console Session cookies; authenticates the same User and Role permissions.
 Avoid calling it a Client token, a Session id reused as Bearer, or a machine principal.
+
+### Account Center
+
+The current User’s self-service Console surface for profile, local password change, UI locale, and User PAT management.
+Avoid conflating with platform Settings / system parameters, or treating User PAT as a sidebar Administration module.
 
 ### Backing Service
 

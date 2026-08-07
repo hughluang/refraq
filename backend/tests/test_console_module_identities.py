@@ -66,7 +66,7 @@ EXPECTED_IDENTITIES = {
     },
     "tokens": {
         "label_key": "tokens.title",
-        "routes": {"list": "/console/tokens", "create": None, "edit": None},
+        "routes": {"list": None, "create": None, "edit": None},
         "actions": {
             "list": "tokens:read",
             "create": "tokens:write",

@@ -1,8 +1,11 @@
 "use client";
 
 import { Button, Menu } from "@mantine/core";
+import { useGetIdentity, useNotification } from "@refinedev/core";
 import { useChangeLanguage, useT } from "next-i18next/client";
 
+import { patchAccountProfile } from "@/features/account/api";
+import { ApiError } from "@/lib/api";
 import {
   getDefaultLocale,
   getLocaleNativeLabel,
@@ -11,6 +14,10 @@ import {
   LOCALE_COOKIE_NAME,
   type Locale,
 } from "@/providers/locale-catalog";
+import {
+  useSessionStore,
+  type CurrentUser,
+} from "@/providers/session-store";
 
 function LanguageIcon() {
   return (
@@ -36,8 +43,34 @@ function LanguageIcon() {
 export function LangSwitcher() {
   const { i18n, t } = useT("common");
   const changeLanguage = useChangeLanguage(LOCALE_COOKIE_NAME);
+  const { open } = useNotification();
+  const { data: user } = useGetIdentity<CurrentUser>();
+  const setUser = useSessionStore((s) => s.setUser);
   const current = i18n.resolvedLanguage ?? i18n.language;
   const locale: Locale = isLocale(current) ? current : getDefaultLocale();
+
+  async function selectLocale(next: Locale) {
+    if (next === locale) {
+      return;
+    }
+    if (user) {
+      try {
+        const updated = await patchAccountProfile({ locale: next });
+        setUser(updated);
+      } catch (err) {
+        open?.({
+          type: "error",
+          message: t("layout.language"),
+          description:
+            err instanceof ApiError
+              ? err.detail
+              : t("account.profile.error"),
+        });
+        return;
+      }
+    }
+    await changeLanguage(next);
+  }
 
   return (
     <Menu position="bottom-end" withinPortal>
@@ -57,7 +90,7 @@ export function LangSwitcher() {
             key={entry.code}
             disabled={entry.code === locale}
             onClick={() => {
-              void changeLanguage(entry.code);
+              void selectLocale(entry.code);
             }}
           >
             {entry.nativeLabel}

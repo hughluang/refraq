@@ -30,6 +30,8 @@ class SessionStore(Protocol):
 
     def delete_by_user_id(self, user_id: str) -> None: ...
 
+    def delete_other_sessions(self, user_id: str, keep_session_id: str) -> None: ...
+
 
 class MemorySessionStore:
     def __init__(self) -> None:
@@ -69,6 +71,18 @@ class MemorySessionStore:
         with self._lock:
             to_delete = [
                 sid for sid, entry in self._sessions.items() if entry.user_id == user_id
+            ]
+            for sid in to_delete:
+                self._sessions.pop(sid, None)
+
+    def delete_other_sessions(self, user_id: str, keep_session_id: str) -> None:
+        if not user_id:
+            return
+        with self._lock:
+            to_delete = [
+                sid
+                for sid, entry in self._sessions.items()
+                if entry.user_id == user_id and sid != keep_session_id
             ]
             for sid in to_delete:
                 self._sessions.pop(sid, None)
@@ -139,6 +153,25 @@ class RedisSessionStore:
         # Drop empty index key if present
         if client.scard(index_key) == 0:
             client.delete(index_key)
+
+    def delete_other_sessions(self, user_id: str, keep_session_id: str) -> None:
+        if not user_id:
+            return
+        from backend.core.redis_client import get_redis
+
+        client = get_redis()
+        index_key = f"{USER_SESSIONS_KEY_PREFIX}{user_id}"
+        session_ids = client.smembers(index_key)
+        if not session_ids:
+            return
+        pipe = client.pipeline()
+        for sid in session_ids:
+            sid_str = str(sid)
+            if sid_str == keep_session_id:
+                continue
+            pipe.delete(f"{SESSION_KEY_PREFIX}{sid_str}")
+            pipe.srem(index_key, sid_str)
+        pipe.execute()
 
 
 SessionStoreImpl = MemorySessionStore

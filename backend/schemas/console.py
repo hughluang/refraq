@@ -22,7 +22,7 @@ class NavigationResponse(BaseModel):
 
 
 class ModuleRoutesResponse(BaseModel):
-    list: str
+    list: str | None = None
     create: str | None = None
     edit: str | None = None
 

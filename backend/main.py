@@ -15,6 +15,7 @@ from backend.core.config import Settings, get_settings
 from backend.admin.roles import SUPER_ADMIN_KEY, seed_roles
 from backend.repositories.role_store import get_role_store
 from backend.repositories.user_store import get_user_store
+from backend.routers.account import router as account_router
 from backend.routers.audit import router as audit_router
 from backend.routers.auth import router as auth_router_instance
 from backend.routers.console import router as console_router
@@ -75,6 +76,7 @@ async def auth_error_handler(_: Request, exc: AuthError) -> JSONResponse:
 
 app.include_router(health_router)
 app.include_router(auth_router_instance)
+app.include_router(account_router)
 app.include_router(users_router)
 app.include_router(roles_router)
 app.include_router(console_router)
