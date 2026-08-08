@@ -11,22 +11,17 @@ from backend.jobs.store import (
     JobRecord,
     JobStatus,
     TERMINAL,
-    create_queued_job,
     get_job_store,
     mark_cancelled,
 )
 from backend.metadata.catalog.store import get_catalog_store, require_object
-from backend.metadata.enqueue import enqueue_job
 from backend.metadata.errors import (
-    CatalogObjectNotFound,
-    JobAlreadyActive,
     JobInputInvalid,
     JobNotCancellable,
     JobNotFound,
-    JobSourceDisabled,
-    SourceNotFound,
 )
-from backend.metadata.sources.store import get_source_store
+from backend.metadata.source_jobs import enqueue_structure_job, list_jobs_for_source
+from backend.metadata.sources.service import require_source
 from backend.repositories.user_store import UserRecord
 from backend.schemas.jobs import (
     CatalogColumnOut,
@@ -99,39 +94,14 @@ def enqueue_source_job(
 ) -> JSONResponse:
     if payload.kind != "structure":
         raise JobInputInvalid("Only kind=structure is supported in slice A")
-    sources = get_source_store()
-    source = sources.get_source(source_id)
-    if source is None:
-        raise SourceNotFound()
-    if source.status != "active":
-        raise JobSourceDisabled()
-    if source.kind != "database":
-        raise JobInputInvalid("structure jobs require a database Source")
-
-    if not source.engine or not source.access_ciphertext:
-        raise JobInputInvalid("Source has no access configuration")
-
-    if get_job_store().has_active_structure_job(source_id):
-        raise JobAlreadyActive()
-
-    job = create_queued_job(
-        kind="structure",
-        input={"source_id": source_id},
-        created_by=user.id,
-    )
-    enqueue_job(job)
-    persist_audit_event(
+    job = enqueue_structure_job(
+        source_id=source_id,
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),
-        resource_type="job",
-        resource_id=job.id,
-        action="job.enqueue",
-        result="success",
-        detail={"kind": "structure", "source_id": source_id},
     )
     return JSONResponse(
         status_code=status.HTTP_202_ACCEPTED,
-        content={"job": _job_out(get_job_store().get(job.id) or job).model_dump(mode="json")},
+        content={"job": _job_out(job).model_dump(mode="json")},
     )
 
 
@@ -142,11 +112,9 @@ def list_source_jobs(
     status_filter: JobStatus | None = Query(default=None, alias="status"),
     _: UserRecord = Depends(require_permission("jobs:run")),
 ) -> JobListResponse:
-    if get_source_store().get_source(source_id) is None:
-        raise SourceNotFound()
     items = [
         _job_out(r)
-        for r in get_job_store().list_for_source(
+        for r in list_jobs_for_source(
             source_id, kind=kind, status=status_filter
         )
     ]
@@ -198,8 +166,7 @@ def list_objects(
     q: str | None = None,
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectListResponse:
-    if get_source_store().get_source(source_id) is None:
-        raise SourceNotFound()
+    require_source(source_id)
     items = [
         _object_out(o, include_columns=False)
         for o in get_catalog_store().list_objects(source_id, name_search=q)

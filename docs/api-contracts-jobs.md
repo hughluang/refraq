@@ -79,9 +79,9 @@ Stable aliases of older draft codes (`INGESTION_*`) must not be reintroduced in 
 
 ### Structure single-flight
 
-Enqueue of `kind=structure` rejects with `JOB_ALREADY_ACTIVE` when the Job store already has a
+Enqueue of `kind=structure` rejects with `JOB_ALREADY_ACTIVE` when the Source–Job facade finds a
 non-terminal structure Job whose `input.source_id` matches the path Source. Authority is the
-Postgres/memory Job table, not Celery.
+Postgres/memory Job table (queried via the facade), not Celery.
 
 ## 5. Slice Notes
 

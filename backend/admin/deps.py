@@ -146,8 +146,8 @@ def get_actor_token_id(request: Request) -> str | None:
     return getattr(request.state, "actor_token_id", None)
 
 
-def resolve_user_from_bearer(secret: str) -> UserRecord:
-    """Resolve an active User from a raw PAT secret (MCP / non-HTTP callers)."""
+def resolve_pat_bearer(secret: str) -> tuple[UserRecord, str]:
+    """Resolve an active User and PAT id from a raw PAT secret (MCP / non-HTTP)."""
     tokens = get_token_store()
     users = get_user_store()
     record = tokens.get_by_hash(hash_token(secret))
@@ -163,5 +163,5 @@ def resolve_user_from_bearer(secret: str) -> UserRecord:
     if user is None or user.status != "active":
         raise AuthPatInvalid()
     tokens.touch_last_used(record.id, now)
-    return user
+    return user, record.id
 

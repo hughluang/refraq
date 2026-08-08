@@ -574,7 +574,7 @@ def test_collect_failure_does_not_absent(monkeypatch: pytest.MonkeyPatch) -> Non
     from backend.metadata.catalog.store import CatalogObjectRecord, get_catalog_store
     from backend.metadata.connectors.base import ConnectorError
     from backend.metadata.runner import run_structure_job
-    from backend.metadata.sources.store import create_source
+    from backend.metadata.sources.service import create_source
 
     source = create_source(
         key="fail-src",
@@ -637,3 +637,115 @@ def test_collect_failure_does_not_absent(monkeypatch: pytest.MonkeyPatch) -> Non
     assert len(present) == 1
     assert present[0].name == "kept"
     assert present[0].business_name == "Kept"
+
+
+def test_public_view_strips_secrets_and_includes_access_updated_at(
+    client: TestClient,
+) -> None:
+    from backend.metadata.sources import service as source_service
+
+    body = _make_source(client, key="pub-view")
+    record = source_service.require_source(body["id"])
+    view = source_service.public_view(record)
+    assert view["access_updated_at"] is not None
+    assert view["has_access"] is True
+    assert view["access"] is not None
+    assert "password" not in view["access"]
+    assert view["access"]["host"] == "127.0.0.1"
+    assert view["id"] == body["id"]
+
+
+def test_enqueue_structure_job_audits_and_rejects_non_database(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import timedelta
+
+    from backend.admin.deps import resolve_pat_bearer
+    from backend.metadata.errors import JobInputInvalid, JobSourceDisabled
+    from backend.metadata.sources.store import SourceRecord, get_source_store
+    from backend.metadata.source_jobs import enqueue_structure_job
+    from backend.repositories.audit_store import get_audit_store, reset_audit_store
+
+    reset_audit_store()
+    monkeypatch.setattr(
+        "backend.metadata.runner.run_structure_job",
+        lambda job_id: {"status": "succeeded"},
+    )
+
+    source = _make_source(client, key="enq-ok")
+    expires = (datetime.utcnow() + timedelta(days=7)).isoformat() + "Z"
+    tok = client.post("/tokens", json={"name": "enq-pat", "expires_at": expires})
+    assert tok.status_code == 201, tok.text
+    token_id = tok.json()["token"]["id"]
+    secret = tok.json()["secret"]
+    user, resolved_token_id = resolve_pat_bearer(secret)
+    assert resolved_token_id == token_id
+
+    job = enqueue_structure_job(
+        source_id=source["id"],
+        actor_user_id=user.id,
+        actor_token_id=resolved_token_id,
+    )
+    assert job.kind == "structure"
+    assert job.input == {"source_id": source["id"]}
+    events, _ = get_audit_store().list_events(action="job.enqueue")
+    assert len(events) == 1
+    assert events[0].actor_user_id == user.id
+    assert events[0].actor_token_id == token_id
+    assert events[0].detail["source_id"] == source["id"]
+
+    disabled = client.patch(f"/sources/{source['id']}", json={"status": "disabled"})
+    assert disabled.status_code == 200
+    with pytest.raises(JobSourceDisabled):
+        enqueue_structure_job(
+            source_id=source["id"],
+            actor_user_id=user.id,
+            actor_token_id=token_id,
+        )
+
+    now = datetime.utcnow()
+    get_source_store().create_source(
+        SourceRecord(
+            id="src_nondb",
+            key="file-like",
+            name="File",
+            kind="file",
+            status="active",
+            description=None,
+            database_name=None,
+            schema_filter=None,
+            engine=None,
+            access_ciphertext=None,
+            access_updated_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    with pytest.raises(JobInputInvalid) as exc:
+        enqueue_structure_job(
+            source_id="src_nondb",
+            actor_user_id=user.id,
+            actor_token_id=token_id,
+        )
+    assert "database" in exc.value.message
+
+
+def test_structure_job_http_enqueue_writes_audit(client: TestClient, monkeypatch) -> None:
+    from backend.repositories.audit_store import get_audit_store, reset_audit_store
+
+    reset_audit_store()
+    monkeypatch.setattr(
+        "backend.metadata.runner.run_structure_job",
+        lambda job_id: {"status": "succeeded"},
+    )
+    source = _make_source(client, key="http-enq")
+    resp = client.post(
+        f"/sources/{source['id']}/jobs",
+        json={"kind": "structure"},
+    )
+    assert resp.status_code == 202, resp.text
+    events, _ = get_audit_store().list_events(action="job.enqueue")
+    assert len(events) == 1
+    assert events[0].resource_id == resp.json()["job"]["id"]
+    assert events[0].detail["source_id"] == source["id"]
+    assert events[0].actor_token_id is None

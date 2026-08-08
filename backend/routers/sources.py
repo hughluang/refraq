@@ -6,24 +6,18 @@ from fastapi import APIRouter, Depends, Request, Response, status
 
 from backend.admin.audit import persist_audit_event
 from backend.admin.deps import get_actor_token_id, require_permission
-from backend.metadata.connectors.specs import get_connector_spec, project_access
+from backend.metadata.connectors.specs import get_connector_spec
 from backend.metadata.errors import (
     SourceAccessRequired,
-    SourceNotFound,
     SourceSecretRequired,
 )
 from backend.metadata.sources.access import (
     decrypt_access_blob,
     validate_access,
 )
+from backend.metadata.sources import service as source_service
 from backend.metadata.sources.probe import run_source_probe
-from backend.metadata.sources.store import (
-    SourceRecord,
-    create_source,
-    delete_source,
-    get_source_store,
-    update_source,
-)
+from backend.metadata.sources.store import SourceRecord, get_source_store
 from backend.repositories.user_store import UserRecord
 from backend.schemas.sources import (
     AccessSchemaResponse,
@@ -42,26 +36,7 @@ router = APIRouter(tags=["sources"])
 
 
 def _source_out(record: SourceRecord) -> SourceOut:
-    access = None
-    if record.engine and record.access_ciphertext:
-        access = project_access(
-            record.engine,
-            decrypt_access_blob(record.access_ciphertext),
-        )
-    return SourceOut(
-        id=record.id,
-        key=record.key,
-        name=record.name,
-        kind=record.kind,
-        status=record.status,
-        description=record.description,
-        database_name=record.database_name,
-        schema_filter=record.schema_filter,
-        engine=record.engine,
-        access=access,
-        has_access=record.has_access,
-        access_updated_at=record.access_updated_at,
-    )
+    return SourceOut.model_validate(source_service.public_view(record))
 
 
 @router.get("/sources", response_model=SourceListResponse)
@@ -90,7 +65,7 @@ def post_source(
     request: Request,
     user: UserRecord = Depends(require_permission("sources:write")),
 ) -> SourceResponse:
-    record = create_source(
+    record = source_service.create_source(
         key=payload.key,
         name=payload.name,
         kind=payload.kind,
@@ -147,9 +122,7 @@ def get_source(
     source_id: str,
     _: UserRecord = Depends(require_permission("sources:read")),
 ) -> SourceResponse:
-    record = get_source_store().get_source(source_id)
-    if record is None:
-        raise SourceNotFound()
+    record = source_service.require_source(source_id)
     return SourceResponse(source=_source_out(record))
 
 
@@ -158,12 +131,8 @@ def get_source_access(
     source_id: str,
     _: UserRecord = Depends(require_permission("sources:write")),
 ) -> SourceAccessResponse:
-    record = get_source_store().get_source(source_id)
-    if record is None:
-        raise SourceNotFound()
-    if not record.access_ciphertext:
-        raise SourceAccessRequired("Source has no access configuration")
-    return SourceAccessResponse(access=decrypt_access_blob(record.access_ciphertext))
+    record = source_service.require_source(source_id)
+    return SourceAccessResponse(access=source_service.full_access(record))
 
 
 @router.patch("/sources/{source_id}", response_model=SourceResponse)
@@ -174,7 +143,7 @@ def patch_source(
     user: UserRecord = Depends(require_permission("sources:write")),
 ) -> SourceResponse:
     data = payload.model_dump(exclude_unset=True)
-    record = update_source(
+    record = source_service.update_source(
         source_id,
         name=data.get("name"),
         description=data["description"] if "description" in data else ...,
@@ -206,7 +175,7 @@ def delete_source_endpoint(
     request: Request,
     user: UserRecord = Depends(require_permission("sources:write")),
 ) -> Response:
-    record = delete_source(source_id)
+    record = source_service.delete_source(source_id)
     persist_audit_event(
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),
@@ -226,9 +195,7 @@ def test_source_stored(
     request: Request,
     user: UserRecord = Depends(require_permission("sources:write")),
 ) -> SourceTestResponse:
-    record = get_source_store().get_source(source_id)
-    if record is None:
-        raise SourceNotFound()
+    record = source_service.require_source(source_id)
 
     engine = payload.engine or record.engine
     if not engine:

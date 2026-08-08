@@ -4,26 +4,13 @@ from __future__ import annotations
 
 import threading
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
-from typing import Any, Protocol
+from typing import Protocol
 
 from backend.core.config import get_settings
-from backend.metadata.errors import (
-    SourceAccessRequired,
-    SourceKeyDuplicate,
-    SourceKindUnsupported,
-    SourceNotDisabled,
-    SourceNotFound,
-    SourceValidationError,
-)
-from backend.metadata.sources.access import (
-    SUPPORTED_ENGINES,
-    decrypt_access_blob,
-    encrypt_access_blob,
-    validate_access,
-)
+from backend.metadata.errors import SourceKeyDuplicate, SourceNotFound
 
 SUPPORTED_KINDS = frozenset({"database"})
 
@@ -262,111 +249,3 @@ def reset_source_store() -> None:
     with _memory_lock:
         _memory_singleton = None
     get_source_store.cache_clear()
-
-
-def create_source(
-    *,
-    key: str,
-    name: str,
-    kind: str,
-    description: str | None,
-    database_name: str | None,
-    schema_filter: str | None,
-    engine: str | None,
-    access: dict[str, Any] | None,
-) -> SourceRecord:
-    if kind not in SUPPORTED_KINDS:
-        raise SourceKindUnsupported()
-    ciphertext: str | None = None
-    access_updated_at: datetime | None = None
-    if kind == "database":
-        if not database_name:
-            raise SourceValidationError("database_name is required for database Sources")
-        if not engine or access is None:
-            raise SourceAccessRequired()
-        access = validate_access(engine, access)
-        ciphertext = encrypt_access_blob(access)
-        access_updated_at = datetime.utcnow()
-    now = datetime.utcnow()
-    record = SourceRecord(
-        id=new_source_id(),
-        key=key,
-        name=name,
-        kind=kind,
-        status="active",
-        description=description,
-        database_name=database_name,
-        schema_filter=schema_filter,
-        engine=engine,
-        access_ciphertext=ciphertext,
-        access_updated_at=access_updated_at,
-        created_at=now,
-        updated_at=now,
-    )
-    return get_source_store().create_source(record)
-
-
-def update_source(
-    source_id: str,
-    *,
-    name: str | None = None,
-    description: str | None | object = ...,
-    status: str | None = None,
-    database_name: str | None = None,
-    schema_filter: str | None | object = ...,
-    engine: str | None = None,
-    access: dict[str, Any] | None | object = ...,
-) -> SourceRecord:
-    store = get_source_store()
-    existing = store.get_source(source_id)
-    if existing is None:
-        raise SourceNotFound()
-    updated = replace(existing)
-    if name is not None:
-        updated.name = name
-    if description is not ...:
-        updated.description = description  # type: ignore[assignment]
-    if status is not None:
-        if status not in {"active", "disabled"}:
-            raise SourceValidationError("Invalid status")
-        updated.status = status
-    if database_name is not None:
-        updated.database_name = database_name
-    if schema_filter is not ...:
-        updated.schema_filter = schema_filter  # type: ignore[assignment]
-    if engine is not None:
-        if engine not in SUPPORTED_ENGINES:
-            from backend.metadata.errors import SourceEngineUnsupported
-
-            raise SourceEngineUnsupported()
-        updated.engine = engine
-    if access is not ...:
-        eng = engine if engine is not None else updated.engine
-        if eng is None:
-            raise SourceAccessRequired()
-        validated = validate_access(eng, access)  # type: ignore[arg-type]
-        updated.access_ciphertext = encrypt_access_blob(validated)
-        updated.access_updated_at = datetime.utcnow()
-    elif engine is not None and updated.access_ciphertext:
-        # Re-validate existing blob against new engine (usually requires full replace)
-        existing_access = decrypt_access_blob(updated.access_ciphertext)
-        validated = validate_access(engine, existing_access)
-        updated.access_ciphertext = encrypt_access_blob(validated)
-        updated.access_updated_at = datetime.utcnow()
-    updated.updated_at = datetime.utcnow()
-    return store.save_source(updated)
-
-
-def delete_source(source_id: str) -> SourceRecord:
-    store = get_source_store()
-    existing = store.get_source(source_id)
-    if existing is None:
-        raise SourceNotFound()
-    if existing.status != "disabled":
-        raise SourceNotDisabled()
-    from backend.metadata.catalog.store import get_catalog_store
-
-    get_catalog_store().delete_objects_for_source(source_id)
-    if not store.delete_source(source_id):
-        raise SourceNotFound()
-    return existing

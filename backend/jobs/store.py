@@ -51,37 +51,19 @@ class MemoryJobStore:
             self._by_id[record.id] = record
             return record
 
-    def list_by_status(self, status: JobStatus) -> list[JobRecord]:
-        with self._lock:
-            return [r for r in self._by_id.values() if r.status == status]
-
-    def list_for_source(
+    def list(
         self,
-        source_id: str,
         *,
         kind: str | None = None,
         status: JobStatus | None = None,
     ) -> list[JobRecord]:
         with self._lock:
-            items = [
-                r
-                for r in self._by_id.values()
-                if r.input.get("source_id") == source_id
-            ]
+            items = list(self._by_id.values())
             if kind is not None:
                 items = [r for r in items if r.kind == kind]
             if status is not None:
                 items = [r for r in items if r.status == status]
             return sorted(items, key=lambda r: r.created_at, reverse=True)
-
-    def has_active_structure_job(self, source_id: str) -> bool:
-        with self._lock:
-            return any(
-                r.kind == "structure"
-                and r.status not in TERMINAL
-                and r.input.get("source_id") == source_id
-                for r in self._by_id.values()
-            )
 
 
 class SqlJobStore:
@@ -133,21 +115,8 @@ class SqlJobStore:
             session.flush()
             return _row_to_job(row)
 
-    def list_by_status(self, status: JobStatus) -> list[JobRecord]:
-        from sqlalchemy import select
-
-        from backend.core.db import session_scope
-        from backend.jobs.models import JobRow
-
-        with session_scope() as session:
-            rows = session.scalars(
-                select(JobRow).where(JobRow.status == status)
-            ).all()
-            return [_row_to_job(row) for row in rows]
-
-    def list_for_source(
+    def list(
         self,
-        source_id: str,
         *,
         kind: str | None = None,
         status: JobStatus | None = None,
@@ -158,25 +127,14 @@ class SqlJobStore:
         from backend.jobs.models import JobRow
 
         with session_scope() as session:
-            rows = session.scalars(select(JobRow)).all()
-            items = [
-                _row_to_job(row)
-                for row in rows
-                if isinstance(row.input, dict)
-                and row.input.get("source_id") == source_id
-            ]
+            stmt = select(JobRow)
             if kind is not None:
-                items = [r for r in items if r.kind == kind]
+                stmt = stmt.where(JobRow.kind == kind)
             if status is not None:
-                items = [r for r in items if r.status == status]
-            return sorted(items, key=lambda r: r.created_at, reverse=True)
-
-    def has_active_structure_job(self, source_id: str) -> bool:
-        return any(
-            True
-            for _ in self.list_for_source(source_id, kind="structure")
-            if _.status not in TERMINAL
-        )
+                stmt = stmt.where(JobRow.status == status)
+            stmt = stmt.order_by(JobRow.created_at.desc())
+            rows = session.scalars(stmt).all()
+            return [_row_to_job(row) for row in rows]
 
 
 def _row_to_job(row: object) -> JobRecord:
@@ -311,7 +269,7 @@ def reap_stuck_running_jobs() -> int:
     cutoff = datetime.utcnow() - timedelta(seconds=timeout)
     store = get_job_store()
     reaped = 0
-    for record in store.list_by_status("running"):
+    for record in store.list(status="running"):
         started = record.started_at or record.created_at
         if started > cutoff:
             continue

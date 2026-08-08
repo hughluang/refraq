@@ -21,7 +21,7 @@ from backend.jobs.store import (  # noqa: E402
     reap_stuck_running_jobs,
     reset_job_store,
 )
-from backend.metadata.enqueue import enqueue_job  # noqa: E402
+from backend.metadata.source_jobs import dispatch_queued_job  # noqa: E402
 from backend.worker.schedules import (  # noqa: E402
     ensure_system_schedules,
     get_schedule_store,
@@ -53,7 +53,7 @@ def test_stub_job_marks_failed_when_source_missing() -> None:
     )
     assert not hasattr(job, "source_id")
     assert job.input["source_id"] == "src_missing"
-    enqueue_job(job)
+    dispatch_queued_job(job)
     stored = get_job_store().get(job.id)
     assert stored is not None
     assert stored.status == "failed"
@@ -63,7 +63,7 @@ def test_stub_job_marks_failed_when_source_missing() -> None:
 
 def test_unknown_kind_marks_failed() -> None:
     job = create_queued_job(kind="nope", input={})
-    enqueue_job(job)
+    dispatch_queued_job(job)
     stored = get_job_store().get(job.id)
     assert stored is not None
     assert stored.status == "failed"

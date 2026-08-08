@@ -23,6 +23,7 @@ from backend.metadata.errors import (
 __all__ = [
     "SUPPORTED_ENGINES",
     "validate_access",
+    "seal_access",
     "encrypt_access_blob",
     "decrypt_access_blob",
     "project_access",
@@ -47,6 +48,11 @@ def validate_access(engine: str, access: dict[str, Any] | None) -> dict[str, Any
 def encrypt_access_blob(access: dict[str, Any]) -> str:
     payload = json.dumps(access, separators=(",", ":"), ensure_ascii=False)
     return encrypt_secret(payload)
+
+
+def seal_access(engine: str, access: dict[str, Any] | None) -> str:
+    """Validate access against Connector Spec and return ciphertext."""
+    return encrypt_access_blob(validate_access(engine, access))
 
 
 def decrypt_access_blob(ciphertext: str) -> dict[str, Any]:

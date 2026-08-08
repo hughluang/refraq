@@ -195,8 +195,8 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
 - **Semantics preservation:** structure upserts whitelist structural columns only; never overwrite
   `business_name` / `business_description` (or later join edges).
 - **Structure single-flight:** at most one non-terminal `kind=structure` Job per Source
-  (`JOB_ALREADY_ACTIVE`). Enforced on the Job store (not a Celery lock). Re-run = new Job after
-  terminal status.
+  (`JOB_ALREADY_ACTIVE`). Enforced by the Source–Job facade using Job store queries (not a Celery
+  lock; authority remains the Job table). Re-run = new Job after terminal status.
 - Collectors read **Source catalog scope + embedded `engine` / decrypted `access`**. Introspection uses
   engine-native catalogs (`pg_catalog`, `sys.*`, `ALL_`/`DBA_`).
 - Collection account guidance: prefer least privilege (PostgreSQL schema `USAGE` + catalog read;
