@@ -8,15 +8,15 @@ from fastapi import APIRouter, Depends, Query
 
 from backend.admin.deps import require_permission
 from backend.admin.errors import AuditEventNotFound
-from backend.repositories.audit_store import get_audit_store
-from backend.repositories.user_store import UserRecord
-from backend.schemas.audit import AuditEvent, AuditEventListResponse, AuditEventResponse
+from backend.admin.audit_store import get_audit_store
+from backend.admin.user_store import UserRecord
+from backend.admin.schemas.audit import AuditEvent, AuditEventListResponse, AuditEventResponse
 
 router = APIRouter(tags=["audit"])
 
 
 def _to_event(record: object) -> AuditEvent:
-    from backend.repositories.audit_store import AuditEventRecord
+    from backend.admin.audit_store import AuditEventRecord
 
     assert isinstance(record, AuditEventRecord)
     return AuditEvent(

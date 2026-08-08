@@ -13,14 +13,14 @@ from backend.admin.errors import (
     TokenNotDeactivated,
     TokenNotFound,
 )
-from backend.repositories.token_store import (
+from backend.admin.token_store import (
     TokenRecord,
     TokenStore,
     generate_token_secret,
     get_token_store,
 )
-from backend.repositories.user_store import UserRecord
-from backend.schemas.tokens import (
+from backend.admin.user_store import UserRecord
+from backend.admin.schemas.tokens import (
     CreateTokenRequest,
     CreateTokenResponse,
     TokenListResponse,

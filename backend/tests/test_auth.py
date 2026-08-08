@@ -13,15 +13,15 @@ os.environ.setdefault("REFRAQ_SKIP_SEED", "1")
 from backend.admin.security import hash_password  # noqa: E402
 from backend.main import app  # noqa: E402
 from backend.admin.roles import create_role, seed_roles  # noqa: E402
-from backend.repositories.role_store import (  # noqa: E402
+from backend.admin.role_store import (  # noqa: E402
     MemoryRoleStore,
     reset_role_store,
 )
-from backend.repositories.session_store import (  # noqa: E402
+from backend.admin.session_store import (  # noqa: E402
     MemorySessionStore,
     reset_session_store,
 )
-from backend.repositories.user_store import (  # noqa: E402
+from backend.admin.user_store import (  # noqa: E402
     MemoryUserStore,
     reset_user_store,
 )
@@ -55,9 +55,9 @@ def store_bundle():
 @pytest.fixture
 def client(store_bundle):
     user_store, role_store, session_store = store_bundle
-    from backend.repositories.role_store import get_role_store
-    from backend.repositories.session_store import get_session_store
-    from backend.repositories.user_store import get_user_store
+    from backend.admin.role_store import get_role_store
+    from backend.admin.session_store import get_session_store
+    from backend.admin.user_store import get_user_store
 
     app.dependency_overrides[get_user_store] = lambda: user_store
     app.dependency_overrides[get_role_store] = lambda: role_store
@@ -206,7 +206,7 @@ def test_logout_delete_cookie_matches_secure_attrs(
         initial_admin_password="s3cret",
     )
     monkeypatch.setattr(
-        "backend.routers.auth.get_settings", lambda: secure_settings
+        "backend.admin.routers.auth.get_settings", lambda: secure_settings
     )
     app.dependency_overrides[get_settings] = lambda: secure_settings
 

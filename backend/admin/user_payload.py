@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from backend.admin.deps import resolve_user_permissions
-from backend.repositories.role_store import RoleRecord, RoleStore
-from backend.repositories.user_store import UserRecord
-from backend.schemas.auth import CurrentUser
-from backend.schemas.user import UserSummary
+from backend.admin.role_store import RoleRecord, RoleStore
+from backend.admin.user_store import UserRecord
+from backend.admin.schemas.auth import CurrentUser
+from backend.admin.schemas.user import UserSummary
 
 
 def role_fields(role: RoleRecord | None) -> tuple[str | None, str | None, str | None]:

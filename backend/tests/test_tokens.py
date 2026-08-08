@@ -13,20 +13,20 @@ os.environ.setdefault("REFRAQ_SKIP_SEED", "1")
 from backend.admin.roles import create_role, seed_roles  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.main import app  # noqa: E402
-from backend.repositories.audit_store import (  # noqa: E402
+from backend.admin.audit_store import (  # noqa: E402
     MemoryAuditStore,
     reset_audit_store,
 )
-from backend.repositories.role_store import MemoryRoleStore, reset_role_store  # noqa: E402
-from backend.repositories.session_store import (  # noqa: E402
+from backend.admin.role_store import MemoryRoleStore, reset_role_store  # noqa: E402
+from backend.admin.session_store import (  # noqa: E402
     MemorySessionStore,
     reset_session_store,
 )
-from backend.repositories.token_store import (  # noqa: E402
+from backend.admin.token_store import (  # noqa: E402
     MemoryTokenStore,
     reset_token_store,
 )
-from backend.repositories.user_store import MemoryUserStore, reset_user_store  # noqa: E402
+from backend.admin.user_store import MemoryUserStore, reset_user_store  # noqa: E402
 
 
 @pytest.fixture
@@ -63,11 +63,11 @@ def store_bundle():
 @pytest.fixture
 def client(store_bundle):
     user_store, role_store, session_store, token_store, audit_store = store_bundle
-    from backend.repositories.audit_store import get_audit_store as _get_audit
-    from backend.repositories.role_store import get_role_store
-    from backend.repositories.session_store import get_session_store
-    from backend.repositories.token_store import get_token_store
-    from backend.repositories.user_store import get_user_store
+    from backend.admin.audit_store import get_audit_store as _get_audit
+    from backend.admin.role_store import get_role_store
+    from backend.admin.session_store import get_session_store
+    from backend.admin.token_store import get_token_store
+    from backend.admin.user_store import get_user_store
 
     app.dependency_overrides[get_user_store] = lambda: user_store
     app.dependency_overrides[get_role_store] = lambda: role_store

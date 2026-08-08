@@ -13,6 +13,7 @@ os.environ["REFRAQ_SECRETS_MASTER_KEY"] = "test-secrets-master-key"
 os.environ["CELERY_TASK_ALWAYS_EAGER"] = "1"
 os.environ.pop("DATABASE_URL", None)
 os.environ.pop("REDIS_URL", None)
+os.environ.setdefault("CELERY_BROKER_URL", "memory://")
 
 from backend.admin.roles import seed_roles  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
@@ -28,8 +29,8 @@ from backend.metadata.catalog.store import (  # noqa: E402
     reset_catalog_store,
 )
 from backend.metadata.sources.store import reset_source_store  # noqa: E402
-from backend.repositories.role_store import get_role_store, reset_role_store  # noqa: E402
-from backend.repositories.user_store import get_user_store, reset_user_store  # noqa: E402
+from backend.admin.role_store import get_role_store, reset_role_store  # noqa: E402
+from backend.admin.user_store import get_user_store, reset_user_store  # noqa: E402
 
 
 @pytest.fixture()
@@ -314,7 +315,7 @@ def test_structure_job_input_only_source_id(
 def test_source_probe_draft_success(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from backend.repositories.audit_store import get_audit_store, reset_audit_store
+    from backend.admin.audit_store import get_audit_store, reset_audit_store
 
     reset_audit_store()
 
@@ -360,7 +361,7 @@ def test_source_probe_draft_failure(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from backend.metadata.connectors.base import ConnectorError
-    from backend.repositories.audit_store import get_audit_store, reset_audit_store
+    from backend.admin.audit_store import get_audit_store, reset_audit_store
 
     reset_audit_store()
 
@@ -400,7 +401,7 @@ def test_source_probe_draft_failure(
 def test_source_probe_stored_uses_access(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from backend.repositories.audit_store import get_audit_store, reset_audit_store
+    from backend.admin.audit_store import get_audit_store, reset_audit_store
 
     reset_audit_store()
     source = _make_source(client, key="probe-stored")
@@ -664,7 +665,7 @@ def test_enqueue_structure_job_audits_and_rejects_non_database(
     from backend.metadata.errors import JobInputInvalid, JobSourceDisabled
     from backend.metadata.sources.store import SourceRecord, get_source_store
     from backend.metadata.source_jobs import enqueue_structure_job
-    from backend.repositories.audit_store import get_audit_store, reset_audit_store
+    from backend.admin.audit_store import get_audit_store, reset_audit_store
 
     reset_audit_store()
     monkeypatch.setattr(
@@ -731,7 +732,7 @@ def test_enqueue_structure_job_audits_and_rejects_non_database(
 
 
 def test_structure_job_http_enqueue_writes_audit(client: TestClient, monkeypatch) -> None:
-    from backend.repositories.audit_store import get_audit_store, reset_audit_store
+    from backend.admin.audit_store import get_audit_store, reset_audit_store
 
     reset_audit_store()
     monkeypatch.setattr(

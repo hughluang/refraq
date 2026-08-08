@@ -12,10 +12,10 @@ from alembic.config import Config
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
 
+from backend.admin.role_store import get_role_store
 from backend.admin.roles import ensure_system_role
 from backend.core.config import get_settings
-from backend.repositories.role_store import get_role_store
-from backend.worker.schedules import ensure_system_schedules
+from backend.worker.api import ensure_system_schedules
 
 # Stable 64-bit signed key derived from product identity (not a generic magic number).
 _ADVISORY_LOCK_KEY = int.from_bytes(

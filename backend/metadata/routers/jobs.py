@@ -1,57 +1,28 @@
-"""Job and Catalog browse HTTP routers."""
+"""Source-scoped Job facade and Catalog browse HTTP adapters."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import JSONResponse
 
-from backend.admin.audit import persist_audit_event
 from backend.admin.deps import get_actor_token_id, require_permission
-from backend.jobs.store import (
-    JobRecord,
-    JobStatus,
-    TERMINAL,
-    get_job_store,
-    mark_cancelled,
-)
+from backend.admin.user_store import UserRecord
+from backend.jobs.api import job_out
+from backend.jobs.schemas.jobs import JobListResponse
+from backend.jobs.store import JobStatus
 from backend.metadata.catalog.store import get_catalog_store, require_object
-from backend.metadata.errors import (
-    JobInputInvalid,
-    JobNotCancellable,
-    JobNotFound,
-)
 from backend.metadata.source_jobs import enqueue_structure_job, list_jobs_for_source
 from backend.metadata.sources.service import require_source
-from backend.repositories.user_store import UserRecord
-from backend.schemas.jobs import (
+from backend.metadata.schemas.jobs import (
     CatalogColumnOut,
     CatalogDdlResponse,
     CatalogObjectListResponse,
     CatalogObjectOut,
     CatalogObjectResponse,
     EnqueueStructureJobRequest,
-    JobListResponse,
-    JobOut,
-    JobResponse,
 )
-from backend.worker.app import celery_app
 
 router = APIRouter(tags=["jobs-catalog"])
-
-
-def _job_out(record: JobRecord) -> JobOut:
-    return JobOut(
-        id=record.id,
-        kind=record.kind,
-        status=record.status,
-        input=dict(record.input),
-        created_by_user_id=record.created_by,
-        created_at=record.created_at,
-        started_at=record.started_at,
-        finished_at=record.finished_at,
-        error_code=record.error_code,
-        error_message=record.error_summary,
-    )
 
 
 def _object_out(record, *, include_columns: bool) -> CatalogObjectOut:
@@ -88,12 +59,10 @@ def _object_out(record, *, include_columns: bool) -> CatalogObjectOut:
 @router.post("/sources/{source_id}/jobs", status_code=status.HTTP_202_ACCEPTED)
 def enqueue_source_job(
     source_id: str,
-    payload: EnqueueStructureJobRequest,
+    payload: EnqueueStructureJobRequest,  # noqa: ARG001 — OpenAPI body; kind fixed by schema
     request: Request,
     user: UserRecord = Depends(require_permission("jobs:run")),
 ) -> JSONResponse:
-    if payload.kind != "structure":
-        raise JobInputInvalid("Only kind=structure is supported in slice A")
     job = enqueue_structure_job(
         source_id=source_id,
         actor_user_id=user.id,
@@ -101,7 +70,7 @@ def enqueue_source_job(
     )
     return JSONResponse(
         status_code=status.HTTP_202_ACCEPTED,
-        content={"job": _job_out(job).model_dump(mode="json")},
+        content={"job": job_out(job).model_dump(mode="json")},
     )
 
 
@@ -113,51 +82,12 @@ def list_source_jobs(
     _: UserRecord = Depends(require_permission("jobs:run")),
 ) -> JobListResponse:
     items = [
-        _job_out(r)
+        job_out(r)
         for r in list_jobs_for_source(
             source_id, kind=kind, status=status_filter
         )
     ]
     return JobListResponse(items=items)
-
-
-@router.get("/jobs/{job_id}", response_model=JobResponse)
-def get_job(
-    job_id: str,
-    _: UserRecord = Depends(require_permission("jobs:run")),
-) -> JobResponse:
-    record = get_job_store().get(job_id)
-    if record is None:
-        raise JobNotFound()
-    return JobResponse(job=_job_out(record))
-
-
-@router.post("/jobs/{job_id}/cancel", response_model=JobResponse)
-def cancel_job(
-    job_id: str,
-    request: Request,
-    user: UserRecord = Depends(require_permission("jobs:run")),
-) -> JobResponse:
-    record = get_job_store().get(job_id)
-    if record is None:
-        raise JobNotFound()
-    if record.status in TERMINAL:
-        raise JobNotCancellable()
-    was_queued = record.status == "queued"
-    updated = mark_cancelled(job_id)
-    assert updated is not None
-    if was_queued:
-        celery_app.control.revoke(job_id, terminate=False)
-    persist_audit_event(
-        actor_user_id=user.id,
-        actor_token_id=get_actor_token_id(request),
-        resource_type="job",
-        resource_id=job_id,
-        action="job.cancel",
-        result="success",
-        detail={},
-    )
-    return JobResponse(job=_job_out(updated))
 
 
 @router.get("/sources/{source_id}/objects", response_model=CatalogObjectListResponse)

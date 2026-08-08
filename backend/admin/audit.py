@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from backend.repositories.audit_store import (
+from backend.admin.audit_store import (
     AuditEventRecord,
     get_audit_store,
     new_audit_id,

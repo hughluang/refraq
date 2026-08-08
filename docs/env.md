@@ -23,7 +23,7 @@ Current `backend/.env.example` defines:
 - `INITIAL_ADMIN_ACCOUNT=root`
 - `INITIAL_ADMIN_PASSWORD=change-me`
 - `REFRAQ_SECRETS_MASTER_KEY=change-me-secrets-master-key` (metadata foundation: encrypt Source secrets at rest)
-- `CELERY_BROKER_URL=redis://127.0.0.1:6379/2` (Celery broker; prefer a logical DB separate from Session `REDIS_URL`)
+- `CELERY_BROKER_URL=redis://127.0.0.1:6379/2` (Celery broker; prefer a logical DB separate from Session `REDIS_URL`). If unset, broker is derived from `REDIS_URL` (`…/2`); if both unset, resolution fails (no localhost invent).
 - `REFRAQ_JOB_WORKER_CONCURRENCY=1` (Celery worker concurrency hint)
 - `REFRAQ_JOB_RUNNING_TIMEOUT_SEC=3600` (stuck `running` **Job** reaper threshold)
 - `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD=0.75` (abort structure catalog write when absent ratio exceeds this)

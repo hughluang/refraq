@@ -6,9 +6,9 @@ from fastapi import APIRouter, Depends
 
 from backend.admin.console_modules import build_module_identities, build_navigation
 from backend.admin.deps import require_permission, resolve_user_permissions
-from backend.repositories.role_store import RoleStore, get_role_store
-from backend.repositories.user_store import UserRecord
-from backend.schemas.console import (
+from backend.admin.role_store import RoleStore, get_role_store
+from backend.admin.user_store import UserRecord
+from backend.admin.schemas.console import (
     ModuleActionsResponse,
     ModuleIdentitiesResponse,
     ModuleIdentityResponse,

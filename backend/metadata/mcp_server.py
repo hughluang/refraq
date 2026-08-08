@@ -11,13 +11,13 @@ from mcp.server import MCPServer
 from backend.admin.deps import resolve_pat_bearer
 from backend.admin.errors import AuthError, AuthForbidden, AuthUnauthenticated
 from backend.admin.permissions import permissions_include
+from backend.admin.role_store import get_role_store
+from backend.admin.user_store import UserRecord
 from backend.jobs.store import get_job_store
 from backend.metadata.catalog.store import get_catalog_store, require_object
 from backend.metadata.source_jobs import enqueue_structure_job as enqueue_structure
 from backend.metadata.sources import service as source_service
 from backend.metadata.sources.store import get_source_store
-from backend.repositories.role_store import get_role_store
-from backend.repositories.user_store import UserRecord
 
 mcp = MCPServer("refraq-metadata")
 
@@ -189,7 +189,7 @@ def get_job(authorization: str, job_id: str) -> str:
         _require(user, "jobs:run")
         record = get_job_store().get(job_id)
         if record is None:
-            from backend.metadata.errors import JobNotFound
+            from backend.jobs.errors import JobNotFound
 
             raise JobNotFound()
         return json.dumps(

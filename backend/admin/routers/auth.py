@@ -21,10 +21,10 @@ from backend.admin.security import verify_password
 from backend.admin.settings_override import get_effective_admin_session_ttl_hours
 from backend.admin.user_payload import build_current_user
 from backend.core.config import Settings, get_settings
-from backend.repositories.role_store import RoleStore, get_role_store
-from backend.repositories.session_store import SessionStore, get_session_store
-from backend.repositories.user_store import UserRecord, UserStore, get_user_store
-from backend.schemas.auth import (
+from backend.admin.role_store import RoleStore, get_role_store
+from backend.admin.session_store import SessionStore, get_session_store
+from backend.admin.user_store import UserRecord, UserStore, get_user_store
+from backend.admin.schemas.auth import (
     LoginRequest,
     LoginResponse,
     LogoutResponse,

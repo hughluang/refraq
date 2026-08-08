@@ -134,8 +134,8 @@ The repository should follow these dependency rules:
 
 - Default **Store Backend** is `persistent` (Postgres for User/Role, Redis for Session).
 - `memory` exists for automated tests only; missing URLs must not silently select memory.
-- Shared infrastructure (settings, engine, `DeclarativeBase`, Redis) lives under `backend/core/`. Business ORM tables live in domain packages (Foundation: `backend/admin/models.py`; metadata: `backend/metadata/`; platform Job: `backend/jobs/`; Celery/Scheduled Task: `backend/worker/`).
-- Module layout stays a modular monolith: add capability packages when real code arrives; do not pre-scaffold empty domain trees.
+- Shared infrastructure (settings, engine, `DeclarativeBase`, Redis, `AppError`) lives under `backend/core/`. Business ORM tables live in owning packages (Foundation: `backend/admin/`; metadata: `backend/metadata/`; platform Job: `backend/jobs/`; Celery/Scheduled Task: `backend/worker/`).
+- Module layout stays a modular monolith with package tiers and published APIs: see `docs/backend-layout.md`. Add packages when real code arrives; do not pre-scaffold empty domain trees.
 - Directory structure aids maintainability; multi-instance correctness depends on **Backing Services**, not sticky sessions.
 - Structure and other long-running **Jobs** use an out-of-process queue and worker with Redis as broker (`docs/adr/0004-redis-queue-for-ingestion.md`); the default runtime is Celery (`docs/adr/0006-celery-platform-async-runtime.md`). Job shape: `docs/adr/0008-job-generic-input.md`. Source `access` is app-encrypted as a whole document (`docs/adr/0005-app-encrypted-connection-secrets.md`, `docs/adr/0011-encrypted-access-blob-and-connector-spec.md`).
 - Catalog identity and database reachability are Source-scoped (`docs/adr/0007-source-owns-catalog-identity.md`, `docs/adr/0010-source-owns-access.md`).

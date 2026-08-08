@@ -11,6 +11,7 @@ os.environ["REFRAQ_STORE_BACKEND"] = "memory"
 os.environ["CELERY_TASK_ALWAYS_EAGER"] = "1"
 os.environ.pop("DATABASE_URL", None)
 os.environ.pop("REDIS_URL", None)
+os.environ.setdefault("CELERY_BROKER_URL", "memory://")
 
 from backend.core.config import reset_settings_cache  # noqa: E402
 from backend.jobs.store import (  # noqa: E402
@@ -21,13 +22,14 @@ from backend.jobs.store import (  # noqa: E402
     reap_stuck_running_jobs,
     reset_job_store,
 )
+from backend.worker.app import celery_app  # noqa: E402
 from backend.metadata.source_jobs import dispatch_queued_job  # noqa: E402
-from backend.worker.schedules import (  # noqa: E402
-    ensure_system_schedules,
-    get_schedule_store,
-    reset_schedule_store,
-)
+from backend.worker.api import ensure_system_schedules  # noqa: E402
+from backend.worker.schedules import get_schedule_store, reset_schedule_store  # noqa: E402
 from backend.worker.models import REAPER_SCHEDULE_KEY  # noqa: E402
+
+celery_app.conf.task_always_eager = True
+celery_app.conf.task_eager_propagates = True
 
 
 @pytest.fixture(autouse=True)
@@ -36,8 +38,6 @@ def _eager_celery(monkeypatch: pytest.MonkeyPatch) -> None:
     reset_settings_cache()
     reset_job_store()
     reset_schedule_store()
-    from backend.worker.app import celery_app
-
     celery_app.conf.task_always_eager = True
     celery_app.conf.task_eager_propagates = True
     yield

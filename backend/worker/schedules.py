@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import threading
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
 
 from backend.core.config import get_settings
-from backend.worker.models import REAPER_SCHEDULE_KEY, REAPER_TASK_NAME
 
 
 @dataclass
@@ -167,27 +165,3 @@ def reset_schedule_store() -> None:
     with _memory_lock:
         _memory_singleton = None
     get_schedule_store.cache_clear()
-
-
-def ensure_system_schedules() -> None:
-    """Idempotent seed for platform Scheduled Tasks (reaper)."""
-    store = get_schedule_store()
-    if store.get_by_key(REAPER_SCHEDULE_KEY) is not None:
-        return
-    now = datetime.utcnow()
-    store.upsert(
-        ScheduledTaskRecord(
-            id=f"sched_{uuid.uuid4().hex[:12]}",
-            key=REAPER_SCHEDULE_KEY,
-            name="Reap stuck jobs",
-            enabled=True,
-            interval_seconds=60,
-            cron=None,
-            task_name=REAPER_TASK_NAME,
-            args_json=[],
-            kwargs_json={},
-            system=True,
-            created_at=now,
-            updated_at=now,
-        )
-    )

@@ -8,6 +8,8 @@ import os
 os.environ["REFRAQ_STORE_BACKEND"] = "memory"
 os.environ.pop("DATABASE_URL", None)
 os.environ.pop("REDIS_URL", None)
+# Explicit broker for Celery app construction in memory/eager tests (no invented default in core).
+os.environ.setdefault("CELERY_BROKER_URL", "memory://")
 
 import pytest
 
@@ -15,11 +17,11 @@ from backend.admin.settings_override import reset_settings_override
 from backend.core.config import reset_settings_cache
 from backend.core.db import reset_db_singletons
 from backend.core.redis_client import reset_redis_singleton
-from backend.repositories.audit_store import reset_audit_store
-from backend.repositories.role_store import reset_role_store
-from backend.repositories.session_store import reset_session_store
-from backend.repositories.token_store import reset_token_store
-from backend.repositories.user_store import reset_user_store
+from backend.admin.audit_store import reset_audit_store
+from backend.admin.role_store import reset_role_store
+from backend.admin.session_store import reset_session_store
+from backend.admin.token_store import reset_token_store
+from backend.admin.user_store import reset_user_store
 from backend.jobs.store import reset_job_store
 from backend.metadata.catalog.store import reset_catalog_store
 from backend.metadata.sources.store import reset_source_store

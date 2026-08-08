@@ -8,9 +8,9 @@ from backend.admin import roles as role_domain
 from backend.admin.deps import require_permission
 from backend.admin.errors import RoleInUse, RoleNotFound
 from backend.admin.permissions import ALL_PERMISSIONS, PERMISSION_DESCRIPTIONS
-from backend.repositories.role_store import RoleRecord, RoleStore, get_role_store
-from backend.repositories.user_store import UserRecord, UserStore, get_user_store
-from backend.schemas.role import (
+from backend.admin.role_store import RoleRecord, RoleStore, get_role_store
+from backend.admin.user_store import UserRecord, UserStore, get_user_store
+from backend.admin.schemas.role import (
     CreateRoleRequest,
     PermissionCatalogEntry,
     PermissionCatalogResponse,

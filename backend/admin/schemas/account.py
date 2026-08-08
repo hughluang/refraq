@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from backend.schemas.auth import CurrentUser
+from backend.admin.schemas.auth import CurrentUser
 
 
 class UpdateProfileRequest(BaseModel):

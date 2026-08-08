@@ -16,10 +16,10 @@ from backend.admin.errors import (
 from backend.admin.locales import is_supported_locale
 from backend.admin.security import hash_password, verify_password
 from backend.admin.user_payload import build_current_user
-from backend.repositories.role_store import RoleStore, get_role_store
-from backend.repositories.session_store import SessionStore, get_session_store
-from backend.repositories.user_store import UserRecord, UserStore, get_user_store
-from backend.schemas.account import (
+from backend.admin.role_store import RoleStore, get_role_store
+from backend.admin.session_store import SessionStore, get_session_store
+from backend.admin.user_store import UserRecord, UserStore, get_user_store
+from backend.admin.schemas.account import (
     ChangePasswordRequest,
     ChangePasswordResponse,
     UpdateProfileRequest,

@@ -2,19 +2,14 @@
 
 from __future__ import annotations
 
+from backend.core.errors import AppError
 
-class AuthError(Exception):
-    """Base class for auth-related domain errors."""
+
+class AuthError(AppError):
+    """Base class for Foundation auth-related domain errors."""
 
     code: str = "AUTH_ERROR"
     http_status: int = 400
-
-    def __init__(self, message: str | None = None) -> None:
-        super().__init__(message or self.code)
-        self.message = message or self._default_message()
-
-    def _default_message(self) -> str:
-        return self.code
 
 
 class AuthInvalidCredentials(AuthError):

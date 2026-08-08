@@ -7,7 +7,7 @@ import uuid
 
 from backend.admin.errors import RoleInvalidKey, RoleKeyDuplicate, RoleLocked
 from backend.admin.permissions import ALL_PERMISSIONS, normalize_permissions
-from backend.repositories.role_store import RoleRecord, RoleStore
+from backend.admin.role_store import RoleRecord, RoleStore
 
 ROLE_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 SUPER_ADMIN_KEY = "super_admin"

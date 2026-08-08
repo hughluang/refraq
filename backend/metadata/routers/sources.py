@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Request, Response, status
 
 from backend.admin.audit import persist_audit_event
 from backend.admin.deps import get_actor_token_id, require_permission
+from backend.admin.user_store import UserRecord
 from backend.metadata.connectors.specs import get_connector_spec
 from backend.metadata.errors import (
     SourceAccessRequired,
@@ -18,8 +19,7 @@ from backend.metadata.sources.access import (
 from backend.metadata.sources import service as source_service
 from backend.metadata.sources.probe import run_source_probe
 from backend.metadata.sources.store import SourceRecord, get_source_store
-from backend.repositories.user_store import UserRecord
-from backend.schemas.sources import (
+from backend.metadata.schemas.sources import (
     AccessSchemaResponse,
     CreateSourceRequest,
     PatchSourceRequest,

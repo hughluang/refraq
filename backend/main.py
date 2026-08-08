@@ -9,24 +9,29 @@ from typing import AsyncIterator
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from backend.admin.errors import AuthError
-from backend.admin.security import hash_password
-from backend.core.config import Settings, get_settings
+from backend.admin.role_store import get_role_store
 from backend.admin.roles import SUPER_ADMIN_KEY, seed_roles
-from backend.repositories.role_store import get_role_store
-from backend.repositories.user_store import get_user_store
-from backend.routers.account import router as account_router
-from backend.routers.audit import router as audit_router
-from backend.routers.auth import router as auth_router_instance
-from backend.routers.console import router as console_router
-from backend.routers.health import router as health_router
-from backend.routers.roles import router as roles_router
-from backend.routers.settings import router as settings_router
-from backend.routers.jobs import router as jobs_router
-from backend.routers.sources import router as sources_router
-from backend.routers.tokens import router as tokens_router
-from backend.routers.users import router as users_router
-from backend.schemas.auth import ErrorResponse
+from backend.admin.schemas.auth import ErrorResponse
+from backend.admin.security import hash_password
+from backend.admin.user_store import get_user_store
+from backend.core.config import Settings, get_settings
+from backend.core.errors import AppError
+from backend.core.health import router as health_router
+
+# Bind Celery before importing domain routers/tasks that use `@shared_task`.
+import backend.worker.app as _celery_runtime  # noqa: F401
+
+from backend.admin.routers.account import router as account_router
+from backend.admin.routers.audit import router as audit_router
+from backend.admin.routers.auth import router as auth_router_instance
+from backend.admin.routers.console import router as console_router
+from backend.admin.routers.roles import router as roles_router
+from backend.admin.routers.settings import router as settings_router
+from backend.admin.routers.tokens import router as tokens_router
+from backend.admin.routers.users import router as users_router
+from backend.jobs.routers.jobs import router as jobs_mechanism_router
+from backend.metadata.routers.jobs import router as metadata_jobs_router
+from backend.metadata.routers.sources import router as sources_router
 
 settings = get_settings()
 
@@ -66,8 +71,8 @@ app = FastAPI(
 )
 
 
-@app.exception_handler(AuthError)
-async def auth_error_handler(_: Request, exc: AuthError) -> JSONResponse:
+@app.exception_handler(AppError)
+async def app_error_handler(_: Request, exc: AppError) -> JSONResponse:
     return JSONResponse(
         status_code=exc.http_status,
         content=ErrorResponse(code=exc.code, message=exc.message).model_dump(),
@@ -84,4 +89,5 @@ app.include_router(settings_router)
 app.include_router(tokens_router)
 app.include_router(audit_router)
 app.include_router(sources_router)
-app.include_router(jobs_router)
+app.include_router(metadata_jobs_router)
+app.include_router(jobs_mechanism_router)

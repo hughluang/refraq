@@ -79,6 +79,7 @@ def persistent_client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("REFRAQ_STORE_BACKEND", "persistent")
     monkeypatch.setenv("DATABASE_URL", INTEGRATION_DATABASE_URL)
     monkeypatch.setenv("REDIS_URL", INTEGRATION_REDIS_URL)
+    monkeypatch.delenv("CELERY_BROKER_URL", raising=False)
     monkeypatch.setenv("REFRAQ_SKIP_SEED", "0")
     monkeypatch.setenv("INITIAL_ADMIN_ACCOUNT", "root")
     monkeypatch.setenv("INITIAL_ADMIN_PASSWORD", "s3cret")
@@ -87,9 +88,9 @@ def persistent_client(monkeypatch: pytest.MonkeyPatch):
     from backend.core.db import reset_db_singletons
     from backend.core.entry import migrate_with_advisory_lock
     from backend.core.redis_client import reset_redis_singleton
-    from backend.repositories.role_store import reset_role_store
-    from backend.repositories.session_store import reset_session_store
-    from backend.repositories.user_store import reset_user_store
+    from backend.admin.role_store import reset_role_store
+    from backend.admin.session_store import reset_session_store
+    from backend.admin.user_store import reset_user_store
 
     reset_settings_cache()
     reset_db_singletons()

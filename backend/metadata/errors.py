@@ -2,10 +2,27 @@
 
 from __future__ import annotations
 
-from backend.admin.errors import AuthError
+from backend.core.errors import AppError
+
+__all__ = [
+    "CatalogObjectNotFound",
+    "JobAlreadyActive",
+    "JobInputInvalid",
+    "JobSecretMissing",
+    "JobSourceDisabled",
+    "SourceAccessInvalid",
+    "SourceAccessRequired",
+    "SourceEngineUnsupported",
+    "SourceKeyDuplicate",
+    "SourceKindUnsupported",
+    "SourceNotDisabled",
+    "SourceNotFound",
+    "SourceSecretRequired",
+    "SourceValidationError",
+]
 
 
-class SourceNotFound(AuthError):
+class SourceNotFound(AppError):
     code = "SOURCE_NOT_FOUND"
     http_status = 404
 
@@ -13,7 +30,7 @@ class SourceNotFound(AuthError):
         return "Source not found"
 
 
-class SourceNotDisabled(AuthError):
+class SourceNotDisabled(AppError):
     code = "SOURCE_NOT_DISABLED"
     http_status = 409
 
@@ -21,7 +38,7 @@ class SourceNotDisabled(AuthError):
         return "Source must be disabled before delete"
 
 
-class SourceKeyDuplicate(AuthError):
+class SourceKeyDuplicate(AppError):
     code = "SOURCE_KEY_DUPLICATE"
     http_status = 409
 
@@ -29,7 +46,7 @@ class SourceKeyDuplicate(AuthError):
         return "Source key already exists"
 
 
-class SourceKindUnsupported(AuthError):
+class SourceKindUnsupported(AppError):
     code = "SOURCE_KIND_UNSUPPORTED"
     http_status = 400
 
@@ -37,7 +54,7 @@ class SourceKindUnsupported(AuthError):
         return "Source kind is not supported in this slice"
 
 
-class SourceAccessRequired(AuthError):
+class SourceAccessRequired(AppError):
     code = "SOURCE_ACCESS_REQUIRED"
     http_status = 400
 
@@ -45,7 +62,7 @@ class SourceAccessRequired(AuthError):
         return "A database source requires engine and access"
 
 
-class SourceAccessInvalid(AuthError):
+class SourceAccessInvalid(AppError):
     code = "SOURCE_ACCESS_INVALID"
     http_status = 400
 
@@ -53,7 +70,7 @@ class SourceAccessInvalid(AuthError):
         return "Source access is invalid for this engine"
 
 
-class SourceEngineUnsupported(AuthError):
+class SourceEngineUnsupported(AppError):
     code = "SOURCE_ENGINE_UNSUPPORTED"
     http_status = 400
 
@@ -61,7 +78,7 @@ class SourceEngineUnsupported(AuthError):
         return "Engine is not supported"
 
 
-class SourceSecretRequired(AuthError):
+class SourceSecretRequired(AppError):
     code = "SOURCE_SECRET_REQUIRED"
     http_status = 400
 
@@ -69,7 +86,7 @@ class SourceSecretRequired(AuthError):
         return "Source access credentials are required for this probe"
 
 
-class CatalogObjectNotFound(AuthError):
+class CatalogObjectNotFound(AppError):
     code = "CATALOG_OBJECT_NOT_FOUND"
     http_status = 404
 
@@ -77,7 +94,7 @@ class CatalogObjectNotFound(AuthError):
         return "Catalog object not found"
 
 
-class JobSourceDisabled(AuthError):
+class JobSourceDisabled(AppError):
     code = "JOB_SOURCE_DISABLED"
     http_status = 400
 
@@ -85,7 +102,7 @@ class JobSourceDisabled(AuthError):
         return "Source is not usable for jobs"
 
 
-class JobSecretMissing(AuthError):
+class JobSecretMissing(AppError):
     code = "JOB_SECRET_MISSING"
     http_status = 400
 
@@ -93,7 +110,7 @@ class JobSecretMissing(AuthError):
         return "Source access is missing"
 
 
-class JobInputInvalid(AuthError):
+class JobInputInvalid(AppError):
     code = "JOB_INPUT_INVALID"
     http_status = 400
 
@@ -101,15 +118,7 @@ class JobInputInvalid(AuthError):
         return "Job kind or input is invalid"
 
 
-class JobNotCancellable(AuthError):
-    code = "JOB_NOT_CANCELLABLE"
-    http_status = 400
-
-    def _default_message(self) -> str:
-        return "Job is already terminal"
-
-
-class JobAlreadyActive(AuthError):
+class JobAlreadyActive(AppError):
     code = "JOB_ALREADY_ACTIVE"
     http_status = 409
 
@@ -117,15 +126,7 @@ class JobAlreadyActive(AuthError):
         return "A non-terminal structure job already exists for this source"
 
 
-class JobNotFound(AuthError):
-    code = "JOB_NOT_FOUND"
-    http_status = 404
-
-    def _default_message(self) -> str:
-        return "Job not found"
-
-
-class SourceValidationError(AuthError):
+class SourceValidationError(AppError):
     code = "SOURCE_VALIDATION_ERROR"
     http_status = 400
 

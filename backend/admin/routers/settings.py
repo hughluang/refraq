@@ -13,8 +13,8 @@ from backend.admin.settings_override import (
     set_admin_session_ttl_hours,
 )
 from backend.core.config import Settings, get_settings
-from backend.repositories.user_store import UserRecord
-from backend.schemas.settings import (
+from backend.admin.user_store import UserRecord
+from backend.admin.schemas.settings import (
     PlatformSettingsPatchRequest,
     PlatformSettingsResponse,
 )

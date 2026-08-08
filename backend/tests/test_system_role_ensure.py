@@ -17,7 +17,7 @@ from backend.admin.roles import (
     ensure_system_role,
     seed_roles,
 )
-from backend.repositories.role_store import MemoryRoleStore, RoleRecord
+from backend.admin.role_store import MemoryRoleStore, RoleRecord
 
 
 def test_ensure_aligns_stale_super_admin_permissions() -> None:
