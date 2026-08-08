@@ -60,6 +60,8 @@ Semantics fields are null until slice B writes them.
 | `PATCH` | `/objects/{id}/semantics` | `metadata:write` | Set object business_name / business_description |
 | `PATCH` | `/columns/{id}/semantics` | `metadata:write` | Set column semantics |
 
+Response envelopes: object patch → `{ "object": … }` (same shape as `GET /objects/{id}`); column patch → `{ "column": … }`.
+
 Rules: omit fields leave unchanged; explicit clear uses a documented sentinel or dedicated clear endpoint — do not treat JSON `null` as wipe unless the contract for that field says so.
 
 ## 5. Join Endpoints (C)
@@ -83,7 +85,9 @@ Rules: omit fields leave unchanged; explicit clear uses a documented sentinel or
 | `PUT` | `/joins` | `metadata:write` | Upsert edge with evidence |
 | `DELETE` | `/joins/{id}` | `metadata:write` | Remove edge |
 
-Reject joins that lack evidence with `JOIN_EVIDENCE_REQUIRED`.
+Response envelopes: list → `{ "items": [Join] }`; upsert → `{ "join": Join }`; delete → `204` No Content.
+
+Reject joins that lack evidence with `JOIN_EVIDENCE_REQUIRED`. Cross-Source edges → `JOIN_CROSS_SOURCE`. Self-loop → `JOIN_INVALID`.
 
 ## 6. Controlled Query (D)
 

@@ -1,4 +1,4 @@
-"""Slice A MCP tools — same domain services and permissions as HTTP."""
+"""Metadata MCP tools (slices A–C) — same domain services and permissions as HTTP."""
 
 from __future__ import annotations
 
@@ -9,11 +9,13 @@ from typing import Any
 from mcp.server import MCPServer
 
 from backend.admin.deps import resolve_pat_bearer
-from backend.admin.errors import AuthError, AuthForbidden, AuthUnauthenticated
+from backend.admin.errors import AuthForbidden, AuthUnauthenticated
 from backend.admin.permissions import permissions_include
 from backend.admin.role_store import get_role_store
 from backend.admin.user_store import UserRecord
+from backend.core.errors import AppError
 from backend.jobs.store import get_job_store
+from backend.metadata.catalog import service as catalog_service
 from backend.metadata.catalog.store import get_catalog_store, require_object
 from backend.metadata.source_jobs import enqueue_structure_job as enqueue_structure
 from backend.metadata.sources import service as source_service
@@ -38,7 +40,7 @@ def _require(user: UserRecord, permission: str) -> None:
 
 
 def _err(exc: Exception) -> str:
-    if isinstance(exc, AuthError):
+    if isinstance(exc, AppError):
         return json.dumps({"error": {"code": exc.code, "message": exc.message}})
     return json.dumps({"error": {"code": "MCP_ERROR", "message": str(exc)}})
 
@@ -202,6 +204,181 @@ def get_job(authorization: str, job_id: str) -> str:
                 "error_message": record.error_summary,
             }
         )
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool()
+def get_object_semantics(authorization: str, object_id: str) -> str:
+    """Read object/column business fields (metadata:read)."""
+    try:
+        user, _token_id = _actor_from_token(authorization)
+        _require(user, "metadata:read")
+        o = catalog_service.get_object_semantics(object_id)
+        return _dumps(
+            {
+                "id": o.id,
+                "source_id": o.source_id,
+                "schema_name": o.schema_name,
+                "name": o.name,
+                "business_name": o.business_name,
+                "business_description": o.business_description,
+                "columns": [
+                    {
+                        "id": c.id,
+                        "name": c.name,
+                        "business_name": c.business_name,
+                        "business_description": c.business_description,
+                    }
+                    for c in o.columns
+                ],
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool()
+def set_object_semantics(
+    authorization: str,
+    object_id: str,
+    business_name: str | None = None,
+    business_description: str | None = None,
+    open_questions: str | None = None,
+) -> str:
+    """Write object business fields (metadata:write)."""
+    try:
+        user, token_id = _actor_from_token(authorization)
+        _require(user, "metadata:write")
+        data: dict[str, Any] = {}
+        if business_name is not None:
+            data["business_name"] = business_name
+        if business_description is not None:
+            data["business_description"] = business_description
+        record = catalog_service.patch_object_semantics(
+            object_id=object_id,
+            data=data,
+            actor_user_id=user.id,
+            actor_token_id=token_id,
+            open_questions=open_questions,
+        )
+        return _dumps(
+            {
+                "id": record.id,
+                "business_name": record.business_name,
+                "business_description": record.business_description,
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool()
+def set_column_semantics(
+    authorization: str,
+    column_id: str,
+    business_name: str | None = None,
+    business_description: str | None = None,
+    open_questions: str | None = None,
+) -> str:
+    """Write column business fields (metadata:write)."""
+    try:
+        user, token_id = _actor_from_token(authorization)
+        _require(user, "metadata:write")
+        data: dict[str, Any] = {}
+        if business_name is not None:
+            data["business_name"] = business_name
+        if business_description is not None:
+            data["business_description"] = business_description
+        record = catalog_service.patch_column_semantics(
+            column_id=column_id,
+            data=data,
+            actor_user_id=user.id,
+            actor_token_id=token_id,
+            open_questions=open_questions,
+        )
+        return _dumps(
+            {
+                "id": record.id,
+                "object_id": record.object_id,
+                "business_name": record.business_name,
+                "business_description": record.business_description,
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool()
+def list_joins(authorization: str, object_id: str) -> str:
+    """List joins touching an object (metadata:read)."""
+    try:
+        user, _token_id = _actor_from_token(authorization)
+        _require(user, "metadata:read")
+        items = catalog_service.list_joins(object_id)
+        return _dumps(
+            {
+                "items": [
+                    {
+                        "id": j.id,
+                        "from_column_id": j.from_column_id,
+                        "to_column_id": j.to_column_id,
+                        "evidence": j.evidence,
+                        "created_by_user_id": j.created_by_user_id,
+                        "created_at": j.created_at,
+                    }
+                    for j in items
+                ]
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool()
+def upsert_join(
+    authorization: str,
+    from_column_id: str,
+    to_column_id: str,
+    evidence: str,
+) -> str:
+    """Upsert a join edge with evidence (metadata:write)."""
+    try:
+        user, token_id = _actor_from_token(authorization)
+        _require(user, "metadata:write")
+        record = catalog_service.upsert_join(
+            from_column_id=from_column_id,
+            to_column_id=to_column_id,
+            evidence=evidence,
+            actor_user_id=user.id,
+            actor_token_id=token_id,
+        )
+        return _dumps(
+            {
+                "id": record.id,
+                "from_column_id": record.from_column_id,
+                "to_column_id": record.to_column_id,
+                "evidence": record.evidence,
+                "created_by_user_id": record.created_by_user_id,
+                "created_at": record.created_at,
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool()
+def delete_join(authorization: str, join_id: str) -> str:
+    """Remove a join edge (metadata:write)."""
+    try:
+        user, token_id = _actor_from_token(authorization)
+        _require(user, "metadata:write")
+        catalog_service.delete_join(
+            join_id=join_id,
+            actor_user_id=user.id,
+            actor_token_id=token_id,
+        )
+        return _dumps({"ok": True, "id": join_id})
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 

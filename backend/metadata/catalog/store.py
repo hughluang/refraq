@@ -7,10 +7,13 @@ import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from functools import lru_cache
-from typing import Protocol
+from typing import Any, Protocol
 
 from backend.core.config import get_settings
 from backend.metadata.errors import CatalogObjectNotFound
+
+# Sentinel: field omitted from patch (distinct from explicit None).
+UNSET: Any = object()
 
 
 @dataclass
@@ -46,12 +49,26 @@ class CatalogObjectRecord:
     columns: list[CatalogColumnRecord] = field(default_factory=list)
 
 
+@dataclass
+class CatalogJoinRecord:
+    id: str
+    from_column_id: str
+    to_column_id: str
+    evidence: str
+    created_by_user_id: str | None
+    created_at: datetime
+
+
 def new_object_id() -> str:
     return f"obj_{uuid.uuid4().hex[:12]}"
 
 
 def new_column_id() -> str:
     return f"col_{uuid.uuid4().hex[:12]}"
+
+
+def new_join_id() -> str:
+    return f"join_{uuid.uuid4().hex[:12]}"
 
 
 class CatalogStore(Protocol):
@@ -64,6 +81,8 @@ class CatalogStore(Protocol):
     ) -> list[CatalogObjectRecord]: ...
 
     def get_object(self, object_id: str) -> CatalogObjectRecord | None: ...
+
+    def get_column(self, column_id: str) -> CatalogColumnRecord | None: ...
 
     def list_present_for_source(self, source_id: str) -> list[CatalogObjectRecord]: ...
 
@@ -78,10 +97,43 @@ class CatalogStore(Protocol):
 
     def delete_objects_for_source(self, source_id: str) -> None: ...
 
+    def patch_object_semantics(
+        self,
+        object_id: str,
+        *,
+        business_name: Any = UNSET,
+        business_description: Any = UNSET,
+    ) -> CatalogObjectRecord | None: ...
+
+    def patch_column_semantics(
+        self,
+        column_id: str,
+        *,
+        business_name: Any = UNSET,
+        business_description: Any = UNSET,
+    ) -> CatalogColumnRecord | None: ...
+
+    def get_join(self, join_id: str) -> CatalogJoinRecord | None: ...
+
+    def list_joins_for_object(self, object_id: str) -> list[CatalogJoinRecord]: ...
+
+    def upsert_join(
+        self,
+        *,
+        from_column_id: str,
+        to_column_id: str,
+        evidence: str,
+        created_by_user_id: str | None,
+    ) -> CatalogJoinRecord: ...
+
+    def delete_join(self, join_id: str) -> bool: ...
+
 
 class MemoryCatalogStore:
     def __init__(self) -> None:
         self._objects: dict[str, CatalogObjectRecord] = {}
+        self._joins: dict[str, CatalogJoinRecord] = {}
+        self._join_by_pair: dict[tuple[str, str], str] = {}
         self._lock = threading.Lock()
 
     def list_objects(
@@ -107,6 +159,14 @@ class MemoryCatalogStore:
     def get_object(self, object_id: str) -> CatalogObjectRecord | None:
         with self._lock:
             return self._objects.get(object_id)
+
+    def get_column(self, column_id: str) -> CatalogColumnRecord | None:
+        with self._lock:
+            for obj in self._objects.values():
+                for col in obj.columns:
+                    if col.id == column_id:
+                        return col
+            return None
 
     def list_present_for_source(self, source_id: str) -> list[CatalogObjectRecord]:
         return self.list_objects(source_id, include_absent=False)
@@ -197,13 +257,123 @@ class MemoryCatalogStore:
 
     def delete_objects_for_source(self, source_id: str) -> None:
         with self._lock:
+            col_ids: set[str] = set()
             to_drop = [
                 oid
                 for oid, obj in self._objects.items()
                 if obj.source_id == source_id
             ]
             for oid in to_drop:
+                for col in self._objects[oid].columns:
+                    col_ids.add(col.id)
                 del self._objects[oid]
+            stale_joins = [
+                jid
+                for jid, join in self._joins.items()
+                if join.from_column_id in col_ids or join.to_column_id in col_ids
+            ]
+            for jid in stale_joins:
+                join = self._joins.pop(jid)
+                self._join_by_pair.pop(
+                    (join.from_column_id, join.to_column_id), None
+                )
+
+    def patch_object_semantics(
+        self,
+        object_id: str,
+        *,
+        business_name: Any = UNSET,
+        business_description: Any = UNSET,
+    ) -> CatalogObjectRecord | None:
+        with self._lock:
+            obj = self._objects.get(object_id)
+            if obj is None:
+                return None
+            kwargs: dict[str, Any] = {"updated_at": datetime.utcnow()}
+            if business_name is not UNSET:
+                kwargs["business_name"] = business_name
+            if business_description is not UNSET:
+                kwargs["business_description"] = business_description
+            updated = replace(obj, **kwargs)
+            self._objects[object_id] = updated
+            return updated
+
+    def patch_column_semantics(
+        self,
+        column_id: str,
+        *,
+        business_name: Any = UNSET,
+        business_description: Any = UNSET,
+    ) -> CatalogColumnRecord | None:
+        with self._lock:
+            for oid, obj in self._objects.items():
+                for idx, col in enumerate(obj.columns):
+                    if col.id != column_id:
+                        continue
+                    kwargs: dict[str, Any] = {"updated_at": datetime.utcnow()}
+                    if business_name is not UNSET:
+                        kwargs["business_name"] = business_name
+                    if business_description is not UNSET:
+                        kwargs["business_description"] = business_description
+                    new_col = replace(col, **kwargs)
+                    cols = list(obj.columns)
+                    cols[idx] = new_col
+                    self._objects[oid] = replace(obj, columns=cols, updated_at=datetime.utcnow())
+                    return new_col
+            return None
+
+    def get_join(self, join_id: str) -> CatalogJoinRecord | None:
+        with self._lock:
+            return self._joins.get(join_id)
+
+    def list_joins_for_object(self, object_id: str) -> list[CatalogJoinRecord]:
+        with self._lock:
+            obj = self._objects.get(object_id)
+            if obj is None:
+                return []
+            col_ids = {c.id for c in obj.columns}
+            items = [
+                j
+                for j in self._joins.values()
+                if j.from_column_id in col_ids or j.to_column_id in col_ids
+            ]
+            return sorted(items, key=lambda j: j.created_at)
+
+    def upsert_join(
+        self,
+        *,
+        from_column_id: str,
+        to_column_id: str,
+        evidence: str,
+        created_by_user_id: str | None,
+    ) -> CatalogJoinRecord:
+        pair = (from_column_id, to_column_id)
+        with self._lock:
+            existing_id = self._join_by_pair.get(pair)
+            if existing_id is not None:
+                prev = self._joins[existing_id]
+                updated = replace(prev, evidence=evidence)
+                self._joins[existing_id] = updated
+                return updated
+            record = CatalogJoinRecord(
+                id=new_join_id(),
+                from_column_id=from_column_id,
+                to_column_id=to_column_id,
+                evidence=evidence,
+                created_by_user_id=created_by_user_id,
+                created_at=datetime.utcnow(),
+            )
+            self._joins[record.id] = record
+            self._join_by_pair[pair] = record.id
+            return record
+
+    def delete_join(self, join_id: str) -> bool:
+        with self._lock:
+            join = self._joins.pop(join_id, None)
+            if join is None:
+                return False
+            self._join_by_pair.pop((join.from_column_id, join.to_column_id), None)
+            return True
 
 
 class SqlCatalogStore:
@@ -257,6 +427,14 @@ class SqlCatalogStore:
                 options=(selectinload(CatalogObjectRow.columns),),
             )
             return _row_to_object(row) if row else None
+
+    def get_column(self, column_id: str) -> CatalogColumnRecord | None:
+        from backend.core.db import session_scope
+        from backend.metadata.models import CatalogColumnRow
+
+        with session_scope() as session:
+            row = session.get(CatalogColumnRow, column_id)
+            return _row_to_column(row) if row else None
 
     def list_present_for_source(self, source_id: str) -> list[CatalogObjectRecord]:
         return self.list_objects(source_id, include_absent=False)
@@ -396,26 +574,208 @@ class SqlCatalogStore:
                 session.delete(row)
             session.flush()
 
+    def patch_object_semantics(
+        self,
+        object_id: str,
+        *,
+        business_name: Any = UNSET,
+        business_description: Any = UNSET,
+    ) -> CatalogObjectRecord | None:
+        from sqlalchemy.orm import selectinload
+
+        from backend.core.db import session_scope
+        from backend.metadata.models import CatalogObjectRow
+
+        with session_scope() as session:
+            row = session.get(
+                CatalogObjectRow,
+                object_id,
+                options=(selectinload(CatalogObjectRow.columns),),
+            )
+            if row is None:
+                return None
+            if business_name is not UNSET:
+                row.business_name = business_name
+            if business_description is not UNSET:
+                row.business_description = business_description
+            row.updated_at = datetime.utcnow()
+            session.flush()
+            return _row_to_object(row)
+
+    def patch_column_semantics(
+        self,
+        column_id: str,
+        *,
+        business_name: Any = UNSET,
+        business_description: Any = UNSET,
+    ) -> CatalogColumnRecord | None:
+        from backend.core.db import session_scope
+        from backend.metadata.models import CatalogColumnRow
+
+        with session_scope() as session:
+            row = session.get(CatalogColumnRow, column_id)
+            if row is None:
+                return None
+            if business_name is not UNSET:
+                row.business_name = business_name
+            if business_description is not UNSET:
+                row.business_description = business_description
+            row.updated_at = datetime.utcnow()
+            session.flush()
+            return _row_to_column(row)
+
+    def get_join(self, join_id: str) -> CatalogJoinRecord | None:
+        from backend.core.db import session_scope
+        from backend.metadata.models import CatalogJoinRow
+
+        with session_scope() as session:
+            row = session.get(CatalogJoinRow, join_id)
+            return _row_to_join(row) if row else None
+
+    def list_joins_for_object(self, object_id: str) -> list[CatalogJoinRecord]:
+        from sqlalchemy import or_, select
+
+        from backend.core.db import session_scope
+        from backend.metadata.models import CatalogColumnRow, CatalogJoinRow
+
+        with session_scope() as session:
+            col_ids = list(
+                session.scalars(
+                    select(CatalogColumnRow.id).where(
+                        CatalogColumnRow.object_id == object_id
+                    )
+                ).all()
+            )
+            if not col_ids:
+                # still valid empty if object exists without columns
+                return []
+            rows = list(
+                session.scalars(
+                    select(CatalogJoinRow)
+                    .where(
+                        or_(
+                            CatalogJoinRow.from_column_id.in_(col_ids),
+                            CatalogJoinRow.to_column_id.in_(col_ids),
+                        )
+                    )
+                    .order_by(CatalogJoinRow.created_at)
+                ).all()
+            )
+            return [_row_to_join(r) for r in rows]
+
+    def upsert_join(
+        self,
+        *,
+        from_column_id: str,
+        to_column_id: str,
+        evidence: str,
+        created_by_user_id: str | None,
+    ) -> CatalogJoinRecord:
+        from sqlalchemy import select
+        from sqlalchemy.dialects.postgresql import insert
+
+        from backend.core.db import session_scope
+        from backend.metadata.models import CatalogJoinRow
+
+        now = datetime.utcnow()
+        with session_scope() as session:
+            # Prefer PG atomic upsert; fall back to select-then-write.
+            dialect = session.get_bind().dialect.name
+            if dialect == "postgresql":
+                stmt = (
+                    insert(CatalogJoinRow)
+                    .values(
+                        id=new_join_id(),
+                        from_column_id=from_column_id,
+                        to_column_id=to_column_id,
+                        evidence=evidence,
+                        created_by_user_id=created_by_user_id,
+                        created_at=now,
+                    )
+                    .on_conflict_do_update(
+                        constraint="uq_catalog_joins_from_to",
+                        set_={"evidence": evidence},
+                    )
+                    .returning(CatalogJoinRow)
+                )
+                row = session.scalars(stmt).one()
+                session.flush()
+                return _row_to_join(row)
+
+            existing = session.scalars(
+                select(CatalogJoinRow).where(
+                    CatalogJoinRow.from_column_id == from_column_id,
+                    CatalogJoinRow.to_column_id == to_column_id,
+                )
+            ).first()
+            if existing is not None:
+                existing.evidence = evidence
+                session.flush()
+                return _row_to_join(existing)
+            row = CatalogJoinRow(
+                id=new_join_id(),
+                from_column_id=from_column_id,
+                to_column_id=to_column_id,
+                evidence=evidence,
+                created_by_user_id=created_by_user_id,
+                created_at=now,
+            )
+            session.add(row)
+            session.flush()
+            return _row_to_join(row)
+
+    def delete_join(self, join_id: str) -> bool:
+        from backend.core.db import session_scope
+        from backend.metadata.models import CatalogJoinRow
+
+        with session_scope() as session:
+            row = session.get(CatalogJoinRow, join_id)
+            if row is None:
+                return False
+            session.delete(row)
+            session.flush()
+            return True
+
+
+def _row_to_column(row: object) -> CatalogColumnRecord:
+    from backend.metadata.models import CatalogColumnRow
+
+    assert isinstance(row, CatalogColumnRow)
+    return CatalogColumnRecord(
+        id=row.id,
+        object_id=row.object_id,
+        name=row.name,
+        ordinal=row.ordinal,
+        data_type=row.data_type,
+        nullable=row.nullable,
+        is_present=row.is_present,
+        business_name=row.business_name,
+        business_description=row.business_description,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _row_to_join(row: object) -> CatalogJoinRecord:
+    from backend.metadata.models import CatalogJoinRow
+
+    assert isinstance(row, CatalogJoinRow)
+    return CatalogJoinRecord(
+        id=row.id,
+        from_column_id=row.from_column_id,
+        to_column_id=row.to_column_id,
+        evidence=row.evidence,
+        created_by_user_id=row.created_by_user_id,
+        created_at=row.created_at,
+    )
+
 
 def _row_to_object(row: object) -> CatalogObjectRecord:
     from backend.metadata.models import CatalogObjectRow
 
     assert isinstance(row, CatalogObjectRow)
     columns = [
-        CatalogColumnRecord(
-            id=c.id,
-            object_id=c.object_id,
-            name=c.name,
-            ordinal=c.ordinal,
-            data_type=c.data_type,
-            nullable=c.nullable,
-            is_present=c.is_present,
-            business_name=c.business_name,
-            business_description=c.business_description,
-            created_at=c.created_at,
-            updated_at=c.updated_at,
-        )
-        for c in sorted(row.columns, key=lambda x: x.ordinal)
+        _row_to_column(c) for c in sorted(row.columns, key=lambda x: x.ordinal)
     ]
     return CatalogObjectRecord(
         id=row.id,

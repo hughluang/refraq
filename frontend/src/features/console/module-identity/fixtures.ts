@@ -72,7 +72,7 @@ export const MODULE_IDENTITY_FIXTURE: ModuleIdentity[] = [
     actions: {
       list: "metadata:read",
       create: null,
-      edit: null,
+      edit: "metadata:write",
       delete: null,
     },
   },

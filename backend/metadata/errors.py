@@ -5,11 +5,16 @@ from __future__ import annotations
 from backend.core.errors import AppError
 
 __all__ = [
+    "CatalogColumnNotFound",
+    "CatalogJoinNotFound",
     "CatalogObjectNotFound",
     "JobAlreadyActive",
     "JobInputInvalid",
     "JobSecretMissing",
     "JobSourceDisabled",
+    "JoinCrossSource",
+    "JoinEvidenceRequired",
+    "JoinInvalid",
     "SourceAccessInvalid",
     "SourceAccessRequired",
     "SourceEngineUnsupported",
@@ -92,6 +97,46 @@ class CatalogObjectNotFound(AppError):
 
     def _default_message(self) -> str:
         return "Catalog object not found"
+
+
+class CatalogColumnNotFound(AppError):
+    code = "CATALOG_COLUMN_NOT_FOUND"
+    http_status = 404
+
+    def _default_message(self) -> str:
+        return "Catalog column not found"
+
+
+class CatalogJoinNotFound(AppError):
+    code = "CATALOG_JOIN_NOT_FOUND"
+    http_status = 404
+
+    def _default_message(self) -> str:
+        return "Catalog join not found"
+
+
+class JoinEvidenceRequired(AppError):
+    code = "JOIN_EVIDENCE_REQUIRED"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Join evidence is required"
+
+
+class JoinInvalid(AppError):
+    code = "JOIN_INVALID"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Join edge is invalid"
+
+
+class JoinCrossSource(AppError):
+    code = "JOIN_CROSS_SOURCE"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Join columns must belong to the same Source"
 
 
 class JobSourceDisabled(AppError):

@@ -120,7 +120,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_label_key="layout.navGroup.metadata",
         label_key="catalog.title",
         routes=ModuleRoutes(list="/console/catalog"),
-        actions=ModuleActions(list="metadata:read"),
+        actions=ModuleActions(list="metadata:read", edit="metadata:write"),
         group_order=25,
         module_order=20,
     ),

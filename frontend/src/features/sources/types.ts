@@ -66,6 +66,15 @@ export type CatalogColumn = {
   is_present: boolean;
 };
 
+export type CatalogJoin = {
+  id: string;
+  from_column_id: string;
+  to_column_id: string;
+  evidence: string;
+  created_by_user_id: string | null;
+  created_at: string;
+};
+
 export type Job = {
   id: string;
   kind: string;

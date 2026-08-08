@@ -90,7 +90,7 @@ EXPECTED_IDENTITIES = {
         "actions": {
             "list": "metadata:read",
             "create": None,
-            "edit": None,
+            "edit": "metadata:write",
             "delete": None,
         },
     },

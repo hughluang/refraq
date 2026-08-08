@@ -1,11 +1,18 @@
-"""Domain Job / Catalog API schemas."""
+"""Domain Job facade request schemas; catalog shapes live in schemas.catalog."""
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+
+from backend.metadata.schemas.catalog import (  # noqa: F401 — re-export for callers
+    CatalogColumnOut,
+    CatalogDdlResponse,
+    CatalogObjectListResponse,
+    CatalogObjectOut,
+    CatalogObjectResponse,
+)
 
 __all__ = [
     "CatalogColumnOut",
@@ -19,41 +26,3 @@ __all__ = [
 
 class EnqueueStructureJobRequest(BaseModel):
     kind: Literal["structure"] = "structure"
-
-
-class CatalogColumnOut(BaseModel):
-    id: str
-    name: str
-    data_type: str
-    nullable: bool
-    business_name: str | None = None
-    business_description: str | None = None
-    ordinal: int = 0
-    is_present: bool = True
-
-
-class CatalogObjectOut(BaseModel):
-    id: str
-    source_id: str
-    object_type: str
-    schema_name: str
-    name: str
-    business_name: str | None
-    business_description: str | None
-    columns: list[CatalogColumnOut] = Field(default_factory=list)
-    ddl: str | None = None
-    is_present: bool = True
-    collected_at: datetime | None = None
-
-
-class CatalogObjectListResponse(BaseModel):
-    items: list[CatalogObjectOut]
-
-
-class CatalogObjectResponse(BaseModel):
-    object: CatalogObjectOut
-
-
-class CatalogDdlResponse(BaseModel):
-    id: str
-    ddl: str | None

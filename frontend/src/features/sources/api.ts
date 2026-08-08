@@ -6,7 +6,11 @@ import type {
   Source,
   SourceAccess,
 } from "@/features/sources/types";
-import type { CatalogObject } from "@/features/sources/types";
+import type {
+  CatalogColumn,
+  CatalogJoin,
+  CatalogObject,
+} from "@/features/sources/types";
 
 export function listSources() {
   return apiClient<{ items: Source[] }>("/sources");
@@ -104,6 +108,38 @@ export function listCatalogObjects(sourceId: string, q?: string) {
 
 export function getCatalogObject(objectId: string) {
   return apiClient<{ object: CatalogObject }>(`/objects/${objectId}`);
+}
+
+export function patchObjectSemantics(
+  objectId: string,
+  body: {
+    business_name?: string | null;
+    business_description?: string | null;
+  },
+) {
+  return apiClient<{ object: CatalogObject }>(`/objects/${objectId}/semantics`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function patchColumnSemantics(
+  columnId: string,
+  body: {
+    business_name?: string | null;
+    business_description?: string | null;
+  },
+) {
+  return apiClient<{ column: CatalogColumn }>(`/columns/${columnId}/semantics`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function listObjectJoins(objectId: string) {
+  return apiClient<{ items: CatalogJoin[] }>(`/objects/${objectId}/joins`);
 }
 
 export function listSourceJobs(sourceId: string) {

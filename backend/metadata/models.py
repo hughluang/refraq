@@ -106,3 +106,31 @@ class CatalogColumnRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     object: Mapped[CatalogObjectRow] = relationship(back_populates="columns")
+
+
+class CatalogJoinRow(Base):
+    __tablename__ = "catalog_joins"
+    __table_args__ = (
+        UniqueConstraint(
+            "from_column_id",
+            "to_column_id",
+            name="uq_catalog_joins_from_to",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    from_column_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("catalog_columns.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    to_column_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("catalog_columns.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    evidence: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
