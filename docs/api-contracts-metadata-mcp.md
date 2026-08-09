@@ -52,7 +52,7 @@ Write discipline: fill gaps; do not invent; use open_questions when evidence is 
 | --- | --- | --- |
 | `run_sql` | `query:run` | Read-only single statement via Source id |
 
-Guards match `docs/api-contracts-metadata.md` §6.
+Guards match `docs/api-contracts-metadata.md` §6 (same defaults/caps/timeouts and per-attempt audit). Tool annotation `readOnlyHint` is advisory only and does not replace platform guards.
 
 ## 7. Out Of Scope Tools
 

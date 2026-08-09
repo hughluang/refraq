@@ -76,6 +76,13 @@ class CollectedStructure:
     objects: list[CollectedObject] = field(default_factory=list)
 
 
+@dataclass
+class QueryResult:
+    columns: list[str]
+    rows: list[list[Any]]
+    truncated: bool
+
+
 class EngineConnector(Protocol):
     engine: str
 
@@ -85,9 +92,66 @@ class EngineConnector(Protocol):
     def collect_structure(self, endpoint: SourceEndpoint) -> CollectedStructure:
         """Return complete structure for the Source scope, or raise."""
 
+    def run_readonly(
+        self,
+        endpoint: SourceEndpoint,
+        sql: str,
+        *,
+        max_rows: int,
+        timeout_sec: int,
+    ) -> QueryResult:
+        """Execute a single read-only statement with engine timeout + row cap."""
+
 
 class ConnectorError(Exception):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+_TIMEOUT_MARKERS = (
+    "statement timeout",
+    "querycanceled",
+    "query canceled",
+    "canceling statement",
+    "cancelling statement",
+    "timed out",
+    "timeout expired",
+    "execution timeout",
+    "call timeout",
+    "dpi-1067",
+    "hyt00",
+)
+
+
+def is_query_timeout_error(exc: BaseException) -> bool:
+    """True when a driver/SQLAlchemy error indicates statement/call timeout."""
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        text = f"{type(current).__name__} {current}".lower()
+        if any(marker in text for marker in _TIMEOUT_MARKERS):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def query_endpoint_error(exc: BaseException) -> ConnectorError:
+    """Map a driver failure to QUERY_TIMEOUT or QUERY_ENDPOINT_FAILED."""
+    code = "QUERY_TIMEOUT" if is_query_timeout_error(exc) else "QUERY_ENDPOINT_FAILED"
+    return ConnectorError(code, str(exc))
+
+
+def fetch_query_result(result: Any, *, max_rows: int) -> QueryResult:
+    """Consume a SQLAlchemy Result with max_rows cap and truncated flag."""
+    columns = list(result.keys())
+    rows: list[list[Any]] = []
+    truncated = False
+    for i, row in enumerate(result):
+        if i >= max_rows:
+            truncated = True
+            break
+        rows.append([value for value in row])
+    return QueryResult(columns=columns, rows=rows, truncated=truncated)

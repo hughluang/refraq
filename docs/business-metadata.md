@@ -211,8 +211,9 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
 
 ## 11. Controlled Query (Slice D)
 
-- Allowed: single read-only statement (SELECT or engine-equivalent).
-- Reject: DDL, DML, multi-statement batches, and anything the platform cannot classify as read-only.
+- Allowed: single read-only statement (SELECT, UNION/INTERSECT/EXCEPT, or `WITH … SELECT`).
+- Reject: DDL, DML, multi-statement batches, row locking (`FOR UPDATE`), dangerous functions (for example `pg_sleep`, `xp_cmdshell`), and anything the platform cannot classify as read-only.
+- L4 uses a dialect-aware SQL AST (sqlglot) keyed by Source `engine` (`postgresql` / `mssql` / `oracle`); parse failures and unclassified statements fail closed.
 - Enforce timeout and maximum row count.
 - Execute through the Source's embedded reachability; audit every attempt (statement summary or hash, User, Source, outcome).
 - Prefer a database user that is itself read-only as defense in depth; platform guards remain mandatory.

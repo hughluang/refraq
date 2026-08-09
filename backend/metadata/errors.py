@@ -15,6 +15,11 @@ __all__ = [
     "JoinCrossSource",
     "JoinEvidenceRequired",
     "JoinInvalid",
+    "QueryFailed",
+    "QueryMultiStatement",
+    "QueryNotReadonly",
+    "QueryRowLimit",
+    "QueryTimeout",
     "SourceAccessInvalid",
     "SourceAccessRequired",
     "SourceEngineUnsupported",
@@ -177,3 +182,43 @@ class SourceValidationError(AppError):
 
     def _default_message(self) -> str:
         return "Source validation failed"
+
+
+class QueryNotReadonly(AppError):
+    code = "QUERY_NOT_READONLY"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "SQL is not a single read-only SELECT statement"
+
+
+class QueryMultiStatement(AppError):
+    code = "QUERY_MULTI_STATEMENT"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Only a single SQL statement is allowed"
+
+
+class QueryTimeout(AppError):
+    code = "QUERY_TIMEOUT"
+    http_status = 504
+
+    def _default_message(self) -> str:
+        return "Query exceeded the platform timeout"
+
+
+class QueryRowLimit(AppError):
+    code = "QUERY_ROW_LIMIT"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "max_rows exceeds the platform cap"
+
+
+class QueryFailed(AppError):
+    code = "QUERY_FAILED"
+    http_status = 502
+
+    def _default_message(self) -> str:
+        return "Query execution failed"

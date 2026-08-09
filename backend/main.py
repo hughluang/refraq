@@ -32,6 +32,7 @@ from backend.admin.routers.users import router as users_router
 from backend.jobs.routers.jobs import router as jobs_mechanism_router
 from backend.metadata.routers.catalog import router as metadata_catalog_router
 from backend.metadata.routers.jobs import router as metadata_jobs_router
+from backend.metadata.routers.query import router as metadata_query_router
 from backend.metadata.routers.sources import router as sources_router
 
 settings = get_settings()
@@ -92,4 +93,5 @@ app.include_router(audit_router)
 app.include_router(sources_router)
 app.include_router(metadata_catalog_router)
 app.include_router(metadata_jobs_router)
+app.include_router(metadata_query_router)
 app.include_router(jobs_mechanism_router)

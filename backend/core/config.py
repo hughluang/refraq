@@ -73,6 +73,14 @@ class Settings(BaseSettings):
         default=0.75,
         validation_alias="REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD",
     )
+    refraq_query_timeout_sec: int = Field(
+        default=30,
+        validation_alias="REFRAQ_QUERY_TIMEOUT_SEC",
+    )
+    refraq_query_max_rows: int = Field(
+        default=1000,
+        validation_alias="REFRAQ_QUERY_MAX_ROWS",
+    )
 
     @model_validator(mode="after")
     def _require_backing_urls_when_persistent(self) -> Settings:

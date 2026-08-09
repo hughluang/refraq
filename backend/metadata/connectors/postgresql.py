@@ -10,8 +10,11 @@ from backend.metadata.connectors.base import (
     CollectedColumn,
     CollectedObject,
     CollectedStructure,
+    QueryResult,
     SourceEndpoint,
     ConnectorError,
+    fetch_query_result,
+    query_endpoint_error,
 )
 
 SYSTEM_SCHEMAS = frozenset({"pg_catalog", "information_schema", "pg_toast"})
@@ -27,6 +30,26 @@ class PostgresqlConnector:
                 conn.execute(text("SELECT 1"))
         except Exception as exc:  # noqa: BLE001 — map driver errors
             raise ConnectorError("JOB_ENDPOINT_FAILED", str(exc)) from exc
+        finally:
+            eng.dispose()
+
+    def run_readonly(
+        self,
+        endpoint: SourceEndpoint,
+        sql: str,
+        *,
+        max_rows: int,
+        timeout_sec: int,
+    ) -> QueryResult:
+        eng = self._engine(endpoint)
+        try:
+            with eng.connect() as conn:
+                timeout_ms = max(1, int(timeout_sec) * 1000)
+                conn.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
+                result = conn.execute(text(sql))
+                return fetch_query_result(result, max_rows=max_rows)
+        except Exception as exc:  # noqa: BLE001
+            raise query_endpoint_error(exc) from exc
         finally:
             eng.dispose()
 

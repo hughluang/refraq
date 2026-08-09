@@ -10,8 +10,11 @@ from backend.metadata.connectors.base import (
     CollectedColumn,
     CollectedObject,
     CollectedStructure,
+    QueryResult,
     SourceEndpoint,
     ConnectorError,
+    fetch_query_result,
+    query_endpoint_error,
 )
 
 
@@ -25,6 +28,24 @@ class MssqlConnector:
                 conn.execute(text("SELECT 1"))
         except Exception as exc:  # noqa: BLE001
             raise ConnectorError("JOB_ENDPOINT_FAILED", str(exc)) from exc
+        finally:
+            eng.dispose()
+
+    def run_readonly(
+        self,
+        endpoint: SourceEndpoint,
+        sql: str,
+        *,
+        max_rows: int,
+        timeout_sec: int,
+    ) -> QueryResult:
+        eng = self._engine(endpoint, timeout_sec=timeout_sec)
+        try:
+            with eng.connect() as conn:
+                result = conn.execute(text(sql))
+                return fetch_query_result(result, max_rows=max_rows)
+        except Exception as exc:  # noqa: BLE001
+            raise query_endpoint_error(exc) from exc
         finally:
             eng.dispose()
 
@@ -105,7 +126,7 @@ class MssqlConnector:
             for r in rows
         ]
 
-    def _engine(self, endpoint: SourceEndpoint):
+    def _engine(self, endpoint: SourceEndpoint, *, timeout_sec: int | None = None):
         mode = endpoint.ssl_mode or "disable"
         if mode != "disable" or endpoint.ssl_root_cert or endpoint.ssl_client_cert or endpoint.ssl_client_key:
             raise ConnectorError(
@@ -120,4 +141,8 @@ class MssqlConnector:
             f"mssql+pymssql://{user}:{password}"
             f"@{endpoint.host}:{endpoint.port}/{db}"
         )
-        return create_engine(url, pool_pre_ping=True)
+        connect_args: dict[str, object] = {}
+        if timeout_sec is not None:
+            # pymssql: query timeout in seconds (not LOCK_TIMEOUT).
+            connect_args["timeout"] = max(1, int(timeout_sec))
+        return create_engine(url, pool_pre_ping=True, connect_args=connect_args)

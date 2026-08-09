@@ -27,6 +27,8 @@ Current `backend/.env.example` defines:
 - `REFRAQ_JOB_WORKER_CONCURRENCY=1` (Celery worker concurrency hint)
 - `REFRAQ_JOB_RUNNING_TIMEOUT_SEC=3600` (stuck `running` **Job** reaper threshold)
 - `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD=0.75` (abort structure catalog write when absent ratio exceeds this)
+- `REFRAQ_QUERY_TIMEOUT_SEC=30` (controlled query dual timeout: application + engine statement/command timeout)
+- `REFRAQ_QUERY_MAX_ROWS=1000` (platform cap for controlled query `max_rows`; request default is 100)
 
 `REFRAQ_STORE_BACKEND=memory` is for automated tests only. Do not use it in production examples.
 Metadata foundation variables are required when running ingestion/secret features; Foundation-only local login may still boot without them until those code paths are exercised.
@@ -71,6 +73,8 @@ Self-deploy Compose exposes only the web service to browsers; the API stays on t
 - `REFRAQ_JOB_WORKER_CONCURRENCY`
 - `REFRAQ_JOB_RUNNING_TIMEOUT_SEC`
 - `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD`
+- `REFRAQ_QUERY_TIMEOUT_SEC`
+- `REFRAQ_QUERY_MAX_ROWS`
 - `REFRAQ_INTEGRATION_DATABASE_URL` (pytest `@pytest.mark.integration` only; default `…/refraq_test`)
 - `REFRAQ_INTEGRATION_REDIS_URL` (integration only; default `redis://127.0.0.1:6379/1`)
 - `REFRAQ_INTEGRATION_CELERY_BROKER_URL` (integration only; default `redis://127.0.0.1:6379/3`)

@@ -1,4 +1,4 @@
-"""Metadata MCP tools (slices A–C) — same domain services and permissions as HTTP."""
+"""Metadata MCP tools (slices A–D) — same domain services and permissions as HTTP."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from mcp.server import MCPServer
+from mcp.types import ToolAnnotations
 
 from backend.admin.deps import resolve_pat_bearer
 from backend.admin.errors import AuthForbidden, AuthUnauthenticated
@@ -17,6 +18,7 @@ from backend.core.errors import AppError
 from backend.jobs.store import get_job_store
 from backend.metadata.catalog import service as catalog_service
 from backend.metadata.catalog.store import get_catalog_store, require_object
+from backend.metadata.query import service as query_service
 from backend.metadata.source_jobs import enqueue_structure_job as enqueue_structure
 from backend.metadata.sources import service as source_service
 from backend.metadata.sources.store import get_source_store
@@ -379,6 +381,45 @@ def delete_join(authorization: str, join_id: str) -> str:
             actor_token_id=token_id,
         )
         return _dumps({"ok": True, "id": join_id})
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(read_only_hint=True),
+)
+def run_sql(
+    authorization: str,
+    source_id: str,
+    sql: str,
+    max_rows: int | None = None,
+) -> str:
+    """Run a single read-only SELECT (or WITH…SELECT) against a Source (query:run).
+
+    Use for controlled probes that need live rows. Do not use for DDL/DML,
+    multi-statement batches, EXPLAIN/SHOW, or anything outside SELECT/WITH-SELECT.
+    max_rows defaults to 100 and must not exceed the platform cap (1000).
+    Platform timeout is REFRAQ_QUERY_TIMEOUT_SEC (default 30s). Never returns
+    Source secrets.
+    """
+    try:
+        user, token_id = _actor_from_token(authorization)
+        _require(user, "query:run")
+        outcome = query_service.run_controlled_query(
+            source_id=source_id,
+            sql=sql,
+            max_rows=max_rows,
+            actor_user_id=user.id,
+            actor_token_id=token_id,
+        )
+        return _dumps(
+            {
+                "columns": outcome.columns,
+                "rows": outcome.rows,
+                "truncated": outcome.truncated,
+                "duration_ms": outcome.duration_ms,
+            }
+        )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 

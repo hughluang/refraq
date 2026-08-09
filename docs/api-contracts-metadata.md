@@ -119,9 +119,11 @@ Errors:
 
 | code | When |
 | --- | --- |
-| `QUERY_NOT_READONLY` | DDL/DML/unclassified |
+| `QUERY_NOT_READONLY` | DDL/DML/unclassified, parse failure, row locking, blocked functions |
 | `QUERY_MULTI_STATEMENT` | More than one statement |
 | `QUERY_TIMEOUT` | Exceeded timeout |
 | `QUERY_ROW_LIMIT` | Rejected before run if max_rows above platform cap |
 
 Every attempt writes a management audit event (statement summary or hash, never Source secret).
+
+Envelope notes: request `max_rows` defaults to **100** when omitted; values above platform cap `REFRAQ_QUERY_MAX_ROWS` (default **1000**) are rejected with `QUERY_ROW_LIMIT` before connect. Platform timeout is `REFRAQ_QUERY_TIMEOUT_SEC` (default **30**), enforced both at the application boundary and via engine statement/command timeout. L4 SQL guards parse a single statement with a dialect-aware AST (sqlglot) for the Source engine and fail closed on write nodes, `INTO`, row locks, blocked functions, or unparseable SQL. Prefer a read-only database account on the Source as defense in depth; platform SQL guards remain mandatory.
