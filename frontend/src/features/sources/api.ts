@@ -1,15 +1,15 @@
 import { apiClient } from "@/lib/api";
 import type {
-  ConnectorSpec,
-  Engine,
-  Job,
-  Source,
-  SourceAccess,
-} from "@/features/sources/types";
-import type {
   CatalogColumn,
   CatalogJoin,
   CatalogObject,
+  ColumnSemanticsPatch,
+  ConnectorSpec,
+  Engine,
+  Job,
+  ObjectSemanticsPatch,
+  Source,
+  SourceAccess,
 } from "@/features/sources/types";
 
 export function listSources() {
@@ -99,11 +99,44 @@ export function testSource(
   });
 }
 
-export function listCatalogObjects(sourceId: string, q?: string) {
-  const query = q ? `?q=${encodeURIComponent(q)}` : "";
-  return apiClient<{ items: CatalogObject[] }>(
-    `/sources/${sourceId}/objects${query}`,
-  );
+export function listCatalogObjects(
+  sourceId: string,
+  q?: string,
+  opts?: { limit?: number; offset?: number; object_type?: string },
+) {
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (opts?.limit != null) params.set("limit", String(opts.limit));
+  if (opts?.offset != null) params.set("offset", String(opts.offset));
+  if (opts?.object_type) params.set("object_type", opts.object_type);
+  const query = params.toString() ? `?${params.toString()}` : "";
+  return apiClient<{
+    items: CatalogObject[];
+    total: number;
+    limit: number;
+    offset: number;
+  }>(`/sources/${sourceId}/objects${query}`);
+}
+
+export function searchCatalogColumns(params: {
+  q: string;
+  source_id?: string;
+  object_type?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  const qs = new URLSearchParams();
+  qs.set("q", params.q);
+  if (params.source_id) qs.set("source_id", params.source_id);
+  if (params.object_type) qs.set("object_type", params.object_type);
+  if (params.limit != null) qs.set("limit", String(params.limit));
+  if (params.offset != null) qs.set("offset", String(params.offset));
+  return apiClient<{
+    items: CatalogColumn[];
+    total: number;
+    limit: number;
+    offset: number;
+  }>(`/catalog/columns/search?${qs.toString()}`);
 }
 
 export function getCatalogObject(objectId: string) {
@@ -112,10 +145,7 @@ export function getCatalogObject(objectId: string) {
 
 export function patchObjectSemantics(
   objectId: string,
-  body: {
-    business_name?: string | null;
-    business_description?: string | null;
-  },
+  body: ObjectSemanticsPatch,
 ) {
   return apiClient<{ object: CatalogObject }>(`/objects/${objectId}/semantics`, {
     method: "PATCH",
@@ -126,10 +156,7 @@ export function patchObjectSemantics(
 
 export function patchColumnSemantics(
   columnId: string,
-  body: {
-    business_name?: string | null;
-    business_description?: string | null;
-  },
+  body: ColumnSemanticsPatch,
 ) {
   return apiClient<{ column: CatalogColumn }>(`/columns/${columnId}/semantics`, {
     method: "PATCH",
@@ -140,6 +167,24 @@ export function patchColumnSemantics(
 
 export function listObjectJoins(objectId: string) {
   return apiClient<{ items: CatalogJoin[] }>(`/objects/${objectId}/joins`);
+}
+
+export function upsertJoin(body: {
+  from_column_id: string;
+  to_column_id: string;
+  evidence: string;
+  join_kind?: string;
+  join_expression?: string | null;
+}) {
+  return apiClient<{ join: CatalogJoin }>("/joins", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteJoin(joinId: string) {
+  return apiClient<void>(`/joins/${joinId}`, { method: "DELETE" });
 }
 
 export function listSourceJobs(sourceId: string) {

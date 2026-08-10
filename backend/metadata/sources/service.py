@@ -20,6 +20,7 @@ from backend.metadata.sources.access import (
     project_access,
     seal_access,
 )
+from backend.metadata.locators import format_source_locator
 from backend.metadata.sources.store import (
     SUPPORTED_KINDS,
     SourceRecord,
@@ -45,6 +46,7 @@ def public_view(record: SourceRecord) -> dict[str, Any]:
     return {
         "id": record.id,
         "key": record.key,
+        "locator_key": record.locator_key,
         "name": record.name,
         "kind": record.kind,
         "status": record.status,
@@ -90,6 +92,7 @@ def create_source(
     record = SourceRecord(
         id=new_source_id(),
         key=key,
+        locator_key=format_source_locator(engine=engine, kind=kind, key=key),
         name=name,
         kind=kind,
         status="active",
@@ -148,7 +151,17 @@ def update_source(
         updated.access_ciphertext = seal_access(engine, existing_access)
         updated.access_updated_at = datetime.utcnow()
     updated.updated_at = datetime.utcnow()
-    return store.save_source(updated)
+    saved = store.save_source(updated)
+    if engine is not None and existing.engine != saved.engine:
+        from backend.metadata.catalog.store import get_catalog_store
+
+        get_catalog_store().recompute_locators_for_source(
+            source_id,
+            engine=saved.engine,
+            kind=saved.kind,
+            source_key=saved.key,
+        )
+    return saved
 
 
 def delete_source(source_id: str) -> SourceRecord:

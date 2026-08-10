@@ -202,9 +202,41 @@ Avoid storing product schedules only in Redis Beat state or static code when ope
 
 ### Catalog Object
 
-A collected structural unit (table, view, or equivalent) under exactly one Source, including columns and optional DDL.
+A collected structural unit (table, view, materialized view, or equivalent) under exactly one Source, including columns, constraints when collected, and optional DDL.
 Avoid calling a Catalog Object a Data Product or Business Entity.
 Avoid treating catalog identity as anything other than Source-scoped.
+
+### Locator
+
+A readable unique key addressing a Source (`src/…`), Catalog Object (`obj/…`), or column (`col/…`).
+Derived from natural keys; MCP is locator-first; HTTP echoes `locator_key` on responses.
+Avoid treating it as a second identity or requiring agents to use opaque surrogate ids.
+
+### Object Semantics
+
+Business meaning fields on a Catalog Object (including category, grain, business primary key, time/status semantics, confidence, open questions, and readiness).
+Avoid inventing meaning without evidence; persist open questions instead.
+
+### Enum Catalog
+
+Discrete `{ code, label, description }` entries on a column when evidenced.
+Avoid unconstrained free-form maps without codes.
+
+### Semantic Source
+
+Provenance tag on semantics writes (`mcp`, `user_input`).
+Records the last write; field-level MCP protection is deferred (ADR 0014).
+Avoid conflating with **Source** (data origin) or **Identity Source**.
+
+### Join Origin
+
+Creation provenance of a join edge: `foreign_key`, `human`, or `mcp`.
+Structure refresh must not delete human/mcp edges.
+
+### Join Path
+
+A multi-hop chain of join edges discovered by graph search between objects or columns.
+Avoid guessing paths from column-name similarity alone.
 
 ### Metadata Nav Group
 

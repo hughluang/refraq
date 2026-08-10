@@ -221,13 +221,29 @@ def test_delete_disabled_source_and_catalog(client: TestClient) -> None:
             CatalogObjectRecord(
                 id="obj_del",
                 source_id=source["id"],
+                locator_key="obj/postgresql/del-ok/public/table/t1",
                 object_type="table",
                 schema_name="public",
                 name="t1",
                 ddl=None,
+                comment=None,
+                primary_key=None,
                 is_present=True,
                 business_name=None,
                 business_description=None,
+                object_category=None,
+                grain_description=None,
+                business_primary_key=None,
+                time_semantics=None,
+                status_semantics=None,
+                relation_summary=None,
+                business_domain=None,
+                evidence_summary=None,
+                confidence=None,
+                open_questions=None,
+                semantic_source=None,
+                business_semantics_ready=False,
+                semantics_updated_at=None,
                 last_structure_job_id="job_del",
                 collected_at=now,
                 created_at=now,
@@ -236,13 +252,20 @@ def test_delete_disabled_source_and_catalog(client: TestClient) -> None:
                     CatalogColumnRecord(
                         id="col_del",
                         object_id="obj_del",
+                        locator_key="col/postgresql/del-ok/public/table/t1/column/id",
                         name="id",
                         ordinal=0,
                         data_type="int",
                         nullable=False,
                         is_present=True,
+                        default_value=None,
+                        comment=None,
                         business_name=None,
                         business_description=None,
+                        column_semantics=None,
+                        enum_catalog=None,
+                        semantic_source=None,
+                        field_kind="column",
                         created_at=now,
                         updated_at=now,
                     )
@@ -250,6 +273,9 @@ def test_delete_disabled_source_and_catalog(client: TestClient) -> None:
             )
         ],
         schema_scope=None,
+        engine="postgresql",
+        kind="database",
+        source_key="del-ok",
     )
     assert get_catalog_store().list_present_for_source(source["id"])
 
@@ -270,7 +296,7 @@ def test_delete_disabled_source_and_catalog(client: TestClient) -> None:
     missing = client.get(f"/sources/{source['id']}")
     assert missing.status_code == 404
     assert missing.json()["code"] == "SOURCE_NOT_FOUND"
-    assert get_catalog_store().list_objects(source["id"]) == []
+    assert get_catalog_store().list_objects(source["id"])[0] == []
 
 
 def test_structure_job_single_flight(client: TestClient) -> None:
@@ -516,13 +542,29 @@ def test_fail_safe_aborts_without_absent() -> None:
             CatalogObjectRecord(
                 id=oid,
                 source_id="src_1",
+                locator_key=f"obj/postgresql/orphan/public/table/t{i}",
                 object_type="table",
                 schema_name="public",
                 name=f"t{i}",
                 ddl=None,
+                comment=None,
+                primary_key=None,
                 is_present=True,
                 business_name="keep",
                 business_description=None,
+                object_category=None,
+                grain_description=None,
+                business_primary_key=None,
+                time_semantics=None,
+                status_semantics=None,
+                relation_summary=None,
+                business_domain=None,
+                evidence_summary=None,
+                confidence=None,
+                open_questions=None,
+                semantic_source=None,
+                business_semantics_ready=False,
+                semantics_updated_at=None,
                 last_structure_job_id="job_old",
                 collected_at=now,
                 created_at=now,
@@ -531,13 +573,20 @@ def test_fail_safe_aborts_without_absent() -> None:
                     CatalogColumnRecord(
                         id=f"col_{i}",
                         object_id=oid,
+                        locator_key=f"col/postgresql/orphan/public/table/t{i}/column/id",
                         name="id",
                         ordinal=1,
                         data_type="int",
                         nullable=False,
                         is_present=True,
+                        default_value=None,
+                        comment=None,
                         business_name="Id",
                         business_description=None,
+                        column_semantics=None,
+                        enum_catalog=None,
+                        semantic_source=None,
+                        field_kind="column",
                         created_at=now,
                         updated_at=now,
                     )
@@ -549,6 +598,9 @@ def test_fail_safe_aborts_without_absent() -> None:
         job_id="job_old",
         objects=seeded,
         schema_scope=None,
+        engine="postgresql",
+        kind="database",
+        source_key="orphan",
     )
     with pytest.raises(CatalogWriteAborted) as exc:
         apply_structure_snapshot(
@@ -557,6 +609,9 @@ def test_fail_safe_aborts_without_absent() -> None:
             collected=[seeded[0]],
             schema_scope=None,
             fail_safe_threshold=0.5,
+            engine="postgresql",
+            kind="database",
+            source_key="orphan",
         )
     assert exc.value.code == "JOB_FAIL_SAFE"
     present = store.list_present_for_source("src_1")
@@ -595,13 +650,29 @@ def test_collect_failure_does_not_absent(monkeypatch: pytest.MonkeyPatch) -> Non
             CatalogObjectRecord(
                 id="obj_keep",
                 source_id=source.id,
+                locator_key="obj/postgresql/fail-src/public/table/kept",
                 object_type="table",
                 schema_name="public",
                 name="kept",
                 ddl=None,
+                comment=None,
+                primary_key=None,
                 is_present=True,
                 business_name="Kept",
                 business_description=None,
+                object_category=None,
+                grain_description=None,
+                business_primary_key=None,
+                time_semantics=None,
+                status_semantics=None,
+                relation_summary=None,
+                business_domain=None,
+                evidence_summary=None,
+                confidence=None,
+                open_questions=None,
+                semantic_source=None,
+                business_semantics_ready=False,
+                semantics_updated_at=None,
                 last_structure_job_id="old",
                 collected_at=now,
                 created_at=now,
@@ -610,6 +681,9 @@ def test_collect_failure_does_not_absent(monkeypatch: pytest.MonkeyPatch) -> Non
             )
         ],
         schema_scope=None,
+        engine="postgresql",
+        kind="database",
+        source_key="fail-src",
     )
 
     class Boom:
@@ -709,6 +783,7 @@ def test_enqueue_structure_job_audits_and_rejects_non_database(
         SourceRecord(
             id="src_nondb",
             key="file-like",
+            locator_key="src/file/file-like",
             name="File",
             kind="file",
             status="active",

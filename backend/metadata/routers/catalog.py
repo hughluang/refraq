@@ -2,26 +2,41 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from fastapi import Request
 
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
 from backend.metadata.catalog import service as catalog_service
 from backend.metadata.catalog.store import get_catalog_store, require_object
+from backend.metadata.errors import (
+    CatalogColumnNotFound,
+    CatalogObjectNotFound,
+    CatalogSearchQueryRequired,
+    JoinPathUnavailable,
+)
+from backend.metadata.joins.graph import find_join_paths
 from backend.metadata.sources.service import require_source
 from backend.metadata.schemas.catalog import (
     CatalogColumnOut,
     CatalogColumnResponse,
+    CatalogColumnSearchResponse,
     CatalogDdlResponse,
     CatalogObjectListResponse,
     CatalogObjectOut,
     CatalogObjectResponse,
+    CatalogObjectSearchResponse,
+    ColumnSemanticsPatchRequest,
+    JoinBatchResponse,
+    JoinBatchUpsertRequest,
     JoinListResponse,
     JoinOut,
+    JoinPathHopOut,
+    JoinPathOut,
+    JoinPathResponse,
     JoinResponse,
     JoinUpsertRequest,
-    SemanticsPatchRequest,
+    ObjectSemanticsPatchRequest,
 )
 
 router = APIRouter(tags=["catalog"])
@@ -30,11 +45,18 @@ router = APIRouter(tags=["catalog"])
 def _column_out(record) -> CatalogColumnOut:
     return CatalogColumnOut(
         id=record.id,
+        locator_key=record.locator_key,
         name=record.name,
         data_type=record.data_type,
         nullable=record.nullable,
+        default_value=record.default_value,
+        comment=record.comment,
         business_name=record.business_name,
         business_description=record.business_description,
+        column_semantics=record.column_semantics,
+        enum_catalog=record.enum_catalog,
+        semantic_source=record.semantic_source,
+        field_kind=record.field_kind,
         ordinal=record.ordinal,
         is_present=record.is_present,
     )
@@ -46,12 +68,28 @@ def _object_out(record, *, include_columns: bool) -> CatalogObjectOut:
         columns = [_column_out(c) for c in record.columns]
     return CatalogObjectOut(
         id=record.id,
+        locator_key=record.locator_key,
         source_id=record.source_id,
         object_type=record.object_type,
         schema_name=record.schema_name,
         name=record.name,
+        comment=record.comment,
+        primary_key=record.primary_key,
         business_name=record.business_name,
         business_description=record.business_description,
+        object_category=record.object_category,
+        grain_description=record.grain_description,
+        business_primary_key=record.business_primary_key,
+        time_semantics=record.time_semantics,
+        status_semantics=record.status_semantics,
+        relation_summary=record.relation_summary,
+        business_domain=record.business_domain,
+        evidence_summary=record.evidence_summary,
+        confidence=record.confidence,
+        open_questions=record.open_questions,
+        semantic_source=record.semantic_source,
+        business_semantics_ready=record.business_semantics_ready,
+        semantics_updated_at=record.semantics_updated_at,
         columns=columns if include_columns else [],
         ddl=record.ddl if include_columns else None,
         is_present=record.is_present,
@@ -59,12 +97,19 @@ def _object_out(record, *, include_columns: bool) -> CatalogObjectOut:
     )
 
 
-def _join_out(record) -> JoinOut:
+def _join_out(record, *, store) -> JoinOut:
+    from_col = store.get_column(record.from_column_id)
+    to_col = store.get_column(record.to_column_id)
     return JoinOut(
         id=record.id,
         from_column_id=record.from_column_id,
         to_column_id=record.to_column_id,
+        from_column_locator_key=from_col.locator_key if from_col else None,
+        to_column_locator_key=to_col.locator_key if to_col else None,
         evidence=record.evidence,
+        join_kind=record.join_kind,
+        join_expression=record.join_expression,
+        origin=record.origin,
         created_by_user_id=record.created_by_user_id,
         created_at=record.created_at,
     )
@@ -74,14 +119,81 @@ def _join_out(record) -> JoinOut:
 def list_objects(
     source_id: str,
     q: str | None = None,
+    object_type: str | None = None,
+    include_absent: bool = True,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectListResponse:
     require_source(source_id)
-    items = [
-        _object_out(o, include_columns=False)
-        for o in get_catalog_store().list_objects(source_id, name_search=q)
-    ]
-    return CatalogObjectListResponse(items=items)
+    items, total = get_catalog_store().list_objects(
+        source_id,
+        name_search=q,
+        include_absent=include_absent,
+        object_type=object_type,
+        limit=limit,
+        offset=offset,
+    )
+    return CatalogObjectListResponse(
+        items=[_object_out(o, include_columns=False) for o in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/catalog/objects/search", response_model=CatalogObjectSearchResponse)
+def search_objects(
+    q: str = Query(..., min_length=1),
+    source_id: str | None = None,
+    object_type: str | None = None,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    _: UserRecord = Depends(require_permission("metadata:read")),
+) -> CatalogObjectSearchResponse:
+    query = q.strip()
+    if not query:
+        raise CatalogSearchQueryRequired()
+    items, total = get_catalog_store().search_objects(
+        query,
+        source_id=source_id,
+        object_type=object_type,
+        limit=limit,
+        offset=offset,
+    )
+    return CatalogObjectSearchResponse(
+        items=[_object_out(o, include_columns=False) for o in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/catalog/columns/search", response_model=CatalogColumnSearchResponse)
+def search_columns(
+    q: str = Query(..., min_length=1),
+    source_id: str | None = None,
+    object_type: str | None = None,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    _: UserRecord = Depends(require_permission("metadata:read")),
+) -> CatalogColumnSearchResponse:
+    query = q.strip()
+    if not query:
+        raise CatalogSearchQueryRequired()
+    items, total = get_catalog_store().search_columns(
+        query,
+        source_id=source_id,
+        object_type=object_type,
+        limit=limit,
+        offset=offset,
+    )
+    return CatalogColumnSearchResponse(
+        items=[_column_out(c) for c in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/objects/{object_id}", response_model=CatalogObjectResponse)
@@ -105,7 +217,7 @@ def get_object_ddl(
 @router.patch("/objects/{object_id}/semantics", response_model=CatalogObjectResponse)
 def patch_object_semantics(
     object_id: str,
-    payload: SemanticsPatchRequest,
+    payload: ObjectSemanticsPatchRequest,
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> CatalogObjectResponse:
@@ -115,6 +227,7 @@ def patch_object_semantics(
         data=data,
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),
+        semantic_source="user_input",
     )
     return CatalogObjectResponse(object=_object_out(record, include_columns=True))
 
@@ -122,16 +235,17 @@ def patch_object_semantics(
 @router.patch("/columns/{column_id}/semantics", response_model=CatalogColumnResponse)
 def patch_column_semantics(
     column_id: str,
-    payload: SemanticsPatchRequest,
+    payload: ColumnSemanticsPatchRequest,
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> CatalogColumnResponse:
     data = payload.model_dump(exclude_unset=True)
-    record = catalog_service.patch_column_semantics(
+    record, _applied = catalog_service.patch_column_semantics(
         column_id=column_id,
         data=data,
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),
+        semantic_source="user_input",
     )
     return CatalogColumnResponse(column=_column_out(record))
 
@@ -141,7 +255,8 @@ def list_object_joins(
     object_id: str,
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> JoinListResponse:
-    items = [_join_out(j) for j in catalog_service.list_joins(object_id)]
+    store = get_catalog_store()
+    items = [_join_out(j, store=store) for j in catalog_service.list_joins(object_id)]
     return JoinListResponse(items=items)
 
 
@@ -157,8 +272,115 @@ def upsert_join(
         evidence=payload.evidence,
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),
+        join_kind=payload.join_kind or "INNER",
+        join_expression=payload.join_expression,
+        origin="human",
     )
-    return JoinResponse(join=_join_out(record))
+    return JoinResponse(join=_join_out(record, store=get_catalog_store()))
+
+
+@router.put("/joins:batch", response_model=JoinBatchResponse)
+def upsert_joins_batch(
+    payload: JoinBatchUpsertRequest,
+    request: Request,
+    user: UserRecord = Depends(require_permission("metadata:write")),
+) -> JoinBatchResponse:
+    items, created, known = catalog_service.upsert_joins_batch(
+        joins=[j.model_dump() for j in payload.joins],
+        actor_user_id=user.id,
+        actor_token_id=get_actor_token_id(request),
+        origin="human",
+    )
+    store = get_catalog_store()
+    return JoinBatchResponse(
+        created_count=created,
+        already_known_count=known,
+        items=[_join_out(j, store=store) for j in items],
+    )
+
+
+@router.get("/joins/path", response_model=JoinPathResponse)
+def get_join_path(
+    start: str = Query(...),
+    target: str | None = None,
+    max_hops: int = Query(default=1, ge=1, le=5),
+    top_targets: int = Query(default=3, ge=1, le=20),
+    _: UserRecord = Depends(require_permission("metadata:read")),
+) -> JoinPathResponse:
+    store = get_catalog_store()
+    start_object_id = None
+    start_column_id = None
+    try:
+        start_col = catalog_service.resolve_column_ref(start)
+        start_column_id = start_col.id
+    except CatalogColumnNotFound:
+        start_col = None
+    if start_col is None:
+        try:
+            start_obj = catalog_service.resolve_object_ref(start)
+            start_object_id = start_obj.id
+        except CatalogObjectNotFound as exc:
+            raise CatalogObjectNotFound() from exc
+
+    target_object_id = None
+    target_column_id = None
+    if target:
+        try:
+            t_col = catalog_service.resolve_column_ref(target)
+            target_column_id = t_col.id
+        except CatalogColumnNotFound:
+            t_col = None
+        if t_col is None:
+            try:
+                t_obj = catalog_service.resolve_object_ref(target)
+                target_object_id = t_obj.id
+            except CatalogObjectNotFound as exc:
+                raise CatalogObjectNotFound() from exc
+
+    result = find_join_paths(
+        store=store,
+        start_object_id=start_object_id,
+        start_column_id=start_column_id,
+        target_object_id=target_object_id,
+        target_column_id=target_column_id,
+        max_hops=max_hops,
+        top_targets=top_targets,
+    )
+    if result.reason == "NO_START_COLUMNS":
+        raise JoinPathUnavailable()
+    paths = []
+    for path in result.paths:
+        hops = []
+        for hop in path.hops:
+            from_col = store.get_column(hop.from_column_id)
+            to_col = store.get_column(hop.to_column_id)
+            hops.append(
+                JoinPathHopOut(
+                    from_column_id=hop.from_column_id,
+                    to_column_id=hop.to_column_id,
+                    from_column_locator_key=from_col.locator_key if from_col else None,
+                    to_column_locator_key=to_col.locator_key if to_col else None,
+                    join_id=hop.join.id,
+                    join_kind=hop.join.join_kind,
+                    join_expression=hop.join.join_expression,
+                    evidence=hop.join.evidence,
+                    origin=hop.join.origin,
+                )
+            )
+        paths.append(
+            JoinPathOut(
+                target_object_id=path.target_object_id,
+                target_column_id=path.target_column_id,
+                hops=hops,
+                path_summary=path.path_summary,
+            )
+        )
+    return JoinPathResponse(
+        paths_found=len(paths),
+        paths=paths,
+        direct_joins=[_join_out(j, store=store) for j in result.direct_joins],
+        reason=result.reason,
+    )
 
 
 @router.delete("/joins/{join_id}", status_code=status.HTTP_204_NO_CONTENT)

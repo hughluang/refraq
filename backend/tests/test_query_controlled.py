@@ -400,7 +400,7 @@ def test_mcp_run_sql_success_and_forbidden(
 
     raw = run_sql(
         authorization=f"Bearer {secret}",
-        source_id=source["id"],
+        source_locator_key=source["locator_key"],
         sql="SELECT 1 AS c",
         max_rows=10,
     )
@@ -425,7 +425,7 @@ def test_mcp_run_sql_success_and_forbidden(
     monkeypatch.setattr(mcp_mod, "_actor_from_token", _fake_actor)
     forbidden = run_sql(
         authorization="Bearer unused",
-        source_id=source["id"],
+        source_locator_key=source["locator_key"],
         sql="SELECT 1",
     )
     err = json.loads(forbidden)

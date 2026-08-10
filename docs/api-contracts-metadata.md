@@ -2,69 +2,100 @@
 
 ## 1. Purpose
 
-HTTP contracts for collected **Catalog Objects**, semantics, join edges, and controlled query.
+HTTP contracts for collected **Catalog Objects**, semantics, join edges, search, join paths, and controlled query.
 
 Business rules: `docs/business-metadata.md`.
 Auth: Session or User PAT.
 
-Slice availability:
+Slice / permission availability:
 
-| Surface | Slice | Permissions |
+| Surface | Phase | Permissions |
 | --- | --- | --- |
 | Objects / columns / DDL | A | `metadata:read` |
-| Semantics R/W | B | read `metadata:read`; write `metadata:write` |
-| Joins R/W | C | read `metadata:read`; write `metadata:write` |
+| Semantics R/W | B + Depth | read `metadata:read`; write `metadata:write` |
+| Joins R/W | C + Depth | read `metadata:read`; write `metadata:write` |
+| Search / join path | Depth | `metadata:read` |
 | Controlled query | D | `query:run` |
+
+All Source and catalog responses include `locator_key` (ADR 0012). HTTP path parameters remain surrogate ids.
 
 ## 2. Catalog Object Shape
 
 ```json
 {
   "id": "obj_01",
-  "source_id": "src_mes_prod",
+  "locator_key": "obj/postgresql/demo-src/public/table/orders",
+  "source_id": "src_demo",
   "object_type": "table",
-  "schema_name": "dbo",
-  "name": "WORK_ORDER",
+  "schema_name": "public",
+  "name": "orders",
+  "comment": null,
+  "primary_key": ["order_id"],
   "business_name": null,
   "business_description": null,
+  "object_category": null,
+  "grain_description": null,
+  "business_primary_key": null,
+  "time_semantics": null,
+  "status_semantics": null,
+  "relation_summary": null,
+  "business_domain": null,
+  "evidence_summary": null,
+  "confidence": null,
+  "open_questions": null,
+  "semantic_source": null,
+  "business_semantics_ready": false,
+  "semantics_updated_at": null,
   "columns": [
     {
       "id": "col_01",
-      "name": "WO_ID",
-      "data_type": "NUMBER",
+      "locator_key": "col/postgresql/demo-src/public/table/orders/column/order_id",
+      "name": "order_id",
+      "data_type": "integer",
       "nullable": false,
+      "default_value": null,
+      "comment": null,
       "business_name": null,
-      "business_description": null
+      "business_description": null,
+      "column_semantics": null,
+      "enum_catalog": null,
+      "semantic_source": null,
+      "field_kind": "column",
+      "ordinal": 1,
+      "is_present": true
     }
   ],
   "ddl": null,
+  "is_present": true,
   "collected_at": "2026-08-05T02:05:00Z"
 }
 ```
 
 Identity is `source_id` (+ object coordinates). `collected_at` is optional provenance only.
-Semantics fields are null until slice B writes them.
+`field_kind` is read-only on semantics writes (structure-held). `model_routing_hint` is not in this phase.
 
 ## 3. Browse Endpoints (A+)
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/sources/{id}/objects` | `metadata:read` | List objects (query: name search) |
+| `GET` | `/sources/{id}/objects` | `metadata:read` | List objects (query: `q`, `object_type`, `include_absent`, `limit`, `offset`) |
 | `GET` | `/objects/{id}` | `metadata:read` | Object detail including columns |
 | `GET` | `/objects/{id}/ddl` | `metadata:read` | DDL text when stored |
 
-## 4. Semantics Endpoints (B)
+List response: `{ "items": […], "total": N, "limit": L, "offset": O }` when pagination params are used; `limit` default 100, max 500.
+
+## 4. Semantics Endpoints (B + Depth)
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
-| `PATCH` | `/objects/{id}/semantics` | `metadata:write` | Set object business_name / business_description |
-| `PATCH` | `/columns/{id}/semantics` | `metadata:write` | Set column semantics |
+| `PATCH` | `/objects/{id}/semantics` | `metadata:write` | Patch object semantics fields (§2 shape) |
+| `PATCH` | `/columns/{id}/semantics` | `metadata:write` | Patch column semantics fields |
 
-Response envelopes: object patch → `{ "object": … }` (same shape as `GET /objects/{id}`); column patch → `{ "column": … }`.
+Request bodies accept any subset of the writable semantics fields in §2 (not `field_kind`; not `model_routing_hint`). Response envelopes: object → `{ "object": … }`; column → `{ "column": … }`. Console writes set `semantic_source=user_input`; MCP writes set `semantic_source=mcp`. JSON `null` does not clear existing values (ADR 0014).
 
-Rules: omit fields leave unchanged; explicit clear uses a documented sentinel or dedicated clear endpoint — do not treat JSON `null` as wipe unless the contract for that field says so.
+Rules: omit fields leave unchanged; JSON `null` does not wipe; explicit clear deferred.
 
-## 5. Join Endpoints (C)
+## 5. Join Endpoints (C + Depth)
 
 ### Join edge shape
 
@@ -73,7 +104,12 @@ Rules: omit fields leave unchanged; explicit clear uses a documented sentinel or
   "id": "join_01",
   "from_column_id": "col_a",
   "to_column_id": "col_b",
-  "evidence": "Verified FK in DDL / successful probe query",
+  "from_column_locator_key": "col/postgresql/demo-src/public/table/orders/column/order_id",
+  "to_column_locator_key": "col/postgresql/demo-src/public/table/order_lines/column/order_id",
+  "evidence": "FK fk_order_lines_order",
+  "join_kind": "INNER",
+  "join_expression": "a.order_id = b.order_id",
+  "origin": "foreign_key",
   "created_by_user_id": "user_001",
   "created_at": "2026-08-05T03:00:00Z"
 }
@@ -82,14 +118,48 @@ Rules: omit fields leave unchanged; explicit clear uses a documented sentinel or
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/objects/{id}/joins` | `metadata:read` | List joins touching object |
-| `PUT` | `/joins` | `metadata:write` | Upsert edge with evidence |
+| `PUT` | `/joins` | `metadata:write` | Upsert single edge (`origin=human` when via Console) |
+| `PUT` | `/joins:batch` | `metadata:write` | Batch upsert; all edges same Source |
 | `DELETE` | `/joins/{id}` | `metadata:write` | Remove edge |
+| `GET` | `/joins/path` | `metadata:read` | Join path lookup |
 
-Response envelopes: list → `{ "items": [Join] }`; upsert → `{ "join": Join }`; delete → `204` No Content.
+Batch request:
+
+```json
+{
+  "joins": [
+    {
+      "from_column_id": "col_a",
+      "to_column_id": "col_b",
+      "evidence": "…",
+      "join_kind": "INNER",
+      "join_expression": null
+    }
+  ]
+}
+```
+
+Batch response: `{ "created_count": 1, "already_known_count": 0, "items": [Join] }`.
+
+Path query params: `start` (object or column id or locator_key), optional `target`, `max_hops` (1–5, default 1), `top_targets` (default 3).
+
+Path response: `{ "paths_found": N, "paths": […], "direct_joins": […], "reason": null | "…" }`.
+`reason` may be set when no usable path is returned (e.g. `TARGET_UNREACHABLE`).
 
 Reject joins that lack evidence with `JOIN_EVIDENCE_REQUIRED`. Cross-Source edges → `JOIN_CROSS_SOURCE`. Self-loop → `JOIN_INVALID`.
 
-## 6. Controlled Query (D)
+## 6. Search Endpoints (Depth)
+
+| Method | Path | Permission | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/catalog/objects/search` | `metadata:read` | Cross-Source object search |
+| `GET` | `/catalog/columns/search` | `metadata:read` | Cross-Source column search |
+
+Query params: `q` (**required**, non-empty for both objects and columns), `source_id`, `object_type`, `limit` (default 20, max 100), `offset`.
+
+Response: `{ "items": […], "total": N, "limit": L, "offset": O }`. Ranking: exact locator/name → prefix → name substring → business name/description substring.
+
+## 7. Controlled Query (D)
 
 ### `POST /sources/{id}/query`
 
@@ -99,7 +169,7 @@ Request:
 
 ```json
 {
-  "sql": "SELECT WO_ID FROM WORK_ORDER WHERE ROWNUM <= 10",
+  "sql": "SELECT order_id FROM orders LIMIT 10",
   "max_rows": 100
 }
 ```
@@ -108,7 +178,7 @@ Response `200`:
 
 ```json
 {
-  "columns": ["WO_ID"],
+  "columns": ["order_id"],
   "rows": [["1001"]],
   "truncated": false,
   "duration_ms": 12

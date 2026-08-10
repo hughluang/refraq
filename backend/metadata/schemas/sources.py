@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 class SourceOut(BaseModel):
     id: str
     key: str
+    locator_key: str
     name: str
     kind: str
     status: str

@@ -16,25 +16,76 @@ from backend.metadata.catalog.store import (
 from backend.metadata.errors import (
     CatalogColumnNotFound,
     CatalogJoinNotFound,
+    CatalogObjectNotFound,
     JoinCrossSource,
     JoinEvidenceRequired,
     JoinInvalid,
 )
+from backend.metadata.sources.store import SourceRecord, get_source_store
 
 _EVIDENCE_AUDIT_MAX = 500
 
+_OBJECT_SEMANTIC_FIELDS = (
+    "business_name",
+    "business_description",
+    "object_category",
+    "grain_description",
+    "business_primary_key",
+    "time_semantics",
+    "status_semantics",
+    "relation_summary",
+    "business_domain",
+    "evidence_summary",
+    "confidence",
+    "open_questions",
+)
 
-def _apply_patch_fields(
+_COLUMN_SEMANTIC_FIELDS = (
+    "business_name",
+    "business_description",
+    "column_semantics",
+    "enum_catalog",
+)
+
+
+def _field_nonempty(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, dict)):
+        return len(value) > 0
+    return True
+
+
+def compute_business_semantics_ready(
+    *,
+    business_name: str | None,
+    business_description: str | None,
+    open_questions: list[str] | None,
+) -> bool:
+    if not _field_nonempty(business_name) or not _field_nonempty(business_description):
+        return False
+    if open_questions:
+        return False
+    return True
+
+
+def _build_semantic_kwargs(
+    *,
     data: dict[str, Any],
-) -> tuple[Any, Any]:
-    """Map request fields to store Unset/value; explicit null is ignored (no wipe)."""
-    business_name: Any = UNSET
-    business_description: Any = UNSET
-    if "business_name" in data and data["business_name"] is not None:
-        business_name = data["business_name"]
-    if "business_description" in data and data["business_description"] is not None:
-        business_description = data["business_description"]
-    return business_name, business_description
+    fields: tuple[str, ...],
+) -> dict[str, Any]:
+    """Build store kwargs from request data; JSON null does not wipe."""
+    kwargs: dict[str, Any] = {}
+    for key in fields:
+        if key not in data:
+            continue
+        value = data[key]
+        if value is None:
+            continue
+        kwargs[key] = value
+    return kwargs
 
 
 def require_column(column_id: str) -> CatalogColumnRecord:
@@ -51,8 +102,31 @@ def require_join(join_id: str) -> CatalogJoinRecord:
     return record
 
 
-def get_object_semantics(object_id: str) -> CatalogObjectRecord:
-    return require_object(object_id)
+def resolve_source_ref(ref: str) -> SourceRecord:
+    """Resolve Source by id or locator_key."""
+    store = get_source_store()
+    record = store.get_source(ref) or store.get_source_by_locator(ref)
+    if record is None:
+        from backend.metadata.errors import SourceNotFound
+
+        raise SourceNotFound()
+    return record
+
+
+def resolve_object_ref(ref: str) -> CatalogObjectRecord:
+    store = get_catalog_store()
+    record = store.get_object(ref) or store.get_object_by_locator(ref)
+    if record is None:
+        raise CatalogObjectNotFound()
+    return record
+
+
+def resolve_column_ref(ref: str) -> CatalogColumnRecord:
+    store = get_catalog_store()
+    record = store.get_column(ref) or store.get_column_by_locator(ref)
+    if record is None:
+        raise CatalogColumnNotFound()
+    return record
 
 
 def patch_object_semantics(
@@ -61,22 +135,29 @@ def patch_object_semantics(
     data: dict[str, Any],
     actor_user_id: str | None,
     actor_token_id: str | None,
-    open_questions: str | None = None,
+    semantic_source: str = "user_input",
 ) -> CatalogObjectRecord:
-    require_object(object_id)
-    business_name, business_description = _apply_patch_fields(data)
-    updated = get_catalog_store().patch_object_semantics(
-        object_id,
+    existing = require_object(object_id)
+    kwargs = _build_semantic_kwargs(data=data, fields=_OBJECT_SEMANTIC_FIELDS)
+    if not kwargs:
+        return existing
+    # Merge for ready computation.
+    business_name = kwargs.get("business_name", existing.business_name)
+    business_description = kwargs.get(
+        "business_description", existing.business_description
+    )
+    open_questions = kwargs.get("open_questions", existing.open_questions)
+    ready = compute_business_semantics_ready(
         business_name=business_name,
         business_description=business_description,
+        open_questions=open_questions,
     )
+    store_kwargs: dict[str, Any] = {k: UNSET for k in _OBJECT_SEMANTIC_FIELDS}
+    store_kwargs.update(kwargs)
+    store_kwargs["semantic_source"] = semantic_source
+    store_kwargs["business_semantics_ready"] = ready
+    updated = get_catalog_store().patch_object_semantics(object_id, **store_kwargs)
     assert updated is not None
-    detail: dict[str, Any] = {
-        "changed": [k for k in ("business_name", "business_description") if k in data and data[k] is not None],
-        "ignored_null": [k for k in ("business_name", "business_description") if k in data and data[k] is None],
-    }
-    if open_questions is not None:
-        detail["open_questions"] = open_questions
     persist_audit_event(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -84,7 +165,13 @@ def patch_object_semantics(
         resource_id=object_id,
         action="semantics.object_patch",
         result="success",
-        detail=detail,
+        detail={
+            "changed": list(kwargs.keys()),
+            "semantic_source": semantic_source,
+            "ignored_null": [
+                k for k in _OBJECT_SEMANTIC_FIELDS if k in data and data[k] is None
+            ],
+        },
     )
     return updated
 
@@ -95,23 +182,18 @@ def patch_column_semantics(
     data: dict[str, Any],
     actor_user_id: str | None,
     actor_token_id: str | None,
-    open_questions: str | None = None,
-) -> CatalogColumnRecord:
-    require_column(column_id)
-    business_name, business_description = _apply_patch_fields(data)
-    updated = get_catalog_store().patch_column_semantics(
-        column_id,
-        business_name=business_name,
-        business_description=business_description,
-    )
+    semantic_source: str = "user_input",
+) -> tuple[CatalogColumnRecord, bool]:
+    """Patch column semantics. Returns (record, applied)."""
+    existing = require_column(column_id)
+    kwargs = _build_semantic_kwargs(data=data, fields=_COLUMN_SEMANTIC_FIELDS)
+    if not kwargs:
+        return existing, False
+    store_kwargs: dict[str, Any] = {k: UNSET for k in _COLUMN_SEMANTIC_FIELDS}
+    store_kwargs.update(kwargs)
+    store_kwargs["semantic_source"] = semantic_source
+    updated = get_catalog_store().patch_column_semantics(column_id, **store_kwargs)
     assert updated is not None
-    detail: dict[str, Any] = {
-        "object_id": updated.object_id,
-        "changed": [k for k in ("business_name", "business_description") if k in data and data[k] is not None],
-        "ignored_null": [k for k in ("business_name", "business_description") if k in data and data[k] is None],
-    }
-    if open_questions is not None:
-        detail["open_questions"] = open_questions
     persist_audit_event(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -119,9 +201,63 @@ def patch_column_semantics(
         resource_id=column_id,
         action="semantics.column_patch",
         result="success",
-        detail=detail,
+        detail={
+            "object_id": updated.object_id,
+            "changed": list(kwargs.keys()),
+            "semantic_source": semantic_source,
+            "ignored_null": [
+                k for k in _COLUMN_SEMANTIC_FIELDS if k in data and data[k] is None
+            ],
+        },
     )
-    return updated
+    return updated, True
+
+
+def set_column_semantics_batch(
+    *,
+    object_id: str,
+    columns: list[dict[str, Any]],
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+    semantic_source: str = "mcp",
+) -> dict[str, Any]:
+    obj = require_object(object_id)
+    by_name = {c.name: c for c in obj.columns}
+    updated_count = 0
+    skipped_columns: list[dict[str, Any]] = []
+    for item in columns:
+        name = item.get("column_name")
+        if not isinstance(name, str) or not name.strip():
+            skipped_columns.append(
+                {
+                    "column_name": name if isinstance(name, str) else None,
+                    "reason": "invalid_column_name",
+                }
+            )
+            continue
+        col = by_name.get(name)
+        if col is None:
+            skipped_columns.append(
+                {"column_name": name, "reason": "invalid_column_name"}
+            )
+            continue
+        data = {k: v for k, v in item.items() if k != "column_name"}
+        _, applied = patch_column_semantics(
+            column_id=col.id,
+            data=data,
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+            semantic_source=semantic_source,
+        )
+        if applied:
+            updated_count += 1
+        else:
+            skipped_columns.append({"column_name": name, "reason": "no_changes"})
+    return {
+        "updated_count": updated_count,
+        "requested_count": len(columns),
+        "skipped_columns": skipped_columns,
+    }
 
 
 def list_joins(object_id: str) -> list[CatalogJoinRecord]:
@@ -136,6 +272,9 @@ def upsert_join(
     evidence: str,
     actor_user_id: str | None,
     actor_token_id: str | None,
+    join_kind: str = "INNER",
+    join_expression: str | None = None,
+    origin: str = "human",
 ) -> CatalogJoinRecord:
     cleaned = (evidence or "").strip()
     if not cleaned:
@@ -148,11 +287,18 @@ def upsert_join(
     to_obj = require_object(to_col.object_id)
     if from_obj.source_id != to_obj.source_id:
         raise JoinCrossSource()
+    expression = join_expression
+    if expression is None:
+        expression = f"{from_col.name} = {to_col.name}"
+    kind = (join_kind or "INNER").strip() or "INNER"
     record = get_catalog_store().upsert_join(
         from_column_id=from_column_id,
         to_column_id=to_column_id,
         evidence=cleaned,
         created_by_user_id=actor_user_id,
+        join_kind=kind,
+        join_expression=expression,
+        origin=origin,
     )
     persist_audit_event(
         actor_user_id=actor_user_id,
@@ -165,9 +311,63 @@ def upsert_join(
             "from_column_id": from_column_id,
             "to_column_id": to_column_id,
             "evidence": cleaned[:_EVIDENCE_AUDIT_MAX],
+            "join_kind": kind,
+            "origin": origin,
         },
     )
     return record
+
+
+def upsert_joins_batch(
+    *,
+    joins: list[dict[str, Any]],
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+    origin: str = "human",
+) -> tuple[list[CatalogJoinRecord], int, int]:
+    """Upsert many joins; all edges must share one Source. Returns items, created, known."""
+    if not joins:
+        return [], 0, 0
+    store = get_catalog_store()
+    source_id: str | None = None
+    created = 0
+    known = 0
+    items: list[CatalogJoinRecord] = []
+    for item in joins:
+        from_id = str(item["from_column_id"])
+        to_id = str(item["to_column_id"])
+        from_col = require_column(from_id)
+        to_col = require_column(to_id)
+        from_obj = require_object(from_col.object_id)
+        to_obj = require_object(to_col.object_id)
+        if from_obj.source_id != to_obj.source_id:
+            raise JoinCrossSource()
+        if source_id is None:
+            source_id = from_obj.source_id
+        elif from_obj.source_id != source_id:
+            raise JoinCrossSource()
+        # Pair known?
+        existing = None
+        for j in store.list_all_joins_for_source(from_obj.source_id):
+            if j.from_column_id == from_id and j.to_column_id == to_id:
+                existing = j
+                break
+        record = upsert_join(
+            from_column_id=from_id,
+            to_column_id=to_id,
+            evidence=str(item.get("evidence") or ""),
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+            join_kind=str(item.get("join_kind") or "INNER"),
+            join_expression=item.get("join_expression"),
+            origin=origin,
+        )
+        if existing is not None:
+            known += 1
+        else:
+            created += 1
+        items.append(record)
+    return items, created, known
 
 
 def delete_join(

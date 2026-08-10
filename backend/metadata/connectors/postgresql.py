@@ -8,6 +8,8 @@ from sqlalchemy import create_engine, text
 
 from backend.metadata.connectors.base import (
     CollectedColumn,
+    CollectedForeignKey,
+    CollectedIndex,
     CollectedObject,
     CollectedStructure,
     QueryResult,
@@ -72,10 +74,11 @@ class PostgresqlConnector:
                         WHEN 'r' THEN 'table'
                         WHEN 'p' THEN 'table'
                         WHEN 'v' THEN 'view'
-                        WHEN 'm' THEN 'view'
+                        WHEN 'm' THEN 'materialized_view'
                         ELSE c.relkind::text
                       END AS object_type,
-                      c.oid AS oid
+                      c.oid AS oid,
+                      obj_description(c.oid, 'pg_class') AS comment
                     FROM pg_catalog.pg_class c
                     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
                     WHERE c.relkind IN ('r', 'p', 'v', 'm')
@@ -89,12 +92,16 @@ class PostgresqlConnector:
                 rows = conn.execute(obj_sql, params).mappings().all()
                 objects: list[CollectedObject] = []
                 for row in rows:
-                    if row["object_type"] not in {"table", "view"}:
-                        continue
-                    cols = self._columns(conn, int(row["oid"]))
+                    oid = int(row["oid"])
+                    cols = self._columns(conn, oid)
                     ddl = None
-                    if row["object_type"] == "view":
-                        ddl = self._view_ddl(conn, row["schema_name"], row["name"])
+                    if row["object_type"] in {"view", "materialized_view"}:
+                        ddl = self._view_ddl(
+                            conn,
+                            row["schema_name"],
+                            row["name"],
+                            row["object_type"],
+                        )
                     objects.append(
                         CollectedObject(
                             schema_name=row["schema_name"],
@@ -102,6 +109,10 @@ class PostgresqlConnector:
                             object_type=row["object_type"],
                             columns=cols,
                             ddl=ddl,
+                            comment=row["comment"],
+                            primary_key=self._primary_key(conn, oid),
+                            foreign_keys=self._foreign_keys(conn, oid),
+                            indexes=self._indexes(conn, oid),
                         )
                     )
                 return CollectedStructure(objects=objects)
@@ -119,8 +130,12 @@ class PostgresqlConnector:
               a.attname AS name,
               a.attnum AS ordinal,
               pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
-              NOT a.attnotnull AS nullable
+              NOT a.attnotnull AS nullable,
+              pg_catalog.pg_get_expr(ad.adbin, ad.adrelid) AS default_value,
+              col_description(a.attrelid, a.attnum) AS comment
             FROM pg_catalog.pg_attribute a
+            LEFT JOIN pg_catalog.pg_attrdef ad
+              ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
             WHERE a.attrelid = :oid
               AND a.attnum > 0
               AND NOT a.attisdropped
@@ -134,11 +149,108 @@ class PostgresqlConnector:
                 ordinal=int(r["ordinal"]),
                 data_type=r["data_type"],
                 nullable=bool(r["nullable"]),
+                default_value=r["default_value"],
+                comment=r["comment"],
             )
             for r in rows
         ]
 
-    def _view_ddl(self, conn: object, schema: str, name: str) -> str | None:
+    def _primary_key(self, conn: object, oid: int) -> list[str]:
+        sql = text(
+            """
+            SELECT a.attname AS name
+            FROM pg_catalog.pg_index i
+            JOIN pg_catalog.pg_attribute a
+              ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+            WHERE i.indrelid = :oid AND i.indisprimary
+            ORDER BY array_position(i.indkey, a.attnum)
+            """
+        )
+        rows = conn.execute(sql, {"oid": oid}).mappings().all()  # type: ignore[attr-defined]
+        return [r["name"] for r in rows]
+
+    def _foreign_keys(self, conn: object, oid: int) -> list[CollectedForeignKey]:
+        sql = text(
+            """
+            SELECT
+              con.conname AS name,
+              con.conkey AS conkey,
+              con.confkey AS confkey,
+              nsp.nspname AS ref_schema,
+              rel.relname AS ref_table,
+              con.confrelid AS confrelid
+            FROM pg_catalog.pg_constraint con
+            JOIN pg_catalog.pg_class rel ON rel.oid = con.confrelid
+            JOIN pg_catalog.pg_namespace nsp ON nsp.oid = rel.relnamespace
+            WHERE con.conrelid = :oid AND con.contype = 'f'
+            ORDER BY con.conname
+            """
+        )
+        rows = conn.execute(sql, {"oid": oid}).mappings().all()  # type: ignore[attr-defined]
+        out: list[CollectedForeignKey] = []
+        for r in rows:
+            cols = self._attnames(conn, oid, list(r["conkey"] or []))
+            ref_cols = self._attnames(
+                conn, int(r["confrelid"]), list(r["confkey"] or [])
+            )
+            out.append(
+                CollectedForeignKey(
+                    name=r["name"],
+                    columns=cols,
+                    ref_schema=r["ref_schema"],
+                    ref_table=r["ref_table"],
+                    ref_columns=ref_cols,
+                )
+            )
+        return out
+
+    def _attnames(self, conn: object, relid: int, attnums: list[int]) -> list[str]:
+        if not attnums:
+            return []
+        sql = text(
+            """
+            SELECT a.attnum, a.attname
+            FROM pg_catalog.pg_attribute a
+            WHERE a.attrelid = :relid AND a.attnum = ANY(:attnums)
+            """
+        )
+        rows = conn.execute(  # type: ignore[attr-defined]
+            sql, {"relid": relid, "attnums": attnums}
+        ).mappings().all()
+        by_num = {int(r["attnum"]): r["attname"] for r in rows}
+        return [by_num[n] for n in attnums if n in by_num]
+
+    def _indexes(self, conn: object, oid: int) -> list[CollectedIndex]:
+        sql = text(
+            """
+            SELECT
+              i.relname AS name,
+              ix.indisunique AS is_unique,
+              ix.indkey AS indkey
+            FROM pg_catalog.pg_index ix
+            JOIN pg_catalog.pg_class i ON i.oid = ix.indexrelid
+            WHERE ix.indrelid = :oid AND NOT ix.indisprimary
+            ORDER BY i.relname
+            """
+        )
+        rows = conn.execute(sql, {"oid": oid}).mappings().all()  # type: ignore[attr-defined]
+        out: list[CollectedIndex] = []
+        for r in rows:
+            # indkey is an int2vector; exclude expression-only (0) slots.
+            attnums = [int(n) for n in (r["indkey"] or []) if int(n) > 0]
+            cols = self._attnames(conn, oid, attnums)
+            out.append(
+                CollectedIndex(
+                    name=r["name"],
+                    columns=cols,
+                    is_unique=bool(r["is_unique"]),
+                )
+            )
+        return out
+
+    def _view_ddl(
+        self, conn: object, schema: str, name: str, object_type: str
+    ) -> str | None:
         try:
             sql = text(
                 """
@@ -150,7 +262,12 @@ class PostgresqlConnector:
             )
             row = conn.execute(sql, {"schema": schema, "name": name}).mappings().first()  # type: ignore[attr-defined]
             if row and row["ddl"]:
-                return f"CREATE OR REPLACE VIEW {schema}.{name} AS\n{row['ddl']}"
+                keyword = (
+                    "MATERIALIZED VIEW"
+                    if object_type == "materialized_view"
+                    else "VIEW"
+                )
+                return f"CREATE {keyword} {schema}.{name} AS\n{row['ddl']}"
         except Exception:  # noqa: BLE001 — ddl optional
             return None
         return None

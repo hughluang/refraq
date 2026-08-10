@@ -13,6 +13,8 @@ Related boundaries:
 - Source / catalog identity: `docs/adr/0007-source-owns-catalog-identity.md`.
 - Source-embedded access: `docs/adr/0010-source-owns-access.md`.
 - Encrypted access blob + Connector Spec: `docs/adr/0011-encrypted-access-blob-and-connector-spec.md`.
+- Locator addressing: `docs/adr/0012-locator-addressing.md`.
+- Semantics provenance: `docs/adr/0013-semantics-provenance-and-protected-sources.md` (field protection deferred: `docs/adr/0014-defer-semantic-field-protection.md`).
 - Job shape: `docs/adr/0008-job-generic-input.md`.
 - This phase does **not** define Business Entity, Data Product catalog, Serving delivery, or Access Contract marketplace workflows.
 
@@ -106,9 +108,26 @@ Rules:
 
 ### 4.3 Catalog Object And Columns
 
-Collected structure includes object identity **under Source**, object type, name, columns (name, type, nullable), and DDL when available.
+Collected structure includes object identity **under Source**, object type, name, columns (name, full type string with precision/length when available, nullable, default value, native comment), primary key column list, foreign keys, unique constraints, indexes, object-level native comment, and DDL when available.
 Optional provenance may record collection timestamp; provenance is not part of identity.
-Later slices attach business semantics and join edges to these objects/columns.
+Semantics and join edges attach to these objects/columns (see §10).
+
+### 4.3.1 Locator keys
+
+Every Source, Catalog Object, and column carries a stable readable **locator key** (stored, unique), derived from natural keys (ADR 0012):
+
+| Kind | Format |
+| --- | --- |
+| Source | `src/{engine}/{source_key}` (non-database: `src/{kind}/{source_key}`) |
+| Object | `obj/{engine}/{source_key}/{schema}/{object_type}/{name}` |
+| Column | `col/{engine}/{source_key}/{schema}/{object_type}/{name}/column/{column_name}` |
+
+Rules:
+
+- Segment-internal `/` is percent-encoded.
+- The `column` field_kind segment is reserved; only `column` is used in this phase.
+- Locators are recomputed when Source `key`/`engine` or object/column natural keys change.
+- **MCP** is locator-first (tool args resolve by locator). **HTTP** path params remain surrogate ids; responses always include `locator_key`.
 
 ### 4.4 Future foresight — non-database Source kinds (not delivered in A–D)
 
@@ -129,9 +148,11 @@ Planned shape only; no Attachment APIs, ORM, or Console flows in this phase:
 | **B** | Object/column business name and description read/write via API and MCP |
 | **C** | Join graph with evidence threshold for writes |
 | **D** | Controlled read-only query (`run_sql`) with guards and audit |
+| **Depth** | Locator addressing; deep structure (PK/FK/indexes/comments/defaults); full semantics model + provenance; catalog search; join path + batch upsert |
 
 Slice B–D must not ship before A’s structure substrate exists for the same Source.
 Non-database Source kinds (e.g. CSV) are **not** in slices A–D.
+Depth builds on A–D; deliver locator → structure depth → semantics → search → join graph in that order.
 
 ## 6. Permission Catalog (Metadata)
 
@@ -181,33 +202,121 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
 
 - Source facade validates and enqueues; worker processes execute connectors.
 - Slice A connectors: **PostgreSQL**, **MSSQL**, **Oracle**.
-- Structure collection persists object inventory, columns, and DDL when obtainable, keyed by Source.
+- Structure collection persists, keyed by Source:
+  - objects: type (`table` \| `view` \| `materialized_view`), schema, name, native comment, DDL when obtainable
+  - columns: name, full type string (precision/length when the engine exposes it), nullable, default value, native comment, ordinal
+  - primary key column names; foreign keys (name, from/to columns); unique constraints; indexes
 - **Current catalog** is authoritative (not a per-Job version history). Natural key:
   `(source_id, schema_name, name, object_type)`. Surrogate ids are preserved across successful refreshes.
 - **Success-only commit:** only a Job that reaches a complete successful collect may mutate catalog.
   Failed, cancelled, or aborted collects leave the prior successful catalog unchanged (no absent marks).
 - **In-scope absent:** after a complete collect, objects previously present within the Job's schema
   scope (`schema_filter` when set) that are missing from the collect are marked `is_present=false`
-  (tombstone). Out-of-scope objects are not bulk-absent when the filter shrinks.
+  (tombstone). Out-of-scope objects are not bulk-absent when the filter shrinks. Same tombstone rules
+  apply to columns, foreign keys, and indexes under present objects.
 - **Fail-safe:** if the fraction of in-scope present objects that would become absent exceeds
   `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD` (default `0.75`), the Job fails with `JOB_FAIL_SAFE` and
   writes nothing.
 - **Semantics preservation:** structure upserts whitelist structural columns only; never overwrite
-  `business_name` / `business_description` (or later join edges).
+  semantics fields or non-`foreign_key` join edges.
+- **FK → join derivation:** each collected foreign key upserts a join edge with `origin=foreign_key`
+  and evidence naming the FK constraint. Re-collection updates or tombstones those edges; it must
+  not delete or overwrite edges with `origin=human` or `origin=mcp`.
 - **Structure single-flight:** at most one non-terminal `kind=structure` Job per Source
   (`JOB_ALREADY_ACTIVE`). Enforced by the Source–Job facade using Job store queries (not a Celery
   lock; authority remains the Job table). Re-run = new Job after terminal status.
 - Collectors read **Source catalog scope + embedded `engine` / decrypted `access`**. Introspection uses
   engine-native catalogs (`pg_catalog`, `sys.*`, `ALL_`/`DBA_`).
+- Oracle schema scope follows `schema_filter` when set; otherwise the connected user is the default
+  scope (not a hard lock when a filter is provided).
 - Collection account guidance: prefer least privilege (PostgreSQL schema `USAGE` + catalog read;
   MSSQL `VIEW DEFINITION`; Oracle `SELECT_CATALOG_ROLE` or equivalent).
+- Engine parity notes (explicit, not silent): when an engine cannot supply a field (e.g. some
+  type-precision shapes), store null/best-effort string and document the gap in connector comments.
 
-## 10. Semantics And Joins (Slices B–C)
+## 10. Semantics And Joins
 
-- Semantics fields: business name, business description; optional enum catalog later.
-- Writes are additive/corrective; do not clear existing semantics with nulls unless an explicit clear API exists.
-- Join edges require evidence (verified SQL/DDL or successful validation); name-similarity alone is insufficient.
-- Open questions may be recorded when evidence is incomplete.
+### 10.1 Object semantics
+
+| Field | Notes |
+| --- | --- |
+| `business_name` | Short display name |
+| `business_description` | Natural-language role / grain summary |
+| `object_category` | `transaction_fact` \| `master_data` \| `dimension` \| `reference` \| `event` |
+| `grain_description` | Prefer “one row means …” |
+| `business_primary_key` | List of column names |
+| `time_semantics` | `{ primary_time_field, time_role }` |
+| `status_semantics` | `{ primary_status_field, status_meaning }` |
+| `relation_summary` | `{ input_role_hint, main_upstream_or_dimension_objects, likely_child_objects }` |
+| `business_domain` | Free text |
+| `evidence_summary` | List of short evidence phrases |
+| `confidence` | 0–1 |
+| `open_questions` | List of unresolved questions (persisted; never audit-only) |
+| `semantic_source` | Provenance of the last write: `mcp` \| `user_input` |
+| `business_semantics_ready` | Stored boolean; true when name+description present and open_questions empty |
+| `semantics_updated_at` | Last semantics write timestamp |
+
+`model_routing_hint` is **not** delivered in this phase (see ADR 0013).
+
+### 10.2 Column semantics
+
+| Field | Notes |
+| --- | --- |
+| `business_name` / `business_description` | Same write rules as object |
+| `column_semantics` | `{ semantic_type, value_pattern, unit }` only |
+| `enum_catalog` | List of `{ code, label, description }` when discrete enums are evidenced |
+| `semantic_source` | Same provenance values as object |
+| `field_kind` | Default `column`; held by structure collection; **not** writable via semantics APIs |
+
+### 10.3 Write rules
+
+- Writes are additive/corrective; JSON `null` does **not** clear existing values.
+- Incomplete understanding stays incomplete — record `open_questions`, do not invent meaning.
+- `semantic_source` records the **last write** provenance. Field-level protection against MCP
+  overwrite is **deferred** (`docs/adr/0014-defer-semantic-field-protection.md`); Console and MCP
+  both write submitted non-null fields.
+- MCP column writes are **batch** per object (see MCP contract); batch reports
+  `skipped_columns` for `invalid_column_name` (missing/blank names) or no-op payloads.
+- Structure Jobs never mutate semantics columns.
+- `field_kind` may be set/refreshed by structure collection, but semantics write endpoints
+  (HTTP PATCH and MCP `set_*_semantics`) must not accept or change it.
+
+### 10.4 Joins
+
+Join edge fields:
+
+| Field | Notes |
+| --- | --- |
+| from/to column | Single-column endpoints (composite FKs become multiple edges) |
+| `evidence` | Required non-empty text |
+| `join_kind` | Default `INNER` |
+| `join_expression` | Optional; when omitted, server generates equality on the column pair |
+| `origin` | `foreign_key` \| `human` \| `mcp` |
+| created_by / created_at | Provenance |
+
+Rules:
+
+- Evidence required; name-similarity alone is insufficient (`JOIN_EVIDENCE_REQUIRED`).
+- Same-Source only (`JOIN_CROSS_SOURCE`); no self-loop (`JOIN_INVALID`).
+- Batch upsert limited to one Source per call; returns created / already_known counts.
+- **FK resolution during structure Jobs:** if a collected foreign key cannot be resolved
+  (missing referenced object/columns), has unequal local/ref column counts, or matches
+  ambiguous referenced targets, the structure Job **fails** and the prior successful catalog
+  snapshot is left unchanged (same success-only commit as §9).
+- **Join path:** BFS over edges (max hops 1–5) from object or column locator; modes are
+  explicit target locator or graph exploration. Returns path summary and per-hop join
+  expressions; responses may include a `reason` when no usable path is available
+  (e.g. unreachable target).
+
+## 10.5 Catalog search
+
+- Cross-Source object and column search by **non-empty** query text (locator, name, schema,
+  business_name, business_description) with optional `source_id` / `object_type` filters and
+  `limit`/`offset`. Empty or omitted query is rejected for both object and column search.
+- Ranking tiers (portable lexical, identical in memory and SQL stores): exact locator/name →
+  prefix → name substring → business name/description substring.
+- Per-Source object list supports the same pagination and `include_absent` / `object_type` filters
+  (list `q` remains optional; search endpoints require non-empty query).
 
 ## 11. Controlled Query (Slice D)
 
@@ -246,6 +355,10 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 3. Source access blobs are never stored or logged in plaintext; long-running Jobs do not block the API process.
 4. Roles can grant read-only metadata access without granting Source write, query, or PAT management.
 5. Documentation under `docs/` matches behavior; refraq is the sole authoritative registry (no `dbmeta` dual-read).
+6. MCP addresses Sources/objects/columns by locator key; HTTP responses include `locator_key`.
+7. Structure Jobs collect PK/FK/indexes/comments/defaults (engine parity documented); FK-derived joins use `origin=foreign_key`.
+8. Full object/column semantics persist (including `open_questions`); `semantic_source` records last-write provenance (field-level MCP protection deferred — ADR 0014).
+9. Cross-Source object/column search with pagination works; join path lookup returns reachable hop chains.
 
 ## 15. Non-Goals
 
@@ -264,6 +377,8 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - Treating read replicas as alternate Source targets for the same physical server
 - Delivering non-database Source kinds (CSV/file import, Attachment APIs, etc.) in this phase — foresight only in §4.4
 - Source soft delete / versioned credential history / audit-per-rotation (hard-delete of disabled Sources is delivered)
+- Query result type normalization / continuation tokens / data masking (deferred past depth)
+- Full-text search engines or PG-only FTS as the ranking authority
 
 ## 16. References
 
@@ -271,6 +386,9 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - `docs/adr/0008-job-generic-input.md`
 - `docs/adr/0010-source-owns-access.md`
 - `docs/adr/0011-encrypted-access-blob-and-connector-spec.md`
+- `docs/adr/0012-locator-addressing.md`
+- `docs/adr/0013-semantics-provenance-and-protected-sources.md`
+- `docs/adr/0014-defer-semantic-field-protection.md`
 - `docs/business-user-tokens.md`
 - `docs/business-management-console.md`
 - `docs/api-contracts-sources.md`

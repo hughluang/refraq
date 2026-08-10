@@ -104,13 +104,29 @@ def _seed_object(
     record = CatalogObjectRecord(
         id=object_id,
         source_id=source_id,
+        locator_key="obj/postgresql/mes-prod/dbo/table/WORK_ORDER",
         object_type="table",
         schema_name="dbo",
         name="WORK_ORDER",
         ddl="CREATE TABLE ...",
+        comment=None,
+        primary_key=None,
         is_present=True,
         business_name=business_name,
         business_description="Orders",
+        object_category=None,
+        grain_description=None,
+        business_primary_key=None,
+        time_semantics=None,
+        status_semantics=None,
+        relation_summary=None,
+        business_domain=None,
+        evidence_summary=None,
+        confidence=None,
+        open_questions=None,
+        semantic_source=None,
+        business_semantics_ready=False,
+        semantics_updated_at=None,
         last_structure_job_id="job_1",
         collected_at=now,
         created_at=now,
@@ -119,26 +135,40 @@ def _seed_object(
             CatalogColumnRecord(
                 id=col_a,
                 object_id=object_id,
+                locator_key="col/postgresql/mes-prod/dbo/table/WORK_ORDER/column/WO_ID",
                 name="WO_ID",
                 ordinal=0,
                 data_type="NUMBER",
                 nullable=False,
                 is_present=True,
+                default_value=None,
+                comment=None,
                 business_name=col_a_business,
                 business_description="PK",
+                column_semantics=None,
+                enum_catalog=None,
+                semantic_source=None,
+                field_kind="column",
                 created_at=now,
                 updated_at=now,
             ),
             CatalogColumnRecord(
                 id=col_b,
                 object_id=object_id,
+                locator_key="col/postgresql/mes-prod/dbo/table/WORK_ORDER/column/LINE_ID",
                 name="LINE_ID",
                 ordinal=1,
                 data_type="NUMBER",
                 nullable=True,
                 is_present=True,
+                default_value=None,
+                comment=None,
                 business_name=None,
                 business_description=None,
+                column_semantics=None,
+                enum_catalog=None,
+                semantic_source=None,
+                field_kind="column",
                 created_at=now,
                 updated_at=now,
             ),
@@ -149,6 +179,9 @@ def _seed_object(
         job_id="job_1",
         objects=[record],
         schema_scope=None,
+        engine="postgresql",
+        kind="database",
+        source_key="mes-prod",
     )
     # restore semantics wiped by structure insert of brand-new object — seed via store after
     store = get_catalog_store()
@@ -377,12 +410,108 @@ def test_delete_source_clears_joins(client: TestClient) -> None:
     assert get_catalog_store().get_join(join_id) is None
 
 
-def test_browse_still_works_after_router_split(client: TestClient) -> None:
+def test_patch_object_open_questions_and_ready(client: TestClient) -> None:
     source = _make_source(client)
     obj = _seed_object(source["id"])
-    listed = client.get(f"/sources/{source['id']}/objects")
-    assert listed.status_code == 200
-    assert any(i["id"] == obj.id for i in listed.json()["items"])
-    detail = client.get(f"/objects/{obj.id}")
-    assert detail.status_code == 200
-    assert detail.json()["object"]["business_name"] == "Work Order"
+
+    with_q = client.patch(
+        f"/objects/{obj.id}/semantics",
+        json={
+            "business_name": "Work Order",
+            "business_description": "Orders",
+            "open_questions": ["What is the grain?"],
+        },
+    )
+    assert with_q.status_code == 200, with_q.text
+    body = with_q.json()["object"]
+    assert body["open_questions"] == ["What is the grain?"]
+    assert body["business_semantics_ready"] is False
+    assert body["semantic_source"] == "user_input"
+    assert body["locator_key"]
+
+    cleared = client.patch(
+        f"/objects/{obj.id}/semantics",
+        json={"open_questions": []},
+    )
+    assert cleared.status_code == 200
+    body = cleared.json()["object"]
+    assert body["open_questions"] == []
+    assert body["business_semantics_ready"] is True
+
+
+def test_mcp_overwrites_existing_semantics(client: TestClient) -> None:
+    from backend.metadata.catalog import service as catalog_service
+
+    source = _make_source(client)
+    obj = _seed_object(source["id"])
+    patched = client.patch(
+        f"/objects/{obj.id}/semantics",
+        json={"business_name": "Human Name", "business_description": "Human desc"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["object"]["semantic_source"] == "user_input"
+
+    record = catalog_service.patch_object_semantics(
+        object_id=obj.id,
+        data={
+            "business_name": "Agent Name",
+            "business_description": "Agent desc",
+            "object_category": "transaction_fact",
+        },
+        actor_user_id="user_1",
+        actor_token_id=None,
+        semantic_source="mcp",
+    )
+    assert record.business_name == "Agent Name"
+    assert record.business_description == "Agent desc"
+    assert record.object_category == "transaction_fact"
+    assert record.semantic_source == "mcp"
+
+
+def test_batch_semantics_updated_count_only_on_apply(client: TestClient) -> None:
+    from backend.metadata.catalog import service as catalog_service
+
+    source = _make_source(client)
+    obj = _seed_object(source["id"])
+    col_name = obj.columns[0].name
+    empty = catalog_service.set_column_semantics_batch(
+        object_id=obj.id,
+        columns=[{"column_name": col_name, "business_name": None}],
+        actor_user_id="user_1",
+        actor_token_id=None,
+        semantic_source="mcp",
+    )
+    assert empty["updated_count"] == 0
+    assert empty["skipped_columns"][0]["reason"] == "no_changes"
+
+    applied = catalog_service.set_column_semantics_batch(
+        object_id=obj.id,
+        columns=[{"column_name": col_name, "business_name": "WO ID"}],
+        actor_user_id="user_1",
+        actor_token_id=None,
+        semantic_source="mcp",
+    )
+    assert applied["updated_count"] == 1
+    assert applied["skipped_columns"] == []
+
+
+def test_join_response_includes_depth_fields(client: TestClient) -> None:
+    source = _make_source(client)
+    obj = _seed_object(source["id"])
+    a, b = obj.columns[0].id, obj.columns[1].id
+    created = client.put(
+        "/joins",
+        json={
+            "from_column_id": a,
+            "to_column_id": b,
+            "evidence": "Verified FK in DDL",
+            "join_kind": "LEFT",
+        },
+    )
+    assert created.status_code == 200, created.text
+    join = created.json()["join"]
+    assert join["join_kind"] == "LEFT"
+    assert join["origin"] == "human"
+    assert join["join_expression"]
+    assert join["from_column_locator_key"]
+    assert join["to_column_locator_key"]

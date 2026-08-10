@@ -8,6 +8,7 @@ __all__ = [
     "CatalogColumnNotFound",
     "CatalogJoinNotFound",
     "CatalogObjectNotFound",
+    "CatalogSearchQueryRequired",
     "JobAlreadyActive",
     "JobInputInvalid",
     "JobSecretMissing",
@@ -15,6 +16,8 @@ __all__ = [
     "JoinCrossSource",
     "JoinEvidenceRequired",
     "JoinInvalid",
+    "JoinPathUnavailable",
+    "LocatorInvalid",
     "QueryFailed",
     "QueryMultiStatement",
     "QueryNotReadonly",
@@ -96,6 +99,14 @@ class SourceSecretRequired(AppError):
         return "Source access credentials are required for this probe"
 
 
+class LocatorInvalid(AppError):
+    code = "LOCATOR_INVALID"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Locator key is invalid"
+
+
 class CatalogObjectNotFound(AppError):
     code = "CATALOG_OBJECT_NOT_FOUND"
     http_status = 404
@@ -118,6 +129,22 @@ class CatalogJoinNotFound(AppError):
 
     def _default_message(self) -> str:
         return "Catalog join not found"
+
+
+class CatalogSearchQueryRequired(AppError):
+    code = "CATALOG_SEARCH_QUERY_REQUIRED"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Search query is required"
+
+
+class JoinPathUnavailable(AppError):
+    code = "JOIN_PATH_UNAVAILABLE"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Join path start cannot be expanded"
 
 
 class JoinEvidenceRequired(AppError):

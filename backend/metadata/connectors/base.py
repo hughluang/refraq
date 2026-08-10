@@ -60,15 +60,37 @@ class CollectedColumn:
     ordinal: int
     data_type: str
     nullable: bool
+    default_value: str | None = None
+    comment: str | None = None
+
+
+@dataclass
+class CollectedForeignKey:
+    name: str
+    columns: list[str]
+    ref_schema: str
+    ref_table: str
+    ref_columns: list[str]
+
+
+@dataclass
+class CollectedIndex:
+    name: str
+    columns: list[str]
+    is_unique: bool
 
 
 @dataclass
 class CollectedObject:
     schema_name: str
     name: str
-    object_type: str  # table | view
+    object_type: str  # table | view | materialized_view
     columns: list[CollectedColumn] = field(default_factory=list)
     ddl: str | None = None
+    comment: str | None = None
+    primary_key: list[str] = field(default_factory=list)
+    foreign_keys: list[CollectedForeignKey] = field(default_factory=list)
+    indexes: list[CollectedIndex] = field(default_factory=list)
 
 
 @dataclass

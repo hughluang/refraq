@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import lru_cache
 from typing import Protocol
 
 from backend.core.config import get_settings
 from backend.metadata.errors import SourceKeyDuplicate, SourceNotFound
+from backend.metadata.locators import format_source_locator
 
 SUPPORTED_KINDS = frozenset({"database"})
 
@@ -19,6 +20,7 @@ SUPPORTED_KINDS = frozenset({"database"})
 class SourceRecord:
     id: str
     key: str
+    locator_key: str
     name: str
     kind: str
     status: str
@@ -40,12 +42,24 @@ def new_source_id() -> str:
     return f"src_{uuid.uuid4().hex[:12]}"
 
 
+def ensure_source_locator(record: SourceRecord) -> SourceRecord:
+    """Recompute locator_key from key/engine/kind."""
+    locator = format_source_locator(
+        engine=record.engine, kind=record.kind, key=record.key
+    )
+    if record.locator_key == locator:
+        return record
+    return replace(record, locator_key=locator)
+
+
 class SourceStore(Protocol):
     def list_sources(self) -> list[SourceRecord]: ...
 
     def get_source(self, source_id: str) -> SourceRecord | None: ...
 
     def get_source_by_key(self, key: str) -> SourceRecord | None: ...
+
+    def get_source_by_locator(self, locator_key: str) -> SourceRecord | None: ...
 
     def create_source(self, record: SourceRecord) -> SourceRecord: ...
 
@@ -58,6 +72,7 @@ class MemorySourceStore:
     def __init__(self) -> None:
         self._sources: dict[str, SourceRecord] = {}
         self._by_key: dict[str, str] = {}
+        self._by_locator: dict[str, str] = {}
         self._lock = threading.Lock()
 
     def list_sources(self) -> list[SourceRecord]:
@@ -76,15 +91,25 @@ class MemorySourceStore:
             source_id = self._by_key.get(key)
             return self._sources.get(source_id) if source_id else None
 
+    def get_source_by_locator(self, locator_key: str) -> SourceRecord | None:
+        with self._lock:
+            source_id = self._by_locator.get(locator_key)
+            return self._sources.get(source_id) if source_id else None
+
     def create_source(self, record: SourceRecord) -> SourceRecord:
+        record = ensure_source_locator(record)
         with self._lock:
             if record.key in self._by_key:
                 raise SourceKeyDuplicate()
+            if record.locator_key in self._by_locator:
+                raise SourceKeyDuplicate()
             self._sources[record.id] = record
             self._by_key[record.key] = record.id
+            self._by_locator[record.locator_key] = record.id
             return record
 
     def save_source(self, record: SourceRecord) -> SourceRecord:
+        record = ensure_source_locator(record)
         with self._lock:
             existing = self._sources.get(record.id)
             if existing is None:
@@ -94,6 +119,14 @@ class MemorySourceStore:
                     raise SourceKeyDuplicate()
                 del self._by_key[existing.key]
                 self._by_key[record.key] = record.id
+            if existing.locator_key != record.locator_key:
+                if (
+                    record.locator_key in self._by_locator
+                    and self._by_locator[record.locator_key] != record.id
+                ):
+                    raise SourceKeyDuplicate()
+                del self._by_locator[existing.locator_key]
+                self._by_locator[record.locator_key] = record.id
             self._sources[record.id] = record
             return record
 
@@ -104,6 +137,8 @@ class MemorySourceStore:
                 return False
             if self._by_key.get(existing.key) == source_id:
                 del self._by_key[existing.key]
+            if self._by_locator.get(existing.locator_key) == source_id:
+                del self._by_locator[existing.locator_key]
             return True
 
 
@@ -138,16 +173,30 @@ class SqlSourceStore:
             ).first()
             return _row_to_source(row) if row else None
 
+    def get_source_by_locator(self, locator_key: str) -> SourceRecord | None:
+        from sqlalchemy import select
+
+        from backend.core.db import session_scope
+        from backend.metadata.models import SourceRow
+
+        with session_scope() as session:
+            row = session.scalars(
+                select(SourceRow).where(SourceRow.locator_key == locator_key)
+            ).first()
+            return _row_to_source(row) if row else None
+
     def create_source(self, record: SourceRecord) -> SourceRecord:
         from sqlalchemy.exc import IntegrityError
 
         from backend.core.db import session_scope
         from backend.metadata.models import SourceRow
 
+        record = ensure_source_locator(record)
         with session_scope() as session:
             row = SourceRow(
                 id=record.id,
                 key=record.key,
+                locator_key=record.locator_key,
                 name=record.name,
                 kind=record.kind,
                 status=record.status,
@@ -173,11 +222,13 @@ class SqlSourceStore:
         from backend.core.db import session_scope
         from backend.metadata.models import SourceRow
 
+        record = ensure_source_locator(record)
         with session_scope() as session:
             row = session.get(SourceRow, record.id)
             if row is None:
                 raise SourceNotFound()
             row.key = record.key
+            row.locator_key = record.locator_key
             row.name = record.name
             row.kind = record.kind
             row.status = record.status
@@ -214,6 +265,7 @@ def _row_to_source(row: object) -> SourceRecord:
     return SourceRecord(
         id=row.id,
         key=row.key,
+        locator_key=row.locator_key,
         name=row.name,
         kind=row.kind,
         status=row.status,
