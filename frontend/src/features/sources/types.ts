@@ -124,6 +124,8 @@ export type CatalogObject = {
   business_semantics_ready?: boolean;
   semantics_updated_at?: string | null;
   columns: CatalogColumn[];
+  foreign_keys?: CatalogForeignKey[];
+  indexes?: CatalogIndex[];
   ddl: string | null;
   is_present: boolean;
   collected_at: string | null;
@@ -147,6 +149,22 @@ export type CatalogColumn = {
   is_present: boolean;
 };
 
+export type CatalogForeignKey = {
+  name: string;
+  columns: string[];
+  ref_schema: string;
+  ref_table: string;
+  ref_columns: string[];
+  is_present: boolean;
+};
+
+export type CatalogIndex = {
+  name: string;
+  columns: string[];
+  is_unique: boolean;
+  is_present: boolean;
+};
+
 export type CatalogJoin = {
   id: string;
   from_column_id: string;
@@ -159,6 +177,47 @@ export type CatalogJoin = {
   origin?: string;
   created_by_user_id: string | null;
   created_at: string;
+};
+
+export type JoinPathHop = {
+  from_column_id: string;
+  to_column_id: string;
+  from_column_locator_key?: string | null;
+  to_column_locator_key?: string | null;
+  join_id: string;
+  join_kind: string;
+  join_expression?: string | null;
+  evidence: string;
+  origin: string;
+};
+
+export type JoinPath = {
+  target_object_id?: string | null;
+  target_column_id?: string | null;
+  hops: JoinPathHop[];
+  path_summary: string;
+};
+
+export type JoinPathResult = {
+  paths_found: number;
+  paths: JoinPath[];
+  direct_joins: CatalogJoin[];
+  reason?: string | null;
+};
+
+export type QueryResult = {
+  columns: string[];
+  rows: unknown[][];
+  truncated: boolean;
+  duration_ms: number;
+};
+
+export type ColumnSemanticsBatchItem = {
+  column_name: string;
+  business_name?: string | null;
+  business_description?: string | null;
+  column_semantics?: ColumnSemantics | null;
+  enum_catalog?: EnumCatalogEntry[] | null;
 };
 
 export type Job = {

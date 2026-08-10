@@ -25,6 +25,7 @@ class ModuleRoutesResponse(BaseModel):
     list: str | None = None
     create: str | None = None
     edit: str | None = None
+    show: str | None = None
 
 
 class ModuleActionsResponse(BaseModel):
@@ -32,6 +33,7 @@ class ModuleActionsResponse(BaseModel):
     create: str | None = None
     edit: str | None = None
     delete: str | None = None
+    show: str | None = None
 
 
 class ModuleIdentityResponse(BaseModel):

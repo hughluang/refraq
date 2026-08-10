@@ -6,6 +6,7 @@ import os
 from datetime import datetime
 
 import pytest
+from dataclasses import replace
 from fastapi.testclient import TestClient
 
 os.environ["REFRAQ_STORE_BACKEND"] = "memory"
@@ -25,6 +26,8 @@ from backend.jobs.store import reset_job_store  # noqa: E402
 from backend.main import app  # noqa: E402
 from backend.metadata.catalog.store import (  # noqa: E402
     CatalogColumnRecord,
+    CatalogForeignKeyRecord,
+    CatalogIndexRecord,
     CatalogObjectRecord,
     get_catalog_store,
     reset_catalog_store,
@@ -101,6 +104,59 @@ def _seed_object(
     col_a_business: str | None = "WO Id",
 ) -> CatalogObjectRecord:
     now = datetime.utcnow()
+    line = CatalogObjectRecord(
+        id="obj_line",
+        source_id=source_id,
+        locator_key="obj/postgresql/mes-prod/dbo/table/LINE",
+        object_type="table",
+        schema_name="dbo",
+        name="LINE",
+        ddl=None,
+        comment=None,
+        primary_key=["LINE_ID"],
+        is_present=True,
+        business_name=None,
+        business_description=None,
+        object_category=None,
+        grain_description=None,
+        business_primary_key=None,
+        time_semantics=None,
+        status_semantics=None,
+        relation_summary=None,
+        business_domain=None,
+        evidence_summary=None,
+        confidence=None,
+        open_questions=None,
+        semantic_source=None,
+        business_semantics_ready=False,
+        semantics_updated_at=None,
+        last_structure_job_id="job_1",
+        collected_at=now,
+        created_at=now,
+        updated_at=now,
+        columns=[
+            CatalogColumnRecord(
+                id="col_line_id",
+                object_id="obj_line",
+                locator_key="col/postgresql/mes-prod/dbo/table/LINE/column/LINE_ID",
+                name="LINE_ID",
+                ordinal=0,
+                data_type="NUMBER",
+                nullable=False,
+                is_present=True,
+                default_value=None,
+                comment=None,
+                business_name=None,
+                business_description=None,
+                column_semantics=None,
+                enum_catalog=None,
+                semantic_source=None,
+                field_kind="column",
+                created_at=now,
+                updated_at=now,
+            )
+        ],
+    )
     record = CatalogObjectRecord(
         id=object_id,
         source_id=source_id,
@@ -109,8 +165,8 @@ def _seed_object(
         schema_name="dbo",
         name="WORK_ORDER",
         ddl="CREATE TABLE ...",
-        comment=None,
-        primary_key=None,
+        comment="Work order header",
+        primary_key=["WO_ID"],
         is_present=True,
         business_name=business_name,
         business_description="Orders",
@@ -173,11 +229,19 @@ def _seed_object(
                 updated_at=now,
             ),
         ],
+        indexes=[
+            CatalogIndexRecord(
+                name="ix_wo_id",
+                columns=["WO_ID"],
+                is_unique=True,
+                is_present=True,
+            )
+        ],
     )
     get_catalog_store().replace_structure_snapshot(
         source_id=source_id,
         job_id="job_1",
-        objects=[record],
+        objects=[line, record],
         schema_scope=None,
         engine="postgresql",
         kind="database",
@@ -515,3 +579,90 @@ def test_join_response_includes_depth_fields(client: TestClient) -> None:
     assert join["join_expression"]
     assert join["from_column_locator_key"]
     assert join["to_column_locator_key"]
+
+
+def test_object_detail_exposes_structure_facts(client: TestClient) -> None:
+    source = _make_source(client)
+    obj = _seed_object(source["id"])
+    # Attach FK on a second structure pass (LINE already present from seed).
+    store = get_catalog_store()
+    current = store.get_object(obj.id)
+    assert current is not None
+    with_fk = replace(
+        current,
+        foreign_keys=[
+            CatalogForeignKeyRecord(
+                name="fk_wo_line",
+                columns=["LINE_ID"],
+                ref_schema="dbo",
+                ref_table="LINE",
+                ref_columns=["LINE_ID"],
+                is_present=True,
+            )
+        ],
+    )
+    line = store.get_object("obj_line")
+    assert line is not None
+    store.replace_structure_snapshot(
+        source_id=source["id"],
+        job_id="job_2",
+        objects=[line, with_fk],
+        schema_scope=None,
+        engine="postgresql",
+        kind="database",
+        source_key="mes-prod",
+    )
+
+    detail = client.get(f"/objects/{obj.id}")
+    assert detail.status_code == 200, detail.text
+    body = detail.json()["object"]
+    assert body["comment"] == "Work order header"
+    assert body["primary_key"] == ["WO_ID"]
+    assert len(body["foreign_keys"]) == 1
+    assert body["foreign_keys"][0]["name"] == "fk_wo_line"
+    assert body["foreign_keys"][0]["ref_table"] == "LINE"
+    assert len(body["indexes"]) == 1
+    assert body["indexes"][0]["is_unique"] is True
+
+    listed = client.get(f"/sources/{source['id']}/objects")
+    assert listed.status_code == 200
+    item = next(i for i in listed.json()["items"] if i["id"] == obj.id)
+    assert item["foreign_keys"] == []
+    assert item["indexes"] == []
+    assert item["columns"] == []
+
+
+def test_patch_columns_semantics_batch_http(client: TestClient) -> None:
+    source = _make_source(client)
+    obj = _seed_object(source["id"])
+    resp = client.patch(
+        f"/objects/{obj.id}/columns/semantics",
+        json={
+            "columns": [
+                {
+                    "column_name": "LINE_ID",
+                    "business_name": "Line",
+                    "business_description": "Production line",
+                    "column_semantics": {
+                        "semantic_type": "id",
+                        "value_pattern": None,
+                        "unit": None,
+                    },
+                    "enum_catalog": [
+                        {"code": "A", "label": "Line A", "description": None}
+                    ],
+                },
+                {"column_name": "MISSING", "business_name": "x"},
+            ]
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["updated_count"] == 1
+    assert body["requested_count"] == 2
+    assert body["skipped_columns"][0]["column_name"] == "MISSING"
+    line = next(c for c in body["object"]["columns"] if c["name"] == "LINE_ID")
+    assert line["business_name"] == "Line"
+    assert line["semantic_source"] == "user_input"
+    assert line["enum_catalog"][0]["code"] == "A"
+    assert line["column_semantics"]["semantic_type"] == "id"

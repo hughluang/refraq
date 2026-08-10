@@ -61,12 +61,14 @@ def get_module_identities(
                     list=module.routes.list,
                     create=module.routes.create,
                     edit=module.routes.edit,
+                    show=module.routes.show,
                 ),
                 actions=ModuleActionsResponse(
                     list=module.actions.list,
                     create=module.actions.create,
                     edit=module.actions.edit,
                     delete=module.actions.delete,
+                    show=module.actions.show,
                 ),
             )
             for module in identities

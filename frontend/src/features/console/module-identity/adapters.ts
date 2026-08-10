@@ -22,6 +22,7 @@ function actionPermission(
   if (action === "create") return actions.create;
   if (action === "edit") return actions.edit;
   if (action === "delete") return actions.delete;
+  if (action === "show") return actions.show;
   return undefined;
 }
 
@@ -39,6 +40,9 @@ export function toRefineResources(modules: ModuleIdentity[]): IResourceItem[] {
     }
     if (module.routes.edit) {
       resource.edit = module.routes.edit;
+    }
+    if (module.routes.show) {
+      resource.show = module.routes.show;
     }
     return resource;
   });

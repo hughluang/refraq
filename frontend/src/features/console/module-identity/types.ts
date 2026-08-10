@@ -3,6 +3,7 @@ export type ModuleRoutes = {
   list: string | null;
   create?: string | null;
   edit?: string | null;
+  show?: string | null;
 };
 
 export type ModuleActions = {
@@ -10,6 +11,7 @@ export type ModuleActions = {
   create?: string | null;
   edit?: string | null;
   delete?: string | null;
+  show?: string | null;
 };
 
 export type ModuleIdentity = {

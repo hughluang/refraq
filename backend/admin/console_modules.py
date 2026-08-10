@@ -14,6 +14,7 @@ class ModuleRoutes:
     list: str | None
     create: str | None = None
     edit: str | None = None
+    show: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +23,7 @@ class ModuleActions:
     create: Permission | None = None
     edit: Permission | None = None
     delete: Permission | None = None
+    show: Permission | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,8 +121,15 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="metadata",
         group_label_key="layout.navGroup.metadata",
         label_key="catalog.title",
-        routes=ModuleRoutes(list="/console/catalog"),
-        actions=ModuleActions(list="metadata:read", edit="metadata:write"),
+        routes=ModuleRoutes(
+            list="/console/catalog",
+            show="/console/catalog/:id",
+        ),
+        actions=ModuleActions(
+            list="metadata:read",
+            edit="metadata:write",
+            show="metadata:read",
+        ),
         group_order=25,
         module_order=20,
     ),

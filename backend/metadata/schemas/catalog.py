@@ -11,7 +11,12 @@ __all__ = [
     "CatalogColumnOut",
     "CatalogColumnResponse",
     "CatalogColumnSearchResponse",
+    "CatalogColumnsSemanticsBatchRequest",
+    "CatalogColumnsSemanticsBatchResponse",
+    "CatalogColumnSemanticsBatchItem",
     "CatalogDdlResponse",
+    "CatalogForeignKeyOut",
+    "CatalogIndexOut",
     "CatalogObjectListResponse",
     "CatalogObjectOut",
     "CatalogObjectResponse",
@@ -92,6 +97,22 @@ class CatalogColumnOut(BaseModel):
     is_present: bool = True
 
 
+class CatalogForeignKeyOut(BaseModel):
+    name: str
+    columns: list[str]
+    ref_schema: str
+    ref_table: str
+    ref_columns: list[str]
+    is_present: bool = True
+
+
+class CatalogIndexOut(BaseModel):
+    name: str
+    columns: list[str]
+    is_unique: bool
+    is_present: bool = True
+
+
 class CatalogObjectOut(BaseModel):
     id: str
     locator_key: str
@@ -117,6 +138,8 @@ class CatalogObjectOut(BaseModel):
     business_semantics_ready: bool = False
     semantics_updated_at: datetime | None = None
     columns: list[CatalogColumnOut] = Field(default_factory=list)
+    foreign_keys: list[CatalogForeignKeyOut] = Field(default_factory=list)
+    indexes: list[CatalogIndexOut] = Field(default_factory=list)
     ddl: str | None = None
     is_present: bool = True
     collected_at: datetime | None = None
@@ -176,6 +199,25 @@ class ColumnSemanticsPatchRequest(BaseModel):
     business_description: str | None = None
     column_semantics: ColumnSemanticsModel | None = None
     enum_catalog: list[EnumCatalogEntry] | None = None
+
+
+class CatalogColumnSemanticsBatchItem(BaseModel):
+    column_name: str
+    business_name: str | None = None
+    business_description: str | None = None
+    column_semantics: ColumnSemanticsModel | None = None
+    enum_catalog: list[EnumCatalogEntry] | None = None
+
+
+class CatalogColumnsSemanticsBatchRequest(BaseModel):
+    columns: list[CatalogColumnSemanticsBatchItem]
+
+
+class CatalogColumnsSemanticsBatchResponse(BaseModel):
+    object: CatalogObjectOut
+    updated_count: int
+    requested_count: int
+    skipped_columns: list[dict] = Field(default_factory=list)
 
 
 class JoinUpsertRequest(BaseModel):

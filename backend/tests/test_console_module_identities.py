@@ -28,12 +28,13 @@ from backend.admin.user_store import (  # noqa: E402
 EXPECTED_IDENTITIES = {
     "dashboard": {
         "label_key": "layout.nav.home",
-        "routes": {"list": "/console", "create": None, "edit": None},
+        "routes": {"list": "/console", "create": None, "edit": None, "show": None},
         "actions": {
             "list": "dashboard:read",
             "create": None,
             "edit": None,
             "delete": None,
+            "show": None,
         },
     },
     "users": {
@@ -42,12 +43,14 @@ EXPECTED_IDENTITIES = {
             "list": "/console/users",
             "create": "/console/users/new",
             "edit": None,
+            "show": None,
         },
         "actions": {
             "list": "users:read",
             "create": "users:write",
             "edit": "users:write",
             "delete": "users:write",
+            "show": None,
         },
     },
     "roles": {
@@ -56,62 +59,84 @@ EXPECTED_IDENTITIES = {
             "list": "/console/roles",
             "create": "/console/roles/new",
             "edit": "/console/roles/:id",
+            "show": None,
         },
         "actions": {
             "list": "roles:read",
             "create": "roles:write",
             "edit": "roles:write",
             "delete": "roles:write",
+            "show": None,
         },
     },
     "tokens": {
         "label_key": "tokens.title",
-        "routes": {"list": None, "create": None, "edit": None},
+        "routes": {"list": None, "create": None, "edit": None, "show": None},
         "actions": {
             "list": "tokens:read",
             "create": "tokens:write",
             "edit": "tokens:write",
             "delete": "tokens:write",
+            "show": None,
         },
     },
     "sources": {
         "label_key": "sources.title",
-        "routes": {"list": "/console/sources", "create": None, "edit": None},
+        "routes": {
+            "list": "/console/sources",
+            "create": None,
+            "edit": None,
+            "show": None,
+        },
         "actions": {
             "list": "sources:read",
             "create": "sources:write",
             "edit": "sources:write",
             "delete": "sources:write",
+            "show": None,
         },
     },
     "catalog": {
         "label_key": "catalog.title",
-        "routes": {"list": "/console/catalog", "create": None, "edit": None},
+        "routes": {
+            "list": "/console/catalog",
+            "create": None,
+            "edit": None,
+            "show": "/console/catalog/:id",
+        },
         "actions": {
             "list": "metadata:read",
             "create": None,
             "edit": "metadata:write",
             "delete": None,
+            "show": "metadata:read",
         },
     },
     "jobs": {
         "label_key": "jobs.title",
-        "routes": {"list": "/console/jobs", "create": None, "edit": None},
+        "routes": {"list": "/console/jobs", "create": None, "edit": None, "show": None},
         "actions": {
             "list": "jobs:run",
             "create": None,
             "edit": None,
             "delete": None,
+            "show": None,
         },
     },
     "settings": {
         "label_key": "settings.title",
-        "routes": {"list": "/console/settings", "create": None, "edit": None},
+        "routes": {
+            "list": "/console/settings",
+            "create": None,
+            "edit": None,
+            "show": None,
+        },
         "actions": {
             "list": "settings:read",
             "create": None,
             "edit": "settings:write",
             "delete": None,
+            "show": None,
         },
     },
 }

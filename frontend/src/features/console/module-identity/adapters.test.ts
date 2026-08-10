@@ -8,7 +8,7 @@ import {
 import { MODULE_IDENTITY_FIXTURE } from "@/features/console/module-identity/fixtures";
 
 describe("toRefineResources", () => {
-  it("maps list/create/edit routes and label keys", () => {
+  it("maps list/create/edit/show routes and label keys", () => {
     const resources = toRefineResources(MODULE_IDENTITY_FIXTURE);
     expect(resources).toEqual([
       {
@@ -41,6 +41,7 @@ describe("toRefineResources", () => {
       {
         name: "catalog",
         list: "/console/catalog",
+        show: "/console/catalog/:id",
         meta: { label: "catalog.title" },
       },
       {
@@ -68,6 +69,17 @@ describe("evaluateCan", () => {
     expect(
       evaluateCan(MODULE_IDENTITY_FIXTURE, ["users:read"], "users", "create"),
     ).toEqual({ can: false, reason: "users:write" });
+  });
+
+  it("grants catalog show with metadata:read", () => {
+    expect(
+      evaluateCan(
+        MODULE_IDENTITY_FIXTURE,
+        ["metadata:read"],
+        "catalog",
+        "show",
+      ),
+    ).toEqual({ can: true });
   });
 
   it("rejects unknown resource and unsupported action", () => {
@@ -101,7 +113,7 @@ describe("matchPath", () => {
     expect(matchPath("/console/tokens", MODULE_IDENTITY_FIXTURE)).toBeNull();
   });
 
-  it("matches metadata module routes", () => {
+  it("matches metadata module routes including catalog show", () => {
     expect(matchPath("/console/sources", MODULE_IDENTITY_FIXTURE)).toEqual({
       resource: "sources",
       action: "list",
@@ -110,6 +122,12 @@ describe("matchPath", () => {
       resource: "catalog",
       action: "list",
     });
+    expect(matchPath("/console/catalog/obj_1", MODULE_IDENTITY_FIXTURE)).toEqual(
+      {
+        resource: "catalog",
+        action: "show",
+      },
+    );
     expect(matchPath("/console/jobs", MODULE_IDENTITY_FIXTURE)).toEqual({
       resource: "jobs",
       action: "list",

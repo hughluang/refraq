@@ -65,6 +65,24 @@ All Source and catalog responses include `locator_key` (ADR 0012). HTTP path par
       "is_present": true
     }
   ],
+  "foreign_keys": [
+    {
+      "name": "fk_orders_customer",
+      "columns": ["customer_id"],
+      "ref_schema": "public",
+      "ref_table": "customers",
+      "ref_columns": ["id"],
+      "is_present": true
+    }
+  ],
+  "indexes": [
+    {
+      "name": "ix_orders_customer_id",
+      "columns": ["customer_id"],
+      "is_unique": false,
+      "is_present": true
+    }
+  ],
   "ddl": null,
   "is_present": true,
   "collected_at": "2026-08-05T02:05:00Z"
@@ -73,6 +91,7 @@ All Source and catalog responses include `locator_key` (ADR 0012). HTTP path par
 
 Identity is `source_id` (+ object coordinates). `collected_at` is optional provenance only.
 `field_kind` is read-only on semantics writes (structure-held). `model_routing_hint` is not in this phase.
+`foreign_keys` and `indexes` are included on object detail (`GET /objects/{id}` and semantics write responses); list/search endpoints return empty arrays for these fields.
 
 ## 3. Browse Endpoints (A+)
 
@@ -90,8 +109,27 @@ List response: `{ "items": […], "total": N, "limit": L, "offset": O }` when pa
 | --- | --- | --- | --- |
 | `PATCH` | `/objects/{id}/semantics` | `metadata:write` | Patch object semantics fields (§2 shape) |
 | `PATCH` | `/columns/{id}/semantics` | `metadata:write` | Patch column semantics fields |
+| `PATCH` | `/objects/{id}/columns/semantics` | `metadata:write` | Batch patch column semantics by `column_name` |
 
 Request bodies accept any subset of the writable semantics fields in §2 (not `field_kind`; not `model_routing_hint`). Response envelopes: object → `{ "object": … }`; column → `{ "column": … }`. Console writes set `semantic_source=user_input`; MCP writes set `semantic_source=mcp`. JSON `null` does not clear existing values (ADR 0014).
+
+Batch column body:
+
+```json
+{
+  "columns": [
+    {
+      "column_name": "status",
+      "business_name": "Status",
+      "business_description": "Lifecycle state",
+      "column_semantics": { "semantic_type": "enum", "value_pattern": null, "unit": null },
+      "enum_catalog": [{ "code": "OPEN", "label": "Open", "description": null }]
+    }
+  ]
+}
+```
+
+Batch response: `{ "object": …, "updated_count": N, "requested_count": M, "skipped_columns": [{ "column_name": "…", "reason": "…" }] }`.
 
 Rules: omit fields leave unchanged; JSON `null` does not wipe; explicit clear deferred.
 

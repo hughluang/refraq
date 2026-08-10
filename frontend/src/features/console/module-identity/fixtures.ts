@@ -68,12 +68,18 @@ export const MODULE_IDENTITY_FIXTURE: ModuleIdentity[] = [
   {
     id: "catalog",
     label_key: "catalog.title",
-    routes: { list: "/console/catalog", create: null, edit: null },
+    routes: {
+      list: "/console/catalog",
+      create: null,
+      edit: null,
+      show: "/console/catalog/:id",
+    },
     actions: {
       list: "metadata:read",
       create: null,
       edit: "metadata:write",
       delete: null,
+      show: "metadata:read",
     },
   },
   {

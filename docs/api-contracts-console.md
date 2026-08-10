@@ -102,12 +102,13 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation and 
     {
       "id": "dashboard",
       "label_key": "layout.nav.home",
-      "routes": { "list": "/console", "create": null, "edit": null },
+      "routes": { "list": "/console", "create": null, "edit": null, "show": null },
       "actions": {
         "list": "dashboard:read",
         "create": null,
         "edit": null,
-        "delete": null
+        "delete": null,
+        "show": null
       }
     },
     {
@@ -116,13 +117,15 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation and 
       "routes": {
         "list": "/console/users",
         "create": "/console/users/new",
-        "edit": null
+        "edit": null,
+        "show": null
       },
       "actions": {
         "list": "users:read",
         "create": "users:write",
         "edit": "users:write",
-        "delete": "users:write"
+        "delete": "users:write",
+        "show": null
       }
     },
     {
@@ -131,24 +134,44 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation and 
       "routes": {
         "list": "/console/roles",
         "create": "/console/roles/new",
-        "edit": "/console/roles/:id"
+        "edit": "/console/roles/:id",
+        "show": null
       },
       "actions": {
         "list": "roles:read",
         "create": "roles:write",
         "edit": "roles:write",
-        "delete": "roles:write"
+        "delete": "roles:write",
+        "show": null
+      }
+    },
+    {
+      "id": "catalog",
+      "label_key": "catalog.title",
+      "routes": {
+        "list": "/console/catalog",
+        "create": null,
+        "edit": null,
+        "show": "/console/catalog/:id"
+      },
+      "actions": {
+        "list": "metadata:read",
+        "create": null,
+        "edit": "metadata:write",
+        "delete": null,
+        "show": "metadata:read"
       }
     },
     {
       "id": "settings",
       "label_key": "settings.title",
-      "routes": { "list": "/console/settings", "create": null, "edit": null },
+      "routes": { "list": "/console/settings", "create": null, "edit": null, "show": null },
       "actions": {
         "list": "settings:read",
         "create": null,
         "edit": "settings:write",
-        "delete": null
+        "delete": null,
+        "show": null
       }
     }
   ]
@@ -171,6 +194,6 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation and 
 | `roles` | `admin` | `/console/roles` | `roles:read` | create/edit/delete → `roles:write`; create `/console/roles/new`; edit `/console/roles/:id` |
 | `tokens` | `admin` (identity only; **not** in navigation) | `null` (no Console page; UI in Account Center) | `tokens:read` | create/edit/delete → `tokens:write`; see `docs/business-account.md` |
 | `sources` | `metadata` | `/console/sources` | `sources:read` | create/edit/delete → `sources:write` |
-| `catalog` | `metadata` | `/console/catalog` | `metadata:read` | — |
+| `catalog` | `metadata` | `/console/catalog` | `metadata:read` | edit → `metadata:write`; show → `metadata:read`; show route `/console/catalog/:id` |
 | `jobs` | `metadata` | `/console/jobs` | `jobs:run` | — |
 | `settings` | `settings` | `/console/settings` | `settings:read` | edit → `settings:write` |

@@ -186,8 +186,10 @@ Initial modules (ids stable):
 | Module id | Purpose | list permission |
 | --- | --- | --- |
 | `sources` | Source registration and reachability management | `sources:read` |
-| `catalog` | Browse Catalog Objects / columns | `metadata:read` |
+| `catalog` | Browse Catalog Objects / columns; object detail at `/console/catalog/:id` (`show` → `metadata:read`) for full semantics, structure facts, sample query, joins, and DDL | `metadata:read` |
 | `jobs` | Job list and trigger entry points | `jobs:run` (list) |
+
+The catalog object detail page is the Console semantics maintenance surface: it exposes the full object/column semantics model (ADR 0013 richer form), structure facts (PK/FK/indexes/comments), controlled sample query when the actor has `query:run`, and join graph / path exploration. List remains the Source-scoped browse entry; deep links use the `show` route so readers with only `metadata:read` can open detail without needing `metadata:write`.
 
 User PAT management is **not** in this group; see `docs/business-user-tokens.md` (Administration module `tokens`).
 

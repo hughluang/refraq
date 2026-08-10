@@ -21,7 +21,11 @@ from backend.metadata.schemas.catalog import (
     CatalogColumnOut,
     CatalogColumnResponse,
     CatalogColumnSearchResponse,
+    CatalogColumnsSemanticsBatchRequest,
+    CatalogColumnsSemanticsBatchResponse,
     CatalogDdlResponse,
+    CatalogForeignKeyOut,
+    CatalogIndexOut,
     CatalogObjectListResponse,
     CatalogObjectOut,
     CatalogObjectResponse,
@@ -64,8 +68,30 @@ def _column_out(record) -> CatalogColumnOut:
 
 def _object_out(record, *, include_columns: bool) -> CatalogObjectOut:
     columns = []
+    foreign_keys: list[CatalogForeignKeyOut] = []
+    indexes: list[CatalogIndexOut] = []
     if include_columns:
         columns = [_column_out(c) for c in record.columns]
+        foreign_keys = [
+            CatalogForeignKeyOut(
+                name=fk.name,
+                columns=list(fk.columns),
+                ref_schema=fk.ref_schema,
+                ref_table=fk.ref_table,
+                ref_columns=list(fk.ref_columns),
+                is_present=fk.is_present,
+            )
+            for fk in record.foreign_keys
+        ]
+        indexes = [
+            CatalogIndexOut(
+                name=idx.name,
+                columns=list(idx.columns),
+                is_unique=idx.is_unique,
+                is_present=idx.is_present,
+            )
+            for idx in record.indexes
+        ]
     return CatalogObjectOut(
         id=record.id,
         locator_key=record.locator_key,
@@ -91,6 +117,8 @@ def _object_out(record, *, include_columns: bool) -> CatalogObjectOut:
         business_semantics_ready=record.business_semantics_ready,
         semantics_updated_at=record.semantics_updated_at,
         columns=columns if include_columns else [],
+        foreign_keys=foreign_keys,
+        indexes=indexes,
         ddl=record.ddl if include_columns else None,
         is_present=record.is_present,
         collected_at=record.collected_at,
@@ -248,6 +276,32 @@ def patch_column_semantics(
         semantic_source="user_input",
     )
     return CatalogColumnResponse(column=_column_out(record))
+
+
+@router.patch(
+    "/objects/{object_id}/columns/semantics",
+    response_model=CatalogColumnsSemanticsBatchResponse,
+)
+def patch_columns_semantics_batch(
+    object_id: str,
+    payload: CatalogColumnsSemanticsBatchRequest,
+    request: Request,
+    user: UserRecord = Depends(require_permission("metadata:write")),
+) -> CatalogColumnsSemanticsBatchResponse:
+    result = catalog_service.set_column_semantics_batch(
+        object_id=object_id,
+        columns=[item.model_dump(exclude_unset=True) for item in payload.columns],
+        actor_user_id=user.id,
+        actor_token_id=get_actor_token_id(request),
+        semantic_source="user_input",
+    )
+    record = require_object(object_id)
+    return CatalogColumnsSemanticsBatchResponse(
+        object=_object_out(record, include_columns=True),
+        updated_count=result["updated_count"],
+        requested_count=result["requested_count"],
+        skipped_columns=result["skipped_columns"],
+    )
 
 
 @router.get("/objects/{object_id}/joins", response_model=JoinListResponse)
