@@ -83,6 +83,21 @@ export const MODULE_IDENTITY_FIXTURE: ModuleIdentity[] = [
     },
   },
   {
+    id: "business-domains",
+    label_key: "businessDomains.title",
+    routes: {
+      list: "/console/business-domains",
+      create: "/console/business-domains",
+      edit: "/console/business-domains",
+    },
+    actions: {
+      list: "metadata:read",
+      create: "metadata:write",
+      edit: "metadata:write",
+      delete: "metadata:write",
+    },
+  },
+  {
     id: "jobs",
     label_key: "jobs.title",
     routes: { list: "/console/jobs", create: null, edit: null },

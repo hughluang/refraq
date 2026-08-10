@@ -110,7 +110,7 @@ Groups and modules:
 | Workbench | `workbench` | Home (`dashboard`) |
 | Administration | `admin` | Users, Roles, User PAT (`tokens`) |
 | Platform settings | `settings` | System parameters (`settings`) |
-| Metadata | `metadata` | Sources (`sources`), Catalog (`catalog`), Jobs (`jobs`) |
+| Metadata | `metadata` | Sources (`sources`), Catalog (`catalog`), Business Domains (`business-domains`), Jobs (`jobs`) |
 
 Notes:
 
@@ -143,7 +143,7 @@ flowchart TB
     G1["Workbench"]
     G2["Administration · users/roles/tokens"]
     G3["Platform settings"]
-    G4["Metadata · sources/catalog/jobs"]
+    G4["Metadata · sources/catalog/domains/jobs"]
   end
 
   subgraph Main["Main work area"]

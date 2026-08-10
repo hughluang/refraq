@@ -15,6 +15,7 @@ Related boundaries:
 - Encrypted access blob + Connector Spec: `docs/adr/0011-encrypted-access-blob-and-connector-spec.md`.
 - Locator addressing: `docs/adr/0012-locator-addressing.md`.
 - Semantics provenance: `docs/adr/0013-semantics-provenance-and-protected-sources.md` (field protection deferred: `docs/adr/0014-defer-semantic-field-protection.md`).
+- Semantics field admission criteria and field-set pruning: `docs/adr/0015-semantic-field-admission.md`.
 - Job shape: `docs/adr/0008-job-generic-input.md`.
 - This phase does **not** define Business Entity, Data Product catalog, Serving delivery, or Access Contract marketplace workflows.
 
@@ -187,9 +188,10 @@ Initial modules (ids stable):
 | --- | --- | --- |
 | `sources` | Source registration and reachability management | `sources:read` |
 | `catalog` | Browse Catalog Objects / columns; object detail at `/console/catalog/:id` (`show` → `metadata:read`) for full semantics, structure facts, sample query, joins, and DDL | `metadata:read` |
+| `business-domains` | Global Business Domain registry (immutable `code`); create/edit/delete → `metadata:write` | `metadata:read` |
 | `jobs` | Job list and trigger entry points | `jobs:run` (list) |
 
-The catalog object detail page is the Console semantics maintenance surface: it exposes the full object/column semantics model (ADR 0013 richer form), structure facts (PK/FK/indexes/comments), controlled sample query when the actor has `query:run`, and join graph / path exploration. List remains the Source-scoped browse entry; deep links use the `show` route so readers with only `metadata:read` can open detail without needing `metadata:write`.
+The catalog object detail page is the Console semantics maintenance surface: it exposes the admitted object/column semantics model (§10, ADR 0015), structure facts (PK/FK/indexes/comments), controlled sample query when the actor has `query:run`, and join graph / path exploration. List remains the Source-scoped browse entry; deep links use the `show` route so readers with only `metadata:read` can open detail without needing `metadata:write`.
 
 User PAT management is **not** in this group; see `docs/business-user-tokens.md` (Administration module `tokens`).
 
@@ -246,34 +248,63 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
 | `business_description` | Natural-language role / grain summary |
 | `object_category` | `transaction_fact` \| `master_data` \| `dimension` \| `reference` \| `event` |
 | `grain_description` | Prefer “one row means …” |
-| `business_primary_key` | List of column names |
-| `time_semantics` | `{ primary_time_field, time_role }` |
-| `status_semantics` | `{ primary_status_field, status_meaning }` |
-| `relation_summary` | `{ input_role_hint, main_upstream_or_dimension_objects, likely_child_objects }` |
-| `business_domain` | Free text |
+| `business_primary_key` | List of column names; names must exist on the object (`SEMANTIC_COLUMN_UNKNOWN`) |
+| `business_domain` | Nested `{ id, code, name }` on read; write via `business_domain_code` referencing a Business Domain entity (ADR 0017); unknown code → `BUSINESS_DOMAIN_UNKNOWN` |
 | `evidence_summary` | List of short evidence phrases |
-| `confidence` | 0–1 |
 | `open_questions` | List of unresolved questions (persisted; never audit-only) |
 | `semantic_source` | Provenance of the last write: `mcp` \| `user_input` |
 | `business_semantics_ready` | Stored boolean; true when name+description present and open_questions empty |
 | `semantics_updated_at` | Last semantics write timestamp |
 
+`object_category` decision rules (so two writers reach the same value):
+
+- `transaction_fact` — one row is one business transaction, carries a business time axis, references master data
+- `event` — one row is one state change or system/user event; append-only, not updated in place
+- `master_data` — one row is a business entity referenced by transactions, with its own lifecycle
+- `dimension` — descriptive table built for analysis, typically derived from master data
+- `reference` — code/dictionary table: small, stable, carrying `code → label`
+
+Tie-breaks: source-system business entity → `master_data`, analytical derivative → `dimension`;
+rows carrying only `code → label` → `reference`.
+
 `model_routing_hint` is **not** delivered in this phase (see ADR 0013).
+`time_semantics`, `status_semantics`, `relation_summary`, and `confidence` are **removed** (ADR 0015);
+time and status meaning live on the relevant columns via `business_description` (and optional
+free-text `semantic_type` / `enum_catalog` — closed vocabulary deferred, ADR 0016), object
+relationships in join edges, and write certainty in `evidence_summary` / `open_questions` /
+`business_semantics_ready`.
+
+**Business Domain** (ADR 0017) is a global flat entity: immutable `code`, mutable `name`, optional
+`description`. Catalog objects reference it by FK (`ON DELETE RESTRICT`). Console Module
+`business-domains` reuses `metadata:read` / `metadata:write`.
 
 ### 10.2 Column semantics
 
 | Field | Notes |
 | --- | --- |
 | `business_name` / `business_description` | Same write rules as object |
-| `column_semantics` | `{ semantic_type, value_pattern, unit }` only |
+| `column_semantics` | `{ semantic_type, value_pattern, unit }` only; `semantic_type` is free text in this phase (ADR 0016) |
 | `enum_catalog` | List of `{ code, label, description }` when discrete enums are evidenced |
 | `semantic_source` | Same provenance values as object |
 | `field_kind` | Default `column`; held by structure collection; **not** writable via semantics APIs |
+
+`semantic_type` remains nullable free text. A closed vocabulary and derived `semantic_gaps` are
+**deferred** until a concrete reader exists (ADR 0016). Unclassified columns leave the field null
+and explain roles in `business_description`. Several columns may each describe a time axis; there
+is no elected primary axis at object level.
 
 ### 10.3 Write rules
 
 - Writes are additive/corrective; JSON `null` does **not** clear existing values.
 - Incomplete understanding stays incomplete — record `open_questions`, do not invent meaning.
+- Column-name references in semantics payloads (`business_primary_key`) must resolve to columns on
+  the object; unknown names are rejected with `SEMANTIC_COLUMN_UNKNOWN`.
+- `business_domain_code` on object semantics writes must resolve to an existing Business Domain;
+  unknown codes are rejected with `BUSINESS_DOMAIN_UNKNOWN`.
+- Adding a semantics field requires passing the ADR 0015 admission criteria — carrier ownership,
+  objective unique answer, falsifiability, structure paying for itself, and layer ownership.
+  Object-level fields that elect one "primary" column out of several of the same kind, and free
+  text read only by humans or agents, do not qualify.
 - `semantic_source` records the **last write** provenance. Field-level protection against MCP
   overwrite is **deferred** (`docs/adr/0014-defer-semantic-field-protection.md`); Console and MCP
   both write submitted non-null fields.
@@ -359,7 +390,7 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 5. Documentation under `docs/` matches behavior; refraq is the sole authoritative registry (no `dbmeta` dual-read).
 6. MCP addresses Sources/objects/columns by locator key; HTTP responses include `locator_key`.
 7. Structure Jobs collect PK/FK/indexes/comments/defaults (engine parity documented); FK-derived joins use `origin=foreign_key`.
-8. Full object/column semantics persist (including `open_questions`); `semantic_source` records last-write provenance (field-level MCP protection deferred — ADR 0014).
+8. Object/column semantics persist across the admitted field set (including `open_questions`); every field passes the ADR 0015 admission criteria, column `semantic_type` is vocabulary-checked, and `semantic_source` records last-write provenance (field-level MCP protection deferred — ADR 0014).
 9. Cross-Source object/column search with pagination works; join path lookup returns reachable hop chains.
 
 ## 15. Non-Goals
@@ -391,6 +422,7 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - `docs/adr/0012-locator-addressing.md`
 - `docs/adr/0013-semantics-provenance-and-protected-sources.md`
 - `docs/adr/0014-defer-semantic-field-protection.md`
+- `docs/adr/0015-semantic-field-admission.md`
 - `docs/business-user-tokens.md`
 - `docs/business-management-console.md`
 - `docs/api-contracts-sources.md`

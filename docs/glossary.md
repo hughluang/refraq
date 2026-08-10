@@ -214,8 +214,23 @@ Avoid treating it as a second identity or requiring agents to use opaque surroga
 
 ### Object Semantics
 
-Business meaning fields on a Catalog Object (including category, grain, business primary key, time/status semantics, confidence, open questions, and readiness).
+Business meaning fields on a Catalog Object (name, description, category, grain, business primary key, Business Domain reference, evidence, open questions, and readiness).
+Every field must pass the ADR 0015 admission criteria; time/status semantics, relation summary, and confidence were removed by that ADR.
 Avoid inventing meaning without evidence; persist open questions instead.
+Avoid electing one "primary" column out of several of the same kind at object level — that is a use-time choice, not a source fact.
+
+### Business Domain
+
+A global flat registry entity with immutable `code` and mutable `name` that Catalog Objects reference (ADR 0017).
+Console Module `business-domains` reuses `metadata:read` / `metadata:write`.
+Avoid free-text domain labels on objects; avoid hierarchical domain trees in this phase.
+
+### Semantic Type
+
+Optional free-text annotation on a column's `column_semantics.semantic_type`.
+A closed vocabulary and derived completeness gaps are deferred until a concrete reader exists (ADR 0016).
+Several columns on one object may each describe a time axis; there is no elected primary axis.
+Avoid re-introducing object-level primary time or status fields.
 
 ### Enum Catalog
 

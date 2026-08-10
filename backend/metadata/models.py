@@ -7,7 +7,6 @@ from datetime import datetime
 from sqlalchemy import (
     Boolean,
     DateTime,
-    Float,
     ForeignKey,
     Integer,
     String,
@@ -17,6 +16,17 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.core.db import Base
+
+
+class BusinessDomainRow(Base):
+    __tablename__ = "business_domains"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    code: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
 class SourceRow(Base):
@@ -78,12 +88,13 @@ class CatalogObjectRow(Base):
     object_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     grain_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     business_primary_key_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    time_semantics_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status_semantics_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    relation_summary_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    business_domain: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    business_domain_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("business_domains.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     evidence_summary_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     open_questions_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     semantic_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
     business_semantics_ready: Mapped[bool] = mapped_column(
@@ -96,6 +107,7 @@ class CatalogObjectRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     source: Mapped[SourceRow] = relationship(back_populates="catalog_objects")
+    business_domain: Mapped[BusinessDomainRow | None] = relationship()
     columns: Mapped[list[CatalogColumnRow]] = relationship(
         back_populates="object",
         cascade="all, delete-orphan",

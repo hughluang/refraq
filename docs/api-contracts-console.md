@@ -163,6 +163,23 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation and 
       }
     },
     {
+      "id": "business-domains",
+      "label_key": "businessDomains.title",
+      "routes": {
+        "list": "/console/business-domains",
+        "create": "/console/business-domains",
+        "edit": "/console/business-domains",
+        "show": null
+      },
+      "actions": {
+        "list": "metadata:read",
+        "create": "metadata:write",
+        "edit": "metadata:write",
+        "delete": "metadata:write",
+        "show": null
+      }
+    },
+    {
       "id": "settings",
       "label_key": "settings.title",
       "routes": { "list": "/console/settings", "create": null, "edit": null, "show": null },
@@ -195,5 +212,6 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation and 
 | `tokens` | `admin` (identity only; **not** in navigation) | `null` (no Console page; UI in Account Center) | `tokens:read` | create/edit/delete → `tokens:write`; see `docs/business-account.md` |
 | `sources` | `metadata` | `/console/sources` | `sources:read` | create/edit/delete → `sources:write` |
 | `catalog` | `metadata` | `/console/catalog` | `metadata:read` | edit → `metadata:write`; show → `metadata:read`; show route `/console/catalog/:id` |
+| `business-domains` | `metadata` | `/console/business-domains` | `metadata:read` | create/edit/delete → `metadata:write` |
 | `jobs` | `metadata` | `/console/jobs` | `jobs:run` | — |
 | `settings` | `settings` | `/console/settings` | `settings:read` | edit → `settings:write` |

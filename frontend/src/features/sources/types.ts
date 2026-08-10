@@ -49,20 +49,10 @@ export type ObjectCategory =
   | "reference"
   | "event";
 
-export type TimeSemantics = {
-  primary_time_field?: string | null;
-  time_role?: string | null;
-};
-
-export type StatusSemantics = {
-  primary_status_field?: string | null;
-  status_meaning?: string | null;
-};
-
-export type RelationSummary = {
-  input_role_hint?: string | null;
-  main_upstream_or_dimension_objects?: string[] | null;
-  likely_child_objects?: string[] | null;
+export type BusinessDomainRef = {
+  id: string;
+  code: string;
+  name: string;
 };
 
 export type ColumnSemantics = {
@@ -83,12 +73,8 @@ export type ObjectSemanticsPatch = {
   object_category?: ObjectCategory | null;
   grain_description?: string | null;
   business_primary_key?: string[] | null;
-  time_semantics?: TimeSemantics | null;
-  status_semantics?: StatusSemantics | null;
-  relation_summary?: RelationSummary | null;
-  business_domain?: string | null;
+  business_domain_code?: string | null;
   evidence_summary?: string[] | null;
-  confidence?: number | null;
   open_questions?: string[] | null;
 };
 
@@ -113,12 +99,8 @@ export type CatalogObject = {
   object_category?: ObjectCategory | string | null;
   grain_description?: string | null;
   business_primary_key?: string[] | null;
-  time_semantics?: TimeSemantics | null;
-  status_semantics?: StatusSemantics | null;
-  relation_summary?: RelationSummary | null;
-  business_domain?: string | null;
+  business_domain?: BusinessDomainRef | null;
   evidence_summary?: string[] | null;
-  confidence?: number | null;
   open_questions?: string[] | null;
   semantic_source?: string | null;
   business_semantics_ready?: boolean;

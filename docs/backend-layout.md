@@ -129,9 +129,23 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 
 ## 5. Structure inside a package
 
-- Prefer flat files; split subpackages for sub-languages or replaceable adapter families (`sources/`, `catalog/`, `connectors/`).
-- Elevate by reuse and language boundary, not file count.
-- Do not add empty technical-layer directories (`domain/`, `application/`, `infrastructure/`) inside a tier.
+A package's modules are of two kinds:
+
+- A **language unit** carries one sub-language of the package: its use-case
+  orchestration and its persistence.
+- A **cross-cutting module** serves the package as a whole (models, error types,
+  identifiers, task entry, adapter host).
+
+Rules:
+
+- A language unit lives in a subpackage named after that language; inside it,
+  modules are named by role (`service.py`, `store.py`, replaceable adapter families).
+- Cross-cutting modules stay at the package root.
+- All language units in a package take the same shape, whatever their size.
+  Elevate by language boundary, not by file count.
+- Consequently, a package root carries no module belonging to a single sub-language.
+- Do not add empty technical-layer directories (`domain/`, `application/`,
+  `infrastructure/`) inside a tier.
 
 ## 6. Naming
 

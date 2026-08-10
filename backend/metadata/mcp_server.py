@@ -59,6 +59,18 @@ def _dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, default=_json_default)
 
 
+
+
+def _domain_ref(domain_id: str | None) -> dict[str, str] | None:
+    if not domain_id:
+        return None
+    from backend.metadata.business_domains.store import get_business_domain_store
+
+    record = get_business_domain_store().get(domain_id)
+    if record is None:
+        return None
+    return {"id": record.id, "code": record.code, "name": record.name}
+
 def _clamp(value: int | None, *, default: int, maximum: int) -> int:
     if value is None:
         return default
@@ -80,12 +92,8 @@ def _object_payload(o: Any, *, include_columns: bool) -> dict[str, Any]:
         "object_category": o.object_category,
         "grain_description": o.grain_description,
         "business_primary_key": o.business_primary_key,
-        "time_semantics": o.time_semantics,
-        "status_semantics": o.status_semantics,
-        "relation_summary": o.relation_summary,
-        "business_domain": o.business_domain,
+        "business_domain": _domain_ref(o.business_domain_id),
         "evidence_summary": o.evidence_summary,
-        "confidence": o.confidence,
         "open_questions": o.open_questions,
         "semantic_source": o.semantic_source,
         "business_semantics_ready": o.business_semantics_ready,
@@ -312,12 +320,8 @@ def get_object_semantics(authorization: str, object_locator_key: str) -> str:
                 "object_category": o.object_category,
                 "grain_description": o.grain_description,
                 "business_primary_key": o.business_primary_key,
-                "time_semantics": o.time_semantics,
-                "status_semantics": o.status_semantics,
-                "relation_summary": o.relation_summary,
-                "business_domain": o.business_domain,
+                "business_domain": _domain_ref(o.business_domain_id),
                 "evidence_summary": o.evidence_summary,
-                "confidence": o.confidence,
                 "open_questions": o.open_questions,
                 "semantic_source": o.semantic_source,
                 "business_semantics_ready": o.business_semantics_ready,
@@ -348,12 +352,8 @@ def set_object_semantics(
     object_category: str | None = None,
     grain_description: str | None = None,
     business_primary_key: list[str] | None = None,
-    time_semantics: dict[str, Any] | None = None,
-    status_semantics: dict[str, Any] | None = None,
-    relation_summary: dict[str, Any] | None = None,
-    business_domain: str | None = None,
+    business_domain_code: str | None = None,
     evidence_summary: list[str] | None = None,
-    confidence: float | None = None,
     open_questions: list[str] | None = None,
 ) -> str:
     """Incremental object semantics write (metadata:write, semantic_source=mcp)."""
@@ -368,12 +368,8 @@ def set_object_semantics(
             "object_category": object_category,
             "grain_description": grain_description,
             "business_primary_key": business_primary_key,
-            "time_semantics": time_semantics,
-            "status_semantics": status_semantics,
-            "relation_summary": relation_summary,
-            "business_domain": business_domain,
+            "business_domain_code": business_domain_code,
             "evidence_summary": evidence_summary,
-            "confidence": confidence,
             "open_questions": open_questions,
         }
         for key, value in locals_map.items():
@@ -410,6 +406,82 @@ def set_column_semantics(
             semantic_source="mcp",
         )
         return _dumps(result)
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool()
+def list_business_domains(
+    authorization: str,
+    query_text: str | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> str:
+    """List Business Domains (metadata:read)."""
+    try:
+        user, _token_id = _actor_from_token(authorization)
+        _require(user, "metadata:read")
+        from backend.metadata.business_domains import service as domain_service
+
+        lim = _clamp(limit, default=100, maximum=500)
+        off = max(0, int(offset or 0))
+        items, total = domain_service.list_domains(
+            q=query_text, limit=lim, offset=off
+        )
+        return _dumps(
+            {
+                "items": [
+                    {
+                        "id": d.id,
+                        "code": d.code,
+                        "name": d.name,
+                        "description": d.description,
+                        "created_at": d.created_at,
+                        "updated_at": d.updated_at,
+                    }
+                    for d in items
+                ],
+                "total": total,
+                "limit": lim,
+                "offset": off,
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+
+@mcp.tool()
+def create_business_domain(
+    authorization: str,
+    code: str,
+    name: str,
+    description: str | None = None,
+) -> str:
+    """Create a Business Domain (metadata:write)."""
+    try:
+        user, token_id = _actor_from_token(authorization)
+        _require(user, "metadata:write")
+        from backend.metadata.business_domains import service as domain_service
+
+        record = domain_service.create_domain(
+            code=code,
+            name=name,
+            description=description,
+            actor_user_id=user.id,
+            actor_token_id=token_id,
+        )
+        return _dumps(
+            {
+                "domain": {
+                    "id": record.id,
+                    "code": record.code,
+                    "name": record.name,
+                    "description": record.description,
+                    "created_at": record.created_at,
+                    "updated_at": record.updated_at,
+                }
+            }
+        )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 

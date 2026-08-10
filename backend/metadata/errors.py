@@ -5,6 +5,10 @@ from __future__ import annotations
 from backend.core.errors import AppError
 
 __all__ = [
+    "BusinessDomainCodeConflict",
+    "BusinessDomainInUse",
+    "BusinessDomainNotFound",
+    "BusinessDomainUnknown",
     "CatalogColumnNotFound",
     "CatalogJoinNotFound",
     "CatalogObjectNotFound",
@@ -23,6 +27,7 @@ __all__ = [
     "QueryNotReadonly",
     "QueryRowLimit",
     "QueryTimeout",
+    "SemanticColumnUnknown",
     "SourceAccessInvalid",
     "SourceAccessRequired",
     "SourceEngineUnsupported",
@@ -121,6 +126,46 @@ class CatalogColumnNotFound(AppError):
 
     def _default_message(self) -> str:
         return "Catalog column not found"
+
+
+class SemanticColumnUnknown(AppError):
+    code = "SEMANTIC_COLUMN_UNKNOWN"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "business_primary_key names a column that does not exist on the object"
+
+
+class BusinessDomainNotFound(AppError):
+    code = "BUSINESS_DOMAIN_NOT_FOUND"
+    http_status = 404
+
+    def _default_message(self) -> str:
+        return "Business domain not found"
+
+
+class BusinessDomainUnknown(AppError):
+    code = "BUSINESS_DOMAIN_UNKNOWN"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "business_domain_code does not match an existing Business Domain"
+
+
+class BusinessDomainCodeConflict(AppError):
+    code = "BUSINESS_DOMAIN_CODE_CONFLICT"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Business domain code already exists"
+
+
+class BusinessDomainInUse(AppError):
+    code = "BUSINESS_DOMAIN_IN_USE"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Business domain is still referenced by catalog objects"
 
 
 class CatalogJoinNotFound(AppError):

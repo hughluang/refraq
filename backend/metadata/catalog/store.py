@@ -87,12 +87,8 @@ class CatalogObjectRecord:
     object_category: str | None
     grain_description: str | None
     business_primary_key: list[str] | None
-    time_semantics: dict[str, Any] | None
-    status_semantics: dict[str, Any] | None
-    relation_summary: dict[str, Any] | None
-    business_domain: str | None
+    business_domain_id: str | None
     evidence_summary: list[str] | None
-    confidence: float | None
     open_questions: list[str] | None
     semantic_source: str | None
     business_semantics_ready: bool
@@ -333,12 +329,8 @@ class CatalogStore(Protocol):
         object_category: Any = UNSET,
         grain_description: Any = UNSET,
         business_primary_key: Any = UNSET,
-        time_semantics: Any = UNSET,
-        status_semantics: Any = UNSET,
-        relation_summary: Any = UNSET,
-        business_domain: Any = UNSET,
+        business_domain_id: Any = UNSET,
         evidence_summary: Any = UNSET,
-        confidence: Any = UNSET,
         open_questions: Any = UNSET,
         semantic_source: Any = UNSET,
         business_semantics_ready: Any = UNSET,
@@ -1089,12 +1081,8 @@ class MemoryCatalogStore:
         object_category: Any = UNSET,
         grain_description: Any = UNSET,
         business_primary_key: Any = UNSET,
-        time_semantics: Any = UNSET,
-        status_semantics: Any = UNSET,
-        relation_summary: Any = UNSET,
-        business_domain: Any = UNSET,
+        business_domain_id: Any = UNSET,
         evidence_summary: Any = UNSET,
-        confidence: Any = UNSET,
         open_questions: Any = UNSET,
         semantic_source: Any = UNSET,
         business_semantics_ready: Any = UNSET,
@@ -1114,12 +1102,8 @@ class MemoryCatalogStore:
                 "object_category": object_category,
                 "grain_description": grain_description,
                 "business_primary_key": business_primary_key,
-                "time_semantics": time_semantics,
-                "status_semantics": status_semantics,
-                "relation_summary": relation_summary,
-                "business_domain": business_domain,
+                "business_domain_id": business_domain_id,
                 "evidence_summary": evidence_summary,
-                "confidence": confidence,
                 "open_questions": open_questions,
                 "semantic_source": semantic_source,
                 "business_semantics_ready": business_semantics_ready,
@@ -1133,6 +1117,15 @@ class MemoryCatalogStore:
                 kwargs.pop("semantics_updated_at", None)
             updated = replace(obj, **kwargs)
             self._objects[object_id] = updated
+            if business_domain_id is not UNSET:
+                from backend.metadata.business_domains.store import (
+                    MemoryBusinessDomainStore,
+                    get_business_domain_store,
+                )
+
+                store = get_business_domain_store()
+                if isinstance(store, MemoryBusinessDomainStore):
+                    store.set_object_ref(object_id, updated.business_domain_id)
             return updated
 
     def patch_column_semantics(
@@ -1523,12 +1516,8 @@ class SqlCatalogStore:
                         object_category=None,
                         grain_description=None,
                         business_primary_key_json=None,
-                        time_semantics_json=None,
-                        status_semantics_json=None,
-                        relation_summary_json=None,
-                        business_domain=None,
+                        business_domain_id=None,
                         evidence_summary_json=None,
-                        confidence=None,
                         open_questions_json=None,
                         semantic_source=None,
                         business_semantics_ready=False,
@@ -1758,12 +1747,8 @@ class SqlCatalogStore:
         object_category: Any = UNSET,
         grain_description: Any = UNSET,
         business_primary_key: Any = UNSET,
-        time_semantics: Any = UNSET,
-        status_semantics: Any = UNSET,
-        relation_summary: Any = UNSET,
-        business_domain: Any = UNSET,
+        business_domain_id: Any = UNSET,
         evidence_summary: Any = UNSET,
-        confidence: Any = UNSET,
         open_questions: Any = UNSET,
         semantic_source: Any = UNSET,
         business_semantics_ready: Any = UNSET,
@@ -1798,23 +1783,11 @@ class SqlCatalogStore:
             if business_primary_key is not UNSET:
                 row.business_primary_key_json = _dumps_json(business_primary_key)
                 changed = True
-            if time_semantics is not UNSET:
-                row.time_semantics_json = _dumps_json(time_semantics)
-                changed = True
-            if status_semantics is not UNSET:
-                row.status_semantics_json = _dumps_json(status_semantics)
-                changed = True
-            if relation_summary is not UNSET:
-                row.relation_summary_json = _dumps_json(relation_summary)
-                changed = True
-            if business_domain is not UNSET:
-                row.business_domain = business_domain
+            if business_domain_id is not UNSET:
+                row.business_domain_id = business_domain_id
                 changed = True
             if evidence_summary is not UNSET:
                 row.evidence_summary_json = _dumps_json(evidence_summary)
-                changed = True
-            if confidence is not UNSET:
-                row.confidence = confidence
                 changed = True
             if open_questions is not UNSET:
                 row.open_questions_json = _dumps_json(open_questions)
@@ -2260,12 +2233,8 @@ def _row_to_object(row: object) -> CatalogObjectRecord:
         object_category=row.object_category,
         grain_description=row.grain_description,
         business_primary_key=_loads_json(row.business_primary_key_json),
-        time_semantics=_loads_json(row.time_semantics_json),
-        status_semantics=_loads_json(row.status_semantics_json),
-        relation_summary=_loads_json(row.relation_summary_json),
-        business_domain=row.business_domain,
+        business_domain_id=row.business_domain_id,
         evidence_summary=_loads_json(row.evidence_summary_json),
-        confidence=row.confidence,
         open_questions=_loads_json(row.open_questions_json),
         semantic_source=row.semantic_source,
         business_semantics_ready=row.business_semantics_ready,

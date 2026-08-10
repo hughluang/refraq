@@ -102,6 +102,7 @@ Responsibilities:
 - Domain facade for Source-scoped **Jobs** (structure enqueue/list)
 - Domain Celery work units (`@shared_task`); discovered by `worker`
 - Catalog object / semantics / join / controlled query services
+- Business Domain registry (global flat entity referenced by catalog objects)
 - Domain use-case HTTP under `metadata/routers/` and shapes under `metadata/schemas/`
 - MCP tool handlers (`backend/metadata/mcp_server.py`) that delegate to the same services
 
@@ -113,6 +114,7 @@ Must not contain:
 - Session cookie issuance (stay in `admin/`)
 - Importing `worker.app`
 - Pre-scaffolded empty subpackages for Entity / Data Product catalog
+- Single-language orchestration or persistence at the package root
 
 ### `backend/worker/`
 

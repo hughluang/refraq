@@ -134,6 +134,25 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         module_order=20,
     ),
     ConsoleModuleSeed(
+        id="business-domains",
+        group_id="metadata",
+        group_label_key="layout.navGroup.metadata",
+        label_key="businessDomains.title",
+        routes=ModuleRoutes(
+            list="/console/business-domains",
+            create="/console/business-domains",
+            edit="/console/business-domains",
+        ),
+        actions=ModuleActions(
+            list="metadata:read",
+            create="metadata:write",
+            edit="metadata:write",
+            delete="metadata:write",
+        ),
+        group_order=25,
+        module_order=25,
+    ),
+    ConsoleModuleSeed(
         id="jobs",
         group_id="metadata",
         group_label_key="layout.navGroup.metadata",

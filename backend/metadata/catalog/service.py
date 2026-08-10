@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from backend.admin.audit import persist_audit_event
+from backend.metadata.business_domains.service import require_domain_by_code
 from backend.metadata.catalog.store import (
     UNSET,
     CatalogColumnRecord,
@@ -20,6 +21,7 @@ from backend.metadata.errors import (
     JoinCrossSource,
     JoinEvidenceRequired,
     JoinInvalid,
+    SemanticColumnUnknown,
 )
 from backend.metadata.sources.store import SourceRecord, get_source_store
 
@@ -31,12 +33,8 @@ _OBJECT_SEMANTIC_FIELDS = (
     "object_category",
     "grain_description",
     "business_primary_key",
-    "time_semantics",
-    "status_semantics",
-    "relation_summary",
-    "business_domain",
+    "business_domain_id",
     "evidence_summary",
-    "confidence",
     "open_questions",
 )
 
@@ -129,6 +127,17 @@ def resolve_column_ref(ref: str) -> CatalogColumnRecord:
     return record
 
 
+def _validate_business_primary_key(
+    existing: CatalogObjectRecord, names: list[str]
+) -> None:
+    known = {c.name for c in existing.columns}
+    unknown = [n for n in names if n not in known]
+    if unknown:
+        raise SemanticColumnUnknown(
+            f"Unknown column(s) in business_primary_key: {', '.join(unknown)}"
+        )
+
+
 def patch_object_semantics(
     *,
     object_id: str,
@@ -138,9 +147,19 @@ def patch_object_semantics(
     semantic_source: str = "user_input",
 ) -> CatalogObjectRecord:
     existing = require_object(object_id)
-    kwargs = _build_semantic_kwargs(data=data, fields=_OBJECT_SEMANTIC_FIELDS)
+    # Resolve business_domain_code → business_domain_id before field extraction.
+    resolved = dict(data)
+    if "business_domain_code" in resolved and resolved["business_domain_code"] is not None:
+        domain = require_domain_by_code(str(resolved["business_domain_code"]))
+        resolved["business_domain_id"] = domain.id
+    kwargs = _build_semantic_kwargs(data=resolved, fields=_OBJECT_SEMANTIC_FIELDS)
     if not kwargs:
         return existing
+    if "business_primary_key" in kwargs:
+        names = kwargs["business_primary_key"]
+        if not isinstance(names, list):
+            raise SemanticColumnUnknown("business_primary_key must be a list of column names")
+        _validate_business_primary_key(existing, [str(n) for n in names])
     # Merge for ready computation.
     business_name = kwargs.get("business_name", existing.business_name)
     business_description = kwargs.get(
@@ -169,7 +188,9 @@ def patch_object_semantics(
             "changed": list(kwargs.keys()),
             "semantic_source": semantic_source,
             "ignored_null": [
-                k for k in _OBJECT_SEMANTIC_FIELDS if k in data and data[k] is None
+                k
+                for k in (*_OBJECT_SEMANTIC_FIELDS, "business_domain_code")
+                if k in data and data[k] is None
             ],
         },
     )

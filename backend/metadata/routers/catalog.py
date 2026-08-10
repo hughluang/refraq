@@ -46,6 +46,18 @@ from backend.metadata.schemas.catalog import (
 router = APIRouter(tags=["catalog"])
 
 
+def _domain_ref(domain_id: str | None):
+    if not domain_id:
+        return None
+    from backend.metadata.business_domains.store import get_business_domain_store
+    from backend.metadata.schemas.catalog import BusinessDomainRef
+
+    record = get_business_domain_store().get(domain_id)
+    if record is None:
+        return None
+    return BusinessDomainRef(id=record.id, code=record.code, name=record.name)
+
+
 def _column_out(record) -> CatalogColumnOut:
     return CatalogColumnOut(
         id=record.id,
@@ -106,12 +118,8 @@ def _object_out(record, *, include_columns: bool) -> CatalogObjectOut:
         object_category=record.object_category,
         grain_description=record.grain_description,
         business_primary_key=record.business_primary_key,
-        time_semantics=record.time_semantics,
-        status_semantics=record.status_semantics,
-        relation_summary=record.relation_summary,
-        business_domain=record.business_domain,
+        business_domain=_domain_ref(record.business_domain_id),
         evidence_summary=record.evidence_summary,
-        confidence=record.confidence,
         open_questions=record.open_questions,
         semantic_source=record.semantic_source,
         business_semantics_ready=record.business_semantics_ready,

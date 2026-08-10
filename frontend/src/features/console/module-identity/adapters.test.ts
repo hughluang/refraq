@@ -45,6 +45,13 @@ describe("toRefineResources", () => {
         meta: { label: "catalog.title" },
       },
       {
+        name: "business-domains",
+        list: "/console/business-domains",
+        create: "/console/business-domains",
+        edit: "/console/business-domains",
+        meta: { label: "businessDomains.title" },
+      },
+      {
         name: "jobs",
         list: "/console/jobs",
         meta: { label: "jobs.title" },

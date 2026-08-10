@@ -181,12 +181,8 @@ def _table(
         object_category=None,
         grain_description=None,
         business_primary_key=None,
-        time_semantics=None,
-        status_semantics=None,
-        relation_summary=None,
-        business_domain=None,
+        business_domain_id=None,
         evidence_summary=None,
-        confidence=None,
         open_questions=None,
         semantic_source=None,
         business_semantics_ready=False,
@@ -310,11 +306,19 @@ def test_illegal_semantics_and_field_kind_not_writable(client: TestClient) -> No
     )
     assert bad_category.status_code == 422
 
-    bad_confidence = client.patch(
+    unknown_pk = client.patch(
         f"/objects/{obj.id}/semantics",
-        json={"confidence": 1.5},
+        json={"business_primary_key": ["not_a_real_column"]},
     )
-    assert bad_confidence.status_code == 422
+    assert unknown_pk.status_code == 400
+    assert unknown_pk.json()["code"] == "SEMANTIC_COLUMN_UNKNOWN"
+
+    unknown_domain = client.patch(
+        f"/objects/{obj.id}/semantics",
+        json={"business_domain_code": "missing-domain"},
+    )
+    assert unknown_domain.status_code == 400
+    assert unknown_domain.json()["code"] == "BUSINESS_DOMAIN_UNKNOWN"
 
     ignored = client.patch(
         f"/columns/{col.id}/semantics",

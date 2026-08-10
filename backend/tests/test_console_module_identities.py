@@ -112,6 +112,22 @@ EXPECTED_IDENTITIES = {
             "show": "metadata:read",
         },
     },
+    "business-domains": {
+        "label_key": "businessDomains.title",
+        "routes": {
+            "list": "/console/business-domains",
+            "create": "/console/business-domains",
+            "edit": "/console/business-domains",
+            "show": None,
+        },
+        "actions": {
+            "list": "metadata:read",
+            "create": "metadata:write",
+            "edit": "metadata:write",
+            "delete": "metadata:write",
+            "show": None,
+        },
+    },
     "jobs": {
         "label_key": "jobs.title",
         "routes": {"list": "/console/jobs", "create": None, "edit": None, "show": None},

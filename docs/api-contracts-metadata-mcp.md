@@ -37,8 +37,14 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 | `inspect_object` | `metadata:read` | Object semantics + columns aggregate |
 | `set_object_semantics` | `metadata:write` | Incremental object semantics write (`semantic_source=mcp`) |
 | `set_column_semantics` | `metadata:write` | Batch column semantics under one object locator |
+| `list_business_domains` | `metadata:read` | List Business Domains |
+| `create_business_domain` | `metadata:write` | Create a Business Domain (`code`, `name`, `description?`) |
 
-Write discipline: fill gaps; do not invent; persist `open_questions` when evidence is weak. `semantic_source` is set to `mcp`. Field-level protection is deferred (ADR 0014). Column batch responses include `skipped_columns` for `invalid_column_name` / `no_changes`. Writable fields match HTTP semantics PATCH (no `field_kind`; no `model_routing_hint` — not delivered this phase).
+Write discipline: fill gaps; do not invent; persist `open_questions` when evidence is weak. `semantic_source` is set to `mcp`. Field-level protection is deferred (ADR 0014). Column batch responses include `skipped_columns` for `invalid_column_name` / `no_changes`. Writable fields match HTTP semantics PATCH (no `field_kind`; no `model_routing_hint` — not delivered this phase; none of the fields removed by ADR 0015).
+
+`set_object_semantics` does **not** accept `time_semantics`, `status_semantics`, `relation_summary`, or `confidence`. Agents record time/status meaning on each relevant column via `business_description` (and optional free-text `column_semantics.semantic_type` / `enum_catalog` — closed vocabulary deferred, ADR 0016) instead of electing one primary time or status column, and record object relationships as join edges with evidence. `business_primary_key` names that do not exist on the object are rejected with `SEMANTIC_COLUMN_UNKNOWN`. Object writes accept `business_domain_code`; unknown codes → `BUSINESS_DOMAIN_UNKNOWN`.
+
+Business Domain delete is **Console HTTP only** (not exposed on MCP) so agents do not trigger `BUSINESS_DOMAIN_IN_USE` without an operator surface (ADR 0017).
 
 `set_column_semantics` request: `{ object_locator_key, columns: [{ column_name, …fields }] }`.
 Response: `{ updated_count, requested_count, skipped_columns }`.

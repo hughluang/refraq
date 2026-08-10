@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 __all__ = [
+    "BusinessDomainRef",
     "CatalogColumnOut",
     "CatalogColumnResponse",
     "CatalogColumnSearchResponse",
@@ -35,10 +36,7 @@ __all__ = [
     "JoinUpsertRequest",
     "ObjectCategory",
     "ObjectSemanticsPatchRequest",
-    "RelationSummaryModel",
     "SemanticSource",
-    "StatusSemanticsModel",
-    "TimeSemanticsModel",
 ]
 
 ObjectCategory = Literal[
@@ -51,22 +49,6 @@ ObjectCategory = Literal[
 SemanticSource = Literal["mcp", "user_input"]
 
 
-class TimeSemanticsModel(BaseModel):
-    primary_time_field: str | None = None
-    time_role: str | None = None
-
-
-class StatusSemanticsModel(BaseModel):
-    primary_status_field: str | None = None
-    status_meaning: str | None = None
-
-
-class RelationSummaryModel(BaseModel):
-    input_role_hint: str | None = None
-    main_upstream_or_dimension_objects: list[str] | None = None
-    likely_child_objects: list[str] | None = None
-
-
 class ColumnSemanticsModel(BaseModel):
     semantic_type: str | None = None
     value_pattern: str | None = None
@@ -77,6 +59,12 @@ class EnumCatalogEntry(BaseModel):
     code: str
     label: str
     description: str | None = None
+
+
+class BusinessDomainRef(BaseModel):
+    id: str
+    code: str
+    name: str
 
 
 class CatalogColumnOut(BaseModel):
@@ -127,12 +115,8 @@ class CatalogObjectOut(BaseModel):
     object_category: ObjectCategory | str | None = None
     grain_description: str | None = None
     business_primary_key: list[str] | None = None
-    time_semantics: TimeSemanticsModel | None = None
-    status_semantics: StatusSemanticsModel | None = None
-    relation_summary: RelationSummaryModel | None = None
-    business_domain: str | None = None
+    business_domain: BusinessDomainRef | None = None
     evidence_summary: list[str] | None = None
-    confidence: float | None = None
     open_questions: list[str] | None = None
     semantic_source: SemanticSource | str | None = None
     business_semantics_ready: bool = False
@@ -185,12 +169,8 @@ class ObjectSemanticsPatchRequest(BaseModel):
     object_category: ObjectCategory | None = None
     grain_description: str | None = None
     business_primary_key: list[str] | None = None
-    time_semantics: TimeSemanticsModel | None = None
-    status_semantics: StatusSemanticsModel | None = None
-    relation_summary: RelationSummaryModel | None = None
-    business_domain: str | None = None
+    business_domain_code: str | None = None
     evidence_summary: list[str] | None = None
-    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     open_questions: list[str] | None = None
 
 

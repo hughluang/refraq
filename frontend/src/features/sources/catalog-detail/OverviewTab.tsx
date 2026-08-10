@@ -5,7 +5,6 @@ import {
   Button,
   Group,
   MultiSelect,
-  NumberInput,
   Select,
   SimpleGrid,
   Stack,
@@ -20,6 +19,8 @@ import { useNotification, useTranslate } from "@refinedev/core";
 import { useEffect, useMemo, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
+import { listBusinessDomains } from "@/features/business-domains/api";
+import type { BusinessDomain } from "@/features/business-domains/types";
 import { patchObjectSemantics } from "@/features/sources/api";
 import type {
   CatalogObject,
@@ -40,18 +41,10 @@ type OverviewFormValues = {
   business_description: string;
   object_category: string | null;
   grain_description: string;
-  business_domain: string;
+  business_domain_code: string | null;
   business_primary_key: string[];
-  primary_time_field: string | null;
-  time_role: string;
-  primary_status_field: string | null;
-  status_meaning: string;
-  input_role_hint: string;
-  main_upstream_or_dimension_objects: string[];
-  likely_child_objects: string[];
   evidence_summary: string[];
   open_questions: string[];
-  confidence: number | string;
 };
 
 type OverviewTabProps = {
@@ -66,19 +59,10 @@ function formFromObject(obj: CatalogObject): OverviewFormValues {
     business_description: obj.business_description ?? "",
     object_category: obj.object_category ? String(obj.object_category) : null,
     grain_description: obj.grain_description ?? "",
-    business_domain: obj.business_domain ?? "",
+    business_domain_code: obj.business_domain?.code ?? null,
     business_primary_key: obj.business_primary_key ?? [],
-    primary_time_field: obj.time_semantics?.primary_time_field ?? null,
-    time_role: obj.time_semantics?.time_role ?? "",
-    primary_status_field: obj.status_semantics?.primary_status_field ?? null,
-    status_meaning: obj.status_semantics?.status_meaning ?? "",
-    input_role_hint: obj.relation_summary?.input_role_hint ?? "",
-    main_upstream_or_dimension_objects:
-      obj.relation_summary?.main_upstream_or_dimension_objects ?? [],
-    likely_child_objects: obj.relation_summary?.likely_child_objects ?? [],
     evidence_summary: obj.evidence_summary ?? [],
     open_questions: obj.open_questions ?? [],
-    confidence: obj.confidence ?? "",
   };
 }
 
@@ -86,6 +70,7 @@ export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
   const t = useTranslate();
   const { open } = useNotification();
   const [saving, setSaving] = useState(false);
+  const [domains, setDomains] = useState<BusinessDomain[]>([]);
   const form = useForm<OverviewFormValues>({
     initialValues: formFromObject(object),
   });
@@ -95,46 +80,39 @@ export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when object identity/content changes
   }, [object.id, object.semantics_updated_at]);
 
+  useEffect(() => {
+    void listBusinessDomains({ limit: 500 })
+      .then((data) => setDomains(data.items))
+      .catch(() => setDomains([]));
+  }, []);
+
   const columnOptions = useMemo(
     () => object.columns.map((c) => ({ value: c.name, label: c.name })),
     [object.columns],
   );
 
+  const domainOptions = useMemo(
+    () =>
+      domains.map((d) => ({
+        value: d.code,
+        label: `${d.name} (${d.code})`,
+      })),
+    [domains],
+  );
+
   const save = async (values: OverviewFormValues) => {
     setSaving(true);
     try {
-      const confidenceRaw =
-        values.confidence === "" || values.confidence === null
-          ? null
-          : Number(values.confidence);
       const data = await patchObjectSemantics(object.id, {
         business_name: values.business_name,
         business_description: values.business_description,
         object_category:
           (values.object_category as ObjectCategory | null) || null,
         grain_description: values.grain_description || null,
-        business_domain: values.business_domain || null,
+        business_domain_code: values.business_domain_code || null,
         business_primary_key: values.business_primary_key,
-        time_semantics: {
-          primary_time_field: values.primary_time_field,
-          time_role: values.time_role || null,
-        },
-        status_semantics: {
-          primary_status_field: values.primary_status_field,
-          status_meaning: values.status_meaning || null,
-        },
-        relation_summary: {
-          input_role_hint: values.input_role_hint || null,
-          main_upstream_or_dimension_objects:
-            values.main_upstream_or_dimension_objects,
-          likely_child_objects: values.likely_child_objects,
-        },
         evidence_summary: values.evidence_summary,
         open_questions: values.open_questions,
-        confidence:
-          confidenceRaw !== null && Number.isFinite(confidenceRaw)
-            ? confidenceRaw
-            : null,
       });
       onSaved(data.object);
       form.setValues(formFromObject(data.object));
@@ -177,9 +155,12 @@ export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
           disabled={!writable}
           minRows={2}
         />
-        <TextInput
+        <Select
           label={t("catalog.semantics.domain")}
-          {...form.getInputProps("business_domain")}
+          data={domainOptions}
+          clearable
+          searchable
+          {...form.getInputProps("business_domain_code")}
           disabled={!writable}
         />
         <MultiSelect
@@ -187,51 +168,6 @@ export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
           data={columnOptions}
           searchable
           {...form.getInputProps("business_primary_key")}
-          disabled={!writable}
-        />
-        <Group grow align="flex-start">
-          <Select
-            label={t("catalog.semantics.timeField")}
-            data={columnOptions}
-            clearable
-            searchable
-            {...form.getInputProps("primary_time_field")}
-            disabled={!writable}
-          />
-          <TextInput
-            label={t("catalog.semantics.timeRole")}
-            {...form.getInputProps("time_role")}
-            disabled={!writable}
-          />
-        </Group>
-        <Group grow align="flex-start">
-          <Select
-            label={t("catalog.semantics.statusField")}
-            data={columnOptions}
-            clearable
-            searchable
-            {...form.getInputProps("primary_status_field")}
-            disabled={!writable}
-          />
-          <TextInput
-            label={t("catalog.semantics.statusMeaning")}
-            {...form.getInputProps("status_meaning")}
-            disabled={!writable}
-          />
-        </Group>
-        <TextInput
-          label={t("catalog.semantics.inputRoleHint")}
-          {...form.getInputProps("input_role_hint")}
-          disabled={!writable}
-        />
-        <TagsInput
-          label={t("catalog.semantics.upstreamObjects")}
-          {...form.getInputProps("main_upstream_or_dimension_objects")}
-          disabled={!writable}
-        />
-        <TagsInput
-          label={t("catalog.semantics.childObjects")}
-          {...form.getInputProps("likely_child_objects")}
           disabled={!writable}
         />
         <TagsInput
@@ -242,17 +178,6 @@ export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
         <TagsInput
           label={t("catalog.semantics.openQuestions")}
           {...form.getInputProps("open_questions")}
-          disabled={!writable}
-        />
-        <NumberInput
-          label={t("catalog.semantics.confidence")}
-          {...form.getInputProps("confidence")}
-          min={0}
-          max={1}
-          step={0.1}
-          decimalScale={2}
-          allowDecimal
-          clampBehavior="strict"
           disabled={!writable}
         />
         {writable ? (

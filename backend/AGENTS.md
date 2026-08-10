@@ -11,5 +11,4 @@ Module responsibilities: [`docs/modules.md`](../docs/modules.md).
 4. Mechanism Job HTTP (by Job id) lives in `jobs/`; Source/Catalog/structure facade HTTP lives in `metadata/`; Foundation HTTP lives in `admin/`.
 5. Domain and HTTP code must **not** import `worker.app`. Use `@shared_task` and `jobs.api.revoke_queued_delivery` (or other published async helpers). Composition (`main.py`) may bind the Celery runtime.
 6. Subclass `backend.core.errors.AppError` for HTTP-mappable errors; do not subclass concrete `admin.errors` types from other tiers.
-7. Prefer flat files inside a package; split subpackages for sub-languages or adapter families only.
-8. Enforcement tests: `backend/tests/test_layout_imports.py`. Do not “fix” failures by widening the contract — fix the import or extend the published list deliberately in docs.
+7. Enforcement tests: `backend/tests/test_layout_imports.py`. Do not “fix” failures by widening the contract — fix the import or extend the published list deliberately in docs.
