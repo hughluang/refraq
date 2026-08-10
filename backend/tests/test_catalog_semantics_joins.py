@@ -249,7 +249,9 @@ def _seed_object(
     return store.get_object(object_id)  # type: ignore[return-value]
 
 
-def test_patch_object_semantics_omit_and_null_no_wipe(client: TestClient) -> None:
+def test_patch_object_semantics_omit_unchanged_present_null_clears(
+    client: TestClient,
+) -> None:
     source = _make_source(client)
     obj = _seed_object(source["id"])
 
@@ -268,7 +270,7 @@ def test_patch_object_semantics_omit_and_null_no_wipe(client: TestClient) -> Non
     )
     assert null_name.status_code == 200, null_name.text
     body = null_name.json()["object"]
-    assert body["business_name"] == "Work Order"
+    assert body["business_name"] is None
     assert body["business_description"] == "Updated desc"
 
     events, _ = get_audit_store().list_events(action="semantics.object_patch")
@@ -276,6 +278,7 @@ def test_patch_object_semantics_omit_and_null_no_wipe(client: TestClient) -> Non
     assert events[0].resource_type == "catalog_object"
     assert events[0].resource_id == obj.id
     assert events[0].result == "success"
+    assert "business_name" in (events[0].detail or {}).get("cleared", [])
 
 
 def test_patch_column_semantics(client: TestClient) -> None:
@@ -298,7 +301,8 @@ def test_patch_column_semantics(client: TestClient) -> None:
         json={"business_name": None},
     )
     assert null_wipe.status_code == 200
-    assert null_wipe.json()["column"]["business_name"] == "Work Order Id"
+    assert null_wipe.json()["column"]["business_name"] is None
+    assert null_wipe.json()["column"]["business_description"] == "Primary"
 
     events, _ = get_audit_store().list_events(action="semantics.column_patch")
     assert events
@@ -491,7 +495,7 @@ def test_patch_object_open_questions_and_ready(client: TestClient) -> None:
     )
     assert cleared.status_code == 200
     body = cleared.json()["object"]
-    assert body["open_questions"] == []
+    assert body["open_questions"] is None
     assert body["business_semantics_ready"] is True
 
 
@@ -532,7 +536,7 @@ def test_batch_semantics_updated_count_only_on_apply(client: TestClient) -> None
     col_name = obj.columns[0].name
     empty = catalog_service.set_column_semantics_batch(
         object_id=obj.id,
-        columns=[{"column_name": col_name, "business_name": None}],
+        columns=[{"column_name": col_name}],
         actor_user_id="user_1",
         actor_token_id=None,
         semantic_source="mcp",
@@ -658,3 +662,157 @@ def test_patch_columns_semantics_batch_http(client: TestClient) -> None:
     assert line["semantic_source"] == "user_input"
     assert line["enum_catalog"][0]["code"] == "A"
     assert line["column_semantics"]["semantic_type"] == "id"
+
+
+def test_http_clears_grain_category_domain_and_blank_name(client: TestClient) -> None:
+    source = _make_source(client)
+    obj = _seed_object(source["id"])
+    domain = client.post(
+        "/business-domains",
+        json={"code": "mes", "name": "MES"},
+    )
+    assert domain.status_code == 201, domain.text
+
+    filled = client.patch(
+        f"/objects/{obj.id}/semantics",
+        json={
+            "grain_description": "one row is one WO",
+            "object_category": "transaction_fact",
+            "business_domain_code": "mes",
+            "business_name": "Work Order",
+            "business_description": "Orders",
+        },
+    )
+    assert filled.status_code == 200, filled.text
+    body = filled.json()["object"]
+    assert body["grain_description"] == "one row is one WO"
+    assert body["object_category"] == "transaction_fact"
+    assert body["business_domain"]["code"] == "mes"
+
+    cleared = client.patch(
+        f"/objects/{obj.id}/semantics",
+        json={
+            "grain_description": None,
+            "object_category": None,
+            "business_domain_code": None,
+            "business_name": "  ",
+        },
+    )
+    assert cleared.status_code == 200, cleared.text
+    body = cleared.json()["object"]
+    assert body["grain_description"] is None
+    assert body["object_category"] is None
+    assert body["business_domain"] is None
+    assert body["business_name"] is None
+    assert body["business_description"] == "Orders"
+    assert body["business_semantics_ready"] is False
+
+
+def test_http_clears_column_semantics_blob_and_enum_catalog(
+    client: TestClient,
+) -> None:
+    source = _make_source(client)
+    obj = _seed_object(source["id"])
+    col_id = obj.columns[0].id
+
+    filled = client.patch(
+        f"/columns/{col_id}/semantics",
+        json={
+            "column_semantics": {
+                "semantic_type": "id",
+                "value_pattern": None,
+                "unit": None,
+            },
+            "enum_catalog": [{"code": "A", "label": "A", "description": None}],
+        },
+    )
+    assert filled.status_code == 200, filled.text
+    assert filled.json()["column"]["column_semantics"]["semantic_type"] == "id"
+    assert filled.json()["column"]["enum_catalog"][0]["code"] == "A"
+
+    cleared = client.patch(
+        f"/columns/{col_id}/semantics",
+        json={"column_semantics": None, "enum_catalog": []},
+    )
+    assert cleared.status_code == 200, cleared.text
+    col = cleared.json()["column"]
+    assert col["column_semantics"] is None
+    assert col["enum_catalog"] is None
+
+
+def test_mcp_strip_empty_does_not_clear_existing(client: TestClient) -> None:
+    from backend.metadata.catalog import service as catalog_service
+    from backend.metadata.mcp_server import _mcp_strip_empty
+
+    source = _make_source(client)
+    obj = _seed_object(source["id"])
+    assert _mcp_strip_empty(
+        {
+            "grain_description": None,
+            "business_name": "  ",
+            "open_questions": [],
+            "evidence_summary": ["ddl"],
+        }
+    ) == {"evidence_summary": ["ddl"]}
+
+    seeded = client.patch(
+        f"/objects/{obj.id}/semantics",
+        json={
+            "business_name": "Human Name",
+            "business_description": "Human desc",
+            "grain_description": "one row is one WO",
+            "object_category": "transaction_fact",
+        },
+    )
+    assert seeded.status_code == 200
+
+    stripped = _mcp_strip_empty(
+        {
+            "business_name": "",
+            "grain_description": None,
+            "object_category": None,
+            "open_questions": [],
+            "business_primary_key": [],
+        }
+    )
+    assert stripped == {}
+    unchanged = catalog_service.patch_object_semantics(
+        object_id=obj.id,
+        data=stripped,
+        actor_user_id="user_1",
+        actor_token_id=None,
+        semantic_source="mcp",
+    )
+    assert unchanged.business_name == "Human Name"
+    assert unchanged.grain_description == "one row is one WO"
+    assert unchanged.object_category == "transaction_fact"
+
+    col_name = obj.columns[0].name
+    client.patch(
+        f"/columns/{obj.columns[0].id}/semantics",
+        json={"business_name": "WO Id Kept"},
+    )
+    stripped_cols = [
+        {
+            "column_name": col_name,
+            **_mcp_strip_empty(
+                {
+                    "business_name": None,
+                    "business_description": "  ",
+                    "column_semantics": None,
+                    "enum_catalog": [],
+                }
+            ),
+        }
+    ]
+    batch = catalog_service.set_column_semantics_batch(
+        object_id=obj.id,
+        columns=stripped_cols,
+        actor_user_id="user_1",
+        actor_token_id=None,
+        semantic_source="mcp",
+    )
+    assert batch["updated_count"] == 0
+    assert batch["skipped_columns"][0]["reason"] == "no_changes"
+    col = catalog_service.require_column(obj.columns[0].id)
+    assert col.business_name == "WO Id Kept"

@@ -101,9 +101,9 @@ Responsibilities:
 - Connector adapters (PostgreSQL, MSSQL, Oracle)
 - Domain facade for Source-scoped **Jobs** (structure enqueue/list)
 - Domain Celery work units (`@shared_task`); discovered by `worker`
-- Catalog object / semantics / join / controlled query services
+- Catalog object / semantics / join / controlled query services (`catalog/service` owns browse, search, Join Path, and semantics/join writes; structure apply + FK→Join sync live beside persistence adapters under `catalog/`)
 - Business Domain registry (global flat entity referenced by catalog objects)
-- Domain use-case HTTP under `metadata/routers/` and shapes under `metadata/schemas/`
+- Domain use-case HTTP under `metadata/routers/` and shapes under `metadata/schemas/` (adapters only: auth + transport)
 - MCP tool handlers (`backend/metadata/mcp_server.py`) that delegate to the same services
 
 Must not contain:

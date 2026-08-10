@@ -16,10 +16,9 @@ from backend.admin.role_store import get_role_store
 from backend.admin.user_store import UserRecord
 from backend.core.errors import AppError
 from backend.jobs.store import get_job_store
+from dataclasses import asdict
+
 from backend.metadata.catalog import service as catalog_service
-from backend.metadata.catalog.store import get_catalog_store
-from backend.metadata.errors import CatalogColumnNotFound
-from backend.metadata.joins.graph import find_join_paths
 from backend.metadata.query import service as query_service
 from backend.metadata.source_jobs import enqueue_structure_job as enqueue_structure
 from backend.metadata.sources import service as source_service
@@ -33,6 +32,20 @@ def _actor_from_token(authorization: str | None) -> tuple[UserRecord, str]:
         raise AuthUnauthenticated()
     token = authorization.split(" ", 1)[1].strip()
     return resolve_pat_bearer(token)
+
+
+def _mcp_strip_empty(data: dict[str, Any]) -> dict[str, Any]:
+    """Drop null / blank / empty collections so MCP stays additive (no clear)."""
+    out: dict[str, Any] = {}
+    for key, value in data.items():
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        if isinstance(value, (list, dict)) and len(value) == 0:
+            continue
+        out[key] = value
+    return out
 
 
 def _require(user: UserRecord, permission: str) -> None:
@@ -59,90 +72,20 @@ def _dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, default=_json_default)
 
 
-
-
-def _domain_ref(domain_id: str | None) -> dict[str, str] | None:
-    if not domain_id:
-        return None
-    from backend.metadata.business_domains.store import get_business_domain_store
-
-    record = get_business_domain_store().get(domain_id)
-    if record is None:
-        return None
-    return {"id": record.id, "code": record.code, "name": record.name}
-
 def _clamp(value: int | None, *, default: int, maximum: int) -> int:
     if value is None:
         return default
     return max(1, min(maximum, int(value)))
 
 
-def _object_payload(o: Any, *, include_columns: bool) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "id": o.id,
-        "locator_key": o.locator_key,
-        "source_id": o.source_id,
-        "object_type": o.object_type,
-        "schema_name": o.schema_name,
-        "name": o.name,
-        "comment": o.comment,
-        "primary_key": o.primary_key,
-        "business_name": o.business_name,
-        "business_description": o.business_description,
-        "object_category": o.object_category,
-        "grain_description": o.grain_description,
-        "business_primary_key": o.business_primary_key,
-        "business_domain": _domain_ref(o.business_domain_id),
-        "evidence_summary": o.evidence_summary,
-        "open_questions": o.open_questions,
-        "semantic_source": o.semantic_source,
-        "business_semantics_ready": o.business_semantics_ready,
-        "semantics_updated_at": o.semantics_updated_at,
-        "is_present": o.is_present,
-        "collected_at": o.collected_at,
-    }
-    if include_columns:
-        payload["ddl"] = o.ddl
-        payload["columns"] = [_column_payload(c) for c in o.columns]
-    return payload
+def _object_payload(
+    view: catalog_service.ObjectView, *, include_columns: bool
+) -> dict[str, Any]:
+    return catalog_service.object_view_as_dict(view, include_columns=include_columns)
 
 
-def _column_payload(c: Any) -> dict[str, Any]:
-    return {
-        "id": c.id,
-        "locator_key": c.locator_key,
-        "name": c.name,
-        "data_type": c.data_type,
-        "nullable": c.nullable,
-        "default_value": c.default_value,
-        "comment": c.comment,
-        "business_name": c.business_name,
-        "business_description": c.business_description,
-        "column_semantics": c.column_semantics,
-        "enum_catalog": c.enum_catalog,
-        "semantic_source": c.semantic_source,
-        "field_kind": c.field_kind,
-        "ordinal": c.ordinal,
-        "is_present": c.is_present,
-    }
-
-
-def _join_payload(j: Any, *, store) -> dict[str, Any]:
-    from_col = store.get_column(j.from_column_id)
-    to_col = store.get_column(j.to_column_id)
-    return {
-        "id": j.id,
-        "from_column_id": j.from_column_id,
-        "to_column_id": j.to_column_id,
-        "from_column_locator_key": from_col.locator_key if from_col else None,
-        "to_column_locator_key": to_col.locator_key if to_col else None,
-        "evidence": j.evidence,
-        "join_kind": j.join_kind,
-        "join_expression": j.join_expression,
-        "origin": j.origin,
-        "created_by_user_id": j.created_by_user_id,
-        "created_at": j.created_at,
-    }
+def _join_payload_from_record(record: Any) -> dict[str, Any]:
+    return catalog_service.join_view_as_dict(catalog_service.join_view(record))
 
 
 @mcp.tool()
@@ -210,9 +153,9 @@ def list_objects(
         source = catalog_service.resolve_source_ref(source_locator_key)
         lim = _clamp(limit, default=100, maximum=500)
         off = max(0, int(offset or 0))
-        items, total = get_catalog_store().list_objects(
+        items, total = catalog_service.list_objects_for_source(
             source.id,
-            name_search=q,
+            q=q,
             object_type=object_type,
             limit=lim,
             offset=off,
@@ -235,8 +178,8 @@ def get_object(authorization: str, object_locator_key: str) -> str:
     try:
         user, _token_id = _actor_from_token(authorization)
         _require(user, "metadata:read")
-        o = catalog_service.resolve_object_ref(object_locator_key)
-        return _dumps(_object_payload(o, include_columns=True))
+        view = catalog_service.get_object(object_locator_key)
+        return _dumps(_object_payload(view, include_columns=True))
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
@@ -247,8 +190,8 @@ def get_object_ddl(authorization: str, object_locator_key: str) -> str:
     try:
         user, _token_id = _actor_from_token(authorization)
         _require(user, "metadata:read")
-        o = catalog_service.resolve_object_ref(object_locator_key)
-        return _dumps({"id": o.id, "locator_key": o.locator_key, "ddl": o.ddl})
+        ddl = catalog_service.get_object_ddl(object_locator_key)
+        return _dumps({"id": ddl.id, "locator_key": ddl.locator_key, "ddl": ddl.ddl})
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
@@ -311,20 +254,22 @@ def get_object_semantics(authorization: str, object_locator_key: str) -> str:
     try:
         user, _token_id = _actor_from_token(authorization)
         _require(user, "metadata:read")
-        o = catalog_service.resolve_object_ref(object_locator_key)
+        view = catalog_service.get_object_semantics(object_locator_key)
         return _dumps(
             {
-                "locator_key": o.locator_key,
-                "business_name": o.business_name,
-                "business_description": o.business_description,
-                "object_category": o.object_category,
-                "grain_description": o.grain_description,
-                "business_primary_key": o.business_primary_key,
-                "business_domain": _domain_ref(o.business_domain_id),
-                "evidence_summary": o.evidence_summary,
-                "open_questions": o.open_questions,
-                "semantic_source": o.semantic_source,
-                "business_semantics_ready": o.business_semantics_ready,
+                "locator_key": view.locator_key,
+                "business_name": view.business_name,
+                "business_description": view.business_description,
+                "object_category": view.object_category,
+                "grain_description": view.grain_description,
+                "business_primary_key": view.business_primary_key,
+                "business_domain": (
+                    asdict(view.business_domain) if view.business_domain else None
+                ),
+                "evidence_summary": view.evidence_summary,
+                "open_questions": view.open_questions,
+                "semantic_source": view.semantic_source,
+                "business_semantics_ready": view.business_semantics_ready,
             }
         )
     except Exception as exc:  # noqa: BLE001
@@ -337,8 +282,8 @@ def inspect_object(authorization: str, object_locator_key: str) -> str:
     try:
         user, _token_id = _actor_from_token(authorization)
         _require(user, "metadata:read")
-        o = catalog_service.resolve_object_ref(object_locator_key)
-        return _dumps(_object_payload(o, include_columns=True))
+        view = catalog_service.inspect_object(object_locator_key)
+        return _dumps(_object_payload(view, include_columns=True))
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
@@ -361,20 +306,18 @@ def set_object_semantics(
         user, token_id = _actor_from_token(authorization)
         _require(user, "metadata:write")
         o = catalog_service.resolve_object_ref(object_locator_key)
-        data: dict[str, Any] = {}
-        locals_map = {
-            "business_name": business_name,
-            "business_description": business_description,
-            "object_category": object_category,
-            "grain_description": grain_description,
-            "business_primary_key": business_primary_key,
-            "business_domain_code": business_domain_code,
-            "evidence_summary": evidence_summary,
-            "open_questions": open_questions,
-        }
-        for key, value in locals_map.items():
-            if value is not None:
-                data[key] = value
+        data = _mcp_strip_empty(
+            {
+                "business_name": business_name,
+                "business_description": business_description,
+                "object_category": object_category,
+                "grain_description": grain_description,
+                "business_primary_key": business_primary_key,
+                "business_domain_code": business_domain_code,
+                "evidence_summary": evidence_summary,
+                "open_questions": open_questions,
+            }
+        )
         record = catalog_service.patch_object_semantics(
             object_id=o.id,
             data=data,
@@ -382,7 +325,14 @@ def set_object_semantics(
             actor_token_id=token_id,
             semantic_source="mcp",
         )
-        return _dumps({"object": _object_payload(record, include_columns=False)})
+        return _dumps(
+            {
+                "object": _object_payload(
+                    catalog_service.object_view(record, include_columns=False),
+                    include_columns=False,
+                )
+            }
+        )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
@@ -398,9 +348,16 @@ def set_column_semantics(
         user, token_id = _actor_from_token(authorization)
         _require(user, "metadata:write")
         o = catalog_service.resolve_object_ref(object_locator_key)
+        stripped_columns: list[dict[str, Any]] = []
+        for item in columns:
+            name = item.get("column_name")
+            rest = {k: v for k, v in item.items() if k != "column_name"}
+            cleaned = _mcp_strip_empty(rest)
+            cleaned["column_name"] = name
+            stripped_columns.append(cleaned)
         result = catalog_service.set_column_semantics_batch(
             object_id=o.id,
-            columns=columns,
+            columns=stripped_columns,
             actor_user_id=user.id,
             actor_token_id=token_id,
             semantic_source="mcp",
@@ -502,15 +459,10 @@ def search_objects(
         source_id = None
         if source_locator_key:
             source_id = catalog_service.resolve_source_ref(source_locator_key).id
-        query = (query_text or "").strip()
-        if not query:
-            from backend.metadata.errors import CatalogSearchQueryRequired
-
-            raise CatalogSearchQueryRequired()
         lim = _clamp(limit, default=20, maximum=100)
         off = max(0, int(offset or 0))
-        items, total = get_catalog_store().search_objects(
-            query,
+        items, total = catalog_service.search_objects(
+            query_text or "",
             source_id=source_id,
             object_type=object_type,
             limit=lim,
@@ -544,15 +496,10 @@ def search_columns(
         source_id = None
         if source_locator_key:
             source_id = catalog_service.resolve_source_ref(source_locator_key).id
-        query = (query_text or "").strip()
-        if not query:
-            from backend.metadata.errors import CatalogSearchQueryRequired
-
-            raise CatalogSearchQueryRequired()
         lim = _clamp(limit, default=20, maximum=100)
         off = max(0, int(offset or 0))
-        items, total = get_catalog_store().search_columns(
-            query,
+        items, total = catalog_service.search_columns(
+            query_text or "",
             source_id=source_id,
             object_type=object_type,
             limit=lim,
@@ -560,7 +507,7 @@ def search_columns(
         )
         return _dumps(
             {
-                "items": [_column_payload(c) for c in items],
+                "items": [catalog_service.column_view_as_dict(c) for c in items],
                 "total": total,
                 "limit": lim,
                 "offset": off,
@@ -577,9 +524,10 @@ def list_joins(authorization: str, object_locator_key: str) -> str:
         user, _token_id = _actor_from_token(authorization)
         _require(user, "metadata:read")
         o = catalog_service.resolve_object_ref(object_locator_key)
-        store = get_catalog_store()
         items = catalog_service.list_joins(o.id)
-        return _dumps({"items": [_join_payload(j, store=store) for j in items]})
+        return _dumps(
+            {"items": [catalog_service.join_view_as_dict(j) for j in items]}
+        )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
@@ -609,7 +557,7 @@ def upsert_join(
             join_expression=join_expression,
             origin="mcp",
         )
-        return _dumps({"join": _join_payload(record, store=get_catalog_store())})
+        return _dumps({"join": _join_payload_from_record(record)})
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
@@ -670,14 +618,13 @@ def upsert_joins(
             actor_token_id=token_id,
             origin="mcp",
         )
-        store = get_catalog_store()
         return _dumps(
             {
                 "created_count": created,
                 "already_known_count": known,
                 "skipped_count": len(skipped_joins),
                 "skipped_joins": skipped_joins,
-                "items": [_join_payload(j, store=store) for j in items],
+                "items": [_join_payload_from_record(j) for j in items],
             }
         )
     except Exception as exc:  # noqa: BLE001
@@ -712,76 +659,26 @@ def find_join_path(
     try:
         user, _token_id = _actor_from_token(authorization)
         _require(user, "metadata:read")
-        store = get_catalog_store()
-        start_object_id = None
-        start_column_id = None
-        try:
-            start_col = catalog_service.resolve_column_ref(start_locator_key)
-            start_column_id = start_col.id
-        except CatalogColumnNotFound:
-            start_obj = catalog_service.resolve_object_ref(start_locator_key)
-            start_object_id = start_obj.id
-
-        target_object_id = None
-        target_column_id = None
-        if target_locator_key:
-            try:
-                t_col = catalog_service.resolve_column_ref(target_locator_key)
-                target_column_id = t_col.id
-            except CatalogColumnNotFound:
-                t_obj = catalog_service.resolve_object_ref(target_locator_key)
-                target_object_id = t_obj.id
-
-        result = find_join_paths(
-            store=store,
-            start_object_id=start_object_id,
-            start_column_id=start_column_id,
-            target_object_id=target_object_id,
-            target_column_id=target_column_id,
+        result = catalog_service.lookup_join_paths(
+            start_locator_key,
+            target_locator_key,
             max_hops=_clamp(max_hops, default=1, maximum=5),
             top_targets=_clamp(top_targets, default=3, maximum=20),
         )
-        if result.reason == "NO_START_COLUMNS":
-            from backend.metadata.errors import JoinPathUnavailable
-
-            raise JoinPathUnavailable()
-        paths = []
-        for path in result.paths:
-            hops = []
-            for hop in path.hops:
-                from_col = store.get_column(hop.from_column_id)
-                to_col = store.get_column(hop.to_column_id)
-                hops.append(
-                    {
-                        "from_column_id": hop.from_column_id,
-                        "to_column_id": hop.to_column_id,
-                        "from_column_locator_key": (
-                            from_col.locator_key if from_col else None
-                        ),
-                        "to_column_locator_key": (
-                            to_col.locator_key if to_col else None
-                        ),
-                        "join_id": hop.join.id,
-                        "join_kind": hop.join.join_kind,
-                        "join_expression": hop.join.join_expression,
-                        "evidence": hop.join.evidence,
-                        "origin": hop.join.origin,
-                    }
-                )
-            paths.append(
-                {
-                    "target_object_id": path.target_object_id,
-                    "target_column_id": path.target_column_id,
-                    "hops": hops,
-                    "path_summary": path.path_summary,
-                }
-            )
         return _dumps(
             {
-                "paths_found": len(paths),
-                "paths": paths,
+                "paths_found": result.paths_found,
+                "paths": [
+                    {
+                        "target_object_id": path.target_object_id,
+                        "target_column_id": path.target_column_id,
+                        "hops": [asdict(hop) for hop in path.hops],
+                        "path_summary": path.path_summary,
+                    }
+                    for path in result.paths
+                ],
                 "direct_joins": [
-                    _join_payload(j, store=store) for j in result.direct_joins
+                    catalog_service.join_view_as_dict(j) for j in result.direct_joins
                 ],
                 "reason": result.reason,
             }

@@ -88,7 +88,7 @@ All Source and catalog responses include `locator_key` (ADR 0012). HTTP path par
 Identity is `source_id` (+ object coordinates). `collected_at` is optional provenance only.
 `field_kind` is read-only on semantics writes (structure-held). `model_routing_hint` is not in this phase.
 `time_semantics`, `status_semantics`, `relation_summary`, and `confidence` are removed from read and write contracts (ADR 0015); time/status meaning lives on column descriptions (and optional free-text `semantic_type` / `enum_catalog` — closed vocabulary deferred, ADR 0016); object relationships live in join edges.
-`business_domain` on read is `{ "id", "code", "name" } | null` (ADR 0017). Object semantics writes accept `business_domain_code` (not the nested object); JSON `null` does not clear (ADR 0014).
+`business_domain` on read is `{ "id", "code", "name" } | null` (ADR 0017). Object semantics writes accept `business_domain_code` (not the nested object); a present JSON `null` (or blank string) clears the domain link (ADR 0018).
 `foreign_keys` and `indexes` are included on object detail (`GET /objects/{id}` and semantics write responses); list/search endpoints return empty arrays for these fields.
 
 ## 3. Browse Endpoints (A+)
@@ -109,7 +109,7 @@ List response: `{ "items": […], "total": N, "limit": L, "offset": O }` when pa
 | `PATCH` | `/columns/{id}/semantics` | `metadata:write` | Patch column semantics fields |
 | `PATCH` | `/objects/{id}/columns/semantics` | `metadata:write` | Batch patch column semantics by `column_name` |
 
-Request bodies accept any subset of the writable semantics fields in §2 (not `field_kind`; not `model_routing_hint`; not the fields removed by ADR 0015). Object writes use `business_domain_code` to attach a Business Domain. Response envelopes: object → `{ "object": … }`; column → `{ "column": … }`. Console writes set `semantic_source=user_input`; MCP writes set `semantic_source=mcp`. JSON `null` does not clear existing values (ADR 0014).
+Request bodies accept any subset of the writable semantics fields in §2 (not `field_kind`; not `model_routing_hint`; not the fields removed by ADR 0015). Object writes use `business_domain_code` to attach a Business Domain. Response envelopes: object → `{ "object": … }`; column → `{ "column": … }`. Console writes set `semantic_source=user_input`; MCP writes set `semantic_source=mcp`. On HTTP: omitted keys leave fields unchanged; a present JSON `null`, blank string (trimmed empty), or empty list/object clears the field (ADR 0018).
 
 Batch column body:
 
@@ -129,7 +129,7 @@ Batch column body:
 
 Batch response: `{ "object": …, "updated_count": N, "requested_count": M, "skipped_columns": [{ "column_name": "…", "reason": "…" }] }`.
 
-Rules: omit fields leave unchanged; JSON `null` does not wipe; explicit clear deferred.
+Rules: omit fields leave unchanged; present `null` / blank string / empty collection clears (store SQL `NULL`).
 
 Validation:
 

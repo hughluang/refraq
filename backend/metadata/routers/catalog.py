@@ -8,15 +8,6 @@ from fastapi import Request
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
 from backend.metadata.catalog import service as catalog_service
-from backend.metadata.catalog.store import get_catalog_store, require_object
-from backend.metadata.errors import (
-    CatalogColumnNotFound,
-    CatalogObjectNotFound,
-    CatalogSearchQueryRequired,
-    JoinPathUnavailable,
-)
-from backend.metadata.joins.graph import find_join_paths
-from backend.metadata.sources.service import require_source
 from backend.metadata.schemas.catalog import (
     CatalogColumnOut,
     CatalogColumnResponse,
@@ -46,45 +37,58 @@ from backend.metadata.schemas.catalog import (
 router = APIRouter(tags=["catalog"])
 
 
-def _domain_ref(domain_id: str | None):
-    if not domain_id:
-        return None
-    from backend.metadata.business_domains.store import get_business_domain_store
-    from backend.metadata.schemas.catalog import BusinessDomainRef
-
-    record = get_business_domain_store().get(domain_id)
-    if record is None:
-        return None
-    return BusinessDomainRef(id=record.id, code=record.code, name=record.name)
-
-
-def _column_out(record) -> CatalogColumnOut:
+def _column_out(view: catalog_service.ColumnView) -> CatalogColumnOut:
     return CatalogColumnOut(
-        id=record.id,
-        locator_key=record.locator_key,
-        name=record.name,
-        data_type=record.data_type,
-        nullable=record.nullable,
-        default_value=record.default_value,
-        comment=record.comment,
-        business_name=record.business_name,
-        business_description=record.business_description,
-        column_semantics=record.column_semantics,
-        enum_catalog=record.enum_catalog,
-        semantic_source=record.semantic_source,
-        field_kind=record.field_kind,
-        ordinal=record.ordinal,
-        is_present=record.is_present,
+        id=view.id,
+        locator_key=view.locator_key,
+        name=view.name,
+        data_type=view.data_type,
+        nullable=view.nullable,
+        default_value=view.default_value,
+        comment=view.comment,
+        business_name=view.business_name,
+        business_description=view.business_description,
+        column_semantics=view.column_semantics,
+        enum_catalog=view.enum_catalog,
+        semantic_source=view.semantic_source,
+        field_kind=view.field_kind,
+        ordinal=view.ordinal,
+        is_present=view.is_present,
     )
 
 
-def _object_out(record, *, include_columns: bool) -> CatalogObjectOut:
-    columns = []
-    foreign_keys: list[CatalogForeignKeyOut] = []
-    indexes: list[CatalogIndexOut] = []
-    if include_columns:
-        columns = [_column_out(c) for c in record.columns]
-        foreign_keys = [
+def _object_out(view: catalog_service.ObjectView) -> CatalogObjectOut:
+    from backend.metadata.schemas.catalog import BusinessDomainRef
+
+    domain = None
+    if view.business_domain is not None:
+        domain = BusinessDomainRef(
+            id=view.business_domain.id,
+            code=view.business_domain.code,
+            name=view.business_domain.name,
+        )
+    return CatalogObjectOut(
+        id=view.id,
+        locator_key=view.locator_key,
+        source_id=view.source_id,
+        object_type=view.object_type,
+        schema_name=view.schema_name,
+        name=view.name,
+        comment=view.comment,
+        primary_key=view.primary_key,
+        business_name=view.business_name,
+        business_description=view.business_description,
+        object_category=view.object_category,
+        grain_description=view.grain_description,
+        business_primary_key=view.business_primary_key,
+        business_domain=domain,
+        evidence_summary=view.evidence_summary,
+        open_questions=view.open_questions,
+        semantic_source=view.semantic_source,
+        business_semantics_ready=view.business_semantics_ready,
+        semantics_updated_at=view.semantics_updated_at,
+        columns=[_column_out(c) for c in view.columns],
+        foreign_keys=[
             CatalogForeignKeyOut(
                 name=fk.name,
                 columns=list(fk.columns),
@@ -93,62 +97,45 @@ def _object_out(record, *, include_columns: bool) -> CatalogObjectOut:
                 ref_columns=list(fk.ref_columns),
                 is_present=fk.is_present,
             )
-            for fk in record.foreign_keys
-        ]
-        indexes = [
+            for fk in view.foreign_keys
+        ],
+        indexes=[
             CatalogIndexOut(
                 name=idx.name,
                 columns=list(idx.columns),
                 is_unique=idx.is_unique,
                 is_present=idx.is_present,
             )
-            for idx in record.indexes
-        ]
-    return CatalogObjectOut(
-        id=record.id,
-        locator_key=record.locator_key,
-        source_id=record.source_id,
-        object_type=record.object_type,
-        schema_name=record.schema_name,
-        name=record.name,
-        comment=record.comment,
-        primary_key=record.primary_key,
-        business_name=record.business_name,
-        business_description=record.business_description,
-        object_category=record.object_category,
-        grain_description=record.grain_description,
-        business_primary_key=record.business_primary_key,
-        business_domain=_domain_ref(record.business_domain_id),
-        evidence_summary=record.evidence_summary,
-        open_questions=record.open_questions,
-        semantic_source=record.semantic_source,
-        business_semantics_ready=record.business_semantics_ready,
-        semantics_updated_at=record.semantics_updated_at,
-        columns=columns if include_columns else [],
-        foreign_keys=foreign_keys,
-        indexes=indexes,
-        ddl=record.ddl if include_columns else None,
-        is_present=record.is_present,
-        collected_at=record.collected_at,
+            for idx in view.indexes
+        ],
+        ddl=view.ddl,
+        is_present=view.is_present,
+        collected_at=view.collected_at,
     )
 
 
-def _join_out(record, *, store) -> JoinOut:
-    from_col = store.get_column(record.from_column_id)
-    to_col = store.get_column(record.to_column_id)
+def _join_out(view: catalog_service.JoinView) -> JoinOut:
     return JoinOut(
-        id=record.id,
-        from_column_id=record.from_column_id,
-        to_column_id=record.to_column_id,
-        from_column_locator_key=from_col.locator_key if from_col else None,
-        to_column_locator_key=to_col.locator_key if to_col else None,
-        evidence=record.evidence,
-        join_kind=record.join_kind,
-        join_expression=record.join_expression,
-        origin=record.origin,
-        created_by_user_id=record.created_by_user_id,
-        created_at=record.created_at,
+        id=view.id,
+        from_column_id=view.from_column_id,
+        to_column_id=view.to_column_id,
+        from_column_locator_key=view.from_column_locator_key,
+        to_column_locator_key=view.to_column_locator_key,
+        evidence=view.evidence,
+        join_kind=view.join_kind,
+        join_expression=view.join_expression,
+        origin=view.origin,
+        created_by_user_id=view.created_by_user_id,
+        created_at=view.created_at,
     )
+
+
+def _object_out_from_record(record, *, include_columns: bool) -> CatalogObjectOut:
+    return _object_out(catalog_service.object_view(record, include_columns=include_columns))
+
+
+def _join_out_from_record(record) -> JoinOut:
+    return _join_out(catalog_service.join_view(record))
 
 
 @router.get("/sources/{source_id}/objects", response_model=CatalogObjectListResponse)
@@ -161,17 +148,16 @@ def list_objects(
     offset: int = Query(default=0, ge=0),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectListResponse:
-    require_source(source_id)
-    items, total = get_catalog_store().list_objects(
+    items, total = catalog_service.list_objects_for_source(
         source_id,
-        name_search=q,
-        include_absent=include_absent,
+        q=q,
         object_type=object_type,
+        include_absent=include_absent,
         limit=limit,
         offset=offset,
     )
     return CatalogObjectListResponse(
-        items=[_object_out(o, include_columns=False) for o in items],
+        items=[_object_out(o) for o in items],
         total=total,
         limit=limit,
         offset=offset,
@@ -187,18 +173,15 @@ def search_objects(
     offset: int = Query(default=0, ge=0),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectSearchResponse:
-    query = q.strip()
-    if not query:
-        raise CatalogSearchQueryRequired()
-    items, total = get_catalog_store().search_objects(
-        query,
+    items, total = catalog_service.search_objects(
+        q,
         source_id=source_id,
         object_type=object_type,
         limit=limit,
         offset=offset,
     )
     return CatalogObjectSearchResponse(
-        items=[_object_out(o, include_columns=False) for o in items],
+        items=[_object_out(o) for o in items],
         total=total,
         limit=limit,
         offset=offset,
@@ -214,11 +197,8 @@ def search_columns(
     offset: int = Query(default=0, ge=0),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogColumnSearchResponse:
-    query = q.strip()
-    if not query:
-        raise CatalogSearchQueryRequired()
-    items, total = get_catalog_store().search_columns(
-        query,
+    items, total = catalog_service.search_columns(
+        q,
         source_id=source_id,
         object_type=object_type,
         limit=limit,
@@ -237,8 +217,7 @@ def get_object(
     object_id: str,
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectResponse:
-    record = require_object(object_id)
-    return CatalogObjectResponse(object=_object_out(record, include_columns=True))
+    return CatalogObjectResponse(object=_object_out(catalog_service.get_object(object_id)))
 
 
 @router.get("/objects/{object_id}/ddl", response_model=CatalogDdlResponse)
@@ -246,8 +225,8 @@ def get_object_ddl(
     object_id: str,
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogDdlResponse:
-    record = require_object(object_id)
-    return CatalogDdlResponse(id=record.id, ddl=record.ddl)
+    ddl = catalog_service.get_object_ddl(object_id)
+    return CatalogDdlResponse(id=ddl.id, ddl=ddl.ddl)
 
 
 @router.patch("/objects/{object_id}/semantics", response_model=CatalogObjectResponse)
@@ -265,7 +244,9 @@ def patch_object_semantics(
         actor_token_id=get_actor_token_id(request),
         semantic_source="user_input",
     )
-    return CatalogObjectResponse(object=_object_out(record, include_columns=True))
+    return CatalogObjectResponse(
+        object=_object_out_from_record(record, include_columns=True)
+    )
 
 
 @router.patch("/columns/{column_id}/semantics", response_model=CatalogColumnResponse)
@@ -283,7 +264,7 @@ def patch_column_semantics(
         actor_token_id=get_actor_token_id(request),
         semantic_source="user_input",
     )
-    return CatalogColumnResponse(column=_column_out(record))
+    return CatalogColumnResponse(column=_column_out(catalog_service.column_view(record)))
 
 
 @router.patch(
@@ -303,9 +284,8 @@ def patch_columns_semantics_batch(
         actor_token_id=get_actor_token_id(request),
         semantic_source="user_input",
     )
-    record = require_object(object_id)
     return CatalogColumnsSemanticsBatchResponse(
-        object=_object_out(record, include_columns=True),
+        object=_object_out(catalog_service.get_object(object_id)),
         updated_count=result["updated_count"],
         requested_count=result["requested_count"],
         skipped_columns=result["skipped_columns"],
@@ -317,9 +297,7 @@ def list_object_joins(
     object_id: str,
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> JoinListResponse:
-    store = get_catalog_store()
-    items = [_join_out(j, store=store) for j in catalog_service.list_joins(object_id)]
-    return JoinListResponse(items=items)
+    return JoinListResponse(items=[_join_out(j) for j in catalog_service.list_joins(object_id)])
 
 
 @router.put("/joins", response_model=JoinResponse)
@@ -338,7 +316,7 @@ def upsert_join(
         join_expression=payload.join_expression,
         origin="human",
     )
-    return JoinResponse(join=_join_out(record, store=get_catalog_store()))
+    return JoinResponse(join=_join_out_from_record(record))
 
 
 @router.put("/joins:batch", response_model=JoinBatchResponse)
@@ -353,11 +331,10 @@ def upsert_joins_batch(
         actor_token_id=get_actor_token_id(request),
         origin="human",
     )
-    store = get_catalog_store()
     return JoinBatchResponse(
         created_count=created,
         already_known_count=known,
-        items=[_join_out(j, store=store) for j in items],
+        items=[_join_out_from_record(j) for j in items],
     )
 
 
@@ -369,78 +346,37 @@ def get_join_path(
     top_targets: int = Query(default=3, ge=1, le=20),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> JoinPathResponse:
-    store = get_catalog_store()
-    start_object_id = None
-    start_column_id = None
-    try:
-        start_col = catalog_service.resolve_column_ref(start)
-        start_column_id = start_col.id
-    except CatalogColumnNotFound:
-        start_col = None
-    if start_col is None:
-        try:
-            start_obj = catalog_service.resolve_object_ref(start)
-            start_object_id = start_obj.id
-        except CatalogObjectNotFound as exc:
-            raise CatalogObjectNotFound() from exc
-
-    target_object_id = None
-    target_column_id = None
-    if target:
-        try:
-            t_col = catalog_service.resolve_column_ref(target)
-            target_column_id = t_col.id
-        except CatalogColumnNotFound:
-            t_col = None
-        if t_col is None:
-            try:
-                t_obj = catalog_service.resolve_object_ref(target)
-                target_object_id = t_obj.id
-            except CatalogObjectNotFound as exc:
-                raise CatalogObjectNotFound() from exc
-
-    result = find_join_paths(
-        store=store,
-        start_object_id=start_object_id,
-        start_column_id=start_column_id,
-        target_object_id=target_object_id,
-        target_column_id=target_column_id,
+    result = catalog_service.lookup_join_paths(
+        start,
+        target,
         max_hops=max_hops,
         top_targets=top_targets,
     )
-    if result.reason == "NO_START_COLUMNS":
-        raise JoinPathUnavailable()
-    paths = []
-    for path in result.paths:
-        hops = []
-        for hop in path.hops:
-            from_col = store.get_column(hop.from_column_id)
-            to_col = store.get_column(hop.to_column_id)
-            hops.append(
-                JoinPathHopOut(
-                    from_column_id=hop.from_column_id,
-                    to_column_id=hop.to_column_id,
-                    from_column_locator_key=from_col.locator_key if from_col else None,
-                    to_column_locator_key=to_col.locator_key if to_col else None,
-                    join_id=hop.join.id,
-                    join_kind=hop.join.join_kind,
-                    join_expression=hop.join.join_expression,
-                    evidence=hop.join.evidence,
-                    origin=hop.join.origin,
-                )
-            )
-        paths.append(
+    return JoinPathResponse(
+        paths_found=result.paths_found,
+        paths=[
             JoinPathOut(
                 target_object_id=path.target_object_id,
                 target_column_id=path.target_column_id,
-                hops=hops,
+                hops=[
+                    JoinPathHopOut(
+                        from_column_id=hop.from_column_id,
+                        to_column_id=hop.to_column_id,
+                        from_column_locator_key=hop.from_column_locator_key,
+                        to_column_locator_key=hop.to_column_locator_key,
+                        join_id=hop.join_id,
+                        join_kind=hop.join_kind,
+                        join_expression=hop.join_expression,
+                        evidence=hop.evidence,
+                        origin=hop.origin,
+                    )
+                    for hop in path.hops
+                ],
                 path_summary=path.path_summary,
             )
-        )
-    return JoinPathResponse(
-        paths_found=len(paths),
-        paths=paths,
-        direct_joins=[_join_out(j, store=store) for j in result.direct_joins],
+            for path in result.paths
+        ],
+        direct_joins=[_join_out(j) for j in result.direct_joins],
         reason=result.reason,
     )
 

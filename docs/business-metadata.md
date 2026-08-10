@@ -295,19 +295,23 @@ is no elected primary axis at object level.
 
 ### 10.3 Write rules
 
-- Writes are additive/corrective; JSON `null` does **not** clear existing values.
+- **HTTP** semantics PATCH: omitted keys leave fields unchanged; a present JSON `null`,
+  blank string (after trim), or empty list/object **clears** the field (ADR 0018).
+- **MCP** adapters strip `null`, blank strings, and empty collections before writing — agents
+  cannot clear via MCP in this phase (fill gaps only).
 - Incomplete understanding stays incomplete — record `open_questions`, do not invent meaning.
 - Column-name references in semantics payloads (`business_primary_key`) must resolve to columns on
   the object; unknown names are rejected with `SEMANTIC_COLUMN_UNKNOWN`.
-- `business_domain_code` on object semantics writes must resolve to an existing Business Domain;
-  unknown codes are rejected with `BUSINESS_DOMAIN_UNKNOWN`.
+- `business_domain_code` on object semantics writes must resolve to an existing Business Domain
+  when non-empty; unknown codes are rejected with `BUSINESS_DOMAIN_UNKNOWN`. A present null/blank
+  clears the object’s Business Domain link.
 - Adding a semantics field requires passing the ADR 0015 admission criteria — carrier ownership,
   objective unique answer, falsifiability, structure paying for itself, and layer ownership.
   Object-level fields that elect one "primary" column out of several of the same kind, and free
   text read only by humans or agents, do not qualify.
 - `semantic_source` records the **last write** provenance. Field-level protection against MCP
   overwrite is **deferred** (`docs/adr/0014-defer-semantic-field-protection.md`); Console and MCP
-  both write submitted non-null fields.
+  both write submitted non-empty fields (HTTP may also clear via present-null).
 - MCP column writes are **batch** per object (see MCP contract); batch reports
   `skipped_columns` for `invalid_column_name` (missing/blank names) or no-op payloads.
 - Structure Jobs never mutate semantics columns.
