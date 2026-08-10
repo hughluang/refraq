@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from urllib.parse import quote_plus
 
-from sqlalchemy import create_engine, text
+from psycopg.adapt import Loader
+from psycopg.types import TypeInfo
+from sqlalchemy import create_engine, event, text
 
 from backend.metadata.connectors.base import (
     CollectedColumn,
@@ -20,6 +22,33 @@ from backend.metadata.connectors.base import (
 )
 
 SYSTEM_SCHEMAS = frozenset({"pg_catalog", "information_schema", "pg_toast"})
+
+# Connector contract: pool connections load int2vector as list[int] so
+# _indexes can iterate attnums without treating the text wire form as a str.
+# psycopg3 has no built-in loader; without this, indkey arrives as "1 2" and
+# `for n in indkey` yields spaces → JOB_COLLECT_FAILED.
+
+
+class Int2VectorLoader(Loader):
+    """Load PostgreSQL int2vector text wire format into list[int]."""
+
+    def load(self, data: bytes | bytearray | memoryview) -> list[int]:
+        if not data:
+            return []
+        raw = data.tobytes() if isinstance(data, memoryview) else data
+        return [int(n) for n in raw.decode("utf-8").split()]
+
+
+def register_int2vector_loader(conn: object) -> None:
+    """Register Int2VectorLoader on a psycopg DBAPI connection."""
+    info = TypeInfo.fetch(conn, "int2vector")  # type: ignore[arg-type]
+    if info is None:
+        raise ConnectorError(
+            "JOB_ENDPOINT_FAILED",
+            "PostgreSQL catalog type int2vector is unavailable; cannot register loader",
+        )
+    info.register(conn)
+    conn.adapters.register_loader("int2vector", Int2VectorLoader)  # type: ignore[attr-defined]
 
 
 class PostgresqlConnector:
@@ -286,6 +315,11 @@ class PostgresqlConnector:
         paths = tls_cm.__enter__()
         connect_args = postgres_connect_args(endpoint, paths)
         eng = create_engine(url, pool_pre_ping=True, connect_args=connect_args)
+
+        @event.listens_for(eng, "connect")
+        def _register_pg_catalog_adapters(dbapi_conn, _connection_record):  # noqa: ANN001
+            register_int2vector_loader(dbapi_conn)
+
         original_dispose = eng.dispose
 
         def dispose(*args, **kwargs):  # noqa: ANN002, ANN003
