@@ -174,7 +174,7 @@ Fixed catalog additions (exact strings are normative for Roles UI):
 
 Rules:
 
-- Seeded `super_admin` always receives the full current catalog (including these entries) via Foundation Upgrade / System Role ensure.
+- Seeded `super_admin` receives the full current catalog **by identity**; Foundation Upgrade ensures the System Role row exists but does not grant access by rewriting a stored permission list.
 - Seeded `operator` does **not** receive `sources:write`, `metadata:write`, `jobs:run`, `query:run`, `catalog:sample`, `tokens:*`, or `audit:read` by default.
 - No object-level ACL in this phase.
 - Nav visibility for modules uses each module’s `list` action Permission (same Console Module contract as Foundation).

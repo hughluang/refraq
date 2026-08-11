@@ -38,11 +38,11 @@ This document records the stable development conventions for contributors workin
 
 - Install dependencies: `python -m pip install -r backend/requirements.txt`
 - Copy env: `cp backend/.env.example backend/.env` (and point URLs at Compose)
-- Foundation Upgrade (schema + System Role ensure, no serve): `python -m backend.core.upgrade`
+- Foundation Upgrade (schema + System Role identity ensure, no serve): `python -m backend.core.upgrade`
 - Official start (upgrade then serve): `python -m backend.core.entry`
-- Dev reload after schema/roles are current: `uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000`
-  - Direct `uvicorn` runs **Site Bootstrap** only (empty stores). It does **not** realign `super_admin` when Permission catalog keys are added.
-  - After catalog or System Role semantics change, run `python -m backend.core.upgrade` (or use `entry`). If Platform Settings is missing from the nav for Super Admin, upgrade first.
+- Dev reload after schema is current: `uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000`
+  - Direct `uvicorn` runs **Site Bootstrap** only (empty stores). It does not run schema migrate or System Role identity ensure.
+  - After schema changes, run `python -m backend.core.upgrade` (or use `entry`). Super Admin effective permissions follow the Permission catalog by identity; adding a catalog key does not require Upgrade for Super Admin authz.
 - Run API tests (memory Store Backend via conftest): `pytest backend/tests -q`
 - Run integration tests (Compose must be up): `pytest backend/tests -q -m integration`
   - Uses isolated stores by default: Postgres DB `refraq_test` + Redis logical DB `1` (does not TRUNCATE/FLUSH interactive `refraq` / Redis `0`)

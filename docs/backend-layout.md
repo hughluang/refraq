@@ -63,7 +63,7 @@ Each **platform kernel / platform primitive / product domain** package has an ex
 | `backend.admin.permissions` | Permission catalog helpers used by MCP and deps |
 | `backend.admin.errors` | Foundation error types (subclass `core.errors.AppError`) |
 | `backend.admin.audit` | `persist_audit_event` |
-| `backend.admin.roles` | `ensure_system_role`, `seed_roles`, `SUPER_ADMIN_KEY`, role write helpers used by composition |
+| `backend.admin.roles` | `ensure_system_role`, `seed_roles`, `effective_permissions`, `SUPER_ADMIN_KEY`, role write helpers used by composition |
 | `backend.admin.security` | Password/session id helpers used by composition |
 | `backend.admin.user_store` | `UserRecord`, `UserStore`, `get_user_store`, `reset_user_store` (typing + bootstrap) |
 | `backend.admin.role_store` | `RoleRecord`, `RoleStore`, `get_role_store`, `reset_role_store` |

@@ -97,6 +97,24 @@ def test_list_roles_includes_seeds(client: TestClient) -> None:
     assert by_key["operator"]["user_count"] == 1
 
 
+def test_list_roles_expands_system_role_permissions(
+    client: TestClient, store_bundle
+) -> None:
+    from backend.admin.permissions import ALL_PERMISSIONS
+
+    _login_root(client)
+    _users, role_store, _sessions = store_bundle
+    stored = role_store.get_by_key("super_admin")
+    assert stored is not None
+    assert stored.permissions == []
+
+    response = client.get("/roles")
+    assert response.status_code == 200
+    by_key = {item["key"]: item for item in response.json()["items"]}
+    assert by_key["super_admin"]["permissions"] == list(ALL_PERMISSIONS)
+    assert "catalog:sample" in by_key["super_admin"]["permissions"]
+
+
 def test_create_and_update_role(client: TestClient) -> None:
     _login_root(client)
     created = client.post(

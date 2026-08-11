@@ -8,6 +8,7 @@ from backend.admin import roles as role_domain
 from backend.admin.deps import require_permission
 from backend.admin.errors import RoleInUse, RoleNotFound
 from backend.admin.permissions import ALL_PERMISSIONS, PERMISSION_DESCRIPTIONS
+from backend.admin.roles import effective_permissions
 from backend.admin.role_store import RoleRecord, RoleStore, get_role_store
 from backend.admin.user_store import UserRecord, UserStore, get_user_store
 from backend.admin.schemas.role import (
@@ -30,7 +31,7 @@ def _to_summary(
         id=record.id,
         key=record.key,
         name=record.name,
-        permissions=list(record.permissions),
+        permissions=effective_permissions(record),
         locked=record.locked,
         user_count=users.count_by_role_id(record.id),
     )

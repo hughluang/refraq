@@ -153,20 +153,20 @@ Avoid calling it a job title or department.
 
 ### System Role
 
-The product-owned locked Role `super_admin`: stable identity, not editable via Role APIs, permissions always equal the current Permission catalog.
-Aligned only by **Foundation Upgrade**, not by ordinary Role edits or Site Bootstrap on a non-empty store.
+The product-owned locked Role `super_admin`: stable identity (`key`), not editable via Role APIs; **effective** permissions are definitionally the current Permission catalog.
+Stored `permissions` are not authoritative for this Role. **Foundation Upgrade** ensures the identity row exists; it does not grant access by rewriting that list.
 Avoid calling every seeded role a System Role (`operator` is a seeded ordinary role).
 
 ### Foundation Upgrade
 
-The official product upgrade path: schema migration under advisory lock, then ensure of the System Role.
-Does not create or rewrite Users, and does not reset editable roles.
+The official product upgrade path: schema migration under advisory lock, then ensure of the System Role identity row.
+Does not create or rewrite Users, does not reset editable roles, and does not realign System Role permissions for authz correctness.
 Invoked as `python -m backend.core.upgrade` or as the first phase of `python -m backend.core.entry`.
 
 ### Site Bootstrap
 
 First-time empty-store initialization: insert seed roles when none exist; create the initial admin User when no users exist.
-Does not realign permissions on an already-present System Role.
+Does not substitute for Foundation Upgrade schema migrate / identity ensure.
 Runs from the API process lifespan (and must not be confused with Foundation Upgrade).
 
 ### Permission

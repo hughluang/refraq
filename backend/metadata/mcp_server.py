@@ -9,7 +9,7 @@ from typing import Any
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
-from backend.admin.deps import resolve_pat_bearer
+from backend.admin.deps import resolve_pat_bearer, resolve_user_permissions
 from backend.admin.errors import AuthForbidden, AuthUnauthenticated
 from backend.admin.permissions import permissions_include
 from backend.admin.role_store import get_role_store
@@ -50,8 +50,7 @@ def _mcp_strip_empty(data: dict[str, Any]) -> dict[str, Any]:
 
 def _require(user: UserRecord, permission: str) -> None:
     roles = get_role_store()
-    role = roles.get_by_id(user.role_id) if user.role_id else None
-    perms = list(role.permissions) if role else []
+    perms = resolve_user_permissions(user, roles)
     if not permissions_include(perms, permission):
         raise AuthForbidden(f"Missing permission {permission}")
 

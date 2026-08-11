@@ -107,11 +107,12 @@ Role is a first-class entity. Each User may hold **at most one** Role (`role_id`
 ### Locked system role: `super_admin`
 
 - **System Role**: product-owned; identity is stable (`id` / `key`)
-- Inserted by **Site Bootstrap** when the role store is empty
-- Kept aligned to the full Permission catalog by **Foundation Upgrade** (`python -m backend.core.upgrade` or the upgrade phase of `python -m backend.core.entry`) — not by ordinary process lifespan on a non-empty store
+- Inserted by **Site Bootstrap** when the role store is empty (stored `permissions` may be empty; not authoritative)
+- **Foundation Upgrade** ensures the identity row exists (`locked`, stable id/key/name) — it does **not** grant Super Admin access by rewriting a stored permission list
+- Effective permissions are definitionally the full Permission catalog whenever `key == super_admin`
 - `key` cannot be changed via Role APIs
 - Cannot be deleted
-- Permissions are always the full Permission catalog and cannot be edited via Role APIs (`ROLE_LOCKED`)
+- Permissions cannot be edited via Role APIs (`ROLE_LOCKED`)
 
 ### Seeded ordinary role: `operator`
 

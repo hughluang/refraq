@@ -24,6 +24,7 @@ Transport rules match `docs/api-contracts-auth.md` §2.
 ```
 
 `locked` is `true` only for the system role `super_admin`.
+For `super_admin`, `permissions` in API responses is the **effective** full Permission catalog (by identity), not the stored list.
 `user_count` is the number of Users currently referencing the Role.
 
 ### Permission Catalog Entry

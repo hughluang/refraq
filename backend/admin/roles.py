@@ -19,10 +19,20 @@ OPERATOR_NAME = "Operator"
 OPERATOR_DEFAULT_PERMISSIONS: tuple[str, ...] = ("console:access", "dashboard:read")
 
 
-def ensure_system_role(roles: RoleStore) -> RoleRecord:
-    """Ensure the locked System Role `super_admin` matches the Permission catalog.
+def effective_permissions(role: RoleRecord) -> list[str]:
+    """Project authoritative permissions for a Role (ADR 0019).
 
-    Idempotent. Safe to re-run. Does not touch `operator` or custom roles.
+    System Role `super_admin` is definitional full catalog; stored list is ignored.
+    """
+    if role.key == SUPER_ADMIN_KEY:
+        return list(ALL_PERMISSIONS)
+    return list(role.permissions)
+
+
+def ensure_system_role(roles: RoleStore) -> RoleRecord:
+    """Ensure the locked System Role `super_admin` identity row exists.
+
+    Idempotent. Safe to re-run. Does not touch `permissions`, `operator`, or custom roles.
     """
     existing = roles.get_by_key(SUPER_ADMIN_KEY)
     if existing is None:
@@ -30,13 +40,12 @@ def ensure_system_role(roles: RoleStore) -> RoleRecord:
             id=SUPER_ADMIN_ID,
             key=SUPER_ADMIN_KEY,
             name=SUPER_ADMIN_NAME,
-            permissions=list(ALL_PERMISSIONS),
+            permissions=[],
             locked=True,
         )
         roles.insert(record)
         return record
     existing.name = SUPER_ADMIN_NAME
-    existing.permissions = list(ALL_PERMISSIONS)
     existing.locked = True
     roles.save(existing)
     return existing
@@ -51,7 +60,7 @@ def seed_roles(roles: RoleStore) -> None:
             id=SUPER_ADMIN_ID,
             key=SUPER_ADMIN_KEY,
             name=SUPER_ADMIN_NAME,
-            permissions=list(ALL_PERMISSIONS),
+            permissions=[],
             locked=True,
         )
     )

@@ -14,21 +14,46 @@ from backend.admin.roles import (
     SUPER_ADMIN_KEY,
     SUPER_ADMIN_NAME,
     create_role,
+    effective_permissions,
     ensure_system_role,
     seed_roles,
 )
 from backend.admin.role_store import MemoryRoleStore, RoleRecord
 
 
-def test_ensure_aligns_stale_super_admin_permissions() -> None:
+def test_effective_permissions_expands_system_role_ignoring_store() -> None:
+    role = RoleRecord(
+        id=SUPER_ADMIN_ID,
+        key=SUPER_ADMIN_KEY,
+        name=SUPER_ADMIN_NAME,
+        permissions=[],
+        locked=True,
+    )
+    assert effective_permissions(role) == list(ALL_PERMISSIONS)
+    assert "catalog:sample" in effective_permissions(role)
+
+
+def test_effective_permissions_uses_store_for_ordinary_roles() -> None:
+    role = RoleRecord(
+        id="role_operator",
+        key=OPERATOR_KEY,
+        name="Operator",
+        permissions=["console:access", "dashboard:read"],
+        locked=False,
+    )
+    assert effective_permissions(role) == ["console:access", "dashboard:read"]
+
+
+def test_ensure_does_not_rewrite_super_admin_permissions() -> None:
     store = MemoryRoleStore()
+    stale = ["console:access", "dashboard:read", "users:read"]
     store.insert(
         RoleRecord(
             id=SUPER_ADMIN_ID,
             key=SUPER_ADMIN_KEY,
-            name=SUPER_ADMIN_NAME,
-            permissions=["console:access", "dashboard:read", "users:read"],
-            locked=True,
+            name="Renamed",
+            permissions=stale,
+            locked=False,
         )
     )
     store.insert(
@@ -46,14 +71,7 @@ def test_ensure_aligns_stale_super_admin_permissions() -> None:
     assert result.key == SUPER_ADMIN_KEY
     assert result.locked is True
     assert result.name == SUPER_ADMIN_NAME
-    assert result.permissions == list(ALL_PERMISSIONS)
-    assert "settings:read" in result.permissions
-    assert "settings:write" in result.permissions
-    assert "tokens:read" in result.permissions
-    assert "tokens:write" in result.permissions
-    assert "audit:read" in result.permissions
-    assert "sources:read" in result.permissions
-    assert "jobs:run" in result.permissions
+    assert result.permissions == stale
 
     operator = store.get_by_key(OPERATOR_KEY)
     assert operator is not None
@@ -64,7 +82,7 @@ def test_ensure_aligns_stale_super_admin_permissions() -> None:
     ]
 
 
-def test_ensure_creates_missing_super_admin() -> None:
+def test_ensure_creates_missing_super_admin_with_empty_permissions() -> None:
     store = MemoryRoleStore()
     store.insert(
         RoleRecord(
@@ -79,8 +97,9 @@ def test_ensure_creates_missing_super_admin() -> None:
     result = ensure_system_role(store)
 
     assert result.id == SUPER_ADMIN_ID
-    assert result.permissions == list(ALL_PERMISSIONS)
+    assert result.permissions == []
     assert result.locked is True
+    assert effective_permissions(result) == list(ALL_PERMISSIONS)
     assert store.get_by_key(OPERATOR_KEY) is not None
 
 
@@ -111,9 +130,19 @@ def test_ensure_does_not_change_custom_role() -> None:
     assert super_admin is not None
     assert super_admin.locked is True
     assert super_admin.name == SUPER_ADMIN_NAME
+    assert super_admin.permissions == ["console:access"]
 
 
-def test_seed_roles_insert_once_does_not_realign() -> None:
+def test_seed_roles_inserts_empty_system_role_permissions() -> None:
+    store = MemoryRoleStore()
+    seed_roles(store)
+    super_admin = store.get_by_key(SUPER_ADMIN_KEY)
+    assert super_admin is not None
+    assert super_admin.permissions == []
+    assert effective_permissions(super_admin) == list(ALL_PERMISSIONS)
+
+
+def test_seed_roles_insert_once_does_not_rewrite() -> None:
     store = MemoryRoleStore()
     seed_roles(store)
     stale = store.get_by_key(SUPER_ADMIN_KEY)
@@ -141,7 +170,7 @@ def test_run_upgrade_calls_ensure_after_migrate() -> None:
             id=SUPER_ADMIN_ID,
             key=SUPER_ADMIN_KEY,
             name=SUPER_ADMIN_NAME,
-            permissions=list(ALL_PERMISSIONS),
+            permissions=[],
             locked=True,
         )
 

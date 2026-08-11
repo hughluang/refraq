@@ -9,6 +9,7 @@ from fastapi import Cookie, Depends, Header, Request
 
 from backend.admin.errors import AuthForbidden, AuthPatInvalid, AuthUnauthenticated
 from backend.admin.permissions import Permission, permissions_include
+from backend.admin.roles import effective_permissions
 from backend.core.config import Settings, get_settings
 from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.session_store import SessionStore, get_session_store
@@ -47,7 +48,7 @@ def resolve_user_permissions(
     role = roles.get_by_id(user.role_id)
     if role is None:
         return []
-    return list(role.permissions)
+    return effective_permissions(role)
 
 
 def _user_from_session(

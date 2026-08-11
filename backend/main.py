@@ -40,7 +40,7 @@ settings = get_settings()
 
 
 def _bootstrap_site(target_settings: Settings) -> None:
-    """Site Bootstrap: empty-store seed only. Does not align System Role permissions."""
+    """Site Bootstrap: empty-store seed only. Does not run Foundation Upgrade."""
     if os.getenv("REFRAQ_SKIP_SEED") == "1":
         return
     roles = get_role_store()
