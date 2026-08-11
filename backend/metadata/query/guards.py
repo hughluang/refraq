@@ -45,7 +45,7 @@ _BLOCKED_FUNCTION_NAMES = frozenset(
 )
 
 
-def _dialect_for_engine(engine: str) -> str:
+def dialect_for_engine(engine: str) -> str:
     key = (engine or "").strip().lower()
     dialect = _DIALECT_BY_ENGINE.get(key)
     if dialect is None:
@@ -79,7 +79,7 @@ def assert_readonly_single_statement(sql: str, *, engine: str) -> str:
     if not body:
         raise QueryNotReadonly("SQL statement is empty")
 
-    dialect = _dialect_for_engine(engine)
+    dialect = dialect_for_engine(engine)
     try:
         statements = parse(body, read=dialect)
     except ParseError as exc:

@@ -27,6 +27,8 @@ __all__ = [
     "QueryNotReadonly",
     "QueryRowLimit",
     "QueryTimeout",
+    "SampleColumnUnknown",
+    "SampleFilterInvalid",
     "SemanticColumnUnknown",
     "SourceAccessInvalid",
     "SourceAccessRequired",
@@ -294,3 +296,19 @@ class QueryFailed(AppError):
 
     def _default_message(self) -> str:
         return "Query execution failed"
+
+
+class SampleColumnUnknown(AppError):
+    code = "SAMPLE_COLUMN_UNKNOWN"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Sample references an unknown column"
+
+
+class SampleFilterInvalid(AppError):
+    code = "SAMPLE_FILTER_INVALID"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Sample filter is invalid"

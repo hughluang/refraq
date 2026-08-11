@@ -146,6 +146,7 @@ Fixed Permission catalog (Foundation + metadata foundation extensions):
 - `metadata:read` / `metadata:write`
 - `jobs:run`
 - `query:run`
+- `catalog:sample`
 - `tokens:read` / `tokens:write`
 - `audit:read`
 
@@ -154,7 +155,7 @@ Rules:
 - New permissions enter the catalog in code/docs first; Role UI only checkboxes catalog entries
 - Free-form permission strings are rejected
 - Frontend checks are UX only; backend remains authoritative
-- Seeded `operator` keeps `console:access` + `dashboard:read` only (no `settings:*`, no metadata write/query/token/audit by default)
+- Seeded `operator` keeps `console:access` + `dashboard:read` only (no `settings:*`, no metadata write/query/sample/token/audit by default)
 - Metadata permission meanings: `docs/business-metadata.md` §6; User PAT: `docs/business-user-tokens.md`
 - Session TTL used at login is the **effective** value (env or Settings Override); changing TTL does not rewrite existing sessions — see `docs/api-contracts-settings.md`
 

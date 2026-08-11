@@ -1,88 +1,150 @@
 "use client";
 
 import {
+  Alert,
   Badge,
   Button,
   Group,
   NumberInput,
+  Select,
   Stack,
   Table,
   Text,
-  Textarea,
+  TextInput,
 } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
 import { useEffect, useMemo, useState } from "react";
 
-import { runSourceQuery } from "@/features/sources/api";
-import type {
-  CatalogObject,
-  QueryResult,
-  Source,
-} from "@/features/sources/types";
+import { EmptyState } from "@/components/feedback/EmptyState";
+import { runObjectSample } from "@/features/sources/api";
+import {
+  isSampleFilterOp,
+  sampleFilterSnapshot,
+  type SampleFilter,
+} from "@/features/sources/catalog-detail/sampleFilters";
+import type { CatalogObject, SampleResult, Source } from "@/features/sources/types";
 import { ApiError } from "@/lib/api";
+import { useSessionStore } from "@/providers/session-store";
 
 type SampleTabProps = {
   object: CatalogObject;
   source: Source | null;
 };
 
-function quoteIdent(engine: string | null | undefined, name: string): string {
-  if (engine === "mssql") return `[${name.replaceAll("]", "]]")}]`;
-  if (engine === "oracle") return `"${name.replaceAll('"', '""')}"`;
-  return `"${name.replaceAll('"', '""')}"`;
-}
+type AppliedParams = {
+  limit: number;
+  offset: number;
+  filterKey: string;
+  orderColumn: string | null;
+  orderDirection: "asc" | "desc";
+};
 
-function buildDefaultSql(
-  object: CatalogObject,
-  engine: string | null | undefined,
-  maxRows: number,
-): string {
-  const schema = quoteIdent(engine, object.schema_name);
-  const table = quoteIdent(engine, object.name);
-  const qualified = `${schema}.${table}`;
-  if (engine === "mssql") {
-    return `SELECT TOP (${maxRows}) * FROM ${qualified}`;
-  }
-  if (engine === "oracle") {
-    return `SELECT * FROM ${qualified} FETCH FIRST ${maxRows} ROWS ONLY`;
-  }
-  return `SELECT * FROM ${qualified} LIMIT ${maxRows}`;
-}
+const DEFAULT_FILTER: SampleFilter = {
+  column: null,
+  op: "eq",
+  value: "",
+};
+
+const DEFAULT_LIMIT = 50;
 
 export function SampleTab({ object, source }: SampleTabProps) {
   const t = useTranslate();
   const { open } = useNotification();
-  const [maxRows, setMaxRows] = useState(50);
-  const [sql, setSql] = useState("");
-  const [result, setResult] = useState<QueryResult | null>(null);
+  const canSample = useSessionStore((s) =>
+    Boolean(s.user?.permissions.includes("catalog:sample")),
+  );
+
+  const [limit, setLimit] = useState(DEFAULT_LIMIT);
+  const [offset, setOffset] = useState(0);
+  const [filter, setFilter] = useState<SampleFilter>(DEFAULT_FILTER);
+  const [orderColumn, setOrderColumn] = useState<string | null>(null);
+  const [orderDirection, setOrderDirection] = useState<"asc" | "desc">("asc");
+  const [result, setResult] = useState<SampleResult | null>(null);
+  const [applied, setApplied] = useState<AppliedParams | null>(null);
   const [forbidden, setForbidden] = useState(false);
   const [running, setRunning] = useState(false);
 
-  const defaultSql = useMemo(
-    () => buildDefaultSql(object, source?.engine, maxRows),
-    [object, source?.engine, maxRows],
+  useEffect(() => {
+    setLimit(DEFAULT_LIMIT);
+    setOffset(0);
+    setFilter(DEFAULT_FILTER);
+    setOrderColumn(null);
+    setOrderDirection("asc");
+    setResult(null);
+    setApplied(null);
+    setForbidden(false);
+  }, [object.id]);
+
+  const filterKey = useMemo(() => sampleFilterSnapshot(filter), [filter]);
+  const stale = Boolean(
+    result &&
+      applied &&
+      (applied.limit !== limit ||
+        applied.offset !== offset ||
+        applied.filterKey !== filterKey ||
+        applied.orderColumn !== orderColumn ||
+        applied.orderDirection !== orderDirection),
   );
 
-  useEffect(() => {
-    setSql(defaultSql);
-    setResult(null);
-    setForbidden(false);
-  }, [defaultSql]);
+  const columnOptions = useMemo(
+    () =>
+      object.columns
+        .filter((c) => c.is_present)
+        .map((c) => ({ value: c.name, label: c.name })),
+    [object.columns],
+  );
 
-  const run = async () => {
-    if (!source) return;
+  const opOptions = useMemo(
+    () => [
+      { value: "eq", label: t("catalog.sample.opEq") },
+      { value: "neq", label: t("catalog.sample.opNeq") },
+      { value: "contains", label: t("catalog.sample.opContains") },
+      { value: "is_null", label: t("catalog.sample.opIsNull") },
+    ],
+    [t],
+  );
+
+  const unstableOrder = offset > 0 && !orderColumn;
+
+  const run = async (nextOffset: number = offset) => {
     setRunning(true);
     try {
-      const data = await runSourceQuery(source.id, {
-        sql,
-        max_rows: maxRows,
+      const filters =
+        filter.column != null
+          ? [
+              {
+                column: filter.column,
+                op: filter.op,
+                value: filter.op === "is_null" ? "" : filter.value,
+              },
+            ]
+          : [];
+      const order_by =
+        orderColumn != null
+          ? [{ column: orderColumn, direction: orderDirection }]
+          : [];
+      const data = await runObjectSample(object.id, {
+        filters,
+        order_by,
+        offset: nextOffset,
+        limit,
+        include_sql: false,
       });
+      setOffset(nextOffset);
       setResult(data);
+      setApplied({
+        limit,
+        offset: nextOffset,
+        filterKey,
+        orderColumn,
+        orderDirection,
+      });
       setForbidden(false);
     } catch (err) {
       if (err instanceof ApiError && err.status === 403) {
         setForbidden(true);
         setResult(null);
+        setApplied(null);
         return;
       }
       open?.({
@@ -94,7 +156,7 @@ export function SampleTab({ object, source }: SampleTabProps) {
     }
   };
 
-  if (forbidden) {
+  if (!canSample || forbidden) {
     return (
       <Text size="sm" c="dimmed">
         {t("catalog.sample.forbidden")}
@@ -102,68 +164,197 @@ export function SampleTab({ object, source }: SampleTabProps) {
     );
   }
 
+  if (!source) {
+    return (
+      <Text size="sm" c="dimmed">
+        {t("catalog.sample.noSource")}
+      </Text>
+    );
+  }
+
+  const needsValue = filter.op !== "is_null" && filter.column != null;
+
   return (
     <Stack gap="sm">
-      <Group align="flex-end">
+      <Group align="flex-end" wrap="wrap">
         <NumberInput
-          label={t("catalog.sample.maxRows")}
-          value={maxRows}
-          onChange={(v) => setMaxRows(typeof v === "number" ? v : 50)}
+          label={t("catalog.sample.pageSize")}
+          value={limit}
+          onChange={(v) => {
+            setLimit(typeof v === "number" ? v : DEFAULT_LIMIT);
+            setOffset(0);
+          }}
           min={1}
           max={500}
           w={140}
         />
-        <Button loading={running} onClick={() => void run()}>
-          {t("catalog.sample.run")}
+        <Select
+          label={t("catalog.sample.filterColumn")}
+          placeholder={t("catalog.sample.filterColumnPlaceholder")}
+          data={columnOptions}
+          value={filter.column}
+          onChange={(v) => {
+            setFilter((prev) => ({ ...prev, column: v }));
+            setOffset(0);
+          }}
+          clearable
+          searchable
+          w={200}
+        />
+        <Select
+          label={t("catalog.sample.filterOp")}
+          data={opOptions}
+          value={filter.op}
+          onChange={(v) => {
+            if (v == null || !isSampleFilterOp(v)) return;
+            setFilter((prev) => ({ ...prev, op: v }));
+            setOffset(0);
+          }}
+          allowDeselect={false}
+          w={140}
+          disabled={!filter.column}
+        />
+        <TextInput
+          label={t("catalog.sample.filterValue")}
+          value={filter.value}
+          onChange={(e) => {
+            setFilter((prev) => ({ ...prev, value: e.currentTarget.value }));
+            setOffset(0);
+          }}
+          w={200}
+          disabled={!needsValue}
+        />
+        <Select
+          label={t("catalog.sample.orderColumn")}
+          placeholder={t("catalog.sample.orderColumnPlaceholder")}
+          data={columnOptions}
+          value={orderColumn}
+          onChange={(v) => {
+            setOrderColumn(v);
+            setOffset(0);
+          }}
+          clearable
+          searchable
+          w={200}
+        />
+        <Select
+          label={t("catalog.sample.orderDirection")}
+          data={[
+            { value: "asc", label: t("catalog.sample.orderAsc") },
+            { value: "desc", label: t("catalog.sample.orderDesc") },
+          ]}
+          value={orderDirection}
+          onChange={(v) => {
+            if (v === "asc" || v === "desc") {
+              setOrderDirection(v);
+              setOffset(0);
+            }
+          }}
+          allowDeselect={false}
+          w={120}
+          disabled={!orderColumn}
+        />
+        <Button
+          loading={running}
+          onClick={() => {
+            void run(0);
+          }}
+        >
+          {result ? t("catalog.sample.reload") : t("catalog.sample.load")}
         </Button>
       </Group>
-      <Textarea
-        label={t("catalog.sample.sql")}
-        value={sql}
-        onChange={(e) => setSql(e.currentTarget.value)}
-        minRows={3}
-        autosize
-      />
+
+      {unstableOrder ? (
+        <Alert color="yellow" variant="light">
+          {t("catalog.sample.unstableOrder")}
+        </Alert>
+      ) : null}
+
+      {stale ? (
+        <Alert color="yellow" variant="light">
+          {t("catalog.sample.stale")}
+        </Alert>
+      ) : null}
+
       {!result ? (
-        <Text size="sm" c="dimmed">
-          {t("catalog.sample.empty")}
-        </Text>
+        <EmptyState message={t("catalog.sample.empty")} />
       ) : (
         <Stack gap="xs">
-          <Group gap="sm">
-            <Text size="sm" c="dimmed">
-              {t("catalog.sample.duration", { ms: result.duration_ms })}
-            </Text>
-            {result.truncated ? (
-              <Badge color="yellow">{t("catalog.sample.truncated")}</Badge>
-            ) : null}
+          <Group gap="sm" justify="space-between" wrap="wrap">
+            <Group gap="sm">
+              <Text size="sm" c="dimmed">
+                {t("catalog.sample.rowCount", { count: result.rows.length })}
+              </Text>
+              <Text size="sm" c="dimmed">
+                {t("catalog.sample.pageRange", {
+                  from: result.offset + 1,
+                  to: result.offset + result.rows.length,
+                })}
+              </Text>
+              <Text size="sm" c="dimmed">
+                {t("catalog.sample.duration", { ms: result.duration_ms })}
+              </Text>
+              {result.truncated ? (
+                <Badge color="yellow">{t("catalog.sample.truncated")}</Badge>
+              ) : null}
+            </Group>
+            <Group gap="xs">
+              <Button
+                size="xs"
+                variant="default"
+                disabled={running || result.offset <= 0}
+                onClick={() => {
+                  void run(Math.max(0, result.offset - result.limit));
+                }}
+              >
+                {t("catalog.sample.prevPage")}
+              </Button>
+              <Button
+                size="xs"
+                variant="default"
+                disabled={running || !result.has_more}
+                onClick={() => {
+                  void run(result.offset + result.limit);
+                }}
+              >
+                {t("catalog.sample.nextPage")}
+              </Button>
+            </Group>
           </Group>
-          <Table striped highlightOnHover withTableBorder>
-            <Table.Thead>
-              <Table.Tr>
-                {result.columns.map((col) => (
-                  <Table.Th key={col}>
-                    <Text size="sm">{col}</Text>
-                  </Table.Th>
-                ))}
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {result.rows.map((row, rowIdx) => (
-                <Table.Tr key={rowIdx}>
-                  {row.map((cell, cellIdx) => (
-                    <Table.Td key={`${rowIdx}-${cellIdx}`}>
-                      <Text size="xs" style={{ whiteSpace: "pre-wrap" }}>
-                        {cell === null || cell === undefined
-                          ? "NULL"
-                          : String(cell)}
-                      </Text>
-                    </Table.Td>
+          {result.rows.length === 0 ? (
+            <Text size="sm" c="dimmed">
+              {t("catalog.sample.zeroRows")}
+            </Text>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <Table striped highlightOnHover withTableBorder>
+                <Table.Thead>
+                  <Table.Tr>
+                    {result.columns.map((col) => (
+                      <Table.Th key={col}>
+                        <Text size="sm">{col}</Text>
+                      </Table.Th>
+                    ))}
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {result.rows.map((row, rowIdx) => (
+                    <Table.Tr key={rowIdx}>
+                      {row.map((cell, cellIdx) => (
+                        <Table.Td key={`${rowIdx}-${cellIdx}`}>
+                          <Text size="xs" style={{ whiteSpace: "pre-wrap" }}>
+                            {cell === null || cell === undefined
+                              ? "NULL"
+                              : String(cell)}
+                          </Text>
+                        </Table.Td>
+                      ))}
+                    </Table.Tr>
                   ))}
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
+                </Table.Tbody>
+              </Table>
+            </div>
+          )}
         </Stack>
       )}
     </Stack>

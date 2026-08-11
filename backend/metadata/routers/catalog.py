@@ -33,6 +33,9 @@ from backend.metadata.schemas.catalog import (
     JoinUpsertRequest,
     ObjectSemanticsPatchRequest,
 )
+from backend.metadata.query import service as query_service
+from backend.metadata.query.compile_sample import SampleFilterSpec, SampleOrderSpec
+from backend.metadata.schemas.query import SampleRequest, SampleResponse
 
 router = APIRouter(tags=["catalog"])
 
@@ -227,6 +230,42 @@ def get_object_ddl(
 ) -> CatalogDdlResponse:
     ddl = catalog_service.get_object_ddl(object_id)
     return CatalogDdlResponse(id=ddl.id, ddl=ddl.ddl)
+
+
+@router.post("/objects/{object_id}/sample", response_model=SampleResponse)
+def run_object_sample(
+    object_id: str,
+    body: SampleRequest,
+    request: Request,
+    user: UserRecord = Depends(require_permission("catalog:sample")),
+) -> SampleResponse:
+    outcome = query_service.run_catalog_sample(
+        object_id=object_id,
+        columns=body.columns,
+        filters=[
+            SampleFilterSpec(column=f.column, op=f.op, value=f.value)
+            for f in body.filters
+        ],
+        order_by=[
+            SampleOrderSpec(column=o.column, direction=o.direction)
+            for o in body.order_by
+        ],
+        offset=body.offset,
+        limit=body.limit,
+        include_sql=body.include_sql,
+        actor_user_id=user.id,
+        actor_token_id=get_actor_token_id(request),
+    )
+    return SampleResponse(
+        columns=outcome.columns,
+        rows=outcome.rows,
+        truncated=outcome.truncated,
+        duration_ms=outcome.duration_ms,
+        offset=outcome.offset,
+        limit=outcome.limit,
+        has_more=outcome.has_more,
+        sql=outcome.sql,
+    )
 
 
 @router.patch("/objects/{object_id}/semantics", response_model=CatalogObjectResponse)

@@ -253,6 +253,16 @@ Structure refresh must not delete human/mcp edges.
 A multi-hop chain of join edges discovered by graph search between objects or columns.
 Avoid guessing paths from column-name similarity alone.
 
+### Catalog Sample
+
+A first-class live peek of rows for one Catalog Object: structured filters and offset/limit pagination, platform-compiled dialect SQL, readonly execution guards.
+Permission: `catalog:sample`. Not an Explore, not Controlled Query UI sugar, and not an MCP tool in this phase.
+
+### Controlled Query
+
+Caller-submitted single read-only SQL against a Source, guarded by platform AST allowlist, timeout, row cap, and audit.
+Permission: `query:run`. Distinct from Catalog Sample.
+
 ### Metadata Nav Group
 
 The Console Navigation group with stable id `metadata` for Sources, Jobs, and catalog browsing modules.

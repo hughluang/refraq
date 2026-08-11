@@ -194,6 +194,32 @@ export type QueryResult = {
   duration_ms: number;
 };
 
+export type SampleResult = {
+  columns: string[];
+  rows: unknown[][];
+  truncated: boolean;
+  duration_ms: number;
+  offset: number;
+  limit: number;
+  has_more: boolean;
+  sql?: string | null;
+};
+
+export type SampleFilterOp = "eq" | "neq" | "contains" | "is_null";
+
+export type SampleRequestBody = {
+  columns?: string[] | null;
+  filters?: Array<{
+    column: string | null;
+    op: SampleFilterOp;
+    value?: string;
+  }>;
+  order_by?: Array<{ column: string; direction: "asc" | "desc" }>;
+  offset?: number;
+  limit?: number;
+  include_sql?: boolean;
+};
+
 export type ColumnSemanticsBatchItem = {
   column_name: string;
   business_name?: string | null;

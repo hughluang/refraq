@@ -81,6 +81,8 @@ Args align with HTTP search: `query_text` **required and non-empty** for both ob
 
 Guards match `docs/api-contracts-metadata.md` §7 (same defaults/caps/timeouts and per-attempt audit). Tool annotation `readOnlyHint` is advisory only and does not replace platform guards.
 
+There is **no** MCP Catalog Sample tool; agents peek via `run_sql`. HTTP Catalog Sample remains `POST /objects/{id}/sample` (`catalog:sample`).
+
 ## 8. Out Of Scope Tools
 
 - Arbitrary shell / file tools

@@ -11,6 +11,8 @@ import type {
   JoinPathResult,
   ObjectSemanticsPatch,
   QueryResult,
+  SampleRequestBody,
+  SampleResult,
   Source,
   SourceAccess,
 } from "@/features/sources/types";
@@ -256,6 +258,14 @@ export function runSourceQuery(
   body: { sql: string; max_rows?: number },
 ) {
   return apiClient<QueryResult>(`/sources/${sourceId}/query`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function runObjectSample(objectId: string, body: SampleRequestBody) {
+  return apiClient<SampleResult>(`/objects/${objectId}/sample`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

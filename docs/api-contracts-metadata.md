@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-HTTP contracts for collected **Catalog Objects**, semantics, join edges, search, join paths, and controlled query.
+HTTP contracts for collected **Catalog Objects**, semantics, join edges, search, join paths, controlled query, and Catalog Sample.
 
 Business rules: `docs/business-metadata.md`.
 Auth: Session or User PAT.
@@ -16,6 +16,7 @@ Slice / permission availability:
 | Joins R/W | C + Depth | read `metadata:read`; write `metadata:write` |
 | Search / join path | Depth | `metadata:read` |
 | Controlled query | D | `query:run` |
+| Catalog Sample | Harden | `catalog:sample` |
 
 All Source and catalog responses include `locator_key` (ADR 0012). HTTP path parameters remain surrogate ids.
 
@@ -98,6 +99,7 @@ Identity is `source_id` (+ object coordinates). `collected_at` is optional prove
 | `GET` | `/sources/{id}/objects` | `metadata:read` | List objects (query: `q`, `object_type`, `include_absent`, `limit`, `offset`) |
 | `GET` | `/objects/{id}` | `metadata:read` | Object detail including columns |
 | `GET` | `/objects/{id}/ddl` | `metadata:read` | DDL text when stored |
+| `POST` | `/objects/{id}/sample` | `catalog:sample` | Catalog Sample live peek (§8) |
 
 List response: `{ "items": […], "total": N, "limit": L, "offset": O }` when pagination params are used; `limit` default 100, max 500.
 
@@ -254,3 +256,66 @@ Errors:
 Every attempt writes a management audit event (statement summary or hash, never Source secret).
 
 Envelope notes: request `max_rows` defaults to **100** when omitted; values above platform cap `REFRAQ_QUERY_MAX_ROWS` (default **1000**) are rejected with `QUERY_ROW_LIMIT` before connect. Platform timeout is `REFRAQ_QUERY_TIMEOUT_SEC` (default **30**), enforced both at the application boundary and via engine statement/command timeout. L4 SQL guards parse a single statement with a dialect-aware AST (sqlglot) for the Source engine and fail closed on write nodes, `INTO`, row locks, blocked functions, or unparseable SQL. Prefer a read-only database account on the Source as defense in depth; platform SQL guards remain mandatory.
+
+## 8. Catalog Sample
+
+### `POST /objects/{id}/sample`
+
+Permission: `catalog:sample`.
+
+Request:
+
+```json
+{
+  "columns": ["order_id", "status"],
+  "filters": [
+    { "column": "status", "op": "eq", "value": "open" }
+  ],
+  "order_by": [{ "column": "order_id", "direction": "asc" }],
+  "offset": 0,
+  "limit": 50,
+  "include_sql": false
+}
+```
+
+| Field | Notes |
+| --- | --- |
+| `columns` | Optional column subset; omit or null → `SELECT *`; empty list → `SAMPLE_FILTER_INVALID` |
+| `filters` | Optional list; AND-combined. v1 ops: `eq`, `neq`, `contains`, `is_null`. Entries without `column` are ignored |
+| `order_by` | Optional; without it, pagination order is unstable (especially `offset > 0`) |
+| `offset` | Default **0**; must be ≥ 0 |
+| `limit` | Default **50**; must be ≥ 1 |
+| `include_sql` | Default **false**; when true, response includes compiled `sql` |
+
+Hard cap: `offset + limit` must be ≤ `REFRAQ_QUERY_MAX_ROWS` (default **1000**); otherwise `QUERY_ROW_LIMIT` before connect. Platform timeout matches Controlled Query.
+
+Response `200`:
+
+```json
+{
+  "columns": ["order_id", "status"],
+  "rows": [["1001", "open"]],
+  "truncated": false,
+  "duration_ms": 12,
+  "offset": 0,
+  "limit": 50,
+  "has_more": false,
+  "sql": null
+}
+```
+
+`has_more` is heuristic: true when the page returned exactly `limit` rows (not a `COUNT(*)`). `sql` is present only when `include_sql` is true.
+
+Errors: same Controlled Query codes when execution/guards fail (`QUERY_NOT_READONLY`, `QUERY_TIMEOUT`, `QUERY_ROW_LIMIT`, …), plus:
+
+| code | When |
+| --- | --- |
+| `CATALOG_OBJECT_NOT_FOUND` | Unknown object id |
+| `SAMPLE_COLUMN_UNKNOWN` | `columns` / filter / `order_by` references a column not on the object |
+| `SAMPLE_FILTER_INVALID` | Unknown filter op, empty `columns` list, or invalid filter payload |
+
+Audit: every attempt writes `action=catalog.sample` on `resource_type=catalog_object` (statement summary/hash, never Source secret).
+
+**Mid-term (versioned, not v1):** may add single-table ops `gt` / `gte` / `lt` / `lte` / `in` / `is_not_null` and richer order UX. Never joins, aggregates, arbitrary SQL fragments, default `total_count`, or MCP sample tool.
+
+**Not this endpoint:** caller-submitted SQL remains `POST /sources/{id}/query` (`query:run`).

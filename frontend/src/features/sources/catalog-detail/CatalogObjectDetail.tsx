@@ -171,7 +171,7 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
           </Tooltip>
         </Group>
 
-        <Tabs value={activeTab} onChange={setActiveTab}>
+        <Tabs value={activeTab} onChange={setActiveTab} keepMounted>
           <Tabs.List>
             <Tabs.Tab value="overview">{t("catalog.tabs.overview")}</Tabs.Tab>
             <Tabs.Tab value="columns">{t("catalog.tabs.columns")}</Tabs.Tab>

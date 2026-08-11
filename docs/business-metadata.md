@@ -167,6 +167,7 @@ Fixed catalog additions (exact strings are normative for Roles UI):
 | `metadata:write` | Write semantics and join edges |
 | `jobs:run` | Enqueue/cancel **Jobs** (structure and later kinds) via domain facades; view Jobs on those facades |
 | `query:run` | Execute controlled read-only SQL against a Source |
+| `catalog:sample` | Run Catalog Sample (structured live peek) on a Catalog Object |
 | `tokens:read` | List own User PAT metadata (never full token after creation) |
 | `tokens:write` | Create/deactivate/restore/soft-delete (deactivated only) own User PATs |
 | `audit:read` | Read management audit events |
@@ -174,7 +175,7 @@ Fixed catalog additions (exact strings are normative for Roles UI):
 Rules:
 
 - Seeded `super_admin` always receives the full current catalog (including these entries) via Foundation Upgrade / System Role ensure.
-- Seeded `operator` does **not** receive `sources:write`, `metadata:write`, `jobs:run`, `query:run`, `tokens:*`, or `audit:read` by default.
+- Seeded `operator` does **not** receive `sources:write`, `metadata:write`, `jobs:run`, `query:run`, `catalog:sample`, `tokens:*`, or `audit:read` by default.
 - No object-level ACL in this phase.
 - Nav visibility for modules uses each module’s `list` action Permission (same Console Module contract as Foundation).
 
@@ -187,11 +188,11 @@ Initial modules (ids stable):
 | Module id | Purpose | list permission |
 | --- | --- | --- |
 | `sources` | Source registration and reachability management | `sources:read` |
-| `catalog` | Browse Catalog Objects / columns; object detail at `/console/catalog/:id` (`show` → `metadata:read`) for full semantics, structure facts, sample query, joins, and DDL | `metadata:read` |
+| `catalog` | Browse Catalog Objects / columns; object detail at `/console/catalog/:id` (`show` → `metadata:read`) for full semantics, structure facts, Catalog Sample, joins, and DDL | `metadata:read` |
 | `business-domains` | Global Business Domain registry (immutable `code`); create/edit/delete → `metadata:write` | `metadata:read` |
 | `jobs` | Job list and trigger entry points | `jobs:run` (list) |
 
-The catalog object detail page is the Console semantics maintenance surface: it exposes the admitted object/column semantics model (§10, ADR 0015), structure facts (PK/FK/indexes/comments), controlled sample query when the actor has `query:run`, and join graph / path exploration. List remains the Source-scoped browse entry; deep links use the `show` route so readers with only `metadata:read` can open detail without needing `metadata:write`.
+The catalog object detail page is the Console semantics maintenance surface: it exposes the admitted object/column semantics model (§10, ADR 0015), structure facts (PK/FK/indexes/comments), **Catalog Sample** when the actor has `catalog:sample`, and join graph / path exploration. List remains the Source-scoped browse entry; deep links use the `show` route so readers with only `metadata:read` can open detail without needing `metadata:write`.
 
 User PAT management is **not** in this group; see `docs/business-user-tokens.md` (Administration module `tokens`).
 
@@ -364,6 +365,15 @@ Rules:
 - Execute through the Source's embedded reachability; audit every attempt (statement summary or hash, User, Source, outcome).
 - Prefer a database user that is itself read-only as defense in depth; platform guards remain mandatory.
 
+## 11.1 Catalog Sample
+
+- First-class live peek for **one Catalog Object**: structured request (`filters`, optional `columns` / `order_by`, `offset` / `limit`), platform compiles dialect SQL (sqlglot), then runs through the same readonly guards / timeout / audit internals as Controlled Query.
+- Permission: `catalog:sample` (distinct from `query:run`). Seeded `operator` does **not** receive it by default.
+- HTTP: `POST /objects/{id}/sample`. MCP does **not** expose a sample tool; agents use `run_sql` for ad-hoc peek.
+- v1 filter ops: `eq`, `neq`, `contains`, `is_null` (AND of filter list). Pagination: `offset` + `limit` with hard cap `offset + limit ≤ REFRAQ_QUERY_MAX_ROWS`; response echoes `offset` / `limit` and `has_more` (heuristic); no default `total_count` / `COUNT(*)`. `order_by` is optional; without it, pagination order is unstable.
+- Optional `include_sql` returns the compiled statement for transparency; default responses omit SQL.
+- Mid-term (versioned): may add single-table ops such as comparisons / `in` / `is_not_null` and richer `order_by` UX. Never joins, aggregates, or arbitrary expressions. Never default `COUNT(*)`.
+
 ## 12. MCP
 
 - MCP tools are a first-class product surface backed by the same domain services and Permissions as HTTP APIs.
@@ -381,6 +391,7 @@ Persist management-plane events for at least:
 - Semantics and join writes
 - User PAT create / deactivate / restore / soft-delete
 - Controlled query execution
+- Catalog Sample execution (`catalog.sample`)
 
 Each event: actor User id, timestamp, resource type/id, action, result (`success` / `failure`), optional detail payload without secrets.
 Full platform audit of every login/Settings/Users path is out of scope for this phase (Foundation login paths may remain hook-ready only).
