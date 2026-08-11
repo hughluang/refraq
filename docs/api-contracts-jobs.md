@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-Contracts for enqueueing and observing platform **Jobs** via domain facades (metadata / Source surfaces in this phase).
+Contracts for enqueueing and observing platform **Jobs** via domain facades (metadata / Source surfaces in this phase) and platform list/get/logs/cancel.
 
 Business rules: `docs/business-metadata.md`, root `CONTEXT.md`.
 Auth: Session or User PAT. Permissions: `jobs:run` unless noted.
@@ -17,12 +17,17 @@ Auth: Session or User PAT. Permissions: `jobs:run` unless noted.
   "input": {
     "source_id": "src_mes_prod"
   },
+  "summary": "structure · mes-prod",
+  "trigger_kind": "user",
+  "trigger_ref": "user_001",
+  "trigger_actor_name": "Ada",
   "created_by_user_id": "user_001",
   "created_at": "2026-08-05T02:00:00Z",
   "started_at": null,
   "finished_at": null,
   "error_code": null,
-  "error_message": null
+  "error_message": null,
+  "log_updated_at": "2026-08-05T02:00:00Z"
 }
 ```
 
@@ -31,7 +36,11 @@ Status: `queued` | `running` | `succeeded` | `failed` | `cancelled`.
 Rules:
 
 - **Job** is a durable asynchronous execution record. It is not owned by Source.
-- Public Job fields are lifecycle + `kind` + generic **`input`** (object). Domains interpret `input` per `kind`.
+- Public Job fields are lifecycle + `kind` + generic **`input`** + observation fields **`summary`**, **`trigger_kind`**, **`trigger_ref`**.
+- **`summary`** is a human-readable snapshot written at enqueue (structure: `structure · {source_key}`). It is not a Source foreign key and must not be confused with the **Source** entity.
+- **`trigger_kind`** / **`trigger_ref`** describe how the Job was started (`user` | `schedule` | `mcp` | `system`, plus optional id). Coexist with **`created_by_user_id`** (user triggers set both).
+- **`trigger_actor_name`** is a presentation-only field: when `trigger_kind` is `user` and `trigger_ref` resolves to a known User, it is that User's `display_name`; otherwise `null`. It is not an identity field — **`trigger_ref`** remains authoritative.
+- Operator-visible run log lives on the Job row as **`log_body`** (newline-separated lines). List/get Job shapes do **not** include full `log_body`; use `GET /jobs/{id}/logs`. Optional **`log_updated_at`** may appear on JobOut.
 - No universal `source_id` columns on Job; domain ids appear inside `input` when the kind requires them.
 - Slice A `kind=structure` for `kind=database` Sources: `input` includes `source_id` only. Workers load reachability from the Source.
 
@@ -41,7 +50,9 @@ Rules:
 | --- | --- | --- | --- |
 | `POST` | `/sources/{id}/jobs` | `jobs:run` | Enqueue a Job for this Source (domain facade) |
 | `GET` | `/sources/{id}/jobs` | `jobs:run` | List Jobs related to this Source (domain facade) |
+| `GET` | `/jobs` | `jobs:run` | Platform list all Jobs (`status`, `kind` query filters) |
 | `GET` | `/jobs/{id}` | `jobs:run` | Get Job by id |
+| `GET` | `/jobs/{id}/logs` | `jobs:run` | Get Job `log_body` (`{ job_id, body, updated_at }`) |
 | `POST` | `/jobs/{id}/cancel` | `jobs:run` | Cancel if not terminal |
 
 ### `POST /sources/{id}/jobs` body (Slice A structure)
@@ -54,13 +65,21 @@ Rules:
 
 Rules:
 
-- Path `{id}` is the Source; the facade validates the Source, builds Job `input` (`source_id` from the path), persists the Job, and enqueues the worker after commit.
+- Path `{id}` is the Source; the facade validates the Source, builds Job `input` (`source_id` from the path), sets `summary` / trigger fields, persists the Job, and enqueues the worker after commit.
 - For database structure Jobs, the Source must be usable and have a secret; otherwise return a stable error.
 - Response `202` returns the Job shape. Work runs asynchronously on a worker.
 
 ### `GET /sources/{id}/jobs`
 
 Domain list semantics for “Jobs related to this Source” (for example Jobs whose `input.source_id` matches). Query params may include `status`, `kind`. This is a Source/metadata concern — not a reason to add Source columns on the Job record.
+
+### `GET /jobs`
+
+Platform-wide list (newest first). Query params may include `status`, `kind`. Create remains domain-facade-only.
+
+### `GET /jobs/{id}/logs`
+
+Returns `{ "job_id", "body", "updated_at" }` where `body` is the full multiline log text (empty string if none).
 
 ## 4. Errors
 
@@ -87,9 +106,10 @@ Postgres/memory Job table (queried via the facade), not Celery.
 
 - Slice A: `kind=structure` only on the Source facade for database Sources.
 - Later slices/domains may add kinds and additional facade routes; unknown kind → `400` with stable code.
-- Console module id `jobs`; permission `jobs:run`.
+- Console: module id `jobs` is the global observe surface; structure enqueue lives on Sources. Permission `jobs:run`.
 
 ## 6. Non-Goals
 
 - Global `POST /jobs` as the only create path in this phase (platform store may still be shared; HTTP create goes through domain facades)
 - Promoting `source_id` to universal Job fields
+- Streaming log push (SSE/WebSocket); Console polls `GET /jobs/{id}/logs`

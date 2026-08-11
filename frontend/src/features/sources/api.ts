@@ -8,6 +8,7 @@ import type {
   ConnectorSpec,
   Engine,
   Job,
+  JobLogs,
   JoinPathResult,
   ObjectSemanticsPatch,
   QueryResult,
@@ -272,8 +273,24 @@ export function runObjectSample(objectId: string, body: SampleRequestBody) {
   });
 }
 
+export function listJobs(params?: { kind?: string; status?: string }) {
+  const q = new URLSearchParams();
+  if (params?.kind) q.set("kind", params.kind);
+  if (params?.status) q.set("status", params.status);
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return apiClient<{ items: Job[] }>(`/jobs${suffix}`);
+}
+
 export function listSourceJobs(sourceId: string) {
   return apiClient<{ items: Job[] }>(`/sources/${sourceId}/jobs`);
+}
+
+export function getJob(jobId: string) {
+  return apiClient<{ job: Job }>(`/jobs/${jobId}`);
+}
+
+export function getJobLogs(jobId: string) {
+  return apiClient<JobLogs>(`/jobs/${jobId}/logs`);
 }
 
 export function enqueueStructureJob(sourceId: string) {

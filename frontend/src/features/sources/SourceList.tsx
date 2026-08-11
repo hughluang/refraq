@@ -24,6 +24,7 @@ import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
   createSource,
   deleteSource,
+  enqueueStructureJob,
   getAccessSchema,
   getSourceAccess,
   listSources,
@@ -31,6 +32,7 @@ import {
   testSource,
   testSourceDraft,
 } from "@/features/sources/api";
+import { SourceJobsModal } from "@/features/sources/SourceJobsModal";
 import { SpecTree, defaultsFromSchema } from "@/features/sources/SpecTree";
 import type {
   ConnectorSpec,
@@ -77,6 +79,10 @@ export function SourceList() {
     resource: ModuleId.sources,
     action: ModuleAction.create,
   });
+  const { data: canRunJobs } = useCan({
+    resource: ModuleId.jobs,
+    action: ModuleAction.list,
+  });
 
   const [items, setItems] = useState<Source[]>([]);
   const [loading, setLoading] = useState(true);
@@ -91,6 +97,10 @@ export function SourceList() {
   const [enginePending, setEnginePending] = useState<Engine | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Source | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [enqueueBusyId, setEnqueueBusyId] = useState<string | null>(null);
+  const [jobsSource, setJobsSource] = useState<Source | null>(null);
+
+  const showActions = Boolean(canWrite?.can || canRunJobs?.can);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -322,7 +332,7 @@ export function SourceList() {
               <Table.Th>{t("sources.fields.database")}</Table.Th>
               <Table.Th>{t("sources.fields.status")}</Table.Th>
               <Table.Th>{t("sources.fields.hasAccess")}</Table.Th>
-              {canWrite?.can ? (
+              {showActions ? (
                 <Table.Th>{t("sources.fields.actions")}</Table.Th>
               ) : null}
             </Table.Tr>
@@ -352,32 +362,82 @@ export function SourceList() {
                     ? t("sources.fields.hasAccessYes")
                     : t("sources.fields.hasAccessNo")}
                 </Table.Td>
-                {canWrite?.can ? (
+                {showActions ? (
                   <Table.Td>
                     <Group gap="xs" wrap="nowrap">
-                      <Button
-                        size="compact-xs"
-                        variant="light"
-                        onClick={() => void openEdit(source)}
+                      <CanAccess
+                        resource={ModuleId.jobs}
+                        action={ModuleAction.list}
                       >
-                        {t("sources.edit")}
-                      </Button>
-                      <Tooltip
-                        label={t("sources.delete.disabledHint")}
-                        disabled={source.status === "disabled"}
-                      >
-                        <span>
+                        <Button
+                          size="compact-xs"
+                          variant="light"
+                          loading={enqueueBusyId === source.id}
+                          disabled={
+                            source.status !== "active" ||
+                            source.kind !== "database" ||
+                            !source.has_access
+                          }
+                          onClick={async () => {
+                            setEnqueueBusyId(source.id);
+                            try {
+                              await enqueueStructureJob(source.id);
+                              open?.({
+                                type: "success",
+                                message: t("jobs.enqueue.success"),
+                              });
+                            } catch (err) {
+                              open?.({
+                                type: "error",
+                                message:
+                                  err instanceof ApiError
+                                    ? err.detail
+                                    : String(err),
+                              });
+                            } finally {
+                              setEnqueueBusyId(null);
+                            }
+                          }}
+                        >
+                          {t("jobs.enqueue")}
+                        </Button>
+                        <Button
+                          size="compact-xs"
+                          variant="default"
+                          onClick={() => setJobsSource(source)}
+                        >
+                          {t("jobs.sourceJobs.open")}
+                        </Button>
+                      </CanAccess>
+                      {canWrite?.can ? (
+                        <>
                           <Button
                             size="compact-xs"
                             variant="light"
-                            color="red"
-                            disabled={source.status !== "disabled" || deleting}
-                            onClick={() => setPendingDelete(source)}
+                            onClick={() => void openEdit(source)}
                           >
-                            {t("sources.delete")}
+                            {t("sources.edit")}
                           </Button>
-                        </span>
-                      </Tooltip>
+                          <Tooltip
+                            label={t("sources.delete.disabledHint")}
+                            disabled={source.status === "disabled"}
+                          >
+                            <span>
+                              <Button
+                                size="compact-xs"
+                                variant="light"
+                                color="red"
+                                disabled={
+                                  source.status !== "disabled" || deleting
+                                }
+                                onClick={() => setPendingDelete(source)}
+                              >
+                                {t("sources.delete")}
+                              </Button>
+                            </span>
+                          </Tooltip>
+                        </>
+                      ) : null}
                     </Group>
                   </Table.Td>
                 ) : null}
@@ -590,6 +650,15 @@ export function SourceList() {
           </Stack>
         </Modal>
       </Modal.Stack>
+
+      <SourceJobsModal
+        sourceId={jobsSource?.id ?? null}
+        sourceLabel={
+          jobsSource ? `${jobsSource.key} — ${jobsSource.name}` : undefined
+        }
+        opened={jobsSource !== null}
+        onClose={() => setJobsSource(null)}
+      />
     </Stack>
   );
 }

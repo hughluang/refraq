@@ -27,6 +27,11 @@ class JobRecord:
     celery_task_id: str | None
     error_code: str | None
     error_summary: str | None
+    summary: str
+    trigger_kind: str | None
+    trigger_ref: str | None
+    log_body: str
+    log_updated_at: datetime | None
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
@@ -81,6 +86,11 @@ class SqlJobStore:
                 celery_task_id=record.celery_task_id,
                 error_code=record.error_code,
                 error_summary=record.error_summary,
+                summary=record.summary,
+                trigger_kind=record.trigger_kind,
+                trigger_ref=record.trigger_ref,
+                log_body=record.log_body,
+                log_updated_at=record.log_updated_at,
                 created_at=record.created_at,
                 started_at=record.started_at,
                 finished_at=record.finished_at,
@@ -110,6 +120,11 @@ class SqlJobStore:
             row.celery_task_id = record.celery_task_id
             row.error_code = record.error_code
             row.error_summary = record.error_summary
+            row.summary = record.summary
+            row.trigger_kind = record.trigger_kind
+            row.trigger_ref = record.trigger_ref
+            row.log_body = record.log_body
+            row.log_updated_at = record.log_updated_at
             row.started_at = record.started_at
             row.finished_at = record.finished_at
             session.flush()
@@ -150,6 +165,11 @@ def _row_to_job(row: object) -> JobRecord:
         celery_task_id=row.celery_task_id,
         error_code=row.error_code,
         error_summary=row.error_summary,
+        summary=row.summary or "",
+        trigger_kind=row.trigger_kind,
+        trigger_ref=row.trigger_ref,
+        log_body=row.log_body or "",
+        log_updated_at=row.log_updated_at,
         created_at=row.created_at,
         started_at=row.started_at,
         finished_at=row.finished_at,
@@ -183,11 +203,20 @@ def new_job_id() -> str:
     return f"job_{uuid.uuid4().hex[:12]}"
 
 
+def format_job_log_line(*, level: str, message: str, at: datetime | None = None) -> str:
+    ts = (at or datetime.utcnow()).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return f"{ts} {level.upper()} {message}"
+
+
 def create_queued_job(
     *,
     kind: str,
     input: dict[str, Any],
     created_by: str | None = None,
+    summary: str = "",
+    trigger_kind: str | None = None,
+    trigger_ref: str | None = None,
+    log_body: str = "",
 ) -> JobRecord:
     now = datetime.utcnow()
     record = JobRecord(
@@ -199,11 +228,34 @@ def create_queued_job(
         celery_task_id=None,
         error_code=None,
         error_summary=None,
+        summary=summary,
+        trigger_kind=trigger_kind,
+        trigger_ref=trigger_ref,
+        log_body=log_body,
+        log_updated_at=now if log_body else None,
         created_at=now,
         started_at=None,
         finished_at=None,
     )
     return get_job_store().create(record)
+
+
+def append_job_log(
+    job_id: str,
+    *,
+    level: str,
+    message: str,
+) -> JobRecord | None:
+    """Append one line to Job.log_body. Returns None if Job missing."""
+    store = get_job_store()
+    record = store.get(job_id)
+    if record is None:
+        return None
+    now = datetime.utcnow()
+    line = format_job_log_line(level=level, message=message, at=now)
+    record.log_body = f"{record.log_body}\n{line}" if record.log_body else line
+    record.log_updated_at = now
+    return store.save(record)
 
 
 def mark_running(job_id: str, *, celery_task_id: str | None = None) -> JobRecord | None:

@@ -6,6 +6,7 @@ from datetime import datetime
 
 from backend.core.config import get_settings
 from backend.jobs.store import (
+    append_job_log,
     get_job_store,
     mark_failed,
     mark_running,
@@ -40,61 +41,59 @@ def run_structure_job(job_id: str) -> dict[str, str]:
     if current.status != "running":
         return {"status": current.status}
     if current.kind != "structure":
-        mark_failed(
+        return _fail(
             job_id,
             error_code="JOB_INPUT_INVALID",
             error_summary=f"Unsupported job kind: {current.kind}",
         )
-        return {"status": "failed", "error_code": "JOB_INPUT_INVALID"}
+
+    append_job_log(job_id, level="info", message="structure job started")
 
     source_id = current.input.get("source_id")
     if not isinstance(source_id, str):
-        mark_failed(
+        return _fail(
             job_id,
             error_code="JOB_INPUT_INVALID",
             error_summary="structure job requires source_id",
         )
-        return {"status": "failed", "error_code": "JOB_INPUT_INVALID"}
 
     sources = get_source_store()
     source = sources.get_source(source_id)
     if source is None:
-        mark_failed(
+        return _fail(
             job_id,
             error_code="JOB_INPUT_INVALID",
             error_summary="Source not found",
         )
-        return {"status": "failed", "error_code": "JOB_INPUT_INVALID"}
 
     if _cancelled(job_id):
         return {"status": "cancelled"}
 
+    append_job_log(job_id, level="info", message=f"loaded source {source.key}")
+
     if not source.engine or not source.access_ciphertext:
-        mark_failed(
+        return _fail(
             job_id,
             error_code="JOB_INPUT_INVALID",
             error_summary="Source has no access configuration",
         )
-        return {"status": "failed", "error_code": "JOB_INPUT_INVALID"}
 
     connector = get_connector(source.engine)
     if connector is None:
-        mark_failed(
+        return _fail(
             job_id,
             error_code="JOB_CONNECTOR_UNAVAILABLE",
             error_summary=f"No connector for engine {source.engine}",
         )
-        return {"status": "failed", "error_code": "JOB_CONNECTOR_UNAVAILABLE"}
 
     try:
         access = decrypt_access_blob(source.access_ciphertext)
     except Exception as exc:  # noqa: BLE001
-        mark_failed(
+        return _fail(
             job_id,
             error_code="JOB_SECRET_MISSING",
             error_summary=f"Access decrypt failed: {exc}",
         )
-        return {"status": "failed", "error_code": "JOB_SECRET_MISSING"}
 
     endpoint = endpoint_from_access(
         engine=source.engine,
@@ -106,16 +105,23 @@ def run_structure_job(job_id: str) -> dict[str, str]:
     if _cancelled(job_id):
         return {"status": "cancelled"}
 
+    append_job_log(job_id, level="info", message="collecting structure…")
     try:
         collected = connector.collect_structure(endpoint)
     except ConnectorError as exc:
         if _cancelled(job_id):
             return {"status": "cancelled"}
-        mark_failed(job_id, error_code=exc.code, error_summary=exc.message)
-        return {"status": "failed", "error_code": exc.code}
+        return _fail(job_id, error_code=exc.code, error_summary=exc.message)
 
     if _cancelled(job_id):
         return {"status": "cancelled"}
+
+    col_count = sum(len(obj.columns) for obj in collected.objects)
+    append_job_log(
+        job_id,
+        level="info",
+        message=f"collected {len(collected.objects)} objects, {col_count} columns",
+    )
 
     records = _to_catalog_records(
         source_id=source_id,
@@ -126,6 +132,7 @@ def run_structure_job(job_id: str) -> dict[str, str]:
         collected=collected,
     )
     settings = get_settings()
+    append_job_log(job_id, level="info", message="applying catalog snapshot…")
     try:
         apply_structure_snapshot(
             source_id=source_id,
@@ -138,13 +145,23 @@ def run_structure_job(job_id: str) -> dict[str, str]:
             source_key=source.key,
         )
     except CatalogWriteAborted as exc:
-        mark_failed(job_id, error_code=exc.code, error_summary=exc.message)
-        return {"status": "failed", "error_code": exc.code}
+        return _fail(job_id, error_code=exc.code, error_summary=exc.message)
 
+    append_job_log(job_id, level="info", message="succeeded")
     final = mark_succeeded(job_id)
     if final is None:
         return {"status": "missing"}
     return {"status": final.status}
+
+
+def _fail(job_id: str, *, error_code: str, error_summary: str) -> dict[str, str]:
+    append_job_log(
+        job_id,
+        level="error",
+        message=f"failed: {error_code} — {error_summary}",
+    )
+    mark_failed(job_id, error_code=error_code, error_summary=error_summary)
+    return {"status": "failed", "error_code": error_code}
 
 
 def _cancelled(job_id: str) -> bool:

@@ -100,12 +100,12 @@ Platform durable asynchronous execution (see root `CONTEXT.md`). Metadata struct
 Rules:
 
 - Job is **not** owned by Source. Do not treat `source_id` as a universal Job column — it lives in `input` when required.
-- Metadata enqueue/list for Source-scoped work uses the **Source facade** (`docs/api-contracts-jobs.md`): `POST/GET /sources/{id}/jobs`.
-- Creating a structure Job requires `jobs:run` and, for database Sources, a usable encrypted access blob on the Source row.
-- Workers load reachability from the Source identified in `input`; `input` does not carry endpoint material.
+- Metadata enqueue/list for Source-scoped work uses the **Source facade** (`docs/api-contracts-jobs.md`): `POST/GET /sources/{id}/jobs`. Platform-wide observe uses `GET /jobs` and `GET /jobs/{id}` / `.../logs` / cancel.
+- Creating a structure Job requires `jobs:run` and, for database Sources, a usable encrypted access blob on the Source row. Enqueue writes `summary` (`structure · {source_key}`) and `trigger_kind`/`trigger_ref` alongside `created_by_user_id`.
+- Workers load reachability from the Source identified in `input`; `input` does not carry endpoint material. Workers append operator-visible lines to Job `log_body`.
 - Jobs are durable records; queue transport is Redis-backed via Celery (see `docs/adr/0004-redis-queue-for-ingestion.md`, `docs/adr/0006-celery-platform-async-runtime.md`).
 - Successful structure Jobs write/refresh **Catalog Objects** on the Source identified in `input`.
-- Console module id `jobs`.
+- Console module id `jobs` is the global Job observe surface; structure enqueue and Source-scoped Job lists live on the Sources module.
 
 ### 4.3 Catalog Object And Columns
 
@@ -165,7 +165,7 @@ Fixed catalog additions (exact strings are normative for Roles UI):
 | `sources:write` | Create/update/disable Sources; hard-delete disabled Sources; replace full `access`; fetch full access for edit; run Source reachability tests |
 | `metadata:read` | Browse Catalog Objects, columns, DDL, semantics, joins |
 | `metadata:write` | Write semantics and join edges |
-| `jobs:run` | Enqueue/cancel **Jobs** (structure and later kinds) via domain facades; view Jobs on those facades |
+| `jobs:run` | Enqueue/cancel **Jobs** via domain facades; list/view Jobs on Source facades and platform `GET /jobs` |
 | `query:run` | Execute controlled read-only SQL against a Source |
 | `catalog:sample` | Run Catalog Sample (structured live peek) on a Catalog Object |
 | `tokens:read` | List own User PAT metadata (never full token after creation) |
@@ -190,7 +190,7 @@ Initial modules (ids stable):
 | `sources` | Source registration and reachability management | `sources:read` |
 | `catalog` | Browse Catalog Objects / columns; object detail at `/console/catalog/:id` (`show` → `metadata:read`) for full semantics, structure facts, Catalog Sample, joins, and DDL | `metadata:read` |
 | `business-domains` | Global Business Domain registry (immutable `code`); create/edit/delete → `metadata:write` | `metadata:read` |
-| `jobs` | Job list and trigger entry points | `jobs:run` (list) |
+| `jobs` | Global Job list and observe (logs/detail); enqueue lives on Sources | `jobs:run` (list) |
 
 The catalog object detail page is the Console semantics maintenance surface: it exposes the admitted object/column semantics model (§10, ADR 0015), structure facts (PK/FK/indexes/comments), **Catalog Sample** when the actor has `catalog:sample`, and join graph / path exploration. List remains the Source-scoped browse entry; deep links use the `show` route so readers with only `metadata:read` can open detail without needing `metadata:write`.
 

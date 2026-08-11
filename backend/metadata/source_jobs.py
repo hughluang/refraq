@@ -8,6 +8,7 @@ from backend.jobs.store import (
     JobRecord,
     JobStatus,
     create_queued_job,
+    format_job_log_line,
     get_job_store,
 )
 from backend.metadata.errors import (
@@ -29,8 +30,11 @@ def dispatch_queued_job(job: JobRecord) -> str:
         args=[job.id],
         task_id=job.id,
     )
-    job.celery_task_id = async_result.id
-    get_job_store().save(job)
+    # Re-load: eager Celery may have mutated Job status before we return.
+    stored = get_job_store().get(job.id)
+    assert stored is not None, f"Job {job.id} missing after dispatch"
+    stored.celery_task_id = async_result.id
+    get_job_store().save(stored)
     return async_result.id
 
 
@@ -72,10 +76,19 @@ def enqueue_structure_job(
     if active:
         raise JobAlreadyActive()
 
+    summary = f"structure · {source.key}"
+    queued_line = format_job_log_line(
+        level="info",
+        message=f"queued for source {source.key}",
+    )
     job = create_queued_job(
         kind="structure",
         input={"source_id": source_id},
         created_by=actor_user_id,
+        summary=summary,
+        trigger_kind="user",
+        trigger_ref=actor_user_id,
+        log_body=queued_line,
     )
     dispatch_queued_job(job)
     persist_audit_event(

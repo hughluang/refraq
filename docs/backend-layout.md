@@ -79,7 +79,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Module | Published for |
 |--------|----------------|
 | `backend.jobs.api` | Seam policy only: `revoke_queued_delivery`, `job_out` (JobRecord→JobOut) |
-| `backend.jobs.store` | Store port used by domain facades and reaper (create/get/status transitions, `JobRecord`, `TERMINAL`) |
+| `backend.jobs.store` | Store port used by domain facades and reaper (create/get/status transitions, `JobRecord`, `TERMINAL`, `append_job_log`, `format_job_log_line`) |
 | `backend.jobs.errors` | Mechanism Job errors (`JobNotFound`, `JobNotCancellable`, …) |
 | `backend.jobs.schemas.*` | Mechanism Job response shapes (shared with domain facades) |
 | `backend.jobs.routers.*` | Mechanism-resource HTTP (by Job id); mounted by `main` |

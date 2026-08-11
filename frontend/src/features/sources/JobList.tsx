@@ -1,27 +1,19 @@
 "use client";
 
-import { Badge, Button, Select, Table, Text } from "@mantine/core";
-import {
-  CanAccess,
-  useCan,
-  useNotification,
-  useTranslate,
-} from "@refinedev/core";
+import { Badge, Button, Group, Table, Text } from "@mantine/core";
+import { useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useState } from "react";
 
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
 import { PageLoader } from "@/components/feedback/PageLoader";
 import { PageChrome } from "@/components/layout/PageChrome";
-import { ModuleAction, ModuleId } from "@/features/console/module-identity";
-import {
-  cancelJob,
-  enqueueStructureJob,
-  listSourceJobs,
-  listSources,
-} from "@/features/sources/api";
-import type { Job, Source } from "@/features/sources/types";
+import { cancelJob, listJobs } from "@/features/sources/api";
+import { formatJobTrigger } from "@/features/sources/formatJobTrigger";
+import { JobDetailModal } from "@/features/sources/JobDetailModal";
+import type { Job } from "@/features/sources/types";
 import { ApiError } from "@/lib/api";
+import { formatInstant, formatJobDuration } from "@/lib/datetime";
 
 const STATUS_COLOR: Record<string, string> = {
   queued: "blue",
@@ -34,122 +26,55 @@ const STATUS_COLOR: Record<string, string> = {
 export function JobList() {
   const t = useTranslate();
   const { open } = useNotification();
-  const { data: canRun } = useCan({
-    resource: ModuleId.jobs,
-    action: ModuleAction.list,
-  });
 
-  const [sources, setSources] = useState<Source[]>([]);
-  const [sourceId, setSourceId] = useState<string | null>(null);
   const [items, setItems] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [detailId, setDetailId] = useState<string | null>(null);
 
-  const loadSources = useCallback(async () => {
-    setLoading(true);
+  const loadJobs = useCallback(async () => {
     try {
-      const data = await listSources();
-      setSources(data.items);
-      if (!sourceId && data.items[0]) setSourceId(data.items[0].id);
+      const data = await listJobs();
+      setItems(data.items);
+      setError(null);
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : String(err));
+      const message = err instanceof ApiError ? err.detail : String(err);
+      setError(message);
+      open?.({ type: "error", message });
     } finally {
       setLoading(false);
     }
-  }, [sourceId]);
-
-  const loadJobs = useCallback(async () => {
-    if (!sourceId) {
-      setItems([]);
-      return;
-    }
-    try {
-      const data = await listSourceJobs(sourceId);
-      setItems(data.items);
-    } catch (err) {
-      open?.({
-        type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
-      });
-    }
-  }, [sourceId, open]);
-
-  useEffect(() => {
-    void loadSources();
-  }, [loadSources]);
+  }, [open]);
 
   useEffect(() => {
     void loadJobs();
   }, [loadJobs]);
 
   if (loading) return <PageLoader />;
-  if (error) return <PageError message={error} />;
-
-  const listActions = (
-    <>
-      <Button size="sm" variant="light" onClick={() => void loadJobs()}>
-        {t("jobs.refresh")}
-      </Button>
-      <CanAccess resource={ModuleId.jobs} action={ModuleAction.list}>
-        <Button
-          size="sm"
-          loading={busy}
-          disabled={!sourceId || !canRun?.can}
-          onClick={async () => {
-            if (!sourceId) return;
-            setBusy(true);
-            try {
-              await enqueueStructureJob(sourceId);
-              open?.({
-                type: "success",
-                message: t("jobs.enqueue.success"),
-              });
-              await loadJobs();
-            } catch (err) {
-              open?.({
-                type: "error",
-                message:
-                  err instanceof ApiError ? err.detail : String(err),
-              });
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          {t("jobs.enqueue")}
-        </Button>
-      </CanAccess>
-    </>
-  );
+  if (error && items.length === 0) return <PageError message={error} />;
 
   return (
     <PageChrome
       title={t("jobs.title")}
       description={t("jobs.description")}
-      actions={listActions}
+      actions={
+        <Button size="sm" variant="light" onClick={() => void loadJobs()}>
+          {t("jobs.refresh")}
+        </Button>
+      }
     >
-      <Select
-        mb="md"
-        label={t("jobs.fields.source")}
-        data={sources.map((s) => ({ value: s.id, label: `${s.key} — ${s.name}` }))}
-        value={sourceId}
-        onChange={setSourceId}
-        searchable
-        w={320}
-      />
-
-      {!sourceId || items.length === 0 ? (
+      {items.length === 0 ? (
         <EmptyState message={t("jobs.empty")} />
       ) : (
         <Table striped highlightOnHover>
           <Table.Thead>
             <Table.Tr>
-              <Table.Th>id</Table.Th>
+              <Table.Th>{t("jobs.fields.summary")}</Table.Th>
               <Table.Th>{t("jobs.fields.kind")}</Table.Th>
               <Table.Th>{t("jobs.fields.status")}</Table.Th>
-              <Table.Th>{t("jobs.fields.error")}</Table.Th>
+              <Table.Th>{t("jobs.fields.trigger")}</Table.Th>
               <Table.Th>{t("jobs.fields.created")}</Table.Th>
+              <Table.Th>{t("jobs.fields.duration")}</Table.Th>
               <Table.Th />
             </Table.Tr>
           </Table.Thead>
@@ -157,7 +82,8 @@ export function JobList() {
             {items.map((job) => (
               <Table.Tr key={job.id}>
                 <Table.Td>
-                  <Text size="sm" ff="monospace">
+                  <Text size="sm">{job.summary || "—"}</Text>
+                  <Text size="xs" c="dimmed" ff="monospace">
                     {job.id}
                   </Text>
                 </Table.Td>
@@ -168,43 +94,60 @@ export function JobList() {
                   </Badge>
                 </Table.Td>
                 <Table.Td>
-                  <Text size="sm" c="dimmed" lineClamp={2}>
-                    {job.error_code
-                      ? `${job.error_code}: ${job.error_message ?? ""}`
-                      : "—"}
-                  </Text>
+                  <Text size="sm">{formatJobTrigger(job, t)}</Text>
                 </Table.Td>
-                <Table.Td>{job.created_at}</Table.Td>
                 <Table.Td>
-                  {job.status === "queued" || job.status === "running" ? (
+                  <Text size="sm">{formatInstant(job.created_at)}</Text>
+                </Table.Td>
+                <Table.Td>
+                  <Text size="sm">{formatJobDuration(job)}</Text>
+                </Table.Td>
+                <Table.Td>
+                  <Group gap="xs" wrap="nowrap">
                     <Button
                       size="xs"
                       variant="light"
-                      color="red"
-                      onClick={async () => {
-                        try {
-                          await cancelJob(job.id);
-                          await loadJobs();
-                        } catch (err) {
-                          open?.({
-                            type: "error",
-                            message:
-                              err instanceof ApiError
-                                ? err.detail
-                                : String(err),
-                          });
-                        }
-                      }}
+                      onClick={() => setDetailId(job.id)}
                     >
-                      {t("jobs.cancel")}
+                      {t("jobs.view")}
                     </Button>
-                  ) : null}
+                    {job.status === "queued" || job.status === "running" ? (
+                      <Button
+                        size="xs"
+                        variant="light"
+                        color="red"
+                        onClick={async () => {
+                          try {
+                            await cancelJob(job.id);
+                            await loadJobs();
+                          } catch (err) {
+                            open?.({
+                              type: "error",
+                              message:
+                                err instanceof ApiError
+                                  ? err.detail
+                                  : String(err),
+                            });
+                          }
+                        }}
+                      >
+                        {t("jobs.cancel")}
+                      </Button>
+                    ) : null}
+                  </Group>
                 </Table.Td>
               </Table.Tr>
             ))}
           </Table.Tbody>
         </Table>
       )}
+
+      <JobDetailModal
+        jobId={detailId}
+        opened={detailId !== null}
+        onClose={() => setDetailId(null)}
+        onChanged={() => void loadJobs()}
+      />
     </PageChrome>
   );
 }
