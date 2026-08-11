@@ -18,6 +18,8 @@ import { useEffect, useMemo, useState } from "react";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { runObjectSample } from "@/features/sources/api";
 import {
+  defaultSampleOrderColumn,
+  formatSampleCell,
   isSampleFilterOp,
   sampleFilterSnapshot,
   type SampleFilter,
@@ -57,7 +59,9 @@ export function SampleTab({ object, source }: SampleTabProps) {
   const [limit, setLimit] = useState(DEFAULT_LIMIT);
   const [offset, setOffset] = useState(0);
   const [filter, setFilter] = useState<SampleFilter>(DEFAULT_FILTER);
-  const [orderColumn, setOrderColumn] = useState<string | null>(null);
+  const [orderColumn, setOrderColumn] = useState<string | null>(() =>
+    defaultSampleOrderColumn(object),
+  );
   const [orderDirection, setOrderDirection] = useState<"asc" | "desc">("asc");
   const [result, setResult] = useState<SampleResult | null>(null);
   const [applied, setApplied] = useState<AppliedParams | null>(null);
@@ -68,7 +72,7 @@ export function SampleTab({ object, source }: SampleTabProps) {
     setLimit(DEFAULT_LIMIT);
     setOffset(0);
     setFilter(DEFAULT_FILTER);
-    setOrderColumn(null);
+    setOrderColumn(defaultSampleOrderColumn(object));
     setOrderDirection("asc");
     setResult(null);
     setApplied(null);
@@ -218,7 +222,8 @@ export function SampleTab({ object, source }: SampleTabProps) {
           label={t("catalog.sample.filterValue")}
           value={filter.value}
           onChange={(e) => {
-            setFilter((prev) => ({ ...prev, value: e.currentTarget.value }));
+            const value = e.currentTarget.value;
+            setFilter((prev) => ({ ...prev, value }));
             setOffset(0);
           }}
           w={200}
@@ -343,9 +348,7 @@ export function SampleTab({ object, source }: SampleTabProps) {
                       {row.map((cell, cellIdx) => (
                         <Table.Td key={`${rowIdx}-${cellIdx}`}>
                           <Text size="xs" style={{ whiteSpace: "pre-wrap" }}>
-                            {cell === null || cell === undefined
-                              ? "NULL"
-                              : String(cell)}
+                            {formatSampleCell(cell)}
                           </Text>
                         </Table.Td>
                       ))}
