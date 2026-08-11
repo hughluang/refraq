@@ -15,10 +15,9 @@ from backend.metadata.catalog.records import (
 )
 
 PROTECTED_JOIN_ORIGINS = frozenset({"human", "mcp"})
-# Back-compat private alias used inside persistence adapters.
-_PROTECTED_JOIN_ORIGINS = PROTECTED_JOIN_ORIGINS
 
-def _merge_fk_snapshot(
+
+def merge_fk_snapshot(
     existing: list[CatalogForeignKeyRecord],
     incoming: list[CatalogForeignKeyRecord],
 ) -> list[CatalogForeignKeyRecord]:
@@ -57,7 +56,7 @@ def _merge_fk_snapshot(
     return out
 
 
-def _merge_index_snapshot(
+def merge_index_snapshot(
     existing: list[CatalogIndexRecord],
     incoming: list[CatalogIndexRecord],
 ) -> list[CatalogIndexRecord]:

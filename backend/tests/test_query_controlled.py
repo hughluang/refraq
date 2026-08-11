@@ -492,3 +492,32 @@ def test_query_max_rows_below_one(
     events, _ = get_audit_store().list_events(action="query.run")
     assert len(events) == 1
     assert events[0].detail.get("code") == "QUERY_ROW_LIMIT"
+
+
+def test_query_unexpected_exception_maps_to_query_failed(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _make_source(client, key="boom-src")
+
+    class _BoomConnector(_RecordingConnector):
+        def run_readonly(
+            self,
+            endpoint: object,
+            sql: str,
+            *,
+            max_rows: int,
+            timeout_sec: int,
+        ) -> QueryResult:
+            raise RuntimeError("driver blew up")
+
+    monkeypatch.setattr(
+        query_service, "get_connector", lambda engine: _BoomConnector()
+    )
+    resp = client.post(
+        f"/sources/{source['id']}/query",
+        json={"sql": "SELECT 1"},
+    )
+    assert resp.status_code == 502
+    assert resp.json()["code"] == "QUERY_FAILED"
+    events, _ = get_audit_store().list_events(action="query.run")
+    assert any(e.detail.get("code") == "QUERY_FAILED" for e in events)

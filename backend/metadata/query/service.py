@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from backend.admin.audit import persist_audit_event
@@ -59,6 +60,16 @@ class SampleOutcome:
     limit: int
     has_more: bool
     sql: str | None
+
+
+@dataclass(frozen=True)
+class ReadonlyAuditSpec:
+    """Mode-specific audit metadata for the shared readonly shell."""
+
+    action: str
+    resource_type: str
+    resource_id: str
+    extra_detail: dict[str, Any] = field(default_factory=dict)
 
 
 def _sql_detail(sql: str, *, max_rows: int, code: str | None = None) -> dict[str, Any]:
@@ -138,6 +149,92 @@ def _execute_readonly(
         pool.shutdown(wait=False, cancel_futures=True)
 
 
+def _execute_readonly_audited(
+    *,
+    max_rows: int,
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+    audit: ReadonlyAuditSpec,
+    started: float,
+    get_sql: Callable[[], str],
+    get_success_resource_id: Callable[[], str] | None = None,
+    run: Callable[[], QueryResult],
+) -> QueryResult:
+    """Shared body → timing → audit → error-mapping shell.
+
+    ``run`` may include mode prechecks / compile; the shell audits both
+    pre-execute and execute failures. ``get_sql`` is read at audit time so
+    Sample can fill compiled SQL late. Failures always use
+    ``audit.resource_id``; success may override via ``get_success_resource_id``.
+    """
+
+    def _failure_detail(code: str) -> dict[str, Any]:
+        detail = _sql_detail(get_sql(), max_rows=max_rows, code=code)
+        detail["duration_ms"] = int((time.perf_counter() - started) * 1000)
+        detail.update(audit.extra_detail)
+        return detail
+
+    try:
+        result = run()
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        detail = _sql_detail(get_sql(), max_rows=max_rows)
+        detail["duration_ms"] = duration_ms
+        detail.update(audit.extra_detail)
+        success_resource_id = (
+            get_success_resource_id()
+            if get_success_resource_id is not None
+            else audit.resource_id
+        )
+        _audit(
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+            resource_type=audit.resource_type,
+            resource_id=success_resource_id,
+            action=audit.action,
+            result="success",
+            detail=detail,
+        )
+        return result
+    except ConnectorError as exc:
+        mapped: AppError = (
+            QueryTimeout(exc.message)
+            if exc.code == "QUERY_TIMEOUT"
+            else QueryFailed(exc.message)
+        )
+        _audit(
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+            resource_type=audit.resource_type,
+            resource_id=audit.resource_id,
+            action=audit.action,
+            result="failure",
+            detail=_failure_detail(mapped.code),
+        )
+        raise mapped from exc
+    except AppError as exc:
+        _audit(
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+            resource_type=audit.resource_type,
+            resource_id=audit.resource_id,
+            action=audit.action,
+            result="failure",
+            detail=_failure_detail(exc.code),
+        )
+        raise
+    except Exception as exc:  # noqa: BLE001 — map unexpected driver/runtime errors
+        _audit(
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+            resource_type=audit.resource_type,
+            resource_id=audit.resource_id,
+            action=audit.action,
+            result="failure",
+            detail=_failure_detail("QUERY_FAILED"),
+        )
+        raise QueryFailed(str(exc)) from exc
+
+
 def run_controlled_query(
     *,
     source_id: str,
@@ -152,82 +249,40 @@ def run_controlled_query(
     effective_max = DEFAULT_MAX_ROWS if max_rows is None else int(max_rows)
     started = time.perf_counter()
 
-    try:
+    def run() -> QueryResult:
         if effective_max < 1:
             raise QueryRowLimit(f"max_rows must be at least 1, got {effective_max}")
         if effective_max > platform_cap:
             raise QueryRowLimit(
                 f"max_rows {effective_max} exceeds platform cap {platform_cap}"
             )
-
-        result = _execute_readonly(
+        return _execute_readonly(
             source_id=source_id,
             sql=sql,
             max_rows=effective_max,
             timeout_sec=timeout_sec,
         )
-        duration_ms = int((time.perf_counter() - started) * 1000)
-        detail = _sql_detail(sql, max_rows=effective_max)
-        detail["duration_ms"] = duration_ms
-        _audit(
-            actor_user_id=actor_user_id,
-            actor_token_id=actor_token_id,
+
+    result = _execute_readonly_audited(
+        max_rows=effective_max,
+        actor_user_id=actor_user_id,
+        actor_token_id=actor_token_id,
+        audit=ReadonlyAuditSpec(
+            action="query.run",
             resource_type="source",
             resource_id=source_id,
-            action="query.run",
-            result="success",
-            detail=detail,
-        )
-        return QueryOutcome(
-            columns=result.columns,
-            rows=result.rows,
-            truncated=result.truncated,
-            duration_ms=duration_ms,
-        )
-    except ConnectorError as exc:
-        mapped: AppError = (
-            QueryTimeout(exc.message)
-            if exc.code == "QUERY_TIMEOUT"
-            else QueryFailed(exc.message)
-        )
-        detail = _sql_detail(sql, max_rows=effective_max, code=mapped.code)
-        detail["duration_ms"] = int((time.perf_counter() - started) * 1000)
-        _audit(
-            actor_user_id=actor_user_id,
-            actor_token_id=actor_token_id,
-            resource_type="source",
-            resource_id=source_id,
-            action="query.run",
-            result="failure",
-            detail=detail,
-        )
-        raise mapped from exc
-    except AppError as exc:
-        detail = _sql_detail(sql, max_rows=effective_max, code=exc.code)
-        detail["duration_ms"] = int((time.perf_counter() - started) * 1000)
-        _audit(
-            actor_user_id=actor_user_id,
-            actor_token_id=actor_token_id,
-            resource_type="source",
-            resource_id=source_id,
-            action="query.run",
-            result="failure",
-            detail=detail,
-        )
-        raise
-    except Exception as exc:  # noqa: BLE001 — map unexpected driver/runtime errors
-        detail = _sql_detail(sql, max_rows=effective_max, code="QUERY_FAILED")
-        detail["duration_ms"] = int((time.perf_counter() - started) * 1000)
-        _audit(
-            actor_user_id=actor_user_id,
-            actor_token_id=actor_token_id,
-            resource_type="source",
-            resource_id=source_id,
-            action="query.run",
-            result="failure",
-            detail=detail,
-        )
-        raise QueryFailed(str(exc)) from exc
+        ),
+        started=started,
+        get_sql=lambda: sql,
+        run=run,
+    )
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    return QueryOutcome(
+        columns=result.columns,
+        rows=result.rows,
+        truncated=result.truncated,
+        duration_ms=duration_ms,
+    )
 
 
 def run_catalog_sample(
@@ -249,8 +304,10 @@ def run_catalog_sample(
     effective_offset = int(offset)
     started = time.perf_counter()
     compiled_sql = ""
+    success_resource_id = object_id
 
-    try:
+    def run() -> QueryResult:
+        nonlocal compiled_sql, success_resource_id
         if effective_offset < 0:
             raise SampleFilterInvalid(f"offset must be >= 0, got {effective_offset}")
         if effective_limit < 1:
@@ -266,6 +323,7 @@ def run_catalog_sample(
             )
 
         obj = catalog_service.get_object(object_id)
+        success_resource_id = obj.id
         source = require_source(obj.source_id)
         if not source.engine:
             raise SourceEngineUnsupported()
@@ -282,91 +340,40 @@ def run_catalog_sample(
             offset=effective_offset,
             limit=effective_limit,
         )
-
-        result = _execute_readonly(
+        return _execute_readonly(
             source_id=obj.source_id,
             sql=compiled_sql,
             max_rows=effective_limit,
             timeout_sec=timeout_sec,
         )
-        duration_ms = int((time.perf_counter() - started) * 1000)
-        detail = _sql_detail(compiled_sql, max_rows=effective_limit)
-        detail["duration_ms"] = duration_ms
-        detail["offset"] = effective_offset
-        detail["limit"] = effective_limit
-        _audit(
-            actor_user_id=actor_user_id,
-            actor_token_id=actor_token_id,
-            resource_type="catalog_object",
-            resource_id=obj.id,
+
+    result = _execute_readonly_audited(
+        max_rows=effective_limit,
+        actor_user_id=actor_user_id,
+        actor_token_id=actor_token_id,
+        audit=ReadonlyAuditSpec(
             action="catalog.sample",
-            result="success",
-            detail=detail,
-        )
-        has_more = len(result.rows) == effective_limit
-        return SampleOutcome(
-            columns=result.columns,
-            rows=result.rows,
-            truncated=result.truncated,
-            duration_ms=duration_ms,
-            offset=effective_offset,
-            limit=effective_limit,
-            has_more=has_more,
-            sql=compiled_sql if include_sql else None,
-        )
-    except ConnectorError as exc:
-        mapped: AppError = (
-            QueryTimeout(exc.message)
-            if exc.code == "QUERY_TIMEOUT"
-            else QueryFailed(exc.message)
-        )
-        detail = _sql_detail(
-            compiled_sql or "",
-            max_rows=effective_limit,
-            code=mapped.code,
-        )
-        detail["duration_ms"] = int((time.perf_counter() - started) * 1000)
-        _audit(
-            actor_user_id=actor_user_id,
-            actor_token_id=actor_token_id,
             resource_type="catalog_object",
             resource_id=object_id,
-            action="catalog.sample",
-            result="failure",
-            detail=detail,
-        )
-        raise mapped from exc
-    except AppError as exc:
-        detail = _sql_detail(
-            compiled_sql or "",
-            max_rows=effective_limit,
-            code=exc.code,
-        )
-        detail["duration_ms"] = int((time.perf_counter() - started) * 1000)
-        _audit(
-            actor_user_id=actor_user_id,
-            actor_token_id=actor_token_id,
-            resource_type="catalog_object",
-            resource_id=object_id,
-            action="catalog.sample",
-            result="failure",
-            detail=detail,
-        )
-        raise
-    except Exception as exc:  # noqa: BLE001
-        detail = _sql_detail(
-            compiled_sql or "",
-            max_rows=effective_limit,
-            code="QUERY_FAILED",
-        )
-        detail["duration_ms"] = int((time.perf_counter() - started) * 1000)
-        _audit(
-            actor_user_id=actor_user_id,
-            actor_token_id=actor_token_id,
-            resource_type="catalog_object",
-            resource_id=object_id,
-            action="catalog.sample",
-            result="failure",
-            detail=detail,
-        )
-        raise QueryFailed(str(exc)) from exc
+            extra_detail={
+                "offset": effective_offset,
+                "limit": effective_limit,
+            },
+        ),
+        started=started,
+        get_sql=lambda: compiled_sql,
+        get_success_resource_id=lambda: success_resource_id,
+        run=run,
+    )
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    has_more = len(result.rows) == effective_limit
+    return SampleOutcome(
+        columns=result.columns,
+        rows=result.rows,
+        truncated=result.truncated,
+        duration_ms=duration_ms,
+        offset=effective_offset,
+        limit=effective_limit,
+        has_more=has_more,
+        sql=compiled_sql if include_sql else None,
+    )

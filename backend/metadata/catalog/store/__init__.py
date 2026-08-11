@@ -7,7 +7,7 @@ from functools import lru_cache
 from typing import Any, Protocol
 
 from backend.core.config import get_settings
-from backend.metadata.catalog.fk_join_sync import PROTECTED_JOIN_ORIGINS, _PROTECTED_JOIN_ORIGINS
+from backend.metadata.catalog.fk_join_sync import PROTECTED_JOIN_ORIGINS
 from backend.metadata.catalog.records import (
     UNSET,
     CatalogColumnRecord,
@@ -71,13 +71,14 @@ class CatalogStore(Protocol):
 
     def list_present_for_source(self, source_id: str) -> list[CatalogObjectRecord]: ...
 
-    def replace_structure_snapshot(
+    def apply_structure_plan(
         self,
         *,
         source_id: str,
         job_id: str,
         objects: list[CatalogObjectRecord],
         schema_scope: str | None,
+        fail_safe_threshold: float,
         engine: str | None,
         kind: str,
         source_key: str,
@@ -186,7 +187,6 @@ __all__ = [
     "MemoryCatalogStore",
     "SqlCatalogStore",
     "PROTECTED_JOIN_ORIGINS",
-    "_PROTECTED_JOIN_ORIGINS",
     "apply_structure_snapshot",
     "get_catalog_store",
     "reset_catalog_store",

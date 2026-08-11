@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime
-from unittest.mock import patch
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -29,8 +30,9 @@ from backend.metadata.catalog.records import (  # noqa: E402
     CatalogObjectRecord,
 )
 from backend.metadata.catalog.store import get_catalog_store, reset_catalog_store  # noqa: E402
-from backend.metadata.connectors.base import QueryResult  # noqa: E402
+from backend.metadata.connectors.base import ConnectorError, QueryResult  # noqa: E402
 from backend.metadata.errors import SampleColumnUnknown, SampleFilterInvalid  # noqa: E402
+from backend.metadata.query import service as query_service  # noqa: E402
 from backend.metadata.query.compile_sample import (  # noqa: E402
     SampleFilterSpec,
     SampleOrderSpec,
@@ -185,6 +187,53 @@ def _seed_object(source_id: str, *, source_key: str = "mes-prod") -> CatalogObje
     return stored
 
 
+class _RecordingConnector:
+    engine = "postgresql"
+
+    def __init__(
+        self,
+        *,
+        rows: list[list[Any]] | None = None,
+        columns: list[str] | None = None,
+        sleep_sec: float = 0,
+    ) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self._rows = rows if rows is not None else [["1", "open"]]
+        self._columns = columns if columns is not None else ["id", "status"]
+        self._sleep_sec = sleep_sec
+
+    def test_connection(self, endpoint: object) -> None:
+        return None
+
+    def collect_structure(self, endpoint: object) -> object:
+        raise NotImplementedError
+
+    def run_readonly(
+        self,
+        endpoint: object,
+        sql: str,
+        *,
+        max_rows: int,
+        timeout_sec: int,
+    ) -> QueryResult:
+        if self._sleep_sec:
+            time.sleep(self._sleep_sec)
+        self.calls.append(
+            {
+                "sql": sql,
+                "max_rows": max_rows,
+                "timeout_sec": timeout_sec,
+            }
+        )
+        limited = self._rows[:max_rows]
+        truncated = len(self._rows) > max_rows
+        return QueryResult(
+            columns=self._columns,
+            rows=limited,
+            truncated=truncated,
+        )
+
+
 def test_compile_dialects_and_ops() -> None:
     known = {"id", "status"}
     pg = compile_sample_sql(
@@ -274,28 +323,26 @@ def test_compile_empty_columns_rejected() -> None:
         )
 
 
-def test_sample_success_permission_and_audit(client: TestClient) -> None:
+def test_sample_success_permission_and_audit(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     source = _make_source(client)
     obj = _seed_object(source["id"], source_key=source["key"])
-
-    fake = QueryResult(
-        columns=["id", "status"],
+    connector = _RecordingConnector(
         rows=[["1", "open"], ["2", "open"]],
-        truncated=False,
+        columns=["id", "status"],
     )
-    with patch(
-        "backend.metadata.query.service._execute_readonly",
-        return_value=fake,
-    ) as exec_mock:
-        resp = client.post(
-            f"/objects/{obj.id}/sample",
-            json={
-                "filters": [{"column": "status", "op": "eq", "value": "open"}],
-                "offset": 0,
-                "limit": 50,
-                "include_sql": True,
-            },
-        )
+    monkeypatch.setattr(query_service, "get_connector", lambda engine: connector)
+
+    resp = client.post(
+        f"/objects/{obj.id}/sample",
+        json={
+            "filters": [{"column": "status", "op": "eq", "value": "open"}],
+            "offset": 0,
+            "limit": 50,
+            "include_sql": True,
+        },
+    )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["columns"] == ["id", "status"]
@@ -305,13 +352,71 @@ def test_sample_success_permission_and_audit(client: TestClient) -> None:
     assert body["has_more"] is False
     assert body["sql"] is not None
     assert "LIMIT 50" in body["sql"]
-    assert exec_mock.called
+    assert len(connector.calls) == 1
+    assert "status = 'open'" in connector.calls[0]["sql"]
 
     events, _ = get_audit_store().list_events(action="catalog.sample")
     assert len(events) == 1
     assert events[0].resource_type == "catalog_object"
     assert events[0].resource_id == obj.id
     assert events[0].result == "success"
+
+
+def test_sample_connector_timeout_maps(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _make_source(client, key="sample-timeout")
+    obj = _seed_object(source["id"], source_key=source["key"])
+
+    class _TimeoutConnector(_RecordingConnector):
+        def run_readonly(
+            self,
+            endpoint: object,
+            sql: str,
+            *,
+            max_rows: int,
+            timeout_sec: int,
+        ) -> QueryResult:
+            raise ConnectorError(
+                "QUERY_TIMEOUT",
+                "canceling statement due to statement timeout",
+            )
+
+    monkeypatch.setattr(
+        query_service, "get_connector", lambda engine: _TimeoutConnector()
+    )
+    resp = client.post(f"/objects/{obj.id}/sample", json={"limit": 10})
+    assert resp.status_code == 504
+    assert resp.json()["code"] == "QUERY_TIMEOUT"
+    events, _ = get_audit_store().list_events(action="catalog.sample")
+    assert any(e.detail.get("code") == "QUERY_TIMEOUT" for e in events)
+
+
+def test_sample_endpoint_failed_maps(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _make_source(client, key="sample-fail")
+    obj = _seed_object(source["id"], source_key=source["key"])
+
+    class _FailConnector(_RecordingConnector):
+        def run_readonly(
+            self,
+            endpoint: object,
+            sql: str,
+            *,
+            max_rows: int,
+            timeout_sec: int,
+        ) -> QueryResult:
+            raise ConnectorError("QUERY_ENDPOINT_FAILED", "relation missing")
+
+    monkeypatch.setattr(
+        query_service, "get_connector", lambda engine: _FailConnector()
+    )
+    resp = client.post(f"/objects/{obj.id}/sample", json={"limit": 10})
+    assert resp.status_code == 502
+    assert resp.json()["code"] == "QUERY_FAILED"
+    events, _ = get_audit_store().list_events(action="catalog.sample")
+    assert any(e.detail.get("code") == "QUERY_FAILED" for e in events)
 
 
 def test_sample_page_cap_rejected(
@@ -327,6 +432,9 @@ def test_sample_page_cap_rejected(
     )
     assert resp.status_code == 400
     assert resp.json()["code"] == "QUERY_ROW_LIMIT"
+    events, _ = get_audit_store().list_events(action="catalog.sample")
+    assert len(events) == 1
+    assert events[0].detail["code"] == "QUERY_ROW_LIMIT"
 
 
 def test_sample_permission_denied(client: TestClient) -> None:

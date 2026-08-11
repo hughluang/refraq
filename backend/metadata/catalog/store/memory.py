@@ -7,15 +7,8 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
-from backend.metadata.catalog.fk_join_sync import (
-    _PROTECTED_JOIN_ORIGINS,
-    _fk_edges_for_object,
-    _merge_fk_snapshot,
-    _merge_index_snapshot,
-)
+from backend.metadata.catalog.fk_join_sync import PROTECTED_JOIN_ORIGINS
 from backend.metadata.catalog.identity import (
-    _incoming_covers_existing,
-    _match_existing_for_incoming,
     _recompute_column_locator,
     _recompute_object_locator,
 )
@@ -25,12 +18,13 @@ from backend.metadata.catalog.records import (
     CatalogJoinRecord,
     CatalogObjectRecord,
     CatalogWriteAborted,
-    new_column_id,
-    new_fk_id,
-    new_index_id,
     new_join_id,
 )
 from backend.metadata.catalog.search_rank import _paginate, _search_rank
+from backend.metadata.catalog.structure_merge import (
+    StructureRefreshPlan,
+    build_structure_refresh_plan,
+)
 
 class MemoryCatalogStore:
     def __init__(self) -> None:
@@ -167,6 +161,54 @@ class MemoryCatalogStore:
         items, _ = self.list_objects(source_id, include_absent=False)
         return items
 
+    def apply_structure_plan(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+        objects: list[CatalogObjectRecord],
+        schema_scope: str | None,
+        fail_safe_threshold: float,
+        engine: str | None,
+        kind: str,
+        source_key: str,
+    ) -> None:
+        """Atomic load → build plan → persist (zero merge rules in adapter)."""
+        now = datetime.utcnow()
+        with self._lock:
+            objects_backup = dict(self._objects)
+            joins_backup = dict(self._joins)
+            join_by_pair_backup = dict(self._join_by_pair)
+            try:
+                existing = [
+                    o for o in self._objects.values() if o.source_id == source_id
+                ]
+                col_ids = {c.id for o in existing for c in o.columns}
+                existing_joins = [
+                    j
+                    for j in self._joins.values()
+                    if j.from_column_id in col_ids or j.to_column_id in col_ids
+                ]
+                plan = build_structure_refresh_plan(
+                    source_id=source_id,
+                    job_id=job_id,
+                    existing_objects=existing,
+                    existing_joins=existing_joins,
+                    incoming=objects,
+                    schema_scope=schema_scope,
+                    fail_safe_threshold=fail_safe_threshold,
+                    engine=engine,
+                    kind=kind,
+                    source_key=source_key,
+                    now=now,
+                )
+                self._persist_structure_plan_unlocked(plan, now=now)
+            except CatalogWriteAborted:
+                self._objects = objects_backup
+                self._joins = joins_backup
+                self._join_by_pair = join_by_pair_backup
+                raise
+
     def replace_structure_snapshot(
         self,
         *,
@@ -178,199 +220,58 @@ class MemoryCatalogStore:
         kind: str,
         source_key: str,
     ) -> None:
-        now = datetime.utcnow()
-        with self._lock:
-            objects_backup = dict(self._objects)
-            joins_backup = dict(self._joins)
-            join_by_pair_backup = dict(self._join_by_pair)
-            try:
-                self._replace_structure_snapshot_unlocked(
-                    source_id=source_id,
-                    job_id=job_id,
-                    objects=objects,
-                    schema_scope=schema_scope,
-                    engine=engine,
-                    kind=kind,
-                    source_key=source_key,
-                    now=now,
-                )
-            except CatalogWriteAborted:
-                self._objects = objects_backup
-                self._joins = joins_backup
-                self._join_by_pair = join_by_pair_backup
-                raise
+        """Deprecated seed helper — prefer apply_structure_snapshot / apply_structure_plan."""
+        self.apply_structure_plan(
+            source_id=source_id,
+            job_id=job_id,
+            objects=objects,
+            schema_scope=schema_scope,
+            fail_safe_threshold=1.0,
+            engine=engine,
+            kind=kind,
+            source_key=source_key,
+        )
 
-    def _replace_structure_snapshot_unlocked(
+    def _persist_structure_plan_unlocked(
         self,
+        plan: StructureRefreshPlan,
         *,
-        source_id: str,
-        job_id: str,
-        objects: list[CatalogObjectRecord],
-        schema_scope: str | None,
-        engine: str | None,
-        kind: str,
-        source_key: str,
         now: datetime,
     ) -> None:
-        incoming_keys = {
-        (o.schema_name, o.name, o.object_type): o for o in objects
-        }
-        existing = [
-            o for o in self._objects.values() if o.source_id == source_id
-        ]
-        existing_by_key = {
-            (o.schema_name, o.name, o.object_type): o for o in existing
-        }
-        for old in existing:
-            if schema_scope is not None and old.schema_name != schema_scope:
-                continue
-            if _incoming_covers_existing(
-                existing_schema=old.schema_name,
-                existing_name=old.name,
-                existing_type=old.object_type,
-                incoming_keys=incoming_keys,
-            ):
-                continue
-            updated = replace(
-                old,
-                is_present=False,
-                updated_at=now,
-                last_structure_job_id=job_id,
-            )
-            updated.columns = [
-                replace(c, is_present=False, updated_at=now)
-                for c in old.columns
-            ]
-            updated.foreign_keys = [
-                replace(fk, is_present=False) for fk in old.foreign_keys
-            ]
-            updated.indexes = [
-                replace(idx, is_present=False) for idx in old.indexes
-            ]
-            self._objects[old.id] = updated
-            self._tombstone_fk_joins_unlocked(updated)
-
-        for key, incoming in incoming_keys.items():
-            match = _match_existing_for_incoming(
-                schema_name=incoming.schema_name,
-                name=incoming.name,
-                object_type=incoming.object_type,
-                existing_by_key=existing_by_key,
-            )
-            obj_locator = _recompute_object_locator(
-                engine=engine,
-                kind=kind,
-                source_key=source_key,
-                schema_name=incoming.schema_name,
-                object_type=incoming.object_type,
-                name=incoming.name,
-            )
-            if match is None:
-                cols = []
-                for col in incoming.columns:
-                    col_locator = _recompute_column_locator(
-                        engine=engine,
-                        kind=kind,
-                        source_key=source_key,
-                        schema_name=incoming.schema_name,
-                        object_type=incoming.object_type,
-                        name=incoming.name,
-                        column_name=col.name,
-                        field_kind=col.field_kind,
-                    )
-                    cols.append(
-                        replace(
-                            col,
-                            locator_key=col_locator,
-                            object_id=incoming.id,
-                        )
-                    )
-                fks = [
-                    replace(fk, id=fk.id or new_fk_id(), is_present=True)
-                    for fk in incoming.foreign_keys
-                ]
-                idxs = [
-                    replace(idx, id=idx.id or new_index_id(), is_present=True)
-                    for idx in incoming.indexes
-                ]
-                self._objects[incoming.id] = replace(
-                    incoming,
-                    locator_key=obj_locator,
-                    columns=cols,
-                    foreign_keys=fks,
-                    indexes=idxs,
+        for obj in plan.objects:
+            self._objects[obj.id] = obj
+        for jid in plan.delete_join_ids:
+            join = self._joins.pop(jid, None)
+            if join is not None:
+                self._join_by_pair.pop(
+                    (join.from_column_id, join.to_column_id), None
                 )
-                continue
-            # Preserve identity and semantics; refresh structure + locators
-            col_by_name = {c.name: c for c in match.columns}
-            new_cols: list[CatalogColumnRecord] = []
-            seen_cols: set[str] = set()
-            for col in incoming.columns:
-                seen_cols.add(col.name)
-                col_locator = _recompute_column_locator(
-                    engine=engine,
-                    kind=kind,
-                    source_key=source_key,
-                    schema_name=incoming.schema_name,
-                    object_type=incoming.object_type,
-                    name=incoming.name,
-                    column_name=col.name,
-                    field_kind=col.field_kind,
+        for upsert in plan.upsert_joins:
+            pair = (upsert.from_column_id, upsert.to_column_id)
+            existing_id = self._join_by_pair.get(pair)
+            if existing_id is not None:
+                prev = self._joins[existing_id]
+                self._joins[existing_id] = replace(
+                    prev,
+                    evidence=upsert.evidence,
+                    join_kind=upsert.join_kind,
+                    join_expression=upsert.join_expression,
+                    origin=upsert.origin,
                 )
-                prev = col_by_name.get(col.name)
-                if prev is None:
-                    new_cols.append(
-                        replace(
-                            col,
-                            object_id=match.id,
-                            id=new_column_id(),
-                            locator_key=col_locator,
-                        )
-                    )
-                else:
-                    new_cols.append(
-                        replace(
-                            prev,
-                            locator_key=col_locator,
-                            ordinal=col.ordinal,
-                            data_type=col.data_type,
-                            nullable=col.nullable,
-                            default_value=col.default_value,
-                            comment=col.comment,
-                            field_kind=col.field_kind or prev.field_kind,
-                            is_present=True,
-                            updated_at=now,
-                            # business_* and semantics preserved
-                        )
-                    )
-            for name, prev in col_by_name.items():
-                if name not in seen_cols:
-                    new_cols.append(
-                        replace(prev, is_present=False, updated_at=now)
-                    )
-            fks = _merge_fk_snapshot(match.foreign_keys, incoming.foreign_keys)
-            idxs = _merge_index_snapshot(match.indexes, incoming.indexes)
-            updated = replace(
-                match,
-                locator_key=obj_locator,
-                object_type=incoming.object_type,
-                ddl=incoming.ddl,
-                comment=incoming.comment,
-                primary_key=incoming.primary_key,
-                is_present=True,
-                last_structure_job_id=job_id,
-                collected_at=now,
-                updated_at=now,
-                columns=sorted(new_cols, key=lambda c: c.ordinal),
-                foreign_keys=fks,
-                indexes=idxs,
-                # semantics preserved on match
-            )
-            self._objects[match.id] = updated
-            self._tombstone_fk_joins_unlocked(updated)
-
-        # Sync FK joins after all objects are present (refs may be new).
-        self._sync_fk_joins_for_source_unlocked(source_id)
+            else:
+                record = CatalogJoinRecord(
+                    id=new_join_id(),
+                    from_column_id=upsert.from_column_id,
+                    to_column_id=upsert.to_column_id,
+                    evidence=upsert.evidence,
+                    join_kind=upsert.join_kind,
+                    join_expression=upsert.join_expression,
+                    origin=upsert.origin,
+                    created_by_user_id=None,
+                    created_at=now,
+                )
+                self._joins[record.id] = record
+                self._join_by_pair[pair] = record.id
 
     def recompute_locators_for_source(
         self,
@@ -420,59 +321,6 @@ class MemoryCatalogStore:
                     )
         return changed
 
-    def _tombstone_fk_joins_unlocked(self, obj: CatalogObjectRecord) -> None:
-        """Remove foreign_key-origin joins whose from-column belongs to this object."""
-        obj_col_ids = {c.id for c in obj.columns}
-        stale = [
-            jid
-            for jid, join in self._joins.items()
-            if join.origin == "foreign_key" and join.from_column_id in obj_col_ids
-        ]
-        for jid in stale:
-            join = self._joins.pop(jid)
-            self._join_by_pair.pop((join.from_column_id, join.to_column_id), None)
-
-    def _sync_fk_joins_for_source_unlocked(self, source_id: str) -> None:
-        present = [
-            o
-            for o in self._objects.values()
-            if o.source_id == source_id and o.is_present
-        ]
-        expected: dict[tuple[str, str], tuple[str, str]] = {}
-        for obj in present:
-            for from_id, to_id, evidence, expression in _fk_edges_for_object(
-                obj, present_objects=present
-            ):
-                expected[(from_id, to_id)] = (evidence, expression)
-
-        source_col_ids = {
-            c.id
-            for o in self._objects.values()
-            if o.source_id == source_id
-            for c in o.columns
-        }
-        stale = [
-            jid
-            for jid, join in self._joins.items()
-            if join.origin == "foreign_key"
-            and join.from_column_id in source_col_ids
-            and (join.from_column_id, join.to_column_id) not in expected
-        ]
-        for jid in stale:
-            join = self._joins.pop(jid)
-            self._join_by_pair.pop((join.from_column_id, join.to_column_id), None)
-
-        for (from_id, to_id), (evidence, expression) in expected.items():
-            self._upsert_join_unlocked(
-                from_column_id=from_id,
-                to_column_id=to_id,
-                evidence=evidence,
-                created_by_user_id=None,
-                join_kind="INNER",
-                join_expression=expression,
-                origin="foreign_key",
-            )
-
     def _upsert_join_unlocked(
         self,
         *,
@@ -488,7 +336,7 @@ class MemoryCatalogStore:
         existing_id = self._join_by_pair.get(pair)
         if existing_id is not None:
             prev = self._joins[existing_id]
-            if origin == "foreign_key" and prev.origin in _PROTECTED_JOIN_ORIGINS:
+            if origin == "foreign_key" and prev.origin in PROTECTED_JOIN_ORIGINS:
                 return prev
             updated = replace(
                 prev,

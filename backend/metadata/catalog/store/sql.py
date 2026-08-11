@@ -3,18 +3,12 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
 from backend.core.db import session_scope
-from backend.metadata.catalog.fk_join_sync import (
-    _PROTECTED_JOIN_ORIGINS,
-    _fk_edges_for_object,
-)
+from backend.metadata.catalog.fk_join_sync import PROTECTED_JOIN_ORIGINS
 from backend.metadata.catalog.identity import (
-    _incoming_covers_existing,
-    _match_existing_for_incoming,
     _recompute_column_locator,
     _recompute_object_locator,
 )
@@ -25,13 +19,10 @@ from backend.metadata.catalog.records import (
     CatalogIndexRecord,
     CatalogJoinRecord,
     CatalogObjectRecord,
-    CatalogWriteAborted,
-    new_column_id,
-    new_fk_id,
-    new_index_id,
     new_join_id,
 )
 from backend.metadata.catalog.search_rank import _paginate, _search_rank
+from backend.metadata.catalog.structure_merge import build_structure_refresh_plan
 
 
 def _dumps_json(value: Any) -> str | None:
@@ -239,6 +230,109 @@ class SqlCatalogStore:
         items, _ = self.list_objects(source_id, include_absent=False)
         return items
 
+    def apply_structure_plan(
+        self,
+        *,
+        source_id: str,
+        job_id: str,
+        objects: list[CatalogObjectRecord],
+        schema_scope: str | None,
+        fail_safe_threshold: float,
+        engine: str | None,
+        kind: str,
+        source_key: str,
+    ) -> None:
+        """Atomic load → build plan → persist (zero merge rules in adapter)."""
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+
+        from backend.core.db import session_scope
+        from backend.metadata.models import (
+            CatalogJoinRow,
+            CatalogObjectRow,
+        )
+
+        now = datetime.utcnow()
+        with session_scope() as session:
+            rows = list(
+                session.scalars(
+                    select(CatalogObjectRow)
+                    .where(CatalogObjectRow.source_id == source_id)
+                    .options(
+                        selectinload(CatalogObjectRow.columns),
+                        selectinload(CatalogObjectRow.foreign_keys),
+                        selectinload(CatalogObjectRow.indexes),
+                    )
+                ).all()
+            )
+            existing_objects = [_row_to_object(r) for r in rows]
+            col_ids = [c.id for o in existing_objects for c in o.columns]
+            existing_joins: list[CatalogJoinRecord] = []
+            if col_ids:
+                from sqlalchemy import or_
+
+                join_rows = list(
+                    session.scalars(
+                        select(CatalogJoinRow).where(
+                            or_(
+                                CatalogJoinRow.from_column_id.in_(col_ids),
+                                CatalogJoinRow.to_column_id.in_(col_ids),
+                            )
+                        )
+                    ).all()
+                )
+                existing_joins = [_row_to_join(j) for j in join_rows]
+
+            plan = build_structure_refresh_plan(
+                source_id=source_id,
+                job_id=job_id,
+                existing_objects=existing_objects,
+                existing_joins=existing_joins,
+                incoming=objects,
+                schema_scope=schema_scope,
+                fail_safe_threshold=fail_safe_threshold,
+                engine=engine,
+                kind=kind,
+                source_key=source_key,
+                now=now,
+            )
+
+            for obj in plan.objects:
+                _sql_persist_object(session, obj, now=now)
+
+            for jid in plan.delete_join_ids:
+                row = session.get(CatalogJoinRow, jid)
+                if row is not None:
+                    session.delete(row)
+
+            for upsert in plan.upsert_joins:
+                existing = session.scalars(
+                    select(CatalogJoinRow).where(
+                        CatalogJoinRow.from_column_id == upsert.from_column_id,
+                        CatalogJoinRow.to_column_id == upsert.to_column_id,
+                    )
+                ).first()
+                if existing is not None:
+                    existing.evidence = upsert.evidence
+                    existing.join_kind = upsert.join_kind
+                    existing.join_expression = upsert.join_expression
+                    existing.origin = upsert.origin
+                else:
+                    session.add(
+                        CatalogJoinRow(
+                            id=new_join_id(),
+                            from_column_id=upsert.from_column_id,
+                            to_column_id=upsert.to_column_id,
+                            evidence=upsert.evidence,
+                            join_kind=upsert.join_kind,
+                            join_expression=upsert.join_expression,
+                            origin=upsert.origin,
+                            created_by_user_id=None,
+                            created_at=now,
+                        )
+                    )
+            session.flush()
+
     def replace_structure_snapshot(
         self,
         *,
@@ -250,242 +344,17 @@ class SqlCatalogStore:
         kind: str,
         source_key: str,
     ) -> None:
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import (
-            CatalogColumnRow,
-            CatalogForeignKeyRow,
-            CatalogIndexRow,
-            CatalogObjectRow,
+        """Deprecated seed helper — prefer apply_structure_snapshot / apply_structure_plan."""
+        self.apply_structure_plan(
+            source_id=source_id,
+            job_id=job_id,
+            objects=objects,
+            schema_scope=schema_scope,
+            fail_safe_threshold=1.0,
+            engine=engine,
+            kind=kind,
+            source_key=source_key,
         )
-
-        now = datetime.utcnow()
-        incoming_keys = {(o.schema_name, o.name, o.object_type): o for o in objects}
-
-        with session_scope() as session:
-            stmt = (
-                select(CatalogObjectRow)
-                .where(CatalogObjectRow.source_id == source_id)
-                .options(
-                    selectinload(CatalogObjectRow.columns),
-                    selectinload(CatalogObjectRow.foreign_keys),
-                    selectinload(CatalogObjectRow.indexes),
-                )
-            )
-            if schema_scope is not None:
-                stmt = stmt.where(CatalogObjectRow.schema_name == schema_scope)
-            existing_rows = list(session.scalars(stmt).all())
-            existing_by_key = {
-                (r.schema_name, r.name, r.object_type): r for r in existing_rows
-            }
-
-            for key, row in list(existing_by_key.items()):
-                if _incoming_covers_existing(
-                    existing_schema=row.schema_name,
-                    existing_name=row.name,
-                    existing_type=row.object_type,
-                    incoming_keys=incoming_keys,
-                ):
-                    continue
-                row.is_present = False
-                row.last_structure_job_id = job_id
-                row.updated_at = now
-                for col in row.columns:
-                    col.is_present = False
-                    col.updated_at = now
-                for fk in row.foreign_keys:
-                    fk.is_present = False
-                    fk.updated_at = now
-                for idx in row.indexes:
-                    idx.is_present = False
-                    idx.updated_at = now
-                _sql_tombstone_fk_joins(session, row)
-
-            touched_object_ids: list[str] = []
-            for key, incoming in incoming_keys.items():
-                obj_locator = _recompute_object_locator(
-                    engine=engine,
-                    kind=kind,
-                    source_key=source_key,
-                    schema_name=incoming.schema_name,
-                    object_type=incoming.object_type,
-                    name=incoming.name,
-                )
-                row = _match_existing_for_incoming(
-                    schema_name=incoming.schema_name,
-                    name=incoming.name,
-                    object_type=incoming.object_type,
-                    existing_by_key=existing_by_key,
-                )
-                if row is None:
-                    obj = CatalogObjectRow(
-                        id=incoming.id,
-                        source_id=source_id,
-                        locator_key=obj_locator,
-                        object_type=incoming.object_type,
-                        schema_name=incoming.schema_name,
-                        name=incoming.name,
-                        ddl=incoming.ddl,
-                        comment=incoming.comment,
-                        primary_key_json=_dumps_json(incoming.primary_key),
-                        is_present=True,
-                        business_name=None,
-                        business_description=None,
-                        object_category=None,
-                        grain_description=None,
-                        business_primary_key_json=None,
-                        business_domain_id=None,
-                        evidence_summary_json=None,
-                        open_questions_json=None,
-                        semantic_source=None,
-                        business_semantics_ready=False,
-                        semantics_updated_at=None,
-                        last_structure_job_id=job_id,
-                        collected_at=now,
-                        created_at=now,
-                        updated_at=now,
-                    )
-                    session.add(obj)
-                    for col in incoming.columns:
-                        col_locator = _recompute_column_locator(
-                            engine=engine,
-                            kind=kind,
-                            source_key=source_key,
-                            schema_name=incoming.schema_name,
-                            object_type=incoming.object_type,
-                            name=incoming.name,
-                            column_name=col.name,
-                            field_kind=col.field_kind,
-                        )
-                        session.add(
-                            CatalogColumnRow(
-                                id=col.id,
-                                object_id=incoming.id,
-                                locator_key=col_locator,
-                                name=col.name,
-                                ordinal=col.ordinal,
-                                data_type=col.data_type,
-                                nullable=col.nullable,
-                                default_value=col.default_value,
-                                comment=col.comment,
-                                is_present=True,
-                                business_name=None,
-                                business_description=None,
-                                column_semantics_json=None,
-                                enum_catalog_json=None,
-                                semantic_source=None,
-                                field_kind=col.field_kind or "column",
-                                created_at=now,
-                                updated_at=now,
-                            )
-                        )
-                    for fk in incoming.foreign_keys:
-                        session.add(
-                            CatalogForeignKeyRow(
-                                id=new_fk_id(),
-                                object_id=incoming.id,
-                                name=fk.name,
-                                columns_json=_dumps_json(fk.columns) or "[]",
-                                ref_schema=fk.ref_schema,
-                                ref_table=fk.ref_table,
-                                ref_columns_json=_dumps_json(fk.ref_columns) or "[]",
-                                is_present=True,
-                                created_at=now,
-                                updated_at=now,
-                            )
-                        )
-                    for idx in incoming.indexes:
-                        session.add(
-                            CatalogIndexRow(
-                                id=new_index_id(),
-                                object_id=incoming.id,
-                                name=idx.name,
-                                columns_json=_dumps_json(idx.columns) or "[]",
-                                is_unique=idx.is_unique,
-                                is_present=True,
-                                created_at=now,
-                                updated_at=now,
-                            )
-                        )
-                    touched_object_ids.append(incoming.id)
-                    continue
-
-                row.locator_key = obj_locator
-                row.object_type = incoming.object_type
-                row.ddl = incoming.ddl
-                row.comment = incoming.comment
-                row.primary_key_json = _dumps_json(incoming.primary_key)
-                row.is_present = True
-                row.last_structure_job_id = job_id
-                row.collected_at = now
-                row.updated_at = now
-                # never touch semantics fields
-
-                col_by_name = {c.name: c for c in row.columns}
-                seen: set[str] = set()
-                for col in incoming.columns:
-                    seen.add(col.name)
-                    col_locator = _recompute_column_locator(
-                        engine=engine,
-                        kind=kind,
-                        source_key=source_key,
-                        schema_name=incoming.schema_name,
-                        object_type=incoming.object_type,
-                        name=incoming.name,
-                        column_name=col.name,
-                        field_kind=col.field_kind,
-                    )
-                    prev = col_by_name.get(col.name)
-                    if prev is None:
-                        session.add(
-                            CatalogColumnRow(
-                                id=new_column_id(),
-                                object_id=row.id,
-                                locator_key=col_locator,
-                                name=col.name,
-                                ordinal=col.ordinal,
-                                data_type=col.data_type,
-                                nullable=col.nullable,
-                                default_value=col.default_value,
-                                comment=col.comment,
-                                is_present=True,
-                                business_name=None,
-                                business_description=None,
-                                column_semantics_json=None,
-                                enum_catalog_json=None,
-                                semantic_source=None,
-                                field_kind=col.field_kind or "column",
-                                created_at=now,
-                                updated_at=now,
-                            )
-                        )
-                    else:
-                        prev.locator_key = col_locator
-                        prev.ordinal = col.ordinal
-                        prev.data_type = col.data_type
-                        prev.nullable = col.nullable
-                        prev.default_value = col.default_value
-                        prev.comment = col.comment
-                        prev.field_kind = col.field_kind or prev.field_kind
-                        prev.is_present = True
-                        prev.updated_at = now
-                for name, prev in col_by_name.items():
-                    if name not in seen:
-                        prev.is_present = False
-                        prev.updated_at = now
-
-                _sql_upsert_fks(session, row, incoming.foreign_keys, now=now)
-                _sql_upsert_indexes(session, row, incoming.indexes, now=now)
-                _sql_tombstone_fk_joins(session, row)
-                touched_object_ids.append(row.id)
-
-            session.flush()
-
-            # Sync FK joins for the whole Source after structure is present.
-            _sql_sync_fk_joins_for_source(session, source_id=source_id, now=now)
-            session.flush()
 
     def recompute_locators_for_source(
         self,
@@ -758,7 +627,7 @@ class SqlCatalogStore:
                 )
             ).first()
             if existing is not None:
-                if origin == "foreign_key" and existing.origin in _PROTECTED_JOIN_ORIGINS:
+                if origin == "foreign_key" and existing.origin in PROTECTED_JOIN_ORIGINS:
                     return _row_to_join(existing)
                 existing.evidence = evidence
                 existing.join_kind = join_kind
@@ -796,175 +665,182 @@ class SqlCatalogStore:
 
 
 
-def _sql_upsert_fks(
-    session: Any,
-    row: Any,
-    incoming: list[CatalogForeignKeyRecord],
-    *,
-    now: datetime,
-) -> None:
-    from backend.metadata.models import CatalogForeignKeyRow
+def _sql_persist_object(session: Any, obj: CatalogObjectRecord, *, now: datetime) -> None:
+    """Write a fully-merged CatalogObjectRecord (no merge rules)."""
+    from sqlalchemy.orm import selectinload
 
-    by_name = {fk.name: fk for fk in row.foreign_keys}
-    seen: set[str] = set()
-    for fk in incoming:
-        seen.add(fk.name)
-        prev = by_name.get(fk.name)
+    from backend.metadata.models import (
+        CatalogColumnRow,
+        CatalogForeignKeyRow,
+        CatalogIndexRow,
+        CatalogObjectRow,
+    )
+
+    row = session.get(
+        CatalogObjectRow,
+        obj.id,
+        options=(
+            selectinload(CatalogObjectRow.columns),
+            selectinload(CatalogObjectRow.foreign_keys),
+            selectinload(CatalogObjectRow.indexes),
+        ),
+    )
+    if row is None:
+        row = CatalogObjectRow(
+            id=obj.id,
+            source_id=obj.source_id,
+            locator_key=obj.locator_key,
+            object_type=obj.object_type,
+            schema_name=obj.schema_name,
+            name=obj.name,
+            ddl=obj.ddl,
+            comment=obj.comment,
+            primary_key_json=_dumps_json(obj.primary_key),
+            is_present=obj.is_present,
+            business_name=obj.business_name,
+            business_description=obj.business_description,
+            object_category=obj.object_category,
+            grain_description=obj.grain_description,
+            business_primary_key_json=_dumps_json(obj.business_primary_key),
+            business_domain_id=obj.business_domain_id,
+            evidence_summary_json=_dumps_json(obj.evidence_summary),
+            open_questions_json=_dumps_json(obj.open_questions),
+            semantic_source=obj.semantic_source,
+            business_semantics_ready=obj.business_semantics_ready,
+            semantics_updated_at=obj.semantics_updated_at,
+            last_structure_job_id=obj.last_structure_job_id,
+            collected_at=obj.collected_at,
+            created_at=obj.created_at,
+            updated_at=obj.updated_at,
+        )
+        session.add(row)
+    else:
+        row.locator_key = obj.locator_key
+        row.object_type = obj.object_type
+        row.schema_name = obj.schema_name
+        row.name = obj.name
+        row.ddl = obj.ddl
+        row.comment = obj.comment
+        row.primary_key_json = _dumps_json(obj.primary_key)
+        row.is_present = obj.is_present
+        row.last_structure_job_id = obj.last_structure_job_id
+        row.collected_at = obj.collected_at
+        row.updated_at = obj.updated_at
+        # semantics fields intentionally not overwritten from plan merges
+
+    col_by_id = {c.id: c for c in list(row.columns)}
+    seen_col_ids: set[str] = set()
+    for col in obj.columns:
+        seen_col_ids.add(col.id)
+        prev = col_by_id.get(col.id)
+        if prev is None:
+            session.add(
+                CatalogColumnRow(
+                    id=col.id,
+                    object_id=obj.id,
+                    locator_key=col.locator_key,
+                    name=col.name,
+                    ordinal=col.ordinal,
+                    data_type=col.data_type,
+                    nullable=col.nullable,
+                    default_value=col.default_value,
+                    comment=col.comment,
+                    is_present=col.is_present,
+                    business_name=col.business_name,
+                    business_description=col.business_description,
+                    column_semantics_json=_dumps_json(col.column_semantics),
+                    enum_catalog_json=_dumps_json(col.enum_catalog),
+                    semantic_source=col.semantic_source,
+                    field_kind=col.field_kind or "column",
+                    created_at=col.created_at,
+                    updated_at=col.updated_at,
+                )
+            )
+        else:
+            prev.locator_key = col.locator_key
+            prev.name = col.name
+            prev.ordinal = col.ordinal
+            prev.data_type = col.data_type
+            prev.nullable = col.nullable
+            prev.default_value = col.default_value
+            prev.comment = col.comment
+            prev.field_kind = col.field_kind or prev.field_kind
+            prev.is_present = col.is_present
+            prev.updated_at = col.updated_at
+
+    for cid, prev in col_by_id.items():
+        if cid not in seen_col_ids:
+            session.delete(prev)
+
+    fk_by_id = {fk.id: fk for fk in list(row.foreign_keys) if fk.id}
+    seen_fk_ids: set[str] = set()
+    for fk in obj.foreign_keys:
+        fk_id = fk.id
+        if fk_id is None:
+            raise ValueError(
+                f"structure plan FK {fk.name!r} on object {obj.id} missing id"
+            )
+        seen_fk_ids.add(fk_id)
+        prev = fk_by_id.get(fk_id)
         if prev is None:
             session.add(
                 CatalogForeignKeyRow(
-                    id=new_fk_id(),
-                    object_id=row.id,
+                    id=fk_id,
+                    object_id=obj.id,
                     name=fk.name,
                     columns_json=_dumps_json(fk.columns) or "[]",
                     ref_schema=fk.ref_schema,
                     ref_table=fk.ref_table,
                     ref_columns_json=_dumps_json(fk.ref_columns) or "[]",
-                    is_present=True,
+                    is_present=fk.is_present,
                     created_at=now,
                     updated_at=now,
                 )
             )
         else:
+            prev.name = fk.name
             prev.columns_json = _dumps_json(fk.columns) or "[]"
             prev.ref_schema = fk.ref_schema
             prev.ref_table = fk.ref_table
             prev.ref_columns_json = _dumps_json(fk.ref_columns) or "[]"
-            prev.is_present = True
+            prev.is_present = fk.is_present
             prev.updated_at = now
-    for name, prev in by_name.items():
-        if name not in seen:
-            prev.is_present = False
-            prev.updated_at = now
+    for fid, prev in fk_by_id.items():
+        if fid not in seen_fk_ids:
+            session.delete(prev)
 
-
-def _sql_upsert_indexes(
-    session: Any,
-    row: Any,
-    incoming: list[CatalogIndexRecord],
-    *,
-    now: datetime,
-) -> None:
-    from backend.metadata.models import CatalogIndexRow
-
-    by_name = {idx.name: idx for idx in row.indexes}
-    seen: set[str] = set()
-    for idx in incoming:
-        seen.add(idx.name)
-        prev = by_name.get(idx.name)
+    idx_by_id = {idx.id: idx for idx in list(row.indexes) if idx.id}
+    seen_idx_ids: set[str] = set()
+    for idx in obj.indexes:
+        idx_id = idx.id
+        if idx_id is None:
+            raise ValueError(
+                f"structure plan index {idx.name!r} on object {obj.id} missing id"
+            )
+        seen_idx_ids.add(idx_id)
+        prev = idx_by_id.get(idx_id)
         if prev is None:
             session.add(
                 CatalogIndexRow(
-                    id=new_index_id(),
-                    object_id=row.id,
+                    id=idx_id,
+                    object_id=obj.id,
                     name=idx.name,
                     columns_json=_dumps_json(idx.columns) or "[]",
                     is_unique=idx.is_unique,
-                    is_present=True,
+                    is_present=idx.is_present,
                     created_at=now,
                     updated_at=now,
                 )
             )
         else:
+            prev.name = idx.name
             prev.columns_json = _dumps_json(idx.columns) or "[]"
             prev.is_unique = idx.is_unique
-            prev.is_present = True
+            prev.is_present = idx.is_present
             prev.updated_at = now
-    for name, prev in by_name.items():
-        if name not in seen:
-            prev.is_present = False
-            prev.updated_at = now
-
-
-def _sql_tombstone_fk_joins(session: Any, row: Any) -> None:
-    """Remove foreign_key-origin joins whose from-column belongs to this object."""
-    from sqlalchemy import select
-
-    from backend.metadata.models import CatalogJoinRow
-
-    col_ids = [c.id for c in row.columns]
-    if not col_ids:
-        return
-    joins = list(
-        session.scalars(
-            select(CatalogJoinRow).where(
-                CatalogJoinRow.origin == "foreign_key",
-                CatalogJoinRow.from_column_id.in_(col_ids),
-            )
-        ).all()
-    )
-    for join in joins:
-        session.delete(join)
-
-
-def _sql_sync_fk_joins_for_source(
-    session: Any, *, source_id: str, now: datetime
-) -> None:
-    from sqlalchemy import select
-    from sqlalchemy.orm import selectinload
-
-    from backend.metadata.models import CatalogJoinRow, CatalogObjectRow
-
-    rows = list(
-        session.scalars(
-            select(CatalogObjectRow)
-            .where(CatalogObjectRow.source_id == source_id)
-            .options(
-                selectinload(CatalogObjectRow.columns),
-                selectinload(CatalogObjectRow.foreign_keys),
-            )
-        ).all()
-    )
-    present_records = [_row_to_object(r) for r in rows if r.is_present]
-    expected: dict[tuple[str, str], tuple[str, str]] = {}
-    for obj in present_records:
-        for from_id, to_id, evidence, expression in _fk_edges_for_object(
-            obj, present_objects=present_records
-        ):
-            expected[(from_id, to_id)] = (evidence, expression)
-
-    source_col_ids = {c.id for r in rows for c in r.columns}
-    if source_col_ids:
-        joins = list(
-            session.scalars(
-                select(CatalogJoinRow).where(
-                    CatalogJoinRow.origin == "foreign_key",
-                    CatalogJoinRow.from_column_id.in_(source_col_ids),
-                )
-            ).all()
-        )
-        for join in joins:
-            if (join.from_column_id, join.to_column_id) not in expected:
-                session.delete(join)
-
-    for (from_id, to_id), (evidence, expression) in expected.items():
-        existing = session.scalars(
-            select(CatalogJoinRow).where(
-                CatalogJoinRow.from_column_id == from_id,
-                CatalogJoinRow.to_column_id == to_id,
-            )
-        ).first()
-        if existing is not None:
-            if existing.origin in _PROTECTED_JOIN_ORIGINS:
-                continue
-            existing.evidence = evidence
-            existing.join_kind = "INNER"
-            existing.join_expression = expression
-            existing.origin = "foreign_key"
-        else:
-            session.add(
-                CatalogJoinRow(
-                    id=new_join_id(),
-                    from_column_id=from_id,
-                    to_column_id=to_id,
-                    evidence=evidence,
-                    join_kind="INNER",
-                    join_expression=expression,
-                    origin="foreign_key",
-                    created_by_user_id=None,
-                    created_at=now,
-                )
-            )
+    for iid, prev in idx_by_id.items():
+        if iid not in seen_idx_ids:
+            session.delete(prev)
 
 
 def _row_to_column(row: object) -> CatalogColumnRecord:
