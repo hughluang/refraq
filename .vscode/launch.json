@@ -24,6 +24,55 @@
       "preLaunchTask": "free-port-12000"
     },
     {
+      "name": "Celery: Worker",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "module": "celery",
+      "args": [
+        "-A",
+        "backend.worker.app",
+        "worker",
+        "--loglevel=INFO",
+        "--pool=solo",
+        "--concurrency=1"
+      ],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/backend/.env",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
+        "VIRTUAL_ENV": "${workspaceFolder}/.venv",
+        "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}",
+        "TZ": "UTC"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Celery: Beat",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "module": "celery",
+      "args": [
+        "-A",
+        "backend.worker.app",
+        "beat",
+        "--loglevel=INFO"
+      ],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/backend/.env",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
+        "VIRTUAL_ENV": "${workspaceFolder}/.venv",
+        "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}",
+        "TZ": "UTC"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+
+    {
       "name": "Python: Current File",
       "type": "debugpy",
       "request": "launch",
@@ -60,6 +109,25 @@
       "env": { "PYTHONPATH": "${workspaceFolder}" },
       "console": "integratedTerminal",
       "justMyCode": true
+    }
+  ],
+  "compounds": [
+    {
+      "name": "API + Worker",
+      "configurations": [
+        "FastAPI: Run Server (uvicorn)",
+        "Celery: Worker"
+      ],
+      "stopAll": true
+    },
+    {
+      "name": "API + Worker + Beat",
+      "configurations": [
+        "FastAPI: Run Server (uvicorn)",
+        "Celery: Worker",
+        "Celery: Beat"
+      ],
+      "stopAll": true
     }
   ]
 }
