@@ -181,9 +181,9 @@ Avoid free-form permission strings invented in the UI.
 ### Source
 
 A registered data origin whose catalog refraq owns. Slice A covers live databases (for example U9 or MES); later kinds may include static imports such as CSV.
-Has a stable key, display name, `kind`, and kind-specific catalog scope (for database: database name and optional schema filter); not a login directory.
-For `kind=database`, the Source also carries `engine` and a per-engine validated `access` document (secrets inside; whole document encrypted at rest). Non-database kinds may omit those fields.
-Avoid calling it Identity Source or Client. Avoid assuming every Source is an enterprise application. Avoid treating reachability as a separate reusable entity.
+Has a stable key, display name, `kind`, and kind-specific catalog scope (for database: engine-dialect keys inside `access` such as `database`/`schema` or `service_name`/`owner`); not a login directory.
+For `kind=database`, the Source also carries `engine` and a per-engine validated `access` document (secrets and scope inside; whole document encrypted at rest). Non-database kinds may omit those fields.
+Avoid calling it Identity Source or Client. Avoid assuming every Source is an enterprise application. Avoid treating reachability as a separate reusable entity. Avoid fixed top-level `database_name` / `schema_filter` beside `access`.
 
 ### Job
 

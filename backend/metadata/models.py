@@ -41,8 +41,6 @@ class SourceRow(Base):
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    database_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    schema_filter: Mapped[str | None] = mapped_column(String(256), nullable=True)
     engine: Mapped[str | None] = mapped_column(String(64), nullable=True)
     access_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     access_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

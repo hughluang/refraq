@@ -37,8 +37,6 @@ export function createSource(body: {
   name: string;
   kind: "database";
   description?: string | null;
-  database_name: string;
-  schema_filter?: string | null;
   engine: Engine;
   access: SourceAccess;
 }) {
@@ -55,8 +53,6 @@ export function patchSource(
     name: string;
     description: string | null;
     status: "active" | "disabled";
-    database_name: string;
-    schema_filter: string | null;
     engine: Engine;
     access: SourceAccess;
   }>,
@@ -81,7 +77,6 @@ export type SourceTestResult = {
 export function testSourceDraft(body: {
   engine: Engine;
   access: SourceAccess;
-  database_name: string;
 }) {
   return apiClient<SourceTestResult>("/sources/test", {
     method: "POST",
@@ -93,7 +88,6 @@ export function testSourceDraft(body: {
 export function testSource(
   sourceId: string,
   body: {
-    database_name: string;
     engine?: Engine;
     access?: SourceAccess;
   },

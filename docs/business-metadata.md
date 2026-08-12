@@ -13,6 +13,7 @@ Related boundaries:
 - Source / catalog identity: `docs/adr/0007-source-owns-catalog-identity.md`.
 - Source-embedded access: `docs/adr/0010-source-owns-access.md`.
 - Encrypted access blob + Connector Spec: `docs/adr/0011-encrypted-access-blob-and-connector-spec.md`.
+- Catalog scope inside access: `docs/adr/0021-catalog-scope-in-access.md`.
 - Locator addressing: `docs/adr/0012-locator-addressing.md`.
 - Semantics provenance: `docs/adr/0013-semantics-provenance-and-protected-sources.md` (field protection deferred: `docs/adr/0014-defer-semantic-field-protection.md`).
 - Semantics field admission criteria and field-set pruning: `docs/adr/0015-semantic-field-admission.md`.
@@ -38,7 +39,7 @@ Foundation P0 delivered people, permissions, and Console mount contract. Product
 
 ## 3. Principles
 
-1. **Source is the business/catalog identity and, for database kinds, owns live reachability and credentials** — catalog scope (`database_name`, `schema_filter`) plus `engine` and a per-engine validated **access** JSON document (secrets inside that document), stored as one application-encrypted blob on the Source row (ADR 0011).
+1. **Source is the business/catalog identity and, for database kinds, owns live reachability and credentials** — `engine` and a per-engine validated **access** JSON document that carries both connectivity and catalog scope (engine-dialect keys; secrets inside that document), stored as one application-encrypted blob on the Source row (ADR 0011 / 0021).
 2. **Catalog Object identity is Source-scoped only**.
 3. **Long work never blocks the API process** — enqueue **Jobs**; workers execute.
 4. **Credentials are secrets** — the whole access document is encrypted at rest in Postgres; read APIs strip `x-secret` fields; write/edit APIs may return the full decrypted tree; never written to Settings Override or logs.
@@ -63,10 +64,8 @@ Fields (business meaning):
 | kind | Collection modality; slice A: `database`. Catalog may grow (e.g. `file`) without renaming Source |
 | status | `active` / `disabled` |
 | description | Optional |
-| database_name | Required when `kind=database`; catalog/DB scope (engine-specific: database, service/SID, etc.) |
-| schema_filter | Optional when `kind=database`; schema (or equivalent) scope for collection |
 | engine | Required when `kind=database`; wire/protocol family — slice A: `postgresql` \| `mssql` \| `oracle` |
-| access | Required when `kind=database`; per-engine Connector Spec–validated JSON (includes `password` and other secrets, optional `extra`; TLS fields only where the engine Spec wires them — PostgreSQL full modes, mssql/oracle `disable` only in slice A); unknown root keys rejected; stored encrypted as a whole document |
+| access | Required when `kind=database`; per-engine Connector Spec–validated JSON (includes dialect catalog scope — PostgreSQL / MSSQL: required `database` and `schema`; Oracle: required `service_name` and `owner` — schema/owner is always required so object names are unique within the Source; plus `password` and other secrets, optional `extra`; TLS fields only where the engine Spec wires them — PostgreSQL full modes, mssql/oracle `disable` only in slice A); unknown root keys rejected; stored encrypted as a whole document |
 
 APIs expose projected `access` (secrets stripped), plus `has_access` / `access_updated_at`. Full decrypted `access` is available only on the write-scoped edit endpoint. Non-database kinds may omit `engine` and `access`.
 
@@ -75,7 +74,7 @@ APIs expose projected `access` (secrets stripped), plus `has_access` / `access_u
 Rules:
 
 - Distinct environments or physical instances are **distinct Sources** (separate keys, catalogs, and reachability).
-- For `kind=database`, **business/catalog scope** and **live reachability/credentials** both live on the Source — there is no separate Connection entity or credential reuse across Sources.
+- For `kind=database`, **business/catalog scope** and **live reachability/credentials** both live in Source `access` (ADR 0021) — there is no separate Connection entity or credential reuse across Sources, and no fixed top-level `database_name` / `schema_filter` columns.
 - Creating a database Source without `engine` and `access` is rejected (`SOURCE_ACCESS_REQUIRED`).
 - Endpoint or credential change updates the **same Source** (replace full `access`) — not a new Source row. Catalog Objects stay under that Source; the next structure Job uses the updated endpoint.
 - Prefer the authoritative / primary endpoint; do not register read replicas as alternate Sources for the same physical server.
@@ -216,7 +215,7 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
 - **Success-only commit:** only a Job that reaches a complete successful collect may mutate catalog.
   Failed, cancelled, or aborted collects leave the prior successful catalog unchanged (no absent marks).
 - **In-scope absent:** after a complete collect, objects previously present within the Job's schema
-  scope (`schema_filter` when set) that are missing from the collect are marked `is_present=false`
+  scope (`access.schema` / `access.owner`; resolved at runtime) that are missing from the collect are marked `is_present=false`
   (tombstone). Out-of-scope objects are not bulk-absent when the filter shrinks. Same tombstone rules
   apply to columns, foreign keys, and indexes under present objects.
 - **Fail-safe:** if the fraction of in-scope present objects that would become absent exceeds
@@ -230,10 +229,9 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
 - **Structure single-flight:** at most one non-terminal `kind=structure` Job per Source
   (`JOB_ALREADY_ACTIVE`). Enforced by the Source–Job facade using Job store queries (not a Celery
   lock; authority remains the Job table). Re-run = new Job after terminal status.
-- Collectors read **Source catalog scope + embedded `engine` / decrypted `access`**. Introspection uses
+- Collectors read **Source `engine` / decrypted `access`** (scope and credentials together). Introspection uses
   engine-native catalogs (`pg_catalog`, `sys.*`, `ALL_`/`DBA_`).
-- Oracle schema scope follows `schema_filter` when set; otherwise the connected user is the default
-  scope (not a hard lock when a filter is provided).
+- Oracle schema scope is `access.owner` (required; same role as `schema` on PostgreSQL/MSSQL).
 - Collection account guidance: prefer least privilege (PostgreSQL schema `USAGE` + catalog read;
   MSSQL `VIEW DEFINITION`; Oracle `SELECT_CATALOG_ROLE` or equivalent).
 - Engine parity notes (explicit, not silent): when an engine cannot supply a field (e.g. some
@@ -434,6 +432,7 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - `docs/adr/0008-job-generic-input.md`
 - `docs/adr/0010-source-owns-access.md`
 - `docs/adr/0011-encrypted-access-blob-and-connector-spec.md`
+- `docs/adr/0021-catalog-scope-in-access.md`
 - `docs/adr/0012-locator-addressing.md`
 - `docs/adr/0013-semantics-provenance-and-protected-sources.md`
 - `docs/adr/0014-defer-semantic-field-protection.md`

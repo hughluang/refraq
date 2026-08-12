@@ -34,8 +34,6 @@ export type Source = {
   kind: string;
   status: string;
   description: string | null;
-  database_name: string | null;
-  schema_filter: string | null;
   engine: string | null;
   access: SourceAccess | null;
   has_access: boolean;

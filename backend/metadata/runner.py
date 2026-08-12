@@ -98,8 +98,6 @@ def run_structure_job(job_id: str) -> dict[str, str]:
     endpoint = endpoint_from_access(
         engine=source.engine,
         access=access,
-        database_name=source.database_name or "",
-        schema_filter=source.schema_filter,
     )
 
     if _cancelled(job_id):
@@ -138,7 +136,7 @@ def run_structure_job(job_id: str) -> dict[str, str]:
             source_id=source_id,
             job_id=job_id,
             collected=records,
-            schema_scope=source.schema_filter,
+            schema_scope=endpoint.schema_filter,
             fail_safe_threshold=settings.refraq_catalog_fail_safe_threshold,
             engine=source.engine,
             kind=source.kind,

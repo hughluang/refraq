@@ -70,8 +70,6 @@ def post_source(
         name=payload.name,
         kind=payload.kind,
         description=payload.description,
-        database_name=payload.database_name,
-        schema_filter=payload.schema_filter,
         engine=payload.engine,
         access=payload.access,
     )
@@ -97,7 +95,6 @@ def test_source_draft(
     result = run_source_probe(
         engine=payload.engine,
         access=access,
-        database_name=payload.database_name,
     )
     persist_audit_event(
         actor_user_id=user.id,
@@ -148,8 +145,6 @@ def patch_source(
         name=data.get("name"),
         description=data["description"] if "description" in data else ...,
         status=data.get("status"),
-        database_name=data.get("database_name"),
-        schema_filter=data["schema_filter"] if "schema_filter" in data else ...,
         engine=data.get("engine"),
         access=data["access"] if "access" in data else ...,
     )
@@ -211,7 +206,6 @@ def test_source_stored(
     result = run_source_probe(
         engine=engine,
         access=access,
-        database_name=payload.database_name,
     )
     persist_audit_event(
         actor_user_id=user.id,

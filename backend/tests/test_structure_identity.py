@@ -72,6 +72,8 @@ def _access() -> dict:
         "username": "u",
         "password": "p",
         "ssl_mode": "require",
+        "database": "MES",
+        "schema": "public",
         "extra": {},
     }
 
@@ -83,7 +85,6 @@ def _make_source(client: TestClient, key: str = "mes-prod") -> dict:
             "key": key,
             "name": key,
             "kind": "database",
-            "database_name": "MES",
             "engine": "postgresql",
             "access": _access(),
         },
@@ -250,6 +251,8 @@ def test_engine_change_recomputes_catalog_locators(client: TestClient) -> None:
                 "username": "u",
                 "password": "p",
                 "ssl_mode": "disable",
+                "database": "MES",
+                "schema": "dbo",
                 "extra": {},
             },
         },

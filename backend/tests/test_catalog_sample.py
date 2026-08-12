@@ -81,6 +81,8 @@ def _access() -> dict:
         "username": "u",
         "password": "super-secret-password",
         "ssl_mode": "require",
+        "database": "MES",
+        "schema": "public",
         "extra": {},
     }
 
@@ -92,7 +94,6 @@ def _make_source(client: TestClient, key: str = "mes-prod") -> dict:
             "key": key,
             "name": key,
             "kind": "database",
-            "database_name": "MES",
             "engine": "postgresql",
             "access": _access(),
         },

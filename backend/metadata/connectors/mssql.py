@@ -57,14 +57,11 @@ class MssqlConnector:
         eng = self._engine(endpoint)
         try:
             with eng.connect() as conn:
-                params: dict[str, object] = {}
-                schema_clause = ""
-                if endpoint.schema_filter:
-                    schema_clause = "AND s.name = :schema_filter"
-                    params["schema_filter"] = endpoint.schema_filter
-
+                params: dict[str, object] = {
+                    "schema_filter": endpoint.schema_filter,
+                }
                 obj_sql = text(
-                    f"""
+                    """
                     SELECT
                       s.name AS schema_name,
                       o.name AS name,
@@ -84,7 +81,7 @@ class MssqlConnector:
                      AND ep.class = 1
                     WHERE o.type IN ('U', 'V')
                       AND s.name NOT IN ('sys', 'INFORMATION_SCHEMA')
-                      {schema_clause}
+                      AND s.name = :schema_filter
                     ORDER BY s.name, o.name
                     """
                 )

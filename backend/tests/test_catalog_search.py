@@ -42,8 +42,6 @@ def _reset_stores(monkeypatch: pytest.MonkeyPatch) -> None:
             kind="database",
             status="active",
             description=None,
-            database_name="mes",
-            schema_filter=None,
             engine="postgresql",
             access_ciphertext=None,
             access_updated_at=None,

@@ -30,8 +30,6 @@ class SourceRecord:
     kind: str
     status: str
     description: str | None
-    database_name: str | None
-    schema_filter: str | None
     engine: str | None
     access_ciphertext: str | None
     access_updated_at: datetime | None
@@ -175,8 +173,6 @@ class SqlSourceStore:
                 kind=record.kind,
                 status=record.status,
                 description=record.description,
-                database_name=record.database_name,
-                schema_filter=record.schema_filter,
                 engine=record.engine,
                 access_ciphertext=record.access_ciphertext,
                 access_updated_at=record.access_updated_at,
@@ -202,8 +198,6 @@ class SqlSourceStore:
             row.kind = record.kind
             row.status = record.status
             row.description = record.description
-            row.database_name = record.database_name
-            row.schema_filter = record.schema_filter
             row.engine = record.engine
             row.access_ciphertext = record.access_ciphertext
             row.access_updated_at = record.access_updated_at
@@ -233,8 +227,6 @@ def _row_to_source(row: object) -> SourceRecord:
         kind=row.kind,
         status=row.status,
         description=row.description,
-        database_name=row.database_name,
-        schema_filter=row.schema_filter,
         engine=row.engine,
         access_ciphertext=row.access_ciphertext,
         access_updated_at=row.access_updated_at,

@@ -45,12 +45,9 @@ import { ApiError } from "@/lib/api";
 type IdentityForm = {
   key: string;
   name: string;
-  database_name: string;
-  schema_filter: string;
   description: string;
   status: "active" | "disabled";
   engine: Engine | "";
-  probe_database_name: string;
 };
 
 const ENGINE_OPTIONS = [
@@ -63,13 +60,20 @@ function emptyIdentity(engine: Engine = "postgresql"): IdentityForm {
   return {
     key: "",
     name: "",
-    database_name: "",
-    schema_filter: "",
     description: "",
     status: "active",
     engine,
-    probe_database_name: "",
   };
+}
+
+function scopeLabel(source: Source): string {
+  const access = source.access;
+  if (!access || typeof access !== "object") return "—";
+  const database = access.database;
+  const service = access.service_name;
+  if (typeof database === "string" && database.trim()) return database;
+  if (typeof service === "string" && service.trim()) return service;
+  return "—";
 }
 
 export function SourceList() {
@@ -125,7 +129,6 @@ export function SourceList() {
       key: (v) =>
         editing ? null : v.trim() ? null : t("sources.validation.required"),
       name: (v) => (v.trim() ? null : t("sources.validation.required")),
-      database_name: (v) => (v.trim() ? null : t("sources.validation.required")),
       engine: (v) => (v ? null : t("sources.validation.required")),
     },
   });
@@ -163,12 +166,9 @@ export function SourceList() {
     form.setValues({
       key: source.key,
       name: source.name,
-      database_name: source.database_name ?? "",
-      schema_filter: source.schema_filter ?? "",
       description: source.description ?? "",
       status: source.status === "disabled" ? "disabled" : "active",
       engine,
-      probe_database_name: source.database_name ?? "",
     });
     form.clearErrors();
     try {
@@ -221,15 +221,6 @@ export function SourceList() {
       form.setFieldError("engine", t("sources.validation.required"));
       return;
     }
-    const probeDb =
-      values.probe_database_name.trim() || values.database_name.trim();
-    if (!probeDb) {
-      open?.({
-        type: "error",
-        message: t("sources.validation.probeDatabase"),
-      });
-      return;
-    }
     if (!String(access.password ?? "").trim()) {
       open?.({
         type: "error",
@@ -241,14 +232,12 @@ export function SourceList() {
     try {
       const result = editing
         ? await testSource(editing.id, {
-            database_name: probeDb,
             engine: values.engine,
             access,
           })
         : await testSourceDraft({
             engine: values.engine,
             access,
-            database_name: probeDb,
           });
       if (result.ok) {
         open?.({ type: "success", message: t("sources.test.success") });
@@ -320,7 +309,7 @@ export function SourceList() {
       </Group>
 
       {items.length === 0 ? (
-        <EmptyState message={t("sources.empty")} action={createAction} />
+        <EmptyState message={t("sources.empty")} />
       ) : (
         <Table striped highlightOnHover withTableBorder>
           <Table.Thead>
@@ -348,7 +337,7 @@ export function SourceList() {
                     ? source.access.host
                     : "—"}
                 </Table.Td>
-                <Table.Td>{source.database_name ?? "—"}</Table.Td>
+                <Table.Td>{scopeLabel(source)}</Table.Td>
                 <Table.Td>
                   <Badge
                     color={source.status === "active" ? "green" : "gray"}
@@ -464,8 +453,6 @@ export function SourceList() {
                   await patchSource(editing.id, {
                     name: values.name.trim(),
                     description: values.description.trim() || null,
-                    database_name: values.database_name.trim(),
-                    schema_filter: values.schema_filter.trim() || null,
                     status: values.status,
                     engine: values.engine,
                     access,
@@ -480,8 +467,6 @@ export function SourceList() {
                     name: values.name.trim(),
                     kind: "database",
                     description: values.description.trim() || null,
-                    database_name: values.database_name.trim(),
-                    schema_filter: values.schema_filter.trim() || null,
                     engine: values.engine,
                     access,
                   });
@@ -514,17 +499,6 @@ export function SourceList() {
                 label={t("sources.fields.name")}
                 required
                 {...form.getInputProps("name")}
-              />
-              <TextInput
-                label={t("sources.fields.database")}
-                description={t("sources.fields.databaseHint")}
-                required
-                {...form.getInputProps("database_name")}
-              />
-              <TextInput
-                label={t("sources.fields.schema")}
-                description={t("sources.fields.schemaHint")}
-                {...form.getInputProps("schema_filter")}
               />
               <Textarea
                 label={t("sources.fields.description")}
@@ -560,11 +534,6 @@ export function SourceList() {
                 disabled={busy || testing}
               />
 
-              <TextInput
-                label={t("sources.fields.probeDatabase")}
-                description={t("sources.fields.probeDatabaseHint")}
-                {...form.getInputProps("probe_database_name")}
-              />
               <Group justify="space-between">
                 <Button
                   type="button"

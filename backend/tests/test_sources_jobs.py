@@ -74,6 +74,8 @@ def _access(
     username: str = "u",
     password: str = "p",
     ssl_mode: str = "require",
+    database: str = "MES",
+    schema: str = "public",
     extra: dict | None = None,
 ) -> dict:
     return {
@@ -82,6 +84,8 @@ def _access(
         "username": username,
         "password": password,
         "ssl_mode": ssl_mode,
+        "database": database,
+        "schema": schema,
         "extra": extra if extra is not None else {},
     }
 
@@ -89,7 +93,7 @@ def _access(
 def _make_source(
     client: TestClient,
     key: str = "mes-prod",
-    database_name: str = "MES",
+    database: str = "MES",
     *,
     password: str = "p",
 ) -> dict:
@@ -99,9 +103,8 @@ def _make_source(
             "key": key,
             "name": key,
             "kind": "database",
-            "database_name": database_name,
             "engine": "postgresql",
-            "access": _access(password=password),
+            "access": _access(password=password, database=database),
         },
     )
     assert resp.status_code == 201, resp.text
@@ -122,12 +125,23 @@ def test_access_schema_endpoint(client: TestClient) -> None:
     assert body["schema"]["properties"]["password"]["x-secret"] is True
     assert "require" in body["schema"]["properties"]["ssl_mode"]["enum"]
     assert "ssl_root_cert" in body["schema"]["properties"]
+    assert "database" in body["schema"]["required"]
+    assert "schema" in body["schema"]["required"]
 
     mssql = client.get("/sources/access-schema/mssql")
     assert mssql.status_code == 200, mssql.text
     mssql_schema = mssql.json()["schema"]
     assert mssql_schema["properties"]["ssl_mode"]["enum"] == ["disable"]
     assert "ssl_root_cert" not in mssql_schema["properties"]
+    assert "database" in mssql_schema["required"]
+    assert "schema" in mssql_schema["required"]
+    assert mssql_schema["properties"]["schema"]["default"] == "dbo"
+
+    oracle = client.get("/sources/access-schema/oracle")
+    assert oracle.status_code == 200, oracle.text
+    oracle_schema = oracle.json()["schema"]
+    assert "service_name" in oracle_schema["required"]
+    assert "owner" in oracle_schema["required"]
 
 
 def test_mssql_rejects_tls_ssl_mode(client: TestClient) -> None:
@@ -137,7 +151,6 @@ def test_mssql_rejects_tls_ssl_mode(client: TestClient) -> None:
             "key": "mssql-tls",
             "name": "MSSQL TLS",
             "kind": "database",
-            "database_name": "app",
             "engine": "mssql",
             "access": {
                 "host": "127.0.0.1",
@@ -145,6 +158,8 @@ def test_mssql_rejects_tls_ssl_mode(client: TestClient) -> None:
                 "username": "u",
                 "password": "p",
                 "ssl_mode": "require",
+                "database": "app",
+                "schema": "dbo",
                 "extra": {},
             },
         },
@@ -160,7 +175,6 @@ def test_source_requires_access(client: TestClient) -> None:
             "key": "no-access",
             "name": "NoAccess",
             "kind": "database",
-            "database_name": "MES",
             "engine": "postgresql",
         },
     )
@@ -174,7 +188,6 @@ def test_source_rejects_unknown_access_keys(client: TestClient) -> None:
             "key": "bad-access",
             "name": "Bad",
             "kind": "database",
-            "database_name": "MES",
             "engine": "postgresql",
             "access": {**_access(), "sslmode": "require"},
         },
@@ -297,7 +310,7 @@ def test_delete_disabled_source_and_catalog(client: TestClient) -> None:
 
 
 def test_structure_job_single_flight(client: TestClient) -> None:
-    source = _make_source(client, key="s1", database_name="db")
+    source = _make_source(client, key="s1", database="db")
     from backend.jobs.store import create_queued_job, mark_running
 
     job = create_queued_job(
@@ -324,7 +337,7 @@ def test_structure_job_input_only_source_id(
         "run_structure_job",
         lambda job_id: {"status": "succeeded"},
     )
-    source = _make_source(client, key="s2", database_name="db")
+    source = _make_source(client, key="s2", database="db")
     resp = client.post(
         f"/sources/{source['id']}/jobs",
         json={"kind": "structure"},
@@ -364,8 +377,7 @@ def test_source_probe_draft_success(
         "/sources/test",
         json={
             "engine": "postgresql",
-            "access": _access(),
-            "database_name": "postgres",
+            "access": _access(database="postgres"),
         },
     )
     assert resp.status_code == 200, resp.text
@@ -407,7 +419,6 @@ def test_source_probe_draft_failure(
         json={
             "engine": "postgresql",
             "access": _access(),
-            "database_name": "postgres",
         },
     )
     assert resp.status_code == 200
@@ -450,7 +461,7 @@ def test_source_probe_stored_uses_access(
 
     resp = client.post(
         f"/sources/{source['id']}/test",
-        json={"database_name": "MES"},
+        json={},
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["ok"] is True
@@ -484,7 +495,6 @@ def test_source_probe_timeout_returns_promptly(monkeypatch: pytest.MonkeyPatch) 
     result = probe_mod.run_source_probe(
         engine="postgresql",
         access=_access(),
-        database_name="db",
     )
     elapsed = time.monotonic() - started
 
@@ -493,15 +503,68 @@ def test_source_probe_timeout_returns_promptly(monkeypatch: pytest.MonkeyPatch) 
     assert elapsed < 2.0
 
 
-def test_source_probe_requires_database_name(client: TestClient) -> None:
+def test_source_probe_requires_database_in_access(client: TestClient) -> None:
+    access = _access()
+    del access["database"]
     resp = client.post(
         "/sources/test",
         json={
             "engine": "postgresql",
-            "access": _access(),
+            "access": access,
         },
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "SOURCE_ACCESS_INVALID"
+
+
+def test_source_probe_requires_schema_in_access(client: TestClient) -> None:
+    access = _access()
+    del access["schema"]
+    resp = client.post(
+        "/sources/test",
+        json={
+            "engine": "postgresql",
+            "access": access,
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "SOURCE_ACCESS_INVALID"
+
+
+def test_mssql_probe_requires_schema_in_access(client: TestClient) -> None:
+    access = {
+        "host": "127.0.0.1",
+        "port": 1433,
+        "username": "u",
+        "password": "p",
+        "ssl_mode": "disable",
+        "database": "app",
+        "extra": {},
+    }
+    resp = client.post(
+        "/sources/test",
+        json={"engine": "mssql", "access": access},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "SOURCE_ACCESS_INVALID"
+
+
+def test_oracle_probe_requires_owner_in_access(client: TestClient) -> None:
+    access = {
+        "host": "127.0.0.1",
+        "port": 1521,
+        "username": "u",
+        "password": "p",
+        "ssl_mode": "disable",
+        "service_name": "ORCL",
+        "extra": {},
+    }
+    resp = client.post(
+        "/sources/test",
+        json={"engine": "oracle", "access": access},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "SOURCE_ACCESS_INVALID"
 
 
 def test_source_probe_forbidden_without_write(client: TestClient) -> None:
@@ -522,7 +585,6 @@ def test_source_probe_forbidden_without_write(client: TestClient) -> None:
         json={
             "engine": "postgresql",
             "access": _access(),
-            "database_name": "postgres",
         },
     )
     assert resp.status_code == 403
@@ -631,8 +693,6 @@ def test_collect_failure_does_not_absent(monkeypatch: pytest.MonkeyPatch) -> Non
         name="F",
         kind="database",
         description=None,
-        database_name="db",
-        schema_filter=None,
         engine="postgresql",
         access=_access(),
     )
@@ -779,8 +839,6 @@ def test_enqueue_structure_job_audits_and_rejects_non_database(
             kind="file",
             status="active",
             description=None,
-            database_name=None,
-            schema_filter=None,
             engine=None,
             access_ciphertext=None,
             access_updated_at=None,

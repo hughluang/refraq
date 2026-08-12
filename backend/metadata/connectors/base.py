@@ -14,7 +14,7 @@ class SourceEndpoint:
     username: str
     password: str
     database_name: str
-    schema_filter: str | None = None
+    schema_filter: str
     ssl_mode: str = "require"
     ssl_root_cert: str | None = None
     ssl_client_cert: str | None = None
@@ -22,13 +22,31 @@ class SourceEndpoint:
     extra: dict[str, str] = field(default_factory=dict)
 
 
+def _scope_from_access(engine: str, access: dict[str, Any]) -> tuple[str, str]:
+    """Resolve DSN catalog id and required schema/owner scope from dialect keys."""
+    if engine == "oracle":
+        service = access.get("service_name")
+        if not service:
+            raise ValueError("access.service_name is required for oracle")
+        owner = access.get("owner")
+        if not owner:
+            raise ValueError("access.owner is required for oracle")
+        return str(service), str(owner)
+    database = access.get("database")
+    if not database:
+        raise ValueError(f"access.database is required for {engine}")
+    schema = access.get("schema")
+    if not schema:
+        raise ValueError(f"access.schema is required for {engine}")
+    return str(database), str(schema)
+
+
 def endpoint_from_access(
     *,
     engine: str,
     access: dict[str, Any],
-    database_name: str,
-    schema_filter: str | None = None,
 ) -> SourceEndpoint:
+    database_name, schema_filter = _scope_from_access(engine, access)
     extra_raw = access.get("extra") or {}
     extra = {
         str(k): str(v)

@@ -55,11 +55,7 @@ class OracleConnector:
 
     def collect_structure(self, endpoint: SourceEndpoint) -> CollectedStructure:
         eng = self._engine(endpoint)
-        # Prefer schema_filter when set; otherwise default to connected username.
-        if endpoint.schema_filter:
-            owner_filter = endpoint.schema_filter.upper()
-        else:
-            owner_filter = (endpoint.username or "").upper()
+        owner_filter = endpoint.schema_filter.upper()
         try:
             with eng.connect() as conn:
                 params: dict[str, object] = {"owner": owner_filter}

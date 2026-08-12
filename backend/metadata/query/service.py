@@ -126,8 +126,6 @@ def _execute_readonly(
     endpoint = endpoint_from_access(
         engine=source.engine,
         access=access,
-        database_name=source.database_name or "",
-        schema_filter=source.schema_filter,
     )
 
     pool = ThreadPoolExecutor(max_workers=1)

@@ -36,6 +36,7 @@ def require_source(source_id: str) -> SourceRecord:
         raise SourceNotFound()
     return record
 
+
 def public_view(record: SourceRecord) -> dict[str, Any]:
     access = None
     if record.engine and record.access_ciphertext:
@@ -51,18 +52,18 @@ def public_view(record: SourceRecord) -> dict[str, Any]:
         "kind": record.kind,
         "status": record.status,
         "description": record.description,
-        "database_name": record.database_name,
-        "schema_filter": record.schema_filter,
         "engine": record.engine,
         "access": access,
         "has_access": record.has_access,
         "access_updated_at": record.access_updated_at,
     }
 
+
 def full_access(record: SourceRecord) -> dict[str, Any]:
     if not record.access_ciphertext:
         raise SourceAccessRequired("Source has no access configuration")
     return decrypt_access_blob(record.access_ciphertext)
+
 
 def create_source(
     *,
@@ -70,8 +71,6 @@ def create_source(
     name: str,
     kind: str,
     description: str | None,
-    database_name: str | None,
-    schema_filter: str | None,
     engine: str | None,
     access: dict[str, Any] | None,
 ) -> SourceRecord:
@@ -80,8 +79,6 @@ def create_source(
     ciphertext: str | None = None
     access_updated_at: datetime | None = None
     if kind == "database":
-        if not database_name:
-            raise SourceValidationError("database_name is required for database Sources")
         if not engine or access is None:
             raise SourceAccessRequired()
         ciphertext = seal_access(engine, access)
@@ -95,8 +92,6 @@ def create_source(
         kind=kind,
         status="active",
         description=description,
-        database_name=database_name,
-        schema_filter=schema_filter,
         engine=engine,
         access_ciphertext=ciphertext,
         access_updated_at=access_updated_at,
@@ -105,14 +100,13 @@ def create_source(
     )
     return get_source_store().create_source(record)
 
+
 def update_source(
     source_id: str,
     *,
     name: str | None = None,
     description: str | None | object = ...,
     status: str | None = None,
-    database_name: str | None = None,
-    schema_filter: str | None | object = ...,
     engine: str | None = None,
     access: dict[str, Any] | None | object = ...,
 ) -> SourceRecord:
@@ -129,10 +123,6 @@ def update_source(
         if status not in {"active", "disabled"}:
             raise SourceValidationError("Invalid status")
         updated.status = status
-    if database_name is not None:
-        updated.database_name = database_name
-    if schema_filter is not ...:
-        updated.schema_filter = schema_filter  # type: ignore[assignment]
     if engine is not None:
         if engine not in SUPPORTED_ENGINES:
             raise SourceEngineUnsupported()
@@ -150,7 +140,6 @@ def update_source(
     updated.updated_at = datetime.utcnow()
     saved = store.save_source(updated)
     if engine is not None and existing.engine != saved.engine:
-
         get_catalog_store().recompute_locators_for_source(
             source_id,
             engine=saved.engine,
@@ -158,6 +147,7 @@ def update_source(
             source_key=saved.key,
         )
     return saved
+
 
 def delete_source(source_id: str) -> SourceRecord:
     store = get_source_store()

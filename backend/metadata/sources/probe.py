@@ -24,7 +24,6 @@ def run_source_probe(
     *,
     engine: str,
     access: dict[str, Any],
-    database_name: str,
 ) -> ProbeResult:
     connector = get_connector(engine)
     if connector is None:
@@ -33,8 +32,6 @@ def run_source_probe(
     endpoint = endpoint_from_access(
         engine=engine,
         access=access,
-        database_name=database_name,
-        schema_filter=None,
     )
 
     # Do not use `with ThreadPoolExecutor`: on timeout its __exit__ calls

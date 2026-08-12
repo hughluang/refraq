@@ -87,14 +87,11 @@ class PostgresqlConnector:
         eng = self._engine(endpoint)
         try:
             with eng.connect() as conn:
-                params: dict[str, object] = {}
-                schema_clause = ""
-                if endpoint.schema_filter:
-                    schema_clause = "AND n.nspname = :schema_filter"
-                    params["schema_filter"] = endpoint.schema_filter
-
+                params: dict[str, object] = {
+                    "schema_filter": endpoint.schema_filter,
+                }
                 obj_sql = text(
-                    f"""
+                    """
                     SELECT
                       n.nspname AS schema_name,
                       c.relname AS name,
@@ -113,7 +110,7 @@ class PostgresqlConnector:
                       AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
                       AND n.nspname NOT LIKE 'pg_toast%%'
                       AND n.nspname NOT LIKE 'pg_temp%%'
-                      {schema_clause}
+                      AND n.nspname = :schema_filter
                     ORDER BY n.nspname, c.relname
                     """
                 )

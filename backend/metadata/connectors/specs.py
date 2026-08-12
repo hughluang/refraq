@@ -83,6 +83,45 @@ def _base_properties(
     return props
 
 
+_DATABASE_PROP: dict[str, Any] = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 256,
+    "description": "Database name (DSN catalog + collection scope)",
+}
+
+
+def _schema_prop(*, default: str) -> dict[str, Any]:
+    """Required schema/owner-equivalent scope; default is engine-conventional only."""
+    return {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "default": default,
+        "description": (
+            "Required schema scope for structure collection "
+            "(qualifies object identity within the Source)"
+        ),
+    }
+
+
+_SERVICE_NAME_PROP: dict[str, Any] = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 256,
+    "description": "Oracle service name / SID",
+}
+_OWNER_PROP: dict[str, Any] = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 256,
+    "description": (
+        "Required owner (schema) scope for structure collection "
+        "(qualifies object identity within the Source)"
+    ),
+}
+
+
 def _engine_schema(
     *,
     schema_id: str,
@@ -91,6 +130,8 @@ def _engine_schema(
     ssl_modes: list[str],
     default_ssl_mode: str,
     include_cert_fields: bool,
+    scope_properties: dict[str, dict[str, Any]],
+    scope_required: list[str],
 ) -> dict[str, Any]:
     props = _base_properties(
         default_port=default_port,
@@ -98,13 +139,15 @@ def _engine_schema(
         default_ssl_mode=default_ssl_mode,
         include_cert_fields=include_cert_fields,
     )
+    props.update(deepcopy(scope_properties))
+    required = ["host", "port", "username", "password", "ssl_mode", *scope_required]
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": schema_id,
         "title": title,
         "type": "object",
         "additionalProperties": False,
-        "required": ["host", "port", "username", "password", "ssl_mode"],
+        "required": required,
         "properties": props,
     }
 
@@ -117,6 +160,11 @@ CONNECTOR_SPECS: dict[str, dict[str, Any]] = {
         ssl_modes=SSL_MODE_ENUM_POSTGRES,
         default_ssl_mode="require",
         include_cert_fields=True,
+        scope_properties={
+            "database": _DATABASE_PROP,
+            "schema": _schema_prop(default="public"),
+        },
+        scope_required=["database", "schema"],
     ),
     "mssql": _engine_schema(
         schema_id="mssql.access.v1",
@@ -125,6 +173,11 @@ CONNECTOR_SPECS: dict[str, dict[str, Any]] = {
         ssl_modes=SSL_MODE_ENUM_PLAIN,
         default_ssl_mode="disable",
         include_cert_fields=False,
+        scope_properties={
+            "database": _DATABASE_PROP,
+            "schema": _schema_prop(default="dbo"),
+        },
+        scope_required=["database", "schema"],
     ),
     "oracle": _engine_schema(
         schema_id="oracle.access.v1",
@@ -133,6 +186,11 @@ CONNECTOR_SPECS: dict[str, dict[str, Any]] = {
         ssl_modes=SSL_MODE_ENUM_PLAIN,
         default_ssl_mode="disable",
         include_cert_fields=False,
+        scope_properties={
+            "service_name": _SERVICE_NAME_PROP,
+            "owner": _OWNER_PROP,
+        },
+        scope_required=["service_name", "owner"],
     ),
 }
 
