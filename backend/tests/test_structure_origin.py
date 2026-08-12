@@ -221,3 +221,50 @@ def test_apply_preserves_human_join_via_store() -> None:
     assert joins[0].id == human.id
     assert joins[0].origin == "human"
     assert joins[0].evidence == "analyst confirmed"
+
+
+def test_service_foreign_key_upsert_keeps_human_join() -> None:
+    from backend.metadata.catalog import service as catalog_service
+
+    store = get_catalog_store()
+    now = datetime.utcnow()
+    customers = _table(
+        object_id="obj_customers",
+        name="customers",
+        columns=[("col_cust_id", "id")],
+        now=now,
+    )
+    orders = _table(
+        object_id="obj_orders",
+        name="orders",
+        columns=[("col_ord_id", "id"), ("col_cust_fk", "customer_id")],
+        now=now,
+    )
+    store.replace_structure_snapshot(
+        source_id="src_origin",
+        job_id="job_seed",
+        objects=[customers, orders],
+        schema_scope=None,
+        engine="postgresql",
+        kind="database",
+        source_key="demo",
+    )
+    human = catalog_service.upsert_join(
+        from_column_id="col_cust_fk",
+        to_column_id="col_cust_id",
+        evidence="analyst confirmed",
+        actor_user_id="u1",
+        actor_token_id=None,
+        origin="human",
+    )
+    kept = catalog_service.upsert_join(
+        from_column_id="col_cust_fk",
+        to_column_id="col_cust_id",
+        evidence="FK fk_orders_customer",
+        actor_user_id=None,
+        actor_token_id=None,
+        origin="foreign_key",
+    )
+    assert kept.id == human.id
+    assert kept.origin == "human"
+    assert kept.evidence == "analyst confirmed"

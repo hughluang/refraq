@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
-from backend.metadata.catalog.fk_join_sync import PROTECTED_JOIN_ORIGINS
 from backend.metadata.catalog.identity import (
     _recompute_column_locator,
     _recompute_object_locator,
@@ -21,10 +21,7 @@ from backend.metadata.catalog.records import (
     new_join_id,
 )
 from backend.metadata.catalog.search_rank import _paginate, _search_rank
-from backend.metadata.catalog.structure_merge import (
-    StructureRefreshPlan,
-    build_structure_refresh_plan,
-)
+from backend.metadata.catalog.structure_merge import StructureRefreshPlan
 
 class MemoryCatalogStore:
     def __init__(self) -> None:
@@ -161,20 +158,15 @@ class MemoryCatalogStore:
         items, _ = self.list_objects(source_id, include_absent=False)
         return items
 
-    def apply_structure_plan(
+    def run_structure_refresh(
         self,
-        *,
         source_id: str,
-        job_id: str,
-        objects: list[CatalogObjectRecord],
-        schema_scope: str | None,
-        fail_safe_threshold: float,
-        engine: str | None,
-        kind: str,
-        source_key: str,
+        build_plan: Callable[
+            [list[CatalogObjectRecord], list[CatalogJoinRecord], datetime],
+            StructureRefreshPlan,
+        ],
     ) -> None:
-        """Atomic load → build plan → persist (zero merge rules in adapter)."""
-        now = datetime.utcnow()
+        """Atomic load → build_plan → persist (zero merge/origin rules)."""
         with self._lock:
             objects_backup = dict(self._objects)
             joins_backup = dict(self._joins)
@@ -189,19 +181,8 @@ class MemoryCatalogStore:
                     for j in self._joins.values()
                     if j.from_column_id in col_ids or j.to_column_id in col_ids
                 ]
-                plan = build_structure_refresh_plan(
-                    source_id=source_id,
-                    job_id=job_id,
-                    existing_objects=existing,
-                    existing_joins=existing_joins,
-                    incoming=objects,
-                    schema_scope=schema_scope,
-                    fail_safe_threshold=fail_safe_threshold,
-                    engine=engine,
-                    kind=kind,
-                    source_key=source_key,
-                    now=now,
-                )
+                now = datetime.utcnow()
+                plan = build_plan(existing, existing_joins, now)
                 self._persist_structure_plan_unlocked(plan, now=now)
             except CatalogWriteAborted:
                 self._objects = objects_backup
@@ -220,16 +201,21 @@ class MemoryCatalogStore:
         kind: str,
         source_key: str,
     ) -> None:
-        """Deprecated seed helper — prefer apply_structure_snapshot / apply_structure_plan."""
-        self.apply_structure_plan(
-            source_id=source_id,
-            job_id=job_id,
-            objects=objects,
-            schema_scope=schema_scope,
-            fail_safe_threshold=1.0,
-            engine=engine,
-            kind=kind,
-            source_key=source_key,
+        """Deprecated seed helper — prefer apply_structure_snapshot."""
+        from backend.metadata.catalog.structure_refresh import bind_structure_refresh_plan
+
+        self.run_structure_refresh(
+            source_id,
+            bind_structure_refresh_plan(
+                source_id=source_id,
+                job_id=job_id,
+                collected=objects,
+                schema_scope=schema_scope,
+                fail_safe_threshold=1.0,
+                engine=engine,
+                kind=kind,
+                source_key=source_key,
+            ),
         )
 
     def _persist_structure_plan_unlocked(
@@ -336,8 +322,6 @@ class MemoryCatalogStore:
         existing_id = self._join_by_pair.get(pair)
         if existing_id is not None:
             prev = self._joins[existing_id]
-            if origin == "foreign_key" and prev.origin in PROTECTED_JOIN_ORIGINS:
-                return prev
             updated = replace(
                 prev,
                 evidence=evidence,
@@ -480,6 +464,17 @@ class MemoryCatalogStore:
 
     def get_join(self, join_id: str) -> CatalogJoinRecord | None:
         with self._lock:
+            return self._joins.get(join_id)
+
+    def get_join_by_pair(
+        self,
+        from_column_id: str,
+        to_column_id: str,
+    ) -> CatalogJoinRecord | None:
+        with self._lock:
+            join_id = self._join_by_pair.get((from_column_id, to_column_id))
+            if join_id is None:
+                return None
             return self._joins.get(join_id)
 
     def list_joins_for_object(self, object_id: str) -> list[CatalogJoinRecord]:

@@ -1,9 +1,8 @@
-"""FK → Join edge derivation and protected Join Origin rules."""
+"""FK/index snapshot merge and FK → Join edge derivation."""
 
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any
 
 from backend.metadata.catalog.records import (
     CatalogForeignKeyRecord,
@@ -13,8 +12,6 @@ from backend.metadata.catalog.records import (
     new_fk_id,
     new_index_id,
 )
-
-PROTECTED_JOIN_ORIGINS = frozenset({"human", "mcp"})
 
 
 def merge_fk_snapshot(

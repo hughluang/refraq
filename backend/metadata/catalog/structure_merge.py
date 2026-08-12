@@ -6,10 +6,13 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 from backend.metadata.catalog.fk_join_sync import (
-    PROTECTED_JOIN_ORIGINS,
     _fk_edges_for_object,
     merge_fk_snapshot,
     merge_index_snapshot,
+)
+from backend.metadata.catalog.join_origin import (
+    STRUCTURE_JOIN_ORIGIN,
+    resolve_join_write,
 )
 from backend.metadata.catalog.identity import (
     _incoming_covers_existing,
@@ -296,7 +299,14 @@ def build_structure_refresh_plan(
     upserts: list[StructureJoinUpsert] = []
     for (from_id, to_id), (evidence, expression) in expected.items():
         existing = joins_by_pair.get((from_id, to_id))
-        if existing is not None and existing.origin in PROTECTED_JOIN_ORIGINS:
+        existing_origin = existing.origin if existing is not None else None
+        if (
+            resolve_join_write(
+                existing_origin=existing_origin,
+                incoming_origin=STRUCTURE_JOIN_ORIGIN,
+            )
+            == "keep_existing"
+        ):
             continue
         upserts.append(
             StructureJoinUpsert(
@@ -304,6 +314,7 @@ def build_structure_refresh_plan(
                 to_column_id=to_id,
                 evidence=evidence,
                 join_expression=expression,
+                origin=STRUCTURE_JOIN_ORIGIN,
             )
         )
 

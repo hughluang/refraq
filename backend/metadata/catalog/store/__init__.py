@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
+from datetime import datetime
 from functools import lru_cache
 from typing import Any, Protocol
 
 from backend.core.config import get_settings
-from backend.metadata.catalog.fk_join_sync import PROTECTED_JOIN_ORIGINS
 from backend.metadata.catalog.records import (
     UNSET,
     CatalogColumnRecord,
@@ -24,7 +25,8 @@ from backend.metadata.catalog.records import (
 )
 from backend.metadata.catalog.store.memory import MemoryCatalogStore
 from backend.metadata.catalog.store.sql import SqlCatalogStore
-from backend.metadata.catalog.structure_apply import apply_structure_snapshot
+from backend.metadata.catalog.structure_merge import StructureRefreshPlan
+from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
 from backend.metadata.errors import CatalogObjectNotFound
 
 class CatalogStore(Protocol):
@@ -71,17 +73,13 @@ class CatalogStore(Protocol):
 
     def list_present_for_source(self, source_id: str) -> list[CatalogObjectRecord]: ...
 
-    def apply_structure_plan(
+    def run_structure_refresh(
         self,
-        *,
         source_id: str,
-        job_id: str,
-        objects: list[CatalogObjectRecord],
-        schema_scope: str | None,
-        fail_safe_threshold: float,
-        engine: str | None,
-        kind: str,
-        source_key: str,
+        build_plan: Callable[
+            [list[CatalogObjectRecord], list[CatalogJoinRecord], datetime],
+            StructureRefreshPlan,
+        ],
     ) -> None: ...
 
     def delete_objects_for_source(self, source_id: str) -> None: ...
@@ -115,6 +113,12 @@ class CatalogStore(Protocol):
     ) -> CatalogColumnRecord | None: ...
 
     def get_join(self, join_id: str) -> CatalogJoinRecord | None: ...
+
+    def get_join_by_pair(
+        self,
+        from_column_id: str,
+        to_column_id: str,
+    ) -> CatalogJoinRecord | None: ...
 
     def list_joins_for_object(self, object_id: str) -> list[CatalogJoinRecord]: ...
 
@@ -186,7 +190,6 @@ __all__ = [
     "CatalogStore",
     "MemoryCatalogStore",
     "SqlCatalogStore",
-    "PROTECTED_JOIN_ORIGINS",
     "apply_structure_snapshot",
     "get_catalog_store",
     "reset_catalog_store",

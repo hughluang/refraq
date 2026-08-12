@@ -8,6 +8,7 @@ from typing import Any
 
 from backend.admin.audit import persist_audit_event
 from backend.metadata.business_domains.service import require_domain_by_code
+from backend.metadata.catalog.join_origin import resolve_join_write
 from backend.metadata.catalog.store import (
     UNSET,
     CatalogColumnRecord,
@@ -790,7 +791,19 @@ def upsert_join(
     if expression is None:
         expression = f"{from_col.name} = {to_col.name}"
     kind = (join_kind or "INNER").strip() or "INNER"
-    record = get_catalog_store().upsert_join(
+    store = get_catalog_store()
+    existing = store.get_join_by_pair(from_column_id, to_column_id)
+    existing_origin = existing.origin if existing is not None else None
+    if (
+        resolve_join_write(
+            existing_origin=existing_origin,
+            incoming_origin=origin,
+        )
+        == "keep_existing"
+    ):
+        assert existing is not None
+        return existing
+    record = store.upsert_join(
         from_column_id=from_column_id,
         to_column_id=to_column_id,
         evidence=cleaned,

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
 from backend.core.db import session_scope
-from backend.metadata.catalog.fk_join_sync import PROTECTED_JOIN_ORIGINS
 from backend.metadata.catalog.identity import (
     _recompute_column_locator,
     _recompute_object_locator,
@@ -22,7 +22,7 @@ from backend.metadata.catalog.records import (
     new_join_id,
 )
 from backend.metadata.catalog.search_rank import _paginate, _search_rank
-from backend.metadata.catalog.structure_merge import build_structure_refresh_plan
+from backend.metadata.catalog.structure_merge import StructureRefreshPlan
 
 
 def _dumps_json(value: Any) -> str | None:
@@ -230,19 +230,15 @@ class SqlCatalogStore:
         items, _ = self.list_objects(source_id, include_absent=False)
         return items
 
-    def apply_structure_plan(
+    def run_structure_refresh(
         self,
-        *,
         source_id: str,
-        job_id: str,
-        objects: list[CatalogObjectRecord],
-        schema_scope: str | None,
-        fail_safe_threshold: float,
-        engine: str | None,
-        kind: str,
-        source_key: str,
+        build_plan: Callable[
+            [list[CatalogObjectRecord], list[CatalogJoinRecord], datetime],
+            StructureRefreshPlan,
+        ],
     ) -> None:
-        """Atomic load → build plan → persist (zero merge rules in adapter)."""
+        """Atomic load → build_plan → persist (zero merge/origin rules)."""
         from sqlalchemy import select
         from sqlalchemy.orm import selectinload
 
@@ -252,7 +248,6 @@ class SqlCatalogStore:
             CatalogObjectRow,
         )
 
-        now = datetime.utcnow()
         with session_scope() as session:
             rows = list(
                 session.scalars(
@@ -283,27 +278,22 @@ class SqlCatalogStore:
                 )
                 existing_joins = [_row_to_join(j) for j in join_rows]
 
-            plan = build_structure_refresh_plan(
-                source_id=source_id,
-                job_id=job_id,
-                existing_objects=existing_objects,
-                existing_joins=existing_joins,
-                incoming=objects,
-                schema_scope=schema_scope,
-                fail_safe_threshold=fail_safe_threshold,
-                engine=engine,
-                kind=kind,
-                source_key=source_key,
-                now=now,
-            )
+            now = datetime.utcnow()
+            plan = build_plan(existing_objects, existing_joins, now)
 
-            for obj in plan.objects:
-                _sql_persist_object(session, obj, now=now)
-
+            # Joins reference catalog_columns via FK without ORM relationships, so
+            # flush order is not inferred — delete joins, then persist objects/columns,
+            # then upsert joins (with an explicit flush before join inserts).
             for jid in plan.delete_join_ids:
                 row = session.get(CatalogJoinRow, jid)
                 if row is not None:
                     session.delete(row)
+            if plan.delete_join_ids:
+                session.flush()
+
+            for obj in plan.objects:
+                _sql_persist_object(session, obj, now=now)
+            session.flush()
 
             for upsert in plan.upsert_joins:
                 existing = session.scalars(
@@ -344,16 +334,21 @@ class SqlCatalogStore:
         kind: str,
         source_key: str,
     ) -> None:
-        """Deprecated seed helper — prefer apply_structure_snapshot / apply_structure_plan."""
-        self.apply_structure_plan(
-            source_id=source_id,
-            job_id=job_id,
-            objects=objects,
-            schema_scope=schema_scope,
-            fail_safe_threshold=1.0,
-            engine=engine,
-            kind=kind,
-            source_key=source_key,
+        """Deprecated seed helper — prefer apply_structure_snapshot."""
+        from backend.metadata.catalog.structure_refresh import bind_structure_refresh_plan
+
+        self.run_structure_refresh(
+            source_id,
+            bind_structure_refresh_plan(
+                source_id=source_id,
+                job_id=job_id,
+                collected=objects,
+                schema_scope=schema_scope,
+                fail_safe_threshold=1.0,
+                engine=engine,
+                kind=kind,
+                source_key=source_key,
+            ),
         )
 
     def recompute_locators_for_source(
@@ -535,6 +530,25 @@ class SqlCatalogStore:
             row = session.get(CatalogJoinRow, join_id)
             return _row_to_join(row) if row else None
 
+    def get_join_by_pair(
+        self,
+        from_column_id: str,
+        to_column_id: str,
+    ) -> CatalogJoinRecord | None:
+        from sqlalchemy import select
+
+        from backend.core.db import session_scope
+        from backend.metadata.models import CatalogJoinRow
+
+        with session_scope() as session:
+            row = session.scalars(
+                select(CatalogJoinRow).where(
+                    CatalogJoinRow.from_column_id == from_column_id,
+                    CatalogJoinRow.to_column_id == to_column_id,
+                )
+            ).first()
+            return _row_to_join(row) if row else None
+
     def list_joins_for_object(self, object_id: str) -> list[CatalogJoinRecord]:
         from sqlalchemy import or_, select
 
@@ -627,8 +641,6 @@ class SqlCatalogStore:
                 )
             ).first()
             if existing is not None:
-                if origin == "foreign_key" and existing.origin in PROTECTED_JOIN_ORIGINS:
-                    return _row_to_join(existing)
                 existing.evidence = evidence
                 existing.join_kind = join_kind
                 existing.join_expression = join_expression
@@ -726,7 +738,17 @@ def _sql_persist_object(session: Any, obj: CatalogObjectRecord, *, now: datetime
         row.last_structure_job_id = obj.last_structure_job_id
         row.collected_at = obj.collected_at
         row.updated_at = obj.updated_at
-        # semantics fields intentionally not overwritten from plan merges
+        row.business_name = obj.business_name
+        row.business_description = obj.business_description
+        row.object_category = obj.object_category
+        row.grain_description = obj.grain_description
+        row.business_primary_key_json = _dumps_json(obj.business_primary_key)
+        row.business_domain_id = obj.business_domain_id
+        row.evidence_summary_json = _dumps_json(obj.evidence_summary)
+        row.open_questions_json = _dumps_json(obj.open_questions)
+        row.semantic_source = obj.semantic_source
+        row.business_semantics_ready = obj.business_semantics_ready
+        row.semantics_updated_at = obj.semantics_updated_at
 
     col_by_id = {c.id: c for c in list(row.columns)}
     seen_col_ids: set[str] = set()
@@ -767,6 +789,11 @@ def _sql_persist_object(session: Any, obj: CatalogObjectRecord, *, now: datetime
             prev.field_kind = col.field_kind or prev.field_kind
             prev.is_present = col.is_present
             prev.updated_at = col.updated_at
+            prev.business_name = col.business_name
+            prev.business_description = col.business_description
+            prev.column_semantics_json = _dumps_json(col.column_semantics)
+            prev.enum_catalog_json = _dumps_json(col.enum_catalog)
+            prev.semantic_source = col.semantic_source
 
     for cid, prev in col_by_id.items():
         if cid not in seen_col_ids:
