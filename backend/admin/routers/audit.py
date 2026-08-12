@@ -6,17 +6,16 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 
+from backend.admin.audit_store import AuditEventRecord, get_audit_store
 from backend.admin.deps import require_permission
 from backend.admin.errors import AuditEventNotFound
-from backend.admin.audit_store import get_audit_store
-from backend.admin.user_store import UserRecord
 from backend.admin.schemas.audit import AuditEvent, AuditEventListResponse, AuditEventResponse
+from backend.admin.user_store import UserRecord
+
 
 router = APIRouter(tags=["audit"])
 
-
 def _to_event(record: object) -> AuditEvent:
-    from backend.admin.audit_store import AuditEventRecord
 
     assert isinstance(record, AuditEventRecord)
     return AuditEvent(
@@ -30,7 +29,6 @@ def _to_event(record: object) -> AuditEvent:
         result=record.result,
         detail=dict(record.detail),
     )
-
 
 @router.get("/audit/events", response_model=AuditEventListResponse)
 def list_audit_events(
@@ -57,7 +55,6 @@ def list_audit_events(
         items=[_to_event(item) for item in items],
         next_cursor=next_cursor,
     )
-
 
 @router.get("/audit/events/{event_id}", response_model=AuditEventResponse)
 def get_audit_event(

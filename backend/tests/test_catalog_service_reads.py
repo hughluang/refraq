@@ -30,6 +30,7 @@ from backend.metadata.catalog.store import (  # noqa: E402
     get_catalog_store,
     reset_catalog_store,
 )
+from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
 from backend.metadata.errors import (  # noqa: E402
     CatalogSearchQueryRequired,
     JoinPathUnavailable,
@@ -165,11 +166,12 @@ def test_service_read_model_and_semantics() -> None:
     _seed_source()
     store = get_catalog_store()
     a = _table("obj_a", "orders", [("col_id", "id")])
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id="src_1",
         job_id="j1",
-        objects=[a],
+        collected=[a],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="mes",
@@ -199,11 +201,12 @@ def test_service_lookup_join_paths() -> None:
     store = get_catalog_store()
     a = _table("obj_a", "a", [("col_a_id", "id"), ("col_a_b", "b_id")])
     b = _table("obj_b", "b", [("col_b_id", "id")])
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id="src_1",
         job_id="j1",
-        objects=[a, b],
+        collected=[a, b],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="mes",
@@ -225,11 +228,12 @@ def test_service_lookup_join_paths() -> None:
     assert result.paths[0].hops[0].from_column_locator_key is not None
 
     empty = _table("obj_empty", "empty", [])
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id="src_1",
         job_id="j2",
-        objects=[a, b, empty],
+        collected=[a, b, empty],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="mes",
@@ -310,11 +314,12 @@ def test_http_join_path_smoke(client: TestClient) -> None:
             )
         ],
     )
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id=source_id,
         job_id="j1",
-        objects=[a],
+        collected=[a],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="path-src",
@@ -401,11 +406,12 @@ def test_mcp_find_join_path_smoke(client: TestClient) -> None:
             )
         ],
     )
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id=source_id,
         job_id="j1",
-        objects=[a],
+        collected=[a],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="mcp-path",

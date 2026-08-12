@@ -30,6 +30,7 @@ from backend.metadata.catalog.records import (  # noqa: E402
     CatalogObjectRecord,
 )
 from backend.metadata.catalog.store import get_catalog_store, reset_catalog_store  # noqa: E402
+from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
 from backend.metadata.connectors.base import ConnectorError, QueryResult  # noqa: E402
 from backend.metadata.errors import SampleColumnUnknown, SampleFilterInvalid  # noqa: E402
 from backend.metadata.query import service as query_service  # noqa: E402
@@ -173,11 +174,12 @@ def _seed_object(source_id: str, *, source_key: str = "mes-prod") -> CatalogObje
         ],
         indexes=[],
     )
-    get_catalog_store().replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id=source_id,
         job_id="job_sample",
-        objects=[record],
+        collected=[record],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key=source_key,

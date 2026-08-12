@@ -7,7 +7,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
 
+from sqlalchemy import select
+
 from backend.core.config import get_settings
+from backend.core.db import session_scope
+from backend.worker.models import ScheduledTaskRow
 
 
 @dataclass
@@ -25,7 +29,6 @@ class ScheduledTaskRecord:
     last_run_at: datetime | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
-
 
 class MemoryScheduleStore:
     def __init__(self) -> None:
@@ -52,14 +55,8 @@ class MemoryScheduleStore:
                 record.last_run_at = when
                 record.updated_at = when
 
-
 class SqlScheduleStore:
     def upsert(self, record: ScheduledTaskRecord) -> ScheduledTaskRecord:
-        from backend.core.db import session_scope
-        from backend.worker.models import ScheduledTaskRow
-
-        from sqlalchemy import select
-
         with session_scope() as session:
             row = session.get(ScheduledTaskRow, record.id)
             if row is None:
@@ -85,11 +82,6 @@ class SqlScheduleStore:
             return _row_to_schedule(row)
 
     def get_by_key(self, key: str) -> ScheduledTaskRecord | None:
-        from sqlalchemy import select
-
-        from backend.core.db import session_scope
-        from backend.worker.models import ScheduledTaskRow
-
         with session_scope() as session:
             row = session.scalar(
                 select(ScheduledTaskRow).where(ScheduledTaskRow.key == key)
@@ -97,11 +89,6 @@ class SqlScheduleStore:
             return _row_to_schedule(row) if row else None
 
     def list_enabled(self) -> list[ScheduledTaskRecord]:
-        from sqlalchemy import select
-
-        from backend.core.db import session_scope
-        from backend.worker.models import ScheduledTaskRow
-
         with session_scope() as session:
             rows = session.scalars(
                 select(ScheduledTaskRow).where(ScheduledTaskRow.enabled.is_(True))
@@ -109,11 +96,6 @@ class SqlScheduleStore:
             return [_row_to_schedule(row) for row in rows]
 
     def touch_last_run(self, key: str, when: datetime) -> None:
-        from sqlalchemy import select
-
-        from backend.core.db import session_scope
-        from backend.worker.models import ScheduledTaskRow
-
         with session_scope() as session:
             row = session.scalar(
                 select(ScheduledTaskRow).where(ScheduledTaskRow.key == key)
@@ -122,10 +104,7 @@ class SqlScheduleStore:
                 row.last_run_at = when
                 row.updated_at = when
 
-
 def _row_to_schedule(row: object) -> ScheduledTaskRecord:
-    from backend.worker.models import ScheduledTaskRow
-
     assert isinstance(row, ScheduledTaskRow)
     return ScheduledTaskRecord(
         id=row.id,
@@ -143,10 +122,8 @@ def _row_to_schedule(row: object) -> ScheduledTaskRecord:
         updated_at=row.updated_at,
     )
 
-
 _memory_singleton: MemoryScheduleStore | None = None
 _memory_lock = threading.Lock()
-
 
 @lru_cache
 def get_schedule_store() -> MemoryScheduleStore | SqlScheduleStore:
@@ -158,7 +135,6 @@ def get_schedule_store() -> MemoryScheduleStore | SqlScheduleStore:
                 _memory_singleton = MemoryScheduleStore()
             return _memory_singleton
     return SqlScheduleStore()
-
 
 def reset_schedule_store() -> None:
     global _memory_singleton

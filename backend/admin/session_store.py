@@ -10,28 +10,25 @@ from typing import Protocol
 
 from backend.admin.security import new_session_id
 from backend.core.config import get_settings
+from backend.core.redis_client import get_redis
+
 
 SESSION_KEY_PREFIX = "refraq:session:"
 USER_SESSIONS_KEY_PREFIX = "refraq:user_sessions:"
-
 
 @dataclass
 class _SessionEntry:
     user_id: str
     expires_at: float
 
-
 class SessionStore(Protocol):
     def create(self, user_id: str, ttl_seconds: int) -> str: ...
-
     def get(self, session_id: str) -> str | None: ...
 
     def delete(self, session_id: str) -> None: ...
-
     def delete_by_user_id(self, user_id: str) -> None: ...
 
     def delete_other_sessions(self, user_id: str, keep_session_id: str) -> None: ...
-
 
 class MemorySessionStore:
     def __init__(self) -> None:
@@ -93,11 +90,8 @@ class MemorySessionStore:
         for sid in expired:
             self._sessions.pop(sid, None)
 
-
 class RedisSessionStore:
     def create(self, user_id: str, ttl_seconds: int) -> str:
-        from backend.core.redis_client import get_redis
-
         session_id = new_session_id()
         ttl = max(int(ttl_seconds), 1)
         client = get_redis()
@@ -110,7 +104,6 @@ class RedisSessionStore:
     def get(self, session_id: str) -> str | None:
         if not session_id:
             return None
-        from backend.core.redis_client import get_redis
 
         client = get_redis()
         key = f"{SESSION_KEY_PREFIX}{session_id}"
@@ -124,7 +117,6 @@ class RedisSessionStore:
     def delete(self, session_id: str) -> None:
         if not session_id:
             return
-        from backend.core.redis_client import get_redis
 
         client = get_redis()
         key = f"{SESSION_KEY_PREFIX}{session_id}"
@@ -138,7 +130,6 @@ class RedisSessionStore:
     def delete_by_user_id(self, user_id: str) -> None:
         if not user_id:
             return
-        from backend.core.redis_client import get_redis
 
         client = get_redis()
         index_key = f"{USER_SESSIONS_KEY_PREFIX}{user_id}"
@@ -157,7 +148,6 @@ class RedisSessionStore:
     def delete_other_sessions(self, user_id: str, keep_session_id: str) -> None:
         if not user_id:
             return
-        from backend.core.redis_client import get_redis
 
         client = get_redis()
         index_key = f"{USER_SESSIONS_KEY_PREFIX}{user_id}"
@@ -173,12 +163,10 @@ class RedisSessionStore:
             pipe.srem(index_key, sid_str)
         pipe.execute()
 
-
 SessionStoreImpl = MemorySessionStore
 
 _memory_singleton: MemorySessionStore | None = None
 _memory_lock = threading.Lock()
-
 
 @lru_cache
 def get_session_store() -> SessionStore:
@@ -190,7 +178,6 @@ def get_session_store() -> SessionStore:
                 _memory_singleton = MemorySessionStore()
             return _memory_singleton
     return RedisSessionStore()
-
 
 def reset_session_store() -> None:
     global _memory_singleton

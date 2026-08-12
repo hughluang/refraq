@@ -14,12 +14,14 @@ from backend.metadata.connectors.base import (
     CollectedIndex,
     CollectedObject,
     CollectedStructure,
+    ConnectorError,
     QueryResult,
     SourceEndpoint,
-    ConnectorError,
     fetch_query_result,
     query_endpoint_error,
 )
+from backend.metadata.connectors.tls import postgres_connect_args, tls_temp_files
+
 
 SYSTEM_SCHEMAS = frozenset({"pg_catalog", "information_schema", "pg_toast"})
 
@@ -27,7 +29,6 @@ SYSTEM_SCHEMAS = frozenset({"pg_catalog", "information_schema", "pg_toast"})
 # _indexes can iterate attnums without treating the text wire form as a str.
 # psycopg3 has no built-in loader; without this, indkey arrives as "1 2" and
 # `for n in indkey` yields spaces → JOB_COLLECT_FAILED.
-
 
 class Int2VectorLoader(Loader):
     """Load PostgreSQL int2vector text wire format into list[int]."""
@@ -37,7 +38,6 @@ class Int2VectorLoader(Loader):
             return []
         raw = data.tobytes() if isinstance(data, memoryview) else data
         return [int(n) for n in raw.decode("utf-8").split()]
-
 
 def register_int2vector_loader(conn: object) -> None:
     """Register Int2VectorLoader on a psycopg DBAPI connection."""
@@ -49,7 +49,6 @@ def register_int2vector_loader(conn: object) -> None:
         )
     info.register(conn)
     conn.adapters.register_loader("int2vector", Int2VectorLoader)  # type: ignore[attr-defined]
-
 
 class PostgresqlConnector:
     engine = "postgresql"
@@ -302,7 +301,6 @@ class PostgresqlConnector:
         return None
 
     def _engine(self, endpoint: SourceEndpoint):
-        from backend.metadata.connectors.tls import postgres_connect_args, tls_temp_files
 
         user = quote_plus(endpoint.username)
         password = quote_plus(endpoint.password)

@@ -25,10 +25,10 @@ from backend.main import app  # noqa: E402
 from backend.metadata.catalog.store import (  # noqa: E402
     CatalogColumnRecord,
     CatalogObjectRecord,
-    apply_structure_snapshot,
     get_catalog_store,
     reset_catalog_store,
 )
+from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
 from backend.metadata.locators import format_object_locator  # noqa: E402
 from backend.metadata.mcp_server import upsert_joins  # noqa: E402
 from backend.metadata.sources.store import reset_source_store  # noqa: E402
@@ -173,11 +173,12 @@ def test_view_to_materialized_view_preserves_identity(client: TestClient) -> Non
         object_type="view",
         col_id="col_mv_id",
     )
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id=source["id"],
         job_id="job_1",
-        objects=[seed],
+        collected=[seed],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="mes-prod",
@@ -225,11 +226,12 @@ def test_engine_change_recomputes_catalog_locators(client: TestClient) -> None:
         name="work_order",
         col_id="col_wo",
     )
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id=source["id"],
         job_id="job_1",
-        objects=[seed],
+        collected=[seed],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="mes-prod",
@@ -319,11 +321,12 @@ def test_list_objects_pagination_defaults(client: TestClient) -> None:
                 indexes=[],
             )
         )
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id=source["id"],
         job_id="job_page",
-        objects=objects,
+        collected=objects,
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="paged",

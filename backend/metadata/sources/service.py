@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
+from backend.metadata.catalog.store import get_catalog_store
 from backend.metadata.errors import (
     SourceAccessRequired,
     SourceEngineUnsupported,
@@ -14,13 +15,13 @@ from backend.metadata.errors import (
     SourceNotFound,
     SourceValidationError,
 )
+from backend.metadata.locators import format_source_locator
 from backend.metadata.sources.access import (
     SUPPORTED_ENGINES,
     decrypt_access_blob,
     project_access,
     seal_access,
 )
-from backend.metadata.locators import format_source_locator
 from backend.metadata.sources.store import (
     SUPPORTED_KINDS,
     SourceRecord,
@@ -34,7 +35,6 @@ def require_source(source_id: str) -> SourceRecord:
     if record is None:
         raise SourceNotFound()
     return record
-
 
 def public_view(record: SourceRecord) -> dict[str, Any]:
     access = None
@@ -59,12 +59,10 @@ def public_view(record: SourceRecord) -> dict[str, Any]:
         "access_updated_at": record.access_updated_at,
     }
 
-
 def full_access(record: SourceRecord) -> dict[str, Any]:
     if not record.access_ciphertext:
         raise SourceAccessRequired("Source has no access configuration")
     return decrypt_access_blob(record.access_ciphertext)
-
 
 def create_source(
     *,
@@ -106,7 +104,6 @@ def create_source(
         updated_at=now,
     )
     return get_source_store().create_source(record)
-
 
 def update_source(
     source_id: str,
@@ -153,7 +150,6 @@ def update_source(
     updated.updated_at = datetime.utcnow()
     saved = store.save_source(updated)
     if engine is not None and existing.engine != saved.engine:
-        from backend.metadata.catalog.store import get_catalog_store
 
         get_catalog_store().recompute_locators_for_source(
             source_id,
@@ -163,7 +159,6 @@ def update_source(
         )
     return saved
 
-
 def delete_source(source_id: str) -> SourceRecord:
     store = get_source_store()
     existing = store.get_source(source_id)
@@ -171,7 +166,6 @@ def delete_source(source_id: str) -> SourceRecord:
         raise SourceNotFound()
     if existing.status != "disabled":
         raise SourceNotDisabled()
-    from backend.metadata.catalog.store import get_catalog_store
 
     get_catalog_store().delete_objects_for_source(source_id)
     if not store.delete_source(source_id):

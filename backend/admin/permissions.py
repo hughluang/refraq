@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Literal
 
+from backend.admin.errors import RoleInvalidPermission
+
+
 Permission = Literal[
     "console:access",
     "dashboard:read",
@@ -69,14 +72,11 @@ PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
 
 CATALOG_SET: frozenset[str] = frozenset(ALL_PERMISSIONS)
 
-
 def is_known_permission(permission: str) -> bool:
     return permission in CATALOG_SET
 
-
 def normalize_permissions(permissions: list[str]) -> list[str]:
     """Deduplicate while preserving catalog order; reject unknown keys."""
-    from backend.admin.errors import RoleInvalidPermission
 
     seen: set[str] = set()
     ordered: list[str] = []
@@ -90,7 +90,6 @@ def normalize_permissions(permissions: list[str]) -> list[str]:
         if key in seen:
             ordered.append(key)
     return ordered
-
 
 def permissions_include(permissions: list[str] | tuple[str, ...], permission: str) -> bool:
     return permission in permissions

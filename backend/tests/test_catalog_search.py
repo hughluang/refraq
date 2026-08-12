@@ -18,6 +18,7 @@ from backend.metadata.catalog.store import (  # noqa: E402
     get_catalog_store,
     reset_catalog_store,
 )
+from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
 from backend.metadata.sources.store import (  # noqa: E402
     SourceRecord,
     get_source_store,
@@ -116,10 +117,10 @@ def _obj(
 
 def test_search_objects_ranking_exact_prefix_substring_business() -> None:
     store = get_catalog_store()
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id="src_1",
         job_id="j1",
-        objects=[
+        collected=[
             _obj(object_id="obj_exact", name="work_order"),
             _obj(object_id="obj_prefix", name="work_order_line"),
             _obj(object_id="obj_sub", name="x_work_order_y"),
@@ -131,6 +132,7 @@ def test_search_objects_ranking_exact_prefix_substring_business() -> None:
             ),
         ],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="mes-prod",
@@ -192,11 +194,12 @@ def test_search_columns_name_and_business() -> None:
             updated_at=now,
         ),
     ]
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id="src_1",
         job_id="j1",
-        objects=[obj],
+        collected=[obj],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="mes-prod",

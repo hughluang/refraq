@@ -146,16 +146,35 @@ Rules:
 - Consequently, a package root carries no module belonging to a single sub-language.
 - Do not add empty technical-layer directories (`domain/`, `application/`,
   `infrastructure/`) inside a tier.
+- Within a language unit, persistence (`*store*` / adapters) exposes persistence
+  only. Orchestration and use-case modules may import the store; the store must
+  not import orchestration (no re-export, no orchestration entry points on the
+  store). Callers import orchestration from the orchestration module directly.
 
 ## 6. Naming
 
-- `*store*`: persistence only; no HTTP; no permission decisions.
+- `*store*`: persistence only; no HTTP; no permission decisions; no orchestration
+  (see §5).
 - Published modules: cross-package entry (see §3); do not mythologize a single filename.
 - `service.py` / use-case-named modules: in-package orchestration.
 - `models.py`, `errors.py`, `tasks.py`, `router(s)`, `schemas/`: as named.
 - Top-level directory names express **tier and language**, not “bucket of all routers”.
 
-## 7. Allowed dependencies (whitelist; acyclic)
+## 7. Import placement
+
+Default: **all imports live at module top level** (after module docstring / `from __future__`, before other code), matching PEP 8.
+
+**Forbidden in production code** (`backend/` excluding `tests/` and `alembic/`): `import` / `from … import` inside a function or method body.
+
+**Allowed exceptions:**
+
+1. **`if TYPE_CHECKING:`** blocks (typing-only imports).
+2. **Optional process entry** dependencies that must not load when the module is imported for non-serve paths — currently only `uvicorn` inside `backend.core.entry.main`. Register each case in `backend/tests/test_no_inline_imports.py` (`INLINE_IMPORT_ALLOWLIST`).
+3. **`backend/tests/**`** — not enforced (tests may import inside fixtures/helpers).
+
+Enforcement: `backend/tests/test_no_inline_imports.py`. Rationale: ADR 0020.
+
+## 8. Allowed dependencies (whitelist; acyclic)
 
 Forward rules:
 
@@ -179,12 +198,12 @@ Concrete edges:
 | `alembic` | `core` Base + every package `models` module |
 | `tests` | any backend module (enforcement tests assert production edges) |
 
-## 8. Enforcement
+## 9. Enforcement
 
 - This document plus [`docs/modules.md`](modules.md) Allowed Dependencies stay aligned with code.
-- Automated checks: packages must not import another package's unpublished modules; `core` must not import business packages except the upgrade→`admin.roles` edge; business code must not import `worker.app`.
-- Checks live under `backend/tests/` (layout/import tests). Temporary allowlists, if any, are registered in that test and removed when migration phases finish—not by editing this contract.
+- Automated checks: packages must not import another package's unpublished modules; `core` must not import business packages except the upgrade→`admin.roles` edge; business code must not import `worker.app`; production modules must not use function-body imports except the Import placement allowlist.
+- Checks live under `backend/tests/` (layout/import tests and `test_no_inline_imports.py`). Temporary allowlists, if any, are registered in that test and removed when migration phases finish—not by editing this contract.
 
-## 9. Repository root under `backend/`
+## 10. Repository root under `backend/`
 
 Only: composition (`main.py`), tiered packages, `alembic/`, `tests/`, dependency and env files. No scattered business `service.py` / stores at the `backend/` root.

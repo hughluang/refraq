@@ -9,13 +9,17 @@ from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Any, Literal
 
+from sqlalchemy import select
+
 from backend.core.config import get_settings
+from backend.core.db import session_scope
+from backend.jobs.models import JobRow
+
 
 JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 TERMINAL: frozenset[str] = frozenset({"succeeded", "failed", "cancelled"})
 
 ERROR_WORKER_LOST = "JOB_WORKER_LOST"
-
 
 @dataclass
 class JobRecord:
@@ -35,7 +39,6 @@ class JobRecord:
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
-
 
 class MemoryJobStore:
     def __init__(self) -> None:
@@ -70,12 +73,8 @@ class MemoryJobStore:
                 items = [r for r in items if r.status == status]
             return sorted(items, key=lambda r: r.created_at, reverse=True)
 
-
 class SqlJobStore:
     def create(self, record: JobRecord) -> JobRecord:
-        from backend.core.db import session_scope
-        from backend.jobs.models import JobRow
-
         with session_scope() as session:
             row = JobRow(
                 id=record.id,
@@ -100,17 +99,11 @@ class SqlJobStore:
             return _row_to_job(row)
 
     def get(self, job_id: str) -> JobRecord | None:
-        from backend.core.db import session_scope
-        from backend.jobs.models import JobRow
-
         with session_scope() as session:
             row = session.get(JobRow, job_id)
             return _row_to_job(row) if row else None
 
     def save(self, record: JobRecord) -> JobRecord:
-        from backend.core.db import session_scope
-        from backend.jobs.models import JobRow
-
         with session_scope() as session:
             row = session.get(JobRow, record.id)
             if row is None:
@@ -136,10 +129,6 @@ class SqlJobStore:
         kind: str | None = None,
         status: JobStatus | None = None,
     ) -> list[JobRecord]:
-        from sqlalchemy import select
-
-        from backend.core.db import session_scope
-        from backend.jobs.models import JobRow
 
         with session_scope() as session:
             stmt = select(JobRow)
@@ -151,10 +140,7 @@ class SqlJobStore:
             rows = session.scalars(stmt).all()
             return [_row_to_job(row) for row in rows]
 
-
 def _row_to_job(row: object) -> JobRecord:
-    from backend.jobs.models import JobRow
-
     assert isinstance(row, JobRow)
     return JobRecord(
         id=row.id,
@@ -175,10 +161,8 @@ def _row_to_job(row: object) -> JobRecord:
         finished_at=row.finished_at,
     )
 
-
 _memory_singleton: MemoryJobStore | None = None
 _memory_lock = threading.Lock()
-
 
 @lru_cache
 def get_job_store() -> MemoryJobStore | SqlJobStore:
@@ -191,22 +175,18 @@ def get_job_store() -> MemoryJobStore | SqlJobStore:
             return _memory_singleton
     return SqlJobStore()
 
-
 def reset_job_store() -> None:
     global _memory_singleton
     with _memory_lock:
         _memory_singleton = None
     get_job_store.cache_clear()
 
-
 def new_job_id() -> str:
     return f"job_{uuid.uuid4().hex[:12]}"
-
 
 def format_job_log_line(*, level: str, message: str, at: datetime | None = None) -> str:
     ts = (at or datetime.utcnow()).strftime("%Y-%m-%dT%H:%M:%SZ")
     return f"{ts} {level.upper()} {message}"
-
 
 def create_queued_job(
     *,
@@ -239,7 +219,6 @@ def create_queued_job(
     )
     return get_job_store().create(record)
 
-
 def append_job_log(
     job_id: str,
     *,
@@ -257,7 +236,6 @@ def append_job_log(
     record.log_updated_at = now
     return store.save(record)
 
-
 def mark_running(job_id: str, *, celery_task_id: str | None = None) -> JobRecord | None:
     store = get_job_store()
     record = store.get(job_id)
@@ -270,7 +248,6 @@ def mark_running(job_id: str, *, celery_task_id: str | None = None) -> JobRecord
     if celery_task_id:
         record.celery_task_id = celery_task_id
     return store.save(record)
-
 
 def mark_failed(
     job_id: str,
@@ -290,7 +267,6 @@ def mark_failed(
     record.finished_at = datetime.utcnow()
     return store.save(record)
 
-
 def mark_succeeded(job_id: str) -> JobRecord | None:
     store = get_job_store()
     record = store.get(job_id)
@@ -302,7 +278,6 @@ def mark_succeeded(job_id: str) -> JobRecord | None:
     record.finished_at = datetime.utcnow()
     return store.save(record)
 
-
 def mark_cancelled(job_id: str) -> JobRecord | None:
     store = get_job_store()
     record = store.get(job_id)
@@ -313,7 +288,6 @@ def mark_cancelled(job_id: str) -> JobRecord | None:
     record.status = "cancelled"
     record.finished_at = datetime.utcnow()
     return store.save(record)
-
 
 def reap_stuck_running_jobs() -> int:
     """Mark running jobs past timeout as failed. Does not re-enqueue."""

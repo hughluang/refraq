@@ -18,10 +18,10 @@ from backend.metadata.catalog.store import (
     CatalogIndexRecord,
     CatalogObjectRecord,
     CatalogWriteAborted,
-    apply_structure_snapshot,
     new_column_id,
     new_object_id,
 )
+from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
 from backend.metadata.connectors.base import (
     CollectedStructure,
     ConnectorError,

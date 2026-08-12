@@ -29,10 +29,10 @@ from backend.metadata.catalog.store import (  # noqa: E402
     CatalogForeignKeyRecord,
     CatalogObjectRecord,
     CatalogWriteAborted,
-    apply_structure_snapshot,
     get_catalog_store,
     reset_catalog_store,
 )
+from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
 from backend.metadata.errors import LocatorInvalid  # noqa: E402
 from backend.metadata.joins.graph import find_join_paths  # noqa: E402
 from backend.metadata.locators import (  # noqa: E402
@@ -286,11 +286,12 @@ def test_illegal_semantics_and_field_kind_not_writable(client: TestClient) -> No
         columns=[("col_id", "id"), ("col_note", "note")],
     )
     obj.source_id = source_id
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id=source_id,
         job_id="seed",
-        objects=[obj],
+        collected=[obj],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="demo-http",
@@ -347,11 +348,12 @@ def test_join_path_reasons() -> None:
     store = get_catalog_store()
     a = _table(object_id="obj_a", name="a", columns=[("col_a", "id")])
     b = _table(object_id="obj_b", name="b", columns=[("col_b", "id")])
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id="src_1",
         job_id="j1",
-        objects=[a, b],
+        collected=[a, b],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="demo-src",
@@ -398,11 +400,12 @@ def test_fk_unresolved_aborts_and_keeps_snapshot() -> None:
             )
         ],
     )
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id="src_1",
         job_id="job_old",
-        objects=[customers, orders],
+        collected=[customers, orders],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="demo-src",
@@ -508,11 +511,12 @@ def test_fk_retarget_clears_stale_edge() -> None:
             )
         ],
     )
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id="src_1",
         job_id="job_v1",
-        objects=[customers, partners, orders],
+        collected=[customers, partners, orders],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="demo-src",
@@ -535,11 +539,12 @@ def test_fk_retarget_clears_stale_edge() -> None:
             )
         ],
     )
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id="src_1",
         job_id="job_v2",
-        objects=[customers, partners, retargeted],
+        collected=[customers, partners, retargeted],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="demo-src",

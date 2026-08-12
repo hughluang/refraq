@@ -9,8 +9,14 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Protocol
 
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
+
 from backend.core.config import get_settings
+from backend.core.db import session_scope
 from backend.metadata.errors import BusinessDomainCodeConflict, BusinessDomainNotFound
+from backend.metadata.models import BusinessDomainRow, CatalogObjectRow
+
 
 __all__ = [
     "BusinessDomainRecord",
@@ -22,7 +28,6 @@ __all__ = [
     "reset_business_domain_store",
 ]
 
-
 @dataclass
 class BusinessDomainRecord:
     id: str
@@ -32,10 +37,8 @@ class BusinessDomainRecord:
     created_at: datetime
     updated_at: datetime
 
-
 def new_business_domain_id() -> str:
     return f"bd_{uuid.uuid4().hex[:12]}"
-
 
 class BusinessDomainStore(Protocol):
     def list_domains(
@@ -43,17 +46,13 @@ class BusinessDomainStore(Protocol):
     ) -> tuple[list[BusinessDomainRecord], int]: ...
 
     def get(self, domain_id: str) -> BusinessDomainRecord | None: ...
-
     def get_by_code(self, code: str) -> BusinessDomainRecord | None: ...
 
     def create(self, record: BusinessDomainRecord) -> BusinessDomainRecord: ...
-
     def save(self, record: BusinessDomainRecord) -> BusinessDomainRecord: ...
 
     def delete(self, domain_id: str) -> bool: ...
-
     def count_object_refs(self, domain_id: str) -> int: ...
-
 
 class MemoryBusinessDomainStore:
     def __init__(self) -> None:
@@ -130,15 +129,10 @@ class MemoryBusinessDomainStore:
                 return
             self._object_refs.setdefault(domain_id, set()).add(object_id)
 
-
 class SqlBusinessDomainStore:
     def list_domains(
         self, *, q: str | None = None, limit: int = 100, offset: int = 0
     ) -> tuple[list[BusinessDomainRecord], int]:
-        from sqlalchemy import func, or_, select
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import BusinessDomainRow
 
         with session_scope() as session:
             stmt = select(BusinessDomainRow)
@@ -165,19 +159,11 @@ class SqlBusinessDomainStore:
             return [_row_to_record(r) for r in rows], total
 
     def get(self, domain_id: str) -> BusinessDomainRecord | None:
-        from backend.core.db import session_scope
-        from backend.metadata.models import BusinessDomainRow
-
         with session_scope() as session:
             row = session.get(BusinessDomainRow, domain_id)
             return _row_to_record(row) if row else None
 
     def get_by_code(self, code: str) -> BusinessDomainRecord | None:
-        from sqlalchemy import select
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import BusinessDomainRow
-
         with session_scope() as session:
             row = session.execute(
                 select(BusinessDomainRow).where(BusinessDomainRow.code == code)
@@ -185,11 +171,6 @@ class SqlBusinessDomainStore:
             return _row_to_record(row) if row else None
 
     def create(self, record: BusinessDomainRecord) -> BusinessDomainRecord:
-        from sqlalchemy.exc import IntegrityError
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import BusinessDomainRow
-
         with session_scope() as session:
             session.add(
                 BusinessDomainRow(
@@ -208,9 +189,6 @@ class SqlBusinessDomainStore:
             return record
 
     def save(self, record: BusinessDomainRecord) -> BusinessDomainRecord:
-        from backend.core.db import session_scope
-        from backend.metadata.models import BusinessDomainRow
-
         with session_scope() as session:
             row = session.get(BusinessDomainRow, record.id)
             if row is None:
@@ -224,9 +202,6 @@ class SqlBusinessDomainStore:
             return _row_to_record(row)
 
     def delete(self, domain_id: str) -> bool:
-        from backend.core.db import session_scope
-        from backend.metadata.models import BusinessDomainRow
-
         with session_scope() as session:
             row = session.get(BusinessDomainRow, domain_id)
             if row is None:
@@ -236,11 +211,6 @@ class SqlBusinessDomainStore:
             return True
 
     def count_object_refs(self, domain_id: str) -> int:
-        from sqlalchemy import func, select
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import CatalogObjectRow
-
         with session_scope() as session:
             return int(
                 session.execute(
@@ -250,10 +220,7 @@ class SqlBusinessDomainStore:
                 ).scalar_one()
             )
 
-
 def _row_to_record(row: object) -> BusinessDomainRecord:
-    from backend.metadata.models import BusinessDomainRow
-
     assert isinstance(row, BusinessDomainRow)
     return BusinessDomainRecord(
         id=row.id,
@@ -264,10 +231,8 @@ def _row_to_record(row: object) -> BusinessDomainRecord:
         updated_at=row.updated_at,
     )
 
-
 _memory_singleton: MemoryBusinessDomainStore | None = None
 _memory_lock = threading.Lock()
-
 
 @lru_cache
 def get_business_domain_store() -> MemoryBusinessDomainStore | SqlBusinessDomainStore:
@@ -279,7 +244,6 @@ def get_business_domain_store() -> MemoryBusinessDomainStore | SqlBusinessDomain
                 _memory_singleton = MemoryBusinessDomainStore()
             return _memory_singleton
     return SqlBusinessDomainStore()
-
 
 def reset_business_domain_store() -> None:
     global _memory_singleton

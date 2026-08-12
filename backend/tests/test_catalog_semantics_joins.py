@@ -32,6 +32,7 @@ from backend.metadata.catalog.store import (  # noqa: E402
     get_catalog_store,
     reset_catalog_store,
 )
+from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
 from backend.metadata.sources.store import reset_source_store  # noqa: E402
 
 
@@ -230,11 +231,12 @@ def _seed_object(
             )
         ],
     )
-    get_catalog_store().replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id=source_id,
         job_id="job_1",
-        objects=[line, record],
+        collected=[line, record],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="mes-prod",
@@ -599,11 +601,12 @@ def test_object_detail_exposes_structure_facts(client: TestClient) -> None:
     )
     line = store.get_object("obj_line")
     assert line is not None
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id=source["id"],
         job_id="job_2",
-        objects=[line, with_fk],
+        collected=[line, with_fk],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="mes-prod",

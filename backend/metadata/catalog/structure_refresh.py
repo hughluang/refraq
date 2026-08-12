@@ -6,6 +6,7 @@ from collections.abc import Callable
 from datetime import datetime
 
 from backend.metadata.catalog.records import CatalogJoinRecord, CatalogObjectRecord
+from backend.metadata.catalog.store import get_catalog_store
 from backend.metadata.catalog.structure_merge import (
     StructureRefreshPlan,
     build_structure_refresh_plan,
@@ -67,8 +68,6 @@ def apply_structure_snapshot(
     survival live in ``structure_merge``; the store adapter only loads inputs and
     persists the resulting ``StructureRefreshPlan`` inside one lock/transaction.
     """
-    from backend.metadata.catalog.store import get_catalog_store
-
     get_catalog_store().run_structure_refresh(
         source_id,
         bind_structure_refresh_plan(

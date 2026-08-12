@@ -8,20 +8,22 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
-from backend.metadata.catalog.identity import (
-    _recompute_column_locator,
-    _recompute_object_locator,
+from backend.metadata.business_domains.store import (
+    MemoryBusinessDomainStore,
+    get_business_domain_store,
 )
+from backend.metadata.catalog.identity import _recompute_column_locator, _recompute_object_locator
 from backend.metadata.catalog.records import (
-    UNSET,
     CatalogColumnRecord,
     CatalogJoinRecord,
     CatalogObjectRecord,
     CatalogWriteAborted,
+    UNSET,
     new_join_id,
 )
 from backend.metadata.catalog.search_rank import _paginate, _search_rank
 from backend.metadata.catalog.structure_merge import StructureRefreshPlan
+
 
 class MemoryCatalogStore:
     def __init__(self) -> None:
@@ -189,34 +191,6 @@ class MemoryCatalogStore:
                 self._joins = joins_backup
                 self._join_by_pair = join_by_pair_backup
                 raise
-
-    def replace_structure_snapshot(
-        self,
-        *,
-        source_id: str,
-        job_id: str,
-        objects: list[CatalogObjectRecord],
-        schema_scope: str | None,
-        engine: str | None,
-        kind: str,
-        source_key: str,
-    ) -> None:
-        """Deprecated seed helper — prefer apply_structure_snapshot."""
-        from backend.metadata.catalog.structure_refresh import bind_structure_refresh_plan
-
-        self.run_structure_refresh(
-            source_id,
-            bind_structure_refresh_plan(
-                source_id=source_id,
-                job_id=job_id,
-                collected=objects,
-                schema_scope=schema_scope,
-                fail_safe_threshold=1.0,
-                engine=engine,
-                kind=kind,
-                source_key=source_key,
-            ),
-        )
 
     def _persist_structure_plan_unlocked(
         self,
@@ -415,10 +389,6 @@ class MemoryCatalogStore:
             updated = replace(obj, **kwargs)
             self._objects[object_id] = updated
             if business_domain_id is not UNSET:
-                from backend.metadata.business_domains.store import (
-                    MemoryBusinessDomainStore,
-                    get_business_domain_store,
-                )
 
                 store = get_business_domain_store()
                 if isinstance(store, MemoryBusinessDomainStore):
@@ -534,6 +504,4 @@ class MemoryCatalogStore:
                 return False
             self._join_by_pair.pop((join.from_column_id, join.to_column_id), None)
             return True
-
-
 

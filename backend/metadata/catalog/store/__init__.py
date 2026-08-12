@@ -26,8 +26,8 @@ from backend.metadata.catalog.records import (
 from backend.metadata.catalog.store.memory import MemoryCatalogStore
 from backend.metadata.catalog.store.sql import SqlCatalogStore
 from backend.metadata.catalog.structure_merge import StructureRefreshPlan
-from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
 from backend.metadata.errors import CatalogObjectNotFound
+
 
 class CatalogStore(Protocol):
     def list_objects(
@@ -148,7 +148,6 @@ class CatalogStore(Protocol):
     ) -> int: ...
 
 
-
 _memory_singleton: MemoryCatalogStore | None = None
 _memory_lock = threading.Lock()
 
@@ -190,7 +189,6 @@ __all__ = [
     "CatalogStore",
     "MemoryCatalogStore",
     "SqlCatalogStore",
-    "apply_structure_snapshot",
     "get_catalog_store",
     "reset_catalog_store",
     "require_object",

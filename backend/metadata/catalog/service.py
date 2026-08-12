@@ -8,12 +8,13 @@ from typing import Any
 
 from backend.admin.audit import persist_audit_event
 from backend.metadata.business_domains.service import require_domain_by_code
+from backend.metadata.business_domains.store import get_business_domain_store
 from backend.metadata.catalog.join_origin import resolve_join_write
 from backend.metadata.catalog.store import (
-    UNSET,
     CatalogColumnRecord,
     CatalogJoinRecord,
     CatalogObjectRecord,
+    UNSET,
     get_catalog_store,
     require_object,
 )
@@ -27,23 +28,22 @@ from backend.metadata.errors import (
     JoinInvalid,
     JoinPathUnavailable,
     SemanticColumnUnknown,
+    SourceNotFound,
 )
 from backend.metadata.joins.graph import find_join_paths
 from backend.metadata.sources.service import require_source
 from backend.metadata.sources.store import SourceRecord, get_source_store
 
+
 _EVIDENCE_AUDIT_MAX = 500
 
-
 # --- Shared read models (transport-neutral) ---
-
 
 @dataclass(frozen=True)
 class DomainRefView:
     id: str
     code: str
     name: str
-
 
 @dataclass(frozen=True)
 class ColumnView:
@@ -63,7 +63,6 @@ class ColumnView:
     ordinal: int
     is_present: bool
 
-
 @dataclass(frozen=True)
 class ForeignKeyView:
     name: str
@@ -73,14 +72,12 @@ class ForeignKeyView:
     ref_columns: list[str]
     is_present: bool
 
-
 @dataclass(frozen=True)
 class IndexView:
     name: str
     columns: list[str]
     is_unique: bool
     is_present: bool
-
 
 @dataclass
 class ObjectView:
@@ -110,7 +107,6 @@ class ObjectView:
     indexes: list[IndexView] = field(default_factory=list)
     ddl: str | None = None
 
-
 @dataclass(frozen=True)
 class ObjectSemanticsView:
     locator_key: str
@@ -125,13 +121,11 @@ class ObjectSemanticsView:
     semantic_source: str | None
     business_semantics_ready: bool
 
-
 @dataclass(frozen=True)
 class ObjectDdlView:
     id: str
     locator_key: str
     ddl: str | None
-
 
 @dataclass(frozen=True)
 class JoinView:
@@ -147,7 +141,6 @@ class JoinView:
     created_by_user_id: str | None
     created_at: datetime
 
-
 @dataclass(frozen=True)
 class JoinPathHopView:
     from_column_id: str
@@ -160,14 +153,12 @@ class JoinPathHopView:
     evidence: str
     origin: str
 
-
 @dataclass(frozen=True)
 class JoinPathView:
     target_object_id: str | None
     target_column_id: str | None
     hops: list[JoinPathHopView]
     path_summary: str
-
 
 @dataclass(frozen=True)
 class JoinPathLookup:
@@ -176,17 +167,14 @@ class JoinPathLookup:
     direct_joins: list[JoinView]
     reason: str | None
 
-
 def domain_ref_view(domain_id: str | None) -> DomainRefView | None:
     if not domain_id:
         return None
-    from backend.metadata.business_domains.store import get_business_domain_store
 
     record = get_business_domain_store().get(domain_id)
     if record is None:
         return None
     return DomainRefView(id=record.id, code=record.code, name=record.name)
-
 
 def column_view(record: CatalogColumnRecord) -> ColumnView:
     return ColumnView(
@@ -206,7 +194,6 @@ def column_view(record: CatalogColumnRecord) -> ColumnView:
         ordinal=record.ordinal,
         is_present=record.is_present,
     )
-
 
 def object_view(
     record: CatalogObjectRecord, *, include_columns: bool
@@ -266,7 +253,6 @@ def object_view(
         ddl=ddl,
     )
 
-
 def join_view(record: CatalogJoinRecord) -> JoinView:
     store = get_catalog_store()
     from_col = store.get_column(record.from_column_id)
@@ -284,7 +270,6 @@ def join_view(record: CatalogJoinRecord) -> JoinView:
         created_by_user_id=record.created_by_user_id,
         created_at=record.created_at,
     )
-
 
 def object_view_as_dict(view: ObjectView, *, include_columns: bool) -> dict[str, Any]:
     """MCP-shaped object payload (no foreign_keys/indexes; columns/ddl when detailed)."""
@@ -316,14 +301,11 @@ def object_view_as_dict(view: ObjectView, *, include_columns: bool) -> dict[str,
         payload["columns"] = [asdict(c) for c in view.columns]
     return payload
 
-
 def column_view_as_dict(view: ColumnView) -> dict[str, Any]:
     return asdict(view)
 
-
 def join_view_as_dict(view: JoinView) -> dict[str, Any]:
     return asdict(view)
-
 
 def _resolve_path_endpoint(
     ref: str,
@@ -337,9 +319,7 @@ def _resolve_path_endpoint(
     obj = resolve_object_ref(ref)
     return obj.id, None
 
-
 # --- Browse / search / get / join-path use cases ---
-
 
 def list_objects_for_source(
     source_id: str,
@@ -361,7 +341,6 @@ def list_objects_for_source(
     )
     return [object_view(o, include_columns=False) for o in items], total
 
-
 def search_objects(
     query: str,
     *,
@@ -381,7 +360,6 @@ def search_objects(
         offset=offset,
     )
     return [object_view(o, include_columns=False) for o in items], total
-
 
 def search_columns(
     query: str,
@@ -403,16 +381,13 @@ def search_columns(
     )
     return [column_view(c) for c in items], total
 
-
 def get_object(object_ref: str) -> ObjectView:
     record = resolve_object_ref(object_ref)
     return object_view(record, include_columns=True)
 
-
 def get_object_ddl(object_ref: str) -> ObjectDdlView:
     record = resolve_object_ref(object_ref)
     return ObjectDdlView(id=record.id, locator_key=record.locator_key, ddl=record.ddl)
-
 
 def get_object_semantics(object_ref: str) -> ObjectSemanticsView:
     record = resolve_object_ref(object_ref)
@@ -430,10 +405,8 @@ def get_object_semantics(object_ref: str) -> ObjectSemanticsView:
         business_semantics_ready=record.business_semantics_ready,
     )
 
-
 def inspect_object(object_ref: str) -> ObjectView:
     return get_object(object_ref)
-
 
 def lookup_join_paths(
     start_ref: str,
@@ -513,7 +486,6 @@ _COLUMN_SEMANTIC_FIELDS = (
     "enum_catalog",
 )
 
-
 def _field_nonempty(value: Any) -> bool:
     if value is None:
         return False
@@ -522,7 +494,6 @@ def _field_nonempty(value: Any) -> bool:
     if isinstance(value, (list, dict)):
         return len(value) > 0
     return True
-
 
 def compute_business_semantics_ready(
     *,
@@ -536,7 +507,6 @@ def compute_business_semantics_ready(
         return False
     return True
 
-
 def _normalize_semantic_value(value: Any) -> Any:
     """Normalize a present PATCH value; blank/empty becomes None (clear)."""
     if value is None:
@@ -547,7 +517,6 @@ def _normalize_semantic_value(value: Any) -> Any:
     if isinstance(value, (list, dict)):
         return value if len(value) > 0 else None
     return value
-
 
 def _build_semantic_kwargs(
     *,
@@ -566,13 +535,11 @@ def _build_semantic_kwargs(
         kwargs[key] = _normalize_semantic_value(data[key])
     return kwargs
 
-
 def require_column(column_id: str) -> CatalogColumnRecord:
     record = get_catalog_store().get_column(column_id)
     if record is None:
         raise CatalogColumnNotFound()
     return record
-
 
 def require_join(join_id: str) -> CatalogJoinRecord:
     record = get_catalog_store().get_join(join_id)
@@ -580,17 +547,14 @@ def require_join(join_id: str) -> CatalogJoinRecord:
         raise CatalogJoinNotFound()
     return record
 
-
 def resolve_source_ref(ref: str) -> SourceRecord:
     """Resolve Source by id or locator_key."""
     store = get_source_store()
     record = store.get_source(ref) or store.get_source_by_locator(ref)
     if record is None:
-        from backend.metadata.errors import SourceNotFound
 
         raise SourceNotFound()
     return record
-
 
 def resolve_object_ref(ref: str) -> CatalogObjectRecord:
     store = get_catalog_store()
@@ -599,14 +563,12 @@ def resolve_object_ref(ref: str) -> CatalogObjectRecord:
         raise CatalogObjectNotFound()
     return record
 
-
 def resolve_column_ref(ref: str) -> CatalogColumnRecord:
     store = get_catalog_store()
     record = store.get_column(ref) or store.get_column_by_locator(ref)
     if record is None:
         raise CatalogColumnNotFound()
     return record
-
 
 def _validate_business_primary_key(
     existing: CatalogObjectRecord, names: list[str]
@@ -617,7 +579,6 @@ def _validate_business_primary_key(
         raise SemanticColumnUnknown(
             f"Unknown column(s) in business_primary_key: {', '.join(unknown)}"
         )
-
 
 def patch_object_semantics(
     *,
@@ -677,7 +638,6 @@ def patch_object_semantics(
     )
     return updated
 
-
 def patch_column_semantics(
     *,
     column_id: str,
@@ -711,7 +671,6 @@ def patch_column_semantics(
         },
     )
     return updated, True
-
 
 def set_column_semantics_batch(
     *,
@@ -759,11 +718,9 @@ def set_column_semantics_batch(
         "skipped_columns": skipped_columns,
     }
 
-
 def list_joins(object_id: str) -> list[JoinView]:
     require_object(object_id)
     return [join_view(j) for j in get_catalog_store().list_joins_for_object(object_id)]
-
 
 def upsert_join(
     *,
@@ -829,7 +786,6 @@ def upsert_join(
     )
     return record
 
-
 def upsert_joins_batch(
     *,
     joins: list[dict[str, Any]],
@@ -880,7 +836,6 @@ def upsert_joins_batch(
             created += 1
         items.append(record)
     return items, created, known
-
 
 def delete_join(
     *,

@@ -7,22 +7,29 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import or_, select
+from sqlalchemy.orm import selectinload
+
 from backend.core.db import session_scope
-from backend.metadata.catalog.identity import (
-    _recompute_column_locator,
-    _recompute_object_locator,
-)
+from backend.metadata.catalog.identity import _recompute_column_locator, _recompute_object_locator
 from backend.metadata.catalog.records import (
-    UNSET,
     CatalogColumnRecord,
     CatalogForeignKeyRecord,
     CatalogIndexRecord,
     CatalogJoinRecord,
     CatalogObjectRecord,
+    UNSET,
     new_join_id,
 )
 from backend.metadata.catalog.search_rank import _paginate, _search_rank
 from backend.metadata.catalog.structure_merge import StructureRefreshPlan
+from backend.metadata.models import (
+    CatalogColumnRow,
+    CatalogForeignKeyRow,
+    CatalogIndexRow,
+    CatalogJoinRow,
+    CatalogObjectRow,
+)
 
 
 def _dumps_json(value: Any) -> str | None:
@@ -30,14 +37,10 @@ def _dumps_json(value: Any) -> str | None:
         return None
     return json.dumps(value)
 
-
 def _loads_json(raw: str | None) -> Any:
     if raw is None:
         return None
     return json.loads(raw)
-
-
-
 
 class SqlCatalogStore:
     def list_objects(
@@ -50,11 +53,6 @@ class SqlCatalogStore:
         limit: int | None = None,
         offset: int = 0,
     ) -> tuple[list[CatalogObjectRecord], int]:
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import CatalogObjectRow
 
         with session_scope() as session:
             stmt = (
@@ -93,11 +91,6 @@ class SqlCatalogStore:
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[CatalogObjectRecord], int]:
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import CatalogObjectRow
 
         with session_scope() as session:
             stmt = select(CatalogObjectRow).options(
@@ -139,11 +132,6 @@ class SqlCatalogStore:
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[CatalogColumnRecord], int]:
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import CatalogObjectRow
 
         with session_scope() as session:
             stmt = select(CatalogObjectRow).options(
@@ -176,11 +164,6 @@ class SqlCatalogStore:
             return page, total
 
     def get_object(self, object_id: str) -> CatalogObjectRecord | None:
-        from sqlalchemy.orm import selectinload
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import CatalogObjectRow
-
         with session_scope() as session:
             row = session.get(
                 CatalogObjectRow,
@@ -190,12 +173,6 @@ class SqlCatalogStore:
             return _row_to_object(row) if row else None
 
     def get_object_by_locator(self, locator_key: str) -> CatalogObjectRecord | None:
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import CatalogObjectRow
-
         with session_scope() as session:
             row = session.scalars(
                 select(CatalogObjectRow)
@@ -205,19 +182,11 @@ class SqlCatalogStore:
             return _row_to_object(row) if row else None
 
     def get_column(self, column_id: str) -> CatalogColumnRecord | None:
-        from backend.core.db import session_scope
-        from backend.metadata.models import CatalogColumnRow
-
         with session_scope() as session:
             row = session.get(CatalogColumnRow, column_id)
             return _row_to_column(row) if row else None
 
     def get_column_by_locator(self, locator_key: str) -> CatalogColumnRecord | None:
-        from sqlalchemy import select
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import CatalogColumnRow
-
         with session_scope() as session:
             row = session.scalars(
                 select(CatalogColumnRow).where(
@@ -239,14 +208,6 @@ class SqlCatalogStore:
         ],
     ) -> None:
         """Atomic load → build_plan → persist (zero merge/origin rules)."""
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import (
-            CatalogJoinRow,
-            CatalogObjectRow,
-        )
 
         with session_scope() as session:
             rows = list(
@@ -264,7 +225,6 @@ class SqlCatalogStore:
             col_ids = [c.id for o in existing_objects for c in o.columns]
             existing_joins: list[CatalogJoinRecord] = []
             if col_ids:
-                from sqlalchemy import or_
 
                 join_rows = list(
                     session.scalars(
@@ -323,34 +283,6 @@ class SqlCatalogStore:
                     )
             session.flush()
 
-    def replace_structure_snapshot(
-        self,
-        *,
-        source_id: str,
-        job_id: str,
-        objects: list[CatalogObjectRecord],
-        schema_scope: str | None,
-        engine: str | None,
-        kind: str,
-        source_key: str,
-    ) -> None:
-        """Deprecated seed helper — prefer apply_structure_snapshot."""
-        from backend.metadata.catalog.structure_refresh import bind_structure_refresh_plan
-
-        self.run_structure_refresh(
-            source_id,
-            bind_structure_refresh_plan(
-                source_id=source_id,
-                job_id=job_id,
-                collected=objects,
-                schema_scope=schema_scope,
-                fail_safe_threshold=1.0,
-                engine=engine,
-                kind=kind,
-                source_key=source_key,
-            ),
-        )
-
     def recompute_locators_for_source(
         self,
         source_id: str,
@@ -359,11 +291,6 @@ class SqlCatalogStore:
         kind: str,
         source_key: str,
     ) -> int:
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import CatalogObjectRow
 
         changed = 0
         with session_scope() as session:
@@ -404,12 +331,6 @@ class SqlCatalogStore:
         return changed
 
     def delete_objects_for_source(self, source_id: str) -> None:
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import CatalogObjectRow
-
         with session_scope() as session:
             rows = list(
                 session.scalars(
@@ -437,10 +358,6 @@ class SqlCatalogStore:
         semantic_source: Any = UNSET,
         business_semantics_ready: Any = UNSET,
     ) -> CatalogObjectRecord | None:
-        from sqlalchemy.orm import selectinload
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import CatalogObjectRow
 
         with session_scope() as session:
             row = session.get(
@@ -499,8 +416,6 @@ class SqlCatalogStore:
         semantic_source: Any = UNSET,
         field_kind: Any = UNSET,
     ) -> CatalogColumnRecord | None:
-        from backend.core.db import session_scope
-        from backend.metadata.models import CatalogColumnRow
 
         with session_scope() as session:
             row = session.get(CatalogColumnRow, column_id)
@@ -523,9 +438,6 @@ class SqlCatalogStore:
             return _row_to_column(row)
 
     def get_join(self, join_id: str) -> CatalogJoinRecord | None:
-        from backend.core.db import session_scope
-        from backend.metadata.models import CatalogJoinRow
-
         with session_scope() as session:
             row = session.get(CatalogJoinRow, join_id)
             return _row_to_join(row) if row else None
@@ -535,10 +447,6 @@ class SqlCatalogStore:
         from_column_id: str,
         to_column_id: str,
     ) -> CatalogJoinRecord | None:
-        from sqlalchemy import select
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import CatalogJoinRow
 
         with session_scope() as session:
             row = session.scalars(
@@ -550,11 +458,6 @@ class SqlCatalogStore:
             return _row_to_join(row) if row else None
 
     def list_joins_for_object(self, object_id: str) -> list[CatalogJoinRecord]:
-        from sqlalchemy import or_, select
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import CatalogColumnRow, CatalogJoinRow
-
         with session_scope() as session:
             col_ids = list(
                 session.scalars(
@@ -580,15 +483,6 @@ class SqlCatalogStore:
             return [_row_to_join(r) for r in rows]
 
     def list_all_joins_for_source(self, source_id: str) -> list[CatalogJoinRecord]:
-        from sqlalchemy import or_, select
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import (
-            CatalogColumnRow,
-            CatalogJoinRow,
-            CatalogObjectRow,
-        )
-
         with session_scope() as session:
             col_ids = list(
                 session.scalars(
@@ -627,10 +521,6 @@ class SqlCatalogStore:
         join_expression: str | None = None,
         origin: str = "human",
     ) -> CatalogJoinRecord:
-        from sqlalchemy import select
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import CatalogJoinRow
 
         now = datetime.utcnow()
         with session_scope() as session:
@@ -663,9 +553,6 @@ class SqlCatalogStore:
             return _row_to_join(row)
 
     def delete_join(self, join_id: str) -> bool:
-        from backend.core.db import session_scope
-        from backend.metadata.models import CatalogJoinRow
-
         with session_scope() as session:
             row = session.get(CatalogJoinRow, join_id)
             if row is None:
@@ -674,19 +561,8 @@ class SqlCatalogStore:
             session.flush()
             return True
 
-
-
-
 def _sql_persist_object(session: Any, obj: CatalogObjectRecord, *, now: datetime) -> None:
     """Write a fully-merged CatalogObjectRecord (no merge rules)."""
-    from sqlalchemy.orm import selectinload
-
-    from backend.metadata.models import (
-        CatalogColumnRow,
-        CatalogForeignKeyRow,
-        CatalogIndexRow,
-        CatalogObjectRow,
-    )
 
     row = session.get(
         CatalogObjectRow,
@@ -869,10 +745,7 @@ def _sql_persist_object(session: Any, obj: CatalogObjectRecord, *, now: datetime
         if iid not in seen_idx_ids:
             session.delete(prev)
 
-
 def _row_to_column(row: object) -> CatalogColumnRecord:
-    from backend.metadata.models import CatalogColumnRow
-
     assert isinstance(row, CatalogColumnRow)
     return CatalogColumnRecord(
         id=row.id,
@@ -895,10 +768,7 @@ def _row_to_column(row: object) -> CatalogColumnRecord:
         updated_at=row.updated_at,
     )
 
-
 def _row_to_join(row: object) -> CatalogJoinRecord:
-    from backend.metadata.models import CatalogJoinRow
-
     assert isinstance(row, CatalogJoinRow)
     return CatalogJoinRecord(
         id=row.id,
@@ -912,10 +782,7 @@ def _row_to_join(row: object) -> CatalogJoinRecord:
         created_at=row.created_at,
     )
 
-
 def _row_to_object(row: object) -> CatalogObjectRecord:
-    from backend.metadata.models import CatalogObjectRow
-
     assert isinstance(row, CatalogObjectRow)
     columns = [
         _row_to_column(c) for c in sorted(row.columns, key=lambda x: x.ordinal)
@@ -972,6 +839,4 @@ def _row_to_object(row: object) -> CatalogObjectRecord:
         foreign_keys=foreign_keys,
         indexes=indexes,
     )
-
-
 

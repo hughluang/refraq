@@ -24,10 +24,10 @@ from backend.metadata.catalog.store import (  # noqa: E402
     CatalogColumnRecord,
     CatalogObjectRecord,
     CatalogWriteAborted,
-    apply_structure_snapshot,
     get_catalog_store,
     reset_catalog_store,
 )
+from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
 from backend.metadata.sources.store import reset_source_store  # noqa: E402
 from backend.admin.role_store import get_role_store, reset_role_store  # noqa: E402
 from backend.admin.user_store import get_user_store, reset_user_store  # noqa: E402
@@ -214,10 +214,10 @@ def test_delete_source_requires_disabled(client: TestClient) -> None:
 def test_delete_disabled_source_and_catalog(client: TestClient) -> None:
     source = _make_source(client, key="del-ok")
     now = datetime.utcnow()
-    get_catalog_store().replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id=source["id"],
         job_id="job_del",
-        objects=[
+        collected=[
             CatalogObjectRecord(
                 id="obj_del",
                 source_id=source["id"],
@@ -269,6 +269,7 @@ def test_delete_disabled_source_and_catalog(client: TestClient) -> None:
             )
         ],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="del-ok",
@@ -585,11 +586,12 @@ def test_fail_safe_aborts_without_absent() -> None:
                 ],
             )
         )
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id="src_1",
         job_id="job_old",
-        objects=seeded,
+        collected=seeded,
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="orphan",
@@ -635,10 +637,10 @@ def test_collect_failure_does_not_absent(monkeypatch: pytest.MonkeyPatch) -> Non
         access=_access(),
     )
     now = datetime.utcnow()
-    get_catalog_store().replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id=source.id,
         job_id="old",
-        objects=[
+        collected=[
             CatalogObjectRecord(
                 id="obj_keep",
                 source_id=source.id,
@@ -669,6 +671,7 @@ def test_collect_failure_does_not_absent(monkeypatch: pytest.MonkeyPatch) -> Non
             )
         ],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="fail-src",

@@ -8,7 +8,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
 
+from sqlalchemy import select
+
+from backend.admin.models import AuditEventRow
 from backend.core.config import get_settings
+from backend.core.db import session_scope
 
 
 @dataclass
@@ -22,7 +26,6 @@ class AuditEventRecord:
     action: str
     result: str
     detail: dict = field(default_factory=dict)
-
 
 class MemoryAuditStore:
     def __init__(self) -> None:
@@ -77,12 +80,8 @@ class MemoryAuditStore:
         next_cursor = page[-1].id if len(filtered) > limit else None
         return page, next_cursor
 
-
 class SqlAuditStore:
     def create(self, record: AuditEventRecord) -> AuditEventRecord:
-        from backend.admin.models import AuditEventRow
-        from backend.core.db import session_scope
-
         with session_scope() as session:
             row = AuditEventRow(
                 id=record.id,
@@ -100,9 +99,6 @@ class SqlAuditStore:
             return _row_to_event(row)
 
     def get_by_id(self, event_id: str) -> AuditEventRecord | None:
-        from backend.admin.models import AuditEventRow
-        from backend.core.db import session_scope
-
         with session_scope() as session:
             row = session.get(AuditEventRow, event_id)
             return _row_to_event(row) if row else None
@@ -118,10 +114,6 @@ class SqlAuditStore:
         cursor: str | None = None,
         limit: int = 50,
     ) -> tuple[list[AuditEventRecord], str | None]:
-        from sqlalchemy import select
-
-        from backend.admin.models import AuditEventRow
-        from backend.core.db import session_scope
 
         with session_scope() as session:
             stmt = select(AuditEventRow).order_by(
@@ -152,10 +144,7 @@ class SqlAuditStore:
             next_cursor = page_rows[-1].id if len(rows) > limit else None
             return [_row_to_event(row) for row in page_rows], next_cursor
 
-
 def _row_to_event(row: object) -> AuditEventRecord:
-    from backend.admin.models import AuditEventRow
-
     assert isinstance(row, AuditEventRow)
     return AuditEventRecord(
         id=row.id,
@@ -169,14 +158,11 @@ def _row_to_event(row: object) -> AuditEventRecord:
         detail=dict(row.detail or {}),
     )
 
-
 def new_audit_id() -> str:
     return f"aud_{uuid.uuid4().hex[:12]}"
 
-
 _memory_singleton: MemoryAuditStore | None = None
 _memory_lock = threading.Lock()
-
 
 @lru_cache
 def get_audit_store() -> MemoryAuditStore | SqlAuditStore:
@@ -188,7 +174,6 @@ def get_audit_store() -> MemoryAuditStore | SqlAuditStore:
                 _memory_singleton = MemoryAuditStore()
             return _memory_singleton
     return SqlAuditStore()
-
 
 def reset_audit_store() -> None:
     global _memory_singleton

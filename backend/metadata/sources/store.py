@@ -9,12 +9,17 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Protocol
 
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+
 from backend.core.config import get_settings
+from backend.core.db import session_scope
 from backend.metadata.errors import SourceKeyDuplicate, SourceNotFound
 from backend.metadata.locators import format_source_locator
+from backend.metadata.models import SourceRow
+
 
 SUPPORTED_KINDS = frozenset({"database"})
-
 
 @dataclass
 class SourceRecord:
@@ -37,10 +42,8 @@ class SourceRecord:
     def has_access(self) -> bool:
         return bool(self.access_ciphertext)
 
-
 def new_source_id() -> str:
     return f"src_{uuid.uuid4().hex[:12]}"
-
 
 def ensure_source_locator(record: SourceRecord) -> SourceRecord:
     """Recompute locator_key from key/engine/kind."""
@@ -51,22 +54,17 @@ def ensure_source_locator(record: SourceRecord) -> SourceRecord:
         return record
     return replace(record, locator_key=locator)
 
-
 class SourceStore(Protocol):
     def list_sources(self) -> list[SourceRecord]: ...
-
     def get_source(self, source_id: str) -> SourceRecord | None: ...
 
     def get_source_by_key(self, key: str) -> SourceRecord | None: ...
-
     def get_source_by_locator(self, locator_key: str) -> SourceRecord | None: ...
 
     def create_source(self, record: SourceRecord) -> SourceRecord: ...
-
     def save_source(self, record: SourceRecord) -> SourceRecord: ...
 
     def delete_source(self, source_id: str) -> bool: ...
-
 
 class MemorySourceStore:
     def __init__(self) -> None:
@@ -141,32 +139,18 @@ class MemorySourceStore:
                 del self._by_locator[existing.locator_key]
             return True
 
-
 class SqlSourceStore:
     def list_sources(self) -> list[SourceRecord]:
-        from sqlalchemy import select
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import SourceRow
-
         with session_scope() as session:
             rows = session.scalars(select(SourceRow).order_by(SourceRow.key)).all()
             return [_row_to_source(r) for r in rows]
 
     def get_source(self, source_id: str) -> SourceRecord | None:
-        from backend.core.db import session_scope
-        from backend.metadata.models import SourceRow
-
         with session_scope() as session:
             row = session.get(SourceRow, source_id)
             return _row_to_source(row) if row else None
 
     def get_source_by_key(self, key: str) -> SourceRecord | None:
-        from sqlalchemy import select
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import SourceRow
-
         with session_scope() as session:
             row = session.scalars(
                 select(SourceRow).where(SourceRow.key == key)
@@ -174,11 +158,6 @@ class SqlSourceStore:
             return _row_to_source(row) if row else None
 
     def get_source_by_locator(self, locator_key: str) -> SourceRecord | None:
-        from sqlalchemy import select
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import SourceRow
-
         with session_scope() as session:
             row = session.scalars(
                 select(SourceRow).where(SourceRow.locator_key == locator_key)
@@ -186,11 +165,6 @@ class SqlSourceStore:
             return _row_to_source(row) if row else None
 
     def create_source(self, record: SourceRecord) -> SourceRecord:
-        from sqlalchemy.exc import IntegrityError
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import SourceRow
-
         record = ensure_source_locator(record)
         with session_scope() as session:
             row = SourceRow(
@@ -217,11 +191,6 @@ class SqlSourceStore:
             return _row_to_source(row)
 
     def save_source(self, record: SourceRecord) -> SourceRecord:
-        from sqlalchemy.exc import IntegrityError
-
-        from backend.core.db import session_scope
-        from backend.metadata.models import SourceRow
-
         record = ensure_source_locator(record)
         with session_scope() as session:
             row = session.get(SourceRow, record.id)
@@ -246,9 +215,6 @@ class SqlSourceStore:
             return _row_to_source(row)
 
     def delete_source(self, source_id: str) -> bool:
-        from backend.core.db import session_scope
-        from backend.metadata.models import SourceRow
-
         with session_scope() as session:
             row = session.get(SourceRow, source_id)
             if row is None:
@@ -257,10 +223,7 @@ class SqlSourceStore:
             session.flush()
             return True
 
-
 def _row_to_source(row: object) -> SourceRecord:
-    from backend.metadata.models import SourceRow
-
     assert isinstance(row, SourceRow)
     return SourceRecord(
         id=row.id,
@@ -279,10 +242,8 @@ def _row_to_source(row: object) -> SourceRecord:
         updated_at=row.updated_at,
     )
 
-
 _memory_singleton: MemorySourceStore | None = None
 _memory_lock = threading.Lock()
-
 
 @lru_cache
 def get_source_store() -> MemorySourceStore | SqlSourceStore:
@@ -294,7 +255,6 @@ def get_source_store() -> MemorySourceStore | SqlSourceStore:
                 _memory_singleton = MemorySourceStore()
             return _memory_singleton
     return SqlSourceStore()
-
 
 def reset_source_store() -> None:
     global _memory_singleton

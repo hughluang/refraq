@@ -8,7 +8,13 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Protocol
 
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+
+from backend.admin.errors import RoleKeyDuplicate
+from backend.admin.models import RoleRow
 from backend.core.config import get_settings
+from backend.core.db import session_scope
 
 
 @dataclass
@@ -20,22 +26,17 @@ class RoleRecord:
     locked: bool = False
     created_at: float = field(default_factory=time.time)
 
-
 class RoleStore(Protocol):
     def count(self) -> int: ...
-
     def get_by_id(self, role_id: str) -> RoleRecord | None: ...
 
     def get_by_key(self, key: str) -> RoleRecord | None: ...
-
     def list_roles(self) -> list[RoleRecord]: ...
 
     def insert(self, record: RoleRecord) -> None: ...
-
     def save(self, record: RoleRecord) -> None: ...
 
     def delete(self, role_id: str) -> RoleRecord | None: ...
-
 
 class MemoryRoleStore:
     def __init__(self) -> None:
@@ -66,8 +67,6 @@ class MemoryRoleStore:
             )
 
     def insert(self, record: RoleRecord) -> None:
-        from backend.admin.errors import RoleKeyDuplicate
-
         with self._lock:
             if record.key in self._by_key or record.id in self._by_id:
                 raise RoleKeyDuplicate()
@@ -91,48 +90,28 @@ class MemoryRoleStore:
             self._by_key.pop(record.key, None)
             return record
 
-
 class SqlRoleStore:
     def count(self) -> int:
-        from backend.core.db import session_scope
-        from backend.admin.models import RoleRow
-
         with session_scope() as session:
             return session.query(RoleRow).count()
 
     def get_by_id(self, role_id: str) -> RoleRecord | None:
-        from backend.core.db import session_scope
-        from backend.admin.models import RoleRow
-
         with session_scope() as session:
             row = session.get(RoleRow, role_id)
             return _row_to_role(row) if row else None
 
     def get_by_key(self, key: str) -> RoleRecord | None:
-        from backend.core.db import session_scope
-        from backend.admin.models import RoleRow
-        from sqlalchemy import select
-
         with session_scope() as session:
             row = session.scalar(select(RoleRow).where(RoleRow.key == key))
             return _row_to_role(row) if row else None
 
     def list_roles(self) -> list[RoleRecord]:
-        from backend.core.db import session_scope
-        from backend.admin.models import RoleRow
-        from sqlalchemy import select
-
         with session_scope() as session:
             rows = session.scalars(select(RoleRow)).all()
             records = [_row_to_role(row) for row in rows]
             return sorted(records, key=lambda record: (0 if record.locked else 1, record.key))
 
     def insert(self, record: RoleRecord) -> None:
-        from backend.admin.errors import RoleKeyDuplicate
-        from backend.core.db import session_scope
-        from backend.admin.models import RoleRow
-        from sqlalchemy.exc import IntegrityError
-
         try:
             with session_scope() as session:
                 session.add(
@@ -150,9 +129,6 @@ class SqlRoleStore:
             raise RoleKeyDuplicate() from exc
 
     def save(self, record: RoleRecord) -> None:
-        from backend.core.db import session_scope
-        from backend.admin.models import RoleRow
-
         with session_scope() as session:
             row = session.get(RoleRow, record.id)
             if row is None:
@@ -163,9 +139,6 @@ class SqlRoleStore:
             session.flush()
 
     def delete(self, role_id: str) -> RoleRecord | None:
-        from backend.core.db import session_scope
-        from backend.admin.models import RoleRow
-
         with session_scope() as session:
             row = session.get(RoleRow, role_id)
             if row is None:
@@ -174,10 +147,7 @@ class SqlRoleStore:
             session.delete(row)
             return record
 
-
 def _row_to_role(row: object) -> RoleRecord:
-    from backend.admin.models import RoleRow
-
     assert isinstance(row, RoleRow)
     return RoleRecord(
         id=row.id,
@@ -188,12 +158,10 @@ def _row_to_role(row: object) -> RoleRecord:
         created_at=float(row.created_at),
     )
 
-
 RoleStoreImpl = MemoryRoleStore
 
 _memory_singleton: MemoryRoleStore | None = None
 _memory_lock = threading.Lock()
-
 
 @lru_cache
 def get_role_store() -> RoleStore:
@@ -205,7 +173,6 @@ def get_role_store() -> RoleStore:
                 _memory_singleton = MemoryRoleStore()
             return _memory_singleton
     return SqlRoleStore()
-
 
 def reset_role_store() -> None:
     global _memory_singleton

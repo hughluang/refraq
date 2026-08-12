@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Response, status
-from fastapi import Request
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
 from backend.metadata.catalog import service as catalog_service
+from backend.metadata.query import service as query_service
+from backend.metadata.query.compile_sample import SampleFilterSpec, SampleOrderSpec
 from backend.metadata.schemas.catalog import (
+    BusinessDomainRef,
     CatalogColumnOut,
     CatalogColumnResponse,
     CatalogColumnSearchResponse,
@@ -33,12 +35,10 @@ from backend.metadata.schemas.catalog import (
     JoinUpsertRequest,
     ObjectSemanticsPatchRequest,
 )
-from backend.metadata.query import service as query_service
-from backend.metadata.query.compile_sample import SampleFilterSpec, SampleOrderSpec
 from backend.metadata.schemas.query import SampleRequest, SampleResponse
 
-router = APIRouter(tags=["catalog"])
 
+router = APIRouter(tags=["catalog"])
 
 def _column_out(view: catalog_service.ColumnView) -> CatalogColumnOut:
     return CatalogColumnOut(
@@ -59,9 +59,7 @@ def _column_out(view: catalog_service.ColumnView) -> CatalogColumnOut:
         is_present=view.is_present,
     )
 
-
 def _object_out(view: catalog_service.ObjectView) -> CatalogObjectOut:
-    from backend.metadata.schemas.catalog import BusinessDomainRef
 
     domain = None
     if view.business_domain is not None:
@@ -116,7 +114,6 @@ def _object_out(view: catalog_service.ObjectView) -> CatalogObjectOut:
         collected_at=view.collected_at,
     )
 
-
 def _join_out(view: catalog_service.JoinView) -> JoinOut:
     return JoinOut(
         id=view.id,
@@ -132,14 +129,11 @@ def _join_out(view: catalog_service.JoinView) -> JoinOut:
         created_at=view.created_at,
     )
 
-
 def _object_out_from_record(record, *, include_columns: bool) -> CatalogObjectOut:
     return _object_out(catalog_service.object_view(record, include_columns=include_columns))
 
-
 def _join_out_from_record(record) -> JoinOut:
     return _join_out(catalog_service.join_view(record))
-
 
 @router.get("/sources/{source_id}/objects", response_model=CatalogObjectListResponse)
 def list_objects(
@@ -166,7 +160,6 @@ def list_objects(
         offset=offset,
     )
 
-
 @router.get("/catalog/objects/search", response_model=CatalogObjectSearchResponse)
 def search_objects(
     q: str = Query(..., min_length=1),
@@ -189,7 +182,6 @@ def search_objects(
         limit=limit,
         offset=offset,
     )
-
 
 @router.get("/catalog/columns/search", response_model=CatalogColumnSearchResponse)
 def search_columns(
@@ -214,14 +206,12 @@ def search_columns(
         offset=offset,
     )
 
-
 @router.get("/objects/{object_id}", response_model=CatalogObjectResponse)
 def get_object(
     object_id: str,
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectResponse:
     return CatalogObjectResponse(object=_object_out(catalog_service.get_object(object_id)))
-
 
 @router.get("/objects/{object_id}/ddl", response_model=CatalogDdlResponse)
 def get_object_ddl(
@@ -230,7 +220,6 @@ def get_object_ddl(
 ) -> CatalogDdlResponse:
     ddl = catalog_service.get_object_ddl(object_id)
     return CatalogDdlResponse(id=ddl.id, ddl=ddl.ddl)
-
 
 @router.post("/objects/{object_id}/sample", response_model=SampleResponse)
 def run_object_sample(
@@ -267,7 +256,6 @@ def run_object_sample(
         sql=outcome.sql,
     )
 
-
 @router.patch("/objects/{object_id}/semantics", response_model=CatalogObjectResponse)
 def patch_object_semantics(
     object_id: str,
@@ -287,7 +275,6 @@ def patch_object_semantics(
         object=_object_out_from_record(record, include_columns=True)
     )
 
-
 @router.patch("/columns/{column_id}/semantics", response_model=CatalogColumnResponse)
 def patch_column_semantics(
     column_id: str,
@@ -304,7 +291,6 @@ def patch_column_semantics(
         semantic_source="user_input",
     )
     return CatalogColumnResponse(column=_column_out(catalog_service.column_view(record)))
-
 
 @router.patch(
     "/objects/{object_id}/columns/semantics",
@@ -330,14 +316,12 @@ def patch_columns_semantics_batch(
         skipped_columns=result["skipped_columns"],
     )
 
-
 @router.get("/objects/{object_id}/joins", response_model=JoinListResponse)
 def list_object_joins(
     object_id: str,
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> JoinListResponse:
     return JoinListResponse(items=[_join_out(j) for j in catalog_service.list_joins(object_id)])
-
 
 @router.put("/joins", response_model=JoinResponse)
 def upsert_join(
@@ -357,7 +341,6 @@ def upsert_join(
     )
     return JoinResponse(join=_join_out_from_record(record))
 
-
 @router.put("/joins:batch", response_model=JoinBatchResponse)
 def upsert_joins_batch(
     payload: JoinBatchUpsertRequest,
@@ -375,7 +358,6 @@ def upsert_joins_batch(
         already_known_count=known,
         items=[_join_out_from_record(j) for j in items],
     )
-
 
 @router.get("/joins/path", response_model=JoinPathResponse)
 def get_join_path(
@@ -418,7 +400,6 @@ def get_join_path(
         direct_joins=[_join_out(j) for j in result.direct_joins],
         reason=result.reason,
     )
-
 
 @router.delete("/joins/{join_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_join(

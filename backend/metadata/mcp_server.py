@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from datetime import datetime
 from typing import Any
 
@@ -15,24 +16,23 @@ from backend.admin.permissions import permissions_include
 from backend.admin.role_store import get_role_store
 from backend.admin.user_store import UserRecord
 from backend.core.errors import AppError
+from backend.jobs.errors import JobNotFound
 from backend.jobs.store import get_job_store
-from dataclasses import asdict
-
+from backend.metadata.business_domains import service as domain_service
 from backend.metadata.catalog import service as catalog_service
 from backend.metadata.query import service as query_service
 from backend.metadata.source_jobs import enqueue_structure_job as enqueue_structure
 from backend.metadata.sources import service as source_service
 from backend.metadata.sources.store import get_source_store
 
-mcp = MCPServer("refraq-metadata")
 
+mcp = MCPServer("refraq-metadata")
 
 def _actor_from_token(authorization: str | None) -> tuple[UserRecord, str]:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise AuthUnauthenticated()
     token = authorization.split(" ", 1)[1].strip()
     return resolve_pat_bearer(token)
-
 
 def _mcp_strip_empty(data: dict[str, Any]) -> dict[str, Any]:
     """Drop null / blank / empty collections so MCP stays additive (no clear)."""
@@ -47,45 +47,37 @@ def _mcp_strip_empty(data: dict[str, Any]) -> dict[str, Any]:
         out[key] = value
     return out
 
-
 def _require(user: UserRecord, permission: str) -> None:
     roles = get_role_store()
     perms = resolve_user_permissions(user, roles)
     if not permissions_include(perms, permission):
         raise AuthForbidden(f"Missing permission {permission}")
 
-
 def _err(exc: Exception) -> str:
     if isinstance(exc, AppError):
         return json.dumps({"error": {"code": exc.code, "message": exc.message}})
     return json.dumps({"error": {"code": "MCP_ERROR", "message": str(exc)}})
-
 
 def _json_default(obj: object) -> Any:
     if isinstance(obj, datetime):
         return obj.isoformat()
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
-
 def _dumps(payload: dict[str, Any]) -> str:
     return json.dumps(payload, default=_json_default)
-
 
 def _clamp(value: int | None, *, default: int, maximum: int) -> int:
     if value is None:
         return default
     return max(1, min(maximum, int(value)))
 
-
 def _object_payload(
     view: catalog_service.ObjectView, *, include_columns: bool
 ) -> dict[str, Any]:
     return catalog_service.object_view_as_dict(view, include_columns=include_columns)
 
-
 def _join_payload_from_record(record: Any) -> dict[str, Any]:
     return catalog_service.join_view_as_dict(catalog_service.join_view(record))
-
 
 @mcp.tool()
 def search_sources(
@@ -123,7 +115,6 @@ def search_sources(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-
 @mcp.tool()
 def get_source(authorization: str, source_locator_key: str) -> str:
     """Get Source detail by locator (sources:read)."""
@@ -134,7 +125,6 @@ def get_source(authorization: str, source_locator_key: str) -> str:
         return _dumps(source_service.public_view(s))
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
-
 
 @mcp.tool()
 def list_objects(
@@ -170,7 +160,6 @@ def list_objects(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-
 @mcp.tool()
 def get_object(authorization: str, object_locator_key: str) -> str:
     """Get Catalog Object with columns by locator (metadata:read)."""
@@ -182,7 +171,6 @@ def get_object(authorization: str, object_locator_key: str) -> str:
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-
 @mcp.tool()
 def get_object_ddl(authorization: str, object_locator_key: str) -> str:
     """Get stored DDL for a Catalog Object (metadata:read)."""
@@ -193,7 +181,6 @@ def get_object_ddl(authorization: str, object_locator_key: str) -> str:
         return _dumps({"id": ddl.id, "locator_key": ddl.locator_key, "ddl": ddl.ddl})
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
-
 
 @mcp.tool()
 def enqueue_structure_job(
@@ -221,7 +208,6 @@ def enqueue_structure_job(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-
 @mcp.tool()
 def get_job(authorization: str, job_id: str) -> str:
     """Get Job status (jobs:run)."""
@@ -230,7 +216,6 @@ def get_job(authorization: str, job_id: str) -> str:
         _require(user, "jobs:run")
         record = get_job_store().get(job_id)
         if record is None:
-            from backend.jobs.errors import JobNotFound
 
             raise JobNotFound()
         return _dumps(
@@ -245,7 +230,6 @@ def get_job(authorization: str, job_id: str) -> str:
         )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
-
 
 @mcp.tool()
 def get_object_semantics(authorization: str, object_locator_key: str) -> str:
@@ -274,7 +258,6 @@ def get_object_semantics(authorization: str, object_locator_key: str) -> str:
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-
 @mcp.tool()
 def inspect_object(authorization: str, object_locator_key: str) -> str:
     """Object semantics + columns aggregate (metadata:read)."""
@@ -285,7 +268,6 @@ def inspect_object(authorization: str, object_locator_key: str) -> str:
         return _dumps(_object_payload(view, include_columns=True))
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
-
 
 @mcp.tool()
 def set_object_semantics(
@@ -335,7 +317,6 @@ def set_object_semantics(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-
 @mcp.tool()
 def set_column_semantics(
     authorization: str,
@@ -365,7 +346,6 @@ def set_column_semantics(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-
 @mcp.tool()
 def list_business_domains(
     authorization: str,
@@ -377,7 +357,6 @@ def list_business_domains(
     try:
         user, _token_id = _actor_from_token(authorization)
         _require(user, "metadata:read")
-        from backend.metadata.business_domains import service as domain_service
 
         lim = _clamp(limit, default=100, maximum=500)
         off = max(0, int(offset or 0))
@@ -405,7 +384,6 @@ def list_business_domains(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-
 @mcp.tool()
 def create_business_domain(
     authorization: str,
@@ -417,7 +395,6 @@ def create_business_domain(
     try:
         user, token_id = _actor_from_token(authorization)
         _require(user, "metadata:write")
-        from backend.metadata.business_domains import service as domain_service
 
         record = domain_service.create_domain(
             code=code,
@@ -440,7 +417,6 @@ def create_business_domain(
         )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
-
 
 @mcp.tool()
 def search_objects(
@@ -478,7 +454,6 @@ def search_objects(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-
 @mcp.tool()
 def search_columns(
     authorization: str,
@@ -515,7 +490,6 @@ def search_columns(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-
 @mcp.tool()
 def list_joins(authorization: str, object_locator_key: str) -> str:
     """List joins for an object locator (metadata:read)."""
@@ -529,7 +503,6 @@ def list_joins(authorization: str, object_locator_key: str) -> str:
         )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
-
 
 @mcp.tool()
 def upsert_join(
@@ -559,7 +532,6 @@ def upsert_join(
         return _dumps({"join": _join_payload_from_record(record)})
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
-
 
 @mcp.tool()
 def upsert_joins(
@@ -629,7 +601,6 @@ def upsert_joins(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-
 @mcp.tool()
 def delete_join(authorization: str, join_id: str) -> str:
     """Remove a join edge by id (metadata:write)."""
@@ -644,7 +615,6 @@ def delete_join(authorization: str, join_id: str) -> str:
         return _dumps({"ok": True, "id": join_id})
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
-
 
 @mcp.tool()
 def find_join_path(
@@ -685,7 +655,6 @@ def find_join_path(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-
 @mcp.tool(
     annotations=ToolAnnotations(read_only_hint=True),
 )
@@ -718,10 +687,8 @@ def run_sql(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-
 def main() -> None:
     mcp.run()
-
 
 if __name__ == "__main__":
     main()

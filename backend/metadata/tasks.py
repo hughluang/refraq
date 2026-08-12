@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from celery import shared_task
 
-from backend.jobs.store import mark_failed
+from backend.jobs.store import get_job_store, mark_failed
 from backend.metadata.runner import run_structure_job
 
 
 @shared_task(name="backend.metadata.tasks.run_job")
 def run_job(job_id: str) -> dict[str, str]:
     """Dispatch Job kind handlers via domain runners."""
-    from backend.jobs.store import get_job_store
 
     current = get_job_store().get(job_id)
     if current is None:

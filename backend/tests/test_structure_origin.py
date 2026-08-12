@@ -19,10 +19,10 @@ from backend.metadata.catalog.records import (  # noqa: E402
     CatalogObjectRecord,
 )
 from backend.metadata.catalog.store import (  # noqa: E402
-    apply_structure_snapshot,
     get_catalog_store,
     reset_catalog_store,
 )
+from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
 from backend.metadata.catalog.structure_merge import (  # noqa: E402
     build_structure_refresh_plan,
 )
@@ -188,11 +188,12 @@ def test_apply_preserves_human_join_via_store() -> None:
         columns=[("col_ord_id", "id"), ("col_cust_fk", "customer_id")],
         now=now,
     )
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id="src_origin",
         job_id="job_seed",
-        objects=[customers, bare_orders],
+        collected=[customers, bare_orders],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="demo",
@@ -240,11 +241,12 @@ def test_service_foreign_key_upsert_keeps_human_join() -> None:
         columns=[("col_ord_id", "id"), ("col_cust_fk", "customer_id")],
         now=now,
     )
-    store.replace_structure_snapshot(
+    apply_structure_snapshot(
         source_id="src_origin",
         job_id="job_seed",
-        objects=[customers, orders],
+        collected=[customers, orders],
         schema_scope=None,
+        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="demo",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from urllib.parse import quote_plus
 
+import oracledb
 from sqlalchemy import create_engine, text
 
 from backend.metadata.connectors.base import (
@@ -13,9 +14,9 @@ from backend.metadata.connectors.base import (
     CollectedIndex,
     CollectedObject,
     CollectedStructure,
+    ConnectorError,
     QueryResult,
     SourceEndpoint,
-    ConnectorError,
     fetch_query_result,
     query_endpoint_error,
 )
@@ -361,7 +362,6 @@ class OracleConnector:
         }
         if thick:
             try:
-                import oracledb
 
                 oracledb.init_oracle_client()
             except Exception as exc:  # noqa: BLE001
