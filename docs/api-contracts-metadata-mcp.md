@@ -17,6 +17,7 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 - Mutations write management audit events
 - No tool returns Source plaintext secrets or PAT secrets
 - Locator formats: `src/{engine|kind}/{source_key}`, `obj/…/{schema}/{object_type}/{name}`, `col/…/column/{column_name}`
+- Catalog column payloads omit `normalized_type`. There is no Type Mapping tool. Agents use native `data_type` (ADR 0024).
 - **Instants** in tool JSON match HTTP: outbound UTC `Z` via `format_instant`. Actor **Display Timezone** is not applied to MCP Instant strings (Console-only formatting). Agents may read `display_timezone` from Current User / Account profile and format locally if needed.
 
 ## 3. Structure (read)
@@ -26,7 +27,7 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 | `search_sources` | `sources:read` | Search/list Sources (`query_text`, `limit`, `offset`) |
 | `get_source` | `sources:read` | Source detail by `source_locator_key` (projected `access`) |
 | `list_objects` | `metadata:read` | Catalog Objects under a Source locator (`q`, `object_type`, `limit`, `offset`) |
-| `get_object` | `metadata:read` | Object + columns by `object_locator_key` (includes semantics when present) |
+| `get_object` | `metadata:read` | Object + columns by `object_locator_key` (includes semantics when present; columns omit `normalized_type`) |
 | `get_object_ddl` | `metadata:read` | DDL when present |
 | `enqueue_structure_job` | `jobs:run` | Enqueue structure Job for Source locator |
 | `get_job` | `jobs:run` | Job by id (status, input, summary, nullable `result`) |

@@ -40,6 +40,9 @@ __all__ = [
     "SourceSecretRequired",
     "StructureDiffNotFound",
     "SourceValidationError",
+    "TypeMappingNotFound",
+    "TypeMappingSeedImmutable",
+    "TypeMappingUnknownForbidden",
 ]
 
 
@@ -321,4 +324,28 @@ class StructureDiffNotFound(AppError):
 
     def _default_message(self) -> str:
         return "Structure Diff not found"
+
+
+class TypeMappingNotFound(AppError):
+    code = "TYPE_MAPPING_NOT_FOUND"
+    http_status = 404
+
+    def _default_message(self) -> str:
+        return "Type Mapping not found"
+
+
+class TypeMappingSeedImmutable(AppError):
+    code = "TYPE_MAPPING_SEED_IMMUTABLE"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Product seed Type Mapping cannot be patched"
+
+
+class TypeMappingUnknownForbidden(AppError):
+    code = "TYPE_MAPPING_UNKNOWN_FORBIDDEN"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Type Mapping cannot be patched to unknown"
 

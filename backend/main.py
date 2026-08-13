@@ -52,6 +52,8 @@ from backend.metadata.routers.jobs import router as metadata_jobs_router
 from backend.metadata.routers.query import router as metadata_query_router
 from backend.metadata.routers.sources import router as sources_router
 from backend.metadata.routers.structure_diffs import router as structure_diffs_router
+from backend.metadata.routers.type_mappings import router as type_mappings_router
+from backend.metadata.type_mappings.seeds import ensure_product_type_mappings
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -64,6 +66,7 @@ def _bootstrap_site(target_settings: Settings) -> None:
         return
     roles = get_role_store()
     seed_roles(roles)
+    ensure_product_type_mappings()
     users = get_user_store()
     if users.count() > 0:
         return
@@ -151,6 +154,7 @@ app.include_router(audit_router)
 app.include_router(sources_router)
 app.include_router(metadata_catalog_router)
 app.include_router(business_domains_router)
+app.include_router(type_mappings_router)
 app.include_router(metadata_jobs_router)
 app.include_router(structure_diffs_router)
 app.include_router(metadata_query_router)

@@ -300,11 +300,17 @@ def object_view_as_dict(view: ObjectView, *, include_columns: bool) -> dict[str,
     }
     if include_columns:
         payload["ddl"] = view.ddl
-        payload["columns"] = [asdict(c) for c in view.columns]
+        payload["columns"] = [_mcp_column_dict(c) for c in view.columns]
     return payload
 
 def column_view_as_dict(view: ColumnView) -> dict[str, Any]:
-    return asdict(view)
+    return _mcp_column_dict(view)
+
+
+def _mcp_column_dict(view: ColumnView) -> dict[str, Any]:
+    payload = asdict(view)
+    payload.pop("normalized_type", None)
+    return payload
 
 def join_view_as_dict(view: JoinView) -> dict[str, Any]:
     return asdict(view)

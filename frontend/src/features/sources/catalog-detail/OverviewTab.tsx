@@ -213,15 +213,17 @@ export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
             object.foreign_keys?.length ? (
               <Stack gap={4}>
                 {object.foreign_keys.map((fk) => (
-                  <Text key={fk.name} size="sm">
-                    {fk.name}: {fk.columns.join(", ")} → {fk.ref_schema}.
-                    {fk.ref_table}({fk.ref_columns.join(", ")})
+                  <Group key={fk.name} gap="xs" wrap="wrap">
+                    <Text size="sm">
+                      {fk.name}: {fk.columns.join(", ")} → {fk.ref_schema}.
+                      {fk.ref_table}({fk.ref_columns.join(", ")})
+                    </Text>
                     {!fk.is_present ? (
-                      <Badge size="xs" ml="xs" color="gray">
+                      <Badge size="xs" color="gray">
                         {t("catalog.fields.absentValue")}
                       </Badge>
                     ) : null}
-                  </Text>
+                  </Group>
                 ))}
               </Stack>
             ) : null
@@ -234,14 +236,16 @@ export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
             object.indexes?.length ? (
               <Stack gap={4}>
                 {object.indexes.map((idx) => (
-                  <Text key={idx.name} size="sm">
-                    {idx.name}: {idx.columns.join(", ")}
+                  <Group key={idx.name} gap="xs" wrap="wrap">
+                    <Text size="sm">
+                      {idx.name}: {idx.columns.join(", ")}
+                    </Text>
                     {idx.is_unique ? (
-                      <Badge size="xs" ml="xs">
+                      <Badge size="xs">
                         {t("catalog.structure.unique")}
                       </Badge>
                     ) : null}
-                  </Text>
+                  </Group>
                 ))}
               </Stack>
             ) : null

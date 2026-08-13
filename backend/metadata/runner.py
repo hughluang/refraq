@@ -25,6 +25,7 @@ from backend.metadata.catalog.store import (
 )
 from backend.metadata.catalog.structure_diff import compute_structure_diff
 from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
+from backend.metadata.type_mappings.service import assign_normalized_types
 from backend.metadata.connectors.base import (
     CollectedStructure,
     ConnectorError,
@@ -133,6 +134,13 @@ def run_structure_job(job_id: str) -> dict[str, str]:
         job_id=job_id,
         collected=collected,
     )
+    records = assign_normalized_types(records, engine=source.engine)
+    unknown_locators = [
+        col.locator_key
+        for obj in records
+        for col in obj.columns
+        if col.normalized_type == "unknown"
+    ]
     settings = get_settings()
     catalog = get_catalog_store()
     existing = catalog.list_present_for_source(source_id)
@@ -168,6 +176,17 @@ def run_structure_job(job_id: str) -> dict[str, str]:
         level="info",
         message=f"succeeded class={facts.diff_class}",
     )
+    if unknown_locators:
+        sample = ", ".join(unknown_locators[:10])
+        ellipsis = ", …" if len(unknown_locators) > 10 else ""
+        append_job_log(
+            job_id,
+            level="warn",
+            message=(
+                f"{len(unknown_locators)} columns mapped to unknown "
+                f"({sample}{ellipsis})"
+            ),
+        )
     final = mark_succeeded(job_id, result=facts.result_envelope(diff.id))
     if final is None:
         return {"status": "missing"}

@@ -131,10 +131,11 @@ Postgres/memory Job table (queried via the facade), not Celery.
 
 - Slice A: `kind=structure` only on the Source facade for database Sources.
 - Later slices/domains may add kinds and additional facade routes; unknown kind → `400` with stable code.
-- Console: module id `jobs` is the global observe surface; structure enqueue lives on Sources. Permission `jobs:run`.
+- Console: module id `jobs` is the global observe surface; structure enqueue lives on Sources. Permission `jobs:run`. Job lists (platform-wide and Source-scoped) omit a `result` column. Job detail may show **Job result** as uninterpreted JSON and does not unpack `class` or link to **Structure Diff**.
 
 ## 6. Non-Goals
 
 - Global `POST /jobs` as the only create path in this phase (platform store may still be shared; HTTP create goes through domain facades)
 - Promoting `source_id` to universal Job fields
+- Promoting structure `class` onto Job list or detail chrome
 - Streaming log push (SSE/WebSocket); Console polls `GET /jobs/{id}/logs`

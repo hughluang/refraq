@@ -157,6 +157,22 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         module_order=25,
     ),
     ConsoleModuleSeed(
+        id="type-mappings",
+        group_id="metadata",
+        group_label_key="layout.navGroup.metadata",
+        label_key="typeMappings.title",
+        routes=ModuleRoutes(
+            list="/console/type-mappings",
+            edit="/console/type-mappings",
+        ),
+        actions=ModuleActions(
+            list="metadata:read",
+            edit="metadata:write",
+        ),
+        group_order=25,
+        module_order=27,
+    ),
+    ConsoleModuleSeed(
         id="jobs",
         group_id="metadata",
         group_label_key="layout.navGroup.metadata",

@@ -110,6 +110,7 @@ Responsibilities:
 - Domain Celery work units (`@shared_task`); discovered by `worker`
 - Catalog object / semantics / join / controlled query / Catalog Sample services (`catalog/service` owns browse, search, Join Path, and semantics/join writes; sample compile+run lives under `query/`; structure refresh orchestration in `catalog/structure_refresh`, plan merge in `catalog/structure_merge`, Join Origin policy in `catalog/join_origin`; persistence adapters only persist)
 - Business Domain registry (global flat entity referenced by catalog objects)
+- Type Mapping registry (global engine + native type → Normalized Type; product seeds via Upgrade)
 - Domain use-case HTTP under `metadata/routers/` and shapes under `metadata/schemas/` (adapters only: auth + transport)
 - MCP tool handlers (`backend/metadata/mcp_server.py`) that delegate to the same services
 

@@ -17,6 +17,7 @@ Related boundaries:
 - Locator addressing: `docs/adr/0012-locator-addressing.md`.
 - Semantics provenance: `docs/adr/0013-semantics-provenance-and-protected-sources.md` (field protection deferred: `docs/adr/0014-defer-semantic-field-protection.md`).
 - Semantics field admission criteria and field-set pruning: `docs/adr/0015-semantic-field-admission.md`.
+- Type Mapping as Normalized Type authority: `docs/adr/0024-normalized-type-mapping.md`.
 - Job shape: `docs/adr/0008-job-generic-input.md`.
 - This phase does **not** define Business Entity, Data Product catalog, Serving delivery, or Access Contract marketplace workflows.
 
@@ -130,6 +131,27 @@ Rules:
 - Locators are recomputed when Source `key`/`engine` or object/column natural keys change.
 - **MCP** is locator-first (tool args resolve by locator). **HTTP** path params remain surrogate ids; responses always include `locator_key`.
 
+### 4.3.2 Type Mapping
+
+Global assignment of **Normalized Type** for one `engine` + canonical native type (ADR 0024). Not owned by a Source.
+
+| Field | Notes |
+| --- | --- |
+| id | Stable technical identifier |
+| engine | Wire/protocol family (`postgresql` \| `mssql` \| `oracle` in Slice A) |
+| native_type | Canonical parameter-free type name (lowercase, whitespace folded, every `(…)` group removed). `varchar(50)` and `varchar(100)` share one row; `varchar` and `character varying` do not. `TIMESTAMP(6) WITH TIME ZONE` → `timestamp with time zone` |
+| normalized_type | Closed 12-value **Normalized Type** |
+| origin | **Type Mapping Origin**: `product` (seed), `job` (structure Job recorded `unknown`), `user` (Console PATCH) |
+
+Rules:
+
+- Unique on `(engine, native_type)`. Product seeds occupy that key on Upgrade (no second row). If a `job`/`user` row already exists for a seeded key, Upgrade takes it over (`origin=product` and the seed target).
+- Product seed rows are immutable. Console has no CREATE / DELETE. Operators may PATCH a non-seed row to any closed value except `unknown`; PATCH sets `origin=user`.
+- A structure **Job** canonicalizes collected `data_type`, looks up the row, and if missing inserts `unknown` with `origin=job`. It never replaces an existing row. Empty/blank `data_type` assigns column `unknown` and does **not** insert a mapping (no identity key).
+- Column **Normalized Type** is the snapshot from that Job, not a live lookup. Patching a mapping does not rewrite existing columns until the next successful structure Job.
+- Console PATCH writes a **Management Audit Event** (`resource_type=type_mapping`, `action=type_mapping.patch`). Job-recorded `unknown` does not.
+- MCP catalog tools omit `normalized_type` and do not expose Type Mapping; agents use native `data_type`.
+
 ### 4.4 Future foresight — non-database Source kinds (not delivered in A–D)
 
 Planned shape only; no Attachment APIs, ORM, or Console flows in this phase:
@@ -163,8 +185,8 @@ Fixed catalog additions (exact strings are normative for Roles UI):
 | --- | --- |
 | `sources:read` | List/view Sources (projected `access`, Connector Spec) |
 | `sources:write` | Create/update/disable Sources; hard-delete disabled Sources; replace full `access`; fetch full access for edit; run Source reachability tests |
-| `metadata:read` | Browse Catalog Objects, columns, DDL, semantics, joins |
-| `metadata:write` | Write semantics and join edges |
+| `metadata:read` | Browse Catalog Objects, columns, DDL, semantics, joins, and **Type Mapping** |
+| `metadata:write` | Write semantics and join edges; PATCH non-seed **Type Mapping** |
 | `jobs:run` | Enqueue/cancel **Jobs** via domain facades; list/view Jobs on Source facades and platform `GET /jobs` |
 | `query:run` | Execute controlled read-only SQL against a Source |
 | `catalog:sample` | Run Catalog Sample (structured live peek) on a Catalog Object |
@@ -190,11 +212,12 @@ Initial modules (ids stable):
 | `sources` | Source registration, reachability, structure Jobs, and **Structure Diff** browse (`/console/sources/:id/structure-diffs`) | `sources:read` |
 | `catalog` | Browse Catalog Objects / columns; object detail at `/console/catalog/:id` (`show` → `metadata:read`) for full semantics, structure facts, Catalog Sample, joins, and DDL | `metadata:read` |
 | `business-domains` | Global Business Domain registry (immutable `code`); create/edit/delete → `metadata:write` | `metadata:read` |
+| `type-mappings` | Global **Type Mapping** list; PATCH non-seed target only (no create/delete) → `metadata:write` | `metadata:read` |
 | `jobs` | Global Job list and observe (logs/detail); enqueue lives on Sources | `jobs:run` (list) |
 
 The catalog object detail page is the Console semantics maintenance surface: it exposes the admitted object/column semantics model (§10, ADR 0015), structure facts (PK/FK/indexes/comments), **Catalog Sample** when the actor has `catalog:sample`, and join graph / path exploration. List remains the Source-scoped browse entry; deep links use the `show` route so readers with only `metadata:read` can open detail without needing `metadata:write`.
 
-**Structure Diff** browse lives under Source routes (`/console/sources/:id/structure-diffs`); viewing requires `metadata:read`. It is not a new sidebar module. Job list/detail may show `result.class` under `jobs:run`.
+**Structure Diff** browse lives under Source routes (`/console/sources/:id/structure-diffs`); viewing requires `metadata:read`. It is not a new sidebar module. Job list and Job detail observe public Job fields under `jobs:run`; detail may show **Job result** as uninterpreted JSON and does not unpack `result.class`. Classification is read on **Structure Diff**.
 
 User PAT management is **not** in this group; see `docs/business-user-tokens.md` (Administration module `tokens`).
 
@@ -211,7 +234,7 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
 - Slice A connectors: **PostgreSQL**, **MSSQL**, **Oracle**.
 - Structure collection persists, keyed by Source:
   - objects: type (`table` \| `view` \| `materialized_view`), schema, name, native comment, DDL when obtainable
-  - columns: name, full type string (precision/length when the engine exposes it), **Normalized Type** (closed coarse physical type derived from that string), nullable, default value, native comment, ordinal
+  - columns: name, full type string (precision/length when the engine exposes it), **Normalized Type** (snapshot from **Type Mapping** for that engine + canonical native type), nullable, default value, native comment, ordinal
   - primary key column names; foreign keys (name, from/to columns); unique constraints; indexes
 - **Current catalog** is authoritative (not a per-Job version history). Natural key:
   `(source_id, schema_name, name, object_type)`. Surrogate ids are preserved across successful refreshes.
@@ -239,8 +262,13 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
     but do not raise `class`.
   - Full locators live on the Diff; Job result holds counts only.
 - **Normalized Type** values: `string` \| `integer` \| `number` \| `boolean` \| `date` \|
-  `timestamp` \| `binary` \| `json` \| `unknown`. Native `data_type` remains the engine string.
-  `type_changed` compares native `data_type` strings (exact inequality; not Normalized Type).
+  `timestamp` \| `time` \| `interval` \| `binary` \| `json` \| `array` \| `unknown`.
+  Native `data_type` remains the engine string. Assignment is a **Type Mapping** lookup
+  (ADR 0024): canonicalize, look up `(engine, native type)`, insert `unknown` (`origin=job`)
+  if missing, never overwrite an existing row. Product seeds are Upgrade-occupied and
+  immutable. `type_changed` compares native `data_type` strings (exact inequality; not
+  Normalized Type). Columns with `unknown` stay visible (Console Badge; one Job `WARN`
+  with count and up to 10 locators). Job result / Structure Diff do not grow unknown counters.
 - **Semantics preservation:** structure upserts whitelist structural columns only; never overwrite
   semantics fields or non-`foreign_key` join edges.
 - **FK → join derivation:** each collected foreign key upserts a join edge with `origin=foreign_key`
@@ -457,6 +485,7 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - `docs/adr/0013-semantics-provenance-and-protected-sources.md`
 - `docs/adr/0014-defer-semantic-field-protection.md`
 - `docs/adr/0015-semantic-field-admission.md`
+- `docs/adr/0024-normalized-type-mapping.md`
 - `docs/business-user-tokens.md`
 - `docs/business-management-console.md`
 - `docs/api-contracts-sources.md`

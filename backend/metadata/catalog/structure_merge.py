@@ -20,7 +20,6 @@ from backend.metadata.catalog.identity import (
     _recompute_column_locator,
     _recompute_object_locator,
 )
-from backend.metadata.catalog.normalized_type import normalize_type
 from backend.metadata.catalog.records import (
     CatalogColumnRecord,
     CatalogJoinRecord,
@@ -89,7 +88,6 @@ def merge_columns_snapshot(
                     object_id=object_id,
                     id=new_column_id(),
                     locator_key=col_locator,
-                    normalized_type=normalize_type(col.data_type),
                 )
             )
         else:
@@ -99,7 +97,7 @@ def merge_columns_snapshot(
                     locator_key=col_locator,
                     ordinal=col.ordinal,
                     data_type=col.data_type,
-                    normalized_type=normalize_type(col.data_type),
+                    normalized_type=col.normalized_type,
                     nullable=col.nullable,
                     default_value=col.default_value,
                     comment=col.comment,
@@ -219,7 +217,6 @@ def build_structure_refresh_plan(
                         col,
                         locator_key=col_locator,
                         object_id=incoming_obj.id,
-                        normalized_type=normalize_type(col.data_type),
                     )
                 )
             fks = [

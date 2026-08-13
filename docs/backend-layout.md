@@ -90,6 +90,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 |--------|----------------|
 | `backend.metadata.errors` | Domain errors (subclass `AppError`, not `admin` concrete types) |
 | `backend.metadata.source_jobs` | Structure enqueue / list-by-source facade |
+| `backend.metadata.type_mappings.seeds` | Product Type Mapping seed occupy (`ensure_product_type_mappings`) for Foundation Upgrade / Site Bootstrap |
 | `backend.metadata.mcp_server` | MCP tool host entry |
 | `backend.metadata.tasks` | Celery shared-task callables (discovered by `worker`) |
 | `backend.metadata.routers.*` | Domain use-case HTTP; mounted by `main` |
@@ -178,7 +179,7 @@ Enforcement: `backend/tests/test_no_inline_imports.py`. Rationale: ADR 0020.
 
 Forward rules:
 
-1. `core` depends on no platform kernel / primitive / product-domain business package (upgrade may import **published** `admin` and `worker.api` only for orchestration).
+1. `core` depends on no platform kernel / primitive / product-domain business package (upgrade may import **published** `admin`, `worker.api`, and `metadata.type_mappings.seeds` only for orchestration).
 2. **Product domain ↔ product domain:** no direct imports. Collaborate via shared-kernel protocols or composition binding—extend this contract with an explicit edge when needed.
 3. **Product domain → platform kernel / primitive:** published API only (Conformist).
 4. Platform primitive → platform kernel: default none; if needed, add an explicit whitelist edge via published API.
@@ -190,7 +191,7 @@ Concrete edges:
 | From | May import |
 |------|------------|
 | `main` (composition) | `core`, published `admin` / `jobs` / `metadata` (including their `routers.*` for mount), Site Bootstrap helpers |
-| `core` | stdlib, third parties, Alembic; `admin.roles` published symbols from `upgrade` only |
+| `core` | stdlib, third parties, Alembic; `admin.roles` published symbols from `upgrade` only; `metadata.type_mappings.seeds` from `upgrade` only |
 | `admin` | `core`; own stores/schemas/routers |
 | `jobs` | `core`; own store/schemas/routers; published `admin` when cancel/audit needs it |
 | `metadata` | `core`; published `admin`; published `jobs`; own modules |

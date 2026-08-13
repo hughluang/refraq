@@ -213,5 +213,6 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation and 
 | `sources` | `metadata` | `/console/sources` | `sources:read` | create/edit/delete → `sources:write` |
 | `catalog` | `metadata` | `/console/catalog` | `metadata:read` | edit → `metadata:write`; show → `metadata:read`; show route `/console/catalog/:id` |
 | `business-domains` | `metadata` | `/console/business-domains` | `metadata:read` | create/edit/delete → `metadata:write` |
+| `type-mappings` | `metadata` | `/console/type-mappings` | `metadata:read` | edit → `metadata:write` (no create/delete) |
 | `jobs` | `metadata` | `/console/jobs` | `jobs:run` | — |
 | `settings` | `settings` | `/console/settings` | `settings:read` | edit → `settings:write` |

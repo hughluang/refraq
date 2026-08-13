@@ -89,7 +89,7 @@ All Source and catalog responses include `locator_key` (ADR 0012). HTTP path par
 ```
 
 Identity is `source_id` (+ object coordinates). `collected_at` is optional provenance only.
-`normalized_type` is the closed coarse physical type derived from `data_type` (`string` | `integer` | `number` | `boolean` | `date` | `timestamp` | `binary` | `json` | `unknown`). Native `data_type` is unchanged.
+`normalized_type` is the closed coarse physical type assigned by **Type Mapping** (`string` | `integer` | `number` | `boolean` | `date` | `timestamp` | `time` | `interval` | `binary` | `json` | `array` | `unknown`). It is a snapshot from the last successful structure Job, not a live lookup. Native `data_type` is unchanged. MCP catalog tools omit this field.
 `field_kind` is read-only on semantics writes (structure-held). `model_routing_hint` is not in this phase.
 `time_semantics`, `status_semantics`, `relation_summary`, and `confidence` are removed from read and write contracts (ADR 0015); time/status meaning lives on column descriptions (and optional free-text `semantic_type` / `enum_catalog` — closed vocabulary deferred, ADR 0016); object relationships live in join edges.
 `business_domain` on read is `{ "id", "code", "name" } | null` (ADR 0017). Object semantics writes accept `business_domain_code` (not the nested object); a present JSON `null` (or blank string) clears the domain link (ADR 0018).
@@ -169,6 +169,17 @@ Validation:
 
 Domain shape: `{ "id", "code", "name", "description", "created_at", "updated_at" }`.
 Create conflicts on duplicate `code` → `BUSINESS_DOMAIN_CODE_CONFLICT`. Missing id → `BUSINESS_DOMAIN_NOT_FOUND`.
+
+## 4.2 Type Mapping Endpoints (ADR 0024)
+
+| Method | Path | Permission | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/type-mappings` | `metadata:read` | List mappings (`q`, `engine`, `origin`, `limit`, `offset`) |
+| `PATCH` | `/type-mappings/{id}` | `metadata:write` | Set `normalized_type` on a non-seed row |
+
+No POST or DELETE. Mapping shape: `{ "id", "engine", "native_type", "normalized_type", "origin", "created_at", "updated_at" }`. `origin` is `product` \| `job` \| `user`.
+
+PATCH body: `{ "normalized_type": "<one of 11 buckets>" }` — any closed Normalized Type except `unknown`. Product seed (`origin=product`) → `TYPE_MAPPING_SEED_IMMUTABLE`. Target `unknown` → `TYPE_MAPPING_UNKNOWN_FORBIDDEN`. Missing id → `TYPE_MAPPING_NOT_FOUND`. Successful PATCH writes a **Management Audit Event** (`resource_type=type_mapping`, `action=type_mapping.patch`).
 
 ## 5. Join Endpoints (C + Depth)
 

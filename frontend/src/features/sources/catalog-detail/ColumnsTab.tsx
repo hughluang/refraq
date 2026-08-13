@@ -304,7 +304,11 @@ export function ColumnsTab({
                   </Table.Td>
                   <Table.Td>
                     <Text size="sm">{col.data_type}</Text>
-                    {col.normalized_type ? (
+                    {col.normalized_type === "unknown" ? (
+                      <Badge size="xs" color="orange" variant="filled">
+                        {t("catalog.fields.normalizedTypeUnknown")}
+                      </Badge>
+                    ) : col.normalized_type ? (
                       <Text size="xs" c="dimmed">
                         {t("catalog.fields.normalizedType")}:{" "}
                         {col.normalized_type}

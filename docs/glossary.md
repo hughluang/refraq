@@ -195,17 +195,18 @@ Successful Jobs may carry a nullable generic **Job result**; failed/cancelled/fa
 Avoid calling it an Ingestion Job. Avoid running long work inside the Management Console API request.
 Avoid treating a Job as a **Scheduled Task**, or reading Celery result/Flower as the product lifecycle.
 Avoid promoting domain foreign keys into universal Job fields.
+Avoid promoting kind-specific result fields (for example structure `class`) into universal Job fields.
 Avoid overloading enqueue **summary** with outcome, or writing `{}` to mean “no result”.
 
 ### Job result
 
 A nullable JSON outcome written when a Job reaches a successful terminal state. The platform does not interpret the document; each `kind` supplies its envelope (structure: `class`, `counts`, `structure_diff_id`).
-Avoid Celery result backend, **Management Audit Event** `result`, and treating result as whether the Job succeeded.
+Avoid Celery result backend, **Management Audit Event** `result`, treating result as whether the Job succeeded, or treating structure `class` as a public Job attribute. Console Job detail may show the document uninterpreted; classification is read on **Structure Diff**.
 
 ### Structure Diff
 
 A persisted record of structural changes committed by one successful structure **Job**, belonging to exactly one **Source**. Full locators live here; Job result holds only class, counts, and the Diff id.
-Avoid Catalog Snapshot, Drift entity, Job child table, or using the Diff as the live catalog.
+Avoid Catalog Snapshot, Drift entity, Job child table, using the Diff as the live catalog, or treating Diff `class` as a Job list or detail field.
 
 ### Instant
 
@@ -266,9 +267,19 @@ Avoid conflating with **Normalized Type**.
 
 ### Normalized Type
 
-A closed coarse physical type on a catalog column (`string` | `integer` | `number` | `boolean` | `date` | `timestamp` | `binary` | `json` | `unknown`), derived from native `data_type`.
+A closed coarse physical type on a catalog column (`string` | `integer` | `number` | `boolean` | `date` | `timestamp` | `time` | `interval` | `binary` | `json` | `array` | `unknown`). On a database-kind Source it is assigned by a **Type Mapping** for that `engine` and native type. The value on a column is the snapshot from the last successful structure **Job**, not a live lookup.
 `type_changed` on a **Structure Diff** compares native `data_type` strings, not Normalized Type.
-Avoid replacing native `data_type`; avoid **Semantic Type**.
+Avoid replacing native `data_type`; avoid **Semantic Type**; avoid treating Normalized Type as MCP catalog payload.
+
+### Type Mapping
+
+A global rule that assigns one **Normalized Type** to one native type of one `engine` (ADR 0024). Unique on `(engine, native type)`. The native type is parameter-free: `varchar(50)` and `varchar(100)` share one mapping; aliases such as `varchar` and `character varying` are distinct. Product seed mappings are immutable. A structure **Job** records a mapping with `unknown` when it first sees a native type that has no row. Console Module `type-mappings` lists mappings and may PATCH a non-seed row (`metadata:read` / `metadata:write`); no CREATE or DELETE.
+Avoid Source-local type override; avoid a code dict or sqlglot DType as the catalog; avoid treating Type Mapping as per-operator personalization of product seeds.
+
+### Type Mapping Origin
+
+Whether a **Type Mapping** is the product seed (`product`), was recorded by a structure **Job** (`job`), or was assigned by an operator as gap-fill (`user`).
+Avoid **Semantic Source**, **Join Origin**, treating origin as an audit log, or treating origin as per-Source personalization.
 
 ### Enum Catalog
 

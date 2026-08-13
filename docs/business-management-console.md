@@ -110,7 +110,7 @@ Groups and modules:
 | Workbench | `workbench` | Home (`dashboard`) |
 | Administration | `admin` | Users, Roles, User PAT (`tokens`) |
 | Platform settings | `settings` | System parameters (`settings`) |
-| Metadata | `metadata` | Sources (`sources`), Catalog (`catalog`), Business Domains (`business-domains`), Jobs (`jobs`) |
+| Metadata | `metadata` | Sources (`sources`), Catalog (`catalog`), Business Domains (`business-domains`), Type Mappings (`type-mappings`), Jobs (`jobs`) |
 
 Notes:
 

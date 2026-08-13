@@ -30,6 +30,21 @@ class BusinessDomainRow(Base):
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
 
+class TypeMappingRow(Base):
+    __tablename__ = "type_mappings"
+    __table_args__ = (
+        UniqueConstraint("engine", "native_type", name="uq_type_mappings_engine_native"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    engine: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    native_type: Mapped[str] = mapped_column(String(256), nullable=False)
+    normalized_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    origin: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
 class SourceRow(Base):
     __tablename__ = "sources"
 

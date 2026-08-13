@@ -11,7 +11,6 @@ import { PageChrome } from "@/components/layout/PageChrome";
 import { cancelJob, listJobs } from "@/features/sources/api";
 import { formatJobTrigger } from "@/features/sources/formatJobTrigger";
 import { JobDetailModal } from "@/features/sources/JobDetailModal";
-import { JobResultBadge } from "@/features/sources/JobResultBadge";
 import type { Job } from "@/features/sources/types";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
@@ -75,7 +74,6 @@ export function JobList() {
               <Table.Th>{t("jobs.fields.summary")}</Table.Th>
               <Table.Th>{t("jobs.fields.kind")}</Table.Th>
               <Table.Th>{t("jobs.fields.status")}</Table.Th>
-              <Table.Th>{t("jobs.fields.result")}</Table.Th>
               <Table.Th>{t("jobs.fields.trigger")}</Table.Th>
               <Table.Th>{t("jobs.fields.created")}</Table.Th>
               <Table.Th>{t("jobs.fields.duration")}</Table.Th>
@@ -96,9 +94,6 @@ export function JobList() {
                   <Badge color={STATUS_COLOR[job.status] ?? "gray"}>
                     {job.status}
                   </Badge>
-                </Table.Td>
-                <Table.Td>
-                  <JobResultBadge value={job.result?.class} />
                 </Table.Td>
                 <Table.Td>
                   <Text size="sm">{formatJobTrigger(job, t)}</Text>

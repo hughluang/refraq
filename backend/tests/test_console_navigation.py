@@ -91,6 +91,7 @@ def test_super_admin_sees_all_seed_modules(client: TestClient) -> None:
         "sources",
         "catalog",
         "business-domains",
+        "type-mappings",
         "jobs",
     ]
     assert [m["id"] for m in groups["settings"]["modules"]] == ["settings"]

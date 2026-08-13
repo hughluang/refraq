@@ -52,6 +52,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
         {
             "metadata.errors",
             "metadata.source_jobs",
+            "metadata.type_mappings.seeds",
             "metadata.mcp_server",
             "metadata.tasks",
             "metadata.routers",
@@ -141,12 +142,15 @@ def test_layout_imports(path: Path) -> None:
         if target_pkg == importer_pkg:
             continue
 
-        # core must not import business packages (upgrade → published admin/worker only).
+        # core must not import business packages (upgrade → published admin/worker/metadata seeds).
         if importer_pkg == "core":
             if target_pkg in {"admin", "jobs", "metadata", "worker"}:
-                if importer == "core.upgrade" and target_pkg in {"admin", "worker"}:
+                if importer == "core.upgrade" and target_pkg in {"admin", "worker", "metadata"}:
                     if target_pkg == "worker":
                         if imported == "worker.api" or imported.startswith("worker.api."):
+                            continue
+                    elif target_pkg == "metadata":
+                        if _is_published_import("metadata", imported):
                             continue
                     elif _is_published_import("admin", imported):
                         continue

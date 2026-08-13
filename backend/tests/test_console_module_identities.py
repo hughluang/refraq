@@ -128,6 +128,22 @@ EXPECTED_IDENTITIES = {
             "show": None,
         },
     },
+    "type-mappings": {
+        "label_key": "typeMappings.title",
+        "routes": {
+            "list": "/console/type-mappings",
+            "create": None,
+            "edit": "/console/type-mappings",
+            "show": None,
+        },
+        "actions": {
+            "list": "metadata:read",
+            "create": None,
+            "edit": "metadata:write",
+            "delete": None,
+            "show": None,
+        },
+    },
     "jobs": {
         "label_key": "jobs.title",
         "routes": {"list": "/console/jobs", "create": None, "edit": None, "show": None},

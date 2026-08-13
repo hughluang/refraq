@@ -53,6 +53,12 @@ describe("toRefineResources", () => {
         meta: { label: "businessDomains.title" },
       },
       {
+        name: "type-mappings",
+        list: "/console/type-mappings",
+        edit: "/console/type-mappings",
+        meta: { label: "typeMappings.title" },
+      },
+      {
         name: "jobs",
         list: "/console/jobs",
         meta: { label: "jobs.title" },

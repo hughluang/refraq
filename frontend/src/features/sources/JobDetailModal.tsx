@@ -10,15 +10,11 @@ import {
   Stack,
   Text,
 } from "@mantine/core";
-import { CanAccess, useNotification, useTranslate } from "@refinedev/core";
-import Link from "next/link";
+import { useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { cancelJob, getJob, getJobLogs } from "@/features/sources/api";
 import { formatJobTrigger } from "@/features/sources/formatJobTrigger";
-import { JobResultBadge } from "@/features/sources/JobResultBadge";
-import { jobSourceId } from "@/features/sources/jobSourceId";
 import type { Job } from "@/features/sources/types";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
@@ -98,8 +94,6 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
 
   const canCancel = job && (job.status === "queued" || job.status === "running");
   const showPollControls = job && !TERMINAL.has(job.status);
-  const sourceId = job ? jobSourceId(job) : null;
-  const diffId = job?.result?.structure_diff_id;
 
   return (
     <Modal
@@ -116,22 +110,6 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
         <Stack gap="md">
           <Group gap="sm" wrap="wrap">
             <Badge color={STATUS_COLOR[job.status] ?? "gray"}>{job.status}</Badge>
-            <JobResultBadge value={job.result?.class} />
-            {sourceId && diffId ? (
-              <CanAccess
-                resource={ModuleId.sources}
-                action={ModuleAction.show}
-              >
-                <Button
-                  component={Link}
-                  href={`/console/sources/${sourceId}/structure-diffs/${diffId}`}
-                  size="compact-xs"
-                  variant="light"
-                >
-                  {t("jobs.result.openDiff")}
-                </Button>
-              </CanAccess>
-            ) : null}
             <Text size="sm" ff="monospace">
               {job.id}
             </Text>
@@ -184,6 +162,15 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
               {job.error_code}: {job.error_message ?? ""}
             </Text>
           ) : null}
+
+          <Stack gap="xs">
+            <Text fw={600} size="sm">
+              {t("jobs.fields.result")}
+            </Text>
+            <Code block style={{ whiteSpace: "pre-wrap" }}>
+              {JSON.stringify(job.result, null, 2)}
+            </Code>
+          </Stack>
 
           <Group justify="space-between" align="center">
             <Text fw={600} size="sm">

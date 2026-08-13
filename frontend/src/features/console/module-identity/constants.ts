@@ -7,6 +7,7 @@ export const ModuleId = {
   sources: "sources",
   catalog: "catalog",
   businessDomains: "business-domains",
+  typeMappings: "type-mappings",
   jobs: "jobs",
   settings: "settings",
 } as const;

@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Badge,
   Button,
   Group,
   Modal,
@@ -146,25 +145,19 @@ export function UserList() {
                     />
                   </Table.Td>
                   <Table.Td>
-                    <Group gap="xs">
-                      <Switch
-                        checked={row.status === "active"}
-                        onChange={() => setPending(row)}
-                        disabled={
-                          !canWrite?.can || mutation.isPending || isSelf
-                        }
-                        size="sm"
-                        aria-label={t("users.fields.status")}
-                      />
-                      <Badge
-                        color={row.status === "active" ? "green" : "gray"}
-                        variant="dot"
-                      >
-                        {row.status === "active"
+                    <Switch
+                      checked={row.status === "active"}
+                      onChange={() => setPending(row)}
+                      disabled={
+                        !canWrite?.can || mutation.isPending || isSelf
+                      }
+                      size="sm"
+                      aria-label={
+                        row.status === "active"
                           ? t("users.status.active")
-                          : t("users.status.disabled")}
-                      </Badge>
-                    </Group>
+                          : t("users.status.disabled")
+                      }
+                    />
                   </Table.Td>
                   <Table.Td>{formatInstant(row.last_login_at)}</Table.Td>
                 </Table.Tr>

@@ -104,6 +104,21 @@ export const MODULE_IDENTITY_FIXTURE: ModuleIdentity[] = [
     },
   },
   {
+    id: "type-mappings",
+    label_key: "typeMappings.title",
+    routes: {
+      list: "/console/type-mappings",
+      create: null,
+      edit: "/console/type-mappings",
+    },
+    actions: {
+      list: "metadata:read",
+      create: null,
+      edit: "metadata:write",
+      delete: null,
+    },
+  },
+  {
     id: "jobs",
     label_key: "jobs.title",
     routes: { list: "/console/jobs", create: null, edit: null },
