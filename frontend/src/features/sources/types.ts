@@ -127,6 +127,7 @@ export type CatalogColumn = {
   field_kind?: string;
   ordinal: number;
   is_present: boolean;
+  normalized_type?: string | null;
 };
 
 export type CatalogForeignKey = {
@@ -226,11 +227,19 @@ export type ColumnSemanticsBatchItem = {
   enum_catalog?: EnumCatalogEntry[] | null;
 };
 
+export type JobResult = {
+  schema?: string;
+  class?: "breaking" | "non_breaking" | "unchanged" | string;
+  counts?: Record<string, number>;
+  structure_diff_id?: string;
+};
+
 export type Job = {
   id: string;
   kind: string;
   status: string;
   input: Record<string, unknown>;
+  result: JobResult | null;
   summary: string;
   trigger_kind: string | null;
   trigger_ref: string | null;
@@ -249,3 +258,20 @@ export type JobLogs = {
   body: string;
   updated_at: string | null;
 };
+
+export type StructureDiffChange = {
+  change: string;
+  locator_key: string;
+  [key: string]: unknown;
+};
+
+export type StructureDiff = {
+  id: string;
+  source_id: string;
+  job_id: string;
+  class: string;
+  counts: Record<string, number>;
+  created_at: string;
+  changes?: StructureDiffChange[];
+};
+

@@ -106,12 +106,16 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="metadata",
         group_label_key="layout.navGroup.metadata",
         label_key="sources.title",
-        routes=ModuleRoutes(list="/console/sources"),
+        routes=ModuleRoutes(
+            list="/console/sources",
+            show="/console/sources/:id/structure-diffs",
+        ),
         actions=ModuleActions(
             list="sources:read",
             create="sources:write",
             edit="sources:write",
             delete="sources:write",
+            show="metadata:read",
         ),
         group_order=25,
         module_order=10,

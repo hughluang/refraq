@@ -227,6 +227,8 @@ def get_job(authorization: str, job_id: str) -> str:
                 "kind": record.kind,
                 "status": record.status,
                 "input": record.input,
+                "summary": record.summary,
+                "result": record.result,
                 "error_code": record.error_code,
                 "error_message": record.error_summary,
             }

@@ -12,6 +12,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.core.db import Base
@@ -143,6 +144,7 @@ class CatalogColumnRow(Base):
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     data_type: Mapped[str] = mapped_column(String(256), nullable=False)
+    normalized_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     nullable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     default_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -230,3 +232,24 @@ class CatalogJoinRow(Base):
     origin: Mapped[str] = mapped_column(String(32), nullable=False, default="human")
     created_by_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
+class StructureDiffRow(Base):
+    __tablename__ = "structure_diffs"
+    __table_args__ = (
+        UniqueConstraint("job_id", name="uq_structure_diffs_job_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("sources.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    job_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    diff_class: Mapped[str] = mapped_column("class", String(32), nullable=False)
+    counts: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    changes: Mapped[list] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+

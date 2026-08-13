@@ -13,6 +13,7 @@ class JobOut(BaseModel):
     kind: str
     status: str
     input: dict[str, Any]
+    result: dict[str, Any] | None = None
     summary: str
     trigger_kind: str | None
     trigger_ref: str | None

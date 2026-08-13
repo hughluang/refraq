@@ -50,6 +50,7 @@ All Source and catalog responses include `locator_key` (ADR 0012). HTTP path par
       "locator_key": "col/postgresql/demo-src/public/table/orders/column/order_id",
       "name": "order_id",
       "data_type": "integer",
+      "normalized_type": "integer",
       "nullable": false,
       "default_value": null,
       "comment": null,
@@ -88,6 +89,7 @@ All Source and catalog responses include `locator_key` (ADR 0012). HTTP path par
 ```
 
 Identity is `source_id` (+ object coordinates). `collected_at` is optional provenance only.
+`normalized_type` is the closed coarse physical type derived from `data_type` (`string` | `integer` | `number` | `boolean` | `date` | `timestamp` | `binary` | `json` | `unknown`). Native `data_type` is unchanged.
 `field_kind` is read-only on semantics writes (structure-held). `model_routing_hint` is not in this phase.
 `time_semantics`, `status_semantics`, `relation_summary`, and `confidence` are removed from read and write contracts (ADR 0015); time/status meaning lives on column descriptions (and optional free-text `semantic_type` / `enum_catalog` — closed vocabulary deferred, ADR 0016); object relationships live in join edges.
 `business_domain` on read is `{ "id", "code", "name" } | null` (ADR 0017). Object semantics writes accept `business_domain_code` (not the nested object); a present JSON `null` (or blank string) clears the domain link (ADR 0018).
@@ -103,6 +105,19 @@ Identity is `source_id` (+ object coordinates). `collected_at` is optional prove
 | `POST` | `/objects/{id}/sample` | `catalog:sample` | Catalog Sample live peek (§8) |
 
 List response: `{ "items": […], "total": N, "limit": L, "offset": O }` when pagination params are used; `limit` default 100, max 500.
+
+## 3.1 Structure Diff
+
+A **Structure Diff** belongs to a **Source** and was produced by one successful structure **Job**. It is not a Job sub-resource. Viewing: `metadata:read`. Failed/fail-safe Jobs have no Diff.
+
+| Method | Path | Permission | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/sources/{id}/structure-diffs` | `metadata:read` | List Diffs for this Source (newest first; `limit`/`offset`) |
+| `GET` | `/structure-diffs/{id}` | `metadata:read` | Diff detail including full `changes` |
+
+List item includes `id`, `source_id`, `job_id`, `class`, `counts`, `created_at` (not full `changes`). Detail adds `changes`: arrays of `{ "change", "locator_key" }` plus `from`/`to` when the change is type, PK, or nullable.
+
+`class` / `counts` match the structure **Job result** envelope (`docs/api-contracts-jobs.md`). `change` values include `object_added`, `object_removed`, `column_added`, `column_removed`, `type_changed`, `pk_changed`, `nullable_tightened`, `nullable_widened`, `comment_or_default_changed`, and FK/index kinds that do not raise `class`.
 
 ## 4. Semantics Endpoints (B + Depth)
 

@@ -51,6 +51,7 @@ def job_out(
         kind=record.kind,
         status=record.status,
         input=dict(record.input),
+        result=record.result,
         summary=record.summary,
         trigger_kind=record.trigger_kind,
         trigger_ref=record.trigger_ref,

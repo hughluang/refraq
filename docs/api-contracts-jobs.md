@@ -20,6 +20,7 @@ HTTP protocol failures: [`docs/conventions-errors.md`](conventions-errors.md). J
     "source_id": "src_mes_prod"
   },
   "summary": "structure · mes-prod",
+  "result": null,
   "trigger_kind": "user",
   "trigger_ref": "user_001",
   "trigger_actor_name": "Ada",
@@ -38,8 +39,30 @@ Status: `queued` | `running` | `succeeded` | `failed` | `cancelled`.
 Rules:
 
 - **Job** is a durable asynchronous execution record. It is not owned by Source.
-- Public Job fields are lifecycle + `kind` + generic **`input`** + observation fields **`summary`**, **`trigger_kind`**, **`trigger_ref`**.
-- **`summary`** is a human-readable snapshot written at enqueue (structure: `structure · {source_key}`). It is not a Source foreign key and must not be confused with the **Source** entity.
+- Public Job fields are lifecycle + `kind` + generic **`input`** + observation fields **`summary`**, **`trigger_kind`**, **`trigger_ref`**, and nullable generic **`result`**.
+- **`summary`** is a human-readable snapshot written at enqueue (structure: `structure · {source_key}`). It is not a Source foreign key and must not be confused with the **Source** entity. Do not overwrite it with outcome.
+- **`result`** is kind-interpreted structured outcome, written only when the Job reaches **succeeded**. Failed, cancelled, and fail-safe Jobs leave `result` `null` (never `{}`). Platform list/get do not interpret the document. Structure envelope:
+
+```json
+{
+  "schema": "structure.diff.v1",
+  "class": "breaking",
+  "counts": {
+    "objects_added": 0,
+    "objects_removed": 1,
+    "columns_added": 0,
+    "columns_removed": 1,
+    "type_changed": 0,
+    "pk_changed": 0,
+    "nullable_tightened": 0,
+    "nullable_widened": 0,
+    "comments_or_defaults": 0
+  },
+  "structure_diff_id": "sdiff_01"
+}
+```
+
+`class` is `breaking` | `non_breaking` | `unchanged`. Full locators live on the **Structure Diff** (`docs/api-contracts-metadata.md`), not in `result`. Other kinds keep `result` null.
 - **`trigger_kind`** / **`trigger_ref`** describe how the Job was started (`user` | `schedule` | `mcp` | `system`, plus optional id). Coexist with **`created_by_user_id`** (user triggers set both).
 - **`trigger_actor_name`** is a presentation-only field: when `trigger_kind` is `user` and `trigger_ref` resolves to a known User, it is that User's `display_name`; otherwise `null`. It is not an identity field — **`trigger_ref`** remains authoritative.
 - Operator-visible run log lives on the Job row as **`log_body`** (newline-separated lines). List/get Job shapes do **not** include full `log_body`; use `GET /jobs/{id}/logs`. Optional **`log_updated_at`** may appear on JobOut.

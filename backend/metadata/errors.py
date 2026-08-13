@@ -38,6 +38,7 @@ __all__ = [
     "SourceNotDisabled",
     "SourceNotFound",
     "SourceSecretRequired",
+    "StructureDiffNotFound",
     "SourceValidationError",
 ]
 
@@ -312,3 +313,12 @@ class SampleFilterInvalid(AppError):
 
     def _default_message(self) -> str:
         return "Sample filter is invalid"
+
+
+class StructureDiffNotFound(AppError):
+    code = "STRUCTURE_DIFF_NOT_FOUND"
+    http_status = 404
+
+    def _default_message(self) -> str:
+        return "Structure Diff not found"
+

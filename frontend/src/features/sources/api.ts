@@ -16,6 +16,7 @@ import type {
   SampleResult,
   Source,
   SourceAccess,
+  StructureDiff,
 } from "@/features/sources/types";
 
 export function listSources() {
@@ -265,6 +266,25 @@ export function runObjectSample(objectId: string, body: SampleRequestBody) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+export function listStructureDiffs(
+  sourceId: string,
+  params?: { limit?: number; offset?: number },
+) {
+  const q = new URLSearchParams();
+  if (params?.limit != null) q.set("limit", String(params.limit));
+  if (params?.offset != null) q.set("offset", String(params.offset));
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return apiClient<{ items: StructureDiff[]; total: number }>(
+    `/sources/${sourceId}/structure-diffs${suffix}`,
+  );
+}
+
+export function getStructureDiff(diffId: string) {
+  return apiClient<{ structure_diff: StructureDiff }>(
+    `/structure-diffs/${diffId}`,
+  );
 }
 
 export function listJobs(params?: { kind?: string; status?: string }) {

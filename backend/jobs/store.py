@@ -28,6 +28,7 @@ class JobRecord:
     kind: str
     status: JobStatus
     input: dict[str, Any]
+    result: dict[str, Any] | None
     created_by: str | None
     celery_task_id: str | None
     error_code: str | None
@@ -82,6 +83,7 @@ class SqlJobStore:
                 kind=record.kind,
                 status=record.status,
                 input=dict(record.input),
+                result=dict(record.result) if record.result is not None else None,
                 created_by=record.created_by,
                 celery_task_id=record.celery_task_id,
                 error_code=record.error_code,
@@ -111,6 +113,7 @@ class SqlJobStore:
                 raise KeyError(record.id)
             row.status = record.status
             row.input = dict(record.input)
+            row.result = dict(record.result) if record.result is not None else None
             row.celery_task_id = record.celery_task_id
             row.error_code = record.error_code
             row.error_summary = record.error_summary
@@ -148,6 +151,7 @@ def _row_to_job(row: object) -> JobRecord:
         kind=row.kind,
         status=row.status,  # type: ignore[arg-type]
         input=dict(row.input),
+        result=dict(row.result) if row.result is not None else None,
         created_by=row.created_by,
         celery_task_id=row.celery_task_id,
         error_code=row.error_code,
@@ -205,6 +209,7 @@ def create_queued_job(
         kind=kind,
         status="queued",
         input=dict(input),
+        result=None,
         created_by=created_by,
         celery_task_id=None,
         error_code=None,
@@ -268,7 +273,11 @@ def mark_failed(
     record.finished_at = utc_now()
     return store.save(record)
 
-def mark_succeeded(job_id: str) -> JobRecord | None:
+def mark_succeeded(
+    job_id: str,
+    *,
+    result: dict[str, Any] | None = None,
+) -> JobRecord | None:
     store = get_job_store()
     record = store.get(job_id)
     if record is None:
@@ -276,6 +285,7 @@ def mark_succeeded(job_id: str) -> JobRecord | None:
     if record.status in TERMINAL:
         return record
     record.status = "succeeded"
+    record.result = dict(result) if result is not None else None
     record.finished_at = utc_now()
     return store.save(record)
 

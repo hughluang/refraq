@@ -27,6 +27,7 @@ from backend.jobs.store import reset_job_store
 from backend.metadata.business_domains.store import reset_business_domain_store
 from backend.metadata.catalog.store import reset_catalog_store
 from backend.metadata.sources.store import reset_source_store
+from backend.metadata.structure_diffs.store import reset_structure_diff_store
 from backend.worker.schedules import reset_schedule_store
 
 reset_settings_cache()
@@ -54,6 +55,7 @@ def _reset_foundation_singletons() -> None:
     reset_job_store()
     reset_source_store()
     reset_catalog_store()
+    reset_structure_diff_store()
     reset_business_domain_store()
     reset_schedule_store()
     reset_db_singletons()
@@ -67,6 +69,7 @@ def _reset_foundation_singletons() -> None:
     reset_job_store()
     reset_source_store()
     reset_catalog_store()
+    reset_structure_diff_store()
     reset_business_domain_store()
     reset_schedule_store()
     reset_db_singletons()

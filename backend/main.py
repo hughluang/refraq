@@ -51,6 +51,7 @@ from backend.metadata.routers.catalog import router as metadata_catalog_router
 from backend.metadata.routers.jobs import router as metadata_jobs_router
 from backend.metadata.routers.query import router as metadata_query_router
 from backend.metadata.routers.sources import router as sources_router
+from backend.metadata.routers.structure_diffs import router as structure_diffs_router
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -151,6 +152,7 @@ app.include_router(sources_router)
 app.include_router(metadata_catalog_router)
 app.include_router(business_domains_router)
 app.include_router(metadata_jobs_router)
+app.include_router(structure_diffs_router)
 app.include_router(metadata_query_router)
 app.include_router(jobs_mechanism_router)
 

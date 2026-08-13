@@ -40,6 +40,7 @@ class CatalogColumnRecord:
     field_kind: str
     created_at: datetime
     updated_at: datetime
+    normalized_type: str | None = None
 
 
 @dataclass

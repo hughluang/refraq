@@ -57,6 +57,7 @@ def _column_out(view: catalog_service.ColumnView) -> CatalogColumnOut:
         field_kind=view.field_kind,
         ordinal=view.ordinal,
         is_present=view.is_present,
+        normalized_type=view.normalized_type,
     )
 
 def _object_out(view: catalog_service.ObjectView) -> CatalogObjectOut:

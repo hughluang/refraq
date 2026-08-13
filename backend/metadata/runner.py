@@ -19,9 +19,11 @@ from backend.metadata.catalog.store import (
     CatalogIndexRecord,
     CatalogObjectRecord,
     CatalogWriteAborted,
+    get_catalog_store,
     new_column_id,
     new_object_id,
 )
+from backend.metadata.catalog.structure_diff import compute_structure_diff
 from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
 from backend.metadata.connectors.base import (
     CollectedStructure,
@@ -32,6 +34,7 @@ from backend.metadata.connectors.registry import get_connector
 from backend.metadata.locators import format_column_locator, format_object_locator
 from backend.metadata.sources.access import decrypt_access_blob
 from backend.metadata.sources.store import get_source_store
+from backend.metadata.structure_diffs.service import persist_structure_diff
 
 
 def run_structure_job(job_id: str) -> dict[str, str]:
@@ -131,6 +134,8 @@ def run_structure_job(job_id: str) -> dict[str, str]:
         collected=collected,
     )
     settings = get_settings()
+    catalog = get_catalog_store()
+    existing = catalog.list_present_for_source(source_id)
     append_job_log(job_id, level="info", message="applying catalog snapshot…")
     try:
         apply_structure_snapshot(
@@ -146,8 +151,24 @@ def run_structure_job(job_id: str) -> dict[str, str]:
     except CatalogWriteAborted as exc:
         return _fail(job_id, error_code=exc.code, error_summary=exc.message)
 
-    append_job_log(job_id, level="info", message="succeeded")
-    final = mark_succeeded(job_id)
+    facts = compute_structure_diff(
+        existing=existing,
+        incoming=records,
+        schema_scope=endpoint.schema_filter,
+    )
+    diff = persist_structure_diff(
+        source_id=source_id,
+        job_id=job_id,
+        diff_class=facts.diff_class,
+        counts=facts.counts,
+        changes=facts.changes_document(),
+    )
+    append_job_log(
+        job_id,
+        level="info",
+        message=f"succeeded class={facts.diff_class}",
+    )
+    final = mark_succeeded(job_id, result=facts.result_envelope(diff.id))
     if final is None:
         return {"status": "missing"}
     return {"status": final.status}

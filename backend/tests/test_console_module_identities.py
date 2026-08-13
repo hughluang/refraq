@@ -86,14 +86,14 @@ EXPECTED_IDENTITIES = {
             "list": "/console/sources",
             "create": None,
             "edit": None,
-            "show": None,
+            "show": "/console/sources/:id/structure-diffs",
         },
         "actions": {
             "list": "sources:read",
             "create": "sources:write",
             "edit": "sources:write",
             "delete": "sources:write",
-            "show": None,
+            "show": "metadata:read",
         },
     },
     "catalog": {

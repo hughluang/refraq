@@ -29,7 +29,7 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 | `get_object` | `metadata:read` | Object + columns by `object_locator_key` (includes semantics when present) |
 | `get_object_ddl` | `metadata:read` | DDL when present |
 | `enqueue_structure_job` | `jobs:run` | Enqueue structure Job for Source locator |
-| `get_job` | `jobs:run` | Job status by job id |
+| `get_job` | `jobs:run` | Job by id (status, input, summary, nullable `result`) |
 
 ## 4. Semantics
 

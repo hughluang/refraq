@@ -93,6 +93,7 @@ Platform durable asynchronous execution (see root `CONTEXT.md`). Metadata struct
 | kind | `structure` \| `semantics_refresh` \| … as slices/domains add |
 | status | `queued` \| `running` \| `succeeded` \| `failed` \| `cancelled` |
 | input | Generic object; domain interprets per `kind`. Slice A database structure: `{ "source_id": "…" }` only |
+| result | Nullable generic JSON; platform does not interpret. Written only on successful terminal. Structure envelope: `{ "schema": "structure.diff.v1", "class", "counts", "structure_diff_id" }`. Other kinds stay `null` (not `{}`) |
 | created_by | User id |
 | timestamps / error summary | Operational visibility |
 
@@ -103,12 +104,12 @@ Rules:
 - Creating a structure Job requires `jobs:run` and, for database Sources, a usable encrypted access blob on the Source row. Enqueue writes `summary` (`structure · {source_key}`) and `trigger_kind`/`trigger_ref` alongside `created_by_user_id`.
 - Workers load reachability from the Source identified in `input`; `input` does not carry endpoint material. Workers append operator-visible lines to Job `log_body`.
 - Jobs are durable records; queue transport is Redis-backed via Celery (see `docs/adr/0004-redis-queue-for-ingestion.md`, `docs/adr/0006-celery-platform-async-runtime.md`).
-- Successful structure Jobs write/refresh **Catalog Objects** on the Source identified in `input`.
-- Console module id `jobs` is the global Job observe surface; structure enqueue and Source-scoped Job lists live on the Sources module.
+- Successful structure Jobs write/refresh **Catalog Objects** on the Source identified in `input`, and produce at most one **Structure Diff** for that Source. **Job result** holds class and counts; full locators live on the Diff. Failed, cancelled, or fail-safe Jobs write neither result nor Diff.
+- Console module id `jobs` is the global Job observe surface; structure enqueue and Source-scoped Job lists live on the Sources module. Structure Diff browse is a Source-scoped Console page (`metadata:read`), not a new nav module.
 
 ### 4.3 Catalog Object And Columns
 
-Collected structure includes object identity **under Source**, object type, name, columns (name, full type string with precision/length when available, nullable, default value, native comment), primary key column list, foreign keys, unique constraints, indexes, object-level native comment, and DDL when available.
+Collected structure includes object identity **under Source**, object type, name, columns (name, full type string with precision/length when available, **Normalized Type**, nullable, default value, native comment), primary key column list, foreign keys, unique constraints, indexes, object-level native comment, and DDL when available.
 Optional provenance may record collection timestamp; provenance is not part of identity.
 Semantics and join edges attach to these objects/columns (see §10).
 
@@ -186,12 +187,14 @@ Initial modules (ids stable):
 
 | Module id | Purpose | list permission |
 | --- | --- | --- |
-| `sources` | Source registration and reachability management | `sources:read` |
+| `sources` | Source registration, reachability, structure Jobs, and **Structure Diff** browse (`/console/sources/:id/structure-diffs`) | `sources:read` |
 | `catalog` | Browse Catalog Objects / columns; object detail at `/console/catalog/:id` (`show` → `metadata:read`) for full semantics, structure facts, Catalog Sample, joins, and DDL | `metadata:read` |
 | `business-domains` | Global Business Domain registry (immutable `code`); create/edit/delete → `metadata:write` | `metadata:read` |
 | `jobs` | Global Job list and observe (logs/detail); enqueue lives on Sources | `jobs:run` (list) |
 
 The catalog object detail page is the Console semantics maintenance surface: it exposes the admitted object/column semantics model (§10, ADR 0015), structure facts (PK/FK/indexes/comments), **Catalog Sample** when the actor has `catalog:sample`, and join graph / path exploration. List remains the Source-scoped browse entry; deep links use the `show` route so readers with only `metadata:read` can open detail without needing `metadata:write`.
+
+**Structure Diff** browse lives under Source routes (`/console/sources/:id/structure-diffs`); viewing requires `metadata:read`. It is not a new sidebar module. Job list/detail may show `result.class` under `jobs:run`.
 
 User PAT management is **not** in this group; see `docs/business-user-tokens.md` (Administration module `tokens`).
 
@@ -208,7 +211,7 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
 - Slice A connectors: **PostgreSQL**, **MSSQL**, **Oracle**.
 - Structure collection persists, keyed by Source:
   - objects: type (`table` \| `view` \| `materialized_view`), schema, name, native comment, DDL when obtainable
-  - columns: name, full type string (precision/length when the engine exposes it), nullable, default value, native comment, ordinal
+  - columns: name, full type string (precision/length when the engine exposes it), **Normalized Type** (closed coarse physical type derived from that string), nullable, default value, native comment, ordinal
   - primary key column names; foreign keys (name, from/to columns); unique constraints; indexes
 - **Current catalog** is authoritative (not a per-Job version history). Natural key:
   `(source_id, schema_name, name, object_type)`. Surrogate ids are preserved across successful refreshes.
@@ -220,7 +223,24 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
   apply to columns, foreign keys, and indexes under present objects.
 - **Fail-safe:** if the fraction of in-scope present objects that would become absent exceeds
   `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD` (default `0.75`), the Job fails with `JOB_FAIL_SAFE` and
-  writes nothing.
+  writes nothing (no catalog mutation, no **Job result**, no **Structure Diff**). Fail-safe answers
+  “was this collect untrustworthy?”; it is not drift detection.
+- **Structure Diff (detect, do not act):** after a successful commit, compare existing vs incoming
+  (same identity and `schema_scope` as merge; do not reverse-engineer the touched-object plan) and
+  persist a **Structure Diff** on the Source, associated with the Job. Write **Job result**
+  `{ "schema": "structure.diff.v1", "class", "counts", "structure_diff_id" }`. Do not change Job
+  status, pause a **Scheduled Task**, or block the next structure Job when `class=breaking`.
+  Do not put outcome into enqueue **summary**.
+  - `class` is derived: `breaking` if any breaking count > 0; else `non_breaking` if any
+    non-breaking count > 0; else `unchanged`. First collect (all adds) is `non_breaking`.
+  - Breaking: removed object, removed column, native `data_type` string change, PK set change,
+    nullable tighten. `varchar(50)→varchar(100)` and `integer→bigint` are type changes.
+    Rename is drop+add (no rename detection). FK/index/unique changes are recorded on the Diff
+    but do not raise `class`.
+  - Full locators live on the Diff; Job result holds counts only.
+- **Normalized Type** values: `string` \| `integer` \| `number` \| `boolean` \| `date` \|
+  `timestamp` \| `binary` \| `json` \| `unknown`. Native `data_type` remains the engine string.
+  `type_changed` compares native `data_type` strings (exact inequality; not Normalized Type).
 - **Semantics preservation:** structure upserts whitelist structural columns only; never overwrite
   semantics fields or non-`foreign_key` join edges.
 - **FK → join derivation:** each collected foreign key upserts a join edge with `origin=foreign_key`

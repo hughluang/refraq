@@ -191,9 +191,21 @@ A single durable asynchronous execution with an observable lifecycle (queued →
 Domains expose enqueue/list facades (for example under Source for structure work); the Job record is not owned by Source.
 API (or a **Scheduled Task**) enqueues; a Celery worker executes; operator-visible status lives on the Postgres job record.
 Lifecycle stamps (`created_at`, `started_at`, `finished_at`, log line times) are **Instants**.
+Successful Jobs may carry a nullable generic **Job result**; failed/cancelled/fail-safe Jobs leave it null.
 Avoid calling it an Ingestion Job. Avoid running long work inside the Management Console API request.
 Avoid treating a Job as a **Scheduled Task**, or reading Celery result/Flower as the product lifecycle.
 Avoid promoting domain foreign keys into universal Job fields.
+Avoid overloading enqueue **summary** with outcome, or writing `{}` to mean “no result”.
+
+### Job result
+
+A nullable JSON outcome written when a Job reaches a successful terminal state. The platform does not interpret the document; each `kind` supplies its envelope (structure: `class`, `counts`, `structure_diff_id`).
+Avoid Celery result backend, **Management Audit Event** `result`, and treating result as whether the Job succeeded.
+
+### Structure Diff
+
+A persisted record of structural changes committed by one successful structure **Job**, belonging to exactly one **Source**. Full locators live here; Job result holds only class, counts, and the Diff id.
+Avoid Catalog Snapshot, Drift entity, Job child table, or using the Diff as the live catalog.
 
 ### Instant
 
@@ -250,6 +262,13 @@ Optional free-text annotation on a column's `column_semantics.semantic_type`.
 A closed vocabulary and derived completeness gaps are deferred until a concrete reader exists (ADR 0016).
 Several columns on one object may each describe a time axis; there is no elected primary axis.
 Avoid re-introducing object-level primary time or status fields.
+Avoid conflating with **Normalized Type**.
+
+### Normalized Type
+
+A closed coarse physical type on a catalog column (`string` | `integer` | `number` | `boolean` | `date` | `timestamp` | `binary` | `json` | `unknown`), derived from native `data_type`.
+`type_changed` on a **Structure Diff** compares native `data_type` strings, not Normalized Type.
+Avoid replacing native `data_type`; avoid **Semantic Type**.
 
 ### Enum Catalog
 

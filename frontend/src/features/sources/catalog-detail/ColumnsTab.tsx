@@ -302,7 +302,15 @@ export function ColumnsTab({
                       </Text>
                     </Stack>
                   </Table.Td>
-                  <Table.Td>{col.data_type}</Table.Td>
+                  <Table.Td>
+                    <Text size="sm">{col.data_type}</Text>
+                    {col.normalized_type ? (
+                      <Text size="xs" c="dimmed">
+                        {t("catalog.fields.normalizedType")}:{" "}
+                        {col.normalized_type}
+                      </Text>
+                    ) : null}
+                  </Table.Td>
                   <Table.Td>
                     {col.nullable
                       ? t("catalog.fields.yes")

@@ -15,6 +15,7 @@ import {
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { CanAccess, useCan, useNotification, useTranslate } from "@refinedev/core";
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { EmptyState } from "@/components/feedback/EmptyState";
@@ -87,6 +88,10 @@ export function SourceList() {
     resource: ModuleId.jobs,
     action: ModuleAction.list,
   });
+  const { data: canReadDiffs } = useCan({
+    resource: ModuleId.sources,
+    action: ModuleAction.show,
+  });
 
   const [items, setItems] = useState<Source[]>([]);
   const [loading, setLoading] = useState(true);
@@ -104,7 +109,9 @@ export function SourceList() {
   const [enqueueBusyId, setEnqueueBusyId] = useState<string | null>(null);
   const [jobsSource, setJobsSource] = useState<Source | null>(null);
 
-  const showActions = Boolean(canWrite?.can || canRunJobs?.can);
+  const showActions = Boolean(
+    canWrite?.can || canRunJobs?.can || canReadDiffs?.can,
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -354,6 +361,19 @@ export function SourceList() {
                 {showActions ? (
                   <Table.Td>
                     <Group gap="xs" wrap="nowrap">
+                      <CanAccess
+                        resource={ModuleId.sources}
+                        action={ModuleAction.show}
+                      >
+                        <Button
+                          component={Link}
+                          href={`/console/sources/${source.id}/structure-diffs`}
+                          size="compact-xs"
+                          variant="default"
+                        >
+                          {t("structureDiffs.open")}
+                        </Button>
+                      </CanAccess>
                       <CanAccess
                         resource={ModuleId.jobs}
                         action={ModuleAction.list}

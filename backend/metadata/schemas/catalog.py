@@ -83,6 +83,7 @@ class CatalogColumnOut(BaseModel):
     field_kind: str = "column"
     ordinal: int = 0
     is_present: bool = True
+    normalized_type: str | None = None
 
 
 class CatalogForeignKeyOut(BaseModel):

@@ -641,6 +641,7 @@ def _sql_persist_object(session: Any, obj: CatalogObjectRecord, *, now: datetime
                     name=col.name,
                     ordinal=col.ordinal,
                     data_type=col.data_type,
+                    normalized_type=col.normalized_type,
                     nullable=col.nullable,
                     default_value=col.default_value,
                     comment=col.comment,
@@ -660,6 +661,7 @@ def _sql_persist_object(session: Any, obj: CatalogObjectRecord, *, now: datetime
             prev.name = col.name
             prev.ordinal = col.ordinal
             prev.data_type = col.data_type
+            prev.normalized_type = col.normalized_type
             prev.nullable = col.nullable
             prev.default_value = col.default_value
             prev.comment = col.comment
@@ -767,6 +769,7 @@ def _row_to_column(row: object) -> CatalogColumnRecord:
         field_kind=row.field_kind,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        normalized_type=row.normalized_type,
     )
 
 def _row_to_join(row: object) -> CatalogJoinRecord:

@@ -36,6 +36,7 @@ describe("toRefineResources", () => {
       {
         name: "sources",
         list: "/console/sources",
+        show: "/console/sources/:id/structure-diffs",
         meta: { label: "sources.title" },
       },
       {
@@ -84,6 +85,17 @@ describe("evaluateCan", () => {
         MODULE_IDENTITY_FIXTURE,
         ["metadata:read"],
         "catalog",
+        "show",
+      ),
+    ).toEqual({ can: true });
+  });
+
+  it("grants sources show with metadata:read", () => {
+    expect(
+      evaluateCan(
+        MODULE_IDENTITY_FIXTURE,
+        ["metadata:read"],
+        "sources",
         "show",
       ),
     ).toEqual({ can: true });
@@ -139,6 +151,18 @@ describe("matchPath", () => {
       resource: "jobs",
       action: "list",
     });
+    expect(
+      matchPath("/console/sources/src_1/structure-diffs", MODULE_IDENTITY_FIXTURE),
+    ).toEqual({
+      resource: "sources",
+      action: "show",
+    });
+    expect(
+      matchPath(
+        "/console/sources/src_1/structure-diffs/sdiff_1",
+        MODULE_IDENTITY_FIXTURE,
+      ),
+    ).toBeNull();
   });
 
   it("returns null for unregistered paths", () => {

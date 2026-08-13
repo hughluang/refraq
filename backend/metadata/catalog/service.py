@@ -62,6 +62,7 @@ class ColumnView:
     field_kind: str
     ordinal: int
     is_present: bool
+    normalized_type: str | None = None
 
 @dataclass(frozen=True)
 class ForeignKeyView:
@@ -193,6 +194,7 @@ def column_view(record: CatalogColumnRecord) -> ColumnView:
         field_kind=record.field_kind,
         ordinal=record.ordinal,
         is_present=record.is_present,
+        normalized_type=record.normalized_type,
     )
 
 def object_view(

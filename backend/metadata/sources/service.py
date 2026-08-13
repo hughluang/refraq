@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 
 from backend.metadata.catalog.store import get_catalog_store
+from backend.metadata.structure_diffs.store import get_structure_diff_store
 from backend.metadata.errors import (
     SourceAccessRequired,
     SourceEngineUnsupported,
@@ -159,6 +160,7 @@ def delete_source(source_id: str) -> SourceRecord:
         raise SourceNotDisabled()
 
     get_catalog_store().delete_objects_for_source(source_id)
+    get_structure_diff_store().delete_for_source(source_id)
     if not store.delete_source(source_id):
         raise SourceNotFound()
     return existing
