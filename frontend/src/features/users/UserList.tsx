@@ -26,11 +26,13 @@ import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { UserRoleBadge } from "@/features/users/UserRoleBadge";
 import type { UserRow, UserStatus } from "@/features/users/types";
+import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
 import type { CurrentUser } from "@/providers/session-store";
 
 export function UserList() {
   const t = useTranslate();
+  const formatInstant = useFormatInstant();
   const { data: identity } = useGetIdentity<CurrentUser>();
   const { data: canWrite } = useCan({
     resource: ModuleId.users,
@@ -164,11 +166,7 @@ export function UserList() {
                       </Badge>
                     </Group>
                   </Table.Td>
-                  <Table.Td>
-                    {row.last_login_at
-                      ? new Date(row.last_login_at).toLocaleString()
-                      : "—"}
-                  </Table.Td>
+                  <Table.Td>{formatInstant(row.last_login_at)}</Table.Td>
                 </Table.Tr>
               );
             })}

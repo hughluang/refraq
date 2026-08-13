@@ -12,8 +12,9 @@ import { cancelJob, listJobs } from "@/features/sources/api";
 import { formatJobTrigger } from "@/features/sources/formatJobTrigger";
 import { JobDetailModal } from "@/features/sources/JobDetailModal";
 import type { Job } from "@/features/sources/types";
+import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
-import { formatInstant, formatJobDuration } from "@/lib/datetime";
+import { formatJobDuration } from "@/lib/datetime";
 
 const STATUS_COLOR: Record<string, string> = {
   queued: "blue",
@@ -26,6 +27,7 @@ const STATUS_COLOR: Record<string, string> = {
 export function JobList() {
   const t = useTranslate();
   const { open } = useNotification();
+  const formatInstant = useFormatInstant();
 
   const [items, setItems] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);

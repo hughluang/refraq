@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from fastapi import APIRouter, Depends, Request
 
 from backend.admin.deps import get_current_user
 from backend.admin.errors import (
     AccountInvalidDisplayName,
+    AccountInvalidDisplayTimezone,
     AccountInvalidLocale,
     AccountPasswordInvalid,
     AccountPasswordNotLocal,
@@ -30,6 +33,13 @@ router = APIRouter(prefix="/account", tags=["account"])
 
 
 def _normalize_email(value: str | None) -> str | None:
+    if value is None:
+        return None
+    trimmed = value.strip()
+    return trimmed or None
+
+
+def _normalize_display_timezone(value: str | None) -> str | None:
     if value is None:
         return None
     trimmed = value.strip()
@@ -62,12 +72,24 @@ def update_profile(
             raise AccountInvalidLocale()
         locale = payload.locale
 
+    set_display_timezone = "display_timezone" in fields_set
+    display_timezone: str | None = None
+    if set_display_timezone:
+        display_timezone = _normalize_display_timezone(payload.display_timezone)
+        if display_timezone is not None:
+            try:
+                ZoneInfo(display_timezone)
+            except (ZoneInfoNotFoundError, ValueError):
+                raise AccountInvalidDisplayTimezone()
+
     updated = users.update_profile(
         user.id,
         display_name=display_name,
         email=email,
         set_email=set_email,
         locale=locale,
+        display_timezone=display_timezone,
+        set_display_timezone=set_display_timezone,
     )
     assert updated is not None
     return UpdateProfileResponse(user=build_current_user(updated, roles))

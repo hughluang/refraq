@@ -20,6 +20,7 @@ class CurrentUser(BaseModel):
     display_name: str
     email: str | None = None
     locale: str = "en-US"
+    display_timezone: str | None = None
     role_id: str | None
     role_key: str | None
     role_name: str | None

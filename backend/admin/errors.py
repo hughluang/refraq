@@ -196,6 +196,14 @@ class AccountInvalidLocale(AuthError):
         return "Unsupported locale"
 
 
+class AccountInvalidDisplayTimezone(AuthError):
+    code = "ACCOUNT_INVALID_DISPLAY_TIMEZONE"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Invalid Display Timezone (IANA zone required)"
+
+
 class AccountInvalidDisplayName(AuthError):
     code = "ACCOUNT_INVALID_DISPLAY_NAME"
     http_status = 400

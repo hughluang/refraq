@@ -32,6 +32,7 @@ These contracts are intentionally small:
   "display_name": "System Admin",
   "email": null,
   "locale": "en-US",
+  "display_timezone": null,
   "role_id": "role_super_admin",
   "role_key": "super_admin",
   "role_name": "Super Admin",
@@ -49,6 +50,7 @@ These contracts are intentionally small:
 
 `role_id`, `role_key`, and `role_name` are `null` when the User has no Role. Console login never returns that state because login requires `console:access`.
 `email` may be `null`. `locale` is a supported Console locale code (`zh-CN`, `en-US`).
+`display_timezone` is an optional IANA zone for **Management Console** Instant formatting (`null` = follow browser); it does not change Instant JSON on HTTP or MCP (outbound remains UTC `Z`).
 
 ### Error Response
 

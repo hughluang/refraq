@@ -17,7 +17,7 @@ import {
   useTranslate,
 } from "@refinedev/core";
 import { useChangeLanguage } from "next-i18next/client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
 import { PageChrome } from "@/components/layout/PageChrome";
@@ -26,6 +26,10 @@ import { PasswordSection } from "@/features/account/PasswordSection";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { TokenList } from "@/features/tokens/TokenList";
 import { ApiError } from "@/lib/api";
+import {
+  FOLLOW_BROWSER_TIMEZONE,
+  listIanaTimeZones,
+} from "@/providers/display-timezone-catalog";
 import {
   isLocale,
   LOCALE_COOKIE_NAME,
@@ -41,6 +45,7 @@ type ProfileForm = {
   display_name: string;
   email: string;
   locale: Locale;
+  display_timezone: string;
 };
 
 export function AccountPanel() {
@@ -51,11 +56,15 @@ export function AccountPanel() {
   const changeLanguage = useChangeLanguage(LOCALE_COOKIE_NAME);
   const [savingProfile, setSavingProfile] = useState(false);
 
+  const catalogZones = useMemo(() => listIanaTimeZones(), []);
+  const catalogZoneSet = useMemo(() => new Set(catalogZones), [catalogZones]);
+
   const profileForm = useForm<ProfileForm>({
     initialValues: {
       display_name: "",
       email: "",
       locale: "en-US",
+      display_timezone: FOLLOW_BROWSER_TIMEZONE,
     },
     validate: {
       display_name: (value) =>
@@ -69,6 +78,8 @@ export function AccountPanel() {
       display_name: identity.display_name,
       email: identity.email ?? "",
       locale: isLocale(identity.locale) ? identity.locale : "en-US",
+      // null → follow browser; non-null (even outside ICU catalog) keep as-is.
+      display_timezone: identity.display_timezone ?? FOLLOW_BROWSER_TIMEZONE,
     });
     // Only sync when identity id / fields change from server.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- form identity is stable enough
@@ -77,7 +88,24 @@ export function AccountPanel() {
     identity?.display_name,
     identity?.email,
     identity?.locale,
+    identity?.display_timezone,
   ]);
+
+  const timezoneSelectData = useMemo(() => {
+    const stored = identity?.display_timezone;
+    const extra =
+      stored && !catalogZoneSet.has(stored)
+        ? [{ value: stored, label: stored }]
+        : [];
+    return [
+      {
+        value: FOLLOW_BROWSER_TIMEZONE,
+        label: t("account.fields.displayTimezone.browser"),
+      },
+      ...extra,
+      ...catalogZones.map((zone) => ({ value: zone, label: zone })),
+    ];
+  }, [t, catalogZones, catalogZoneSet, identity?.display_timezone]);
 
   async function onSaveProfile(values: ProfileForm) {
     setSavingProfile(true);
@@ -86,6 +114,10 @@ export function AccountPanel() {
         display_name: values.display_name.trim(),
         email: values.email.trim() === "" ? null : values.email.trim(),
         locale: values.locale,
+        display_timezone:
+          values.display_timezone === FOLLOW_BROWSER_TIMEZONE
+            ? null
+            : values.display_timezone,
       });
       setUser(user);
       if (isLocale(user.locale)) {
@@ -152,6 +184,14 @@ export function AccountPanel() {
               data={LOCALE_SELECT_DATA}
               allowDeselect={false}
               {...profileForm.getInputProps("locale")}
+            />
+            <Select
+              label={t("account.fields.displayTimezone")}
+              description={t("account.fields.displayTimezone.hint")}
+              data={timezoneSelectData}
+              searchable
+              allowDeselect={false}
+              {...profileForm.getInputProps("display_timezone")}
             />
             <Group justify="flex-end">
               <Button type="submit" loading={savingProfile}>

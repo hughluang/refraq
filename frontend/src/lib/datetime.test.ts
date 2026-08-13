@@ -17,9 +17,41 @@ describe("formatInstant", () => {
     expect(formatInstant("not-a-date")).toBe("—");
   });
 
-  it("formats a valid ISO instant via toLocaleString", () => {
+  it("formats a valid ISO instant via browser default", () => {
     const value = "2026-08-11T14:20:38.676492Z";
     expect(formatInstant(value)).toBe(new Date(value).toLocaleString());
+  });
+
+  it("formats with an explicit IANA timeZone", () => {
+    const value = "2026-08-11T14:20:38.000Z";
+    const formatted = formatInstant(value, {
+      timeZone: "UTC",
+      locale: "en-US",
+    });
+    expect(formatted).toBe(
+      new Date(value).toLocaleString("en-US", { timeZone: "UTC" }),
+    );
+  });
+
+  it("formats Asia/Shanghai differently from UTC for the same Instant", () => {
+    const value = "2026-08-11T14:20:38.000Z";
+    const utc = formatInstant(value, { timeZone: "UTC", locale: "en-US" });
+    const shanghai = formatInstant(value, {
+      timeZone: "Asia/Shanghai",
+      locale: "en-US",
+    });
+    expect(shanghai).not.toBe(utc);
+  });
+
+  it("returns em dash for invalid timeZone (not browser fallback)", () => {
+    const value = "2026-08-11T14:20:38.000Z";
+    const browser = formatInstant(value, { locale: "en-US" });
+    const invalid = formatInstant(value, {
+      timeZone: "Not/AZone",
+      locale: "en-US",
+    });
+    expect(invalid).toBe("—");
+    expect(invalid).not.toBe(browser);
   });
 });
 

@@ -82,11 +82,12 @@ def _login(client: TestClient) -> None:
     )
 
 
-def test_me_includes_email_and_locale(client: TestClient) -> None:
+def test_me_includes_email_locale_and_display_timezone(client: TestClient) -> None:
     _login(client)
     body = client.get("/auth/me").json()["user"]
     assert body["email"] is None
     assert body["locale"] == "en-US"
+    assert body["display_timezone"] is None
 
 
 def test_update_profile(client: TestClient, store_bundle) -> None:
@@ -98,6 +99,7 @@ def test_update_profile(client: TestClient, store_bundle) -> None:
             "display_name": "Root Renamed",
             "email": "root@example.com",
             "locale": "zh-CN",
+            "display_timezone": "Asia/Shanghai",
         },
     )
     assert response.status_code == 200
@@ -105,9 +107,71 @@ def test_update_profile(client: TestClient, store_bundle) -> None:
     assert user["display_name"] == "Root Renamed"
     assert user["email"] == "root@example.com"
     assert user["locale"] == "zh-CN"
+    assert user["display_timezone"] == "Asia/Shanghai"
     stored = user_store.get_by_account("root")
     assert stored is not None
     assert stored.locale == "zh-CN"
+    assert stored.display_timezone == "Asia/Shanghai"
+
+
+def test_update_profile_clear_display_timezone(client: TestClient) -> None:
+    _login(client)
+    assert (
+        client.patch(
+            "/account/profile", json={"display_timezone": "UTC"}
+        ).status_code
+        == 200
+    )
+    cleared = client.patch("/account/profile", json={"display_timezone": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["user"]["display_timezone"] is None
+
+
+def test_update_profile_invalid_display_timezone(client: TestClient) -> None:
+    _login(client)
+    response = client.patch(
+        "/account/profile", json={"display_timezone": "Not/AZone"}
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "ACCOUNT_INVALID_DISPLAY_TIMEZONE"
+
+
+def test_update_profile_display_timezone_path_value_error(
+    client: TestClient,
+) -> None:
+    """ZoneInfo raises ValueError for non-normalized relative paths."""
+    _login(client)
+    response = client.patch(
+        "/account/profile", json={"display_timezone": "../UTC"}
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "ACCOUNT_INVALID_DISPLAY_TIMEZONE"
+
+
+def test_display_timezone_does_not_change_instant_wire(
+    client: TestClient, store_bundle
+) -> None:
+    """HTTP Instant fields stay UTC Z after Display TZ is set (Console-only formatting)."""
+    from backend.core.time import format_instant, utc_now
+
+    user_store, _, _, _ = store_bundle
+    user = user_store.get_by_account("root")
+    assert user is not None
+    when = utc_now().replace(microsecond=0)
+    user_store.update_last_login(user.id, when)
+    _login(client)
+    assert (
+        client.patch(
+            "/account/profile", json={"display_timezone": "Asia/Shanghai"}
+        ).status_code
+        == 200
+    )
+    listed = client.get("/users")
+    assert listed.status_code == 200
+    row = next(item for item in listed.json()["items"] if item["account"] == "root")
+    assert row["display_timezone"] == "Asia/Shanghai"
+    assert row["last_login_at"] == format_instant(when)
+    assert row["last_login_at"].endswith("Z")
 
 
 def test_update_profile_clear_email(client: TestClient) -> None:

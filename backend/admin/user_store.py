@@ -34,6 +34,7 @@ class UserRecord:
     identity_source: IdentitySource = "local"
     email: str | None = None
     locale: str = DEFAULT_LOCALE
+    display_timezone: str | None = None
     last_login_at: datetime | None = None
     created_at: datetime = field(default_factory=utc_now)
 
@@ -69,6 +70,8 @@ class UserStore(Protocol):
         email: str | None = None,
         set_email: bool = False,
         locale: str | None = None,
+        display_timezone: str | None = None,
+        set_display_timezone: bool = False,
     ) -> UserRecord | None: ...
 
     def update_password_hash(self, user_id: str, password_hash: str) -> UserRecord | None: ...
@@ -159,6 +162,8 @@ class MemoryUserStore:
         email: str | None = None,
         set_email: bool = False,
         locale: str | None = None,
+        display_timezone: str | None = None,
+        set_display_timezone: bool = False,
     ) -> UserRecord | None:
         with self._lock:
             record = self._by_id.get(user_id)
@@ -170,6 +175,8 @@ class MemoryUserStore:
                 record.email = email
             if locale is not None:
                 record.locale = locale
+            if set_display_timezone:
+                record.display_timezone = display_timezone
             return record
 
     def update_password_hash(self, user_id: str, password_hash: str) -> UserRecord | None:
@@ -274,6 +281,8 @@ class SqlUserStore:
         email: str | None = None,
         set_email: bool = False,
         locale: str | None = None,
+        display_timezone: str | None = None,
+        set_display_timezone: bool = False,
     ) -> UserRecord | None:
 
         with session_scope() as session:
@@ -286,6 +295,8 @@ class SqlUserStore:
                 row.email = email
             if locale is not None:
                 row.locale = locale
+            if set_display_timezone:
+                row.display_timezone = display_timezone
             session.flush()
             return _row_to_user(row)
 
@@ -310,6 +321,7 @@ def _row_to_user(row: object) -> UserRecord:
         identity_source=row.identity_source,  # type: ignore[arg-type]
         email=row.email,
         locale=row.locale or DEFAULT_LOCALE,
+        display_timezone=row.display_timezone,
         last_login_at=row.last_login_at,
         created_at=row.created_at,
     )

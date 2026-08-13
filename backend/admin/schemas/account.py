@@ -11,6 +11,7 @@ class UpdateProfileRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=64)
     email: str | None = Field(default=None, max_length=256)
     locale: str | None = Field(default=None, max_length=16)
+    display_timezone: str | None = Field(default=None, max_length=64)
 
 
 class UpdateProfileResponse(BaseModel):

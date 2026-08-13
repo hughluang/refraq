@@ -16,8 +16,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { cancelJob, getJob, getJobLogs } from "@/features/sources/api";
 import { formatJobTrigger } from "@/features/sources/formatJobTrigger";
 import type { Job } from "@/features/sources/types";
+import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
-import { formatInstant, formatJobDuration } from "@/lib/datetime";
+import { formatJobDuration } from "@/lib/datetime";
 
 const STATUS_COLOR: Record<string, string> = {
   queued: "blue",
@@ -38,6 +39,7 @@ type Props = {
 };
 
 export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
+  const formatInstant = useFormatInstant();
   const t = useTranslate();
   const { open } = useNotification();
   const [job, setJob] = useState<Job | null>(null);

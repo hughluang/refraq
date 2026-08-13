@@ -5,6 +5,7 @@ export type UpdateProfilePayload = {
   display_name?: string;
   email?: string | null;
   locale?: string;
+  display_timezone?: string | null;
 };
 
 export type ChangePasswordPayload = {

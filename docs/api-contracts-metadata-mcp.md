@@ -16,6 +16,7 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 - Mutations write management audit events
 - No tool returns Source plaintext secrets or PAT secrets
 - Locator formats: `src/{engine|kind}/{source_key}`, `obj/…/{schema}/{object_type}/{name}`, `col/…/column/{column_name}`
+- **Instants** in tool JSON match HTTP: outbound UTC `Z` via `format_instant`. Actor **Display Timezone** is not applied to MCP Instant strings (Console-only formatting). Agents may read `display_timezone` from Current User / Account profile and format locally if needed.
 
 ## 3. Structure (read)
 

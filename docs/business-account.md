@@ -2,7 +2,7 @@
 
 ## 1. Scope
 
-This document defines **Account Center** rules: the current User’s self-service Console surface for profile, local password change, UI locale, and **User PAT** management.
+This document defines **Account Center** rules: the current User’s self-service Console surface for profile, local password change, UI locale, **Display Timezone**, and **User PAT** management.
 
 Related:
 
@@ -17,11 +17,11 @@ Platform system parameters remain under Console Module `settings` (`docs/api-con
 
 - Account Center is a Console page at `/console/account`, entered from the header username menu.
 - It is **not** a Console Module and does **not** appear in the sidebar navigation tree.
-- Any authenticated User with Console access may open Account Center; no extra permission is required for the shell, profile, password, or locale self-service.
+- Any authenticated User with Console access may open Account Center; no extra permission is required for the shell, profile, password, locale, or Display Timezone self-service.
 - **User PAT** create/list/deactivate/restore/soft-delete remains gated by `tokens:read` / `tokens:write` and is embedded as a section inside Account Center (not a sidebar nav item; module `routes.list` is null).
 - Self-service mutates **only the caller’s** User; admin `/users` APIs continue to manage other Users via `users:*`.
 
-## 3. Profile And Locale
+## 3. Profile, Locale, And Display Timezone
 
 | Field | Rules |
 | --- | --- |
@@ -30,6 +30,7 @@ Platform system parameters remain under Console Module `settings` (`docs/api-con
 | display_name | Self-service editable |
 | email | Optional contact field: nullable, not unique, not verified, not used for login or mail |
 | locale | Persisted on the User; must be a supported Console locale code (`zh-CN`, `en-US`); applied on login / identity restore |
+| display_timezone | Optional IANA zone on the User for **Management Console** Instant formatting; `null` = follow browser; must be a `zoneinfo`-valid IANA id when set; does **not** change HTTP/MCP Instant wire (`Z`) |
 
 ## 4. Password Change
 

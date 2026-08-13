@@ -12,7 +12,7 @@ Domain terms: root `CONTEXT.md`, [`docs/glossary.md`](glossary.md).
 | **Schedule Timezone** | IANA zone on a **Scheduled Task** that interprets **cron** wall-clock fields | Separate string column; **not** stored inside an Instant; **ignored** for `interval_seconds` |
 
 Celery `timezone` / `enable_utc` is worker message time, **not** business Schedule Timezone.
-Console / user display preference is **out of scope** for this contract; APIs exchange Instants only.
+**Display Timezone** (User preference) formats Instants in the Management Console only; HTTP / MCP Instant JSON stays UTC `Z` (see §8).
 
 ## 2. Process rules
 
@@ -73,17 +73,21 @@ This matches Dagster’s **daily / weekly / monthly** DST handling. Dagster’s 
 - Treating Celery `timezone` as Schedule Timezone
 - Mixing Session Redis TTL / `time.time()` epoch expiry into the Instant column contract
 
-## 8. Deferred / do not reverse direction
+## 8. Display Timezone (Console edge only)
+
+**Display Timezone** is an optional IANA preference on a **User** (`users.display_timezone`). The **Management Console** uses it to format Instants for that operator (`null` = follow the browser). HTTP, MCP, and Job log Instant strings continue to use `format_instant` → UTC **`Z`**. Do not bind actor Display TZ into Instant serializers or MCP dumps.
+
+## 9. Deferred / do not reverse direction
 
 Product or ecosystem items that may land later must **not** rewrite Instant storage or the daily-for-all cron DST rule:
 
-- Console / user **Display TZ** (format Instant at the edge; APIs still exchange Instants only)
 - RFC 9557 / IXDTF `[Zone]` suffixes on the wire (accept/ignore or reject at the boundary; do not store zone inside Instant)
 - `whenever.Instant` (or similar) as the in-process Instant type (stdlib aware UTC remains the kernel)
 - Epoch-ms / unix-seconds as the Instant wire format for HTTP/MCP
 - Boundary helpers that treat naive datetime as UTC “for compatibility”
+- Encoding a viewer’s Display Timezone into Instant JSON (offset or `[Zone]`)
 
-## 9. Implementation entry
+## 10. Implementation entry
 
 Unique code entry: `backend.core.time` (Clock, `utc_now`, Instant field, `UtcDateTime`, format/parse helpers).
 See [`docs/modules.md`](modules.md) and [`docs/backend-layout.md`](backend-layout.md).

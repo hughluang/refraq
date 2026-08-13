@@ -1,5 +1,14 @@
-/** Human-friendly instant for list/detail UI (browser locale). */
-export function formatInstant(value: string | null | undefined): string {
+export type FormatInstantOptions = {
+  /** IANA zone; null/undefined = browser default. */
+  timeZone?: string | null;
+  locale?: string;
+};
+
+/** Human-friendly instant for list/detail UI. */
+export function formatInstant(
+  value: string | null | undefined,
+  options?: FormatInstantOptions,
+): string {
   if (!value) {
     return "—";
   }
@@ -7,7 +16,13 @@ export function formatInstant(value: string | null | undefined): string {
   if (Number.isNaN(date.getTime())) {
     return "—";
   }
-  return date.toLocaleString();
+  const timeZone = options?.timeZone || undefined;
+  const locale = options?.locale;
+  try {
+    return date.toLocaleString(locale, timeZone ? { timeZone } : undefined);
+  } catch {
+    return "—";
+  }
 }
 
 type JobDurationFields = {

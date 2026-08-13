@@ -34,10 +34,10 @@ import {
 import {
   datetimeLocalToIso,
   defaultExpiresLocalValue,
-  formatTokenInstant,
   tokenStatus,
 } from "@/features/tokens/status";
 import type { TokenMetadata, TokenStatus } from "@/features/tokens/types";
+import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
 
 const STATUS_COLOR: Record<TokenStatus, string> = {
@@ -55,6 +55,7 @@ type CreateFormValues = {
 export function TokenList() {
   const t = useTranslate();
   const { open } = useNotification();
+  const formatInstant = useFormatInstant();
   const { tableQuery, currentPage, pageCount, setCurrentPage } =
     useTable<TokenMetadata>({
       resource: ModuleId.tokens,
@@ -290,9 +291,9 @@ export function TokenList() {
                       {t(`tokens.status.${status}`)}
                     </Badge>
                   </Table.Td>
-                  <Table.Td>{formatTokenInstant(row.expires_at)}</Table.Td>
-                  <Table.Td>{formatTokenInstant(row.created_at)}</Table.Td>
-                  <Table.Td>{formatTokenInstant(row.last_used_at)}</Table.Td>
+                  <Table.Td>{formatInstant(row.expires_at)}</Table.Td>
+                  <Table.Td>{formatInstant(row.created_at)}</Table.Td>
+                  <Table.Td>{formatInstant(row.last_used_at)}</Table.Td>
                   <Table.Td>
                     <CanAccess
                       resource={ModuleId.tokens}

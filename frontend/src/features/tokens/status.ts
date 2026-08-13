@@ -13,13 +13,6 @@ export function tokenStatus(
   return "active";
 }
 
-export function formatTokenInstant(value: string | null): string {
-  if (!value) {
-    return "—";
-  }
-  return new Date(value).toLocaleString();
-}
-
 /** Value for `<input type="datetime-local">` in the browser's local zone. */
 export function toDatetimeLocalValue(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");

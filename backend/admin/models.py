@@ -33,6 +33,7 @@ class UserRow(Base):
     display_name: Mapped[str] = mapped_column(String(128), nullable=False)
     email: Mapped[str | None] = mapped_column(String(256), nullable=True)
     locale: Mapped[str] = mapped_column(String(16), nullable=False, default="en-US")
+    display_timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     role_id: Mapped[str | None] = mapped_column(
         String(64),

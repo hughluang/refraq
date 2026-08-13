@@ -25,6 +25,7 @@ The former `/admins` resource is retired; clients must use `/users`.
   "display_name": "System Admin",
   "email": null,
   "locale": "en-US",
+  "display_timezone": null,
   "role_id": "role_super_admin",
   "role_key": "super_admin",
   "role_name": "Super Admin",
@@ -38,6 +39,7 @@ The former `/admins` resource is retired; clients must use `/users`.
 `last_login_at` may be `null` if the User has never signed in.
 `email` may be `null` (optional contact; not unique, not verified).
 `locale` is a supported Console locale code; new Users default to the platform default locale unless provided.
+`display_timezone` is optional IANA for Console Instant formatting (`null` = follow browser); Instant fields remain UTC `Z`.
 
 ### Error Response
 

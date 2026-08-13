@@ -127,7 +127,7 @@ Avoid calling it a Client token, a Session id reused as Bearer, or a machine pri
 
 ### Account Center
 
-The current User’s self-service Console surface for profile, local password change, UI locale, and User PAT management.
+The current User’s self-service Console surface for profile, local password change, UI locale, **Display Timezone**, and User PAT management.
 Avoid conflating with platform Settings / system parameters, or treating User PAT as a sidebar Administration module.
 
 ### Backing Service
@@ -199,12 +199,17 @@ Avoid promoting domain foreign keys into universal Job fields.
 
 An absolute moment on the timeline, represented as aware UTC in process, `timestamptz` in Postgres, and RFC 3339 on the wire (outbound `Z`).
 Contract: [`docs/conventions-time.md`](conventions-time.md).
-Avoid wall-clock local time, treating cron hour/minute as a stored Instant, or Console display-preference timezone.
+Avoid wall-clock local time, treating cron hour/minute as a stored Instant, or encoding a viewer’s **Display Timezone** into the Instant wire form.
+
+### Display Timezone
+
+An optional IANA zone on a **User** that the **Management Console** uses to format **Instants** for that operator. `null` means follow the browser’s system timezone. Not part of Instant storage or HTTP/MCP Instant JSON (those stay UTC `Z`).
+Avoid Schedule Timezone, worker process timezone, or treating the preference as a second Instant type.
 
 ### Schedule Timezone
 
 An IANA zone on a **Scheduled Task** that interprets **cron** wall-clock fields; ignored for interval schedules; not part of an **Instant** and not the Celery process timezone.
-Avoid storing the zone inside a timestamptz Instant, conflating with Console display timezone, or assuming interval schedules shift when the zone changes.
+Avoid storing the zone inside a timestamptz Instant, conflating with **Display Timezone**, or assuming interval schedules shift when the zone changes.
 
 ### Scheduled Task
 

@@ -6,6 +6,7 @@ export type UserRow = {
   display_name: string;
   email: string | null;
   locale: string;
+  display_timezone: string | null;
   role_id: string | null;
   role_key: string | null;
   role_name: string | null;
