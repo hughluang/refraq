@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -34,7 +35,7 @@ class UserRecord:
     email: str | None = None
     locale: str = DEFAULT_LOCALE
     last_login_at: datetime | None = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=utc_now)
 
 class UserStore(Protocol):
     def count(self) -> int: ...
@@ -224,7 +225,7 @@ class SqlUserStore:
     ) -> UserRecord:
 
         user_id = f"user_{uuid.uuid4().hex[:12]}"
-        created_at = datetime.utcnow()
+        created_at = utc_now()
         try:
             with session_scope() as session:
                 existing = session.scalar(select(UserRow).where(UserRow.account == account))

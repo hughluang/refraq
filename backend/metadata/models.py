@@ -6,7 +6,6 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
-    DateTime,
     ForeignKey,
     Integer,
     String,
@@ -16,6 +15,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.core.db import Base
+from backend.core.time import UtcDateTime
 
 
 class BusinessDomainRow(Base):
@@ -25,8 +25,8 @@ class BusinessDomainRow(Base):
     code: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
 
 class SourceRow(Base):
@@ -43,9 +43,9 @@ class SourceRow(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     engine: Mapped[str | None] = mapped_column(String(64), nullable=True)
     access_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
-    access_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    access_updated_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
     catalog_objects: Mapped[list[CatalogObjectRow]] = relationship(
         back_populates="source",
@@ -98,11 +98,11 @@ class CatalogObjectRow(Base):
     business_semantics_ready: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
-    semantics_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    semantics_updated_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     last_structure_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    collected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    collected_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
     source: Mapped[SourceRow] = relationship(back_populates="catalog_objects")
     business_domain: Mapped[BusinessDomainRow | None] = relationship()
@@ -153,8 +153,8 @@ class CatalogColumnRow(Base):
     enum_catalog_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     semantic_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
     field_kind: Mapped[str] = mapped_column(String(64), nullable=False, default="column")
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
     object: Mapped[CatalogObjectRow] = relationship(back_populates="columns")
 
@@ -175,8 +175,8 @@ class CatalogForeignKeyRow(Base):
     ref_table: Mapped[str] = mapped_column(String(256), nullable=False)
     ref_columns_json: Mapped[str] = mapped_column(Text, nullable=False)
     is_present: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
     object: Mapped[CatalogObjectRow] = relationship(back_populates="foreign_keys")
 
@@ -195,8 +195,8 @@ class CatalogIndexRow(Base):
     columns_json: Mapped[str] = mapped_column(Text, nullable=False)
     is_unique: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_present: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
     object: Mapped[CatalogObjectRow] = relationship(back_populates="indexes")
 
@@ -229,4 +229,4 @@ class CatalogJoinRow(Base):
     join_expression: Mapped[str | None] = mapped_column(Text, nullable=True)
     origin: Mapped[str] = mapped_column(String(32), nullable=False, default="human")
     created_by_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)

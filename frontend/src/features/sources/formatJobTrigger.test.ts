@@ -8,10 +8,10 @@ import {
 const t = (key: string) =>
   (
     {
-      "jobs.trigger.user": "用户",
-      "jobs.trigger.schedule": "定时",
+      "jobs.trigger.user": "User",
+      "jobs.trigger.schedule": "Schedule",
       "jobs.trigger.mcp": "MCP",
-      "jobs.trigger.system": "系统",
+      "jobs.trigger.system": "System",
     } as Record<string, string>
   )[key] ?? key;
 
@@ -49,11 +49,11 @@ describe("formatJobTrigger", () => {
         {
           trigger_kind: "user",
           trigger_ref: "user_1c9f4f9481de",
-          trigger_actor_name: "张三",
+          trigger_actor_name: "Alice",
         },
         t,
       ),
-    ).toBe("用户 · 张三");
+    ).toBe("User · Alice");
   });
 
   it("falls back to short ref when actor name is missing", () => {
@@ -66,7 +66,7 @@ describe("formatJobTrigger", () => {
         },
         t,
       ),
-    ).toBe("用户 · user_1c9f4f94");
+    ).toBe("User · user_1c9f4f94");
   });
 
   it("localizes non-user kinds", () => {
@@ -79,6 +79,6 @@ describe("formatJobTrigger", () => {
         },
         t,
       ),
-    ).toBe("定时 · sched_1");
+    ).toBe("Schedule · sched_1");
   });
 });

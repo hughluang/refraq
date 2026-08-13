@@ -34,7 +34,8 @@ Responsibilities:
 
 - Shared kernel used by Foundation and capability packages
 - `core/config.py`: environment-driven settings via pydantic-settings (Store Backend, backing-service URLs)
-- `core/db.py`: SQLAlchemy `DeclarativeBase`, engine, and session factory for Postgres
+- `core/db.py`: SQLAlchemy `DeclarativeBase`, engine, and session factory for Postgres (sessions pin `TimeZone=UTC`)
+- `core/time.py`: **unique Instant / Clock entry** — `Clock` / `utc_now`, Instant field type, `UtcDateTime`, format helpers; Schedule wall-clock DST helpers used by `worker`
 - `core/redis_client.py`: Redis client factory for Session storage
 - `core/secrets.py`: application secret encryption helpers
 - `core/errors.py`: `AppError` (code + http_status) cross-package error primitive
@@ -42,11 +43,14 @@ Responsibilities:
 - `core/entry.py`: official product start path (run Foundation Upgrade, then serve); exit non-zero if upgrade fails (does not serve)
 - Process probes (health/ready HTTP adapters)
 
+Time contract: [`docs/conventions-time.md`](conventions-time.md), ADR [`0022`](adr/0022-unified-time-contract.md).
+
 Must not contain:
 
 - Business rules for what a System Role is (those live in `admin/`; `core` only orchestrates)
 - Domain-specific ORM table definitions (those live in owning packages such as `admin/models.py`)
 - Product-domain use-case HTTP
+- Business Schedule Task ownership (lives in `worker/`; `core` only supplies Instant/DST primitives)
 
 ### `backend/admin/`
 
@@ -130,7 +134,8 @@ Must not contain:
 - Domain collector logic (stay in `metadata/`)
 - Interactive Console HTTP routes
 
-Deploy **one** Beat replica. See `docs/adr/0006-celery-platform-async-runtime.md` and `docs/env.md` §7.
+Deploy **one** Beat replica. See `docs/adr/0006-celery-platform-async-runtime.md` and `docs/env.md` §8.
+Schedule Timezone / Instant rules: [`docs/conventions-time.md`](conventions-time.md).
 
 ### Celery worker process
 
@@ -139,7 +144,7 @@ Responsibilities:
 - Consume Celery tasks (domain Jobs and platform system tasks) and run collectors/handlers
 - Update **Job** status (and later catalog snapshots) in Postgres
 
-Must not serve interactive Console HTTP traffic. Start commands: `docs/env.md` §7.
+Must not serve interactive Console HTTP traffic. Start commands: `docs/env.md` §8.
 
 ### `backend/alembic/`
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now, format_instant
 import json
 import os
 import time
@@ -394,7 +395,7 @@ def test_mcp_run_sql_success_and_forbidden(
     connector = _RecordingConnector(rows=[["ok"]], columns=["c"])
     monkeypatch.setattr(query_service, "get_connector", lambda engine: connector)
 
-    expires = (datetime.utcnow() + timedelta(days=7)).isoformat() + "Z"
+    expires = format_instant(utc_now() + timedelta(days=7))
     tok = client.post("/tokens", json={"name": "query-pat", "expires_at": expires})
     assert tok.status_code == 201, tok.text
     secret = tok.json()["secret"]

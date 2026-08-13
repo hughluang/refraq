@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now
 from dataclasses import replace
 from datetime import datetime
 from typing import Any
@@ -82,8 +83,8 @@ def create_source(
         if not engine or access is None:
             raise SourceAccessRequired()
         ciphertext = seal_access(engine, access)
-        access_updated_at = datetime.utcnow()
-    now = datetime.utcnow()
+        access_updated_at = utc_now()
+    now = utc_now()
     record = SourceRecord(
         id=new_source_id(),
         key=key,
@@ -132,12 +133,12 @@ def update_source(
         if eng is None:
             raise SourceAccessRequired()
         updated.access_ciphertext = seal_access(eng, access)  # type: ignore[arg-type]
-        updated.access_updated_at = datetime.utcnow()
+        updated.access_updated_at = utc_now()
     elif engine is not None and updated.access_ciphertext:
         existing_access = decrypt_access_blob(updated.access_ciphertext)
         updated.access_ciphertext = seal_access(engine, existing_access)
-        updated.access_updated_at = datetime.utcnow()
-    updated.updated_at = datetime.utcnow()
+        updated.access_updated_at = utc_now()
+    updated.updated_at = utc_now()
     saved = store.save_source(updated)
     if engine is not None and existing.engine != saved.engine:
         get_catalog_store().recompute_locators_for_source(

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.core.db import Base
+from backend.core.time import UtcDateTime
 
 
 class RoleRow(Base):
@@ -40,8 +41,8 @@ class UserRow(Base):
     )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     identity_source: Mapped[str] = mapped_column(String(32), nullable=False, default="local")
-    last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    last_login_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
     role: Mapped[RoleRow | None] = relationship(back_populates="users")
     pats: Mapped[list[UserPatRow]] = relationship(back_populates="user")
@@ -60,11 +61,11 @@ class UserPatRow(Base):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     prefix: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
     user: Mapped[UserRow] = relationship(back_populates="pats")
 
@@ -73,7 +74,7 @@ class AuditEventRow(Base):
     __tablename__ = "audit_events"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, index=True)
     actor_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     actor_token_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     resource_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)

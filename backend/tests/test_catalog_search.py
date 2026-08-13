@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now
 import os
 from datetime import datetime
 
@@ -32,7 +33,7 @@ def _reset_stores(monkeypatch: pytest.MonkeyPatch) -> None:
     reset_settings_cache()
     reset_catalog_store()
     reset_source_store()
-    now = datetime.utcnow()
+    now = utc_now()
     get_source_store().create_source(
         SourceRecord(
             id="src_1",
@@ -60,7 +61,7 @@ def _obj(
     business_description: str | None = None,
     locator: str | None = None,
 ) -> CatalogObjectRecord:
-    now = datetime.utcnow()
+    now = utc_now()
     loc = locator or f"obj/postgresql/mes-prod/{schema}/table/{name}"
     return CatalogObjectRecord(
         id=object_id,
@@ -148,7 +149,7 @@ def test_search_objects_ranking_exact_prefix_substring_business() -> None:
 
 def test_search_columns_name_and_business() -> None:
     store = get_catalog_store()
-    now = datetime.utcnow()
+    now = utc_now()
     obj = _obj(object_id="obj_c", name="orders")
     obj.columns = [
         CatalogColumnRecord(

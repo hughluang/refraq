@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from backend.core.config import get_settings
 from backend.core.db import session_scope
+from backend.core.time import utc_now
 from backend.worker.models import ScheduledTaskRow
 
 
@@ -26,9 +27,11 @@ class ScheduledTaskRecord:
     args_json: list = field(default_factory=list)
     kwargs_json: dict = field(default_factory=dict)
     system: bool = False
+    schedule_timezone: str = "UTC"
     last_run_at: datetime | None = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+
 
 class MemoryScheduleStore:
     def __init__(self) -> None:
@@ -55,6 +58,7 @@ class MemoryScheduleStore:
                 record.last_run_at = when
                 record.updated_at = when
 
+
 class SqlScheduleStore:
     def upsert(self, record: ScheduledTaskRecord) -> ScheduledTaskRecord:
         with session_scope() as session:
@@ -71,6 +75,7 @@ class SqlScheduleStore:
             row.enabled = record.enabled
             row.interval_seconds = record.interval_seconds
             row.cron = record.cron
+            row.schedule_timezone = record.schedule_timezone or "UTC"
             row.task_name = record.task_name
             row.args_json = list(record.args_json)
             row.kwargs_json = dict(record.kwargs_json)
@@ -104,6 +109,7 @@ class SqlScheduleStore:
                 row.last_run_at = when
                 row.updated_at = when
 
+
 def _row_to_schedule(row: object) -> ScheduledTaskRecord:
     assert isinstance(row, ScheduledTaskRow)
     return ScheduledTaskRecord(
@@ -117,13 +123,16 @@ def _row_to_schedule(row: object) -> ScheduledTaskRecord:
         args_json=list(row.args_json or []),
         kwargs_json=dict(row.kwargs_json or {}),
         system=row.system,
+        schedule_timezone=getattr(row, "schedule_timezone", None) or "UTC",
         last_run_at=row.last_run_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
 
+
 _memory_singleton: MemoryScheduleStore | None = None
 _memory_lock = threading.Lock()
+
 
 @lru_cache
 def get_schedule_store() -> MemoryScheduleStore | SqlScheduleStore:
@@ -135,6 +144,7 @@ def get_schedule_store() -> MemoryScheduleStore | SqlScheduleStore:
                 _memory_singleton = MemoryScheduleStore()
             return _memory_singleton
     return SqlScheduleStore()
+
 
 def reset_schedule_store() -> None:
     global _memory_singleton

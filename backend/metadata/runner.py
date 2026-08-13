@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now
 from datetime import datetime
 
 from backend.core.config import get_settings
@@ -178,7 +179,7 @@ def _to_catalog_records(
     job_id: str,
     collected: CollectedStructure,
 ) -> list[CatalogObjectRecord]:
-    now = datetime.utcnow()
+    now = utc_now()
     out: list[CatalogObjectRecord] = []
     for obj in collected.objects:
         object_id = new_object_id()

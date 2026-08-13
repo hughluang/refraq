@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-
 from celery.beat import ScheduleEntry, Scheduler
-from celery.schedules import schedule as interval_schedule
 
+from backend.core.time import utc_now
+from backend.worker.cron import build_celery_schedule
 from backend.worker.schedules import get_schedule_store
 
 
@@ -26,14 +25,17 @@ class DatabaseScheduler(Scheduler):
     def _load_entries(self) -> dict[str, ScheduleEntry]:
         entries: dict[str, ScheduleEntry] = {}
         for record in get_schedule_store().list_enabled():
-            if not record.interval_seconds or record.interval_seconds <= 0:
+            schedule = build_celery_schedule(
+                cron=record.cron,
+                schedule_timezone=record.schedule_timezone,
+                interval_seconds=record.interval_seconds,
+            )
+            if schedule is None:
                 continue
             entries[record.key] = ScheduleEntry(
                 name=record.key,
                 task=record.task_name,
-                schedule=interval_schedule(
-                    run_every=timedelta(seconds=record.interval_seconds)
-                ),
+                schedule=schedule,
                 args=tuple(record.args_json),
                 kwargs=dict(record.kwargs_json),
                 options={"ignore_result": True},
@@ -45,5 +47,5 @@ class DatabaseScheduler(Scheduler):
 
     def apply_entry(self, entry: ScheduleEntry, producer=None):
         result = super().apply_entry(entry, producer=producer)
-        get_schedule_store().touch_last_run(entry.name, datetime.utcnow())
+        get_schedule_store().touch_last_run(entry.name, utc_now())
         return result

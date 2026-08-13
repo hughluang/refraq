@@ -190,15 +190,29 @@ Avoid calling it Identity Source or Client. Avoid assuming every Source is an en
 A single durable asynchronous execution with an observable lifecycle (queued → running → terminal), discriminated by kind, carrying only a generic input payload that each domain interprets.
 Domains expose enqueue/list facades (for example under Source for structure work); the Job record is not owned by Source.
 API (or a **Scheduled Task**) enqueues; a Celery worker executes; operator-visible status lives on the Postgres job record.
+Lifecycle stamps (`created_at`, `started_at`, `finished_at`, log line times) are **Instants**.
 Avoid calling it an Ingestion Job. Avoid running long work inside the Management Console API request.
 Avoid treating a Job as a **Scheduled Task**, or reading Celery result/Flower as the product lifecycle.
 Avoid promoting domain foreign keys into universal Job fields.
+
+### Instant
+
+An absolute moment on the timeline, represented as aware UTC in process, `timestamptz` in Postgres, and RFC 3339 on the wire (outbound `Z`).
+Contract: [`docs/conventions-time.md`](conventions-time.md).
+Avoid wall-clock local time, treating cron hour/minute as a stored Instant, or Console display-preference timezone.
+
+### Schedule Timezone
+
+An IANA zone on a **Scheduled Task** that interprets **cron** wall-clock fields; ignored for interval schedules; not part of an **Instant** and not the Celery process timezone.
+Avoid storing the zone inside a timestamptz Instant, conflating with Console display timezone, or assuming interval schedules shift when the zone changes.
 
 ### Scheduled Task
 
 A platform schedule definition (interval or cron) stored in Postgres that triggers work when due.
 Celery Beat reads these rows (single Beat replica). Distinct from any one **Job** instance.
+Cron wall clock uses **Schedule Timezone**; `last_run_at` is an **Instant**.
 Avoid storing product schedules only in Redis Beat state or static code when operators need to change them.
+Avoid treating Celery `timezone` as the business schedule zone.
 
 ### Catalog Object
 

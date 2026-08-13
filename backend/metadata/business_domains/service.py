@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now
 from datetime import datetime
 
 from backend.admin.audit import persist_audit_event
@@ -57,7 +58,7 @@ def create_domain(
     actor_user_id: str | None,
     actor_token_id: str | None,
 ) -> BusinessDomainRecord:
-    now = datetime.utcnow()
+    now = utc_now()
     record = BusinessDomainRecord(
         id=new_business_domain_id(),
         code=code.strip(),
@@ -106,7 +107,7 @@ def patch_domain(
             name=new_name,
             description=new_description,
             created_at=existing.created_at,
-            updated_at=datetime.utcnow(),
+            updated_at=utc_now(),
         )
     )
     persist_audit_event(

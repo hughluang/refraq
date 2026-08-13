@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from backend.core.time import Instant
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 class AuditEvent(BaseModel):
     id: str
-    created_at: datetime
+    created_at: Instant
     actor_user_id: str | None
     actor_token_id: str | None
     resource_type: str

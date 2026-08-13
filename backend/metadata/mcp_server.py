@@ -16,6 +16,7 @@ from backend.admin.permissions import permissions_include
 from backend.admin.role_store import get_role_store
 from backend.admin.user_store import UserRecord
 from backend.core.errors import AppError
+from backend.core.time import format_instant
 from backend.jobs.errors import JobNotFound
 from backend.jobs.store import get_job_store
 from backend.metadata.business_domains import service as domain_service
@@ -60,7 +61,7 @@ def _err(exc: Exception) -> str:
 
 def _json_default(obj: object) -> Any:
     if isinstance(obj, datetime):
-        return obj.isoformat()
+        return format_instant(obj)
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 def _dumps(payload: dict[str, Any]) -> str:

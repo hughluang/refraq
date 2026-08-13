@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now
 import os
 from datetime import datetime
 
@@ -33,7 +34,7 @@ def _reset(monkeypatch: pytest.MonkeyPatch) -> None:
     reset_settings_cache()
     reset_catalog_store()
     reset_source_store()
-    now = datetime.utcnow()
+    now = utc_now()
     get_source_store().create_source(
         SourceRecord(
             id="src_1",
@@ -57,7 +58,7 @@ def _table(
     name: str,
     columns: list[tuple[str, str]],
 ) -> CatalogObjectRecord:
-    now = datetime.utcnow()
+    now = utc_now()
     return CatalogObjectRecord(
         id=object_id,
         source_id="src_1",

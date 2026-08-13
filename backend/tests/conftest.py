@@ -17,6 +17,7 @@ from backend.admin.settings_override import reset_settings_override
 from backend.core.config import reset_settings_cache
 from backend.core.db import reset_db_singletons
 from backend.core.redis_client import reset_redis_singleton
+from backend.core.time import reset_clock
 from backend.admin.audit_store import reset_audit_store
 from backend.admin.role_store import reset_role_store
 from backend.admin.session_store import reset_session_store
@@ -30,6 +31,7 @@ from backend.worker.schedules import reset_schedule_store
 
 reset_settings_cache()
 reset_settings_override()
+reset_clock()
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -43,6 +45,7 @@ def pytest_configure(config: pytest.Config) -> None:
 def _reset_foundation_singletons() -> None:
     reset_settings_cache()
     reset_settings_override()
+    reset_clock()
     reset_user_store()
     reset_role_store()
     reset_session_store()
@@ -70,3 +73,4 @@ def _reset_foundation_singletons() -> None:
     reset_redis_singleton()
     reset_settings_override()
     reset_settings_cache()
+    reset_clock()

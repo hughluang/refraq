@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from backend.core.time import Instant
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -120,13 +120,13 @@ class CatalogObjectOut(BaseModel):
     open_questions: list[str] | None = None
     semantic_source: SemanticSource | str | None = None
     business_semantics_ready: bool = False
-    semantics_updated_at: datetime | None = None
+    semantics_updated_at: Instant | None = None
     columns: list[CatalogColumnOut] = Field(default_factory=list)
     foreign_keys: list[CatalogForeignKeyOut] = Field(default_factory=list)
     indexes: list[CatalogIndexOut] = Field(default_factory=list)
     ddl: str | None = None
     is_present: bool = True
-    collected_at: datetime | None = None
+    collected_at: Instant | None = None
 
 
 class CatalogObjectListResponse(BaseModel):
@@ -223,7 +223,7 @@ class JoinOut(BaseModel):
     join_expression: str | None = None
     origin: str = "human"
     created_by_user_id: str | None = None
-    created_at: datetime
+    created_at: Instant
 
 
 class JoinListResponse(BaseModel):

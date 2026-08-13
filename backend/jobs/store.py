@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import format_instant, utc_now
 import threading
 import uuid
 from dataclasses import dataclass
@@ -185,7 +186,7 @@ def new_job_id() -> str:
     return f"job_{uuid.uuid4().hex[:12]}"
 
 def format_job_log_line(*, level: str, message: str, at: datetime | None = None) -> str:
-    ts = (at or datetime.utcnow()).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ts = format_instant(at or utc_now())
     return f"{ts} {level.upper()} {message}"
 
 def create_queued_job(
@@ -198,7 +199,7 @@ def create_queued_job(
     trigger_ref: str | None = None,
     log_body: str = "",
 ) -> JobRecord:
-    now = datetime.utcnow()
+    now = utc_now()
     record = JobRecord(
         id=new_job_id(),
         kind=kind,
@@ -230,7 +231,7 @@ def append_job_log(
     record = store.get(job_id)
     if record is None:
         return None
-    now = datetime.utcnow()
+    now = utc_now()
     line = format_job_log_line(level=level, message=message, at=now)
     record.log_body = f"{record.log_body}\n{line}" if record.log_body else line
     record.log_updated_at = now
@@ -244,7 +245,7 @@ def mark_running(job_id: str, *, celery_task_id: str | None = None) -> JobRecord
     if record.status != "queued":
         return record
     record.status = "running"
-    record.started_at = datetime.utcnow()
+    record.started_at = utc_now()
     if celery_task_id:
         record.celery_task_id = celery_task_id
     return store.save(record)
@@ -264,7 +265,7 @@ def mark_failed(
     record.status = "failed"
     record.error_code = error_code
     record.error_summary = error_summary
-    record.finished_at = datetime.utcnow()
+    record.finished_at = utc_now()
     return store.save(record)
 
 def mark_succeeded(job_id: str) -> JobRecord | None:
@@ -275,7 +276,7 @@ def mark_succeeded(job_id: str) -> JobRecord | None:
     if record.status in TERMINAL:
         return record
     record.status = "succeeded"
-    record.finished_at = datetime.utcnow()
+    record.finished_at = utc_now()
     return store.save(record)
 
 def mark_cancelled(job_id: str) -> JobRecord | None:
@@ -286,13 +287,13 @@ def mark_cancelled(job_id: str) -> JobRecord | None:
     if record.status in TERMINAL:
         return record
     record.status = "cancelled"
-    record.finished_at = datetime.utcnow()
+    record.finished_at = utc_now()
     return store.save(record)
 
 def reap_stuck_running_jobs() -> int:
     """Mark running jobs past timeout as failed. Does not re-enqueue."""
     timeout = get_settings().refraq_job_running_timeout_sec
-    cutoff = datetime.utcnow() - timedelta(seconds=timeout)
+    cutoff = utc_now() - timedelta(seconds=timeout)
     store = get_job_store()
     reaped = 0
     for record in store.list(status="running"):

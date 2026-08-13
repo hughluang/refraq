@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now
 import uuid
-from datetime import datetime
 
 from backend.worker.models import REAPER_SCHEDULE_KEY, REAPER_TASK_NAME
 from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store
@@ -16,7 +16,7 @@ def ensure_system_schedules() -> None:
     store = get_schedule_store()
     if store.get_by_key(REAPER_SCHEDULE_KEY) is not None:
         return
-    now = datetime.utcnow()
+    now = utc_now()
     store.upsert(
         ScheduledTaskRecord(
             id=f"sched_{uuid.uuid4().hex[:12]}",
@@ -25,6 +25,7 @@ def ensure_system_schedules() -> None:
             enabled=True,
             interval_seconds=60,
             cron=None,
+            schedule_timezone="UTC",
             task_name=REAPER_TASK_NAME,
             args_json=[],
             kwargs_json={},

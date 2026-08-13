@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now
 import os
 from datetime import datetime
 
@@ -105,7 +106,7 @@ def _seed_object(
     business_name: str | None = "Work Order",
     col_a_business: str | None = "WO Id",
 ) -> CatalogObjectRecord:
-    now = datetime.utcnow()
+    now = utc_now()
     line = CatalogObjectRecord(
         id="obj_line",
         source_id=source_id,

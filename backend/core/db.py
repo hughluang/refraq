@@ -22,7 +22,15 @@ def get_engine() -> Engine:
     settings = get_settings()
     if not settings.database_url:
         raise RuntimeError("DATABASE_URL is required for persistent Store Backend")
-    return create_engine(settings.database_url, pool_pre_ping=True)
+    # Pin session TimeZone=UTC so offset-less literals cannot silently shift Instants.
+    connect_args: dict[str, str] = {}
+    if settings.database_url.startswith("postgresql"):
+        connect_args["options"] = "-c TimeZone=UTC"
+    return create_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        connect_args=connect_args,
+    )
 
 
 @lru_cache

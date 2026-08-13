@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now
 from datetime import datetime
 from typing import Callable, Literal, TypedDict
 
@@ -85,7 +86,7 @@ def _user_from_bearer(
     if not secret:
         raise AuthPatInvalid()
     record = tokens.get_by_hash(hash_token(secret))
-    now = datetime.utcnow()
+    now = utc_now()
     if (
         record is None
         or record.revoked_at is not None
@@ -152,7 +153,7 @@ def resolve_pat_bearer(secret: str) -> tuple[UserRecord, str]:
     tokens = get_token_store()
     users = get_user_store()
     record = tokens.get_by_hash(hash_token(secret))
-    now = datetime.utcnow()
+    now = utc_now()
     if (
         record is None
         or record.revoked_at is not None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now
 import os
 from datetime import datetime
 from pathlib import Path
@@ -90,7 +91,7 @@ def _reset_memory_stores(monkeypatch: pytest.MonkeyPatch) -> None:
     reset_settings_cache()
     reset_catalog_store()
     reset_source_store()
-    now = datetime.utcnow()
+    now = utc_now()
     get_source_store().create_source(
         SourceRecord(
             id="src_1",
@@ -117,7 +118,7 @@ def _col(
     table: str,
     ordinal: int = 0,
 ) -> CatalogColumnRecord:
-    now = datetime.utcnow()
+    now = utc_now()
     return CatalogColumnRecord(
         id=col_id,
         object_id=object_id,
@@ -155,7 +156,7 @@ def _table(
     columns: list[tuple[str, str]],
     foreign_keys: list[CatalogForeignKeyRecord] | None = None,
 ) -> CatalogObjectRecord:
-    now = datetime.utcnow()
+    now = utc_now()
     return CatalogObjectRecord(
         id=object_id,
         source_id="src_1",

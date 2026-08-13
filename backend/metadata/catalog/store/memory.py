@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now
 import threading
 from collections.abc import Callable
 from dataclasses import replace
@@ -183,7 +184,7 @@ class MemoryCatalogStore:
                     for j in self._joins.values()
                     if j.from_column_id in col_ids or j.to_column_id in col_ids
                 ]
-                now = datetime.utcnow()
+                now = utc_now()
                 plan = build_plan(existing, existing_joins, now)
                 self._persist_structure_plan_unlocked(plan, now=now)
             except CatalogWriteAborted:
@@ -314,7 +315,7 @@ class MemoryCatalogStore:
             join_expression=join_expression,
             origin=origin,
             created_by_user_id=created_by_user_id,
-            created_at=datetime.utcnow(),
+            created_at=utc_now(),
         )
         self._joins[record.id] = record
         self._join_by_pair[pair] = record.id
@@ -362,7 +363,7 @@ class MemoryCatalogStore:
             obj = self._objects.get(object_id)
             if obj is None:
                 return None
-            now = datetime.utcnow()
+            now = utc_now()
             kwargs: dict[str, Any] = {
                 "updated_at": now,
                 "semantics_updated_at": now,
@@ -411,7 +412,7 @@ class MemoryCatalogStore:
                 for idx, col in enumerate(obj.columns):
                     if col.id != column_id:
                         continue
-                    kwargs: dict[str, Any] = {"updated_at": datetime.utcnow()}
+                    kwargs: dict[str, Any] = {"updated_at": utc_now()}
                     local = {
                         "business_name": business_name,
                         "business_description": business_description,
@@ -427,7 +428,7 @@ class MemoryCatalogStore:
                     cols = list(obj.columns)
                     cols[idx] = new_col
                     self._objects[oid] = replace(
-                        obj, columns=cols, updated_at=datetime.utcnow()
+                        obj, columns=cols, updated_at=utc_now()
                     )
                     return new_col
             return None

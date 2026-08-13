@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from backend.core.time import utc_now
 
 from fastapi import APIRouter, Depends, Request, Response, status
 
@@ -69,10 +69,8 @@ def create_token(
     user: UserRecord = Depends(require_permission("tokens:write")),
     tokens: TokenStore = Depends(get_token_store),
 ) -> CreateTokenResponse:
-    now = datetime.utcnow()
+    now = utc_now()
     expires_at = payload.expires_at
-    if expires_at.tzinfo is not None:
-        expires_at = expires_at.replace(tzinfo=None)
     if expires_at <= now:
         raise TokenInvalidExpiresAt()
     secret, prefix, token_hash = generate_token_secret()
@@ -103,7 +101,7 @@ def deactivate_token(
     tokens: TokenStore = Depends(get_token_store),
 ) -> TokenResponse:
     _owned_visible(tokens.get_by_id(token_id), user.id)
-    record = tokens.deactivate(token_id, when=datetime.utcnow())
+    record = tokens.deactivate(token_id, when=utc_now())
     assert record is not None
     persist_audit_event(
         actor_user_id=user.id,
@@ -153,7 +151,7 @@ def delete_token(
     existing = _owned_visible(tokens.get_by_id(token_id), user.id)
     if existing.revoked_at is None:
         raise TokenNotDeactivated()
-    record = tokens.soft_delete(token_id, when=datetime.utcnow())
+    record = tokens.soft_delete(token_id, when=utc_now())
     assert record is not None
     persist_audit_event(
         actor_user_id=user.id,

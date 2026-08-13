@@ -5,6 +5,7 @@ services:
       POSTGRES_USER: refraq
       POSTGRES_PASSWORD: refraq
       POSTGRES_DB: refraq
+      TZ: UTC
     ports:
       - "5432:5432"
     healthcheck:

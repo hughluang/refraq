@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now
 from datetime import datetime
 from typing import Any
 
@@ -25,7 +26,7 @@ def persist_audit_event(
     store = get_audit_store()
     record = AuditEventRecord(
         id=new_audit_id(),
-        created_at=datetime.utcnow(),
+        created_at=utc_now(),
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
         resource_type=resource_type,

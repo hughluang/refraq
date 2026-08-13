@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now
 import os
 from datetime import datetime
 
@@ -72,7 +73,7 @@ def _table(
     foreign_keys: list[CatalogForeignKeyRecord] | None = None,
     now: datetime | None = None,
 ) -> CatalogObjectRecord:
-    stamp = now or datetime.utcnow()
+    stamp = now or utc_now()
     cols = [_col(cid, object_id, cname, now=stamp) for cid, cname in columns]
     return CatalogObjectRecord(
         id=object_id,
@@ -107,7 +108,7 @@ def _table(
 
 
 def test_plan_skips_protected_human_join() -> None:
-    now = datetime.utcnow()
+    now = utc_now()
     customers = _table(
         object_id="obj_customers",
         name="customers",
@@ -159,7 +160,7 @@ def test_plan_skips_protected_human_join() -> None:
 
 def test_apply_preserves_human_join_via_store() -> None:
     store = get_catalog_store()
-    now = datetime.utcnow()
+    now = utc_now()
     customers = _table(
         object_id="obj_customers",
         name="customers",
@@ -228,7 +229,7 @@ def test_service_foreign_key_upsert_keeps_human_join() -> None:
     from backend.metadata.catalog import service as catalog_service
 
     store = get_catalog_store()
-    now = datetime.utcnow()
+    now = utc_now()
     customers = _table(
         object_id="obj_customers",
         name="customers",

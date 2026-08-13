@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from backend.core.time import Instant
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -19,7 +19,7 @@ class SourceOut(BaseModel):
     engine: str | None
     access: dict[str, Any] | None
     has_access: bool
-    access_updated_at: datetime | None
+    access_updated_at: Instant | None
 
 
 class SourceListResponse(BaseModel):

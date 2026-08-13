@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now
 import os
 
 import pytest
@@ -183,7 +184,7 @@ def test_change_password_requires_session_not_pat_only(
         name="cli",
         token_hash=token_hash,
         prefix=prefix,
-        expires_at=datetime.utcnow() + timedelta(days=1),
+        expires_at=utc_now() + timedelta(days=1),
     )
     response = client.post(
         "/account/password",

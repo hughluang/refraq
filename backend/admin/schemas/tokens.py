@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 
+from backend.core.time import Instant
 from pydantic import BaseModel, Field
 
 
@@ -11,10 +11,10 @@ class TokenMetadata(BaseModel):
     id: str
     name: str
     prefix: str
-    expires_at: datetime
-    revoked_at: datetime | None
-    created_at: datetime
-    last_used_at: datetime | None
+    expires_at: Instant
+    revoked_at: Instant | None
+    created_at: Instant
+    last_used_at: Instant | None
 
 
 class TokenListResponse(BaseModel):
@@ -23,7 +23,7 @@ class TokenListResponse(BaseModel):
 
 class CreateTokenRequest(BaseModel):
     name: str = Field(min_length=1, max_length=128)
-    expires_at: datetime
+    expires_at: Instant
 
 
 class CreateTokenResponse(BaseModel):

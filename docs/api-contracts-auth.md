@@ -19,6 +19,7 @@ These contracts are intentionally small:
 - Frontend must send requests with credentials included
 - Metadata foundation and automation may alternatively authenticate with **User PAT** Bearer (`docs/api-contracts-tokens.md`); protected endpoints accept Session **or** PAT
 - Protected endpoints return `401` for unauthenticated requests and `403` for insufficient permission
+- **Instants** on all HTTP APIs: RFC 3339 with required offset inbound; outbound UTC `Z`. Global rules: [`docs/conventions-time.md`](conventions-time.md).
 
 ## 3. Shared Response Shapes
 

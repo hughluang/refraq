@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from backend.core.time import Instant
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -22,7 +22,7 @@ class UserSummary(BaseModel):
     role_name: str | None
     status: UserStatus
     identity_source: IdentitySource
-    last_login_at: datetime | None = None
+    last_login_at: Instant | None = None
 
 
 class UserListResponse(BaseModel):

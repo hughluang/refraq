@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now
 from datetime import datetime
 
 from fastapi import APIRouter, Cookie, Depends, Response
@@ -62,7 +63,7 @@ def login(
         **cookie_attrs,
     )
 
-    users.update_last_login(record.id, datetime.utcnow())
+    users.update_last_login(record.id, utc_now())
     return LoginResponse(user=build_current_user(record, roles))
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now, format_instant
 import os
 from datetime import datetime, timedelta
 
@@ -84,7 +85,7 @@ def _login(client: TestClient) -> None:
 
 
 def _create_token(client: TestClient, name: str = "mcp-local") -> tuple[str, str]:
-    expires = (datetime.utcnow() + timedelta(days=30)).isoformat() + "Z"
+    expires = format_instant(utc_now() + timedelta(days=30))
     created = client.post("/tokens", json={"name": name, "expires_at": expires})
     assert created.status_code == 201
     body = created.json()
@@ -184,7 +185,7 @@ def test_soft_delete_hides_token_and_invalidates_auth(client: TestClient) -> Non
 
 def test_bearer_auth_me_without_session(client: TestClient, store_bundle) -> None:
     _login(client)
-    expires = (datetime.utcnow() + timedelta(days=7)).isoformat() + "Z"
+    expires = format_instant(utc_now() + timedelta(days=7))
     created = client.post("/tokens", json={"name": "agent", "expires_at": expires})
     secret = created.json()["secret"]
     client.cookies.clear()

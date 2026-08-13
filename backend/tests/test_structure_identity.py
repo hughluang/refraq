@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now, format_instant
 import os
 from datetime import datetime
 
@@ -103,7 +104,7 @@ def _object(
     business_name: str | None = "Orders MV",
     col_id: str = "col_id",
 ) -> CatalogObjectRecord:
-    now = datetime.utcnow()
+    now = utc_now()
     locator = format_object_locator(
         engine="postgresql",
         kind="database",
@@ -271,7 +272,7 @@ def test_mcp_upsert_joins_reports_missing_endpoints(client: TestClient) -> None:
     import json
     from datetime import timedelta
 
-    expires = (datetime.utcnow() + timedelta(days=7)).isoformat() + "Z"
+    expires = format_instant(utc_now() + timedelta(days=7))
     tok = client.post("/tokens", json={"name": "join-pat", "expires_at": expires})
     assert tok.status_code == 201, tok.text
     secret = tok.json()["secret"]
@@ -289,7 +290,7 @@ def test_mcp_upsert_joins_reports_missing_endpoints(client: TestClient) -> None:
 def test_list_objects_pagination_defaults(client: TestClient) -> None:
     source = _make_source(client, key="paged")
     store = get_catalog_store()
-    now = datetime.utcnow()
+    now = utc_now()
     objects = []
     for i in range(105):
         objects.append(

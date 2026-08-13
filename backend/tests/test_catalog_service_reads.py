@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now, format_instant
 import json
 import os
 from datetime import datetime, timedelta
@@ -75,7 +76,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 
 def _seed_source() -> None:
-    now = datetime.utcnow()
+    now = utc_now()
     get_source_store().create_source(
         SourceRecord(
             id="src_1",
@@ -99,7 +100,7 @@ def _table(
     name: str,
     columns: list[tuple[str, str]],
 ) -> CatalogObjectRecord:
-    now = datetime.utcnow()
+    now = utc_now()
     return CatalogObjectRecord(
         id=object_id,
         source_id="src_1",
@@ -263,7 +264,7 @@ def test_http_join_path_smoke(client: TestClient) -> None:
     assert source.status_code == 201, source.text
     source_id = source.json()["source"]["id"]
     store = get_catalog_store()
-    now = datetime.utcnow()
+    now = utc_now()
     a = CatalogObjectRecord(
         id="obj_http_a",
         source_id=source_id,
@@ -356,7 +357,7 @@ def test_mcp_find_join_path_smoke(client: TestClient) -> None:
     assert source.status_code == 201, source.text
     source_id = source.json()["source"]["id"]
     store = get_catalog_store()
-    now = datetime.utcnow()
+    now = utc_now()
     a = CatalogObjectRecord(
         id="obj_mcp_a",
         source_id=source_id,
@@ -416,7 +417,7 @@ def test_mcp_find_join_path_smoke(client: TestClient) -> None:
         kind="database",
         source_key="mcp-path",
     )
-    expires = (datetime.utcnow() + timedelta(days=7)).isoformat() + "Z"
+    expires = format_instant(utc_now() + timedelta(days=7))
     tok = client.post("/tokens", json={"name": "path-pat", "expires_at": expires})
     assert tok.status_code == 201, tok.text
     secret = tok.json()["secret"]

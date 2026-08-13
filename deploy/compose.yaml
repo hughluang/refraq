@@ -5,6 +5,7 @@ services:
       POSTGRES_USER: refraq
       POSTGRES_PASSWORD: refraq
       POSTGRES_DB: refraq
+      TZ: UTC
     volumes:
       - refraq_pg:/var/lib/postgresql/data
     healthcheck:
@@ -32,6 +33,7 @@ services:
       REFRAQ_API_HOST: 0.0.0.0
       REFRAQ_API_PORT: 8000
       REFRAQ_STORE_BACKEND: persistent
+      TZ: UTC
       DATABASE_URL: postgresql+psycopg://refraq:refraq@postgres:5432/refraq
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/2
@@ -75,6 +77,7 @@ services:
     environment:
       REFRAQ_ENV: prod
       REFRAQ_STORE_BACKEND: persistent
+      TZ: UTC
       DATABASE_URL: postgresql+psycopg://refraq:refraq@postgres:5432/refraq
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/2
@@ -98,6 +101,7 @@ services:
     environment:
       REFRAQ_ENV: prod
       REFRAQ_STORE_BACKEND: persistent
+      TZ: UTC
       DATABASE_URL: postgresql+psycopg://refraq:refraq@postgres:5432/refraq
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/2

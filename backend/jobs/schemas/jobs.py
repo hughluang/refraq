@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from backend.core.time import Instant
 from typing import Any
 
 from pydantic import BaseModel
@@ -18,12 +18,12 @@ class JobOut(BaseModel):
     trigger_ref: str | None
     trigger_actor_name: str | None = None
     created_by_user_id: str | None
-    created_at: datetime
-    started_at: datetime | None
-    finished_at: datetime | None
+    created_at: Instant
+    started_at: Instant | None
+    finished_at: Instant | None
     error_code: str | None
     error_message: str | None
-    log_updated_at: datetime | None = None
+    log_updated_at: Instant | None = None
 
 
 class JobListResponse(BaseModel):
@@ -37,4 +37,4 @@ class JobResponse(BaseModel):
 class JobLogsResponse(BaseModel):
     job_id: str
     body: str
-    updated_at: datetime | None
+    updated_at: Instant | None

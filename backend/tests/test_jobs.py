@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now
 import os
 from datetime import datetime, timedelta
 
@@ -91,7 +92,7 @@ def test_reaper_marks_stuck_running() -> None:
     mark_running(job.id)
     stored = get_job_store().get(job.id)
     assert stored is not None
-    stored.started_at = datetime.utcnow() - timedelta(hours=2)
+    stored.started_at = utc_now() - timedelta(hours=2)
     get_job_store().save(stored)
 
     count = reap_stuck_running_jobs()

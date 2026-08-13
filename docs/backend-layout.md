@@ -12,7 +12,7 @@ Every top-level package belongs to exactly one tier:
 
 | Tier | Meaning | Current members | Add a package when |
 |------|---------|-----------------|--------------------|
-| **Shared kernel** | Stable infrastructure and cross-package primitives with no product use-case rules | `core` | Multiple parties need it, and it does not express a business use case |
+| **Shared kernel** | Stable infrastructure and cross-package primitives with no product use-case rules | `core` (includes `core.time` as the sole Instant/Clock entry) | Multiple parties need it, and it does not express a business use case |
 | **Platform kernel** | Site-enabling capability; product domains may depend on its **published API** | `admin` (Management Foundation) | Independent model/lifecycle; real code; language is people/authz/session/audit, not a product domain |
 | **Platform primitive** | Mechanism reusable by domains; **owns mechanism-resource HTTP**; does **not** own domain use-case HTTP | `jobs` (Job lifecycle) | Model is mechanistic (kind + opaque input), not one domain's resource facade |
 | **Product domain** | Business-language boundary; vertically coherent | `metadata` | Distinct business language; real code; mixing into another package keeps causing friction |
@@ -29,7 +29,7 @@ Directory shape is illustrative, not a mandate for every filename.
 ```text
 backend/
   main.py                 # composition root: mount published routers; Site Bootstrap
-  core/                   # shared kernel: config, DB/Redis, upgrade, AppError, probes
+  core/                   # shared kernel: config, DB/Redis, time (Instant/Clock), upgrade, AppError, probes
   admin/                  # platform kernel (Identity / RBAC / Console foundation)
     # published modules listed in §3
     models.py *_store.py permissions.py …
@@ -120,7 +120,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Domain use-case HTTP (Source, structure enqueue/list, Catalog) | product domain (`metadata`) |
 | Outbound adapter families | Owning product domain (e.g. `metadata/connectors`) |
 | Domain error types | That product domain (base in `core`) |
-| Config, engine, secrets crypto, upgrade orchestration, `AppError`, process probes | `core` (upgrade may call platform-kernel published API) |
+| Config, engine, secrets crypto, Instant/Clock (`core.time`), upgrade orchestration, `AppError`, process probes | `core` (upgrade may call platform-kernel published API); time contract in [`docs/conventions-time.md`](conventions-time.md) |
 | Celery app, Beat, **Scheduled Task**, system tasks, task registration | `worker` |
 | Domain async work units (`@shared_task` or equivalent) | Owning product domain; **discovered and registered by `worker`** |
 | Process probes (health/ready) | `core` (thin); not inside a product domain |

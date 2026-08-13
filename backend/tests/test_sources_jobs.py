@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now, format_instant
 import os
 from datetime import datetime
 
@@ -226,7 +227,7 @@ def test_delete_source_requires_disabled(client: TestClient) -> None:
 
 def test_delete_disabled_source_and_catalog(client: TestClient) -> None:
     source = _make_source(client, key="del-ok")
-    now = datetime.utcnow()
+    now = utc_now()
     apply_structure_snapshot(
         source_id=source["id"],
         job_id="job_del",
@@ -592,7 +593,7 @@ def test_source_probe_forbidden_without_write(client: TestClient) -> None:
 
 def test_fail_safe_aborts_without_absent() -> None:
     reset_catalog_store()
-    now = datetime.utcnow()
+    now = utc_now()
     store = get_catalog_store()
     seeded = []
     for i in range(4):
@@ -696,7 +697,7 @@ def test_collect_failure_does_not_absent(monkeypatch: pytest.MonkeyPatch) -> Non
         engine="postgresql",
         access=_access(),
     )
-    now = datetime.utcnow()
+    now = utc_now()
     apply_structure_snapshot(
         source_id=source.id,
         job_id="old",
@@ -799,7 +800,7 @@ def test_enqueue_structure_job_audits_and_rejects_non_database(
     )
 
     source = _make_source(client, key="enq-ok")
-    expires = (datetime.utcnow() + timedelta(days=7)).isoformat() + "Z"
+    expires = format_instant(utc_now() + timedelta(days=7))
     tok = client.post("/tokens", json={"name": "enq-pat", "expires_at": expires})
     assert tok.status_code == 201, tok.text
     token_id = tok.json()["token"]["id"]
@@ -829,7 +830,7 @@ def test_enqueue_structure_job_audits_and_rejects_non_database(
             actor_token_id=token_id,
         )
 
-    now = datetime.utcnow()
+    now = utc_now()
     get_source_store().create_source(
         SourceRecord(
             id="src_nondb",

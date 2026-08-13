@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now
 import json
 from collections.abc import Callable
 from datetime import datetime
@@ -238,7 +239,7 @@ class SqlCatalogStore:
                 )
                 existing_joins = [_row_to_join(j) for j in join_rows]
 
-            now = datetime.utcnow()
+            now = utc_now()
             plan = build_plan(existing_objects, existing_joins, now)
 
             # Joins reference catalog_columns via FK without ORM relationships, so
@@ -367,7 +368,7 @@ class SqlCatalogStore:
             )
             if row is None:
                 return None
-            now = datetime.utcnow()
+            now = utc_now()
             changed = False
             if business_name is not UNSET:
                 row.business_name = business_name
@@ -433,7 +434,7 @@ class SqlCatalogStore:
                 row.semantic_source = semantic_source
             if field_kind is not UNSET:
                 row.field_kind = field_kind
-            row.updated_at = datetime.utcnow()
+            row.updated_at = utc_now()
             session.flush()
             return _row_to_column(row)
 
@@ -522,7 +523,7 @@ class SqlCatalogStore:
         origin: str = "human",
     ) -> CatalogJoinRecord:
 
-        now = datetime.utcnow()
+        now = utc_now()
         with session_scope() as session:
             existing = session.scalars(
                 select(CatalogJoinRow).where(

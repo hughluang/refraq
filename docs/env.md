@@ -16,6 +16,7 @@ Current `backend/.env.example` defines:
 - `REFRAQ_API_HOST=127.0.0.1`
 - `REFRAQ_API_PORT=8000`
 - `REFRAQ_STORE_BACKEND=persistent`
+- `TZ=UTC` (process timezone default; override via standard `TZ` only)
 - `DATABASE_URL=postgresql+psycopg://refraq:refraq@127.0.0.1:5432/refraq`
 - `REDIS_URL=redis://127.0.0.1:6379/0`
 - `ADMIN_SESSION_SECRET=change-me`
@@ -62,6 +63,7 @@ Self-deploy Compose exposes only the web service to browsers; the API stays on t
 - `REFRAQ_API_HOST`
 - `REFRAQ_API_PORT`
 - `REFRAQ_STORE_BACKEND` (`persistent` default; `memory` tests only)
+- `TZ` (process timezone; default UTC in examples/images; not `APP_TIMEZONE`)
 - `DATABASE_URL` (required when `persistent`)
 - `REDIS_URL` (required when `persistent`)
 - `ADMIN_SESSION_SECRET` (reserved for future signed-cookie usage; v1 sessions are server-managed)
@@ -85,7 +87,15 @@ Self-deploy Compose exposes only the web service to browsers; the API stays on t
 - `REFRAQ_API_UPSTREAM` (server-side rewrite target; build-time for production images)
 - `NEXT_PUBLIC_DEFAULT_LOCALE`
 
-## 5. Usage Rules
+## 5. Process timezone (`TZ`)
+
+- Deploy default is process `TZ=UTC` (backend Dockerfile `ENV`, Compose service environment, `.env.example`).
+- Override only via the standard `TZ` environment variable; do **not** invent `APP_TIMEZONE`.
+- Production must run UTC. Instant semantics do not depend on process TZ, but default UTC avoids accidental local interpretation in libraries that read `TZ`.
+- IANA zone data: declare Python package `tzdata` so Schedule Timezone / `zoneinfo` works without host OS zoneinfo.
+- Full Instant / Schedule Timezone rules: [`docs/conventions-time.md`](conventions-time.md).
+
+## 6. Usage Rules
 
 - Use `.env.example` as the canonical template
 - Keep docs and env examples in sync
@@ -96,11 +106,11 @@ Self-deploy Compose exposes only the web service to browsers; the API stays on t
 - Settings dotenv load order: repo-root `.env` then `backend/.env` (later wins). Prefer `backend/.env` as the local canonical file
 - Integration tests must not reuse interactive `DATABASE_URL` / `REDIS_URL`; they use `REFRAQ_INTEGRATION_*` defaults so Compose live data stays intact
 
-## 6. Initial Admin Seeding
+## 7. Initial Admin Seeding
 
 On backend startup, if the user store is empty, default roles are ensured and a single `super_admin` user is created from `INITIAL_ADMIN_ACCOUNT` and `INITIAL_ADMIN_PASSWORD`. The display name defaults to the account value. Subsequent restarts do not re-seed. Multiple replicas remain safe because seeding is gated on an empty user store.
 
-## 7. Celery Worker And Beat
+## 8. Celery Worker And Beat
 
 Platform async runtime (`docs/adr/0006-celery-platform-async-runtime.md`):
 
@@ -111,7 +121,7 @@ Platform async runtime (`docs/adr/0006-celery-platform-async-runtime.md`):
 - No Celery result backend; operator-visible status and run logs live on Postgres Job rows (`log_body`; later large attachments if needed)
 - Do not run long collection inside the interactive API request path (`docs/adr/0004-redis-queue-for-ingestion.md`)
 
-## 8. Secret Handling
+## 9. Secret Handling
 
 - Never commit real `REFRAQ_SECRETS_MASTER_KEY`, admin passwords, or Source database passwords
 - Rotating `REFRAQ_SECRETS_MASTER_KEY` requires a documented re-encrypt procedure before it is safe in production; until then treat the key as stable per environment

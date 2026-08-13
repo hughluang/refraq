@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 
+from backend.core.time import Instant
 from pydantic import BaseModel, Field
 
 __all__ = [
@@ -20,8 +20,8 @@ class BusinessDomainOut(BaseModel):
     code: str
     name: str
     description: str | None = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: Instant
+    updated_at: Instant
 
 
 class BusinessDomainListResponse(BaseModel):

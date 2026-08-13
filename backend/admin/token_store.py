@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.time import utc_now
 import hashlib
 import secrets
 import threading
@@ -111,7 +112,7 @@ class MemoryTokenStore:
                 expires_at=expires_at,
                 revoked_at=None,
                 deleted_at=None,
-                created_at=datetime.utcnow(),
+                created_at=utc_now(),
                 last_used_at=None,
             )
             self._by_id[token_id] = record
@@ -185,7 +186,7 @@ class SqlTokenStore:
     ) -> TokenRecord:
 
         token_id = f"pat_{uuid.uuid4().hex[:12]}"
-        created_at = datetime.utcnow()
+        created_at = utc_now()
         with session_scope() as session:
             row = UserPatRow(
                 id=token_id,
