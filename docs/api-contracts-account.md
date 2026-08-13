@@ -10,7 +10,7 @@ Related: `docs/api-contracts-auth.md` (Current User Summary), `docs/api-contract
 
 ## 2. Transport
 
-Same as other protected APIs: JSON, Session **or** PAT, `401` when unauthenticated.
+Same as other protected APIs: JSON success bodies, Session **or** PAT, `401` when unauthenticated. HTTP failures: [`docs/conventions-errors.md`](conventions-errors.md).
 
 ## 3. `PATCH /account/profile`
 

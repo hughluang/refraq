@@ -52,7 +52,7 @@ The backend owns:
 - Password verification
 - User identity model
 - Role and permission evaluation
-- HTTP error semantics for unauthenticated and unauthorized access
+- HTTP Problem Details for failures (unauthenticated, unauthorized, validation, unhandled); Request ID on every response ([`docs/conventions-errors.md`](conventions-errors.md))
 - Schema migration and System Role ensure via Foundation Upgrade / official entrypoint (not app lifespan permission reconcile)
 - Site Bootstrap on lifespan only when stores are empty (see `docs/adr/0003-foundation-upgrade-vs-bootstrap.md`)
 

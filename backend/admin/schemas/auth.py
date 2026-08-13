@@ -32,10 +32,5 @@ class LoginResponse(BaseModel):
     user: CurrentUser
 
 
-class ErrorResponse(BaseModel):
-    code: str
-    message: str
-
-
 class LogoutResponse(BaseModel):
     success: bool = True

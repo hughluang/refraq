@@ -8,6 +8,7 @@ from celery import Celery
 
 from backend.core.celery_broker import celery_broker_url
 from backend.core.config import get_settings
+from backend.core.request_id import connect_celery_request_id, install_request_id_log_filter
 
 
 def create_celery_app() -> Celery:
@@ -35,6 +36,9 @@ def create_celery_app() -> Celery:
 
 celery_app = create_celery_app()
 celery_app.set_default()
+
+install_request_id_log_filter()
+connect_celery_request_id()
 
 # Alias for `celery -A backend.worker.app`
 app = celery_app

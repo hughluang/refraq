@@ -14,7 +14,9 @@ These contracts are intentionally small:
 
 ## 2. Transport Rules
 
-- Content type: `application/json`
+- Success content type: `application/json`
+- HTTP **failures**: `application/problem+json` (RFC 9457). Global rules: [`docs/conventions-errors.md`](conventions-errors.md), ADR [`0023`](adr/0023-api-problem-details.md)
+- Every HTTP response (success and failure) echoes `X-Request-ID`
 - Authentication transport for Management Console: session cookie
 - Frontend must send requests with credentials included
 - Metadata foundation and automation may alternatively authenticate with **User PAT** Bearer (`docs/api-contracts-tokens.md`); protected endpoints accept Session **or** PAT
@@ -54,17 +56,17 @@ These contracts are intentionally small:
 
 ### Error Response
 
+HTTP failures use Problem Details. First-party clients branch on **Problem Code** (`code`), not on `type`. `detail` is the English fallback; localize UI by `code`. `request_id` matches `X-Request-ID`.
+
 ```json
 {
+  "type": "urn:refraq:problem:AUTH_INVALID_CREDENTIALS",
+  "status": 401,
+  "detail": "Invalid account or password",
   "code": "AUTH_INVALID_CREDENTIALS",
-  "message": "Invalid account or password"
+  "request_id": "…"
 }
 ```
-
-Fields:
-
-- `code`: stable machine-readable error code; clients SHOULD localize UI copy by `code`
-- `message`: English default fallback string; not a locale-negotiated field in this slice
 
 ## 4. `POST /auth/login`
 
@@ -114,8 +116,11 @@ Additional behavior:
 
 ```json
 {
+  "type": "urn:refraq:problem:AUTH_INVALID_CREDENTIALS",
+  "status": 401,
+  "detail": "Invalid account or password",
   "code": "AUTH_INVALID_CREDENTIALS",
-  "message": "Invalid account or password"
+  "request_id": "…"
 }
 ```
 
@@ -123,8 +128,11 @@ Additional behavior:
 
 ```json
 {
+  "type": "urn:refraq:problem:AUTH_ACCOUNT_DISABLED",
+  "status": 403,
+  "detail": "This account is disabled",
   "code": "AUTH_ACCOUNT_DISABLED",
-  "message": "This account is disabled"
+  "request_id": "…"
 }
 ```
 
@@ -132,8 +140,11 @@ Additional behavior:
 
 ```json
 {
+  "type": "urn:refraq:problem:AUTH_CONSOLE_ACCESS_REQUIRED",
+  "status": 403,
+  "detail": "This account cannot sign in to the console",
   "code": "AUTH_CONSOLE_ACCESS_REQUIRED",
-  "message": "This account cannot sign in to the console"
+  "request_id": "…"
 }
 ```
 
@@ -158,12 +169,15 @@ Same `user` shape as login success.
 
 ```json
 {
+  "type": "urn:refraq:problem:AUTH_UNAUTHENTICATED",
+  "status": 401,
+  "detail": "Not signed in or session expired",
   "code": "AUTH_UNAUTHENTICATED",
-  "message": "Not signed in or session expired"
+  "request_id": "…"
 }
 ```
 
-(`message` is a default English fallback; PAT failures may use `AUTH_PAT_INVALID` where that code is more specific.)
+(`detail` is a default English fallback; PAT failures may use `AUTH_PAT_INVALID` where that code is more specific.)
 
 ## 6. `POST /auth/logout`
 
@@ -198,8 +212,11 @@ Status: `403`
 
 ```json
 {
+  "type": "urn:refraq:problem:AUTH_FORBIDDEN",
+  "status": 403,
+  "detail": "You do not have permission for this action",
   "code": "AUTH_FORBIDDEN",
-  "message": "You do not have permission for this action"
+  "request_id": "…"
 }
 ```
 

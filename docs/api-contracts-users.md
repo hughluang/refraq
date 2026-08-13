@@ -4,9 +4,9 @@
 
 This document defines the User management endpoints for the **Management Console** slice. They belong to the **Management Foundation** and are gated by the `users:read` and `users:write` permissions.
 
-These contracts complement `docs/api-contracts-auth.md` and `docs/api-contracts-roles.md`. They follow the same transport rules:
+These contracts complement `docs/api-contracts-auth.md` and `docs/api-contracts-roles.md`. They follow the same transport rules (`docs/api-contracts-auth.md` §2, [`docs/conventions-errors.md`](conventions-errors.md)):
 
-- Content type: `application/json`
+- Success: `application/json`; HTTP failures: `application/problem+json`
 - Authentication: Session cookie or User PAT Bearer (see `docs/api-contracts-auth.md` §2, `docs/api-contracts-tokens.md`)
 - All endpoints require a valid authenticated User
 - `401` is returned when authentication is missing or invalid
@@ -43,14 +43,17 @@ The former `/admins` resource is retired; clients must use `/users`.
 
 ### Error Response
 
+HTTP failures use Problem Details ([`docs/conventions-errors.md`](conventions-errors.md)). First-party clients localize by **Problem Code** (`code`); `detail` is the English fallback.
+
 ```json
 {
+  "type": "urn:refraq:problem:USER_ACCOUNT_DUPLICATE",
+  "status": 409,
+  "detail": "Account already exists",
   "code": "USER_ACCOUNT_DUPLICATE",
-  "message": "Account already exists"
+  "request_id": "…"
 }
 ```
-
-`code` is the stable machine-readable code; clients SHOULD localize UI copy by `code`. `message` is an English default fallback string; it is not locale-negotiated in this slice.
 
 ## 3. `GET /users`
 

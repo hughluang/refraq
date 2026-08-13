@@ -56,8 +56,10 @@ def _require(user: UserRecord, permission: str) -> None:
 
 def _err(exc: Exception) -> str:
     if isinstance(exc, AppError):
-        return json.dumps({"error": {"code": exc.code, "message": exc.message}})
-    return json.dumps({"error": {"code": "MCP_ERROR", "message": str(exc)}})
+        payload: dict[str, str] = {"code": exc.code, "message": exc.message}
+    else:
+        payload = {"code": "MCP_ERROR", "message": str(exc)}
+    return json.dumps({"error": payload})
 
 def _json_default(obj: object) -> Any:
     if isinstance(obj, datetime):

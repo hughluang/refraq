@@ -38,7 +38,7 @@ For `super_admin`, `permissions` in API responses is the **effective** full Perm
 
 ### Error Response
 
-Same shape as other Management Foundation APIs (`code` + `message`).
+Same HTTP Problem Details shape as other Management Foundation APIs ([`docs/conventions-errors.md`](conventions-errors.md)).
 
 ## 3. `GET /permissions`
 

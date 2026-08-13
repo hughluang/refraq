@@ -2,21 +2,37 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.admin.role_store import get_role_store
 from backend.admin.roles import SUPER_ADMIN_KEY, seed_roles
-from backend.admin.schemas.auth import ErrorResponse
 from backend.admin.security import hash_password
 from backend.admin.user_store import get_user_store
 from backend.core.config import Settings, get_settings
-from backend.core.errors import AppError
+from backend.core.errors import (
+    CODE_INTERNAL_ERROR,
+    CODE_REQUEST_INVALID,
+    DETAIL_INTERNAL_ERROR,
+    DETAIL_REQUEST_INVALID,
+    AppError,
+    http_status_problem_code,
+    problem_response,
+    validation_field_errors,
+)
 from backend.core.health import router as health_router
+from backend.core.request_id import (
+    RequestIdMiddleware,
+    SCOPE_KEY,
+    get_request_id,
+    install_request_id_log_filter,
+)
 
 # Bind Celery before importing domain routers/tasks that use `@shared_task`.
 import backend.worker.app as _celery_runtime  # noqa: F401
@@ -37,6 +53,8 @@ from backend.metadata.routers.query import router as metadata_query_router
 from backend.metadata.routers.sources import router as sources_router
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
+install_request_id_log_filter()
 
 
 def _bootstrap_site(target_settings: Settings) -> None:
@@ -75,10 +93,48 @@ app = FastAPI(
 
 
 @app.exception_handler(AppError)
-async def app_error_handler(_: Request, exc: AppError) -> JSONResponse:
-    return JSONResponse(
-        status_code=exc.http_status,
-        content=ErrorResponse(code=exc.code, message=exc.message).model_dump(),
+async def app_error_handler(_request: Request, exc: AppError) -> object:
+    return problem_response(
+        status=exc.http_status,
+        code=exc.code,
+        detail=exc.message,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_handler(
+    _request: Request, exc: RequestValidationError
+) -> object:
+    return problem_response(
+        status=422,
+        code=CODE_REQUEST_INVALID,
+        detail=DETAIL_REQUEST_INVALID,
+        details=validation_field_errors(exc.errors()),
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(_request: Request, exc: StarletteHTTPException) -> object:
+    return problem_response(
+        status=exc.status_code,
+        code=http_status_problem_code(exc.status_code),
+        detail=exc.detail,
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_error_handler(request: Request, exc: Exception) -> object:
+    logger.exception("Unhandled error: %s", exc)
+    # FastAPI binds Exception to ServerErrorMiddleware, after RequestIdMiddleware resets ContextVar.
+    rid = get_request_id()
+    if not rid:
+        scoped = request.scope.get(SCOPE_KEY)
+        rid = scoped if isinstance(scoped, str) else ""
+    return problem_response(
+        status=500,
+        code=CODE_INTERNAL_ERROR,
+        detail=DETAIL_INTERNAL_ERROR,
+        request_id=rid,
     )
 
 
@@ -97,3 +153,5 @@ app.include_router(business_domains_router)
 app.include_router(metadata_jobs_router)
 app.include_router(metadata_query_router)
 app.include_router(jobs_mechanism_router)
+
+app.add_middleware(RequestIdMiddleware)

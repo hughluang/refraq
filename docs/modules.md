@@ -16,7 +16,8 @@ Responsibilities:
 
 - Create FastAPI app (composition root)
 - Mount package routers (including health probes from `core`)
-- Map `AppError` to HTTP responses
+- Map `AppError`, validation errors, HTTPException, and unhandled exceptions to Problem Details
+- Install request-id middleware (`X-Request-ID`)
 - Run **Site Bootstrap** when stores are empty (seed roles + initial admin); must not realign System Role permissions on non-empty stores
 
 Must not contain:
@@ -38,12 +39,14 @@ Responsibilities:
 - `core/time.py`: **unique Instant / Clock entry** — `Clock` / `utc_now`, Instant field type, `UtcDateTime`, format helpers; Schedule wall-clock DST helpers used by `worker`
 - `core/redis_client.py`: Redis client factory for Session storage
 - `core/secrets.py`: application secret encryption helpers
-- `core/errors.py`: `AppError` (code + http_status) cross-package error primitive
+- `core/errors.py`: `AppError` (code + http_status) and HTTP Problem Details serialization
+- `core/request_id.py`: `X-Request-ID` middleware helpers, log filter, Celery header transfer
 - `core/upgrade.py`: **Foundation Upgrade** (advisory-locked Alembic migrate, then call domain System Role ensure); exit non-zero on failure
 - `core/entry.py`: official product start path (run Foundation Upgrade, then serve); exit non-zero if upgrade fails (does not serve)
 - Process probes (health/ready HTTP adapters)
 
 Time contract: [`docs/conventions-time.md`](conventions-time.md), ADR [`0022`](adr/0022-unified-time-contract.md).
+Error / request-id contract: [`docs/conventions-errors.md`](conventions-errors.md), ADR [`0023`](adr/0023-api-problem-details.md).
 
 Must not contain:
 
@@ -128,6 +131,7 @@ Responsibilities:
 - **Scheduled Task** ORM, system schedule seed, and Postgres-backed Beat scheduler
 - Platform system tasks (for example stuck **Job** reaper)
 - Discover and register domain and platform task modules
+- Bind Celery request-id header transfer (not a Job column)
 
 Must not contain:
 

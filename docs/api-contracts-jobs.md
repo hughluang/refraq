@@ -7,6 +7,7 @@ Contracts for enqueueing and observing platform **Jobs** via domain facades (met
 Business rules: `docs/business-metadata.md`, root `CONTEXT.md`.
 Auth: Session or User PAT. Permissions: `jobs:run` unless noted.
 Instants: [`docs/conventions-time.md`](conventions-time.md) (UTC `Z` on the wire).
+HTTP protocol failures: [`docs/conventions-errors.md`](conventions-errors.md). Job `error_code` / `error_message` remain resource fields on a successful GET, not Problem Details.
 
 ## 2. Job Shape
 

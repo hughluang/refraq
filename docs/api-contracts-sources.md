@@ -5,7 +5,7 @@
 HTTP contracts for **Source** management (metadata foundation slice A+), including embedded reachability and credentials for `kind=database`.
 
 Business rules: `docs/business-metadata.md`, `docs/adr/0007-source-owns-catalog-identity.md`, `docs/adr/0010-source-owns-access.md`, `docs/adr/0011-encrypted-access-blob-and-connector-spec.md`, `docs/adr/0021-catalog-scope-in-access.md`.
-Transport: `application/json`. Authentication: Session cookie **or** User PAT Bearer (`docs/api-contracts-auth.md`, `docs/api-contracts-tokens.md`).
+Transport: success `application/json`; HTTP failures `application/problem+json` ([`docs/conventions-errors.md`](conventions-errors.md)). Authentication: Session cookie **or** User PAT Bearer (`docs/api-contracts-auth.md`, `docs/api-contracts-tokens.md`).
 `401` unauthenticated; `403` missing permission.
 
 ## 2. Shared Shapes
@@ -49,12 +49,19 @@ For non-database kinds (future), `engine` / `access` may be absent.
 
 ### Error
 
+HTTP protocol failures use Problem Details ([`docs/conventions-errors.md`](conventions-errors.md)):
+
 ```json
 {
+  "type": "urn:refraq:problem:SOURCE_ACCESS_REQUIRED",
+  "status": 400,
+  "detail": "A database source requires engine and access",
   "code": "SOURCE_ACCESS_REQUIRED",
-  "message": "A database source requires engine and access"
+  "request_id": "…"
 }
 ```
+
+Source probe completed-failure remains HTTP 200 `{ "ok": false, "code", "message" }` (result document; not Problem Details).
 
 ## 3. Source Endpoints
 

@@ -7,6 +7,7 @@ Read API for **Management Audit Events** produced by metadata foundation and Use
 Business rules: `docs/business-metadata.md` §13.
 Permission: `audit:read`.
 Auth: Session or User PAT.
+HTTP protocol failures: [`docs/conventions-errors.md`](conventions-errors.md).
 
 ## 2. Event Shape
 

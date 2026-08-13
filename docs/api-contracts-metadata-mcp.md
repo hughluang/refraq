@@ -11,6 +11,7 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 
 ## 2. Cross-Cutting Rules
 
+- Tool failures are **not** HTTP Problem Details. Shape: `{ "error": { "code": "<Problem Code>", "message": "..." } }`. Human text stays `message` (not `detail`). JSON-RPC protocol `error.code` is an integer and is not a Problem Code. Shared identity with HTTP: [`docs/conventions-errors.md`](conventions-errors.md)
 - Missing/invalid auth → tool error mapped from `401`
 - Authenticated but lacking permission → mapped from `403` with required permission named when practical
 - Mutations write management audit events

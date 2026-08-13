@@ -6,6 +6,7 @@ HTTP contracts for collected **Catalog Objects**, semantics, join edges, search,
 
 Business rules: `docs/business-metadata.md`.
 Auth: Session or User PAT.
+HTTP protocol failures: [`docs/conventions-errors.md`](conventions-errors.md).
 
 Slice / permission availability:
 

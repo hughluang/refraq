@@ -104,10 +104,10 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 
 ### Cross-package errors
 
-- `backend.core.errors.AppError` carries `code` + `http_status` (+ message).
+- `backend.core.errors.AppError` carries `code` + `http_status` (+ message). HTTP mapping serializes RFC 9457 Problem Details (`code` is Problem Code; `message` becomes `detail`).
 - Foundation and domain errors subclass `AppError`.
 - Product domains and platform primitives **must not** subclass concrete `admin.errors` types.
-- HTTP mapping in composition recognizes `AppError`.
+- HTTP mapping in composition recognizes `AppError`, validation errors, Starlette `HTTPException`, and unhandled exceptions. Contract: [`docs/conventions-errors.md`](conventions-errors.md).
 
 ## 4. Placement (by ownership, not by technical layer)
 
@@ -120,7 +120,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Domain use-case HTTP (Source, structure enqueue/list, Catalog) | product domain (`metadata`) |
 | Outbound adapter families | Owning product domain (e.g. `metadata/connectors`) |
 | Domain error types | That product domain (base in `core`) |
-| Config, engine, secrets crypto, Instant/Clock (`core.time`), upgrade orchestration, `AppError`, process probes | `core` (upgrade may call platform-kernel published API); time contract in [`docs/conventions-time.md`](conventions-time.md) |
+| Config, engine, secrets crypto, Instant/Clock (`core.time`), upgrade orchestration, `AppError` / Problem Details, request-id helpers, process probes | `core` (upgrade may call platform-kernel published API); time contract in [`docs/conventions-time.md`](conventions-time.md); errors in [`docs/conventions-errors.md`](conventions-errors.md) |
 | Celery app, Beat, **Scheduled Task**, system tasks, task registration | `worker` |
 | Domain async work units (`@shared_task` or equivalent) | Owning product domain; **discovered and registered by `worker`** |
 | Process probes (health/ready) | `core` (thin); not inside a product domain |

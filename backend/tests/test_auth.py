@@ -12,6 +12,7 @@ os.environ.setdefault("REFRAQ_SKIP_SEED", "1")
 
 from backend.admin.security import hash_password  # noqa: E402
 from backend.main import app  # noqa: E402
+from backend.tests.problem import assert_problem  # noqa: E402
 from backend.admin.roles import create_role, seed_roles  # noqa: E402
 from backend.admin.role_store import (  # noqa: E402
     MemoryRoleStore,
@@ -88,10 +89,12 @@ def test_login_wrong_password_returns_invalid_credentials(client: TestClient) ->
     )
 
     assert response.status_code == 401
-    assert response.json() == {
-        "code": "AUTH_INVALID_CREDENTIALS",
-        "message": "Invalid account or password",
-    }
+    assert_problem(
+        response,
+        status=401,
+        code="AUTH_INVALID_CREDENTIALS",
+        detail="Invalid account or password",
+    )
 
 
 def test_login_unknown_account_returns_invalid_credentials(client: TestClient) -> None:

@@ -7,6 +7,7 @@ Contracts for **User PAT** create/list/deactivate/restore/soft-delete.
 Business rules: `docs/business-user-tokens.md`.
 Auth for these endpoints: Session cookie **or** User PAT (a PAT may deactivate or delete itself).
 Permissions: `tokens:read` / `tokens:write`. Users act only on their own tokens.
+HTTP protocol failures: [`docs/conventions-errors.md`](conventions-errors.md).
 
 ## 2. Token Metadata Shape
 
