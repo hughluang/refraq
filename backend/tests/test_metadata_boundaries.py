@@ -47,6 +47,7 @@ from backend.metadata.schemas.catalog import (  # noqa: E402
     ObjectSemanticsPatchRequest,
     SemanticSource,
 )
+from backend.metadata.sources.service import require_source  # noqa: E402
 from backend.metadata.sources.store import (  # noqa: E402
     SourceRecord,
     get_source_store,
@@ -287,14 +288,11 @@ def test_illegal_semantics_and_field_kind_not_writable(client: TestClient) -> No
     )
     obj.source_id = source_id
     apply_structure_snapshot(
-        source_id=source_id,
+        source=require_source(source_id),
         job_id="seed",
         collected=[obj],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="demo-http",
     )
     stored = store.get_object(obj.id)
     assert stored is not None
@@ -349,14 +347,11 @@ def test_join_path_reasons() -> None:
     a = _table(object_id="obj_a", name="a", columns=[("col_a", "id")])
     b = _table(object_id="obj_b", name="b", columns=[("col_b", "id")])
     apply_structure_snapshot(
-        source_id="src_1",
+        source=require_source("src_1"),
         job_id="j1",
         collected=[a, b],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="demo-src",
     )
     missing_start = find_join_paths(
         store=store,
@@ -401,14 +396,11 @@ def test_fk_unresolved_aborts_and_keeps_snapshot() -> None:
         ],
     )
     apply_structure_snapshot(
-        source_id="src_1",
+        source=require_source("src_1"),
         job_id="job_old",
         collected=[customers, orders],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="demo-src",
     )
     joins_before = store.list_joins_for_object("obj_orders")
     assert len(joins_before) == 1
@@ -432,14 +424,11 @@ def test_fk_unresolved_aborts_and_keeps_snapshot() -> None:
     )
     with pytest.raises(CatalogWriteAborted) as exc:
         apply_structure_snapshot(
-            source_id="src_1",
+            source=require_source("src_1"),
             job_id="job_bad",
             collected=[customers, broken_orders],
             schema_scope=None,
             fail_safe_threshold=1.0,
-            engine="postgresql",
-            kind="database",
-            source_key="demo-src",
         )
     assert exc.value.code == "JOB_FK_UNRESOLVED"
     present_after = {o.id: o.name for o in store.list_present_for_source("src_1")}
@@ -472,14 +461,11 @@ def test_fk_column_mismatch_aborts() -> None:
     )
     with pytest.raises(CatalogWriteAborted) as exc:
         apply_structure_snapshot(
-            source_id="src_1",
+            source=require_source("src_1"),
             job_id="job_mismatch",
             collected=[parent, child],
             schema_scope=None,
             fail_safe_threshold=1.0,
-            engine="postgresql",
-            kind="database",
-            source_key="demo-src",
         )
     assert exc.value.code == "JOB_FK_COLUMN_MISMATCH"
     assert store.list_present_for_source("src_1") == []
@@ -512,14 +498,11 @@ def test_fk_retarget_clears_stale_edge() -> None:
         ],
     )
     apply_structure_snapshot(
-        source_id="src_1",
+        source=require_source("src_1"),
         job_id="job_v1",
         collected=[customers, partners, orders],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="demo-src",
     )
     first = store.list_joins_for_object("obj_orders")
     assert len(first) == 1
@@ -540,14 +523,11 @@ def test_fk_retarget_clears_stale_edge() -> None:
         ],
     )
     apply_structure_snapshot(
-        source_id="src_1",
+        source=require_source("src_1"),
         job_id="job_v2",
         collected=[customers, partners, retargeted],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="demo-src",
     )
     second = store.list_joins_for_object("obj_orders")
     assert len(second) == 1

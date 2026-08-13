@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from backend.core.time import utc_now
-from datetime import datetime
-
 from backend.core.config import get_settings
+from backend.core.time import utc_now
+
 from backend.jobs.store import (
     append_job_log,
     get_job_store,
@@ -25,21 +24,16 @@ from backend.metadata.catalog.store import (
 )
 from backend.metadata.catalog.structure_diff import compute_structure_diff
 from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
-from backend.metadata.type_mappings.service import assign_normalized_types
-from backend.metadata.connectors.base import (
-    CollectedStructure,
-    ConnectorError,
-    endpoint_from_access,
-)
-from backend.metadata.connectors.registry import get_connector
+from backend.metadata.connectors.base import CollectedStructure, ConnectorError
+from backend.metadata.connectors.runtime import prepare
 from backend.metadata.locators import format_column_locator, format_object_locator
 from backend.metadata.sources.access import decrypt_access_blob
 from backend.metadata.sources.store import get_source_store
 from backend.metadata.structure_diffs.service import persist_structure_diff
+from backend.metadata.type_mappings.service import assign_normalized_types
 
 
 def run_structure_job(job_id: str) -> dict[str, str]:
-    store = get_job_store()
     current = mark_running(job_id, celery_task_id=job_id)
     if current is None:
         return {"status": "missing"}
@@ -62,8 +56,7 @@ def run_structure_job(job_id: str) -> dict[str, str]:
             error_summary="structure job requires source_id",
         )
 
-    sources = get_source_store()
-    source = sources.get_source(source_id)
+    source = get_source_store().get_source(source_id)
     if source is None:
         return _fail(
             job_id,
@@ -83,14 +76,6 @@ def run_structure_job(job_id: str) -> dict[str, str]:
             error_summary="Source has no access configuration",
         )
 
-    connector = get_connector(source.engine)
-    if connector is None:
-        return _fail(
-            job_id,
-            error_code="JOB_CONNECTOR_UNAVAILABLE",
-            error_summary=f"No connector for engine {source.engine}",
-        )
-
     try:
         access = decrypt_access_blob(source.access_ciphertext)
     except Exception as exc:  # noqa: BLE001
@@ -100,17 +85,21 @@ def run_structure_job(job_id: str) -> dict[str, str]:
             error_summary=f"Access decrypt failed: {exc}",
         )
 
-    endpoint = endpoint_from_access(
-        engine=source.engine,
-        access=access,
-    )
+    try:
+        bound = prepare(engine=source.engine, access=access)
+    except ConnectorError:
+        return _fail(
+            job_id,
+            error_code="JOB_CONNECTOR_UNAVAILABLE",
+            error_summary=f"No connector for engine {source.engine}",
+        )
 
     if _cancelled(job_id):
         return {"status": "cancelled"}
 
     append_job_log(job_id, level="info", message="collecting structure…")
     try:
-        collected = connector.collect_structure(endpoint)
+        collected = bound.connector.collect_structure(bound.endpoint)
     except ConnectorError as exc:
         if _cancelled(job_id):
             return {"status": "cancelled"}
@@ -141,20 +130,16 @@ def run_structure_job(job_id: str) -> dict[str, str]:
         for col in obj.columns
         if col.normalized_type == "unknown"
     ]
-    settings = get_settings()
     catalog = get_catalog_store()
     existing = catalog.list_present_for_source(source_id)
     append_job_log(job_id, level="info", message="applying catalog snapshot…")
     try:
         apply_structure_snapshot(
-            source_id=source_id,
+            source=source,
             job_id=job_id,
             collected=records,
-            schema_scope=endpoint.schema_filter,
-            fail_safe_threshold=settings.refraq_catalog_fail_safe_threshold,
-            engine=source.engine,
-            kind=source.kind,
-            source_key=source.key,
+            schema_scope=bound.endpoint.schema_filter,
+            fail_safe_threshold=get_settings().refraq_catalog_fail_safe_threshold,
         )
     except CatalogWriteAborted as exc:
         return _fail(job_id, error_code=exc.code, error_summary=exc.message)
@@ -162,7 +147,7 @@ def run_structure_job(job_id: str) -> dict[str, str]:
     facts = compute_structure_diff(
         existing=existing,
         incoming=records,
-        schema_scope=endpoint.schema_filter,
+        schema_scope=bound.endpoint.schema_filter,
     )
     diff = persist_structure_diff(
         source_id=source_id,

@@ -32,6 +32,7 @@ from backend.metadata.catalog.store import (  # noqa: E402
 from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
 from backend.metadata.locators import format_object_locator  # noqa: E402
 from backend.metadata.mcp_server import upsert_joins  # noqa: E402
+from backend.metadata.sources.service import require_source  # noqa: E402
 from backend.metadata.sources.store import reset_source_store  # noqa: E402
 
 
@@ -176,14 +177,11 @@ def test_view_to_materialized_view_preserves_identity(client: TestClient) -> Non
         col_id="col_mv_id",
     )
     apply_structure_snapshot(
-        source_id=source["id"],
+        source=require_source(source["id"]),
         job_id="job_1",
         collected=[seed],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="mes-prod",
     )
     before = store.get_object("obj_mv")
     assert before is not None
@@ -199,14 +197,11 @@ def test_view_to_materialized_view_preserves_identity(client: TestClient) -> Non
         business_name=None,
     )
     apply_structure_snapshot(
-        source_id=source["id"],
+        source=require_source(source["id"]),
         job_id="job_2",
         collected=[incoming],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key=source["key"],
     )
     after = store.get_object("obj_mv")
     assert after is not None
@@ -229,14 +224,11 @@ def test_engine_change_recomputes_catalog_locators(client: TestClient) -> None:
         col_id="col_wo",
     )
     apply_structure_snapshot(
-        source_id=source["id"],
+        source=require_source(source["id"]),
         job_id="job_1",
         collected=[seed],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="mes-prod",
     )
     before = store.get_object("obj_wo")
     assert before is not None
@@ -326,14 +318,11 @@ def test_list_objects_pagination_defaults(client: TestClient) -> None:
             )
         )
     apply_structure_snapshot(
-        source_id=source["id"],
+        source=require_source(source["id"]),
         job_id="job_page",
         collected=objects,
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="paged",
     )
     first = client.get(f"/sources/{source['id']}/objects")
     assert first.status_code == 200

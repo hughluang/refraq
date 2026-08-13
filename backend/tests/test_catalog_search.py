@@ -20,6 +20,7 @@ from backend.metadata.catalog.store import (  # noqa: E402
     reset_catalog_store,
 )
 from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
+from backend.metadata.sources.service import require_source  # noqa: E402
 from backend.metadata.sources.store import (  # noqa: E402
     SourceRecord,
     get_source_store,
@@ -117,7 +118,7 @@ def _obj(
 def test_search_objects_ranking_exact_prefix_substring_business() -> None:
     store = get_catalog_store()
     apply_structure_snapshot(
-        source_id="src_1",
+        source=require_source("src_1"),
         job_id="j1",
         collected=[
             _obj(object_id="obj_exact", name="work_order"),
@@ -132,9 +133,6 @@ def test_search_objects_ranking_exact_prefix_substring_business() -> None:
         ],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="mes-prod",
     )
     # Seed business fields (structure insert keeps incoming business_*).
     items, total = store.search_objects("work_order", limit=10, offset=0)
@@ -194,14 +192,11 @@ def test_search_columns_name_and_business() -> None:
         ),
     ]
     apply_structure_snapshot(
-        source_id="src_1",
+        source=require_source("src_1"),
         job_id="j1",
         collected=[obj],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="mes-prod",
     )
     items, total = store.search_columns("wo_id", limit=10, offset=0)
     assert total >= 1

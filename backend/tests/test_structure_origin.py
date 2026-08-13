@@ -27,6 +27,12 @@ from backend.metadata.catalog.structure_refresh import apply_structure_snapshot 
 from backend.metadata.catalog.structure_merge import (  # noqa: E402
     build_structure_refresh_plan,
 )
+from backend.metadata.sources.service import require_source  # noqa: E402
+from backend.metadata.sources.store import (  # noqa: E402
+    SourceRecord,
+    get_source_store,
+    reset_source_store,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -34,6 +40,24 @@ def _memory_store(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("REFRAQ_STORE_BACKEND", "memory")
     reset_settings_cache()
     reset_catalog_store()
+    reset_source_store()
+    now = utc_now()
+    get_source_store().create_source(
+        SourceRecord(
+            id="src_origin",
+            key="demo",
+            locator_key="src/postgresql/demo",
+            name="Demo",
+            kind="database",
+            status="active",
+            description=None,
+            engine="postgresql",
+            access_ciphertext=None,
+            access_updated_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+    )
 
 
 def _col(
@@ -190,14 +214,11 @@ def test_apply_preserves_human_join_via_store() -> None:
         now=now,
     )
     apply_structure_snapshot(
-        source_id="src_origin",
+        source=require_source("src_origin"),
         job_id="job_seed",
         collected=[customers, bare_orders],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="demo",
     )
     human = store.upsert_join(
         from_column_id="col_cust_fk",
@@ -209,14 +230,11 @@ def test_apply_preserves_human_join_via_store() -> None:
     assert human.origin == "human"
 
     apply_structure_snapshot(
-        source_id="src_origin",
+        source=require_source("src_origin"),
         job_id="job_refresh",
         collected=[customers, orders],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="demo",
     )
     joins = store.list_joins_for_object("obj_orders")
     assert len(joins) == 1
@@ -243,14 +261,11 @@ def test_service_foreign_key_upsert_keeps_human_join() -> None:
         now=now,
     )
     apply_structure_snapshot(
-        source_id="src_origin",
+        source=require_source("src_origin"),
         job_id="job_seed",
         collected=[customers, orders],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="demo",
     )
     human = catalog_service.upsert_join(
         from_column_id="col_cust_fk",

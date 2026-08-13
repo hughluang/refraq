@@ -11,9 +11,10 @@ from backend.metadata.catalog.structure_merge import (
     StructureRefreshPlan,
     build_structure_refresh_plan,
 )
+from backend.metadata.sources.store import SourceRecord
 
 
-def bind_structure_refresh_plan(
+def _bind_structure_refresh_plan(
     *,
     source_id: str,
     job_id: str,
@@ -53,31 +54,30 @@ def bind_structure_refresh_plan(
 
 def apply_structure_snapshot(
     *,
-    source_id: str,
+    source: SourceRecord,
     job_id: str,
     collected: list[CatalogObjectRecord],
     schema_scope: str | None,
     fail_safe_threshold: float,
-    engine: str | None,
-    kind: str,
-    source_key: str,
 ) -> None:
     """Commit structure upsert/absent only after a complete successful collect.
 
-    Fail-safe, identity match, FK/index merge, Join Origin, and Object Semantics
-    survival live in ``structure_merge``; the store adapter only loads inputs and
-    persists the resulting ``StructureRefreshPlan`` inside one lock/transaction.
+    Identity (engine / kind / key) is taken from ``source``; the fail-safe
+    threshold is supplied by the caller. Fail-safe, identity match, FK/index
+    merge, Join Origin, and Object Semantics survival live in
+    ``structure_merge``; the store adapter only loads inputs and persists the
+    resulting ``StructureRefreshPlan`` inside one lock/transaction.
     """
     get_catalog_store().run_structure_refresh(
-        source_id,
-        bind_structure_refresh_plan(
-            source_id=source_id,
+        source.id,
+        _bind_structure_refresh_plan(
+            source_id=source.id,
             job_id=job_id,
             collected=collected,
             schema_scope=schema_scope,
             fail_safe_threshold=fail_safe_threshold,
-            engine=engine,
-            kind=kind,
-            source_key=source_key,
+            engine=source.engine,
+            kind=source.kind,
+            source_key=source.key,
         ),
     )

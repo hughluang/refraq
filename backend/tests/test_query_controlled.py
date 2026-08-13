@@ -229,7 +229,7 @@ def test_query_success_and_audit(
         rows=[["1001"], ["1002"], ["1003"]],
         columns=["WO_ID"],
     )
-    monkeypatch.setattr(query_service, "get_connector", lambda engine: connector)
+    monkeypatch.setattr("backend.metadata.connectors.runtime.get_connector", lambda engine: connector)
 
     resp = client.post(
         f"/sources/{source['id']}/query",
@@ -288,7 +288,7 @@ def test_query_disabled_source(
 ) -> None:
     source = _make_source(client, key="dis-src")
     connector = _RecordingConnector()
-    monkeypatch.setattr(query_service, "get_connector", lambda engine: connector)
+    monkeypatch.setattr("backend.metadata.connectors.runtime.get_connector", lambda engine: connector)
     disabled = client.patch(f"/sources/{source['id']}", json={"status": "disabled"})
     assert disabled.status_code == 200
     resp = client.post(
@@ -321,7 +321,7 @@ def test_query_row_limit_precheck(
 ) -> None:
     source = _make_source(client, key="cap-src")
     connector = _RecordingConnector()
-    monkeypatch.setattr(query_service, "get_connector", lambda engine: connector)
+    monkeypatch.setattr("backend.metadata.connectors.runtime.get_connector", lambda engine: connector)
     resp = client.post(
         f"/sources/{source['id']}/query",
         json={"sql": "SELECT 1", "max_rows": 1001},
@@ -355,7 +355,7 @@ def test_query_guard_http_errors(
 ) -> None:
     source = _make_source(client, key=f"g-{abs(hash(sql)) % 10_000}")
     connector = _RecordingConnector()
-    monkeypatch.setattr(query_service, "get_connector", lambda engine: connector)
+    monkeypatch.setattr("backend.metadata.connectors.runtime.get_connector", lambda engine: connector)
     resp = client.post(
         f"/sources/{source['id']}/query",
         json={"sql": sql},
@@ -374,7 +374,7 @@ def test_query_application_timeout(
     reset_settings_cache()
     source = _make_source(client, key="timeout-src")
     connector = _RecordingConnector(sleep_sec=3)
-    monkeypatch.setattr(query_service, "get_connector", lambda engine: connector)
+    monkeypatch.setattr("backend.metadata.connectors.runtime.get_connector", lambda engine: connector)
     resp = client.post(
         f"/sources/{source['id']}/query",
         json={"sql": "SELECT 1"},
@@ -393,7 +393,7 @@ def test_mcp_run_sql_success_and_forbidden(
 
     source = _make_source(client, key="mcp-src")
     connector = _RecordingConnector(rows=[["ok"]], columns=["c"])
-    monkeypatch.setattr(query_service, "get_connector", lambda engine: connector)
+    monkeypatch.setattr("backend.metadata.connectors.runtime.get_connector", lambda engine: connector)
 
     expires = format_instant(utc_now() + timedelta(days=7))
     tok = client.post("/tokens", json={"name": "query-pat", "expires_at": expires})
@@ -463,7 +463,7 @@ def test_query_engine_timeout_maps_to_query_timeout(
             )
 
     monkeypatch.setattr(
-        query_service, "get_connector", lambda engine: _TimeoutConnector()
+        "backend.metadata.connectors.runtime.get_connector", lambda engine: _TimeoutConnector()
     )
     resp = client.post(
         f"/sources/{source['id']}/query",
@@ -480,7 +480,7 @@ def test_query_max_rows_below_one(
 ) -> None:
     source = _make_source(client, key="min-rows")
     connector = _RecordingConnector()
-    monkeypatch.setattr(query_service, "get_connector", lambda engine: connector)
+    monkeypatch.setattr("backend.metadata.connectors.runtime.get_connector", lambda engine: connector)
 
     with pytest.raises(QueryRowLimit):
         query_service.run_controlled_query(
@@ -513,7 +513,7 @@ def test_query_unexpected_exception_maps_to_query_failed(
             raise RuntimeError("driver blew up")
 
     monkeypatch.setattr(
-        query_service, "get_connector", lambda engine: _BoomConnector()
+        "backend.metadata.connectors.runtime.get_connector", lambda engine: _BoomConnector()
     )
     resp = client.post(
         f"/sources/{source['id']}/query",

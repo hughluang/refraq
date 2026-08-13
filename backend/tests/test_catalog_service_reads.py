@@ -37,6 +37,7 @@ from backend.metadata.errors import (  # noqa: E402
     JoinPathUnavailable,
 )
 from backend.metadata.mcp_server import find_join_path  # noqa: E402
+from backend.metadata.sources.service import require_source  # noqa: E402
 from backend.metadata.sources.store import (  # noqa: E402
     SourceRecord,
     get_source_store,
@@ -166,14 +167,11 @@ def test_service_read_model_and_semantics() -> None:
     store = get_catalog_store()
     a = _table("obj_a", "orders", [("col_id", "id")])
     apply_structure_snapshot(
-        source_id="src_1",
+        source=require_source("src_1"),
         job_id="j1",
         collected=[a],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="mes",
     )
     items, total = catalog_service.list_objects_for_source("src_1")
     assert total == 1
@@ -201,14 +199,11 @@ def test_service_lookup_join_paths() -> None:
     a = _table("obj_a", "a", [("col_a_id", "id"), ("col_a_b", "b_id")])
     b = _table("obj_b", "b", [("col_b_id", "id")])
     apply_structure_snapshot(
-        source_id="src_1",
+        source=require_source("src_1"),
         job_id="j1",
         collected=[a, b],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="mes",
     )
     store.upsert_join(
         from_column_id="col_a_b",
@@ -228,14 +223,11 @@ def test_service_lookup_join_paths() -> None:
 
     empty = _table("obj_empty", "empty", [])
     apply_structure_snapshot(
-        source_id="src_1",
+        source=require_source("src_1"),
         job_id="j2",
         collected=[a, b, empty],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="mes",
     )
     with pytest.raises(JoinPathUnavailable):
         catalog_service.lookup_join_paths(empty.locator_key)
@@ -315,14 +307,11 @@ def test_http_join_path_smoke(client: TestClient) -> None:
         ],
     )
     apply_structure_snapshot(
-        source_id=source_id,
+        source=require_source(source_id),
         job_id="j1",
         collected=[a],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="path-src",
     )
     resp = client.get(
         "/joins/path",
@@ -408,14 +397,11 @@ def test_mcp_find_join_path_smoke(client: TestClient) -> None:
         ],
     )
     apply_structure_snapshot(
-        source_id=source_id,
+        source=require_source(source_id),
         job_id="j1",
         collected=[a],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="mcp-path",
     )
     expires = format_instant(utc_now() + timedelta(days=7))
     tok = client.post("/tokens", json={"name": "path-pat", "expires_at": expires})

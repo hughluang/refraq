@@ -29,7 +29,12 @@ from backend.metadata.catalog.store import (  # noqa: E402
     reset_catalog_store,
 )
 from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
-from backend.metadata.sources.store import reset_source_store  # noqa: E402
+from backend.metadata.sources.service import require_source  # noqa: E402
+from backend.metadata.sources.store import (  # noqa: E402
+    SourceRecord,
+    get_source_store,
+    reset_source_store,
+)
 from backend.admin.role_store import get_role_store, reset_role_store  # noqa: E402
 from backend.admin.user_store import get_user_store, reset_user_store  # noqa: E402
 
@@ -229,7 +234,7 @@ def test_delete_disabled_source_and_catalog(client: TestClient) -> None:
     source = _make_source(client, key="del-ok")
     now = utc_now()
     apply_structure_snapshot(
-        source_id=source["id"],
+        source=require_source(source["id"]),
         job_id="job_del",
         collected=[
             CatalogObjectRecord(
@@ -284,9 +289,6 @@ def test_delete_disabled_source_and_catalog(client: TestClient) -> None:
         ],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="del-ok",
     )
     assert get_catalog_store().list_present_for_source(source["id"])
 
@@ -331,10 +333,10 @@ def test_structure_job_single_flight(client: TestClient) -> None:
 def test_structure_job_input_only_source_id(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from backend.metadata import runner as runner_mod
+    from backend.metadata.structure_jobs import service as structure_jobs
 
     monkeypatch.setattr(
-        runner_mod,
+        structure_jobs,
         "run_structure_job",
         lambda job_id: {"status": "succeeded"},
     )
@@ -370,7 +372,7 @@ def test_source_probe_draft_success(
             raise AssertionError("not used")
 
     monkeypatch.setattr(
-        "backend.metadata.sources.probe.get_connector",
+        "backend.metadata.connectors.runtime.get_connector",
         lambda engine: OkConnector(),
     )
 
@@ -411,7 +413,7 @@ def test_source_probe_draft_failure(
             raise AssertionError("not used")
 
     monkeypatch.setattr(
-        "backend.metadata.sources.probe.get_connector",
+        "backend.metadata.connectors.runtime.get_connector",
         lambda engine: FailConnector(),
     )
 
@@ -456,7 +458,7 @@ def test_source_probe_stored_uses_access(
             raise AssertionError("not used")
 
     monkeypatch.setattr(
-        "backend.metadata.sources.probe.get_connector",
+        "backend.metadata.connectors.runtime.get_connector",
         lambda engine: OkConnector(),
     )
 
@@ -490,7 +492,10 @@ def test_source_probe_timeout_returns_promptly(monkeypatch: pytest.MonkeyPatch) 
         def collect_structure(self, endpoint):  # noqa: ANN001
             raise AssertionError("not used")
 
-    monkeypatch.setattr(probe_mod, "get_connector", lambda engine: HangConnector())
+    monkeypatch.setattr(
+        "backend.metadata.connectors.runtime.get_connector",
+        lambda engine: HangConnector(),
+    )
 
     started = time.monotonic()
     result = probe_mod.run_source_probe(
@@ -593,7 +598,24 @@ def test_source_probe_forbidden_without_write(client: TestClient) -> None:
 
 def test_fail_safe_aborts_without_absent() -> None:
     reset_catalog_store()
+    reset_source_store()
     now = utc_now()
+    source = get_source_store().create_source(
+        SourceRecord(
+            id="src_1",
+            key="orphan",
+            locator_key="src/postgresql/orphan",
+            name="Orphan",
+            kind="database",
+            status="active",
+            description=None,
+            engine="postgresql",
+            access_ciphertext=None,
+            access_updated_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+    )
     store = get_catalog_store()
     seeded = []
     for i in range(4):
@@ -650,25 +672,19 @@ def test_fail_safe_aborts_without_absent() -> None:
             )
         )
     apply_structure_snapshot(
-        source_id="src_1",
+        source=source,
         job_id="job_old",
         collected=seeded,
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="orphan",
     )
     with pytest.raises(CatalogWriteAborted) as exc:
         apply_structure_snapshot(
-            source_id="src_1",
+            source=source,
             job_id="job_new",
             collected=[seeded[0]],
             schema_scope=None,
             fail_safe_threshold=0.5,
-            engine="postgresql",
-            kind="database",
-            source_key="orphan",
         )
     assert exc.value.code == "JOB_FAIL_SAFE"
     present = store.list_present_for_source("src_1")
@@ -686,7 +702,7 @@ def test_collect_failure_does_not_absent(monkeypatch: pytest.MonkeyPatch) -> Non
     from backend.jobs.store import create_queued_job
     from backend.metadata.catalog.store import CatalogObjectRecord, get_catalog_store
     from backend.metadata.connectors.base import ConnectorError
-    from backend.metadata.runner import run_structure_job
+    from backend.metadata.structure_jobs.service import run_structure_job
     from backend.metadata.sources.service import create_source
 
     source = create_source(
@@ -699,7 +715,7 @@ def test_collect_failure_does_not_absent(monkeypatch: pytest.MonkeyPatch) -> Non
     )
     now = utc_now()
     apply_structure_snapshot(
-        source_id=source.id,
+        source=source,
         job_id="old",
         collected=[
             CatalogObjectRecord(
@@ -733,9 +749,6 @@ def test_collect_failure_does_not_absent(monkeypatch: pytest.MonkeyPatch) -> Non
         ],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="fail-src",
     )
 
     class Boom:
@@ -748,7 +761,7 @@ def test_collect_failure_does_not_absent(monkeypatch: pytest.MonkeyPatch) -> Non
             raise ConnectorError("JOB_COLLECT_FAILED", "boom")
 
     monkeypatch.setattr(
-        "backend.metadata.runner.get_connector",
+        "backend.metadata.connectors.runtime.get_connector",
         lambda engine: Boom(),
     )
     job = create_queued_job(
@@ -795,7 +808,7 @@ def test_enqueue_structure_job_audits_and_rejects_non_database(
 
     reset_audit_store()
     monkeypatch.setattr(
-        "backend.metadata.runner.run_structure_job",
+        "backend.metadata.structure_jobs.service.run_structure_job",
         lambda job_id: {"status": "succeeded"},
     )
 
@@ -861,7 +874,7 @@ def test_structure_job_http_enqueue_writes_audit(client: TestClient, monkeypatch
 
     reset_audit_store()
     monkeypatch.setattr(
-        "backend.metadata.runner.run_structure_job",
+        "backend.metadata.structure_jobs.service.run_structure_job",
         lambda job_id: {"status": "succeeded"},
     )
     source = _make_source(client, key="http-enq")

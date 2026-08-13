@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from typing import Any
 
-from backend.metadata.connectors.base import ConnectorError, endpoint_from_access
-from backend.metadata.connectors.registry import get_connector
+from backend.metadata.connectors.base import ConnectorError
+from backend.metadata.connectors.runtime import prepare, run_bounded
 from backend.metadata.errors import SourceEngineUnsupported
 
 PROBE_TIMEOUT_SECONDS = 10
@@ -25,40 +24,32 @@ def run_source_probe(
     engine: str,
     access: dict[str, Any],
 ) -> ProbeResult:
-    connector = get_connector(engine)
-    if connector is None:
-        raise SourceEngineUnsupported()
-
-    endpoint = endpoint_from_access(
-        engine=engine,
-        access=access,
-    )
-
-    # Do not use `with ThreadPoolExecutor`: on timeout its __exit__ calls
-    # shutdown(wait=True) and would block until the hung connector returns.
-    pool = ThreadPoolExecutor(max_workers=1)
     try:
-        future = pool.submit(connector.test_connection, endpoint)
-        try:
-            future.result(timeout=PROBE_TIMEOUT_SECONDS)
-        except FuturesTimeout:
-            return ProbeResult(
-                ok=False,
-                code="SOURCE_TEST_TIMEOUT",
-                message=f"Source probe timed out after {PROBE_TIMEOUT_SECONDS}s",
-            )
-        except ConnectorError as exc:
-            return ProbeResult(
-                ok=False,
-                code="SOURCE_TEST_FAILED",
-                message=exc.message,
-            )
-        except Exception as exc:  # noqa: BLE001 — map unexpected driver errors
-            return ProbeResult(
-                ok=False,
-                code="SOURCE_TEST_FAILED",
-                message=str(exc),
-            )
-        return ProbeResult(ok=True)
-    finally:
-        pool.shutdown(wait=False, cancel_futures=True)
+        bound = prepare(engine=engine, access=access)
+    except ConnectorError as exc:
+        raise SourceEngineUnsupported() from exc
+
+    try:
+        run_bounded(
+            lambda: bound.connector.test_connection(bound.endpoint),
+            timeout_sec=PROBE_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        return ProbeResult(
+            ok=False,
+            code="SOURCE_TEST_TIMEOUT",
+            message=f"Source probe timed out after {PROBE_TIMEOUT_SECONDS}s",
+        )
+    except ConnectorError as exc:
+        return ProbeResult(
+            ok=False,
+            code="SOURCE_TEST_FAILED",
+            message=exc.message,
+        )
+    except Exception as exc:  # noqa: BLE001 — map unexpected driver errors
+        return ProbeResult(
+            ok=False,
+            code="SOURCE_TEST_FAILED",
+            message=str(exc),
+        )
+    return ProbeResult(ok=True)

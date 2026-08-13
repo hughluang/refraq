@@ -21,6 +21,7 @@ from backend.metadata.catalog.store import (  # noqa: E402
 )
 from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
 from backend.metadata.joins.graph import find_join_paths  # noqa: E402
+from backend.metadata.sources.service import require_source  # noqa: E402
 from backend.metadata.sources.store import (  # noqa: E402
     SourceRecord,
     get_source_store,
@@ -118,14 +119,11 @@ def test_two_hop_join_path() -> None:
     b = _table("obj_b", "b", [("col_b_id", "id"), ("col_b_c", "c_id")])
     c = _table("obj_c", "c", [("col_c_id", "id")])
     apply_structure_snapshot(
-        source_id="src_1",
+        source=require_source("src_1"),
         job_id="j1",
         collected=[a, b, c],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="mes",
     )
     store.upsert_join(
         from_column_id="col_a_b",
@@ -163,14 +161,11 @@ def test_direct_joins_for_column_start() -> None:
     a = _table("obj_a", "a", [("col_a_id", "id"), ("col_a_b", "b_id")])
     b = _table("obj_b", "b", [("col_b_id", "id")])
     apply_structure_snapshot(
-        source_id="src_1",
+        source=require_source("src_1"),
         job_id="j1",
         collected=[a, b],
         schema_scope=None,
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="mes",
     )
     store.upsert_join(
         from_column_id="col_a_b",

@@ -5,8 +5,6 @@ from __future__ import annotations
 import hashlib
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -14,12 +12,8 @@ from backend.admin.audit import persist_audit_event
 from backend.core.config import get_settings
 from backend.core.errors import AppError
 from backend.metadata.catalog import service as catalog_service
-from backend.metadata.connectors.base import (
-    ConnectorError,
-    QueryResult,
-    endpoint_from_access,
-)
-from backend.metadata.connectors.registry import get_connector
+from backend.metadata.connectors.base import ConnectorError, QueryResult
+from backend.metadata.connectors.runtime import prepare, run_bounded
 from backend.metadata.errors import (
     JobSourceDisabled,
     QueryFailed,
@@ -117,34 +111,27 @@ def _execute_readonly(
     if not source.engine or not source.access_ciphertext:
         raise QueryFailed("Source has no access configuration")
 
-    connector = get_connector(source.engine)
-    if connector is None:
-        raise SourceEngineUnsupported()
-
     normalized = assert_readonly_single_statement(sql, engine=source.engine)
     access = decrypt_access_blob(source.access_ciphertext)
-    endpoint = endpoint_from_access(
-        engine=source.engine,
-        access=access,
-    )
-
-    pool = ThreadPoolExecutor(max_workers=1)
     try:
-        future = pool.submit(
-            connector.run_readonly,
-            endpoint,
-            normalized,
-            max_rows=max_rows,
+        bound = prepare(engine=source.engine, access=access)
+    except ConnectorError as exc:
+        raise SourceEngineUnsupported() from exc
+
+    try:
+        return run_bounded(
+            lambda: bound.connector.run_readonly(
+                bound.endpoint,
+                normalized,
+                max_rows=max_rows,
+                timeout_sec=timeout_sec,
+            ),
             timeout_sec=timeout_sec,
         )
-        try:
-            return future.result(timeout=timeout_sec)
-        except FuturesTimeout as exc:
-            raise QueryTimeout(
-                f"Query exceeded the platform timeout of {timeout_sec}s"
-            ) from exc
-    finally:
-        pool.shutdown(wait=False, cancel_futures=True)
+    except TimeoutError as exc:
+        raise QueryTimeout(
+            f"Query exceeded the platform timeout of {timeout_sec}s"
+        ) from exc
 
 
 def _execute_readonly_audited(

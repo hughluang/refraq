@@ -38,7 +38,7 @@ backend/
     models.py store.py …
     schemas/ routers/     # mechanism HTTP by Job id (get/cancel); no domain use-case HTTP
   metadata/               # product domain: Source / Catalog / structure Job use cases
-    models.py errors.py sources/ catalog/ connectors/
+    models.py errors.py sources/ catalog/ connectors/ structure_jobs/
     schemas/ routers/     # domain use-case HTTP
     mcp_server.py tasks.py
   worker/                 # runtime: Celery app, Beat, Scheduled Task, system tasks, discovery
@@ -119,7 +119,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Request/response shapes and HTTP/MCP adapters for a use case | Package that **owns that use case** |
 | Mechanism-resource HTTP (get/cancel Job by id) | `jobs` |
 | Domain use-case HTTP (Source, structure enqueue/list, Catalog) | product domain (`metadata`) |
-| Outbound adapter families | Owning product domain (e.g. `metadata/connectors`) |
+| Outbound adapter families | Owning product domain (e.g. `metadata/connectors`: engine adapters + `runtime` invocation shell) |
 | Domain error types | That product domain (base in `core`) |
 | Config, engine, secrets crypto, Instant/Clock (`core.time`), upgrade orchestration, `AppError` / Problem Details, request-id helpers, process probes | `core` (upgrade may call platform-kernel published API); time contract in [`docs/conventions-time.md`](conventions-time.md); errors in [`docs/conventions-errors.md`](conventions-errors.md) |
 | Celery app, Beat, **Scheduled Task**, system tasks, task registration | `worker` |

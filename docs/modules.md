@@ -105,8 +105,9 @@ Must not contain:
 Responsibilities:
 
 - Source domain models and services (embedded reachability for database kinds)
-- Connector adapters (PostgreSQL, MSSQL, Oracle)
+- Connector adapters (PostgreSQL, MSSQL, Oracle); outbound invocation shell in `connectors/runtime`
 - Domain facade for Source-scoped **Jobs** (structure enqueue/list)
+- Structure Job runtime in `structure_jobs/service` (`run_structure_job`: collect → Normalized Type → refresh → Structure Diff)
 - Domain Celery work units (`@shared_task`); discovered by `worker`
 - Catalog object / semantics / join / controlled query / Catalog Sample services (`catalog/service` owns browse, search, Join Path, and semantics/join writes; sample compile+run lives under `query/`; structure refresh orchestration in `catalog/structure_refresh`, plan merge in `catalog/structure_merge`, Join Origin policy in `catalog/join_origin`; persistence adapters only persist)
 - Business Domain registry (global flat entity referenced by catalog objects)

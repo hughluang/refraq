@@ -31,7 +31,7 @@ from backend.metadata.connectors.base import (  # noqa: E402
     CollectedObject,
     CollectedStructure,
 )
-from backend.metadata.runner import run_structure_job  # noqa: E402
+from backend.metadata.structure_jobs.service import run_structure_job  # noqa: E402
 from backend.metadata.sources.service import create_source  # noqa: E402
 from backend.metadata.type_mappings.seeds import (  # noqa: E402
     ensure_product_type_mappings,
@@ -354,7 +354,7 @@ def test_structure_job_warns_unknown_columns(monkeypatch: pytest.MonkeyPatch) ->
         },
     )
     monkeypatch.setattr(
-        "backend.metadata.runner.get_connector",
+        "backend.metadata.connectors.runtime.get_connector",
         lambda engine: _FakeConnector(),
     )
     job = create_queued_job(kind="structure", input={"source_id": source.id})

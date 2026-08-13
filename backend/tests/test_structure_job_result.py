@@ -30,8 +30,9 @@ from backend.metadata.connectors.base import (  # noqa: E402
     CollectedObject,
     CollectedStructure,
 )
-from backend.metadata.runner import run_structure_job  # noqa: E402
+from backend.metadata.structure_jobs.service import run_structure_job  # noqa: E402
 from backend.metadata.sources.service import create_source  # noqa: E402
+from backend.metadata.sources.store import SourceRecord  # noqa: E402
 from backend.metadata.structure_diffs.store import get_structure_diff_store  # noqa: E402
 
 
@@ -48,14 +49,14 @@ def _access() -> dict:
     }
 
 
-def _seed_tables(source_id: str, names: list[str]) -> None:
+def _seed_tables(source: SourceRecord, names: list[str]) -> None:
     now = utc_now()
     collected = []
     for name in names:
         collected.append(
             CatalogObjectRecord(
                 id=f"obj_{name}",
-                source_id=source_id,
+                source_id=source.id,
                 locator_key=f"obj/postgresql/diff-src/public/table/{name}",
                 object_type="table",
                 schema_name="public",
@@ -106,14 +107,11 @@ def _seed_tables(source_id: str, names: list[str]) -> None:
             )
         )
     apply_structure_snapshot(
-        source_id=source_id,
+        source=source,
         job_id="job_old",
         collected=collected,
         schema_scope="public",
         fail_safe_threshold=1.0,
-        engine="postgresql",
-        kind="database",
-        source_key="diff-src",
     )
 
 
@@ -188,7 +186,7 @@ def test_successful_structure_job_writes_result_and_diff(
 ) -> None:
     source = _source()
     monkeypatch.setattr(
-        "backend.metadata.runner.get_connector",
+        "backend.metadata.connectors.runtime.get_connector",
         lambda engine: _FakeConnector(["orders"]),
     )
     job = create_queued_job(
@@ -228,10 +226,10 @@ def test_fail_safe_runner_writes_no_result_or_diff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = _source()
-    _seed_tables(source.id, ["t0", "t1", "t2", "t3"])
+    _seed_tables(source, ["t0", "t1", "t2", "t3"])
     monkeypatch.setattr(get_settings(), "refraq_catalog_fail_safe_threshold", 0.5)
     monkeypatch.setattr(
-        "backend.metadata.runner.get_connector",
+        "backend.metadata.connectors.runtime.get_connector",
         lambda engine: _FakeConnector(["t0"]),
     )
     job = create_queued_job(
