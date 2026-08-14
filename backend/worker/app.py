@@ -22,9 +22,11 @@ def create_celery_app() -> Celery:
         worker_concurrency=settings.refraq_job_worker_concurrency,
         imports=(
             "backend.metadata.tasks",
+            "backend.metadata.source_jobs",
             "backend.worker.tasks",
         ),
         beat_scheduler="backend.worker.scheduler:DatabaseScheduler",
+        beat_max_loop_interval=5,
         timezone="UTC",
         enable_utc=True,
     )

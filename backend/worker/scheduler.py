@@ -13,14 +13,17 @@ class DatabaseScheduler(Scheduler):
     """Reload enabled Scheduled Task definitions from the schedule store."""
 
     sync_every = 30
+    max_interval = 5
 
     def setup_schedule(self) -> None:
         self.merge_inplace(self._load_entries())
         super().setup_schedule()
+        self._heap = None
 
     def sync(self) -> None:
         self.merge_inplace(self._load_entries())
         super().sync()
+        self._heap = None
 
     def _load_entries(self) -> dict[str, ScheduleEntry]:
         entries: dict[str, ScheduleEntry] = {}

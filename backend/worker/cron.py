@@ -98,10 +98,25 @@ class ZoneCronSchedule(BaseSchedule):
         return nxt - now
 
     def is_due(self, last_run_at: datetime | None):
-        rem = self.remaining_estimate(last_run_at)
-        if rem.total_seconds() <= 0:
-            return schedstate(True, 60.0)
-        return schedstate(False, rem.total_seconds())
+        now = ensure_aware_utc(self.now())
+        last = ensure_aware_utc(last_run_at) if last_run_at is not None else now
+        local_now = now.astimezone(self._tz)
+        naive = local_now.replace(second=0, microsecond=0, tzinfo=None)
+        if _local_matches(naive, self._fields):
+            slot = resolve_wall_time(
+                naive.year,
+                naive.month,
+                naive.day,
+                naive.hour,
+                naive.minute,
+                0,
+                self._tz,
+            )
+            if slot > last and now >= slot:
+                return schedstate(True, 60.0)
+        nxt = self._next_fire_after(now)
+        rem = (nxt - now).total_seconds()
+        return schedstate(False, max(rem, 1.0))
 
     def now(self) -> datetime:
         return utc_now()

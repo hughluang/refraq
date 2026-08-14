@@ -130,6 +130,17 @@ export const MODULE_IDENTITY_FIXTURE: ModuleIdentity[] = [
     },
   },
   {
+    id: "schedules",
+    label_key: "schedules.title",
+    routes: { list: "/console/schedules", create: null, edit: "/console/schedules" },
+    actions: {
+      list: "jobs:run",
+      create: null,
+      edit: "jobs:run",
+      delete: "jobs:run",
+    },
+  },
+  {
     id: "settings",
     label_key: "settings.title",
     routes: { list: "/console/settings", create: null, edit: null },

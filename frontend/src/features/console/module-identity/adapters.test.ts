@@ -64,6 +64,12 @@ describe("toRefineResources", () => {
         meta: { label: "jobs.title" },
       },
       {
+        name: "schedules",
+        list: "/console/schedules",
+        edit: "/console/schedules",
+        meta: { label: "schedules.title" },
+      },
+      {
         name: "settings",
         list: "/console/settings",
         meta: { label: "settings.title" },
@@ -155,6 +161,10 @@ describe("matchPath", () => {
     );
     expect(matchPath("/console/jobs", MODULE_IDENTITY_FIXTURE)).toEqual({
       resource: "jobs",
+      action: "list",
+    });
+    expect(matchPath("/console/schedules", MODULE_IDENTITY_FIXTURE)).toEqual({
+      resource: "schedules",
       action: "list",
     });
     expect(

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+
+from celery import shared_task
+
 from backend.admin.audit import persist_audit_event
 from backend.jobs.store import (
     TERMINAL,
@@ -15,9 +19,15 @@ from backend.metadata.errors import (
     JobAlreadyActive,
     JobInputInvalid,
     JobSourceDisabled,
+    SourceNotFound,
 )
 from backend.metadata.sources.service import require_source
+from backend.metadata.source_schedules import STRUCTURE_ENQUEUE_TASK_NAME
 from backend.metadata.tasks import run_job
+from backend.worker.api import STRUCTURE_SCHEDULE_KEY_PREFIX
+from backend.worker.schedules import get_schedule_store
+
+logger = logging.getLogger(__name__)
 
 
 def dispatch_queued_job(job: JobRecord) -> str:
@@ -56,10 +66,12 @@ def list_jobs_for_source(
 def enqueue_structure_job(
     *,
     source_id: str,
-    actor_user_id: str,
+    actor_user_id: str | None,
     actor_token_id: str | None = None,
+    trigger_kind: str = "user",
+    trigger_ref: str | None = None,
 ) -> JobRecord:
-    """Validate Source, create structure Job, dispatch worker, audit success."""
+    """Validate Source, create structure Job, dispatch worker, audit user enqueue."""
     source = require_source(source_id)
     if source.status != "active":
         raise JobSourceDisabled()
@@ -81,23 +93,57 @@ def enqueue_structure_job(
         level="info",
         message=f"queued for source {source.key}",
     )
+    resolved_ref = trigger_ref if trigger_ref is not None else actor_user_id
     job = create_queued_job(
         kind="structure",
         input={"source_id": source_id},
         created_by=actor_user_id,
         summary=summary,
-        trigger_kind="user",
-        trigger_ref=actor_user_id,
+        trigger_kind=trigger_kind,
+        trigger_ref=resolved_ref,
         log_body=queued_line,
     )
     dispatch_queued_job(job)
-    persist_audit_event(
-        actor_user_id=actor_user_id,
-        actor_token_id=actor_token_id,
-        resource_type="job",
-        resource_id=job.id,
-        action="job.enqueue",
-        result="success",
-        detail={"kind": "structure", "source_id": source_id},
-    )
+    if trigger_kind == "user":
+        persist_audit_event(
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+            resource_type="job",
+            resource_id=job.id,
+            action="job.enqueue",
+            result="success",
+            detail={"kind": "structure", "source_id": source_id},
+        )
     return job
+
+
+def fire_scheduled_structure(source_id: str) -> dict[str, str]:
+    """Beat tick: enqueue a structure Job or skip overlap / unusable Source."""
+    record = get_schedule_store().get_by_key(
+        f"{STRUCTURE_SCHEDULE_KEY_PREFIX}{source_id}"
+    )
+    trigger_ref = record.id if record is not None else None
+    try:
+        job = enqueue_structure_job(
+            source_id=source_id,
+            actor_user_id=None,
+            trigger_kind="schedule",
+            trigger_ref=trigger_ref,
+        )
+        return {"status": "queued", "job_id": job.id}
+    except JobAlreadyActive:
+        logger.info("scheduled structure skipped: already active source_id=%s", source_id)
+        return {"status": "skipped", "reason": "already_active"}
+    except (JobSourceDisabled, JobInputInvalid, SourceNotFound) as exc:
+        logger.info(
+            "scheduled structure skipped: source_unusable source_id=%s error=%s",
+            source_id,
+            exc.code,
+        )
+        return {"status": "skipped", "reason": "source_unusable"}
+
+
+@shared_task(name=STRUCTURE_ENQUEUE_TASK_NAME)
+def enqueue_scheduled_structure(source_id: str) -> dict[str, str]:
+    """Lightweight Beat tick: enqueue a structure Job via the Source facade."""
+    return fire_scheduled_structure(source_id)

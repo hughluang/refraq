@@ -155,6 +155,22 @@ EXPECTED_IDENTITIES = {
             "show": None,
         },
     },
+    "schedules": {
+        "label_key": "schedules.title",
+        "routes": {
+            "list": "/console/schedules",
+            "create": None,
+            "edit": "/console/schedules",
+            "show": None,
+        },
+        "actions": {
+            "list": "jobs:run",
+            "create": None,
+            "edit": "jobs:run",
+            "delete": "jobs:run",
+            "show": None,
+        },
+    },
     "settings": {
         "label_key": "settings.title",
         "routes": {

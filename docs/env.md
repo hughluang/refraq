@@ -116,7 +116,7 @@ Platform async runtime (`docs/adr/0006-celery-platform-async-runtime.md`):
 
 - API process: create durable Job rows and enqueue via Celery after commit (`docs/api-contracts-jobs.md`)
 - Worker: `celery -A backend.worker.app worker --concurrency="${REFRAQ_JOB_WORKER_CONCURRENCY:-1}"`
-- Beat (single replica): `celery -A backend.worker.app beat` — reads **Scheduled Task** rows from Postgres; do not run multiple Beat replicas
+- Beat (single replica): `celery -A backend.worker.app beat` — reads **Scheduled Task** rows from Postgres; do not run multiple Beat replicas. Loop `max_interval` is ~5s; schedule reload `sync_every` is 30s (operator PATCH cadence is visible on the next sync).
 - Worker and Beat share `DATABASE_URL`, `CELERY_BROKER_URL`, and (when decrypting secrets) `REFRAQ_SECRETS_MASTER_KEY`
 - No Celery result backend; operator-visible status and run logs live on Postgres Job rows (`log_body`; later large attachments if needed)
 - Do not run long collection inside the interactive API request path (`docs/adr/0004-redis-queue-for-ingestion.md`)

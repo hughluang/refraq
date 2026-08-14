@@ -9,7 +9,7 @@ It answers what the console business base must provide. It does not prescribe vi
 Related boundaries:
 
 - **Management Foundation** (login, session, users, roles, permissions) is the enabling layer; rules live in `docs/business-login-auth.md`.
-- **Data Product Capabilities** remain the long-term product identity; this document defines Console shell mounts. Metadata foundation modules mount under group `metadata` (see `docs/business-metadata.md`). Data Product catalog / Entity modules are still deferred.
+- **Data Product Capabilities** remain the long-term product identity; this document defines Console shell mounts. Metadata foundation modules mount under group `metadata` (see `docs/business-metadata.md`). Platform **Job** / **Scheduled Task** modules mount under group `operations` (see `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`). Data Product catalog / Entity modules are still deferred.
 - Permission decisions are authoritative in the backend; frontend show/hide only improves UX. See `docs/architecture.md`.
 - Navigation catalog decision: `docs/adr/0002-console-navigation-catalog.md`.
 
@@ -26,19 +26,19 @@ The Console shell must grow from a flat nav into an extensible base: stable zone
 1. **Separate top-bar and side-nav duties** (global utility vs structural navigation)
 2. **Permission-driven navigation** from a backend Console Module catalog
 3. **Module registration = backend code seed** (not runtime enable/disable, not DB menu CRUD)
-4. **Separate Administration and Platform Settings** from metadata and future Data Product primary nav
-5. **Thin slice / TVP**: Foundation delivered people · permissions · shell · mount contract; metadata foundation fills the `metadata` group next
+4. **Separate Administration and Platform Settings** from metadata, operations, and future Data Product primary nav
+5. **Thin slice / TVP**: Foundation delivered people · permissions · shell · mount contract; metadata foundation fills the `metadata` group; platform Job / Scheduled Task modules fill the `operations` group
 
 Refraq is a domain management system. Top-level Foundation modules are always present; access differs only by Permission. Optional **Plugin** extensions under a module are out of scope for this slice.
 
 ## 3. Principles
 
 1. **The Console is the platform product’s primary UI**; the goal is lower cognitive load, not a menu of microservice names.
-2. **Foundation delivers people · permissions · shell · mount contract**; metadata foundation fills the `metadata` group; later Data Product phases add discoverable, requestable, governable product capabilities.
+2. **Foundation delivers people · permissions · shell · mount contract**; metadata foundation fills the `metadata` group; platform **Job** / **Scheduled Task** modules fill the `operations` group; later Data Product phases add discoverable, requestable, governable product capabilities.
 3. **Structural navigation lives in the side nav**; account, logout, language, and personal preferences belong in top-bar utility navigation, not the side nav.
 4. **Menus are generated from “module catalog × permission decisions”** on the backend; no permission means no entry; deep-link visits must get an explainable unauthorized state.
 5. **Frontend and backend share one permission language** (resource + action); UI filtering is not a security boundary.
-6. **Management master data (users / roles / user tokens) and platform settings** stay separate from the `metadata` group and from future Data Product primary nav.
+6. **Management master data (users / roles / user tokens) and platform settings** stay separate from the `metadata` group, the `operations` group, and future Data Product primary nav.
 
 ## 4. Capability Priorities
 
@@ -69,8 +69,9 @@ Refraq is a domain management system. Top-level Foundation modules are always pr
 
 | Capability | Business meaning |
 | --- | --- |
-| `metadata` nav group | Sources, catalog browse, Job visibility |
-| Sources / structure Jobs | See `docs/business-metadata.md` |
+| `metadata` nav group | Sources, catalog browse |
+| `operations` nav group | Platform-wide **Job** observe and domain **Scheduled Task** definitions (`docs/business-jobs.md`, `docs/business-scheduled-tasks.md`) |
+| Sources / structure Jobs | Structure enqueue and clocks on Sources; see `docs/business-metadata.md` |
 | User PAT module | Person-owned Bearer tokens under Administration (`tokens`) |
 | Management-plane audit read | Thin audit browser when `audit:read` is granted |
 
@@ -109,13 +110,15 @@ Groups and modules:
 | --- | --- | --- |
 | Workbench | `workbench` | Home (`dashboard`) |
 | Administration | `admin` | Users, Roles, User PAT (`tokens`) |
+| Metadata | `metadata` | Sources (`sources`), Catalog (`catalog`), Business Domains (`business-domains`), Type Mappings (`type-mappings`) |
+| Operations | `operations` | Jobs (`jobs`), Schedules (`schedules`) |
 | Platform settings | `settings` | System parameters (`settings`) |
-| Metadata | `metadata` | Sources (`sources`), Catalog (`catalog`), Business Domains (`business-domains`), Type Mappings (`type-mappings`), Jobs (`jobs`) |
 
 Notes:
 
 - Foundation P0 shipped Workbench / Administration (Users, Roles) / Platform settings.
 - Metadata foundation adds group id **`metadata`** and Administration module **`tokens`**. Module field details: `docs/business-metadata.md`, `docs/business-user-tokens.md`.
+- Platform **Job** / **Scheduled Task** modules mount under group id **`operations`** (after Metadata, before Platform settings). Details: `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`.
 - Still reserved for later (not implemented): Data products, Governance (and any persona composer). Hide-vs-empty product policy for empty future groups remains deferred.
 
 **Forbidden**: putting account, logout, or language in the side nav; organizing first-level nav by internal service names; treating Foundation modules as enable/disable toggles; mounting Sources under Administration.
@@ -142,8 +145,9 @@ flowchart TB
   subgraph SideNav["Side nav · structural navigation"]
     G1["Workbench"]
     G2["Administration · users/roles/tokens"]
-    G3["Platform settings"]
-    G4["Metadata · sources/catalog/domains/jobs"]
+    G3["Metadata · sources/catalog/domains/type-mappings"]
+    G4["Operations · jobs/schedules"]
+    G5["Platform settings"]
   end
 
   subgraph Main["Main work area"]
@@ -201,11 +205,11 @@ For this slice:
 
 | Foundation (delivered) | Metadata foundation (next) | Later Data Product phase |
 | --- | --- | --- |
-| Login / session / logout | Sources / Jobs / catalog | Data Product object model and catalog browse |
+| Login / session / logout | Sources / catalog | Data Product object model and catalog browse |
 | Users, roles, permission assignment | User PAT; management-plane audit for metadata | Persona navigation composer |
-| Permission-filtered grouped side nav | `metadata` nav group modules | Self-serve access marketplace |
+| Permission-filtered grouped side nav | `metadata` nav group modules; `operations` group for Job / Scheduled Task | Self-serve access marketplace |
 | Console Module code-seed contract | MCP metadata tool surface | Entity detail extension slots / Plugins |
-| Administration and Platform Settings | Encrypted Source secrets; queue worker | Persisted multi-replica Settings Override (unless blocked earlier) |
+| Administration and Platform Settings | Encrypted Source secrets | Persisted multi-replica Settings Override (unless blocked earlier) |
 | System parameters API (TTL override) | Controlled read-only query (slice D) | Notification center / global search productization |
 | Top bar: mark, user menu, language | | |
 

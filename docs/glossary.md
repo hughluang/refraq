@@ -125,6 +125,11 @@ A personal access token owned by a User for non-browser API and MCP access (`Aut
 Coexists with Console Session cookies; authenticates the same User and Role permissions.
 Avoid calling it a Client token, a Session id reused as Bearer, or a machine principal.
 
+### Display Timezone
+
+An optional IANA zone on a **User** that the **Management Console** uses to format **Instants** for that operator. `null` means follow the browser’s system timezone. Not part of Instant storage or HTTP/MCP Instant JSON (those stay UTC `Z`).
+Avoid Schedule Timezone, worker process timezone, or treating the preference as a second Instant type.
+
 ### Account Center
 
 The current User’s self-service Console surface for profile, local password change, UI locale, **Display Timezone**, and User PAT management.
@@ -176,19 +181,12 @@ Chosen only from a fixed catalog when editing Roles.
 Avoid reducing it to a menu or a page label.
 Avoid free-form permission strings invented in the UI.
 
-## Metadata Foundation
-
-### Source
-
-A registered data origin whose catalog refraq owns. Slice A covers live databases (for example U9 or MES); later kinds may include static imports such as CSV.
-Has a stable key, display name, `kind`, and kind-specific catalog scope (for database: engine-dialect keys inside `access` such as `database`/`schema` or `service_name`/`owner`); not a login directory.
-For `kind=database`, the Source also carries `engine` and a per-engine validated `access` document (secrets and scope inside; whole document encrypted at rest). Non-database kinds may omit those fields.
-Avoid calling it Identity Source or Client. Avoid assuming every Source is an enterprise application. Avoid treating reachability as a separate reusable entity. Avoid fixed top-level `database_name` / `schema_filter` beside `access`.
+## Platform Mechanisms
 
 ### Job
 
 A single durable asynchronous execution with an observable lifecycle (queued → running → terminal), discriminated by kind, carrying only a generic input payload that each domain interprets.
-Domains expose enqueue/list facades (for example under Source for structure work); the Job record is not owned by Source.
+Domains expose enqueue/list facades (for example under Source for structure work); the Job record is not owned by Source and is not a Metadata business object.
 API (or a **Scheduled Task**) enqueues; a Celery worker executes; operator-visible status lives on the Postgres job record.
 Lifecycle stamps (`created_at`, `started_at`, `finished_at`, log line times) are **Instants**.
 Successful Jobs may carry a nullable generic **Job result**; failed/cancelled/fail-safe Jobs leave it null.
@@ -203,10 +201,15 @@ Avoid overloading enqueue **summary** with outcome, or writing `{}` to mean “n
 A nullable JSON outcome written when a Job reaches a successful terminal state. The platform does not interpret the document; each `kind` supplies its envelope (structure: `class`, `counts`, `structure_diff_id`).
 Avoid Celery result backend, **Management Audit Event** `result`, treating result as whether the Job succeeded, or treating structure `class` as a public Job attribute. Console Job detail may show the document uninterpreted; classification is read on **Structure Diff**.
 
-### Structure Diff
+### Scheduled Task
 
-A persisted record of structural changes committed by one successful structure **Job**, belonging to exactly one **Source**. Full locators live here; Job result holds only class, counts, and the Diff id.
-Avoid Catalog Snapshot, Drift entity, Job child table, using the Diff as the live catalog, or treating Diff `class` as a Job list or detail field.
+A platform schedule definition (interval or cron) stored in Postgres that triggers work when due.
+Celery Beat reads these rows (single Beat replica). Distinct from any one **Job** instance.
+A platform mechanism like **Job**, not a product domain, not a Metadata business object, and not a field of **Source**.
+Operator identity is a closed work kind plus target, not a Celery task name. Cron wall clock uses **Schedule Timezone**; `last_run_at` is an **Instant** cursor (missed cron slots are skipped).
+Avoid storing product schedules only in Redis Beat state or static code when operators need to change them.
+Avoid treating Celery `timezone` as the business schedule zone.
+Avoid treating a Scheduled Task as a Job, or putting cron on a **Source**.
 
 ### Instant
 
@@ -214,23 +217,31 @@ An absolute moment on the timeline, represented as aware UTC in process, `timest
 Contract: [`docs/conventions-time.md`](conventions-time.md).
 Avoid wall-clock local time, treating cron hour/minute as a stored Instant, or encoding a viewer’s **Display Timezone** into the Instant wire form.
 
-### Display Timezone
-
-An optional IANA zone on a **User** that the **Management Console** uses to format **Instants** for that operator. `null` means follow the browser’s system timezone. Not part of Instant storage or HTTP/MCP Instant JSON (those stay UTC `Z`).
-Avoid Schedule Timezone, worker process timezone, or treating the preference as a second Instant type.
-
 ### Schedule Timezone
 
 An IANA zone on a **Scheduled Task** that interprets **cron** wall-clock fields; ignored for interval schedules; not part of an **Instant** and not the Celery process timezone.
 Avoid storing the zone inside a timestamptz Instant, conflating with **Display Timezone**, or assuming interval schedules shift when the zone changes.
 
-### Scheduled Task
+### Operations Nav Group
 
-A platform schedule definition (interval or cron) stored in Postgres that triggers work when due.
-Celery Beat reads these rows (single Beat replica). Distinct from any one **Job** instance.
-Cron wall clock uses **Schedule Timezone**; `last_run_at` is an **Instant**.
-Avoid storing product schedules only in Redis Beat state or static code when operators need to change them.
-Avoid treating Celery `timezone` as the business schedule zone.
+The Console Navigation group with stable id `operations` for platform-wide **Job** observe and domain **Scheduled Task** definition modules.
+Console IA only; not a product domain.
+Avoid mounting these modules under **Metadata**, Administration, or Platform Settings.
+Avoid treating the group as a synonym for **Job**.
+
+## Metadata Foundation
+
+### Source
+
+A registered data origin whose catalog refraq owns. Slice A covers live databases (for example U9 or MES); later kinds may include static imports such as CSV.
+Has a stable key, display name, `kind`, and kind-specific catalog scope (for database: engine-dialect keys inside `access` such as `database`/`schema` or `service_name`/`owner`); not a login directory.
+For `kind=database`, the Source also carries `engine` and a per-engine validated `access` document (secrets and scope inside; whole document encrypted at rest). Non-database kinds may omit those fields.
+Avoid calling it Identity Source or Client. Avoid assuming every Source is an enterprise application. Avoid treating reachability as a separate reusable entity. Avoid fixed top-level `database_name` / `schema_filter` beside `access`.
+
+### Structure Diff
+
+A persisted record of structural changes committed by one successful structure **Job**, belonging to exactly one **Source**. Full locators live here; Job result holds only class, counts, and the Diff id.
+Avoid Catalog Snapshot, Drift entity, Job child table, using the Diff as the live catalog, or treating Diff `class` as a Job list or detail field.
 
 ### Catalog Object
 
@@ -314,8 +325,9 @@ Permission: `query:run`. Distinct from Catalog Sample.
 
 ### Metadata Nav Group
 
-The Console Navigation group with stable id `metadata` for Sources, Jobs, and catalog browsing modules.
+The Console Navigation group with stable id `metadata` for Sources, catalog browsing, Business Domains, and Type Mappings.
 Avoid mounting these modules under Administration or a Data products group.
+Avoid mounting **Job** or **Scheduled Task** modules here — those belong to the **Operations Nav Group**.
 
 ### Management Audit Event
 

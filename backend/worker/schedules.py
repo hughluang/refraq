@@ -47,9 +47,32 @@ class MemoryScheduleStore:
         with self._lock:
             return self._by_key.get(key)
 
+    def get_by_id(self, schedule_id: str) -> ScheduledTaskRecord | None:
+        with self._lock:
+            for record in self._by_key.values():
+                if record.id == schedule_id:
+                    return record
+            return None
+
+    def list(self, *, include_system: bool = False) -> list[ScheduledTaskRecord]:
+        with self._lock:
+            items = list(self._by_key.values())
+        if not include_system:
+            items = [record for record in items if not record.system]
+        items.sort(key=lambda record: record.created_at, reverse=True)
+        return items
+
     def list_enabled(self) -> list[ScheduledTaskRecord]:
         with self._lock:
             return [r for r in self._by_key.values() if r.enabled]
+
+    def delete(self, schedule_id: str) -> bool:
+        with self._lock:
+            for key, record in list(self._by_key.items()):
+                if record.id == schedule_id:
+                    del self._by_key[key]
+                    return True
+            return False
 
     def touch_last_run(self, key: str, when: datetime) -> None:
         with self._lock:
@@ -93,12 +116,33 @@ class SqlScheduleStore:
             )
             return _row_to_schedule(row) if row else None
 
+    def get_by_id(self, schedule_id: str) -> ScheduledTaskRecord | None:
+        with session_scope() as session:
+            row = session.get(ScheduledTaskRow, schedule_id)
+            return _row_to_schedule(row) if row else None
+
+    def list(self, *, include_system: bool = False) -> list[ScheduledTaskRecord]:
+        with session_scope() as session:
+            stmt = select(ScheduledTaskRow).order_by(ScheduledTaskRow.created_at.desc())
+            if not include_system:
+                stmt = stmt.where(ScheduledTaskRow.system.is_(False))
+            rows = session.scalars(stmt).all()
+            return [_row_to_schedule(row) for row in rows]
+
     def list_enabled(self) -> list[ScheduledTaskRecord]:
         with session_scope() as session:
             rows = session.scalars(
                 select(ScheduledTaskRow).where(ScheduledTaskRow.enabled.is_(True))
             ).all()
             return [_row_to_schedule(row) for row in rows]
+
+    def delete(self, schedule_id: str) -> bool:
+        with session_scope() as session:
+            row = session.get(ScheduledTaskRow, schedule_id)
+            if row is None:
+                return False
+            session.delete(row)
+            return True
 
     def touch_last_run(self, key: str, when: datetime) -> None:
         with session_scope() as session:

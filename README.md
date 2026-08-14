@@ -34,7 +34,7 @@ These are the enabling capabilities required to operate the platform in a contro
 ## Current Status
 
 The Management Console login, session, permission, users, roles, and system-parameters slice is complete.
-The next delivery phase is the **metadata foundation** (Sources, Jobs, MCP, User PAT, companion base). Start at [`docs/business-metadata.md`](docs/business-metadata.md), [`docs/business-user-tokens.md`](docs/business-user-tokens.md), and root [`CONTEXT.md`](CONTEXT.md). **Data Product** catalog / Entity capabilities remain later and are not delivered yet.
+The next delivery phase is the **metadata foundation** (Sources, catalog, MCP, User PAT, companion base). **Job** and **Scheduled Task** are platform mechanisms, not Metadata domain members. Start at [`docs/business-metadata.md`](docs/business-metadata.md), [`docs/business-jobs.md`](docs/business-jobs.md), [`docs/business-scheduled-tasks.md`](docs/business-scheduled-tasks.md), [`docs/business-user-tokens.md`](docs/business-user-tokens.md), and root [`CONTEXT.md`](CONTEXT.md). **Data Product** catalog / Entity capabilities remain later and are not delivered yet.
 
 At this stage, the repository includes:
 

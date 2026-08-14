@@ -4,10 +4,13 @@
 
 This document defines the **metadata foundation** phase for refraq: Sources (with embedded reachability for database kinds), metadata ingestion, catalog browsing, semantics and join enrichment, controlled read-only query, Management Console mounts under the `metadata` nav group, MCP exposure, and the companion system base required to operate that surface safely.
 
+**Job** and **Scheduled Task** are platform mechanisms, not Metadata business objects. Their rules live in `docs/business-jobs.md` and `docs/business-scheduled-tasks.md`. This document keeps only the Source/structure facades that use those mechanisms.
+
 Related boundaries:
 
 - **Management Foundation** (login, Session, Users, Roles) remains the enabling layer; rules live in `docs/business-login-auth.md`.
 - **User PAT** rules live in `docs/business-user-tokens.md`.
+- Platform **Job**: `docs/business-jobs.md`. Platform **Scheduled Task**: `docs/business-scheduled-tasks.md`.
 - Console shell and module registration contract: `docs/business-management-console.md`.
 - Terminology: `docs/glossary.md` and root `CONTEXT.md`.
 - Source / catalog identity: `docs/adr/0007-source-owns-catalog-identity.md`.
@@ -33,7 +36,7 @@ Foundation P0 delivered people, permissions, and Console mount contract. Product
 
 1. **Productize into refraq** — Source registration, ingestion, catalog, MCP, and companion base live in this repository; external `dbmeta` is design reference only.
 2. **Empty rebuild** — do not migrate or dual-read legacy `dbmeta` data; operators re-register Sources and re-collect.
-3. **Phase north star** — metadata capability face comparable to structure + semantics + join + controlled query, plus companion base (secrets, Celery worker/beat, User PAT, management audit, permissions, `metadata` nav).
+3. **Phase north star** — metadata capability face comparable to structure + semantics + join + controlled query, plus companion base (secrets, Celery worker/beat, User PAT, management audit, permissions, `metadata` nav). **Job** / **Scheduled Task** delivered with that companion base remain platform mechanisms; Console modules `jobs` / `schedules` mount under **Operations**, not Metadata.
 4. **Deliver in slices A→B→C→D** with companion base started alongside A — not a single big-bang milestone.
 5. **Defer** Entity, Data Product catalog, Serving, Access marketplace, Client management, and Console P1 cosmetics (scope/search/theme/notifications).
 6. **Source is the catalog owner** — not limited to enterprise systems; `kind` leaves room for later non-live origins (for example CSV).
@@ -80,33 +83,24 @@ Rules:
 - Endpoint or credential change updates the **same Source** (replace full `access`) — not a new Source row. Catalog Objects stay under that Source; the next structure Job uses the updated endpoint.
 - Prefer the authoritative / primary endpoint; do not register read replicas as alternate Sources for the same physical server.
 - Disabling a Source blocks new ingestion until re-enabled (existing catalog snapshots remain readable unless later retention rules say otherwise).
-- A Source may be **hard-deleted** only while `status=disabled` (`DELETE /sources/{id}`); soft delete remains out of scope.
+- A Source may be **hard-deleted** only while `status=disabled` (`DELETE /sources/{id}`); soft delete remains out of scope. Hard-delete also removes that Source's structure **Scheduled Task** (if any).
 - Non-`database` kinds are out of scope for slice A implementation; models and APIs must not hard-code that every Source requires `engine` / `access`. Kind-specific scope fields for non-database kinds arrive with those kinds.
 - Pre-0011 rows that used plaintext access plus a separate secret column are **not** auto-migrated; operators re-enter connectivity after cutover.
 
-### 4.2 Job
+### 4.2 Structure Job and schedule facades
 
-Platform durable asynchronous execution (see root `CONTEXT.md`). Metadata structure collection is one Job `kind`, not the definition of Job.
-
-| Field | Notes |
-| --- | --- |
-| id | Job id |
-| kind | `structure` \| `semantics_refresh` \| … as slices/domains add |
-| status | `queued` \| `running` \| `succeeded` \| `failed` \| `cancelled` |
-| input | Generic object; domain interprets per `kind`. Slice A database structure: `{ "source_id": "…" }` only |
-| result | Nullable generic JSON; platform does not interpret. Written only on successful terminal. Structure envelope: `{ "schema": "structure.diff.v1", "class", "counts", "structure_diff_id" }`. Other kinds stay `null` (not `{}`) |
-| created_by | User id |
-| timestamps / error summary | Operational visibility |
+Platform **Job** and **Scheduled Task** rules live in `docs/business-jobs.md` and `docs/business-scheduled-tasks.md`. Metadata owns the Source-scoped facades that use those mechanisms for structure collection.
 
 Rules:
 
-- Job is **not** owned by Source. Do not treat `source_id` as a universal Job column — it lives in `input` when required.
-- Metadata enqueue/list for Source-scoped work uses the **Source facade** (`docs/api-contracts-jobs.md`): `POST/GET /sources/{id}/jobs`. Platform-wide observe uses `GET /jobs` and `GET /jobs/{id}` / `.../logs` / cancel.
-- Creating a structure Job requires `jobs:run` and, for database Sources, a usable encrypted access blob on the Source row. Enqueue writes `summary` (`structure · {source_key}`) and `trigger_kind`/`trigger_ref` alongside `created_by_user_id`.
-- Workers load reachability from the Source identified in `input`; `input` does not carry endpoint material. Workers append operator-visible lines to Job `log_body`.
-- Jobs are durable records; queue transport is Redis-backed via Celery (see `docs/adr/0004-redis-queue-for-ingestion.md`, `docs/adr/0006-celery-platform-async-runtime.md`).
-- Successful structure Jobs write/refresh **Catalog Objects** on the Source identified in `input`, and produce at most one **Structure Diff** for that Source. **Job result** holds class and counts; full locators live on the Diff. Failed, cancelled, or fail-safe Jobs write neither result nor Diff.
-- Console module id `jobs` is the global Job observe surface; structure enqueue and Source-scoped Job lists live on the Sources module. Structure Diff browse is a Source-scoped Console page (`metadata:read`), not a new nav module.
+- Enqueue/list for Source-scoped structure work uses the **Source facade** (`docs/api-contracts-jobs.md`): `POST/GET /sources/{id}/jobs`. Slice A database structure `input` is `{ "source_id": "…" }` only. Creating a structure Job requires `jobs:run` and, for database Sources, a usable encrypted access blob on the Source row. Enqueue writes `summary` (`structure · {source_key}`) and `trigger_kind`/`trigger_ref` alongside `created_by_user_id`.
+- Workers load reachability from the Source identified in `input`; `input` does not carry endpoint material.
+- Successful structure Jobs write/refresh **Catalog Objects** on the Source identified in `input`, and produce at most one **Structure Diff** for that Source. **Job result** envelope: `{ "schema": "structure.diff.v1", "class", "counts", "structure_diff_id" }`. Failed, cancelled, or fail-safe Jobs write neither result nor Diff.
+- Structure enqueue and Source-scoped Job lists live on the Sources module. Structure Diff browse is a Source-scoped Console page (`metadata:read`), not a new nav module. Global Job observe is the **Operations** module `jobs`.
+- Structure clock create/replace/delete uses the **Source facade** (`docs/api-contracts-schedules.md`): `PUT/GET/DELETE /sources/{id}/schedule`. First slice: `structure` + one Source; at most one structure Scheduled Task per Source (facade uniqueness, not a database unique constraint). Default name `structure · {source_key}`; key convention `structure:{source_id}`.
+- `PUT` is RFC 9110 full replace (201 create / 200 update). Create writes `last_run_at=now` as the cursor so the first fire is the next wall-clock slot strictly after create.
+- Breaking **Structure Diff** does not pause the schedule or block the next structure Job (§9).
+- Manual **Run structure** stays `trigger_kind=user` and does not change cadence.
 
 ### 4.3 Catalog Object And Columns
 
@@ -166,7 +160,7 @@ Planned shape only; no Attachment APIs, ORM, or Console flows in this phase:
 
 | Slice | Business delivery |
 | --- | --- |
-| **Companion base** (with A) | User PAT; Source access-blob encryption; Celery worker/beat + Scheduled Task; Job status APIs; Permission catalog extensions; `metadata` Console nav group; management-plane audit |
+| **Companion base** (with A) | User PAT; Source access-blob encryption; Celery worker/beat; Permission catalog extensions; `metadata` Console nav group; management-plane audit. **Job** / **Scheduled Task** are platform mechanisms delivered alongside (see `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`); their Console modules mount under **Operations**, not Metadata. |
 | **A** | Source CRUD for `kind=database` (embedded reachability); PostgreSQL + MSSQL + Oracle structure collection; Console browse; MCP read-only structure tools |
 | **B** | Object/column business name and description read/write via API and MCP |
 | **C** | Join graph with evidence threshold for writes |
@@ -187,7 +181,6 @@ Fixed catalog additions (exact strings are normative for Roles UI):
 | `sources:write` | Create/update/disable Sources; hard-delete disabled Sources; replace full `access`; fetch full access for edit; run Source reachability tests |
 | `metadata:read` | Browse Catalog Objects, columns, DDL, semantics, joins, and **Type Mapping** |
 | `metadata:write` | Write semantics and join edges; PATCH non-seed **Type Mapping** |
-| `jobs:run` | Enqueue/cancel **Jobs** via domain facades; list/view Jobs on Source facades and platform `GET /jobs` |
 | `query:run` | Execute controlled read-only SQL against a Source |
 | `catalog:sample` | Run Catalog Sample (structured live peek) on a Catalog Object |
 | `tokens:read` | List own User PAT metadata (never full token after creation) |
@@ -196,6 +189,7 @@ Fixed catalog additions (exact strings are normative for Roles UI):
 
 Rules:
 
+- Structure facades (`POST /sources/{id}/jobs`, `PUT /sources/{id}/schedule`) require `jobs:run`, defined in `docs/business-jobs.md` (not a Metadata-owned permission).
 - Seeded `super_admin` receives the full current catalog **by identity**; Foundation Upgrade ensures the System Role row exists but does not grant access by rewriting a stored permission list.
 - Seeded `operator` does **not** receive `sources:write`, `metadata:write`, `jobs:run`, `query:run`, `catalog:sample`, `tokens:*`, or `audit:read` by default.
 - No object-level ACL in this phase.
@@ -213,11 +207,12 @@ Initial modules (ids stable):
 | `catalog` | Browse Catalog Objects / columns; object detail at `/console/catalog/:id` (`show` → `metadata:read`) for full semantics, structure facts, Catalog Sample, joins, and DDL | `metadata:read` |
 | `business-domains` | Global Business Domain registry (immutable `code`); create/edit/delete → `metadata:write` | `metadata:read` |
 | `type-mappings` | Global **Type Mapping** list; PATCH non-seed target only (no create/delete) → `metadata:write` | `metadata:read` |
-| `jobs` | Global Job list and observe (logs/detail); enqueue lives on Sources | `jobs:run` (list) |
 
 The catalog object detail page is the Console semantics maintenance surface: it exposes the admitted object/column semantics model (§10, ADR 0015), structure facts (PK/FK/indexes/comments), **Catalog Sample** when the actor has `catalog:sample`, and join graph / path exploration. List remains the Source-scoped browse entry; deep links use the `show` route so readers with only `metadata:read` can open detail without needing `metadata:write`.
 
-**Structure Diff** browse lives under Source routes (`/console/sources/:id/structure-diffs`); viewing requires `metadata:read`. It is not a new sidebar module. Job list and Job detail observe public Job fields under `jobs:run`; detail may show **Job result** as uninterpreted JSON and does not unpack `result.class`. Classification is read on **Structure Diff**.
+**Structure Diff** browse lives under Source routes (`/console/sources/:id/structure-diffs`); viewing requires `metadata:read`. It is not a new sidebar module. Classification is read on **Structure Diff**, not on Job list/detail chrome.
+
+Sources keep **Run structure** plus a **Schedule** entry to create or replace that Source's structure clock. Global Job observe and domain **Scheduled Task** lists live under **Operations** (`docs/business-jobs.md`, `docs/business-scheduled-tasks.md`), not this group.
 
 User PAT management is **not** in this group; see `docs/business-user-tokens.md` (Administration module `tokens`).
 
@@ -438,6 +433,7 @@ Persist management-plane events for at least:
 - User PAT create / deactivate / restore / soft-delete
 - Controlled query execution
 - Catalog Sample execution (`catalog.sample`)
+- Scheduled Task create / patch / delete (`schedule.create` / `schedule.patch` / `schedule.delete`; no secrets)
 
 Each event: actor User id, timestamp, resource type/id, action, result (`success` / `failure`), optional detail payload without secrets.
 Full platform audit of every login/Settings/Users path is out of scope for this phase (Foundation login paths may remain hook-ready only).
@@ -473,6 +469,8 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - Source soft delete / versioned credential history / audit-per-rotation (hard-delete of disabled Sources is delivered)
 - Query result type normalization / continuation tokens / data masking (deferred past depth)
 - Full-text search engines or PG-only FTS as the ranking authority
+- Catchup / backfill / RRule; multiple structure clocks per Source
+- Treating **Job** or **Scheduled Task** as Metadata domain entities (platform rules: `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`)
 
 ## 16. References
 
@@ -487,9 +485,12 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - `docs/adr/0015-semantic-field-admission.md`
 - `docs/adr/0024-normalized-type-mapping.md`
 - `docs/business-user-tokens.md`
+- `docs/business-jobs.md`
+- `docs/business-scheduled-tasks.md`
 - `docs/business-management-console.md`
 - `docs/api-contracts-sources.md`
 - `docs/api-contracts-jobs.md`
+- `docs/api-contracts-schedules.md`
 - `docs/api-contracts-metadata.md`
 - `docs/api-contracts-tokens.md`
 - `docs/api-contracts-audit.md`

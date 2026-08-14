@@ -62,7 +62,7 @@ PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
     "sources:write": "Create, update, and hard-delete (disabled only) Sources; set secrets; run reachability tests",
     "metadata:read": "Browse catalog objects, semantics, and joins",
     "metadata:write": "Write semantics and join edges",
-    "jobs:run": "Enqueue and manage Jobs (structure and later kinds)",
+    "jobs:run": "Enqueue and manage Jobs; manage domain Scheduled Tasks",
     "query:run": "Run controlled read-only SQL against a Source endpoint",
     "catalog:sample": "Run Catalog Sample (structured live peek) on a Catalog Object",
     "tokens:read": "List own User PAT metadata",

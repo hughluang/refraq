@@ -9,6 +9,7 @@ export const ModuleId = {
   businessDomains: "business-domains",
   typeMappings: "type-mappings",
   jobs: "jobs",
+  schedules: "schedules",
   settings: "settings",
 } as const;
 

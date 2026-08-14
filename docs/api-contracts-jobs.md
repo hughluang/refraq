@@ -4,7 +4,7 @@
 
 Contracts for enqueueing and observing platform **Jobs** via domain facades (metadata / Source surfaces in this phase) and platform list/get/logs/cancel.
 
-Business rules: `docs/business-metadata.md`, root `CONTEXT.md`.
+Business rules: `docs/business-jobs.md` (platform Job) and `docs/business-metadata.md` §4.2 (structure Source facade), root `CONTEXT.md`.
 Auth: Session or User PAT. Permissions: `jobs:run` unless noted.
 Instants: [`docs/conventions-time.md`](conventions-time.md) (UTC `Z` on the wire).
 HTTP protocol failures: [`docs/conventions-errors.md`](conventions-errors.md). Job `error_code` / `error_message` remain resource fields on a successful GET, not Problem Details.
@@ -131,7 +131,7 @@ Postgres/memory Job table (queried via the facade), not Celery.
 
 - Slice A: `kind=structure` only on the Source facade for database Sources.
 - Later slices/domains may add kinds and additional facade routes; unknown kind → `400` with stable code.
-- Console: module id `jobs` is the global observe surface; structure enqueue lives on Sources. Permission `jobs:run`. Job lists (platform-wide and Source-scoped) omit a `result` column. Job detail may show **Job result** as uninterpreted JSON and does not unpack `class` or link to **Structure Diff**.
+- Console: module id `jobs` is the global observe surface under the **Operations** nav group; structure enqueue lives on Sources. Permission `jobs:run`. Job lists (platform-wide and Source-scoped) omit a `result` column. Job detail may show **Job result** as uninterpreted JSON and does not unpack `class` or link to **Structure Diff**.
 
 ## 6. Non-Goals
 

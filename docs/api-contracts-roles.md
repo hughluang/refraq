@@ -63,7 +63,7 @@ Purpose: return the fixed Permission catalog for Role editing UIs.
     { "key": "sources:write", "description": "Create, update, and hard-delete (disabled only) Sources; set secrets; run reachability tests" },
     { "key": "metadata:read", "description": "Browse catalog objects, semantics, and joins" },
     { "key": "metadata:write", "description": "Write semantics and join edges" },
-    { "key": "jobs:run", "description": "Enqueue and manage Jobs (structure and later kinds)" },
+    { "key": "jobs:run", "description": "Enqueue and manage Jobs; manage domain Scheduled Tasks" },
     { "key": "query:run", "description": "Run controlled read-only SQL against a Source" },
     { "key": "catalog:sample", "description": "Run Catalog Sample (structured live peek) on a Catalog Object" },
     { "key": "tokens:read", "description": "List own User PAT metadata" },
@@ -73,7 +73,7 @@ Purpose: return the fixed Permission catalog for Role editing UIs.
 }
 ```
 
-Catalog meanings for metadata-phase keys: `docs/business-metadata.md` §6 and `docs/business-user-tokens.md`.
+Catalog meanings for metadata-phase keys: `docs/business-metadata.md` §6 and `docs/business-user-tokens.md`. Platform **Job** / **Scheduled Task** permission `jobs:run`: `docs/business-jobs.md`.
 
 ## 4. `GET /roles`
 

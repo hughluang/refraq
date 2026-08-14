@@ -52,10 +52,22 @@ PUBLISHED: dict[str, frozenset[str]] = {
         {
             "metadata.errors",
             "metadata.source_jobs",
+            "metadata.source_schedules",
             "metadata.type_mappings.seeds",
             "metadata.mcp_server",
             "metadata.tasks",
             "metadata.routers",
+        }
+    ),
+    "worker": frozenset(
+        {
+            "worker.api",
+            "worker.errors",
+            "worker.schemas",
+            "worker.routers",
+            "worker.schedules",
+            "worker.app",
+            "worker.tasks",
         }
     ),
 }

@@ -42,6 +42,8 @@ backend/
     schemas/ routers/     # domain use-case HTTP
     mcp_server.py tasks.py
   worker/                 # runtime: Celery app, Beat, Scheduled Task, system tasks, discovery
+    models.py schedules.py scheduler.py …
+    schemas/ routers/     # mechanism Scheduled Task HTTP (list/get/patch/delete); no Console pages
   alembic/
   tests/                  # includes dependency / published-API enforcement tests
 ```
@@ -90,6 +92,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 |--------|----------------|
 | `backend.metadata.errors` | Domain errors (subclass `AppError`, not `admin` concrete types) |
 | `backend.metadata.source_jobs` | Structure enqueue / list-by-source facade |
+| `backend.metadata.source_schedules` | Structure Scheduled Task facade + public projection (`public_schedule`) |
 | `backend.metadata.type_mappings.seeds` | Product Type Mapping seed occupy (`ensure_product_type_mappings`) for Foundation Upgrade / Site Bootstrap |
 | `backend.metadata.mcp_server` | MCP tool host entry |
 | `backend.metadata.tasks` | Celery shared-task callables (discovered by `worker`) |
@@ -99,7 +102,11 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 
 | Module | Published for |
 |--------|----------------|
-| `backend.worker.api` | Upgrade/composition helpers (e.g. `ensure_system_schedules`) |
+| `backend.worker.api` | Schedule seam policy (`schedule_out`, cadence / NotFound / system immutable, `ensure_system_schedules`); not a store re-export |
+| `backend.worker.schedules` | Store port (`ScheduledTaskRecord`, get/list/upsert) used by the API seam and domain facades |
+| `backend.worker.errors` | Mechanism Scheduled Task errors |
+| `backend.worker.schemas.*` | Scheduled Task response shapes (shared with domain facades) |
+| `backend.worker.routers.*` | Mechanism-resource HTTP (by Scheduled Task id / platform list); mounted by `main` |
 | `backend.worker.app` | Celery app entry (`celery -A backend.worker.app`); composition may bind it for producers |
 | `backend.worker.tasks` | Platform system tasks (discovered by the app) |
 
@@ -118,7 +125,8 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Domain rules, authz policy, use-case facade | Package that owns that language |
 | Request/response shapes and HTTP/MCP adapters for a use case | Package that **owns that use case** |
 | Mechanism-resource HTTP (get/cancel Job by id) | `jobs` |
-| Domain use-case HTTP (Source, structure enqueue/list, Catalog) | product domain (`metadata`) |
+| Mechanism-resource HTTP (list/get/patch/delete Scheduled Task) | `worker` |
+| Domain use-case HTTP (Source, structure enqueue/list, Catalog, Source schedule facade) | product domain (`metadata`) |
 | Outbound adapter families | Owning product domain (e.g. `metadata/connectors`: engine adapters + `runtime` invocation shell) |
 | Domain error types | That product domain (base in `core`) |
 | Config, engine, secrets crypto, Instant/Clock (`core.time`), upgrade orchestration, `AppError` / Problem Details, request-id helpers, process probes | `core` (upgrade may call platform-kernel published API); time contract in [`docs/conventions-time.md`](conventions-time.md); errors in [`docs/conventions-errors.md`](conventions-errors.md) |
@@ -126,7 +134,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Domain async work units (`@shared_task` or equivalent) | Owning product domain; **discovered and registered by `worker`** |
 | Process probes (health/ready) | `core` (thin); not inside a product domain |
 
-**Use-case ownership:** follow the business language of the operation. Structure collection, Catalog, Source-scoped Job facade → `metadata`. User/Role/Session/PAT/Console foundation → `admin`. Job-id mechanism read/write → `jobs`. Console nav may aggregate routes from multiple packages; that does **not** put all HTTP into `jobs`.
+**Use-case ownership:** follow the business language of the operation. Structure collection, Catalog, Source-scoped Job / schedule facades → `metadata`. User/Role/Session/PAT/Console foundation → `admin`. Job-id mechanism read/write → `jobs`. Scheduled Task mechanism HTTP → `worker` (not Console pages). Console nav may aggregate routes from multiple packages; that does **not** put all HTTP into `jobs`.
 
 ## 5. Structure inside a package
 
@@ -190,11 +198,11 @@ Concrete edges:
 
 | From | May import |
 |------|------------|
-| `main` (composition) | `core`, published `admin` / `jobs` / `metadata` (including their `routers.*` for mount), Site Bootstrap helpers |
+| `main` (composition) | `core`, published `admin` / `jobs` / `metadata` / `worker` (including their `routers.*` for mount), Site Bootstrap helpers |
 | `core` | stdlib, third parties, Alembic; `admin.roles` published symbols from `upgrade` only; `metadata.type_mappings.seeds` from `upgrade` only |
 | `admin` | `core`; own stores/schemas/routers |
 | `jobs` | `core`; own store/schemas/routers; published `admin` when cancel/audit needs it |
-| `metadata` | `core`; published `admin`; published `jobs`; own modules |
+| `metadata` | `core`; published `admin`; published `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; own modules |
 | `worker` | `core`; published `admin` / `jobs` / `metadata` for assembly and system tasks |
 | `alembic` | `core` Base + every package `models` module |
 | `tests` | any backend module (enforcement tests assert production edges) |

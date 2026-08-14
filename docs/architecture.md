@@ -101,7 +101,7 @@ Session expiry is absolute (set at creation; lookup does not renew TTL).
 The first version uses RBAC with **Role** as a first-class entity.
 
 - People are **User** records; each User has at most one Role (nullable).
-- Permissions are chosen from a fixed catalog (`console:access`, `dashboard:read`, `users:*`, `roles:*`, `settings:*`, plus metadata-phase `sources:*`, `metadata:*`, `jobs:run`, `query:run`, `catalog:sample`, `tokens:*`, `audit:read`).
+- Permissions are chosen from a fixed catalog (`console:access`, `dashboard:read`, `users:*`, `roles:*`, `settings:*`, plus `sources:*`, `metadata:*`, platform-mechanism `jobs:run`, `query:run`, `catalog:sample`, `tokens:*`, `audit:read`).
 - Console side navigation is served from a backend-seeded module catalog (`GET /console/navigation`); Console Module Identity for SPA wiring/ACL is `GET /console/module-identities`. See `docs/adr/0002-console-navigation-catalog.md`.
 - Seeded roles: locked `super_admin` (effective permissions = full catalog by identity) and editable `operator` (`console:access` + `dashboard:read` by default; metadata write/query/sample/token permissions are not implied).
 - Machine principals are reserved as **Client** and remain out of scope; person-owned **User PAT** is in scope for metadata foundation.

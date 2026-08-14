@@ -3,7 +3,7 @@
 `refraq` is a standalone **Data Product Integration Platform** (a Data Business Platform).
 New refraq implementation work belongs only in `backend/` and `frontend/`.
 
-The Management Foundation login/session/permission slice (Management Console) is delivered. Next implementation phase is the **metadata foundation** (Sources, Jobs, MCP, User PAT, companion base) — see `docs/business-metadata.md`. Data Product catalog / Entity remain later. Process pointer: `.process/AGENTS.md`; source of truth stays under `docs/`.
+The Management Foundation login/session/permission slice (Management Console) is delivered. Next implementation phase is the **metadata foundation** (Sources, catalog, MCP, User PAT, companion base) — see `docs/business-metadata.md`. **Job** and **Scheduled Task** are platform mechanisms (`docs/business-jobs.md`, `docs/business-scheduled-tasks.md`), not Metadata domain members. Data Product catalog / Entity remain later. Process pointer: `.process/AGENTS.md`; source of truth stays under `docs/`.
 
 ## Repository Rules
 
@@ -20,7 +20,7 @@ For repository structure and long-lived development guidance, read:
 2. `docs/backend-layout.md` (backend package tiers, published APIs, placement)
 3. `docs/architecture.md`
 4. `docs/modules.md`
-5. domain or contract documents under `docs/` that match the task (metadata: `docs/business-metadata.md`, `docs/business-user-tokens.md`, matching `docs/api-contracts-*.md`)
+5. domain or contract documents under `docs/` that match the task (metadata: `docs/business-metadata.md`, `docs/business-user-tokens.md`; jobs/schedules: `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`; matching `docs/api-contracts-*.md`)
 6. root `CONTEXT.md` for domain language
 
 ## Notes

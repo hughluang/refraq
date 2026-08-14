@@ -29,6 +29,7 @@ __all__ = [
     "QueryTimeout",
     "SampleColumnUnknown",
     "SampleFilterInvalid",
+    "ScheduleKindInvalid",
     "SemanticColumnUnknown",
     "SourceAccessInvalid",
     "SourceAccessRequired",
@@ -348,4 +349,13 @@ class TypeMappingUnknownForbidden(AppError):
 
     def _default_message(self) -> str:
         return "Type Mapping cannot be patched to unknown"
+
+
+class ScheduleKindInvalid(AppError):
+    code = "SCHEDULE_KIND_INVALID"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Scheduled Task work kind is not in the closed catalog"
+
 

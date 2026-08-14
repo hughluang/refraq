@@ -106,7 +106,7 @@ Responsibilities:
 
 - Source domain models and services (embedded reachability for database kinds)
 - Connector adapters (PostgreSQL, MSSQL, Oracle); outbound invocation shell in `connectors/runtime`
-- Domain facade for Source-scoped **Jobs** (structure enqueue/list)
+- Domain facade for Source-scoped **Jobs** (structure enqueue/list) and Source-scoped **Scheduled Task** (structure clock PUT/GET/DELETE)
 - Structure Job runtime in `structure_jobs/service` (`run_structure_job`: collect → Normalized Type → refresh → Structure Diff)
 - Domain Celery work units (`@shared_task`); discovered by `worker`
 - Catalog object / semantics / join / controlled query / Catalog Sample services (`catalog/service` owns browse, search, Join Path, and semantics/join writes; sample compile+run lives under `query/`; structure refresh orchestration in `catalog/structure_refresh`, plan merge in `catalog/structure_merge`, Join Origin policy in `catalog/join_origin`; persistence adapters only persist)
@@ -131,6 +131,7 @@ Responsibilities:
 
 - Celery application factory and process entry (`celery -A backend.worker.app`)
 - **Scheduled Task** ORM, system schedule seed, and Postgres-backed Beat scheduler
+- Mechanism Scheduled Task HTTP (`worker/routers/`: list/get/patch/delete)
 - Platform system tasks (for example stuck **Job** reaper)
 - Discover and register domain and platform task modules
 - Bind Celery request-id header transfer (not a Job column)
@@ -138,7 +139,7 @@ Responsibilities:
 Must not contain:
 
 - Domain collector logic (stay in `metadata/`)
-- Interactive Console HTTP routes
+- Interactive Console HTTP routes (pages stay in `frontend/`; mechanism REST is allowed)
 
 Deploy **one** Beat replica. See `docs/adr/0006-celery-platform-async-runtime.md` and `docs/env.md` §8.
 Schedule Timezone / Instant rules: [`docs/conventions-time.md`](conventions-time.md).

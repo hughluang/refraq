@@ -33,6 +33,7 @@ import {
   testSource,
   testSourceDraft,
 } from "@/features/sources/api";
+import { ScheduleFormModal } from "@/features/schedules/ScheduleFormModal";
 import { SourceJobsModal } from "@/features/sources/SourceJobsModal";
 import { SpecTree, defaultsFromSchema } from "@/features/sources/SpecTree";
 import type {
@@ -108,6 +109,7 @@ export function SourceList() {
   const [deleting, setDeleting] = useState(false);
   const [enqueueBusyId, setEnqueueBusyId] = useState<string | null>(null);
   const [jobsSource, setJobsSource] = useState<Source | null>(null);
+  const [scheduleSource, setScheduleSource] = useState<Source | null>(null);
 
   const showActions = Boolean(
     canWrite?.can || canRunJobs?.can || canReadDiffs?.can,
@@ -412,6 +414,16 @@ export function SourceList() {
                         </Button>
                         <Button
                           size="compact-xs"
+                          variant="light"
+                          disabled={
+                            source.kind !== "database" || !source.has_access
+                          }
+                          onClick={() => setScheduleSource(source)}
+                        >
+                          {t("schedules.open")}
+                        </Button>
+                        <Button
+                          size="compact-xs"
                           variant="default"
                           onClick={() => setJobsSource(source)}
                         >
@@ -647,6 +659,17 @@ export function SourceList() {
         }
         opened={jobsSource !== null}
         onClose={() => setJobsSource(null)}
+      />
+      <ScheduleFormModal
+        opened={scheduleSource !== null}
+        sourceId={scheduleSource?.id}
+        sourceLabel={
+          scheduleSource
+            ? `${scheduleSource.key} — ${scheduleSource.name}`
+            : undefined
+        }
+        onClose={() => setScheduleSource(null)}
+        onSaved={() => undefined}
       />
     </Stack>
   );

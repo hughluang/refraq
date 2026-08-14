@@ -30,6 +30,7 @@ from backend.metadata.sources.store import (
     get_source_store,
     new_source_id,
 )
+from backend.worker.api import delete_structure_schedule_by_source_id
 
 
 def require_source(source_id: str) -> SourceRecord:
@@ -161,6 +162,7 @@ def delete_source(source_id: str) -> SourceRecord:
 
     get_catalog_store().delete_objects_for_source(source_id)
     get_structure_diff_store().delete_for_source(source_id)
+    delete_structure_schedule_by_source_id(source_id)
     if not store.delete_source(source_id):
         raise SourceNotFound()
     return existing

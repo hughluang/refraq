@@ -46,10 +46,12 @@ from backend.admin.routers.settings import router as settings_router
 from backend.admin.routers.tokens import router as tokens_router
 from backend.admin.routers.users import router as users_router
 from backend.jobs.routers.jobs import router as jobs_mechanism_router
+from backend.worker.routers.schedules import router as schedules_mechanism_router
 from backend.metadata.routers.business_domains import router as business_domains_router
 from backend.metadata.routers.catalog import router as metadata_catalog_router
 from backend.metadata.routers.jobs import router as metadata_jobs_router
 from backend.metadata.routers.query import router as metadata_query_router
+from backend.metadata.routers.schedules import router as metadata_schedules_router
 from backend.metadata.routers.sources import router as sources_router
 from backend.metadata.routers.structure_diffs import router as structure_diffs_router
 from backend.metadata.routers.type_mappings import router as type_mappings_router
@@ -156,8 +158,10 @@ app.include_router(metadata_catalog_router)
 app.include_router(business_domains_router)
 app.include_router(type_mappings_router)
 app.include_router(metadata_jobs_router)
+app.include_router(metadata_schedules_router)
 app.include_router(structure_diffs_router)
 app.include_router(metadata_query_router)
 app.include_router(jobs_mechanism_router)
+app.include_router(schedules_mechanism_router)
 
 app.add_middleware(RequestIdMiddleware)
