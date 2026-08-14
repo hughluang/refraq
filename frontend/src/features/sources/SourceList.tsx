@@ -439,7 +439,7 @@ export function SourceList() {
               setBusy(true);
               try {
                 if (editing) {
-                  await patchSource(editing.id, {
+                  const updated = await patchSource(editing.id, {
                     name: values.name.trim(),
                     description: values.description.trim() || null,
                     status: values.status,
@@ -450,6 +450,12 @@ export function SourceList() {
                     type: "success",
                     message: t("sources.update.success"),
                   });
+                  if (updated.schedule) {
+                    open?.({
+                      type: "success",
+                      message: t("schedules.seededOnSourceUpdate"),
+                    });
+                  }
                 } else {
                   await createSource({
                     key: values.key.trim(),

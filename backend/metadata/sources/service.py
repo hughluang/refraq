@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from backend.core.config import get_settings
+from backend.core.db import session_scope
 from backend.core.time import utc_now
 from dataclasses import replace
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
+
+from sqlalchemy.orm import Session
 
 from backend.metadata.catalog.store import get_catalog_store
 from backend.metadata.structure_diffs.store import get_structure_diff_store
@@ -27,10 +31,18 @@ from backend.metadata.sources.access import (
 from backend.metadata.sources.store import (
     SUPPORTED_KINDS,
     SourceRecord,
+    SqlSourceStore,
     get_source_store,
     new_source_id,
 )
+from backend.metadata.source_schedules import (
+    ensure_default_structure_schedule_if_none,
+    ensure_default_structure_schedule_if_none_on,
+    seed_default_structure_schedule,
+    seed_default_structure_schedule_on,
+)
 from backend.worker.api import delete_structure_schedules_by_source_id
+from backend.worker.schemas.schedules import ScheduleOut
 
 
 def require_source(source_id: str) -> SourceRecord:
@@ -76,6 +88,8 @@ def create_source(
     description: str | None,
     engine: str | None,
     access: dict[str, Any] | None,
+    actor_user_id: str | None = None,
+    actor_token_id: str | None = None,
 ) -> SourceRecord:
     if kind not in SUPPORTED_KINDS:
         raise SourceKindUnsupported()
@@ -101,7 +115,77 @@ def create_source(
         created_at=now,
         updated_at=now,
     )
-    return get_source_store().create_source(record)
+    if get_settings().store_backend == "persistent":
+        store = cast(SqlSourceStore, get_source_store())
+        with session_scope() as session:
+            stored = store.create_source_on(session, record)
+            seed_default_structure_schedule_on(
+                stored,
+                session=session,
+                actor_user_id=actor_user_id,
+                actor_token_id=actor_token_id,
+            )
+            return stored
+    try:
+        return _insert_source_and_seed(
+            record,
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+        )
+    except Exception:
+        if get_source_store().get_source(record.id) is not None:
+            delete_structure_schedules_by_source_id(record.id)
+            get_source_store().delete_source(record.id)
+        raise
+
+
+def _insert_source_and_seed(
+    record: SourceRecord,
+    *,
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+) -> SourceRecord:
+    stored = get_source_store().create_source(record)
+    seed_default_structure_schedule(
+        stored.id,
+        actor_user_id=actor_user_id,
+        actor_token_id=actor_token_id,
+    )
+    return stored
+
+
+def _source_business_changed(before: SourceRecord, after: SourceRecord) -> bool:
+    return (
+        before.name != after.name
+        or before.description != after.description
+        or before.status != after.status
+        or before.engine != after.engine
+        or before.access_ciphertext != after.access_ciphertext
+    )
+
+
+def _maybe_seed_after_update(
+    saved: SourceRecord,
+    *,
+    changed: bool,
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+    session: Session | None = None,
+) -> ScheduleOut | None:
+    if not changed:
+        return None
+    if session is not None:
+        return ensure_default_structure_schedule_if_none_on(
+            saved,
+            session=session,
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+        )
+    return ensure_default_structure_schedule_if_none(
+        saved,
+        actor_user_id=actor_user_id,
+        actor_token_id=actor_token_id,
+    )
 
 
 def update_source(
@@ -112,7 +196,9 @@ def update_source(
     status: str | None = None,
     engine: str | None = None,
     access: dict[str, Any] | None | object = ...,
-) -> SourceRecord:
+    actor_user_id: str | None = None,
+    actor_token_id: str | None = None,
+) -> tuple[SourceRecord, ScheduleOut | None]:
     store = get_source_store()
     existing = store.get_source(source_id)
     if existing is None:
@@ -141,7 +227,27 @@ def update_source(
         updated.access_ciphertext = seal_access(engine, existing_access)
         updated.access_updated_at = utc_now()
     updated.updated_at = utc_now()
-    saved = store.save_source(updated)
+    changed = _source_business_changed(existing, updated)
+    seeded: ScheduleOut | None = None
+    if get_settings().store_backend == "persistent":
+        sql_store = cast(SqlSourceStore, store)
+        with session_scope() as session:
+            saved = sql_store.save_source_on(session, updated)
+            seeded = _maybe_seed_after_update(
+                saved,
+                changed=changed,
+                actor_user_id=actor_user_id,
+                actor_token_id=actor_token_id,
+                session=session,
+            )
+    else:
+        saved = store.save_source(updated)
+        seeded = _maybe_seed_after_update(
+            saved,
+            changed=changed,
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+        )
     if engine is not None and existing.engine != saved.engine:
         get_catalog_store().recompute_locators_for_source(
             source_id,
@@ -149,7 +255,7 @@ def update_source(
             kind=saved.kind,
             source_key=saved.key,
         )
-    return saved
+    return saved, seeded
 
 
 def delete_source(source_id: str) -> SourceRecord:

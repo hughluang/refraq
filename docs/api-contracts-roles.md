@@ -60,7 +60,7 @@ Purpose: return the fixed Permission catalog for Role editing UIs.
     { "key": "settings:read", "description": "View platform system parameters" },
     { "key": "settings:write", "description": "Change platform system parameters" },
     { "key": "sources:read", "description": "List and view Sources (non-secret fields)" },
-    { "key": "sources:write", "description": "Create, update, and hard-delete (disabled only) Sources; set secrets; run reachability tests" },
+    { "key": "sources:write", "description": "Create, update, and hard-delete (disabled only) Sources; set secrets; run reachability tests; creating a database Source, or a mutating update of one with zero structure schedules, also inserts the product-default structure Scheduled Task" },
     { "key": "metadata:read", "description": "Browse catalog objects, semantics, and joins" },
     { "key": "metadata:write", "description": "Write semantics and join edges" },
     { "key": "jobs:run", "description": "Enqueue and manage Jobs; manage domain Scheduled Tasks" },

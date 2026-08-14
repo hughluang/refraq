@@ -9,6 +9,7 @@ from datetime import datetime
 from functools import lru_cache
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from backend.admin.models import AuditEventRow
 from backend.core.config import get_settings
@@ -83,20 +84,23 @@ class MemoryAuditStore:
 class SqlAuditStore:
     def create(self, record: AuditEventRecord) -> AuditEventRecord:
         with session_scope() as session:
-            row = AuditEventRow(
-                id=record.id,
-                created_at=record.created_at,
-                actor_user_id=record.actor_user_id,
-                actor_token_id=record.actor_token_id,
-                resource_type=record.resource_type,
-                resource_id=record.resource_id,
-                action=record.action,
-                result=record.result,
-                detail=record.detail,
-            )
-            session.add(row)
-            session.flush()
-            return _row_to_event(row)
+            return self.create_on(session, record)
+
+    def create_on(self, session: Session, record: AuditEventRecord) -> AuditEventRecord:
+        row = AuditEventRow(
+            id=record.id,
+            created_at=record.created_at,
+            actor_user_id=record.actor_user_id,
+            actor_token_id=record.actor_token_id,
+            resource_type=record.resource_type,
+            resource_id=record.resource_id,
+            action=record.action,
+            result=record.result,
+            detail=record.detail,
+        )
+        session.add(row)
+        session.flush()
+        return _row_to_event(row)
 
     def get_by_id(self, event_id: str) -> AuditEventRecord | None:
         with session_scope() as session:

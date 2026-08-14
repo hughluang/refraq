@@ -4,12 +4,12 @@
 
 Contracts for operator management of domain **Scheduled Task** definitions (the schedule layer) and firing them.
 
-Business rules: `docs/business-scheduled-tasks.md` (platform Scheduled Task) and `docs/business-metadata.md` §4.2 (structure Source facade), root `CONTEXT.md`.
+Business rules: `docs/business-scheduled-tasks.md` (platform Scheduled Task) and `docs/business-metadata.md` §4.2 (structure Source facade), root `CONTEXT.md`, `docs/adr/0026-seed-structure-schedule-on-source-create.md`.
 Auth: Session or User PAT. Permission: `jobs:run`.
 Instants: [`docs/conventions-time.md`](conventions-time.md) (UTC `Z` on the wire).
 HTTP protocol failures: [`docs/conventions-errors.md`](conventions-errors.md).
 
-Create is domain-facade only. Platform list/get/patch/delete do not create rows and do not accept Celery `task_name`.
+Create is domain-facade (`POST /sources/{id}/schedules`) plus the database Source create-time seed and a mutating Source update (zero structure schedules). Platform list/get/patch/delete do not create rows and do not accept Celery `task_name`.
 
 ## 2. Public shape
 
@@ -46,7 +46,7 @@ Rules:
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/sources/{id}/schedules` | `jobs:run` | Insert a structure schedule for this Source (only human create path) |
+| `POST` | `/sources/{id}/schedules` | `jobs:run` | Insert a structure schedule for this Source (operator create path) |
 | `GET` | `/sources/{id}/schedules` | `jobs:run` | List structure schedules whose target is this Source |
 | `GET` | `/schedules` | `jobs:run` | Platform list (default excludes `system=true`; tests may pass `?system=true`) |
 | `GET` | `/schedules/{id}` | `jobs:run` | Get by id (system rows visible for debug) |
@@ -92,7 +92,7 @@ Newest `created_at` first. Default `include_system=false`. Query `system=true` i
 
 ### `GET /sources/{id}/schedules`
 
-Same public shape, filtered to schedules whose target is this Source. Missing Source → `SOURCE_NOT_FOUND`. Empty list is `200` with `items: []`.
+Same public shape, filtered to schedules whose target is this Source. Missing Source → `SOURCE_NOT_FOUND`. Empty list is `200` with `items: []` (allowed after the operator deletes the last schedule; a newly created database Source has one seed).
 
 ### `DELETE`
 

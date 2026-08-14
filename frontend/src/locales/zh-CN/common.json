@@ -274,6 +274,7 @@
   "schedules.delete.confirmBody": "将删除日程「{{name}}」。此操作不可撤销。",
   "schedules.delete.success": "日程已删除",
   "schedules.save.success": "日程已保存",
+  "schedules.seededOnSourceUpdate": "已补种默认结构日程",
   "schedules.form.title": "Structure 日程",
   "schedules.fields.name": "名称",
   "schedules.fields.kind": "种类",

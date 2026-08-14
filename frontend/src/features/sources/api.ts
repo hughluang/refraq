@@ -1,4 +1,5 @@
 import { apiClient } from "@/lib/api";
+import type { ScheduledTask } from "@/features/schedules/types";
 import type {
   CatalogColumn,
   CatalogJoin,
@@ -58,11 +59,14 @@ export function patchSource(
     access: SourceAccess;
   }>,
 ) {
-  return apiClient<{ source: Source }>(`/sources/${sourceId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  return apiClient<{ source: Source; schedule?: ScheduledTask }>(
+    `/sources/${sourceId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
 }
 
 export function deleteSource(sourceId: string) {

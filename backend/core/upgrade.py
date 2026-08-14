@@ -43,7 +43,7 @@ def migrate_with_advisory_lock(database_url: str) -> None:
 
 
 def run_upgrade(database_url: str) -> None:
-    """Foundation Upgrade: migrate schema, then ensure System Role identity row."""
+    """Foundation Upgrade: migrate schema, then ensure System Role, system schedules, and Type Mapping seeds."""
     _run_under_advisory_lock(database_url, ensure_roles=True)
 
 

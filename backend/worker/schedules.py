@@ -8,6 +8,7 @@ from datetime import datetime
 from functools import lru_cache
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from backend.core.config import get_settings
 from backend.core.db import session_scope
@@ -85,29 +86,34 @@ class MemoryScheduleStore:
 class SqlScheduleStore:
     def upsert(self, record: ScheduledTaskRecord) -> ScheduledTaskRecord:
         with session_scope() as session:
-            row = session.get(ScheduledTaskRow, record.id)
-            if row is None:
-                row = session.scalar(
-                    select(ScheduledTaskRow).where(ScheduledTaskRow.key == record.key)
-                )
-            if row is None:
-                row = ScheduledTaskRow(id=record.id)
-                session.add(row)
-            row.key = record.key
-            row.name = record.name
-            row.enabled = record.enabled
-            row.interval_seconds = record.interval_seconds
-            row.cron = record.cron
-            row.schedule_timezone = record.schedule_timezone or "UTC"
-            row.task_name = record.task_name
-            row.args_json = list(record.args_json)
-            row.kwargs_json = dict(record.kwargs_json)
-            row.system = record.system
-            row.last_run_at = record.last_run_at
-            row.created_at = record.created_at
-            row.updated_at = record.updated_at
-            session.flush()
-            return _row_to_schedule(row)
+            return self.upsert_on(session, record)
+
+    def upsert_on(
+        self, session: Session, record: ScheduledTaskRecord
+    ) -> ScheduledTaskRecord:
+        row = session.get(ScheduledTaskRow, record.id)
+        if row is None:
+            row = session.scalar(
+                select(ScheduledTaskRow).where(ScheduledTaskRow.key == record.key)
+            )
+        if row is None:
+            row = ScheduledTaskRow(id=record.id)
+            session.add(row)
+        row.key = record.key
+        row.name = record.name
+        row.enabled = record.enabled
+        row.interval_seconds = record.interval_seconds
+        row.cron = record.cron
+        row.schedule_timezone = record.schedule_timezone or "UTC"
+        row.task_name = record.task_name
+        row.args_json = list(record.args_json)
+        row.kwargs_json = dict(record.kwargs_json)
+        row.system = record.system
+        row.last_run_at = record.last_run_at
+        row.created_at = record.created_at
+        row.updated_at = record.updated_at
+        session.flush()
+        return _row_to_schedule(row)
 
     def get_by_key(self, key: str) -> ScheduledTaskRecord | None:
         with session_scope() as session:
@@ -123,11 +129,16 @@ class SqlScheduleStore:
 
     def list(self, *, include_system: bool = False) -> list[ScheduledTaskRecord]:
         with session_scope() as session:
-            stmt = select(ScheduledTaskRow).order_by(ScheduledTaskRow.created_at.desc())
-            if not include_system:
-                stmt = stmt.where(ScheduledTaskRow.system.is_(False))
-            rows = session.scalars(stmt).all()
-            return [_row_to_schedule(row) for row in rows]
+            return self.list_on(session, include_system=include_system)
+
+    def list_on(
+        self, session: Session, *, include_system: bool = False
+    ) -> list[ScheduledTaskRecord]:
+        stmt = select(ScheduledTaskRow).order_by(ScheduledTaskRow.created_at.desc())
+        if not include_system:
+            stmt = stmt.where(ScheduledTaskRow.system.is_(False))
+        rows = session.scalars(stmt).all()
+        return [_row_to_schedule(row) for row in rows]
 
     def list_enabled(self) -> list[ScheduledTaskRecord]:
         with session_scope() as session:

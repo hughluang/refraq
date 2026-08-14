@@ -41,7 +41,7 @@ Responsibilities:
 - `core/secrets.py`: application secret encryption helpers
 - `core/errors.py`: `AppError` (code + http_status) and HTTP Problem Details serialization
 - `core/request_id.py`: `X-Request-ID` middleware helpers, log filter, Celery header transfer
-- `core/upgrade.py`: **Foundation Upgrade** (advisory-locked Alembic migrate, then call domain System Role ensure); exit non-zero on failure
+- `core/upgrade.py`: **Foundation Upgrade** (advisory-locked Alembic migrate, then call domain System Role ensure, system schedules, and Type Mapping seeds); exit non-zero on failure
 - `core/entry.py`: official product start path (run Foundation Upgrade, then serve); exit non-zero if upgrade fails (does not serve)
 - Process probes (health/ready HTTP adapters)
 

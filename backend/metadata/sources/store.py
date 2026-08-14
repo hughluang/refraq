@@ -11,6 +11,7 @@ from typing import Protocol
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from backend.core.config import get_settings
 from backend.core.db import session_scope
@@ -163,50 +164,56 @@ class SqlSourceStore:
             return _row_to_source(row) if row else None
 
     def create_source(self, record: SourceRecord) -> SourceRecord:
-        record = ensure_source_locator(record)
         with session_scope() as session:
-            row = SourceRow(
-                id=record.id,
-                key=record.key,
-                locator_key=record.locator_key,
-                name=record.name,
-                kind=record.kind,
-                status=record.status,
-                description=record.description,
-                engine=record.engine,
-                access_ciphertext=record.access_ciphertext,
-                access_updated_at=record.access_updated_at,
-                created_at=record.created_at,
-                updated_at=record.updated_at,
-            )
-            session.add(row)
-            try:
-                session.flush()
-            except IntegrityError as exc:
-                raise SourceKeyDuplicate() from exc
-            return _row_to_source(row)
+            return self.create_source_on(session, record)
+
+    def create_source_on(self, session: Session, record: SourceRecord) -> SourceRecord:
+        record = ensure_source_locator(record)
+        row = SourceRow(
+            id=record.id,
+            key=record.key,
+            locator_key=record.locator_key,
+            name=record.name,
+            kind=record.kind,
+            status=record.status,
+            description=record.description,
+            engine=record.engine,
+            access_ciphertext=record.access_ciphertext,
+            access_updated_at=record.access_updated_at,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )
+        session.add(row)
+        try:
+            session.flush()
+        except IntegrityError as exc:
+            raise SourceKeyDuplicate() from exc
+        return _row_to_source(row)
 
     def save_source(self, record: SourceRecord) -> SourceRecord:
-        record = ensure_source_locator(record)
         with session_scope() as session:
-            row = session.get(SourceRow, record.id)
-            if row is None:
-                raise SourceNotFound()
-            row.key = record.key
-            row.locator_key = record.locator_key
-            row.name = record.name
-            row.kind = record.kind
-            row.status = record.status
-            row.description = record.description
-            row.engine = record.engine
-            row.access_ciphertext = record.access_ciphertext
-            row.access_updated_at = record.access_updated_at
-            row.updated_at = record.updated_at
-            try:
-                session.flush()
-            except IntegrityError as exc:
-                raise SourceKeyDuplicate() from exc
-            return _row_to_source(row)
+            return self.save_source_on(session, record)
+
+    def save_source_on(self, session: Session, record: SourceRecord) -> SourceRecord:
+        record = ensure_source_locator(record)
+        row = session.get(SourceRow, record.id)
+        if row is None:
+            raise SourceNotFound()
+        row.key = record.key
+        row.locator_key = record.locator_key
+        row.name = record.name
+        row.kind = record.kind
+        row.status = record.status
+        row.description = record.description
+        row.engine = record.engine
+        row.access_ciphertext = record.access_ciphertext
+        row.access_updated_at = record.access_updated_at
+        row.updated_at = record.updated_at
+        try:
+            session.flush()
+        except IntegrityError as exc:
+            raise SourceKeyDuplicate() from exc
+        return _row_to_source(row)
 
     def delete_source(self, source_id: str) -> bool:
         with session_scope() as session:

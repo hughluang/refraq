@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from backend.worker.schemas.schedules import ScheduleOut
+
 
 class SourceOut(BaseModel):
     id: str
@@ -28,6 +30,11 @@ class SourceListResponse(BaseModel):
 
 class SourceResponse(BaseModel):
     source: SourceOut
+
+
+class PatchSourceResponse(BaseModel):
+    source: SourceOut
+    schedule: ScheduleOut | None = None
 
 
 class SourceAccessResponse(BaseModel):

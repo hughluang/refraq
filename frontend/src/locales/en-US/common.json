@@ -274,6 +274,7 @@
   "schedules.delete.confirmBody": "Schedule \"{{name}}\" will be deleted. This cannot be undone.",
   "schedules.delete.success": "Schedule deleted",
   "schedules.save.success": "Schedule saved",
+  "schedules.seededOnSourceUpdate": "Default structure schedule seeded",
   "schedules.form.title": "Structure schedule",
   "schedules.fields.name": "Name",
   "schedules.fields.kind": "Kind",

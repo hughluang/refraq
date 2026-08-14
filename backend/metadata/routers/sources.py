@@ -23,6 +23,7 @@ from backend.metadata.schemas.sources import (
     AccessSchemaResponse,
     CreateSourceRequest,
     PatchSourceRequest,
+    PatchSourceResponse,
     SourceAccessResponse,
     SourceListResponse,
     SourceOut,
@@ -72,6 +73,8 @@ def post_source(
         description=payload.description,
         engine=payload.engine,
         access=payload.access,
+        actor_user_id=user.id,
+        actor_token_id=get_actor_token_id(request),
     )
     persist_audit_event(
         actor_user_id=user.id,
@@ -132,32 +135,41 @@ def get_source_access(
     return SourceAccessResponse(access=source_service.full_access(record))
 
 
-@router.patch("/sources/{source_id}", response_model=SourceResponse)
+@router.patch(
+    "/sources/{source_id}",
+    response_model=PatchSourceResponse,
+    response_model_exclude_unset=True,
+)
 def patch_source(
     source_id: str,
     payload: PatchSourceRequest,
     request: Request,
     user: UserRecord = Depends(require_permission("sources:write")),
-) -> SourceResponse:
+) -> PatchSourceResponse:
     data = payload.model_dump(exclude_unset=True)
-    record = source_service.update_source(
+    actor_token_id = get_actor_token_id(request)
+    record, seeded = source_service.update_source(
         source_id,
         name=data.get("name"),
         description=data["description"] if "description" in data else ...,
         status=data.get("status"),
         engine=data.get("engine"),
         access=data["access"] if "access" in data else ...,
+        actor_user_id=user.id,
+        actor_token_id=actor_token_id,
     )
     persist_audit_event(
         actor_user_id=user.id,
-        actor_token_id=get_actor_token_id(request),
+        actor_token_id=actor_token_id,
         resource_type="source",
         resource_id=record.id,
         action="source.update",
         result="success",
         detail={"fields": sorted(data.keys())},
     )
-    return SourceResponse(source=_source_out(record))
+    if seeded is None:
+        return PatchSourceResponse(source=_source_out(record))
+    return PatchSourceResponse(source=_source_out(record), schedule=seeded)
 
 
 @router.delete(

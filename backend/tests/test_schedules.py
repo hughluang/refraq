@@ -131,10 +131,10 @@ def test_post_inserts_multiple_structure_schedules(client: TestClient) -> None:
     listed = client.get("/schedules")
     assert listed.status_code == 200
     items = listed.json()["items"]
-    assert len(items) == 2
+    assert len(items) == 3
     related = client.get(f"/sources/{source['id']}/schedules")
     assert related.status_code == 200
-    assert len(related.json()["items"]) == 2
+    assert len(related.json()["items"]) == 3
     assert "task_name" not in related.json()["items"][0]
 
 
@@ -195,7 +195,9 @@ def test_patch_and_delete_domain_schedule(client: TestClient) -> None:
     assert missing.json()["code"] == "SCHEDULE_NOT_FOUND"
     related = client.get(f"/sources/{source['id']}/schedules")
     assert related.status_code == 200
-    assert related.json()["items"] == []
+    remaining = related.json()["items"]
+    assert len(remaining) == 1
+    assert remaining[0]["id"] != schedule_id
 
 
 def test_patch_empty_name_restores_default(client: TestClient) -> None:
@@ -556,4 +558,241 @@ def test_source_jobs_http_removed(client: TestClient) -> None:
     assert post.status_code == 404
     get = client.get(f"/sources/{source['id']}/jobs")
     assert get.status_code == 404
+
+
+def _source_body(key: str) -> dict:
+    return {
+        "key": key,
+        "name": key,
+        "kind": "database",
+        "engine": "postgresql",
+        "access": {
+            "host": "127.0.0.1",
+            "port": 5432,
+            "username": "u",
+            "password": "p",
+            "ssl_mode": "require",
+            "database": "MES",
+            "schema": "public",
+            "extra": {},
+        },
+    }
+
+
+def _insert_source_without_schedule(*, key: str, name: str | None = None):
+    from backend.core.time import utc_now
+    from backend.metadata.sources.access import seal_access
+    from backend.metadata.sources.store import SourceRecord, get_source_store
+
+    now = utc_now()
+    return get_source_store().create_source(
+        SourceRecord(
+            id=f"src_{key.replace('-', '_')}",
+            key=key,
+            locator_key=f"src/postgresql/{key}",
+            name=name or key,
+            kind="database",
+            status="active",
+            description=None,
+            engine="postgresql",
+            access_ciphertext=seal_access(
+                "postgresql", _source_body(key)["access"]
+            ),
+            access_updated_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+
+def test_source_create_seeds_default_structure_schedule(client: TestClient) -> None:
+    from backend.admin.audit_store import get_audit_store
+    from backend.metadata.source_schedules import DEFAULT_STRUCTURE_CRON
+
+    resp = client.post("/sources", json=_source_body("seed-src"))
+    assert resp.status_code == 201, resp.text
+    assert "schedule" not in resp.json()
+    source = resp.json()["source"]
+    listed = client.get(f"/sources/{source['id']}/schedules")
+    assert listed.status_code == 200
+    items = listed.json()["items"]
+    assert len(items) == 1
+    seed = items[0]
+    assert seed["work_kind"] == "structure"
+    assert seed["cron"] == DEFAULT_STRUCTURE_CRON
+    assert seed["schedule_timezone"] == "UTC"
+    assert seed["enabled"] is True
+    assert seed["interval_seconds"] is None
+    assert seed["name"] == "structure · seed-src"
+    jobs = client.get("/jobs")
+    assert jobs.status_code == 200
+    assert jobs.json()["items"] == []
+    me = client.get("/auth/me")
+    assert me.status_code == 200
+    actor_id = me.json()["user"]["id"]
+    source_events, _ = get_audit_store().list_events(action="source.create")
+    schedule_events, _ = get_audit_store().list_events(action="schedule.create")
+    assert len(source_events) == 1
+    assert len(schedule_events) == 1
+    assert source_events[0].actor_user_id == actor_id
+    assert schedule_events[0].actor_user_id == actor_id
+    assert schedule_events[0].detail == {
+        "kind": "structure",
+        "source_id": source["id"],
+    }
+
+
+def test_sources_write_without_jobs_run_still_seeds(client: TestClient) -> None:
+    from backend.admin.roles import create_role
+    from backend.admin.role_store import get_role_store
+    from backend.admin.security import hash_password
+    from backend.admin.user_store import get_user_store
+    from backend.worker.schedules import get_schedule_store
+
+    role = create_role(
+        get_role_store(),
+        key="src_writer",
+        name="Source writer",
+        permissions=["console:access", "sources:read", "sources:write"],
+    )
+    get_user_store().create_user(
+        account="writer",
+        display_name="Writer",
+        password_hash=hash_password("writer-pass"),
+        role_id=role.id,
+    )
+    login = client.post(
+        "/auth/login",
+        json={"account": "writer", "password": "writer-pass"},
+    )
+    assert login.status_code == 200, login.text
+    resp = client.post("/sources", json=_source_body("writer-src"))
+    assert resp.status_code == 201, resp.text
+    source_id = resp.json()["source"]["id"]
+    forbidden = client.get(f"/sources/{source_id}/schedules")
+    assert forbidden.status_code == 403
+    matches = [
+        record
+        for record in get_schedule_store().list(include_system=False)
+        if record.kwargs_json.get("source_id") == source_id
+    ]
+    assert len(matches) == 1
+
+
+def test_seed_failure_does_not_leave_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.metadata.sources.service import create_source
+    from backend.metadata.sources.store import get_source_store
+    from backend.worker.schedules import get_schedule_store
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("seed failed")
+
+    monkeypatch.setattr(
+        "backend.metadata.sources.service.seed_default_structure_schedule",
+        boom,
+    )
+    with pytest.raises(RuntimeError, match="seed failed"):
+        create_source(
+            key="boom-src",
+            name="boom-src",
+            kind="database",
+            description=None,
+            engine="postgresql",
+            access=_source_body("boom-src")["access"],
+        )
+    assert get_source_store().get_source_by_key("boom-src") is None
+    assert get_schedule_store().list(include_system=False) == []
+
+
+def test_patch_inserts_when_zero_structure_schedules(client: TestClient) -> None:
+    from backend.admin.audit_store import get_audit_store
+    from backend.metadata.source_schedules import (
+        DEFAULT_STRUCTURE_CRON,
+        list_structure_schedules,
+    )
+
+    source = _insert_source_without_schedule(key="ensure-src", name="Ensure")
+    assert list_structure_schedules(source.id) == []
+    me = client.get("/auth/me")
+    assert me.status_code == 200
+    actor_id = me.json()["user"]["id"]
+    patched = client.patch(f"/sources/{source.id}", json={"name": "Ensure updated"})
+    assert patched.status_code == 200, patched.text
+    body = patched.json()
+    assert "source" in body
+    assert "schedule" in body
+    assert body["schedule"]["cron"] == DEFAULT_STRUCTURE_CRON
+    assert body["schedule"]["work_kind"] == "structure"
+    items = list_structure_schedules(source.id)
+    assert len(items) == 1
+    assert items[0].id == body["schedule"]["id"]
+    events, _ = get_audit_store().list_events(action="schedule.create")
+    assert len(events) == 1
+    assert events[0].actor_user_id == actor_id
+    assert events[0].detail == {"kind": "structure", "source_id": source.id}
+    again = client.patch(f"/sources/{source.id}", json={"name": "Ensure again"})
+    assert again.status_code == 200
+    assert "schedule" not in again.json()
+    assert len(list_structure_schedules(source.id)) == 1
+
+
+def test_patch_skips_when_disabled_schedule_present(client: TestClient) -> None:
+    source = _make_source(client, key="disabled-seed")
+    items = client.get(f"/sources/{source['id']}/schedules").json()["items"]
+    assert len(items) == 1
+    patched_sched = client.patch(
+        f"/schedules/{items[0]['id']}", json={"enabled": False}
+    )
+    assert patched_sched.status_code == 200
+    patched = client.patch(
+        f"/sources/{source['id']}", json={"name": "disabled-seed-renamed"}
+    )
+    assert patched.status_code == 200
+    assert "schedule" not in patched.json()
+    after = client.get(f"/sources/{source['id']}/schedules").json()["items"]
+    assert len(after) == 1
+    assert after[0]["id"] == items[0]["id"]
+    assert after[0]["enabled"] is False
+
+
+def test_delete_last_schedule_then_patch_reinserts(client: TestClient) -> None:
+    from backend.admin.audit_store import get_audit_store, reset_audit_store
+
+    source = _make_source(client, key="wipe-seed")
+    items = client.get(f"/sources/{source['id']}/schedules").json()["items"]
+    assert len(items) == 1
+    deleted = client.delete(f"/schedules/{items[0]['id']}")
+    assert deleted.status_code == 204
+    empty = client.get(f"/sources/{source['id']}/schedules")
+    assert empty.json()["items"] == []
+    reset_audit_store()
+    me = client.get("/auth/me")
+    actor_id = me.json()["user"]["id"]
+    patched = client.patch(
+        f"/sources/{source['id']}", json={"name": "wipe-seed-touched"}
+    )
+    assert patched.status_code == 200, patched.text
+    seeded = patched.json()["schedule"]
+    assert seeded["id"] != items[0]["id"]
+    after = client.get(f"/sources/{source['id']}/schedules").json()["items"]
+    assert len(after) == 1
+    assert after[0]["id"] == seeded["id"]
+    events, _ = get_audit_store().list_events(action="schedule.create")
+    assert len(events) == 1
+    assert events[0].actor_user_id == actor_id
+    assert events[0].detail == {"kind": "structure", "source_id": source["id"]}
+
+
+def test_patch_same_name_or_empty_body_does_not_seed(client: TestClient) -> None:
+    from backend.metadata.source_schedules import list_structure_schedules
+
+    source = _insert_source_without_schedule(key="noop-seed", name="Noop")
+    same = client.patch(f"/sources/{source.id}", json={"name": "Noop"})
+    assert same.status_code == 200
+    assert "schedule" not in same.json()
+    assert list_structure_schedules(source.id) == []
+    empty = client.patch(f"/sources/{source.id}", json={})
+    assert empty.status_code == 200
+    assert "schedule" not in empty.json()
+    assert list_structure_schedules(source.id) == []
 

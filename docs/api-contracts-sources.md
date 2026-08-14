@@ -4,7 +4,7 @@
 
 HTTP contracts for **Source** management (metadata foundation slice A+), including embedded reachability and credentials for `kind=database`.
 
-Business rules: `docs/business-metadata.md`, `docs/adr/0007-source-owns-catalog-identity.md`, `docs/adr/0010-source-owns-access.md`, `docs/adr/0011-encrypted-access-blob-and-connector-spec.md`, `docs/adr/0021-catalog-scope-in-access.md`.
+Business rules: `docs/business-metadata.md`, `docs/adr/0007-source-owns-catalog-identity.md`, `docs/adr/0010-source-owns-access.md`, `docs/adr/0011-encrypted-access-blob-and-connector-spec.md`, `docs/adr/0021-catalog-scope-in-access.md`, `docs/adr/0026-seed-structure-schedule-on-source-create.md`.
 Transport: success `application/json`; HTTP failures `application/problem+json` ([`docs/conventions-errors.md`](conventions-errors.md)). Authentication: Session cookie **or** User PAT Bearer (`docs/api-contracts-auth.md`, `docs/api-contracts-tokens.md`).
 `401` unauthenticated; `403` missing permission.
 
@@ -72,7 +72,7 @@ Source probe completed-failure remains HTTP 200 `{ "ok": false, "code", "message
 | `POST` | `/sources` | `sources:write` | Create (database kind requires engine + full `access` including secrets and dialect scope) |
 | `GET` | `/sources/{id}` | `sources:read` | Get (projected `access`) |
 | `GET` | `/sources/{id}/access` | `sources:write` | Decrypted full `access` tree for edit |
-| `PATCH` | `/sources/{id}` | `sources:write` | Update fields / status / replace full `access` |
+| `PATCH` | `/sources/{id}` | `sources:write` | Update fields / status / replace full `access`; may seed a default structure schedule |
 | `DELETE` | `/sources/{id}` | `sources:write` | Hard-delete a **disabled** Source (and its catalog) |
 | `POST` | `/sources/test` | `sources:write` | Reachability probe for a draft Source (not persisted) |
 | `POST` | `/sources/{id}/test` | `sources:write` | Reachability probe for a stored Source |
@@ -105,8 +105,12 @@ Returns `{ "engine": "postgresql", "schema": { … JSON Schema … } }` with `x-
 }
 ```
 
-Rules: for `kind=database`, `engine` and `access` are required (`SOURCE_ACCESS_REQUIRED` / `SOURCE_ACCESS_INVALID` / `SOURCE_ENGINE_UNSUPPORTED` as applicable). Spec validation enforces required dialect scope keys. Updating `access` does not delete catalog; the next structure Job re-collects against the new endpoint.
+Rules: for `kind=database`, `engine` and `access` are required (`SOURCE_ACCESS_REQUIRED` / `SOURCE_ACCESS_INVALID` / `SOURCE_ENGINE_UNSUPPORTED` as applicable). Spec validation enforces required dialect scope keys. Creating a database Source also inserts one ordinary structure **Scheduled Task** (product default daily `0 2 * * *`, **Schedule Timezone** UTC, enabled, default name). Create and seed succeed or fail together. The response remains `{ "source": { … } }` — it does not include the seed. Updating `access` does not delete catalog; the next structure Job re-collects against the new endpoint.
 **Cutover:** rows that used plaintext `access` JSONB plus a separate secret column are **not** auto-migrated; operators must re-enter connectivity after upgrade. Pre-0021 top-level `database_name` / `schema_filter` are one-shot backfilled into `access` then dropped (ADR 0021).
+
+### `PATCH /sources/{id}`
+
+Partial update of name, description, status, engine, and/or `access`. When business fields actually change on a database Source that has zero structure schedules (disabled schedules count as present), the product inserts one default structure **Scheduled Task** (`sources:write`; same cadence as create seed). The success body is `{ "source": { … }, "schedule": { … } }` only when that insert happened; otherwise `{ "source": { … } }` with the `schedule` key omitted (not `null`). GET and `POST /sources` never include `schedule`.
 
 ### `GET /sources/{id}/access`
 

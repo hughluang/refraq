@@ -64,7 +64,7 @@ Each **platform kernel / platform primitive / product domain** package has an ex
 | `backend.admin.deps` | Current user, permission, PAT resolution, actor token id, session cookie helpers |
 | `backend.admin.permissions` | Permission catalog helpers used by MCP and deps |
 | `backend.admin.errors` | Foundation error types (subclass `core.errors.AppError`) |
-| `backend.admin.audit` | `persist_audit_event` |
+| `backend.admin.audit` | `persist_audit_event`, `persist_audit_event_on` |
 | `backend.admin.roles` | `ensure_system_role`, `seed_roles`, `effective_permissions`, `SUPER_ADMIN_KEY`, role write helpers used by composition |
 | `backend.admin.security` | Password/session id helpers used by composition |
 | `backend.admin.user_store` | `UserRecord`, `UserStore`, `get_user_store`, `reset_user_store` (typing + bootstrap) |
@@ -92,7 +92,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 |--------|----------------|
 | `backend.metadata.errors` | Domain errors (subclass `AppError`, not `admin` concrete types) |
 | `backend.metadata.source_jobs` | Structure Job minting via Scheduled Task (single-flight by Source) |
-| `backend.metadata.source_schedules` | Structure Scheduled Task facade + public projection (`public_schedule`) |
+| `backend.metadata.source_schedules` | Structure Scheduled Task facade + public projection (`public_schedule`); product-default seed on Source create and mutating Source update |
 | `backend.metadata.type_mappings.seeds` | Product Type Mapping seed occupy (`ensure_product_type_mappings`) for Foundation Upgrade / Site Bootstrap |
 | `backend.metadata.mcp_server` | MCP tool host entry |
 | `backend.metadata.tasks` | Celery shared-task callables (discovered by `worker`) |

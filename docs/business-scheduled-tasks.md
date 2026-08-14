@@ -9,8 +9,9 @@ Related boundaries:
 - Terminology: `docs/glossary.md` and root `CONTEXT.md`.
 - HTTP: `docs/api-contracts-schedules.md`.
 - **Job** mechanism: `docs/business-jobs.md`.
-- Metadata structure schedule facade (`POST/GET /sources/{id}/schedules`) and hard-delete cascade: `docs/business-metadata.md`.
+- Metadata structure schedule facade (`POST/GET /sources/{id}/schedules`), Source create-time seed, hard-delete cascade, and mutating Source-update ensure: `docs/business-metadata.md`.
 - Schedule-first minting: `docs/adr/0025-clock-first-structure-jobs.md`.
+- Create-time seed: `docs/adr/0026-seed-structure-schedule-on-source-create.md`.
 
 ## 2. Object Model
 
@@ -28,7 +29,7 @@ Platform cadence definition. Does not contain extract SQL, transforms, or a depe
 Rules:
 
 - Operator identity is a closed **work kind** plus **target**. Public JSON does not include Celery `task_name` / `args_json`.
-- Create only via a **domain facade** (`POST /sources/{id}/schedules` inserts). Platform `GET/PATCH/DELETE /schedules` list and edit cadence / enabled / delete. No global create. No PUT replace.
+- Create via a **domain facade** (`POST /sources/{id}/schedules`), plus the create-time seed when registering a database **Source**, plus a mutating Source update when a database Source has zero structure schedules. Platform `GET/PATCH/DELETE /schedules` list and edit cadence / enabled / delete. No global create. No PUT replace.
 - One Source may have several structure schedules. Job ↔ schedule association is `trigger_kind=schedule` and `trigger_ref` = schedule id, not Source single-flight.
 - `PATCH` is RFC 5789 partial (cadence / timezone / enabled / name).
 - Permission is `jobs:run`. No `schedules:*` key.

@@ -59,7 +59,7 @@ PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
     "settings:read": "View platform system parameters",
     "settings:write": "Change platform system parameters",
     "sources:read": "List and view Sources (non-secret fields)",
-    "sources:write": "Create, update, and hard-delete (disabled only) Sources; set secrets; run reachability tests",
+    "sources:write": "Create, update, and hard-delete (disabled only) Sources; set secrets; run reachability tests; creating a database Source also inserts the product-default structure Scheduled Task",
     "metadata:read": "Browse catalog objects, semantics, and joins",
     "metadata:write": "Write semantics and join edges",
     "jobs:run": "Enqueue and manage Jobs; manage domain Scheduled Tasks",
