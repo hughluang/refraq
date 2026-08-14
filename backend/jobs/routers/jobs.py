@@ -18,6 +18,8 @@ from backend.jobs.store import (
     get_job_store,
     mark_cancelled,
 )
+from backend.worker.api import schedule_names_for_jobs
+from backend.worker.schedules import get_schedule_store
 
 router = APIRouter(tags=["jobs"])
 
@@ -31,7 +33,13 @@ def list_jobs(
 ) -> JobListResponse:
     items = get_job_store().list(kind=kind, status=status)
     names = actor_names_for_jobs(items, users)
-    return JobListResponse(items=[job_out(r, actor_names=names) for r in items])
+    schedule_names = schedule_names_for_jobs(items, get_schedule_store())
+    return JobListResponse(
+        items=[
+            job_out(r, actor_names=names, schedule_names=schedule_names)
+            for r in items
+        ]
+    )
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
@@ -44,7 +52,10 @@ def get_job(
     if record is None:
         raise JobNotFound()
     names = actor_names_for_jobs([record], users)
-    return JobResponse(job=job_out(record, actor_names=names))
+    schedule_names = schedule_names_for_jobs([record], get_schedule_store())
+    return JobResponse(
+        job=job_out(record, actor_names=names, schedule_names=schedule_names)
+    )
 
 
 @router.get("/jobs/{job_id}/logs", response_model=JobLogsResponse)
@@ -91,4 +102,7 @@ def cancel_job(
         detail={},
     )
     names = actor_names_for_jobs([logged], users)
-    return JobResponse(job=job_out(logged, actor_names=names))
+    schedule_names = schedule_names_for_jobs([logged], get_schedule_store())
+    return JobResponse(
+        job=job_out(logged, actor_names=names, schedule_names=schedule_names)
+    )

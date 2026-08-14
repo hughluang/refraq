@@ -244,6 +244,7 @@ export type Job = {
   trigger_kind: string | null;
   trigger_ref: string | null;
   trigger_actor_name: string | null;
+  trigger_schedule_name: string | null;
   created_by_user_id: string | null;
   created_at: string;
   started_at: string | null;

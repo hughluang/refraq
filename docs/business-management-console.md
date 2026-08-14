@@ -71,7 +71,7 @@ Refraq is a domain management system. Top-level Foundation modules are always pr
 | --- | --- |
 | `metadata` nav group | Sources, catalog browse |
 | `operations` nav group | Platform-wide **Job** observe and domain **Scheduled Task** definitions (`docs/business-jobs.md`, `docs/business-scheduled-tasks.md`) |
-| Sources / structure Jobs | Structure enqueue and clocks on Sources; see `docs/business-metadata.md` |
+| Sources / structure schedules | Related schedules on Sources; run-now and related Jobs on schedules; see `docs/business-metadata.md` |
 | User PAT module | Person-owned Bearer tokens under Administration (`tokens`) |
 | Management-plane audit read | Thin audit browser when `audit:read` is granted |
 

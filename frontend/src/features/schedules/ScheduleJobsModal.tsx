@@ -5,7 +5,8 @@ import { useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useState } from "react";
 
 import { PageError } from "@/components/feedback/PageError";
-import { cancelJob, listSourceJobs } from "@/features/sources/api";
+import { listScheduleJobs } from "@/features/schedules/api";
+import { cancelJob } from "@/features/sources/api";
 import { formatJobTrigger } from "@/features/sources/formatJobTrigger";
 import { JobDetailModal } from "@/features/sources/JobDetailModal";
 import type { Job } from "@/features/sources/types";
@@ -22,15 +23,15 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 type Props = {
-  sourceId: string | null;
-  sourceLabel?: string;
+  scheduleId: string | null;
+  scheduleLabel?: string;
   opened: boolean;
   onClose: () => void;
 };
 
-export function SourceJobsModal({
-  sourceId,
-  sourceLabel,
+export function ScheduleJobsModal({
+  scheduleId,
+  scheduleLabel,
   opened,
   onClose,
 }: Props) {
@@ -43,14 +44,14 @@ export function SourceJobsModal({
   const [detailId, setDetailId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    if (!sourceId) {
+    if (!scheduleId) {
       setItems([]);
       setError(null);
       return;
     }
     setLoading(true);
     try {
-      const data = await listSourceJobs(sourceId);
+      const data = await listScheduleJobs(scheduleId);
       setItems(data.items);
       setError(null);
     } catch (err) {
@@ -60,7 +61,7 @@ export function SourceJobsModal({
     } finally {
       setLoading(false);
     }
-  }, [sourceId, open]);
+  }, [scheduleId, open]);
 
   useEffect(() => {
     if (opened) {
@@ -78,9 +79,9 @@ export function SourceJobsModal({
         opened={opened}
         onClose={onClose}
         title={
-          sourceLabel
-            ? `${t("jobs.sourceJobs.title")} · ${sourceLabel}`
-            : t("jobs.sourceJobs.title")
+          scheduleLabel
+            ? `${t("jobs.scheduleJobs.title")} · ${scheduleLabel}`
+            : t("jobs.scheduleJobs.title")
         }
         size="xl"
       >
@@ -98,7 +99,7 @@ export function SourceJobsModal({
           <PageError message={error} />
         ) : items.length === 0 ? (
           <Text size="sm" c="dimmed">
-            {t("jobs.sourceJobs.empty")}
+            {t("jobs.scheduleJobs.empty")}
           </Text>
         ) : (
           <Table striped highlightOnHover>

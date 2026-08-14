@@ -18,7 +18,7 @@ export type ScheduledTask = {
   updated_at: string;
 };
 
-export type PutScheduleBody = {
+export type CreateScheduleBody = {
   kind: "structure";
   cron?: string | null;
   interval_seconds?: number | null;

@@ -13,7 +13,7 @@ export function shortTriggerRef(ref: string): string {
 
 type TriggerFields = Pick<
   Job,
-  "trigger_kind" | "trigger_ref" | "trigger_actor_name"
+  "trigger_kind" | "trigger_ref" | "trigger_actor_name" | "trigger_schedule_name"
 >;
 
 /** Format Job trigger for operator-facing tables and detail. */
@@ -32,6 +32,11 @@ export function formatJobTrigger(
       job.trigger_actor_name ??
       (job.trigger_ref ? shortTriggerRef(job.trigger_ref) : null);
     return who ? `${kindLabel} · ${who}` : kindLabel;
+  }
+
+  if (job.trigger_kind === "schedule") {
+    const label = job.trigger_schedule_name ?? job.trigger_ref;
+    return label ? `${kindLabel} · ${label}` : kindLabel;
   }
 
   if (job.trigger_ref) {

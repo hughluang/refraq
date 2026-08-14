@@ -25,7 +25,6 @@ import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
   createSource,
   deleteSource,
-  enqueueStructureJob,
   getAccessSchema,
   getSourceAccess,
   listSources,
@@ -33,8 +32,7 @@ import {
   testSource,
   testSourceDraft,
 } from "@/features/sources/api";
-import { ScheduleFormModal } from "@/features/schedules/ScheduleFormModal";
-import { SourceJobsModal } from "@/features/sources/SourceJobsModal";
+import { SourceSchedulesModal } from "@/features/schedules/SourceSchedulesModal";
 import { SpecTree, defaultsFromSchema } from "@/features/sources/SpecTree";
 import type {
   ConnectorSpec,
@@ -107,8 +105,6 @@ export function SourceList() {
   const [enginePending, setEnginePending] = useState<Engine | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Source | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [enqueueBusyId, setEnqueueBusyId] = useState<string | null>(null);
-  const [jobsSource, setJobsSource] = useState<Source | null>(null);
   const [scheduleSource, setScheduleSource] = useState<Source | null>(null);
 
   const showActions = Boolean(
@@ -383,51 +379,12 @@ export function SourceList() {
                         <Button
                           size="compact-xs"
                           variant="light"
-                          loading={enqueueBusyId === source.id}
-                          disabled={
-                            source.status !== "active" ||
-                            source.kind !== "database" ||
-                            !source.has_access
-                          }
-                          onClick={async () => {
-                            setEnqueueBusyId(source.id);
-                            try {
-                              await enqueueStructureJob(source.id);
-                              open?.({
-                                type: "success",
-                                message: t("jobs.enqueue.success"),
-                              });
-                            } catch (err) {
-                              open?.({
-                                type: "error",
-                                message:
-                                  err instanceof ApiError
-                                    ? err.detail
-                                    : String(err),
-                              });
-                            } finally {
-                              setEnqueueBusyId(null);
-                            }
-                          }}
-                        >
-                          {t("jobs.enqueue")}
-                        </Button>
-                        <Button
-                          size="compact-xs"
-                          variant="light"
                           disabled={
                             source.kind !== "database" || !source.has_access
                           }
                           onClick={() => setScheduleSource(source)}
                         >
-                          {t("schedules.open")}
-                        </Button>
-                        <Button
-                          size="compact-xs"
-                          variant="default"
-                          onClick={() => setJobsSource(source)}
-                        >
-                          {t("jobs.sourceJobs.open")}
+                          {t("schedules.related.open")}
                         </Button>
                       </CanAccess>
                       {canWrite?.can ? (
@@ -652,24 +609,15 @@ export function SourceList() {
         </Modal>
       </Modal.Stack>
 
-      <SourceJobsModal
-        sourceId={jobsSource?.id ?? null}
-        sourceLabel={
-          jobsSource ? `${jobsSource.key} — ${jobsSource.name}` : undefined
-        }
-        opened={jobsSource !== null}
-        onClose={() => setJobsSource(null)}
-      />
-      <ScheduleFormModal
-        opened={scheduleSource !== null}
-        sourceId={scheduleSource?.id}
+      <SourceSchedulesModal
+        sourceId={scheduleSource?.id ?? null}
         sourceLabel={
           scheduleSource
             ? `${scheduleSource.key} — ${scheduleSource.name}`
             : undefined
         }
+        opened={scheduleSource !== null}
         onClose={() => setScheduleSource(null)}
-        onSaved={() => undefined}
       />
     </Stack>
   );

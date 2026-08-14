@@ -37,6 +37,7 @@ describe("formatJobTrigger", () => {
           trigger_kind: null,
           trigger_ref: null,
           trigger_actor_name: null,
+          trigger_schedule_name: null,
         },
         t,
       ),
@@ -50,6 +51,7 @@ describe("formatJobTrigger", () => {
           trigger_kind: "user",
           trigger_ref: "user_1c9f4f9481de",
           trigger_actor_name: "Alice",
+          trigger_schedule_name: null,
         },
         t,
       ),
@@ -63,19 +65,35 @@ describe("formatJobTrigger", () => {
           trigger_kind: "user",
           trigger_ref: "user_1c9f4f9481de",
           trigger_actor_name: null,
+          trigger_schedule_name: null,
         },
         t,
       ),
     ).toBe("User · user_1c9f4f94");
   });
 
-  it("localizes non-user kinds", () => {
+  it("prefers schedule name for schedule triggers", () => {
     expect(
       formatJobTrigger(
         {
           trigger_kind: "schedule",
           trigger_ref: "sched_1",
           trigger_actor_name: null,
+          trigger_schedule_name: "structure · mes-prod",
+        },
+        t,
+      ),
+    ).toBe("Schedule · structure · mes-prod");
+  });
+
+  it("falls back to trigger_ref when schedule name is missing", () => {
+    expect(
+      formatJobTrigger(
+        {
+          trigger_kind: "schedule",
+          trigger_ref: "sched_1",
+          trigger_actor_name: null,
+          trigger_schedule_name: null,
         },
         t,
       ),

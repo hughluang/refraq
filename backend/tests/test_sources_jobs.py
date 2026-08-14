@@ -321,11 +321,17 @@ def test_structure_job_single_flight(client: TestClient) -> None:
         input={"source_id": source["id"]},
     )
     mark_running(job.id)
-
-    resp = client.post(
-        f"/sources/{source['id']}/jobs",
-        json={"kind": "structure"},
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "structure",
+            "cron": "0 2 * * *",
+            "schedule_timezone": "UTC",
+            "enabled": True,
+        },
     )
+    assert created.status_code == 201, created.text
+    resp = client.post(f"/schedules/{created.json()['schedule']['id']}/run")
     assert resp.status_code == 409
     assert resp.json()["code"] == "JOB_ALREADY_ACTIVE"
 
@@ -341,10 +347,17 @@ def test_structure_job_input_only_source_id(
         lambda job_id: {"status": "succeeded"},
     )
     source = _make_source(client, key="s2", database="db")
-    resp = client.post(
-        f"/sources/{source['id']}/jobs",
-        json={"kind": "structure"},
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "structure",
+            "cron": "0 2 * * *",
+            "schedule_timezone": "UTC",
+            "enabled": True,
+        },
     )
+    assert created.status_code == 201, created.text
+    resp = client.post(f"/schedules/{created.json()['schedule']['id']}/run")
     assert resp.status_code == 202, resp.text
     job = resp.json()["job"]
     assert job["input"] == {"source_id": source["id"]}
@@ -795,52 +808,26 @@ def test_public_view_strips_secrets_and_includes_access_updated_at(
     assert view["id"] == body["id"]
 
 
-def test_enqueue_structure_job_audits_and_rejects_non_database(
+def test_enqueue_structure_job_rejects_unusable_source(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from datetime import timedelta
-
-    from backend.admin.deps import resolve_pat_bearer
     from backend.metadata.errors import JobInputInvalid, JobSourceDisabled
     from backend.metadata.sources.store import SourceRecord, get_source_store
     from backend.metadata.source_jobs import enqueue_structure_job
-    from backend.admin.audit_store import get_audit_store, reset_audit_store
 
-    reset_audit_store()
     monkeypatch.setattr(
         "backend.metadata.structure_jobs.service.run_structure_job",
         lambda job_id: {"status": "succeeded"},
     )
 
     source = _make_source(client, key="enq-ok")
-    expires = format_instant(utc_now() + timedelta(days=7))
-    tok = client.post("/tokens", json={"name": "enq-pat", "expires_at": expires})
-    assert tok.status_code == 201, tok.text
-    token_id = tok.json()["token"]["id"]
-    secret = tok.json()["secret"]
-    user, resolved_token_id = resolve_pat_bearer(secret)
-    assert resolved_token_id == token_id
-
-    job = enqueue_structure_job(
-        source_id=source["id"],
-        actor_user_id=user.id,
-        actor_token_id=resolved_token_id,
-    )
-    assert job.kind == "structure"
-    assert job.input == {"source_id": source["id"]}
-    events, _ = get_audit_store().list_events(action="job.enqueue")
-    assert len(events) == 1
-    assert events[0].actor_user_id == user.id
-    assert events[0].actor_token_id == token_id
-    assert events[0].detail["source_id"] == source["id"]
-
     disabled = client.patch(f"/sources/{source['id']}", json={"status": "disabled"})
     assert disabled.status_code == 200
     with pytest.raises(JobSourceDisabled):
         enqueue_structure_job(
             source_id=source["id"],
-            actor_user_id=user.id,
-            actor_token_id=token_id,
+            actor_user_id=None,
+            trigger_ref="sched_test",
         )
 
     now = utc_now()
@@ -863,13 +850,13 @@ def test_enqueue_structure_job_audits_and_rejects_non_database(
     with pytest.raises(JobInputInvalid) as exc:
         enqueue_structure_job(
             source_id="src_nondb",
-            actor_user_id=user.id,
-            actor_token_id=token_id,
+            actor_user_id=None,
+            trigger_ref="sched_test",
         )
     assert "database" in exc.value.message
 
 
-def test_structure_job_http_enqueue_writes_audit(client: TestClient, monkeypatch) -> None:
+def test_structure_job_http_run_writes_audit(client: TestClient, monkeypatch) -> None:
     from backend.admin.audit_store import get_audit_store, reset_audit_store
 
     reset_audit_store()
@@ -878,13 +865,21 @@ def test_structure_job_http_enqueue_writes_audit(client: TestClient, monkeypatch
         lambda job_id: {"status": "succeeded"},
     )
     source = _make_source(client, key="http-enq")
-    resp = client.post(
-        f"/sources/{source['id']}/jobs",
-        json={"kind": "structure"},
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "structure",
+            "cron": "0 2 * * *",
+            "schedule_timezone": "UTC",
+            "enabled": True,
+        },
     )
+    assert created.status_code == 201, created.text
+    resp = client.post(f"/schedules/{created.json()['schedule']['id']}/run")
     assert resp.status_code == 202, resp.text
-    events, _ = get_audit_store().list_events(action="job.enqueue")
+    events, _ = get_audit_store().list_events(action="schedule.run")
     assert len(events) == 1
-    assert events[0].resource_id == resp.json()["job"]["id"]
+    assert events[0].resource_id == created.json()["schedule"]["id"]
     assert events[0].detail["source_id"] == source["id"]
+    assert events[0].detail["job_id"] == resp.json()["job"]["id"]
     assert events[0].actor_token_id is None

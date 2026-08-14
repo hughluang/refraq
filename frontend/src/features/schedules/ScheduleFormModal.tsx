@@ -15,10 +15,8 @@ import { useNotification, useTranslate } from "@refinedev/core";
 import { useEffect, useState } from "react";
 
 import {
-  deleteSourceSchedule,
-  getSourceSchedule,
+  createSourceSchedule,
   patchSchedule,
-  putSourceSchedule,
 } from "@/features/schedules/api";
 import type { ScheduledTask } from "@/features/schedules/types";
 import { ApiError } from "@/lib/api";
@@ -90,45 +88,13 @@ export function ScheduleFormModal({
   const t = useTranslate();
   const { open } = useNotification();
   const [loading, setLoading] = useState(false);
-  const [existing, setExisting] = useState<ScheduledTask | null>(
-    schedule ?? null,
-  );
   const form = useForm<FormValues>({
     initialValues: valuesFromTask(schedule ?? null),
   });
 
   useEffect(() => {
     if (!opened) return;
-    let cancelled = false;
-    async function load() {
-      if (schedule) {
-        setExisting(schedule);
-        form.setValues(valuesFromTask(schedule));
-        return;
-      }
-      if (!sourceId) return;
-      try {
-        const data = await getSourceSchedule(sourceId);
-        if (cancelled) return;
-        setExisting(data.schedule);
-        form.setValues(valuesFromTask(data.schedule));
-      } catch (err) {
-        if (cancelled) return;
-        if (err instanceof ApiError && err.status === 404) {
-          setExisting(null);
-          form.setValues(valuesFromTask(null));
-          return;
-        }
-        open?.({
-          type: "error",
-          message: err instanceof ApiError ? err.detail : String(err),
-        });
-      }
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
+    form.setValues(valuesFromTask(schedule ?? null));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when the modal target changes
   }, [opened, sourceId, schedule?.id]);
 
@@ -136,75 +102,38 @@ export function ScheduleFormModal({
     setLoading(true);
     try {
       const timezone = form.values.schedule_timezone.trim() || "UTC";
-      const name = form.values.name.trim() || null;
-      if (sourceId) {
-        const body =
-          form.values.cadence === "interval"
-            ? {
-                kind: "structure" as const,
-                interval_seconds: Number(form.values.interval_seconds),
-                cron: null,
-                schedule_timezone: timezone,
-                enabled: form.values.enabled,
-                name,
-              }
-            : {
-                kind: "structure" as const,
-                cron:
-                  form.values.cadence === "custom"
-                    ? form.values.cron.trim()
-                    : (PRESETS.find((p) => p.value === form.values.cadence)
-                        ?.cron ?? form.values.cron.trim()),
-                interval_seconds: null,
-                schedule_timezone: timezone,
-                enabled: form.values.enabled,
-                name,
-              };
-        await putSourceSchedule(sourceId, body);
-      } else if (existing) {
-        const body =
-          form.values.cadence === "interval"
-            ? {
-                interval_seconds: Number(form.values.interval_seconds),
-                cron: null as string | null,
-                schedule_timezone: timezone,
-                enabled: form.values.enabled,
-                name,
-              }
-            : {
-                cron:
-                  form.values.cadence === "custom"
-                    ? form.values.cron.trim()
-                    : (PRESETS.find((p) => p.value === form.values.cadence)
-                        ?.cron ?? form.values.cron.trim()),
-                interval_seconds: null as number | null,
-                schedule_timezone: timezone,
-                enabled: form.values.enabled,
-                name,
-              };
-        await patchSchedule(existing.id, body);
+      const name = form.values.name.trim();
+      const cadenceBody =
+        form.values.cadence === "interval"
+          ? {
+              interval_seconds: Number(form.values.interval_seconds),
+              cron: null as string | null,
+              schedule_timezone: timezone,
+              enabled: form.values.enabled,
+              name,
+            }
+          : {
+              cron:
+                form.values.cadence === "custom"
+                  ? form.values.cron.trim()
+                  : (PRESETS.find((p) => p.value === form.values.cadence)
+                      ?.cron ?? form.values.cron.trim()),
+              interval_seconds: null as number | null,
+              schedule_timezone: timezone,
+              enabled: form.values.enabled,
+              name,
+            };
+      if (schedule) {
+        await patchSchedule(schedule.id, cadenceBody);
+      } else if (sourceId) {
+        await createSourceSchedule(sourceId, {
+          kind: "structure",
+          ...cadenceBody,
+        });
       } else {
         return;
       }
       open?.({ type: "success", message: t("schedules.save.success") });
-      onSaved();
-      onClose();
-    } catch (err) {
-      open?.({
-        type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
-      });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleDelete() {
-    if (!sourceId || !existing) return;
-    setLoading(true);
-    try {
-      await deleteSourceSchedule(sourceId);
-      open?.({ type: "success", message: t("schedules.delete.success") });
       onSaved();
       onClose();
     } catch (err) {
@@ -270,27 +199,13 @@ export function ScheduleFormModal({
             form.setFieldValue("enabled", event.currentTarget.checked)
           }
         />
-        <Group justify="space-between">
-          {sourceId && existing ? (
-            <Button
-              color="red"
-              variant="light"
-              loading={loading}
-              onClick={() => void handleDelete()}
-            >
-              {t("schedules.delete")}
-            </Button>
-          ) : (
-            <span />
-          )}
-          <Group>
-            <Button variant="default" onClick={onClose} disabled={loading}>
-              {t("common.cancel")}
-            </Button>
-            <Button loading={loading} onClick={() => void handleSave()}>
-              {t("common.save")}
-            </Button>
-          </Group>
+        <Group justify="flex-end">
+          <Button variant="default" onClick={onClose} disabled={loading}>
+            {t("common.cancel")}
+          </Button>
+          <Button loading={loading} onClick={() => void handleSave()}>
+            {t("common.save")}
+          </Button>
         </Group>
       </Stack>
     </Modal>

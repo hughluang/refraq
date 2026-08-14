@@ -1,6 +1,6 @@
 "use client";
 
-import { Badge, Button, Group, Switch, Table, Text } from "@mantine/core";
+import { Badge, Button, Switch, Table, Text } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useState } from "react";
 
@@ -8,12 +8,10 @@ import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
 import { PageLoader } from "@/components/feedback/PageLoader";
 import { PageChrome } from "@/components/layout/PageChrome";
-import {
-  deleteSchedule,
-  listSchedules,
-  patchSchedule,
-} from "@/features/schedules/api";
+import { listSchedules, patchSchedule } from "@/features/schedules/api";
 import { ScheduleFormModal } from "@/features/schedules/ScheduleFormModal";
+import { ScheduleJobsModal } from "@/features/schedules/ScheduleJobsModal";
+import { ScheduleRowActions } from "@/features/schedules/ScheduleRowActions";
 import type { ScheduledTask } from "@/features/schedules/types";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
@@ -21,6 +19,11 @@ import { ApiError } from "@/lib/api";
 function cadenceLabel(task: ScheduledTask): string {
   if (task.interval_seconds) return `${task.interval_seconds}s`;
   return task.cron ?? "—";
+}
+
+function timezoneLabel(task: ScheduledTask): string {
+  if (task.interval_seconds) return "—";
+  return task.schedule_timezone;
 }
 
 function targetLabel(task: ScheduledTask): string {
@@ -35,6 +38,7 @@ export function ScheduleList() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<ScheduledTask | null>(null);
+  const [jobsTask, setJobsTask] = useState<ScheduledTask | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -103,7 +107,7 @@ export function ScheduleList() {
                     {cadenceLabel(task)}
                   </Text>
                 </Table.Td>
-                <Table.Td>{task.schedule_timezone}</Table.Td>
+                <Table.Td>{timezoneLabel(task)}</Table.Td>
                 <Table.Td>
                   <Switch
                     checked={task.enabled}
@@ -131,36 +135,12 @@ export function ScheduleList() {
                   </Text>
                 </Table.Td>
                 <Table.Td>
-                  <Group gap="xs" wrap="nowrap">
-                    <Button
-                      size="xs"
-                      variant="light"
-                      onClick={() => setEditing(task)}
-                    >
-                      {t("schedules.edit")}
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="light"
-                      color="red"
-                      onClick={async () => {
-                        try {
-                          await deleteSchedule(task.id);
-                          await load();
-                        } catch (err) {
-                          open?.({
-                            type: "error",
-                            message:
-                              err instanceof ApiError
-                                ? err.detail
-                                : String(err),
-                          });
-                        }
-                      }}
-                    >
-                      {t("schedules.delete")}
-                    </Button>
-                  </Group>
+                  <ScheduleRowActions
+                    task={task}
+                    onEdit={() => setEditing(task)}
+                    onJobs={() => setJobsTask(task)}
+                    onChanged={() => void load()}
+                  />
                 </Table.Td>
               </Table.Tr>
             ))}
@@ -172,6 +152,12 @@ export function ScheduleList() {
         schedule={editing}
         onClose={() => setEditing(null)}
         onSaved={() => void load()}
+      />
+      <ScheduleJobsModal
+        scheduleId={jobsTask?.id ?? null}
+        scheduleLabel={jobsTask?.name}
+        opened={jobsTask !== null}
+        onClose={() => setJobsTask(null)}
       />
     </PageChrome>
   );

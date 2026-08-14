@@ -22,7 +22,6 @@ from backend.jobs.store import get_job_store
 from backend.metadata.business_domains import service as domain_service
 from backend.metadata.catalog import service as catalog_service
 from backend.metadata.query import service as query_service
-from backend.metadata.source_jobs import enqueue_structure_job as enqueue_structure
 from backend.metadata.sources import service as source_service
 from backend.metadata.sources.store import get_source_store
 
@@ -185,31 +184,6 @@ def get_object_ddl(authorization: str, object_locator_key: str) -> str:
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-@mcp.tool()
-def enqueue_structure_job(
-    authorization: str,
-    source_locator_key: str,
-) -> str:
-    """Enqueue a structure Job via Source facade (jobs:run)."""
-    try:
-        user, token_id = _actor_from_token(authorization)
-        _require(user, "jobs:run")
-        source = catalog_service.resolve_source_ref(source_locator_key)
-        stored = enqueue_structure(
-            source_id=source.id,
-            actor_user_id=user.id,
-            actor_token_id=token_id,
-        )
-        return _dumps(
-            {
-                "id": stored.id,
-                "kind": stored.kind,
-                "status": stored.status,
-                "input": stored.input,
-            }
-        )
-    except Exception as exc:  # noqa: BLE001
-        return _err(exc)
 
 @mcp.tool()
 def get_job(authorization: str, job_id: str) -> str:

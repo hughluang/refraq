@@ -295,24 +295,12 @@ export function listJobs(params?: { kind?: string; status?: string }) {
   return apiClient<{ items: Job[] }>(`/jobs${suffix}`);
 }
 
-export function listSourceJobs(sourceId: string) {
-  return apiClient<{ items: Job[] }>(`/sources/${sourceId}/jobs`);
-}
-
 export function getJob(jobId: string) {
   return apiClient<{ job: Job }>(`/jobs/${jobId}`);
 }
 
 export function getJobLogs(jobId: string) {
   return apiClient<JobLogs>(`/jobs/${jobId}/logs`);
-}
-
-export function enqueueStructureJob(sourceId: string) {
-  return apiClient<{ job: Job }>(`/sources/${sourceId}/jobs`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ kind: "structure" }),
-  });
 }
 
 export function cancelJob(jobId: string) {

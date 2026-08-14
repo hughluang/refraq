@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import replace
+from typing import Protocol
 
 from backend.core.time import utc_now
+from backend.jobs.store import JobRecord
 from backend.worker.cron import parse_cron_fields, validate_schedule_timezone
 from backend.worker.errors import (
     ScheduleCadenceInvalid,
@@ -20,12 +23,19 @@ __all__ = [
     "STRUCTURE_SCHEDULE_KEY_PREFIX",
     "ensure_system_schedules",
     "delete_schedule",
-    "delete_structure_schedule_by_source_id",
+    "delete_structure_schedules_by_source_id",
     "get_schedule",
     "patch_schedule",
+    "ScheduleNameStore",
+    "schedule_names_for_jobs",
     "schedule_out",
     "validate_cadence",
 ]
+
+
+class ScheduleNameStore(Protocol):
+    def get_by_id(self, schedule_id: str) -> ScheduledTaskRecord | None: ...
+
 
 STRUCTURE_SCHEDULE_KEY_PREFIX = "structure:"
 
@@ -120,6 +130,24 @@ def get_schedule(schedule_id: str) -> ScheduledTaskRecord:
     return record
 
 
+def schedule_names_for_jobs(
+    records: Sequence[JobRecord], store: ScheduleNameStore
+) -> dict[str, str]:
+    """Resolve Scheduled Task names for schedule-triggered Jobs."""
+    names: dict[str, str] = {}
+    ids = {
+        record.trigger_ref
+        for record in records
+        if record.trigger_kind == "schedule" and record.trigger_ref
+    }
+    for schedule_id in ids:
+        sched = store.get_by_id(schedule_id)
+        if sched is None or not sched.name or not sched.name.strip():
+            continue
+        names[schedule_id] = sched.name.strip()
+    return names
+
+
 def patch_schedule(
     schedule_id: str,
     *,
@@ -167,7 +195,7 @@ def patch_schedule(
     updated = replace(
         record,
         enabled=record.enabled if enabled is None else enabled,
-        name=record.name if name is None else name,
+        name=record.name if name is None else name.strip(),
         cron=next_cron,
         interval_seconds=next_interval,
         schedule_timezone=next_zone,
@@ -183,9 +211,11 @@ def delete_schedule(schedule_id: str) -> None:
     get_schedule_store().delete(schedule_id)
 
 
-def delete_structure_schedule_by_source_id(source_id: str) -> None:
-    """Remove the structure clock for a Source if present (hard-delete cascade)."""
-    record = get_schedule_store().get_by_key(f"{STRUCTURE_SCHEDULE_KEY_PREFIX}{source_id}")
-    if record is None or record.system:
-        return
-    get_schedule_store().delete(record.id)
+def delete_structure_schedules_by_source_id(source_id: str) -> None:
+    """Remove all structure schedules whose target is this Source (hard-delete cascade)."""
+    store = get_schedule_store()
+    for record in list(store.list(include_system=True)):
+        if record.system:
+            continue
+        if record.kwargs_json.get("source_id") == source_id:
+            store.delete(record.id)

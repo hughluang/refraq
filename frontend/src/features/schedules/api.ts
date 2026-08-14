@@ -1,7 +1,8 @@
 import { apiClient } from "@/lib/api";
+import type { Job } from "@/features/sources/types";
 import type {
+  CreateScheduleBody,
   PatchScheduleBody,
-  PutScheduleBody,
   ScheduledTask,
 } from "@/features/schedules/types";
 
@@ -9,25 +10,24 @@ export function listSchedules() {
   return apiClient<{ items: ScheduledTask[] }>("/schedules");
 }
 
-export function getSourceSchedule(sourceId: string) {
-  return apiClient<{ schedule: ScheduledTask }>(
-    `/sources/${sourceId}/schedule`,
+export function listSourceSchedules(sourceId: string) {
+  return apiClient<{ items: ScheduledTask[] }>(
+    `/sources/${sourceId}/schedules`,
   );
 }
 
-export function putSourceSchedule(sourceId: string, body: PutScheduleBody) {
+export function createSourceSchedule(
+  sourceId: string,
+  body: CreateScheduleBody,
+) {
   return apiClient<{ schedule: ScheduledTask }>(
-    `/sources/${sourceId}/schedule`,
+    `/sources/${sourceId}/schedules`,
     {
-      method: "PUT",
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     },
   );
-}
-
-export function deleteSourceSchedule(sourceId: string) {
-  return apiClient<void>(`/sources/${sourceId}/schedule`, { method: "DELETE" });
 }
 
 export function patchSchedule(scheduleId: string, body: PatchScheduleBody) {
@@ -40,4 +40,14 @@ export function patchSchedule(scheduleId: string, body: PatchScheduleBody) {
 
 export function deleteSchedule(scheduleId: string) {
   return apiClient<void>(`/schedules/${scheduleId}`, { method: "DELETE" });
+}
+
+export function runSchedule(scheduleId: string) {
+  return apiClient<{ job: Job }>(`/schedules/${scheduleId}/run`, {
+    method: "POST",
+  });
+}
+
+export function listScheduleJobs(scheduleId: string) {
+  return apiClient<{ items: Job[] }>(`/schedules/${scheduleId}/jobs`);
 }

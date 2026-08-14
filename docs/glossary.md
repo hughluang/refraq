@@ -186,7 +186,7 @@ Avoid free-form permission strings invented in the UI.
 ### Job
 
 A single durable asynchronous execution with an observable lifecycle (queued → running → terminal), discriminated by kind, carrying only a generic input payload that each domain interprets.
-Domains expose enqueue/list facades (for example under Source for structure work); the Job record is not owned by Source and is not a Metadata business object.
+Domains mint structure **Jobs** only via a **Scheduled Task** (due tick or run-now); the Job record is not owned by Source and is not a Metadata business object.
 API (or a **Scheduled Task**) enqueues; a Celery worker executes; operator-visible status lives on the Postgres job record.
 Lifecycle stamps (`created_at`, `started_at`, `finished_at`, log line times) are **Instants**.
 Successful Jobs may carry a nullable generic **Job result**; failed/cancelled/fail-safe Jobs leave it null.
@@ -203,13 +203,16 @@ Avoid Celery result backend, **Management Audit Event** `result`, treating resul
 
 ### Scheduled Task
 
-A platform schedule definition (interval or cron) stored in Postgres that triggers work when due.
+A platform schedule definition (interval or cron) stored in Postgres that triggers work when due, and the only Console/HTTP/MCP path that mints domain **Jobs**.
 Celery Beat reads these rows (single Beat replica). Distinct from any one **Job** instance.
 A platform mechanism like **Job**, not a product domain, not a Metadata business object, and not a field of **Source**.
-Operator identity is a closed work kind plus target, not a Celery task name. Cron wall clock uses **Schedule Timezone**; `last_run_at` is an **Instant** cursor (missed cron slots are skipped).
+Operator identity is a closed work kind plus target, not a Celery task name. Several structure schedules may target one Source. Cron wall clock uses **Schedule Timezone**; `last_run_at` is an **Instant** cursor (missed cron slots are skipped). Operator run-now enqueues without moving that cursor.
+Console operator copy, docs that name the row, and identifiers whose referent is this entity use **schedule**, not clock.
 Avoid storing product schedules only in Redis Beat state or static code when operators need to change them.
 Avoid treating Celery `timezone` as the business schedule zone.
 Avoid treating a Scheduled Task as a Job, or putting cron on a **Source**.
+Avoid treating structure single-flight as a schedule mutex.
+Avoid Clock as a product noun, Console label, or identifier for this entity. Avoid renaming Instant test `Clock` / `get_clock`, cron wall-clock English, or ADR file `0025-clock-first-structure-jobs.md`.
 
 ### Instant
 

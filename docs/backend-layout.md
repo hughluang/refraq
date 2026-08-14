@@ -91,7 +91,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Module | Published for |
 |--------|----------------|
 | `backend.metadata.errors` | Domain errors (subclass `AppError`, not `admin` concrete types) |
-| `backend.metadata.source_jobs` | Structure enqueue / list-by-source facade |
+| `backend.metadata.source_jobs` | Structure Job minting via Scheduled Task (single-flight by Source) |
 | `backend.metadata.source_schedules` | Structure Scheduled Task facade + public projection (`public_schedule`) |
 | `backend.metadata.type_mappings.seeds` | Product Type Mapping seed occupy (`ensure_product_type_mappings`) for Foundation Upgrade / Site Bootstrap |
 | `backend.metadata.mcp_server` | MCP tool host entry |
@@ -102,7 +102,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 
 | Module | Published for |
 |--------|----------------|
-| `backend.worker.api` | Schedule seam policy (`schedule_out`, cadence / NotFound / system immutable, `ensure_system_schedules`); not a store re-export |
+| `backend.worker.api` | Schedule seam policy (`schedule_out`, cadence / NotFound / system immutable, `ensure_system_schedules`, `schedule_names_for_jobs`); not a store re-export |
 | `backend.worker.schedules` | Store port (`ScheduledTaskRecord`, get/list/upsert) used by the API seam and domain facades |
 | `backend.worker.errors` | Mechanism Scheduled Task errors |
 | `backend.worker.schemas.*` | Scheduled Task response shapes (shared with domain facades) |
@@ -126,7 +126,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Request/response shapes and HTTP/MCP adapters for a use case | Package that **owns that use case** |
 | Mechanism-resource HTTP (get/cancel Job by id) | `jobs` |
 | Mechanism-resource HTTP (list/get/patch/delete Scheduled Task) | `worker` |
-| Domain use-case HTTP (Source, structure enqueue/list, Catalog, Source schedule facade) | product domain (`metadata`) |
+| Domain use-case HTTP (Source, Catalog, Source schedule facade, schedule run-now / related Jobs) | product domain (`metadata`) |
 | Outbound adapter families | Owning product domain (e.g. `metadata/connectors`: engine adapters + `runtime` invocation shell) |
 | Domain error types | That product domain (base in `core`) |
 | Config, engine, secrets crypto, Instant/Clock (`core.time`), upgrade orchestration, `AppError` / Problem Details, request-id helpers, process probes | `core` (upgrade may call platform-kernel published API); time contract in [`docs/conventions-time.md`](conventions-time.md); errors in [`docs/conventions-errors.md`](conventions-errors.md) |
@@ -134,7 +134,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Domain async work units (`@shared_task` or equivalent) | Owning product domain; **discovered and registered by `worker`** |
 | Process probes (health/ready) | `core` (thin); not inside a product domain |
 
-**Use-case ownership:** follow the business language of the operation. Structure collection, Catalog, Source-scoped Job / schedule facades → `metadata`. User/Role/Session/PAT/Console foundation → `admin`. Job-id mechanism read/write → `jobs`. Scheduled Task mechanism HTTP → `worker` (not Console pages). Console nav may aggregate routes from multiple packages; that does **not** put all HTTP into `jobs`.
+**Use-case ownership:** follow the business language of the operation. Structure collection, Catalog, Source-scoped schedule facades and schedule run-now → `metadata`. User/Role/Session/PAT/Console foundation → `admin`. Job-id mechanism read/write → `jobs`. Scheduled Task mechanism HTTP → `worker` (not Console pages). Console nav may aggregate routes from multiple packages; that does **not** put all HTTP into `jobs`.
 
 ## 5. Structure inside a package
 

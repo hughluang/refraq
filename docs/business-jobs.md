@@ -10,8 +10,9 @@ Related boundaries:
 - Job shape: `docs/adr/0008-job-generic-input.md`.
 - Queue runtime: `docs/adr/0004-redis-queue-for-ingestion.md`, `docs/adr/0006-celery-platform-async-runtime.md`.
 - HTTP: `docs/api-contracts-jobs.md`.
-- **Scheduled Task** (the clock that may enqueue Jobs): `docs/business-scheduled-tasks.md`.
+- **Scheduled Task** (the schedule that mints domain Jobs): `docs/business-scheduled-tasks.md`.
 - Metadata **structure** kind, Source facade, single-flight, and **Structure Diff**: `docs/business-metadata.md`.
+- Schedule-first minting: `docs/adr/0025-clock-first-structure-jobs.md`.
 
 ## 2. Object Model
 
@@ -26,26 +27,29 @@ Platform durable asynchronous execution. Each product domain interprets `kind` a
 | result | Nullable generic JSON; platform does not interpret. Written only on successful terminal. Other kinds stay `null` (not `{}`) |
 | summary | Human-readable enqueue snapshot of the work target; not a domain foreign key |
 | trigger | `trigger_kind` / `trigger_ref` — how the Job was started |
-| created_by | User id (null when a **Scheduled Task** fires) |
+| trigger presentation | `trigger_actor_name` (User display name) and `trigger_schedule_name` (**Scheduled Task** name); not identity |
+| created_by | User id (null when Beat fires; set when an operator run-now fires the schedule) |
 | timestamps / error summary / log | Operational visibility |
 
 Rules:
 
 - Job is **not** owned by Source. Do not treat `source_id` as a universal Job column — it lives in `input` when required.
-- Domains expose enqueue and list facades for work that matters to them. Platform-wide observe uses `GET /jobs` and `GET /jobs/{id}` / `.../logs` / cancel. There is no global `POST /jobs` create in this phase.
+- Structure **Jobs** are minted only by a **Scheduled Task** (due tick or operator run-now). There is no Source HTTP enqueue and no MCP enqueue in this phase. Platform-wide observe uses `GET /jobs` and `GET /jobs/{id}` / `.../logs` / cancel. Related Jobs for a schedule: `GET /schedules/{id}/jobs`. There is no global `POST /jobs` create.
 - Jobs are durable records; queue transport is Redis-backed via Celery.
-- Observing Jobs (list or detail, platform-wide or domain-scoped) uses public Job fields only. Kind-specific outcome fields stay inside **Job result** (and on domain records such as **Structure Diff**), not as public Job attributes.
+- Observing Jobs uses public Job fields only. Kind-specific outcome fields stay inside **Job result** (and on domain records such as **Structure Diff**), not as public Job attributes.
 - Job lists do not include **Job result** as a column. Job detail may present it as the uninterpreted JSON document and does not unpack kind-specific keys into Job chrome.
-- Permission is `jobs:run` (enqueue/cancel via domain facades; list/view Jobs; same key also manages domain **Scheduled Task** definitions — see `docs/business-scheduled-tasks.md`). There is no separate `jobs:read` key in this slice.
+- Console Triggered-by is one column: User → display name; schedule → `trigger_schedule_name` (fallback `trigger_ref`). Do not put schedule name into `trigger_actor_name`.
+- Permission is `jobs:run` (run-now / cancel; list/view Jobs; same key also manages domain **Scheduled Task** definitions — see `docs/business-scheduled-tasks.md`). There is no separate `jobs:read` key in this slice.
 
 ## 3. Console
 
 - Module id `jobs` lives in the **Operations** nav group (`operations`), list permission `jobs:run`: global Job list and observe (logs/detail).
-- Enqueue lives on domain facades (for structure: the Sources module), not on the global Jobs page.
+- Structure minting lives on **Scheduled Task**. Source related-schedules workbench creates schedules and can enable/disable, edit, delete, run-now, and open related Jobs; Operations `schedules` is the platform-wide list with the same management actions and no global create. Not on the global Jobs page and not as Source “Run structure”.
 
 ## 4. Non-Goals
 
 - Treating Job as a Metadata domain entity or mounting the Jobs module under the `metadata` nav group
 - Global `POST /jobs` as the only create path
 - Promoting domain foreign keys onto universal Job fields
-- A `schedules:*` permission key (clock management shares `jobs:run`)
+- A `schedules:*` permission key (schedule management shares `jobs:run`)
+- Source-scoped Job list HTTP (`GET /sources/{id}/jobs`)

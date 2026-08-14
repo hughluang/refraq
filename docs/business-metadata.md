@@ -52,7 +52,7 @@ Foundation P0 delivered people, permissions, and Console mount contract. Product
 7. **Write honesty** for semantics and joins — evidence-backed join edges; incomplete understanding stays incomplete (open questions allowed); do not invent business meaning.
 8. **Controlled query is read-only** with platform guards, not a general SQL console.
 9. **Kind extensibility** — slice A implements Source `kind=database` only; other Source kinds are planned extension points, not delivered in this phase.
-10. **Job is an independent durable execution** — discriminated by Job `kind`, carrying a generic `input` payload; not owned by Source. Domains provide enqueue/list facades.
+10. **Job is an independent durable execution** — discriminated by Job `kind`, carrying a generic `input` payload; not owned by Source. Structure Jobs are minted only by a **Scheduled Task**.
 
 ## 4. Object Model
 
@@ -83,24 +83,24 @@ Rules:
 - Endpoint or credential change updates the **same Source** (replace full `access`) — not a new Source row. Catalog Objects stay under that Source; the next structure Job uses the updated endpoint.
 - Prefer the authoritative / primary endpoint; do not register read replicas as alternate Sources for the same physical server.
 - Disabling a Source blocks new ingestion until re-enabled (existing catalog snapshots remain readable unless later retention rules say otherwise).
-- A Source may be **hard-deleted** only while `status=disabled` (`DELETE /sources/{id}`); soft delete remains out of scope. Hard-delete also removes that Source's structure **Scheduled Task** (if any).
+- A Source may be **hard-deleted** only while `status=disabled` (`DELETE /sources/{id}`); soft delete remains out of scope. Hard-delete also removes that Source's structure **Scheduled Task**s (all schedules whose target is the Source).
 - Non-`database` kinds are out of scope for slice A implementation; models and APIs must not hard-code that every Source requires `engine` / `access`. Kind-specific scope fields for non-database kinds arrive with those kinds.
 - Pre-0011 rows that used plaintext access plus a separate secret column are **not** auto-migrated; operators re-enter connectivity after cutover.
 
 ### 4.2 Structure Job and schedule facades
 
-Platform **Job** and **Scheduled Task** rules live in `docs/business-jobs.md` and `docs/business-scheduled-tasks.md`. Metadata owns the Source-scoped facades that use those mechanisms for structure collection.
+Platform **Job** and **Scheduled Task** rules live in `docs/business-jobs.md` and `docs/business-scheduled-tasks.md`. Metadata owns the Source-scoped schedule facade that uses those mechanisms for structure collection.
 
 Rules:
 
-- Enqueue/list for Source-scoped structure work uses the **Source facade** (`docs/api-contracts-jobs.md`): `POST/GET /sources/{id}/jobs`. Slice A database structure `input` is `{ "source_id": "…" }` only. Creating a structure Job requires `jobs:run` and, for database Sources, a usable encrypted access blob on the Source row. Enqueue writes `summary` (`structure · {source_key}`) and `trigger_kind`/`trigger_ref` alongside `created_by_user_id`.
+- Structure **Jobs** are minted only by a **Scheduled Task** (`docs/api-contracts-schedules.md` run-now and Beat). Slice A database structure `input` is `{ "source_id": "…" }` only. Minting requires `jobs:run` and, for database Sources, a usable encrypted access blob. Enqueue writes `summary` (`structure · {source_key}`) and `trigger_kind=schedule` / `trigger_ref` = schedule id. Operator run-now also sets `created_by`. There is no `POST /sources/{id}/jobs` and no MCP enqueue.
 - Workers load reachability from the Source identified in `input`; `input` does not carry endpoint material.
 - Successful structure Jobs write/refresh **Catalog Objects** on the Source identified in `input`, and produce at most one **Structure Diff** for that Source. **Job result** envelope: `{ "schema": "structure.diff.v1", "class", "counts", "structure_diff_id" }`. Failed, cancelled, or fail-safe Jobs write neither result nor Diff.
-- Structure enqueue and Source-scoped Job lists live on the Sources module. Structure Diff browse is a Source-scoped Console page (`metadata:read`), not a new nav module. Global Job observe is the **Operations** module `jobs`.
-- Structure clock create/replace/delete uses the **Source facade** (`docs/api-contracts-schedules.md`): `PUT/GET/DELETE /sources/{id}/schedule`. First slice: `structure` + one Source; at most one structure Scheduled Task per Source (facade uniqueness, not a database unique constraint). Default name `structure · {source_key}`; key convention `structure:{source_id}`.
-- `PUT` is RFC 9110 full replace (201 create / 200 update). Create writes `last_run_at=now` as the cursor so the first fire is the next wall-clock slot strictly after create.
+- Related Jobs hang on the schedule (`GET /schedules/{id}/jobs`). Structure Diff browse is a Source-scoped Console page (`metadata:read`), not a new nav module. Global Job observe is the **Operations** module `jobs`. Source Console is a related-schedules **workbench** (create plus enable/disable, edit, delete, run-now, related Jobs), not a Source Job list.
+- Structure schedule create/list uses the **Source facade**: `POST/GET /sources/{id}/schedules`. First slice: `work_kind=structure`; several schedules may target one Source. Default name `structure · {source_key}` (not unique); key `structure:{source_id}:{schedule_id}`. Patch/delete/run-now are by schedule id on `/schedules/{id}`.
+- Create writes `last_run_at=now` as the due-tick cursor so the first automatic fire is the next wall-clock slot strictly after create. Run-now does not move that cursor.
 - Breaking **Structure Diff** does not pause the schedule or block the next structure Job (§9).
-- Manual **Run structure** stays `trigger_kind=user` and does not change cadence.
+- **Structure single-flight** (at most one non-terminal structure Job per Source) is catalog-write serialization, not a Scheduled Task mutex.
 
 ### 4.3 Catalog Object And Columns
 
@@ -189,7 +189,7 @@ Fixed catalog additions (exact strings are normative for Roles UI):
 
 Rules:
 
-- Structure facades (`POST /sources/{id}/jobs`, `PUT /sources/{id}/schedule`) require `jobs:run`, defined in `docs/business-jobs.md` (not a Metadata-owned permission).
+- Structure facades (`POST/GET /sources/{id}/schedules`, `POST /schedules/{id}/run`, `GET /schedules/{id}/jobs`) require `jobs:run`, defined in `docs/business-jobs.md` (not a Metadata-owned permission).
 - Seeded `super_admin` receives the full current catalog **by identity**; Foundation Upgrade ensures the System Role row exists but does not grant access by rewriting a stored permission list.
 - Seeded `operator` does **not** receive `sources:write`, `metadata:write`, `jobs:run`, `query:run`, `catalog:sample`, `tokens:*`, or `audit:read` by default.
 - No object-level ACL in this phase.
@@ -212,7 +212,7 @@ The catalog object detail page is the Console semantics maintenance surface: it 
 
 **Structure Diff** browse lives under Source routes (`/console/sources/:id/structure-diffs`); viewing requires `metadata:read`. It is not a new sidebar module. Classification is read on **Structure Diff**, not on Job list/detail chrome.
 
-Sources keep **Run structure** plus a **Schedule** entry to create or replace that Source's structure clock. Global Job observe and domain **Scheduled Task** lists live under **Operations** (`docs/business-jobs.md`, `docs/business-scheduled-tasks.md`), not this group.
+Sources keep a **related schedules** workbench (toolbar create plus the same row actions as Operations `schedules`). Global Job observe and domain **Scheduled Task** lists live under **Operations** (`docs/business-jobs.md`, `docs/business-scheduled-tasks.md`), not this group.
 
 User PAT management is **not** in this group; see `docs/business-user-tokens.md` (Administration module `tokens`).
 
@@ -270,8 +270,10 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
   and evidence naming the FK constraint. Re-collection updates or tombstones those edges; it must
   not delete or overwrite edges with `origin=human` or `origin=mcp`.
 - **Structure single-flight:** at most one non-terminal `kind=structure` Job per Source
-  (`JOB_ALREADY_ACTIVE`). Enforced by the Source–Job facade using Job store queries (not a Celery
-  lock; authority remains the Job table). Re-run = new Job after terminal status.
+  (`JOB_ALREADY_ACTIVE`). This is catalog-write serialization on the Source, not a **Scheduled Task**
+  mutex. Enforced when minting a structure Job (run-now or Beat) using Job store queries (not a Celery
+  lock; authority remains the Job table). Beat swallows the conflict; operator run-now returns it.
+  Re-run = new Job after terminal status.
 - Collectors read **Source `engine` / decrypted `access`** (scope and credentials together). Introspection uses
   engine-native catalogs (`pg_catalog`, `sys.*`, `ALL_`/`DBA_`).
 - Oracle schema scope is `access.owner` (required; same role as `schema` on PostgreSQL/MSSQL).
@@ -428,19 +430,19 @@ Persist management-plane events for at least:
 
 - Source create/update/disable and access replace
 - Source reachability test (`source.test`) — success and failure; no secrets in detail
-- Job enqueue / cancel / terminal failure (summary)
+- Job cancel / terminal failure (summary); structure minting via `schedule.run` / Beat (no Source Job enqueue)
 - Semantics and join writes
 - User PAT create / deactivate / restore / soft-delete
 - Controlled query execution
 - Catalog Sample execution (`catalog.sample`)
-- Scheduled Task create / patch / delete (`schedule.create` / `schedule.patch` / `schedule.delete`; no secrets)
+- Scheduled Task create / patch / delete / run (`schedule.create` / `schedule.patch` / `schedule.delete` / `schedule.run`; no secrets)
 
 Each event: actor User id, timestamp, resource type/id, action, result (`success` / `failure`), optional detail payload without secrets.
 Full platform audit of every login/Settings/Users path is out of scope for this phase (Foundation login paths may remain hook-ready only).
 
 ## 14. Success Criteria (Phase)
 
-1. An authorized User can register database Sources (with embedded reachability) for PostgreSQL, MSSQL, and Oracle under Console group `metadata`, enqueue structure **Jobs**, and browse Catalog Objects under each Source.
+1. An authorized User can register database Sources (with embedded reachability) for PostgreSQL, MSSQL, and Oracle under Console group `metadata`, create structure **Scheduled Task**s and run-now **Jobs**, and browse Catalog Objects under each Source.
 2. MCP clients using a User PAT can exercise slice-appropriate tools; mutating calls are attributable to that User in audit.
 3. Source access blobs are never stored or logged in plaintext; long-running Jobs do not block the API process.
 4. Roles can grant read-only metadata access without granting Source write, query, or PAT management.
@@ -469,13 +471,14 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - Source soft delete / versioned credential history / audit-per-rotation (hard-delete of disabled Sources is delivered)
 - Query result type normalization / continuation tokens / data masking (deferred past depth)
 - Full-text search engines or PG-only FTS as the ranking authority
-- Catchup / backfill / RRule; multiple structure clocks per Source
+- Catchup / backfill / RRule; multiple structure schedules per Source
 - Treating **Job** or **Scheduled Task** as Metadata domain entities (platform rules: `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`)
 
 ## 16. References
 
 - `docs/adr/0007-source-owns-catalog-identity.md`
 - `docs/adr/0008-job-generic-input.md`
+- `docs/adr/0025-clock-first-structure-jobs.md`
 - `docs/adr/0010-source-owns-access.md`
 - `docs/adr/0011-encrypted-access-blob-and-connector-spec.md`
 - `docs/adr/0021-catalog-scope-in-access.md`

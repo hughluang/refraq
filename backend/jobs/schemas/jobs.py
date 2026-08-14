@@ -18,6 +18,7 @@ class JobOut(BaseModel):
     trigger_kind: str | None
     trigger_ref: str | None
     trigger_actor_name: str | None = None
+    trigger_schedule_name: str | None = None
     created_by_user_id: str | None
     created_at: Instant
     started_at: Instant | None

@@ -7,7 +7,10 @@ from fastapi import APIRouter, Depends, Query, Request, Response, status
 from backend.admin.audit import persist_audit_event
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
-from backend.metadata.source_schedules import public_schedule
+from backend.metadata.source_schedules import (
+    public_schedule,
+    structure_schedule_label_for_record,
+)
 from backend.worker.api import (
     delete_schedule,
     get_schedule,
@@ -48,10 +51,11 @@ def patch_platform_schedule(
     user: UserRecord = Depends(require_permission("jobs:run")),
 ) -> ScheduleResponse:
     fields = payload.model_fields_set
+    record = get_schedule(schedule_id)
     updated = patch_schedule(
         schedule_id,
         enabled=payload.enabled,
-        name=payload.name,
+        name=structure_schedule_label_for_record(record, payload.name),
         cron=payload.cron,
         interval_seconds=payload.interval_seconds,
         schedule_timezone=payload.schedule_timezone,

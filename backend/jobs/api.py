@@ -41,11 +41,15 @@ def job_out(
     record: JobRecord,
     *,
     actor_names: Mapping[str, str],
+    schedule_names: Mapping[str, str],
 ) -> JobOut:
     """Map a mechanism JobRecord to the shared HTTP/MCP response shape."""
     trigger_actor_name: str | None = None
     if record.trigger_kind == "user" and record.trigger_ref:
         trigger_actor_name = actor_names.get(record.trigger_ref)
+    trigger_schedule_name: str | None = None
+    if record.trigger_kind == "schedule" and record.trigger_ref:
+        trigger_schedule_name = schedule_names.get(record.trigger_ref)
     return JobOut(
         id=record.id,
         kind=record.kind,
@@ -56,6 +60,7 @@ def job_out(
         trigger_kind=record.trigger_kind,
         trigger_ref=record.trigger_ref,
         trigger_actor_name=trigger_actor_name,
+        trigger_schedule_name=trigger_schedule_name,
         created_by_user_id=record.created_by,
         created_at=record.created_at,
         started_at=record.started_at,
