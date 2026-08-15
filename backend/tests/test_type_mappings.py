@@ -309,7 +309,7 @@ def test_job_insert_does_not_write_audit() -> None:
 class _FakeConnector:
     engine = "postgresql"
 
-    def collect_structure(self, endpoint) -> CollectedStructure:  # noqa: ANN001
+    def collect_structure(self, endpoint, progress=None) -> CollectedStructure:  # noqa: ANN001
         return CollectedStructure(
             objects=[
                 CollectedObject(

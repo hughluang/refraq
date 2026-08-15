@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -73,13 +73,31 @@ class QueryResult:
     truncated: bool
 
 
+@runtime_checkable
+class CollectProgress(Protocol):
+    """Observer for collect_structure. Implementations must not live in connectors."""
+
+    def listing_objects(self, schema: str) -> None:
+        """Object-list query is about to run for this catalog scope."""
+
+    def listed_objects(self, total: int) -> None:
+        """Object-list query returned ``total`` objects to collect."""
+
+    def object_done(self, done: int, total: int) -> None:
+        """Finished collecting one object; ``done`` is 1-based."""
+
+
 class EngineConnector(Protocol):
     engine: str
 
     def test_connection(self, endpoint: SourceEndpoint) -> None:
         """Raise on failure; return None on success."""
 
-    def collect_structure(self, endpoint: SourceEndpoint) -> CollectedStructure:
+    def collect_structure(
+        self,
+        endpoint: SourceEndpoint,
+        progress: CollectProgress | None = None,
+    ) -> CollectedStructure:
         """Return complete structure for the Source scope, or raise."""
 
     def run_readonly(

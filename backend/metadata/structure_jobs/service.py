@@ -26,6 +26,7 @@ from backend.metadata.catalog.structure_diff import compute_structure_diff
 from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
 from backend.metadata.connectors.base import CollectedStructure, ConnectorError
 from backend.metadata.connectors.runtime import prepare
+from backend.metadata.structure_jobs.collect_log import StructureCollectLog
 from backend.metadata.locators import format_column_locator, format_object_locator
 from backend.metadata.sources.access import decrypt_access_blob
 from backend.metadata.sources.store import get_source_store
@@ -99,7 +100,10 @@ def run_structure_job(job_id: str) -> dict[str, str]:
 
     append_job_log(job_id, level="info", message="collecting structure…")
     try:
-        collected = bound.connector.collect_structure(bound.endpoint)
+        collected = bound.connector.collect_structure(
+            bound.endpoint,
+            progress=StructureCollectLog(job_id),
+        )
     except ConnectorError as exc:
         if _cancelled(job_id):
             return {"status": "cancelled"}

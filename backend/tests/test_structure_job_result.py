@@ -124,7 +124,7 @@ class _FakeConnector:
     def test_connection(self, endpoint) -> None:  # noqa: ANN001
         return None
 
-    def collect_structure(self, endpoint) -> CollectedStructure:  # noqa: ANN001
+    def collect_structure(self, endpoint, progress=None) -> CollectedStructure:  # noqa: ANN001
         objects = [
             CollectedObject(
                 schema_name="public",

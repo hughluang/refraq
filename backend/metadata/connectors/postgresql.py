@@ -14,6 +14,7 @@ from backend.metadata.connectors.base import (
     CollectedIndex,
     CollectedObject,
     CollectedStructure,
+    CollectProgress,
     ConnectorError,
     QueryResult,
     SourceEndpoint,
@@ -83,7 +84,13 @@ class PostgresqlConnector:
         finally:
             eng.dispose()
 
-    def collect_structure(self, endpoint: SourceEndpoint) -> CollectedStructure:
+    def collect_structure(
+        self,
+        endpoint: SourceEndpoint,
+        progress: CollectProgress | None = None,
+    ) -> CollectedStructure:
+        if progress is not None:
+            progress.listing_objects(endpoint.schema_filter)
         eng = self._engine(endpoint)
         try:
             with eng.connect() as conn:
@@ -115,8 +122,11 @@ class PostgresqlConnector:
                     """
                 )
                 rows = conn.execute(obj_sql, params).mappings().all()
+                total = len(rows)
+                if progress is not None:
+                    progress.listed_objects(total)
                 objects: list[CollectedObject] = []
-                for row in rows:
+                for index, row in enumerate(rows, start=1):
                     oid = int(row["oid"])
                     cols = self._columns(conn, oid)
                     ddl = None
@@ -140,6 +150,8 @@ class PostgresqlConnector:
                             indexes=self._indexes(conn, oid),
                         )
                     )
+                    if progress is not None:
+                        progress.object_done(index, total)
                 return CollectedStructure(objects=objects)
         except ConnectorError:
             raise

@@ -14,6 +14,7 @@ from backend.metadata.connectors.base import (
     CollectedIndex,
     CollectedObject,
     CollectedStructure,
+    CollectProgress,
     ConnectorError,
     QueryResult,
     SourceEndpoint,
@@ -53,9 +54,15 @@ class OracleConnector:
         finally:
             eng.dispose()
 
-    def collect_structure(self, endpoint: SourceEndpoint) -> CollectedStructure:
-        eng = self._engine(endpoint)
+    def collect_structure(
+        self,
+        endpoint: SourceEndpoint,
+        progress: CollectProgress | None = None,
+    ) -> CollectedStructure:
         owner_filter = endpoint.schema_filter.upper()
+        if progress is not None:
+            progress.listing_objects(owner_filter)
+        eng = self._engine(endpoint)
         try:
             with eng.connect() as conn:
                 params: dict[str, object] = {"owner": owner_filter}
@@ -85,8 +92,11 @@ class OracleConnector:
                     """
                 )
                 rows = conn.execute(obj_sql, params).mappings().all()
+                total = len(rows)
+                if progress is not None:
+                    progress.listed_objects(total)
                 objects: list[CollectedObject] = []
-                for row in rows:
+                for index, row in enumerate(rows, start=1):
                     schema = row["schema_name"]
                     name = row["name"]
                     object_type = row["object_type"]
@@ -106,6 +116,8 @@ class OracleConnector:
                             indexes=self._indexes(conn, schema, name),
                         )
                     )
+                    if progress is not None:
+                        progress.object_done(index, total)
                 return CollectedStructure(objects=objects)
         except ConnectorError:
             raise

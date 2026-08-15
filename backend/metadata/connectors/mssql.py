@@ -12,6 +12,7 @@ from backend.metadata.connectors.base import (
     CollectedIndex,
     CollectedObject,
     CollectedStructure,
+    CollectProgress,
     QueryResult,
     SourceEndpoint,
     ConnectorError,
@@ -53,7 +54,13 @@ class MssqlConnector:
         finally:
             eng.dispose()
 
-    def collect_structure(self, endpoint: SourceEndpoint) -> CollectedStructure:
+    def collect_structure(
+        self,
+        endpoint: SourceEndpoint,
+        progress: CollectProgress | None = None,
+    ) -> CollectedStructure:
+        if progress is not None:
+            progress.listing_objects(endpoint.schema_filter)
         eng = self._engine(endpoint)
         try:
             with eng.connect() as conn:
@@ -85,11 +92,16 @@ class MssqlConnector:
                     ORDER BY s.name, o.name
                     """
                 )
-                rows = conn.execute(obj_sql, params).mappings().all()
+                rows = [
+                    row
+                    for row in conn.execute(obj_sql, params).mappings().all()
+                    if row["object_type"] in _OBJECT_TYPES
+                ]
+                total = len(rows)
+                if progress is not None:
+                    progress.listed_objects(total)
                 objects: list[CollectedObject] = []
-                for row in rows:
-                    if row["object_type"] not in _OBJECT_TYPES:
-                        continue
+                for index, row in enumerate(rows, start=1):
                     object_id = int(row["object_id"])
                     ddl = None
                     if row["object_type"] == "view":
@@ -107,6 +119,8 @@ class MssqlConnector:
                             indexes=self._indexes(conn, object_id),
                         )
                     )
+                    if progress is not None:
+                        progress.object_done(index, total)
                 return CollectedStructure(objects=objects)
         except ConnectorError:
             raise

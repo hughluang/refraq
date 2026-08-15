@@ -387,7 +387,7 @@ def test_source_probe_draft_success(
             assert endpoint.ssl_mode == "require"
             return None
 
-        def collect_structure(self, endpoint):  # noqa: ANN001
+        def collect_structure(self, endpoint, progress=None):  # noqa: ANN001
             raise AssertionError("not used")
 
     monkeypatch.setattr(
@@ -428,7 +428,7 @@ def test_source_probe_draft_failure(
         def test_connection(self, endpoint) -> None:  # noqa: ANN001
             raise ConnectorError("JOB_ENDPOINT_FAILED", "refused")
 
-        def collect_structure(self, endpoint):  # noqa: ANN001
+        def collect_structure(self, endpoint, progress=None):  # noqa: ANN001
             raise AssertionError("not used")
 
     monkeypatch.setattr(
@@ -473,7 +473,7 @@ def test_source_probe_stored_uses_access(
             seen["database_name"] = endpoint.database_name
             return None
 
-        def collect_structure(self, endpoint):  # noqa: ANN001
+        def collect_structure(self, endpoint, progress=None):  # noqa: ANN001
             raise AssertionError("not used")
 
     monkeypatch.setattr(
@@ -508,7 +508,7 @@ def test_source_probe_timeout_returns_promptly(monkeypatch: pytest.MonkeyPatch) 
         def test_connection(self, endpoint) -> None:  # noqa: ANN001
             time.sleep(30)
 
-        def collect_structure(self, endpoint):  # noqa: ANN001
+        def collect_structure(self, endpoint, progress=None):  # noqa: ANN001
             raise AssertionError("not used")
 
     monkeypatch.setattr(
@@ -776,7 +776,7 @@ def test_collect_failure_does_not_absent(monkeypatch: pytest.MonkeyPatch) -> Non
         def test_connection(self, endpoint):  # noqa: ANN001
             return None
 
-        def collect_structure(self, endpoint):  # noqa: ANN001
+        def collect_structure(self, endpoint, progress=None):  # noqa: ANN001
             raise ConnectorError("JOB_COLLECT_FAILED", "boom")
 
     monkeypatch.setattr(
