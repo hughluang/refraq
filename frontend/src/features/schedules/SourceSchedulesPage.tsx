@@ -1,11 +1,16 @@
 "use client";
 
 import { Button, Group, Modal, Switch, Table, Text } from "@mantine/core";
-import { useNotification, useTranslate } from "@refinedev/core";
+import { useCan, useNotification, useTranslate } from "@refinedev/core";
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { EmptyState } from "@/components/feedback/EmptyState";
+import { ForbiddenState } from "@/components/feedback/ForbiddenState";
 import { PageError } from "@/components/feedback/PageError";
+import { PageLoader } from "@/components/feedback/PageLoader";
+import { PageChrome } from "@/components/layout/PageChrome";
+import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
   listSourceSchedules,
   patchSchedule,
@@ -14,6 +19,7 @@ import { ScheduleFormModal } from "@/features/schedules/ScheduleFormModal";
 import { ScheduleJobsModal } from "@/features/schedules/ScheduleJobsModal";
 import { ScheduleRowActions } from "@/features/schedules/ScheduleRowActions";
 import type { ScheduledTask } from "@/features/schedules/types";
+import { getSource } from "@/features/sources/api";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
 
@@ -28,85 +34,92 @@ function timezoneLabel(task: ScheduledTask): string {
 }
 
 type Props = {
-  sourceId: string | null;
-  sourceLabel?: string;
-  opened: boolean;
-  onClose: () => void;
+  sourceId: string;
 };
 
-export function SourceSchedulesModal({
-  sourceId,
-  sourceLabel,
-  opened,
-  onClose,
-}: Props) {
+export function SourceSchedulesPage({ sourceId }: Props) {
   const t = useTranslate();
   const { open } = useNotification();
   const formatInstant = useFormatInstant();
+  const { data: canRun, isLoading: canLoading } = useCan({
+    resource: ModuleId.jobs,
+    action: ModuleAction.list,
+  });
+
   const [items, setItems] = useState<ScheduledTask[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [sourceLabel, setSourceLabel] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<ScheduledTask | null>(null);
   const [jobsTask, setJobsTask] = useState<ScheduledTask | null>(null);
 
   const load = useCallback(async () => {
-    if (!sourceId) {
-      setItems([]);
-      setError(null);
-      return;
-    }
     setLoading(true);
-    try {
-      const data = await listSourceSchedules(sourceId);
-      setItems(data.items);
+    const [sourceResult, listResult] = await Promise.allSettled([
+      getSource(sourceId),
+      listSourceSchedules(sourceId),
+    ]);
+    if (sourceResult.status === "fulfilled") {
+      const source = sourceResult.value.source;
+      setSourceLabel(`${source.key} — ${source.name}`);
+    } else {
+      setSourceLabel(null);
+    }
+    if (listResult.status === "fulfilled") {
+      setItems(listResult.value.items);
       setError(null);
-    } catch (err) {
+    } else {
+      const err = listResult.reason;
       const message = err instanceof ApiError ? err.detail : String(err);
       setError(message);
       open?.({ type: "error", message });
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   }, [sourceId, open]);
 
   useEffect(() => {
-    if (opened) {
-      void load();
-      return;
-    }
-    setItems([]);
-    setError(null);
-    setCreating(false);
-    setEditing(null);
-    setJobsTask(null);
-  }, [opened, load]);
+    if (!canRun?.can) return;
+    void load();
+  }, [load, canRun?.can]);
+
+  if (canLoading || canRun === undefined) return <PageLoader />;
+  if (!canRun.can) return <ForbiddenState reason={canRun.reason} />;
+  if (loading && items.length === 0 && error === null) return <PageLoader />;
+
+  const title = sourceLabel
+    ? `${t("schedules.related.title")} · ${sourceLabel}`
+    : `${t("schedules.related.title")} · ${sourceId}`;
 
   return (
-    <Modal.Stack>
-      <Modal
-        opened={opened}
-        onClose={onClose}
-        title={
-          sourceLabel
-            ? `${t("schedules.related.title")} · ${sourceLabel}`
-            : t("schedules.related.title")
+    <>
+      <PageChrome
+        title={title}
+        description={t("schedules.related.description")}
+        actions={
+          <Group gap="xs">
+            <Button
+              component={Link}
+              href="/console/sources"
+              variant="default"
+              size="sm"
+            >
+              {t("schedules.related.backToSources")}
+            </Button>
+            <Button
+              size="sm"
+              variant="light"
+              loading={loading}
+              onClick={() => void load()}
+            >
+              {t("schedules.refresh")}
+            </Button>
+            <Button size="sm" onClick={() => setCreating(true)}>
+              {t("schedules.create")}
+            </Button>
+          </Group>
         }
-        size="xl"
       >
-        <Group justify="flex-end" mb="sm">
-          <Button
-            size="xs"
-            variant="light"
-            loading={loading}
-            onClick={() => void load()}
-          >
-            {t("schedules.refresh")}
-          </Button>
-          <Button size="xs" onClick={() => setCreating(true)}>
-            {t("schedules.create")}
-          </Button>
-        </Group>
         {error && items.length === 0 ? (
           <PageError message={error} />
         ) : items.length === 0 ? (
@@ -179,27 +192,29 @@ export function SourceSchedulesModal({
             </Table.Tbody>
           </Table>
         )}
-      </Modal>
-      <ScheduleFormModal
-        opened={creating}
-        sourceId={sourceId ?? undefined}
-        sourceLabel={sourceLabel}
-        onClose={() => setCreating(false)}
-        onSaved={() => void load()}
-      />
-      <ScheduleFormModal
-        opened={editing !== null}
-        schedule={editing}
-        sourceLabel={sourceLabel}
-        onClose={() => setEditing(null)}
-        onSaved={() => void load()}
-      />
-      <ScheduleJobsModal
-        scheduleId={jobsTask?.id ?? null}
-        scheduleLabel={jobsTask?.name}
-        opened={jobsTask !== null}
-        onClose={() => setJobsTask(null)}
-      />
-    </Modal.Stack>
+      </PageChrome>
+      <Modal.Stack>
+        <ScheduleFormModal
+          opened={creating}
+          sourceId={sourceId}
+          sourceLabel={sourceLabel ?? undefined}
+          onClose={() => setCreating(false)}
+          onSaved={() => void load()}
+        />
+        <ScheduleFormModal
+          opened={editing !== null}
+          schedule={editing}
+          sourceLabel={sourceLabel ?? undefined}
+          onClose={() => setEditing(null)}
+          onSaved={() => void load()}
+        />
+        <ScheduleJobsModal
+          scheduleId={jobsTask?.id ?? null}
+          scheduleLabel={jobsTask?.name}
+          opened={jobsTask !== null}
+          onClose={() => setJobsTask(null)}
+        />
+      </Modal.Stack>
+    </>
   );
 }

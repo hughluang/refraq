@@ -28,6 +28,10 @@ export function getAccessSchema(engine: Engine) {
   );
 }
 
+export function getSource(sourceId: string) {
+  return apiClient<{ source: Source }>(`/sources/${sourceId}`);
+}
+
 export function getSourceAccess(sourceId: string) {
   return apiClient<{ access: SourceAccess }>(`/sources/${sourceId}/access`);
 }

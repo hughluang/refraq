@@ -114,7 +114,7 @@ Same public shape, filtered to schedules whose target is this Source. Missing So
 ## 5. Console
 
 - Module id `schedules` (`operations` group, list permission `jobs:run`): platform-wide domain schedules; edit cadence / enabled / delete; run-now; related Jobs. No system rows. No global create.
-- Sources: related-schedules **workbench** — toolbar create plus the same row actions as Operations (enable/disable, edit, delete, run-now, related Jobs). Console delete asks for confirmation; HTTP `DELETE` remains immediate.
+- Sources: related-schedules **workbench** at `/console/sources/:id/schedules` — toolbar create plus the same row actions as Operations (enable/disable, edit, delete, run-now, related Jobs). Console delete asks for confirmation; HTTP `DELETE` remains immediate.
 
 ## 6. Non-Goals
 

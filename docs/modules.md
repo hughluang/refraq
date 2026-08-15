@@ -283,8 +283,8 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 
 - `app/` → `features/`, `providers/`, `components/`, `lib/`
 - `features/` → `providers/` (hooks/types only via Refine), `components/`, `lib/`
-- `features/schedules` → `features/jobs` (Job type, cancel, detail modal, trigger presentation)
-- `features/sources` → `features/jobs` (Structure Diff detail opens Job observe modal only); `features/schedules` (Scheduled Task types and related-schedules workbench)
+- `features/schedules` → `features/jobs` (Job type, cancel, detail modal, trigger presentation); `features/sources` (`getSource` for related-schedules workbench title only)
+- `features/sources` → `features/jobs` (Structure Diff detail opens Job observe modal only); `features/schedules` (Scheduled Task types)
 - `features/jobs` must not import `features/sources` or `features/schedules`
 - `providers/` → `lib/`
 - `components/` → `lib/` only for light helpers
@@ -318,5 +318,5 @@ For the login/permission slice, each concern should land here:
 ## 7. Metadata / Operations Console Ownership
 
 - Job observation (list, detail, logs, cancel, trigger presentation): `frontend/src/features/jobs/`
-- Scheduled Task definition workbench (platform list, Source related-schedules, run-now, related Jobs HTTP): `frontend/src/features/schedules/`
+- Scheduled Task definition workbench (platform list, Source related-schedules page `/console/sources/:id/schedules`, run-now, related Jobs HTTP): `frontend/src/features/schedules/`
 - Source / catalog / Structure Diff: `frontend/src/features/sources/` — does not own Job types or `/jobs` HTTP

@@ -32,7 +32,6 @@ import {
   testSource,
   testSourceDraft,
 } from "@/features/sources/api";
-import { SourceSchedulesModal } from "@/features/schedules/SourceSchedulesModal";
 import { SpecTree, defaultsFromSchema } from "@/features/sources/SpecTree";
 import type {
   ConnectorSpec,
@@ -105,7 +104,6 @@ export function SourceList() {
   const [enginePending, setEnginePending] = useState<Engine | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Source | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [scheduleSource, setScheduleSource] = useState<Source | null>(null);
 
   const showActions = Boolean(
     canWrite?.can || canRunJobs?.can || canReadDiffs?.can,
@@ -377,12 +375,10 @@ export function SourceList() {
                         action={ModuleAction.list}
                       >
                         <Button
+                          component={Link}
+                          href={`/console/sources/${source.id}/schedules`}
                           size="compact-xs"
                           variant="light"
-                          disabled={
-                            source.kind !== "database" || !source.has_access
-                          }
-                          onClick={() => setScheduleSource(source)}
                         >
                           {t("schedules.related.open")}
                         </Button>
@@ -614,17 +610,6 @@ export function SourceList() {
           </Stack>
         </Modal>
       </Modal.Stack>
-
-      <SourceSchedulesModal
-        sourceId={scheduleSource?.id ?? null}
-        sourceLabel={
-          scheduleSource
-            ? `${scheduleSource.key} — ${scheduleSource.name}`
-            : undefined
-        }
-        opened={scheduleSource !== null}
-        onClose={() => setScheduleSource(null)}
-      />
     </Stack>
   );
 }

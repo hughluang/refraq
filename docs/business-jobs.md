@@ -44,7 +44,7 @@ Rules:
 ## 3. Console
 
 - Module id `jobs` lives in the **Operations** nav group (`operations`), list permission `jobs:run`: global Job list and observe (logs/detail).
-- Structure minting lives on **Scheduled Task**. Source related-schedules workbench creates schedules and can enable/disable, edit, delete, run-now, and open related Jobs; Operations `schedules` is the platform-wide list with the same management actions and no global create. Not on the global Jobs page and not as Source “Run structure”.
+- Structure minting lives on **Scheduled Task**. Source related-schedules workbench (`/console/sources/:id/schedules`) creates schedules and can enable/disable, edit, delete, run-now, and open related Jobs; Operations `schedules` is the platform-wide list with the same management actions and no global create. Not on the global Jobs page and not as Source “Run structure”.
 
 ## 4. Non-Goals
 

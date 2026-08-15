@@ -179,6 +179,9 @@ describe("matchPath", () => {
         MODULE_IDENTITY_FIXTURE,
       ),
     ).toBeNull();
+    expect(
+      matchPath("/console/sources/src_1/schedules", MODULE_IDENTITY_FIXTURE),
+    ).toBeNull();
   });
 
   it("returns null for unregistered paths", () => {

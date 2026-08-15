@@ -46,7 +46,7 @@ Rules:
 ## 3. Console
 
 - Module id `schedules` lives in the **Operations** nav group (`operations`), list permission `jobs:run`: platform-wide domain schedules; edit cadence / enabled / delete; run-now; related Jobs. No system rows. No global create.
-- Source “related schedules” is a **Source-scoped workbench** for that Source’s structure schedules: toolbar create plus the same row actions (enable/disable, edit, delete, run-now, related Jobs). `jobs:run` gates the surface.
+- Source “related schedules” is a **Source-scoped workbench** at `/console/sources/:id/schedules` (not a sidebar module, not registered as `sources.show`): toolbar create plus the same row actions (enable/disable, edit, delete, run-now, related Jobs). `jobs:run` gates the surface.
 - Console delete asks for confirmation; HTTP `DELETE` remains immediate.
 
 ## 4. Non-Goals
