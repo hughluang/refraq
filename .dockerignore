@@ -3,6 +3,7 @@
 **/*.pyc
 .git/
 .process/
+external/
 frontend/.next/
 **/.turbo/
 **/coverage/
