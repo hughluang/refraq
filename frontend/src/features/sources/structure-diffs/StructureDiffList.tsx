@@ -12,7 +12,7 @@ import { PageLoader } from "@/components/feedback/PageLoader";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { listStructureDiffs } from "@/features/sources/api";
-import { JobResultBadge } from "@/features/sources/JobResultBadge";
+import { StructureDiffClassBadge } from "@/features/sources/structure-diffs/StructureDiffClassBadge";
 import type { StructureDiff } from "@/features/sources/types";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
@@ -113,7 +113,7 @@ export function StructureDiffList({ sourceId }: Props) {
               {items.map((diff) => (
                 <Table.Tr key={diff.id}>
                   <Table.Td>
-                    <JobResultBadge value={diff.class} />
+                    <StructureDiffClassBadge value={diff.class} />
                   </Table.Td>
                   <Table.Td>
                     <Text size="sm">{formatInstant(diff.created_at)}</Text>

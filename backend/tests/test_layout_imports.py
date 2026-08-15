@@ -154,6 +154,14 @@ def test_layout_imports(path: Path) -> None:
         if target_pkg == importer_pkg:
             continue
 
+        # docs/backend-layout.md §8 from-column: jobs may not import worker.
+        if importer_pkg == "jobs" and target_pkg not in {"core", "admin"}:
+            if not _allowlisted(importer, imported):
+                raise AssertionError(
+                    f"{importer} must not import {imported} "
+                    "(jobs may import core and published admin only)"
+                )
+
         # core must not import business packages (upgrade → published admin/worker/metadata seeds).
         if importer_pkg == "core":
             if target_pkg in {"admin", "jobs", "metadata", "worker"}:

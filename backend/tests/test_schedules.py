@@ -23,7 +23,12 @@ from backend.core.config import reset_settings_cache  # noqa: E402
 from backend.core.time import FixedClock, parse_instant, reset_clock, set_clock  # noqa: E402
 from backend.jobs.store import create_queued_job, get_job_store, reset_job_store  # noqa: E402
 from backend.main import app  # noqa: E402
+from backend.metadata import source_jobs as source_jobs_mod  # noqa: E402
 from backend.metadata.source_jobs import fire_scheduled_structure  # noqa: E402
+from backend.metadata.source_schedules import (  # noqa: E402
+    STRUCTURE_ENQUEUE_TASK_NAME,
+    public_schedule,
+)
 from backend.metadata.sources.store import reset_source_store  # noqa: E402
 from backend.worker.api import ensure_system_schedules, schedule_out  # noqa: E402
 from backend.worker.app import celery_app  # noqa: E402
@@ -316,6 +321,29 @@ def test_disabled_source_tick_skips(client: TestClient) -> None:
     assert result["reason"] == "source_unusable"
 
 
+def _structure_record(*, source_id: str = "src_abc") -> ScheduledTaskRecord:
+    from backend.core.time import utc_now
+
+    now = utc_now()
+    schedule_id = "sched_structure"
+    return ScheduledTaskRecord(
+        id=schedule_id,
+        key=f"structure:{source_id}:{schedule_id}",
+        name="structure · mes-prod",
+        enabled=True,
+        interval_seconds=None,
+        cron="0 2 * * *",
+        task_name=STRUCTURE_ENQUEUE_TASK_NAME,
+        args_json=[],
+        kwargs_json={"source_id": source_id, "schedule_id": schedule_id},
+        system=False,
+        schedule_timezone="UTC",
+        last_run_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+
+
 def test_schedule_out_hides_celery_fields() -> None:
     ensure_system_schedules()
     record = get_schedule_store().get_by_key(REAPER_SCHEDULE_KEY)
@@ -323,6 +351,39 @@ def test_schedule_out_hides_celery_fields() -> None:
     dumped = schedule_out(record).model_dump()
     assert "task_name" not in dumped
     assert dumped["work_kind"] is None
+    assert dumped["target"] is None
+
+
+def test_schedule_out_does_not_infer_structure_kind() -> None:
+    dumped = schedule_out(_structure_record()).model_dump()
+    assert "task_name" not in dumped
+    assert dumped["work_kind"] is None
+    assert dumped["target"] is None
+
+
+def test_public_schedule_projects_structure_target(client: TestClient) -> None:
+    source = _make_source(client)
+    created = _post_daily(client, source["id"])
+    assert created.status_code == 201, created.text
+    schedule_id = created.json()["schedule"]["id"]
+    record = get_schedule_store().get_by_id(schedule_id)
+    assert record is not None
+    mechanism = schedule_out(record)
+    assert mechanism.work_kind is None
+    assert mechanism.target is None
+    projected = public_schedule(record)
+    assert projected.work_kind == "structure"
+    assert projected.target is not None
+    assert projected.target.source_id == source["id"]
+    assert projected.target.source_key == "mes-prod"
+
+
+def test_public_schedule_missing_source_id_is_not_structure() -> None:
+    record = _structure_record()
+    record.kwargs_json = {"schedule_id": record.id}
+    projected = public_schedule(record)
+    assert projected.work_kind is None
+    assert projected.target is None
 
 
 def test_patch_rejects_both_cadence_fields(client: TestClient) -> None:
@@ -376,6 +437,12 @@ def test_hard_delete_source_cascades_structure_schedules(client: TestClient) -> 
     assert listed.json()["items"] == []
 
 
+def test_structure_mint_task_lives_on_fire_scheduled_structure() -> None:
+    assert fire_scheduled_structure.name == STRUCTURE_ENQUEUE_TASK_NAME
+    assert fire_scheduled_structure.name.startswith("backend.metadata.source_jobs.")
+    assert not hasattr(source_jobs_mod, "enqueue_scheduled_structure")
+
+
 def test_missing_schedule_tick_skips() -> None:
     result = fire_scheduled_structure("sched_does_not_exist")
     assert result["status"] == "skipped"
@@ -394,7 +461,7 @@ def test_missing_source_tick_skips() -> None:
             enabled=True,
             interval_seconds=None,
             cron="0 2 * * *",
-            task_name="backend.metadata.tasks.enqueue_scheduled_structure",
+            task_name=STRUCTURE_ENQUEUE_TASK_NAME,
             args_json=[],
             kwargs_json={
                 "source_id": "src_does_not_exist",

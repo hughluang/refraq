@@ -73,7 +73,7 @@ Fields (business meaning):
 
 APIs expose projected `access` (secrets stripped), plus `has_access` / `access_updated_at`. Full decrypted `access` is available only on the write-scoped edit endpoint. Non-database kinds may omit `engine` and `access`.
 
-**Connector Spec:** backend-authored JSON Schema per engine, served via API; drives validation and Console SpecTree. `x-secret` marks fields for read/UI projection only — storage encryption is always whole-document.
+**Connector Spec:** backend-authored JSON Schema per engine, served via API; drives validation and Console SpecTree. `x-secret` marks fields for read/UI projection only — storage encryption is always whole-document. `x-scope` (`catalog` | `schema`) marks dialect keys that Source access uses to assemble runtime `SourceEndpoint`; it is not a UI projection marker.
 
 Rules:
 

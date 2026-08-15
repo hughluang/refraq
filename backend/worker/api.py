@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
 from dataclasses import replace
-from typing import Protocol
 
 from backend.core.time import utc_now
-from backend.jobs.store import JobRecord
 from backend.worker.cron import parse_cron_fields, validate_schedule_timezone
 from backend.worker.errors import (
     ScheduleCadenceInvalid,
@@ -16,28 +13,17 @@ from backend.worker.errors import (
     ScheduleSystemImmutable,
 )
 from backend.worker.models import REAPER_SCHEDULE_KEY, REAPER_TASK_NAME
-from backend.worker.schemas.schedules import ScheduleOut, ScheduleTargetOut
+from backend.worker.schemas.schedules import ScheduleOut
 from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store
 
 __all__ = [
-    "STRUCTURE_SCHEDULE_KEY_PREFIX",
     "ensure_system_schedules",
     "delete_schedule",
-    "delete_structure_schedules_by_source_id",
     "get_schedule",
     "patch_schedule",
-    "ScheduleNameStore",
-    "schedule_names_for_jobs",
     "schedule_out",
     "validate_cadence",
 ]
-
-
-class ScheduleNameStore(Protocol):
-    def get_by_id(self, schedule_id: str) -> ScheduledTaskRecord | None: ...
-
-
-STRUCTURE_SCHEDULE_KEY_PREFIX = "structure:"
 
 
 def ensure_system_schedules() -> None:
@@ -90,30 +76,15 @@ def validate_cadence(
         raise ScheduleCadenceInvalid("interval_seconds must be positive")
 
 
-def _work_from_record(
-    record: ScheduledTaskRecord,
-    *,
-    source_key: str | None,
-) -> tuple[str | None, ScheduleTargetOut | None]:
-    if record.system:
-        return None, None
-    source_id = record.kwargs_json["source_id"]
-    return "structure", ScheduleTargetOut(source_id=source_id, source_key=source_key)
-
-
-def schedule_out(
-    record: ScheduledTaskRecord,
-    *,
-    source_key: str | None = None,
-) -> ScheduleOut:
-    work_kind, target = _work_from_record(record, source_key=source_key)
+def schedule_out(record: ScheduledTaskRecord) -> ScheduleOut:
+    """Map a mechanism Scheduled Task record to HTTP fields (no domain work_kind)."""
     return ScheduleOut(
         id=record.id,
         key=record.key,
         name=record.name,
         enabled=record.enabled,
-        work_kind=work_kind,
-        target=target,
+        work_kind=None,
+        target=None,
         interval_seconds=record.interval_seconds,
         cron=record.cron,
         schedule_timezone=record.schedule_timezone,
@@ -128,24 +99,6 @@ def get_schedule(schedule_id: str) -> ScheduledTaskRecord:
     if record is None:
         raise ScheduleNotFound()
     return record
-
-
-def schedule_names_for_jobs(
-    records: Sequence[JobRecord], store: ScheduleNameStore
-) -> dict[str, str]:
-    """Resolve Scheduled Task names for schedule-triggered Jobs."""
-    names: dict[str, str] = {}
-    ids = {
-        record.trigger_ref
-        for record in records
-        if record.trigger_kind == "schedule" and record.trigger_ref
-    }
-    for schedule_id in ids:
-        sched = store.get_by_id(schedule_id)
-        if sched is None or not sched.name or not sched.name.strip():
-            continue
-        names[schedule_id] = sched.name.strip()
-    return names
 
 
 def patch_schedule(
@@ -209,13 +162,3 @@ def delete_schedule(schedule_id: str) -> None:
     if record.system:
         raise ScheduleSystemImmutable()
     get_schedule_store().delete(schedule_id)
-
-
-def delete_structure_schedules_by_source_id(source_id: str) -> None:
-    """Remove all structure schedules whose target is this Source (hard-delete cascade)."""
-    store = get_schedule_store()
-    for record in list(store.list(include_system=True)):
-        if record.system:
-            continue
-        if record.kwargs_json.get("source_id") == source_id:
-            store.delete(record.id)

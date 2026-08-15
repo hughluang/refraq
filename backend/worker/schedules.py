@@ -6,6 +6,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
+from typing import Protocol
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -34,12 +35,35 @@ class ScheduledTaskRecord:
     updated_at: datetime = field(default_factory=utc_now)
 
 
+class ScheduleStore(Protocol):
+    def upsert(
+        self, record: ScheduledTaskRecord, *, session: Session | None = None
+    ) -> ScheduledTaskRecord: ...
+
+    def get_by_key(self, key: str) -> ScheduledTaskRecord | None: ...
+
+    def get_by_id(self, schedule_id: str) -> ScheduledTaskRecord | None: ...
+
+    def list(
+        self, *, include_system: bool = False, session: Session | None = None
+    ) -> list[ScheduledTaskRecord]: ...
+
+    def list_enabled(self) -> list[ScheduledTaskRecord]: ...
+
+    def delete(self, schedule_id: str) -> bool: ...
+
+    def touch_last_run(self, key: str, when: datetime) -> None: ...
+
+
 class MemoryScheduleStore:
     def __init__(self) -> None:
         self._by_key: dict[str, ScheduledTaskRecord] = {}
         self._lock = threading.Lock()
 
-    def upsert(self, record: ScheduledTaskRecord) -> ScheduledTaskRecord:
+    def upsert(
+        self, record: ScheduledTaskRecord, *, session: Session | None = None
+    ) -> ScheduledTaskRecord:
+        del session
         with self._lock:
             self._by_key[record.key] = record
             return record
@@ -55,7 +79,10 @@ class MemoryScheduleStore:
                     return record
             return None
 
-    def list(self, *, include_system: bool = False) -> list[ScheduledTaskRecord]:
+    def list(
+        self, *, include_system: bool = False, session: Session | None = None
+    ) -> list[ScheduledTaskRecord]:
+        del session
         with self._lock:
             items = list(self._by_key.values())
         if not include_system:
@@ -84,9 +111,13 @@ class MemoryScheduleStore:
 
 
 class SqlScheduleStore:
-    def upsert(self, record: ScheduledTaskRecord) -> ScheduledTaskRecord:
-        with session_scope() as session:
+    def upsert(
+        self, record: ScheduledTaskRecord, *, session: Session | None = None
+    ) -> ScheduledTaskRecord:
+        if session is not None:
             return self.upsert_on(session, record)
+        with session_scope() as owned:
+            return self.upsert_on(owned, record)
 
     def upsert_on(
         self, session: Session, record: ScheduledTaskRecord
@@ -127,9 +158,13 @@ class SqlScheduleStore:
             row = session.get(ScheduledTaskRow, schedule_id)
             return _row_to_schedule(row) if row else None
 
-    def list(self, *, include_system: bool = False) -> list[ScheduledTaskRecord]:
-        with session_scope() as session:
+    def list(
+        self, *, include_system: bool = False, session: Session | None = None
+    ) -> list[ScheduledTaskRecord]:
+        if session is not None:
             return self.list_on(session, include_system=include_system)
+        with session_scope() as owned:
+            return self.list_on(owned, include_system=include_system)
 
     def list_on(
         self, session: Session, *, include_system: bool = False
@@ -190,7 +225,7 @@ _memory_lock = threading.Lock()
 
 
 @lru_cache
-def get_schedule_store() -> MemoryScheduleStore | SqlScheduleStore:
+def get_schedule_store() -> ScheduleStore:
     settings = get_settings()
     if settings.store_backend == "memory":
         global _memory_singleton

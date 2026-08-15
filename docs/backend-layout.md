@@ -64,7 +64,7 @@ Each **platform kernel / platform primitive / product domain** package has an ex
 | `backend.admin.deps` | Current user, permission, PAT resolution, actor token id, session cookie helpers |
 | `backend.admin.permissions` | Permission catalog helpers used by MCP and deps |
 | `backend.admin.errors` | Foundation error types (subclass `core.errors.AppError`) |
-| `backend.admin.audit` | `persist_audit_event`, `persist_audit_event_on` |
+| `backend.admin.audit` | `persist_audit_event` |
 | `backend.admin.roles` | `ensure_system_role`, `seed_roles`, `effective_permissions`, `SUPER_ADMIN_KEY`, role write helpers used by composition |
 | `backend.admin.security` | Password/session id helpers used by composition |
 | `backend.admin.user_store` | `UserRecord`, `UserStore`, `get_user_store`, `reset_user_store` (typing + bootstrap) |
@@ -80,7 +80,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 
 | Module | Published for |
 |--------|----------------|
-| `backend.jobs.api` | Seam policy only: `revoke_queued_delivery`, `job_out` (JobRecord→JobOut) |
+| `backend.jobs.api` | Seam policy only: `present_jobs` (JobRecord→JobOut), `revoke_queued_delivery`, schedule-name port bind (`bind_schedule_name_store` / `get_schedule_name_store`); composition injects the Scheduled Task name adapter so `jobs` never imports `worker` |
 | `backend.jobs.store` | Store port used by domain facades and reaper (create/get/status transitions, `JobRecord`, `TERMINAL`, `append_job_log`, `format_job_log_line`) |
 | `backend.jobs.errors` | Mechanism Job errors (`JobNotFound`, `JobNotCancellable`, …) |
 | `backend.jobs.schemas.*` | Mechanism Job response shapes (shared with domain facades) |
@@ -91,19 +91,19 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Module | Published for |
 |--------|----------------|
 | `backend.metadata.errors` | Domain errors (subclass `AppError`, not `admin` concrete types) |
-| `backend.metadata.source_jobs` | Structure Job minting via Scheduled Task (single-flight by Source) |
-| `backend.metadata.source_schedules` | Structure Scheduled Task facade + public projection (`public_schedule`); product-default seed on Source create and mutating Source update |
+| `backend.metadata.source_jobs` | Structure Job minting via Scheduled Task (single-flight by Source); Beat Celery entry (`fire_scheduled_structure`) discovered by `worker` |
+| `backend.metadata.source_schedules` | Structure Scheduled Task facade: unique operator projection (`public_schedule`: work_kind + target + source_key) and Source-delete cascade; product-default seed on Source create and mutating Source update |
 | `backend.metadata.type_mappings.seeds` | Product Type Mapping seed occupy (`ensure_product_type_mappings`) for Foundation Upgrade / Site Bootstrap |
 | `backend.metadata.mcp_server` | MCP tool host entry |
-| `backend.metadata.tasks` | Celery shared-task callables (discovered by `worker`) |
+| `backend.metadata.tasks` | Job kind handler dispatch (`run_job`); discovered by `worker` |
 | `backend.metadata.routers.*` | Domain use-case HTTP; mounted by `main` |
 
 ### `worker` published modules
 
 | Module | Published for |
 |--------|----------------|
-| `backend.worker.api` | Schedule seam policy (`schedule_out`, cadence / NotFound / system immutable, `ensure_system_schedules`, `schedule_names_for_jobs`); not a store re-export |
-| `backend.worker.schedules` | Store port (`ScheduledTaskRecord`, get/list/upsert) used by the API seam and domain facades |
+| `backend.worker.api` | Schedule seam policy (`schedule_out` mechanism fields only — no Source / structure shape — cadence / NotFound / system immutable, `ensure_system_schedules`); not a store re-export |
+| `backend.worker.schedules` | Store port (`ScheduledTaskRecord`, get/list/upsert; `upsert` / `list` accept an optional SQLAlchemy session so a caller can join an existing transaction) used by the API seam and domain facades |
 | `backend.worker.errors` | Mechanism Scheduled Task errors |
 | `backend.worker.schemas.*` | Scheduled Task response shapes (shared with domain facades) |
 | `backend.worker.routers.*` | Mechanism-resource HTTP (by Scheduled Task id / platform list); mounted by `main` |
@@ -127,7 +127,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Mechanism-resource HTTP (get/cancel Job by id) | `jobs` |
 | Mechanism-resource HTTP (list/get/patch/delete Scheduled Task) | `worker` |
 | Domain use-case HTTP (Source, Catalog, Source schedule facade, schedule run-now / related Jobs) | product domain (`metadata`) |
-| Outbound adapter families | Owning product domain (e.g. `metadata/connectors`: engine adapters + `runtime` invocation shell) |
+| Outbound adapter families | Owning product domain (e.g. `metadata/connectors`: engine adapters + `runtime` invocation shell that binds an already-interpreted `SourceEndpoint`) |
 | Domain error types | That product domain (base in `core`) |
 | Config, engine, secrets crypto, Instant/Clock (`core.time`), upgrade orchestration, `AppError` / Problem Details, request-id helpers, process probes | `core` (upgrade may call platform-kernel published API); time contract in [`docs/conventions-time.md`](conventions-time.md); errors in [`docs/conventions-errors.md`](conventions-errors.md) |
 | Celery app, Beat, **Scheduled Task**, system tasks, task registration | `worker` |

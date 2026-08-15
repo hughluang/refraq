@@ -227,39 +227,6 @@ export type ColumnSemanticsBatchItem = {
   enum_catalog?: EnumCatalogEntry[] | null;
 };
 
-export type JobResult = {
-  schema?: string;
-  class?: "breaking" | "non_breaking" | "unchanged" | string;
-  counts?: Record<string, number>;
-  structure_diff_id?: string;
-};
-
-export type Job = {
-  id: string;
-  kind: string;
-  status: string;
-  input: Record<string, unknown>;
-  result: JobResult | null;
-  summary: string;
-  trigger_kind: string | null;
-  trigger_ref: string | null;
-  trigger_actor_name: string | null;
-  trigger_schedule_name: string | null;
-  created_by_user_id: string | null;
-  created_at: string;
-  started_at: string | null;
-  finished_at: string | null;
-  error_code: string | null;
-  error_message: string | null;
-  log_updated_at?: string | null;
-};
-
-export type JobLogs = {
-  job_id: string;
-  body: string;
-  updated_at: string | null;
-};
-
 export type StructureDiffChange = {
   change: string;
   locator_key: string;

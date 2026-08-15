@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord, UserStore, get_user_store
-from backend.jobs.api import actor_names_for_jobs, job_out
+from backend.jobs.api import get_schedule_name_store, present_jobs
 from backend.jobs.schemas.jobs import JobListResponse
 from backend.jobs.store import JobStatus
 from backend.metadata.source_jobs import run_structure_schedule
@@ -17,8 +17,6 @@ from backend.metadata.source_schedules import (
     list_jobs_for_schedule,
     list_structure_schedules,
 )
-from backend.worker.api import schedule_names_for_jobs
-from backend.worker.schedules import get_schedule_store
 from backend.worker.schemas.schedules import ScheduleListResponse
 
 router = APIRouter(tags=["schedules-catalog"])
@@ -77,14 +75,12 @@ def run_source_schedule(
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),
     )
-    names = actor_names_for_jobs([job], users)
-    schedule_names = schedule_names_for_jobs([job], get_schedule_store())
     return JSONResponse(
         status_code=status.HTTP_202_ACCEPTED,
         content={
-            "job": job_out(
-                job, actor_names=names, schedule_names=schedule_names
-            ).model_dump(mode="json")
+            "job": present_jobs(
+                [job], users=users, schedules=get_schedule_name_store()
+            )[0].model_dump(mode="json")
         },
     )
 
@@ -100,11 +96,8 @@ def list_schedule_jobs(
     records = list_jobs_for_schedule(
         schedule_id, kind=kind, status=status_filter
     )
-    names = actor_names_for_jobs(records, users)
-    schedule_names = schedule_names_for_jobs(records, get_schedule_store())
     return JobListResponse(
-        items=[
-            job_out(r, actor_names=names, schedule_names=schedule_names)
-            for r in records
-        ]
+        items=present_jobs(
+            records, users=users, schedules=get_schedule_name_store()
+        )
     )

@@ -132,8 +132,15 @@ def run_structure_schedule(
     return job
 
 
-def fire_scheduled_structure(schedule_id: str) -> dict[str, str]:
+@shared_task(name=STRUCTURE_ENQUEUE_TASK_NAME)
+def fire_scheduled_structure(
+    schedule_id: str | None = None,
+    source_id: str | None = None,  # noqa: ARG001 — Beat forwards kwargs_json
+) -> dict[str, str]:
     """Beat tick: enqueue a structure Job or skip overlap / unusable Source."""
+    if not schedule_id:
+        logger.info("scheduled structure skipped: missing_target")
+        return {"status": "skipped", "reason": "missing_target"}
     record = get_schedule_store().get_by_id(schedule_id)
     raw = record.kwargs_json.get("source_id") if record is not None else None
     if record is None or not isinstance(raw, str) or not raw:
@@ -162,15 +169,3 @@ def fire_scheduled_structure(schedule_id: str) -> dict[str, str]:
             exc.code,
         )
         return {"status": "skipped", "reason": "source_unusable"}
-
-
-@shared_task(name=STRUCTURE_ENQUEUE_TASK_NAME)
-def enqueue_scheduled_structure(
-    schedule_id: str | None = None,
-    source_id: str | None = None,  # noqa: ARG001 — Beat forwards kwargs_json
-) -> dict[str, str]:
-    """Lightweight Beat tick: enqueue a structure Job via the schedule facade."""
-    if not schedule_id:
-        logger.info("scheduled structure skipped: missing_target")
-        return {"status": "skipped", "reason": "missing_target"}
-    return fire_scheduled_structure(schedule_id)

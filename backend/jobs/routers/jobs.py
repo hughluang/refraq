@@ -8,7 +8,11 @@ from backend.admin.audit import persist_audit_event
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord, UserStore, get_user_store
 from backend.core.config import get_settings
-from backend.jobs.api import actor_names_for_jobs, job_out, revoke_queued_delivery
+from backend.jobs.api import (
+    get_schedule_name_store,
+    present_jobs,
+    revoke_queued_delivery,
+)
 from backend.jobs.errors import JobNotCancellable, JobNotFound
 from backend.jobs.schemas.jobs import JobListResponse, JobLogsResponse, JobResponse
 from backend.jobs.store import (
@@ -18,8 +22,6 @@ from backend.jobs.store import (
     get_job_store,
     mark_cancelled,
 )
-from backend.worker.api import schedule_names_for_jobs
-from backend.worker.schedules import get_schedule_store
 
 router = APIRouter(tags=["jobs"])
 
@@ -32,13 +34,8 @@ def list_jobs(
     status: JobStatus | None = Query(default=None),
 ) -> JobListResponse:
     items = get_job_store().list(kind=kind, status=status)
-    names = actor_names_for_jobs(items, users)
-    schedule_names = schedule_names_for_jobs(items, get_schedule_store())
     return JobListResponse(
-        items=[
-            job_out(r, actor_names=names, schedule_names=schedule_names)
-            for r in items
-        ]
+        items=present_jobs(items, users=users, schedules=get_schedule_name_store())
     )
 
 
@@ -51,10 +48,8 @@ def get_job(
     record = get_job_store().get(job_id)
     if record is None:
         raise JobNotFound()
-    names = actor_names_for_jobs([record], users)
-    schedule_names = schedule_names_for_jobs([record], get_schedule_store())
     return JobResponse(
-        job=job_out(record, actor_names=names, schedule_names=schedule_names)
+        job=present_jobs([record], users=users, schedules=get_schedule_name_store())[0]
     )
 
 
@@ -101,8 +96,6 @@ def cancel_job(
         result="success",
         detail={},
     )
-    names = actor_names_for_jobs([logged], users)
-    schedule_names = schedule_names_for_jobs([logged], get_schedule_store())
     return JobResponse(
-        job=job_out(logged, actor_names=names, schedule_names=schedule_names)
+        job=present_jobs([logged], users=users, schedules=get_schedule_name_store())[0]
     )

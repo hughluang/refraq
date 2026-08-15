@@ -13,12 +13,12 @@ type Props = {
   value: string | null | undefined;
 };
 
-export function JobResultBadge({ value }: Props) {
+export function StructureDiffClassBadge({ value }: Props) {
   const t = useTranslate();
   if (!value) return null;
   return (
     <Badge color={CLASS_COLOR[value] ?? "gray"} variant="light">
-      {t(`jobs.result.class.${value}`)}
+      {t(`structureDiffs.class.${value}`)}
     </Badge>
   );
 }

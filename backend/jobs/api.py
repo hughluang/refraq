@@ -2,12 +2,15 @@
 
 Mechanism store ports and errors are imported from ``jobs.store`` /
 ``jobs.errors``. This module owns Celery delivery revoke (so callers never
-import ``worker.app``) and JobRecord→JobOut presentation mapping.
+import ``worker.app``) and Job observation: records in, presented JobOut out.
+Scheduled Task name lookup is an injected adapter so ``jobs`` never imports
+``worker``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import Protocol
 
 from celery import Celery
 
@@ -17,13 +20,56 @@ from backend.core.config import Settings
 from backend.jobs.schemas.jobs import JobOut
 from backend.jobs.store import JobRecord
 
-__all__ = ["actor_names_for_jobs", "job_out", "revoke_queued_delivery"]
+__all__ = [
+    "ScheduleNameStore",
+    "bind_schedule_name_store",
+    "get_schedule_name_store",
+    "present_jobs",
+    "revoke_queued_delivery",
+]
 
 
-def actor_names_for_jobs(
+class _NamedSchedule(Protocol):
+    name: str
+
+
+class ScheduleNameStore(Protocol):
+    def get_by_id(self, schedule_id: str) -> _NamedSchedule | None: ...
+
+
+_schedule_name_store_getter: Callable[[], ScheduleNameStore] | None = None
+
+
+def bind_schedule_name_store(getter: Callable[[], ScheduleNameStore]) -> None:
+    """Composition binds the Scheduled Task name adapter (typically the store getter)."""
+    global _schedule_name_store_getter
+    _schedule_name_store_getter = getter
+
+
+def get_schedule_name_store() -> ScheduleNameStore:
+    if _schedule_name_store_getter is None:
+        raise RuntimeError("schedule name store is not bound")
+    return _schedule_name_store_getter()
+
+
+def present_jobs(
+    records: Sequence[JobRecord],
+    *,
+    users: UserStore,
+    schedules: ScheduleNameStore,
+) -> list[JobOut]:
+    """Map mechanism Job records to the shared HTTP/MCP response shape."""
+    actor_names = _actor_names_for_jobs(records, users)
+    schedule_names = _schedule_names_for_jobs(records, schedules)
+    return [
+        _job_out(record, actor_names=actor_names, schedule_names=schedule_names)
+        for record in records
+    ]
+
+
+def _actor_names_for_jobs(
     records: Sequence[JobRecord], users: UserStore
 ) -> dict[str, str]:
-    """Resolve display names for unique user trigger_ref values."""
     user_ids = {
         record.trigger_ref
         for record in records
@@ -37,13 +83,29 @@ def actor_names_for_jobs(
     return names
 
 
-def job_out(
+def _schedule_names_for_jobs(
+    records: Sequence[JobRecord], store: ScheduleNameStore
+) -> dict[str, str]:
+    names: dict[str, str] = {}
+    ids = {
+        record.trigger_ref
+        for record in records
+        if record.trigger_kind == "schedule" and record.trigger_ref
+    }
+    for schedule_id in ids:
+        sched = store.get_by_id(schedule_id)
+        if sched is None or not sched.name or not sched.name.strip():
+            continue
+        names[schedule_id] = sched.name.strip()
+    return names
+
+
+def _job_out(
     record: JobRecord,
     *,
     actor_names: Mapping[str, str],
     schedule_names: Mapping[str, str],
 ) -> JobOut:
-    """Map a mechanism JobRecord to the shared HTTP/MCP response shape."""
     trigger_actor_name: str | None = None
     if record.trigger_kind == "user" and record.trigger_ref:
         trigger_actor_name = actor_names.get(record.trigger_ref)

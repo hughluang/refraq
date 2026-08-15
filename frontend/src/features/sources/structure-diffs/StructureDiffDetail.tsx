@@ -17,9 +17,9 @@ import { PageError } from "@/components/feedback/PageError";
 import { PageLoader } from "@/components/feedback/PageLoader";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
+import { JobDetailModal } from "@/features/jobs/JobDetailModal";
 import { getStructureDiff } from "@/features/sources/api";
-import { JobDetailModal } from "@/features/sources/JobDetailModal";
-import { JobResultBadge } from "@/features/sources/JobResultBadge";
+import { StructureDiffClassBadge } from "@/features/sources/structure-diffs/StructureDiffClassBadge";
 import {
   COUNT_ORDER,
   groupChanges,
@@ -118,7 +118,7 @@ export function StructureDiffDetail({ sourceId, diffId }: Props) {
     >
       <Stack gap="md">
         <Group gap="sm" wrap="wrap">
-          <JobResultBadge value={diff.class} />
+          <StructureDiffClassBadge value={diff.class} />
           <Text size="sm" ff="monospace">
             {diff.id}
           </Text>

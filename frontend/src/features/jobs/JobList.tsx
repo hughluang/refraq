@@ -1,6 +1,6 @@
 "use client";
 
-import { Badge, Button, Group, Table, Text } from "@mantine/core";
+import { Button, Group, Table, Text } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useState } from "react";
 
@@ -8,21 +8,14 @@ import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
 import { PageLoader } from "@/components/feedback/PageLoader";
 import { PageChrome } from "@/components/layout/PageChrome";
-import { cancelJob, listJobs } from "@/features/sources/api";
-import { formatJobTrigger } from "@/features/sources/formatJobTrigger";
-import { JobDetailModal } from "@/features/sources/JobDetailModal";
-import type { Job } from "@/features/sources/types";
+import { cancelJob, listJobs } from "@/features/jobs/api";
+import { formatJobTrigger } from "@/features/jobs/formatJobTrigger";
+import { JobDetailModal } from "@/features/jobs/JobDetailModal";
+import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
+import type { Job } from "@/features/jobs/types";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
 import { formatJobDuration } from "@/lib/datetime";
-
-const STATUS_COLOR: Record<string, string> = {
-  queued: "blue",
-  running: "yellow",
-  succeeded: "green",
-  failed: "red",
-  cancelled: "gray",
-};
 
 export function JobList() {
   const t = useTranslate();
@@ -91,9 +84,7 @@ export function JobList() {
                 </Table.Td>
                 <Table.Td>{job.kind}</Table.Td>
                 <Table.Td>
-                  <Badge color={STATUS_COLOR[job.status] ?? "gray"}>
-                    {job.status}
-                  </Badge>
+                  <JobStatusBadge status={job.status} />
                 </Table.Td>
                 <Table.Td>
                   <Text size="sm">{formatJobTrigger(job, t)}</Text>

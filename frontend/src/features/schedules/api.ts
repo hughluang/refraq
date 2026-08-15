@@ -1,5 +1,5 @@
 import { apiClient } from "@/lib/api";
-import type { Job } from "@/features/sources/types";
+import type { Job } from "@/features/jobs/types";
 import type {
   CreateScheduleBody,
   PatchScheduleBody,

@@ -34,7 +34,7 @@ Rules:
 - `PATCH` is RFC 5789 partial (cadence / timezone / enabled / name).
 - Permission is `jobs:run`. No `schedules:*` key.
 - System rows (`system=true`, e.g. stuck-Job reaper) stay enabled, are excluded from the default list and Console, and cannot be PATCHed, DELETEd, or run-now via product APIs. Tests may pass `?system=true` to list them.
-- When due, Beat sends a lightweight `enqueue_*` task keyed by the schedule row. Domain work mints a **Job** with `trigger_kind=schedule` and `trigger_ref` = Scheduled Task id (`created_by` null). System work (reaper) does not mint a Job.
+- When due, Beat delivers the domain minting task keyed by the schedule row. That task mints a **Job** with `trigger_kind=schedule` and `trigger_ref` = Scheduled Task id (`created_by` null). System work (reaper) does not mint a Job.
 - Operator run-now (`POST /schedules/{id}/run`) is the same firing for the Job (`trigger_kind=schedule`, `trigger_ref` = schedule id) with `created_by` = the operator. It does **not** update `last_run_at`. Disabled schedules accept run-now. System rows reject it.
 - Overlap of structure work: `JOB_ALREADY_ACTIVE` is **structure** catalog-write serialization per Source, not a schedule lock. Beat swallows it (the schedule is not failed). Run-now returns it to the operator.
 - Disabled / unusable / missing target: due tick skips (missing target is not a Celery failure).

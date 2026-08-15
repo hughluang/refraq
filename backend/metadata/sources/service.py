@@ -36,12 +36,10 @@ from backend.metadata.sources.store import (
     new_source_id,
 )
 from backend.metadata.source_schedules import (
+    delete_structure_schedules_by_source_id,
     ensure_default_structure_schedule_if_none,
-    ensure_default_structure_schedule_if_none_on,
     seed_default_structure_schedule,
-    seed_default_structure_schedule_on,
 )
-from backend.worker.api import delete_structure_schedules_by_source_id
 from backend.worker.schemas.schedules import ScheduleOut
 
 
@@ -119,7 +117,7 @@ def create_source(
         store = cast(SqlSourceStore, get_source_store())
         with session_scope() as session:
             stored = store.create_source_on(session, record)
-            seed_default_structure_schedule_on(
+            seed_default_structure_schedule(
                 stored,
                 session=session,
                 actor_user_id=actor_user_id,
@@ -147,7 +145,7 @@ def _insert_source_and_seed(
 ) -> SourceRecord:
     stored = get_source_store().create_source(record)
     seed_default_structure_schedule(
-        stored.id,
+        stored,
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
     )
@@ -174,17 +172,11 @@ def _maybe_seed_after_update(
 ) -> ScheduleOut | None:
     if not changed:
         return None
-    if session is not None:
-        return ensure_default_structure_schedule_if_none_on(
-            saved,
-            session=session,
-            actor_user_id=actor_user_id,
-            actor_token_id=actor_token_id,
-        )
     return ensure_default_structure_schedule_if_none(
         saved,
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
+        session=session,
     )
 
 

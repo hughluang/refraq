@@ -12,9 +12,9 @@ from backend.metadata.connectors.base import (
     ConnectorError,
     EngineConnector,
     SourceEndpoint,
-    endpoint_from_access,
 )
 from backend.metadata.connectors.registry import get_connector
+from backend.metadata.sources.access import endpoint_from_access
 
 T = TypeVar("T")
 

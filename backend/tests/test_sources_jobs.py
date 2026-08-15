@@ -133,6 +133,8 @@ def test_access_schema_endpoint(client: TestClient) -> None:
     assert "ssl_root_cert" in body["schema"]["properties"]
     assert "database" in body["schema"]["required"]
     assert "schema" in body["schema"]["required"]
+    assert body["schema"]["properties"]["database"]["x-scope"] == "catalog"
+    assert body["schema"]["properties"]["schema"]["x-scope"] == "schema"
 
     mssql = client.get("/sources/access-schema/mssql")
     assert mssql.status_code == 200, mssql.text
@@ -142,12 +144,16 @@ def test_access_schema_endpoint(client: TestClient) -> None:
     assert "database" in mssql_schema["required"]
     assert "schema" in mssql_schema["required"]
     assert mssql_schema["properties"]["schema"]["default"] == "dbo"
+    assert mssql_schema["properties"]["database"]["x-scope"] == "catalog"
+    assert mssql_schema["properties"]["schema"]["x-scope"] == "schema"
 
     oracle = client.get("/sources/access-schema/oracle")
     assert oracle.status_code == 200, oracle.text
     oracle_schema = oracle.json()["schema"]
     assert "service_name" in oracle_schema["required"]
     assert "owner" in oracle_schema["required"]
+    assert oracle_schema["properties"]["service_name"]["x-scope"] == "catalog"
+    assert oracle_schema["properties"]["owner"]["x-scope"] == "schema"
 
 
 def test_mssql_rejects_tls_ssl_mode(client: TestClient) -> None:

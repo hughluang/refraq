@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatJobTrigger,
   shortTriggerRef,
-} from "@/features/sources/formatJobTrigger";
+} from "@/features/jobs/formatJobTrigger";
 
 const t = (key: string) =>
   (

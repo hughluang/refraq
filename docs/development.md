@@ -42,8 +42,8 @@ This document records the stable development conventions for contributors workin
 - Foundation Upgrade (schema + System Role identity ensure, no serve): `python -m backend.core.upgrade`
 - Official start (upgrade then serve): `python -m backend.core.entry`
 - Dev reload after schema is current: `uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000`
-  - Direct `uvicorn` runs **Site Bootstrap** only (empty stores). It does not run schema migrate or System Role identity ensure.
-  - After schema changes, run `python -m backend.core.upgrade` (or use `entry`). Super Admin effective permissions follow the Permission catalog by identity; adding a catalog key does not require Upgrade for Super Admin authz.
+  - Direct `uvicorn` runs **Site Bootstrap** only (empty stores). It does not run schema migrate or System Role identity ensure, and it does not start or reload Celery.
+  - After schema changes, run `python -m backend.core.upgrade` (or use `entry`), then restart worker and Beat (`docs/env.md` §8). Super Admin effective permissions follow the Permission catalog by identity; adding a catalog key does not require Upgrade for Super Admin authz.
 - Run API tests (memory Store Backend via conftest): `pytest backend/tests -q`
 - Run integration tests (Compose must be up): `pytest backend/tests -q -m integration`
   - Uses isolated stores by default: Postgres DB `refraq_test` + Redis logical DB `1` (does not TRUNCATE/FLUSH interactive `refraq` / Redis `0`)

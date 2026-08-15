@@ -1,26 +1,19 @@
 "use client";
 
-import { Badge, Button, Group, Modal, Table, Text } from "@mantine/core";
+import { Button, Group, Modal, Table, Text } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useState } from "react";
 
 import { PageError } from "@/components/feedback/PageError";
+import { cancelJob } from "@/features/jobs/api";
+import { formatJobTrigger } from "@/features/jobs/formatJobTrigger";
+import { JobDetailModal } from "@/features/jobs/JobDetailModal";
+import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
+import type { Job } from "@/features/jobs/types";
 import { listScheduleJobs } from "@/features/schedules/api";
-import { cancelJob } from "@/features/sources/api";
-import { formatJobTrigger } from "@/features/sources/formatJobTrigger";
-import { JobDetailModal } from "@/features/sources/JobDetailModal";
-import type { Job } from "@/features/sources/types";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
 import { formatJobDuration } from "@/lib/datetime";
-
-const STATUS_COLOR: Record<string, string> = {
-  queued: "blue",
-  running: "yellow",
-  succeeded: "green",
-  failed: "red",
-  cancelled: "gray",
-};
 
 type Props = {
   scheduleId: string | null;
@@ -123,9 +116,7 @@ export function ScheduleJobsModal({
                     </Text>
                   </Table.Td>
                   <Table.Td>
-                    <Badge color={STATUS_COLOR[job.status] ?? "gray"}>
-                      {job.status}
-                    </Badge>
+                    <JobStatusBadge status={job.status} />
                   </Table.Td>
                   <Table.Td>
                     <Text size="sm">{formatJobTrigger(job, t)}</Text>

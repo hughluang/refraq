@@ -88,6 +88,7 @@ _DATABASE_PROP: dict[str, Any] = {
     "minLength": 1,
     "maxLength": 256,
     "description": "Database name (DSN catalog + collection scope)",
+    "x-scope": "catalog",
 }
 
 
@@ -102,6 +103,7 @@ def _schema_prop(*, default: str) -> dict[str, Any]:
             "Required schema scope for structure collection "
             "(qualifies object identity within the Source)"
         ),
+        "x-scope": "schema",
     }
 
 
@@ -110,6 +112,7 @@ _SERVICE_NAME_PROP: dict[str, Any] = {
     "minLength": 1,
     "maxLength": 256,
     "description": "Oracle service name / SID",
+    "x-scope": "catalog",
 }
 _OWNER_PROP: dict[str, Any] = {
     "type": "string",
@@ -119,6 +122,7 @@ _OWNER_PROP: dict[str, Any] = {
         "Required owner (schema) scope for structure collection "
         "(qualifies object identity within the Source)"
     ),
+    "x-scope": "schema",
 }
 
 
@@ -212,10 +216,3 @@ def iter_secret_keys(schema: dict[str, Any]) -> set[str]:
         if isinstance(prop, dict) and prop.get("x-secret") is True:
             keys.add(name)
     return keys
-
-
-def project_access(engine: str, access: dict[str, Any]) -> dict[str, Any]:
-    """Access with x-secret fields removed for read APIs."""
-    spec = get_connector_spec(engine)
-    secret_keys = iter_secret_keys(spec)
-    return {k: v for k, v in access.items() if k not in secret_keys}

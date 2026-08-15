@@ -45,8 +45,10 @@ from backend.admin.routers.roles import router as roles_router
 from backend.admin.routers.settings import router as settings_router
 from backend.admin.routers.tokens import router as tokens_router
 from backend.admin.routers.users import router as users_router
+from backend.jobs.api import bind_schedule_name_store
 from backend.jobs.routers.jobs import router as jobs_mechanism_router
 from backend.worker.routers.schedules import router as schedules_mechanism_router
+from backend.worker.schedules import get_schedule_store
 from backend.metadata.routers.business_domains import router as business_domains_router
 from backend.metadata.routers.catalog import router as metadata_catalog_router
 from backend.metadata.routers.query import router as metadata_query_router
@@ -55,6 +57,9 @@ from backend.metadata.routers.sources import router as sources_router
 from backend.metadata.routers.structure_diffs import router as structure_diffs_router
 from backend.metadata.routers.type_mappings import router as type_mappings_router
 from backend.metadata.type_mappings.seeds import ensure_product_type_mappings
+
+# Composition injects the Scheduled Task name adapter so jobs never imports worker.
+bind_schedule_name_store(get_schedule_store)
 
 settings = get_settings()
 logger = logging.getLogger(__name__)

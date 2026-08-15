@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Badge,
   Button,
   Code,
   Group,
@@ -13,20 +12,13 @@ import {
 import { useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { cancelJob, getJob, getJobLogs } from "@/features/sources/api";
-import { formatJobTrigger } from "@/features/sources/formatJobTrigger";
-import type { Job } from "@/features/sources/types";
+import { cancelJob, getJob, getJobLogs } from "@/features/jobs/api";
+import { formatJobTrigger } from "@/features/jobs/formatJobTrigger";
+import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
+import type { Job } from "@/features/jobs/types";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
 import { formatJobDuration } from "@/lib/datetime";
-
-const STATUS_COLOR: Record<string, string> = {
-  queued: "blue",
-  running: "yellow",
-  succeeded: "green",
-  failed: "red",
-  cancelled: "gray",
-};
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
 const POLL_MS = 2000;
@@ -109,7 +101,7 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
       ) : job ? (
         <Stack gap="md">
           <Group gap="sm" wrap="wrap">
-            <Badge color={STATUS_COLOR[job.status] ?? "gray"}>{job.status}</Badge>
+            <JobStatusBadge status={job.status} />
             <Text size="sm" ff="monospace">
               {job.id}
             </Text>

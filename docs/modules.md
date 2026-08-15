@@ -92,6 +92,7 @@ Responsibilities:
 - Platform **Job** ORM (`jobs` table), store adapters, and lifecycle status machine
 - Opaque generic `input` payload; no domain foreign keys as universal columns
 - Shared helpers used by domain enqueue paths and the stuck-Job reaper
+- Job observation presentation (`present_jobs`: trigger actor / schedule names); Scheduled Task name lookup is an injected adapter
 - Mechanism-resource HTTP (get/cancel by Job id) under `jobs/routers/`
 - Published API in [`docs/backend-layout.md`](backend-layout.md) §3
 
@@ -99,16 +100,17 @@ Must not contain:
 
 - Domain collector / Source facade HTTP (stay in `metadata/`)
 - Celery app / Beat scheduler / Scheduled Task ownership (stay in `worker/`)
+- Importing `worker` (Scheduled Task names are an injected adapter, bound by composition)
 
 ### `backend/metadata/`
 
 Responsibilities:
 
-- Source domain models and services (embedded reachability for database kinds)
-- Connector adapters (PostgreSQL, MSSQL, Oracle); outbound invocation shell in `connectors/runtime`
+- Source domain models and services (embedded reachability for database kinds); `sources.access` interprets Connector Spec (validate / seal / project / endpoint)
+- Connector adapters (PostgreSQL, MSSQL, Oracle) consume `SourceEndpoint`; outbound invocation shell in `connectors/runtime` binds an already-interpreted endpoint
 - Domain facade for structure **Jobs** minted via **Scheduled Task** (run-now / Beat) and Source-scoped schedules (`POST/GET /sources/{id}/schedules`)
 - Structure Job runtime in `structure_jobs/service` (`run_structure_job`: collect → Normalized Type → refresh → Structure Diff)
-- Domain Celery work units (`@shared_task`); discovered by `worker`
+- Domain Celery work units (`@shared_task`); discovered by `worker`: structure minting in `source_jobs`, Job kind dispatch in `tasks.py`
 - Catalog object / semantics / join / controlled query / Catalog Sample services (`catalog/service` owns browse, search, Join Path, and semantics/join writes; sample compile+run lives under `query/`; structure refresh orchestration in `catalog/structure_refresh`, plan merge in `catalog/structure_merge`, Join Origin policy in `catalog/join_origin`; persistence adapters only persist)
 - Business Domain registry (global flat entity referenced by catalog objects)
 - Type Mapping registry (global engine + native type → Normalized Type; product seeds via Upgrade)
@@ -272,7 +274,7 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 - `core` → no business packages except `upgrade` → published `admin` / `worker.api`
 - `admin` → `core` (+ own modules)
 - `jobs` → `core`; published `admin` when needed
-- `metadata` → `core`; published `admin` and `jobs` only
+- `metadata` → `core`; published `admin` / `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`
 - `worker` → `core`; published surfaces for assembly
 - `main` → `core` + package routers / bootstrap via published surfaces
 - `alembic` → `core` Base + every package `models` module
@@ -281,6 +283,9 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 
 - `app/` → `features/`, `providers/`, `components/`, `lib/`
 - `features/` → `providers/` (hooks/types only via Refine), `components/`, `lib/`
+- `features/schedules` → `features/jobs` (Job type, cancel, detail modal, trigger presentation)
+- `features/sources` → `features/jobs` (Structure Diff detail opens Job observe modal only); `features/schedules` (Scheduled Task types and related-schedules workbench)
+- `features/jobs` must not import `features/sources` or `features/schedules`
 - `providers/` → `lib/`
 - `components/` → `lib/` only for light helpers
 
@@ -290,6 +295,7 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 - Do not let persistence stores shape UI labels or page logic
 - Do not let frontend components define the authoritative permission matrix
 - Do not scatter login/session logic across many pages; keep it in providers and route guards
+- Do not house Job observation UI or `/jobs` HTTP in `features/sources` (belongs in `features/jobs`)
 - Do not import `worker.app` from domain or HTTP adapters
 - Do not subclass concrete `admin.errors` types from product domains or platform primitives (use `core.errors.AppError`)
 
@@ -308,3 +314,9 @@ For the login/permission slice, each concern should land here:
 - Console navigation API: `backend/admin/routers/console.py` + `admin/console_modules.py`
 - Platform settings API: `backend/admin/routers/settings.py` + `admin/settings_override.py`
 - Settings UI: `frontend/src/features/settings/`
+
+## 7. Metadata / Operations Console Ownership
+
+- Job observation (list, detail, logs, cancel, trigger presentation): `frontend/src/features/jobs/`
+- Scheduled Task definition workbench (platform list, Source related-schedules, run-now, related Jobs HTTP): `frontend/src/features/schedules/`
+- Source / catalog / Structure Diff: `frontend/src/features/sources/` — does not own Job types or `/jobs` HTTP

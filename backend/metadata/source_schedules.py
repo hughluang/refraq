@@ -6,7 +6,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from backend.admin.audit import persist_audit_event, persist_audit_event_on
+from backend.admin.audit import persist_audit_event
 from backend.core.time import utc_now
 from backend.jobs.store import JobRecord, JobStatus, get_job_store
 from backend.metadata.errors import (
@@ -16,44 +16,39 @@ from backend.metadata.errors import (
 )
 from backend.metadata.sources.store import SourceRecord, get_source_store
 from backend.worker.api import (
-    STRUCTURE_SCHEDULE_KEY_PREFIX,
     get_schedule,
     schedule_out,
     validate_cadence,
 )
 from backend.worker.errors import ScheduleSystemImmutable
-from backend.worker.schemas.schedules import ScheduleOut
-from backend.worker.schedules import (
-    ScheduledTaskRecord,
-    SqlScheduleStore,
-    get_schedule_store,
-)
+from backend.worker.schemas.schedules import ScheduleOut, ScheduleTargetOut
+from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store
 
 __all__ = [
     "DEFAULT_STRUCTURE_CRON",
     "DEFAULT_STRUCTURE_SCHEDULE_TIMEZONE",
     "STRUCTURE_ENQUEUE_TASK_NAME",
     "create_structure_schedule",
+    "delete_structure_schedules_by_source_id",
     "ensure_default_structure_schedule_if_none",
-    "ensure_default_structure_schedule_if_none_on",
     "list_jobs_for_schedule",
     "list_structure_schedules",
     "public_schedule",
     "require_runnable_schedule",
     "seed_default_structure_schedule",
-    "seed_default_structure_schedule_on",
     "structure_schedule_label",
     "structure_schedule_label_for_record",
     "structure_schedule_key",
 ]
 
-STRUCTURE_ENQUEUE_TASK_NAME = "backend.metadata.tasks.enqueue_scheduled_structure"
+STRUCTURE_ENQUEUE_TASK_NAME = "backend.metadata.source_jobs.fire_scheduled_structure"
+_STRUCTURE_SCHEDULE_KEY_PREFIX = "structure:"
 DEFAULT_STRUCTURE_CRON = "0 2 * * *"
 DEFAULT_STRUCTURE_SCHEDULE_TIMEZONE = "UTC"
 
 
 def structure_schedule_key(source_id: str, schedule_id: str) -> str:
-    return f"{STRUCTURE_SCHEDULE_KEY_PREFIX}{source_id}:{schedule_id}"
+    return f"{_STRUCTURE_SCHEDULE_KEY_PREFIX}{source_id}:{schedule_id}"
 
 
 def structure_schedule_label(name: str | None, source_key: str) -> str:
@@ -79,16 +74,45 @@ def structure_schedule_label_for_record(
     return structure_schedule_label("", source.key)
 
 
-def public_schedule(record: ScheduledTaskRecord) -> ScheduleOut:
-    """Project a Scheduled Task for HTTP, resolving structure target source_key when possible."""
-    source_key: str | None = None
-    if not record.system:
-        source_id = record.kwargs_json.get("source_id")
-        if isinstance(source_id, str) and source_id:
-            source = get_source_store().get_source(source_id)
-            if source is not None:
-                source_key = source.key
-    return schedule_out(record, source_key=source_key)
+def public_schedule(
+    record: ScheduledTaskRecord, *, source_key: str | None = None
+) -> ScheduleOut:
+    """Project a mechanism record as an operator Scheduled Task.
+
+    Structure / Source shape lives here: system rows stay mechanism-null;
+    a string ``source_id`` in kwargs becomes ``work_kind=structure`` plus target.
+    Missing ``source_id`` is not an error (next kind only changes this facade).
+    Pass ``source_key`` when the caller already has the Source to skip a lookup.
+    """
+    projected = schedule_out(record)
+    if record.system:
+        return projected
+    source_id = record.kwargs_json.get("source_id")
+    if not isinstance(source_id, str) or not source_id:
+        return projected
+    resolved_key = source_key
+    if resolved_key is None:
+        source = get_source_store().get_source(source_id)
+        if source is not None:
+            resolved_key = source.key
+    return projected.model_copy(
+        update={
+            "work_kind": "structure",
+            "target": ScheduleTargetOut(
+                source_id=source_id, source_key=resolved_key
+            ),
+        }
+    )
+
+
+def delete_structure_schedules_by_source_id(source_id: str) -> None:
+    """Remove all structure schedules whose target is this Source (hard-delete cascade)."""
+    store = get_schedule_store()
+    for record in list(store.list(include_system=True)):
+        if record.system:
+            continue
+        if record.kwargs_json.get("source_id") == source_id:
+            store.delete(record.id)
 
 
 def _require_database_source(source_id: str):
@@ -185,34 +209,15 @@ def create_structure_schedule(
         result="success",
         detail=_schedule_create_detail(source_id),
     )
-    return schedule_out(stored, source_key=source.key)
+    return public_schedule(stored, source_key=source.key)
 
 
 def seed_default_structure_schedule(
-    source_id: str,
-    *,
-    actor_user_id: str | None,
-    actor_token_id: str | None,
-) -> ScheduleOut:
-    return create_structure_schedule(
-        source_id=source_id,
-        kind="structure",
-        cron=DEFAULT_STRUCTURE_CRON,
-        interval_seconds=None,
-        schedule_timezone=DEFAULT_STRUCTURE_SCHEDULE_TIMEZONE,
-        enabled=True,
-        name=None,
-        actor_user_id=actor_user_id,
-        actor_token_id=actor_token_id,
-    )
-
-
-def seed_default_structure_schedule_on(
     source: SourceRecord,
     *,
-    session: Session,
     actor_user_id: str | None,
     actor_token_id: str | None,
+    session: Session | None = None,
 ) -> ScheduleOut:
     validate_cadence(
         cron=DEFAULT_STRUCTURE_CRON,
@@ -220,9 +225,8 @@ def seed_default_structure_schedule_on(
         schedule_timezone=DEFAULT_STRUCTURE_SCHEDULE_TIMEZONE,
     )
     record = _default_structure_schedule_record(source)
-    stored = SqlScheduleStore().upsert_on(session, record)
-    persist_audit_event_on(
-        session,
+    stored = get_schedule_store().upsert(record, session=session)
+    persist_audit_event(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
         resource_type="schedule",
@@ -230,8 +234,9 @@ def seed_default_structure_schedule_on(
         action="schedule.create",
         result="success",
         detail=_schedule_create_detail(source.id),
+        session=session,
     )
-    return schedule_out(stored, source_key=source.key)
+    return public_schedule(stored, source_key=source.key)
 
 
 def _has_structure_schedule(source_id: str, records: list[ScheduledTaskRecord]) -> bool:
@@ -243,37 +248,19 @@ def ensure_default_structure_schedule_if_none(
     *,
     actor_user_id: str | None,
     actor_token_id: str | None,
+    session: Session | None = None,
 ) -> ScheduleOut | None:
     """Insert the product-default structure schedule when this database Source has none."""
     if source.kind != "database":
         return None
-    existing = get_schedule_store().list(include_system=False)
+    existing = get_schedule_store().list(include_system=False, session=session)
     if _has_structure_schedule(source.id, existing):
         return None
     return seed_default_structure_schedule(
-        source.id,
-        actor_user_id=actor_user_id,
-        actor_token_id=actor_token_id,
-    )
-
-
-def ensure_default_structure_schedule_if_none_on(
-    source: SourceRecord,
-    *,
-    session: Session,
-    actor_user_id: str | None,
-    actor_token_id: str | None,
-) -> ScheduleOut | None:
-    if source.kind != "database":
-        return None
-    existing = SqlScheduleStore().list_on(session, include_system=False)
-    if _has_structure_schedule(source.id, existing):
-        return None
-    return seed_default_structure_schedule_on(
         source,
-        session=session,
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
+        session=session,
     )
 
 
@@ -284,7 +271,7 @@ def list_structure_schedules(source_id: str) -> list[ScheduleOut]:
     items: list[ScheduleOut] = []
     for record in get_schedule_store().list(include_system=False):
         if record.kwargs_json.get("source_id") == source_id:
-            items.append(schedule_out(record, source_key=source.key))
+            items.append(public_schedule(record, source_key=source.key))
     return items
 
 

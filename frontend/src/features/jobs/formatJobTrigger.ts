@@ -1,4 +1,4 @@
-import type { Job } from "@/features/sources/types";
+import type { Job } from "@/features/jobs/types";
 
 const KNOWN_TRIGGER_KINDS = new Set(["user", "schedule", "mcp", "system"]);
 
