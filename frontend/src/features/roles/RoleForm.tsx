@@ -20,7 +20,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { PageError } from "@/components/feedback/PageError";
-import { PageLoader } from "@/components/feedback/PageLoader";
+import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleId } from "@/features/console/module-identity";
 import type {
@@ -164,7 +164,11 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
   }
 
   if (mode === "edit" && roleQuery.query.isLoading) {
-    return <PageLoader />;
+    return (
+      <PageChrome title={t("roles.edit.title")}>
+        <PageBodySkeleton rows={5} />
+      </PageChrome>
+    );
   }
 
   if (mode === "edit" && roleQuery.result?.locked) {
@@ -184,7 +188,7 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
       {catalogError ? (
         <PageError message={catalogError} />
       ) : catalog === null ? (
-        <PageLoader />
+        <PageBodySkeleton rows={5} />
       ) : (
         <form onSubmit={form.onSubmit(submit)}>
           <Stack gap="sm">

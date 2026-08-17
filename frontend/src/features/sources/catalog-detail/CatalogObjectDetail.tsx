@@ -15,7 +15,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { PageError } from "@/components/feedback/PageError";
-import { PageLoader } from "@/components/feedback/PageLoader";
+import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
@@ -98,9 +98,27 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
     }
   };
 
-  if (loading) return <PageLoader />;
-  if (error) return <PageError message={error} />;
-  if (!object) return <PageError message={t("catalog.empty")} />;
+  if (loading) {
+    return (
+      <PageChrome title={t("catalog.detail")}>
+        <PageBodySkeleton />
+      </PageChrome>
+    );
+  }
+  if (error) {
+    return (
+      <PageChrome title={t("catalog.detail")}>
+        <PageError message={error} onRetry={() => void load()} />
+      </PageChrome>
+    );
+  }
+  if (!object) {
+    return (
+      <PageChrome title={t("catalog.detail")}>
+        <PageError message={t("catalog.empty")} />
+      </PageChrome>
+    );
+  }
 
   return (
     <PageChrome

@@ -22,7 +22,7 @@ import { useState } from "react";
 
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
-import { PageLoader } from "@/components/feedback/PageLoader";
+import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { SectionHeader } from "@/components/layout/SectionHeader";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
@@ -256,7 +256,7 @@ export function TokenList() {
       />
 
       {isLoading ? (
-        <PageLoader />
+        <PageBodySkeleton />
       ) : rows.length === 0 ? (
         <EmptyState />
       ) : (

@@ -2,18 +2,11 @@ import { createProxy } from "next-i18next/proxy";
 import { NextRequest, NextResponse } from "next/server";
 
 import i18nConfig from "../i18n.config";
-
-const PROTECTED_PREFIXES = ["/console"];
+import { isProtectedPath } from "./lib/route-scope";
 
 const PUBLIC_PATHS = new Set(["/login", "/403"]);
 
 const i18nProxy = createProxy(i18nConfig);
-
-function isProtectedPath(pathname: string): boolean {
-  return PROTECTED_PREFIXES.some(
-    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
-  );
-}
 
 /** Strip Accept-Language so detection is cookie → fallback only. */
 function requestWithoutAcceptLanguage(request: NextRequest): NextRequest {

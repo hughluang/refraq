@@ -49,14 +49,32 @@ async function parseError(response: Response): Promise<ApiError> {
   );
 }
 
+export type ApiRequestInit = RequestInit & {
+  timeoutMs?: number;
+};
+
+function requestSignal(init?: ApiRequestInit): AbortSignal | undefined {
+  if (!init) {
+    return undefined;
+  }
+  const timeoutSignal =
+    init.timeoutMs !== undefined ? AbortSignal.timeout(init.timeoutMs) : undefined;
+  if (timeoutSignal && init.signal) {
+    return AbortSignal.any([timeoutSignal, init.signal]);
+  }
+  return timeoutSignal ?? init.signal ?? undefined;
+}
+
 export async function apiClient<T = unknown>(
   path: string,
-  init?: RequestInit,
+  init?: ApiRequestInit,
 ): Promise<T> {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const { timeoutMs: _timeoutMs, ...fetchInit } = init ?? {};
   const response = await fetch(`${baseUrl}${normalizedPath}`, {
     credentials: "include",
-    ...init,
+    ...fetchInit,
+    signal: requestSignal(init),
   });
 
   if (!response.ok) {

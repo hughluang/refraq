@@ -6,6 +6,7 @@ import {
   Button,
   Group,
   Menu,
+  Skeleton,
   Stack,
   Text,
   Title,
@@ -22,13 +23,14 @@ import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useTranslation } from "react-i18next";
 
+import { ForbiddenState } from "@/components/feedback/ForbiddenState";
 import { PageError } from "@/components/feedback/PageError";
-import { PageLoader } from "@/components/feedback/PageLoader";
 import { ConsoleNavLink } from "@/components/layout/ConsoleNavLink";
 import { LangSwitcher } from "@/components/LangSwitcher";
 import { fetchConsoleNavigation } from "@/features/console/api";
 import type { NavigationGroup } from "@/features/console/types";
 import { ApiError } from "@/lib/api";
+import { reloadIdentity } from "@/providers/auth-provider";
 import {
   isLocale,
   LOCALE_COOKIE_NAME,
@@ -40,28 +42,53 @@ import {
 
 type ConsoleShellProps = { children: ReactNode };
 
+type NavErrorKind = "forbidden" | "failed";
+
+function NavSkeleton() {
+  return (
+    <Stack gap="sm" px="sm">
+      <Skeleton height={10} width="40%" />
+      <Skeleton height={28} radius="sm" />
+      <Skeleton height={28} radius="sm" />
+      <Skeleton height={10} width="35%" mt="sm" />
+      <Skeleton height={28} radius="sm" />
+      <Skeleton height={28} radius="sm" />
+    </Stack>
+  );
+}
+
 export function ConsoleShell({ children }: ConsoleShellProps) {
   const t = useTranslate();
   const pathname = usePathname();
   const router = useRouter();
   const [opened, { toggle }] = useDisclosure();
-  const { data: user } = useGetIdentity<CurrentUser>();
+  const { data: identity } = useGetIdentity<CurrentUser>();
+  const sessionUser = useSessionStore((s) => s.user);
+  const identityError = useSessionStore((s) => s.identityError);
+  const permissionsReady = useSessionStore((s) => s.permissionsReady);
+  const user = identity ?? sessionUser;
   const accountLocale = useSessionStore((s) => s.user?.locale);
   const { mutate: logout, isPending } = useLogout();
   const changeLanguage = useChangeLanguage(LOCALE_COOKIE_NAME);
   const { i18n } = useTranslation();
   const [groups, setGroups] = useState<NavigationGroup[] | null>(null);
   const [navError, setNavError] = useState<string | null>(null);
+  const [navErrorKind, setNavErrorKind] = useState<NavErrorKind | null>(null);
   const [navLoading, setNavLoading] = useState(true);
 
   const loadNavigation = useCallback(async () => {
     setNavLoading(true);
     setNavError(null);
+    setNavErrorKind(null);
     try {
       const data = await fetchConsoleNavigation();
       setGroups(data.groups);
     } catch (error) {
       setGroups(null);
+      const forbidden =
+        error instanceof ApiError &&
+        error.status === 403;
+      setNavErrorKind(forbidden ? "forbidden" : "failed");
       setNavError(
         error instanceof ApiError ? error.detail : "navigation_load_failed",
       );
@@ -90,6 +117,22 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
     // Only react to account locale changes — not changeLanguage identity churn.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
   }, [accountLocale]);
+
+  const mainContent =
+    !navLoading && navErrorKind === "forbidden" ? (
+      <ForbiddenState reason="console:access" />
+    ) : identityError && !permissionsReady ? (
+      <PageError
+        message={
+          identityError === "identity_load_failed"
+            ? t("common.error.loadFailed")
+            : identityError
+        }
+        onRetry={() => void reloadIdentity()}
+      />
+    ) : (
+      children
+    );
 
   return (
     <AppShell
@@ -140,14 +183,16 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
                   </Menu.Item>
                 </Menu.Dropdown>
               </Menu>
-            ) : null}
+            ) : (
+              <Skeleton height={28} width={96} radius="sm" />
+            )}
           </Group>
         </Group>
       </AppShell.Header>
 
       <AppShell.Navbar p="sm">
-        {navLoading ? <PageLoader /> : null}
-        {!navLoading && navError ? (
+        {navLoading ? <NavSkeleton /> : null}
+        {!navLoading && navError && navErrorKind !== "forbidden" ? (
           <PageError
             message={
               navError === "navigation_load_failed"
@@ -179,7 +224,7 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
           : null}
       </AppShell.Navbar>
 
-      <AppShell.Main>{children}</AppShell.Main>
+      <AppShell.Main>{mainContent}</AppShell.Main>
     </AppShell>
   );
 }

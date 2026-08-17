@@ -3,21 +3,24 @@
 import { Text } from "@mantine/core";
 import { useGetIdentity, useTranslate } from "@refinedev/core";
 
-import { PageLoader } from "@/components/feedback/PageLoader";
+import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageChrome } from "@/components/layout/PageChrome";
-import type { CurrentUser } from "@/providers/session-store";
+import {
+  useSessionStore,
+  type CurrentUser,
+} from "@/providers/session-store";
 
 export default function ConsoleHomePage() {
   const t = useTranslate();
-  const { data: user, isLoading } = useGetIdentity<CurrentUser>();
-
-  if (isLoading) {
-    return <PageLoader />;
-  }
+  const { data: identity, isLoading } = useGetIdentity<CurrentUser>();
+  const sessionUser = useSessionStore((s) => s.user);
+  const user = identity ?? sessionUser;
 
   return (
     <PageChrome title={t("app.title")} description={t("dashboard.description")}>
-      {user ? (
+      {isLoading && !user ? (
+        <PageBodySkeleton rows={3} />
+      ) : user ? (
         <Text>
           {user.display_name} ({user.account})
           {user.role_name ? ` — ${user.role_name}` : ""}

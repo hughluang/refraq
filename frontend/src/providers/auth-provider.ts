@@ -3,13 +3,22 @@ import type { AuthActionResponse, AuthProvider } from "@refinedev/core";
 import { useModuleIdentityStore } from "@/features/console/module-identity";
 import { apiClient, ApiError } from "@/lib/api";
 import { loginRedirectWithFrom } from "@/lib/return-path";
+import { isProtectedPath } from "@/lib/route-scope";
 import { translateKey } from "@/providers/i18n-runtime";
 import {
+  arePermissionsReady,
   getCurrentUser,
   isSignedOutLocally,
   useSessionStore,
   type CurrentUser,
 } from "@/providers/session-store";
+
+const IDENTITY_LOAD_FAILED = "identity_load_failed";
+const IDENTITY_TIMEOUT_MS = 10_000;
+
+function isProtectedDocument(): boolean {
+  return typeof window !== "undefined" && isProtectedPath(window.location.pathname);
+}
 
 function clearClientSession() {
   useSessionStore.getState().clear();
@@ -32,9 +41,61 @@ type RefineAuth = AuthProvider & {
 };
 
 async function fetchMe(): Promise<CurrentUser> {
-  const data = await apiClient<{ user: CurrentUser }>("/auth/me");
+  const data = await apiClient<{ user: CurrentUser }>("/auth/me", {
+    timeoutMs: IDENTITY_TIMEOUT_MS,
+  });
   useSessionStore.getState().setUser(data.user);
   return data.user;
+}
+
+function handleMeFailure(error: unknown): void {
+  if (isApiError(error) && error.status === 401) {
+    clearClientSession();
+    if (typeof window !== "undefined" && isProtectedDocument()) {
+      window.location.assign(loginRedirectWithFrom());
+    }
+    return;
+  }
+  if (arePermissionsReady()) {
+    return;
+  }
+  useSessionStore.getState().setIdentityError(
+    isApiError(error) ? error.detail : IDENTITY_LOAD_FAILED,
+  );
+}
+
+/** Background Session revalidation; 401 clears UX snapshot and hard-navs to login. */
+function revalidateSessionInBackground() {
+  void fetchMe().catch(handleMeFailure);
+}
+
+/** Retry GET /auth/me after a non-401 identity load failure. */
+export async function reloadIdentity(): Promise<void> {
+  try {
+    await fetchMe();
+  } catch (error: unknown) {
+    handleMeFailure(error);
+  }
+}
+
+/** Outcome of a one-shot `/auth/me` probe on the public login page. */
+export type LoginSessionProbe = "active" | "anonymous" | "load_error";
+
+/**
+ * Login-page Session probe; never hard-navigates.
+ * 401 clears the display summary; non-401 is a load-error, not anonymity.
+ */
+export async function probeLoginSession(): Promise<LoginSessionProbe> {
+  try {
+    await fetchMe();
+    return "active";
+  } catch (error: unknown) {
+    handleMeFailure(error);
+    if (isApiError(error) && error.status === 401) {
+      return "anonymous";
+    }
+    return "load_error";
+  }
 }
 
 function isApiError(value: unknown): value is ApiError {
@@ -130,13 +191,12 @@ export const authProvider: RefineAuth = {
     if (isSignedOutLocally()) {
       return unauthenticatedCheckResponse();
     }
-    try {
-      await fetchMe();
-      return { authenticated: true };
-    } catch {
-      clearClientSession();
-      return unauthenticatedCheckResponse();
+    // Optimistic only on Console documents: proxy already gated on cookie
+    // presence. Public pages stay anonymous and must not fetch /auth/me.
+    if (isProtectedDocument()) {
+      revalidateSessionInBackground();
     }
+    return { authenticated: true };
   },
 
   async getIdentity() {
@@ -144,18 +204,19 @@ export const authProvider: RefineAuth = {
     if (cached) {
       return cached;
     }
-    if (isSignedOutLocally()) {
+    if (isSignedOutLocally() || !isProtectedDocument()) {
       return null;
     }
     try {
       return await fetchMe();
-    } catch {
+    } catch (error: unknown) {
+      handleMeFailure(error);
       return null;
     }
   },
 
   async getPermissions() {
-    if (isSignedOutLocally()) {
+    if (isSignedOutLocally() || !isProtectedDocument()) {
       return [];
     }
     try {
@@ -166,6 +227,7 @@ export const authProvider: RefineAuth = {
         clearClientSession();
         return [];
       }
+      handleMeFailure(error);
       return getCurrentUser()?.permissions ?? [];
     }
   },

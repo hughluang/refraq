@@ -17,8 +17,8 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { EmptyState } from "@/components/feedback/EmptyState";
+import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageError } from "@/components/feedback/PageError";
-import { PageLoader } from "@/components/feedback/PageLoader";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { listCatalogObjects, listSources } from "@/features/sources/api";
 import type { CatalogObject, Source } from "@/features/sources/types";
@@ -106,8 +106,7 @@ export function CatalogBrowse() {
     return items.filter((obj) => !obj.business_semantics_ready);
   }, [items, onlyNotReady]);
 
-  if (loading) return <PageLoader />;
-  if (error) return <PageError message={error} />;
+  if (error && !loading) return <PageError message={error} />;
 
   const refreshAction = (
     <Button size="sm" variant="light" onClick={() => void loadObjects()}>
@@ -121,117 +120,125 @@ export function CatalogBrowse() {
       description={t("catalog.description")}
       actions={refreshAction}
     >
-      <Group mb="md" align="flex-end" wrap="wrap">
-        <Select
-          label={t("catalog.fields.source")}
-          data={sources.map((s) => ({
-            value: s.id,
-            label: `${s.key} — ${s.name}`,
-          }))}
-          value={sourceId}
-          onChange={setSourceId}
-          searchable
-          w={320}
-        />
-        <TextInput
-          label={t("catalog.fields.search")}
-          value={q}
-          onChange={(e) => setQ(e.currentTarget.value)}
-          w={220}
-          rightSection={listLoading ? <Text size="xs">…</Text> : null}
-        />
-        <Checkbox
-          label={t("catalog.list.onlyNotReady")}
-          checked={onlyNotReady}
-          onChange={(e) => setOnlyNotReady(e.currentTarget.checked)}
-          mb={4}
-        />
-        <Checkbox
-          label={t("catalog.list.includeAbsent")}
-          checked={includeAbsent}
-          onChange={(e) => setIncludeAbsent(e.currentTarget.checked)}
-          mb={4}
-        />
-      </Group>
-
-      {!sourceId || total === 0 ? (
-        <EmptyState message={t("catalog.empty")} />
+      {loading && sources.length === 0 ? (
+        <PageBodySkeleton />
       ) : (
-        <Stack gap="sm">
-          <Table striped highlightOnHover>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>{t("catalog.fields.schema")}</Table.Th>
-                <Table.Th>{t("catalog.fields.name")}</Table.Th>
-                <Table.Th>{t("catalog.fields.businessName")}</Table.Th>
-                <Table.Th>{t("catalog.fields.type")}</Table.Th>
-                <Table.Th>{t("catalog.fields.ready")}</Table.Th>
-                <Table.Th>{t("catalog.fields.locator")}</Table.Th>
-                <Table.Th>{t("catalog.fields.present")}</Table.Th>
-                <Table.Th />
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {visibleItems.map((obj) => (
-                <Table.Tr key={obj.id}>
-                  <Table.Td>{obj.schema_name}</Table.Td>
-                  <Table.Td>{obj.name}</Table.Td>
-                  <Table.Td>{obj.business_name ?? "—"}</Table.Td>
-                  <Table.Td>{obj.object_type}</Table.Td>
-                  <Table.Td>
-                    <Badge
-                      color={obj.business_semantics_ready ? "green" : "gray"}
-                    >
-                      {obj.business_semantics_ready
-                        ? t("catalog.semantics.ready")
-                        : t("catalog.semantics.notReady")}
-                    </Badge>
-                  </Table.Td>
-                  <Table.Td>
-                    <Text
-                      size="xs"
-                      c="dimmed"
-                      style={{ wordBreak: "break-all" }}
-                    >
-                      {obj.locator_key}
-                    </Text>
-                  </Table.Td>
-                  <Table.Td>
-                    <Badge color={obj.is_present ? "green" : "gray"}>
-                      {obj.is_present
-                        ? t("catalog.fields.presentValue")
-                        : t("catalog.fields.absentValue")}
-                    </Badge>
-                  </Table.Td>
-                  <Table.Td>
-                    <Button
-                      component={Link}
-                      href={`/console/catalog/${obj.id}`}
-                      size="xs"
-                      variant="light"
-                    >
-                      {t("catalog.detail")}
-                    </Button>
-                  </Table.Td>
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
-          <Group justify="space-between">
-            <Text size="sm" c="dimmed">
-              {t("catalog.list.showing", {
-                from: (page - 1) * PAGE_SIZE + 1,
-                to: Math.min(page * PAGE_SIZE, total),
-                total,
-              })}
-            </Text>
-            <Pagination
-              value={page}
-              onChange={setPage}
-              total={Math.max(1, Math.ceil(total / PAGE_SIZE))}
+        <>
+          <Group mb="md" align="flex-end" wrap="wrap">
+            <Select
+              label={t("catalog.fields.source")}
+              data={sources.map((s) => ({
+                value: s.id,
+                label: `${s.key} — ${s.name}`,
+              }))}
+              value={sourceId}
+              onChange={setSourceId}
+              searchable
+              w={320}
+            />
+            <TextInput
+              label={t("catalog.fields.search")}
+              value={q}
+              onChange={(e) => setQ(e.currentTarget.value)}
+              w={220}
+              rightSection={listLoading ? <Text size="xs">…</Text> : null}
+            />
+            <Checkbox
+              label={t("catalog.list.onlyNotReady")}
+              checked={onlyNotReady}
+              onChange={(e) => setOnlyNotReady(e.currentTarget.checked)}
+              mb={4}
+            />
+            <Checkbox
+              label={t("catalog.list.includeAbsent")}
+              checked={includeAbsent}
+              onChange={(e) => setIncludeAbsent(e.currentTarget.checked)}
+              mb={4}
             />
           </Group>
-        </Stack>
+
+          {listLoading && items.length === 0 ? (
+            <PageBodySkeleton />
+          ) : !sourceId || total === 0 ? (
+            <EmptyState message={t("catalog.empty")} />
+          ) : (
+            <Stack gap="sm">
+              <Table striped highlightOnHover>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>{t("catalog.fields.schema")}</Table.Th>
+                    <Table.Th>{t("catalog.fields.name")}</Table.Th>
+                    <Table.Th>{t("catalog.fields.businessName")}</Table.Th>
+                    <Table.Th>{t("catalog.fields.type")}</Table.Th>
+                    <Table.Th>{t("catalog.fields.ready")}</Table.Th>
+                    <Table.Th>{t("catalog.fields.locator")}</Table.Th>
+                    <Table.Th>{t("catalog.fields.present")}</Table.Th>
+                    <Table.Th />
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {visibleItems.map((obj) => (
+                    <Table.Tr key={obj.id}>
+                      <Table.Td>{obj.schema_name}</Table.Td>
+                      <Table.Td>{obj.name}</Table.Td>
+                      <Table.Td>{obj.business_name ?? "—"}</Table.Td>
+                      <Table.Td>{obj.object_type}</Table.Td>
+                      <Table.Td>
+                        <Badge
+                          color={obj.business_semantics_ready ? "green" : "gray"}
+                        >
+                          {obj.business_semantics_ready
+                            ? t("catalog.semantics.ready")
+                            : t("catalog.semantics.notReady")}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td>
+                        <Text
+                          size="xs"
+                          c="dimmed"
+                          style={{ wordBreak: "break-all" }}
+                        >
+                          {obj.locator_key}
+                        </Text>
+                      </Table.Td>
+                      <Table.Td>
+                        <Badge color={obj.is_present ? "green" : "gray"}>
+                          {obj.is_present
+                            ? t("catalog.fields.presentValue")
+                            : t("catalog.fields.absentValue")}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td>
+                        <Button
+                          component={Link}
+                          href={`/console/catalog/${obj.id}`}
+                          size="xs"
+                          variant="light"
+                        >
+                          {t("catalog.detail")}
+                        </Button>
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+              <Group justify="space-between">
+                <Text size="sm" c="dimmed">
+                  {t("catalog.list.showing", {
+                    from: (page - 1) * PAGE_SIZE + 1,
+                    to: Math.min(page * PAGE_SIZE, total),
+                    total,
+                  })}
+                </Text>
+                <Pagination
+                  value={page}
+                  onChange={setPage}
+                  total={Math.max(1, Math.ceil(total / PAGE_SIZE))}
+                />
+              </Group>
+            </Stack>
+          )}
+        </>
       )}
     </PageChrome>
   );

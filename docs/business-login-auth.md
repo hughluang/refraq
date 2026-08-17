@@ -99,6 +99,16 @@ Frontend navigation around the session boundary:
 - successful logout uses a hard (document) navigation to `/login`
 - the console client guard must not emit Refine's `to` query param after auth failure
 - when a session becomes invalid while a cookie may still be present, the client redirects to `/login` with a validated `from` path
+- the Management Console may paint the AppShell before `GET /auth/me` returns: `proxy.ts` already gates on cookie presence, and `authProvider.check` is optimistic (does not await `/auth/me`)
+- only protected Console documents fetch Session identity; public pages such as `/login` and `/403` stay anonymous and must never hard-navigate to login on `401`
+- `GET /auth/me` is time-bounded; a timeout is a non-401 load-error terminal with retry, not a logout
+- opening `/login` with a valid Session enters the Console at the validated `from` path
+- opening `/login` when `GET /auth/me` fails with a non-401 error (network / 5xx / timeout) is a load-error terminal with retry, not the login form and not a logout
+- the client ACL gate blocks page content until permissions and Module Identities are ready, so a no-permission route shows the forbidden terminal instead of module content or a data-fetch error
+- the client may keep a tab-scoped **User** display summary in `sessionStorage` for UX only (account / display name / locale / display timezone). This is not a **Session**; the Session remains the HttpOnly cookie. Permissions and role fields are not persisted there and must come from login or `/auth/me`
+- an invalid Session still yields `401` on API calls: the client clears the display summary and hard-navigates to `/login` with a validated `from` path
+- losing `console:access` while a Session cookie remains (`403` on console navigation / module-identity APIs) is an explicit forbidden terminal state in the shell, not an infinite skeleton
+- a `GET /auth/me` failure that is not `401` (network / 5xx), while permissions have not yet loaded this tab, is an explicit load-error terminal in the shell with retry; it is not an infinite skeleton and not a logout
 
 ## 7. Role Model
 

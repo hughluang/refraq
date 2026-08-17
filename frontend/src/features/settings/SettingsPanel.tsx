@@ -16,7 +16,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
 import { PageError } from "@/components/feedback/PageError";
-import { PageLoader } from "@/components/feedback/PageLoader";
+import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
@@ -123,7 +123,7 @@ export function SettingsPanel() {
       description={t("settings.description")}
     >
       <Stack gap="md">
-        {loading ? <PageLoader /> : null}
+        {loading ? <PageBodySkeleton rows={4} /> : null}
         {!loading && error ? (
           <PageError message={error} onRetry={() => void load()} />
         ) : null}

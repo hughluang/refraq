@@ -5,8 +5,8 @@ import { useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useState } from "react";
 
 import { EmptyState } from "@/components/feedback/EmptyState";
+import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageError } from "@/components/feedback/PageError";
-import { PageLoader } from "@/components/feedback/PageLoader";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { listSchedules, patchSchedule } from "@/features/schedules/api";
 import { ScheduleFormModal } from "@/features/schedules/ScheduleFormModal";
@@ -58,8 +58,9 @@ export function ScheduleList() {
     void load();
   }, [load]);
 
-  if (loading) return <PageLoader />;
-  if (error && items.length === 0) return <PageError message={error} />;
+  if (error && items.length === 0 && !loading) {
+    return <PageError message={error} />;
+  }
 
   return (
     <PageChrome
@@ -71,7 +72,9 @@ export function ScheduleList() {
         </Button>
       }
     >
-      {items.length === 0 ? (
+      {loading && items.length === 0 ? (
+        <PageBodySkeleton />
+      ) : items.length === 0 ? (
         <EmptyState message={t("schedules.empty")} />
       ) : (
         <Table striped highlightOnHover>

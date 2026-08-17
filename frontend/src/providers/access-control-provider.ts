@@ -5,12 +5,17 @@ import {
   getModuleIdentities,
   getModuleIdentityStatus,
 } from "@/features/console/module-identity";
-import { getCurrentUser } from "@/providers/session-store";
+import {
+  arePermissionsReady,
+  getCurrentUser,
+} from "@/providers/session-store";
 
 export const accessControlProvider: AccessControlProvider = {
   can: async ({ resource, action }) => {
     const user = getCurrentUser();
-    if (!user) return { can: false, reason: "unauthenticated" };
+    if (!user || !arePermissionsReady()) {
+      return { can: false, reason: "user_permissions_not_ready" };
+    }
 
     if (getModuleIdentityStatus() !== "ready") {
       return { can: false, reason: "module_identity_not_ready" };

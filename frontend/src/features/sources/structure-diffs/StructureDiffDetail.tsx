@@ -13,8 +13,8 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ForbiddenState } from "@/components/feedback/ForbiddenState";
+import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageError } from "@/components/feedback/PageError";
-import { PageLoader } from "@/components/feedback/PageLoader";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { JobDetailModal } from "@/features/jobs/JobDetailModal";
@@ -88,13 +88,37 @@ export function StructureDiffDetail({ sourceId, diffId }: Props) {
 
   const groups = useMemo(() => groupChanges(diff?.changes), [diff?.changes]);
 
-  if (canLoading || canShow === undefined) return <PageLoader />;
-  if (!canShow.can) return <ForbiddenState reason={canShow.reason} />;
-  if (loading) return <PageLoader />;
-  if (error) return <PageError message={error} />;
-  if (!diff) return null;
+  const aclPending = canLoading || canShow === undefined;
+
+  if (!aclPending && canShow && !canShow.can) {
+    return <ForbiddenState reason={canShow.reason} />;
+  }
 
   const title = `${t("structureDiffs.detailTitle")} · ${sourceId}`;
+
+  if (aclPending || loading) {
+    return (
+      <PageChrome
+        title={title}
+        description={t("structureDiffs.detailDescription")}
+      >
+        <PageBodySkeleton />
+      </PageChrome>
+    );
+  }
+
+  if (error) {
+    return (
+      <PageChrome
+        title={title}
+        description={t("structureDiffs.detailDescription")}
+      >
+        <PageError message={error} onRetry={() => void load()} />
+      </PageChrome>
+    );
+  }
+
+  if (!diff) return null;
 
   return (
     <PageChrome

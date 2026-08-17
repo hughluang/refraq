@@ -5,11 +5,12 @@ import type { ReactNode } from "react";
 import { usePathname } from "next/navigation";
 
 import { ForbiddenState } from "@/components/feedback/ForbiddenState";
-import { PageLoader } from "@/components/feedback/PageLoader";
+import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import {
   matchPath,
   useModuleIdentityStore,
 } from "@/features/console/module-identity";
+import { useSessionStore } from "@/providers/session-store";
 
 type PageCanAccessProps = {
   children: ReactNode;
@@ -18,21 +19,27 @@ type PageCanAccessProps = {
 export function PageCanAccess({ children }: PageCanAccessProps) {
   const pathname = usePathname();
   const modules = useModuleIdentityStore((state) => state.modules);
-  const matched = matchPath(pathname, modules);
+  const status = useModuleIdentityStore((state) => state.status);
+  const permissionsReady = useSessionStore((state) => state.permissionsReady);
+  const ready = permissionsReady && status === "ready";
+  const matched = ready ? matchPath(pathname, modules) : null;
 
   const { data, isLoading } = useCan({
     resource: matched?.resource ?? "",
     action: matched?.action ?? "list",
-    queryOptions: { enabled: matched !== null },
+    queryOptions: { enabled: ready && matched !== null },
   });
 
-  // Non-resource console routes (e.g. not-found) are not ACL-gated.
+  if (!ready) {
+    return <PageBodySkeleton />;
+  }
+
   if (!matched) {
     return children;
   }
 
   if (isLoading || data === undefined) {
-    return <PageLoader />;
+    return <PageBodySkeleton />;
   }
 
   if (!data.can) {

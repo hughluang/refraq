@@ -13,7 +13,7 @@ import { useState } from "react";
 
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
-import { PageLoader } from "@/components/feedback/PageLoader";
+import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import type { RoleRow } from "@/features/roles/types";
@@ -91,7 +91,7 @@ export function RoleList() {
       actions={createAction}
     >
       {isLoading ? (
-        <PageLoader />
+        <PageBodySkeleton />
       ) : rows.length === 0 ? (
         <EmptyState
           action={

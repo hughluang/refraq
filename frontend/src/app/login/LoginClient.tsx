@@ -13,10 +13,16 @@ import {
 } from "@mantine/core";
 import { useLogin, useTranslate } from "@refinedev/core";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useState, type FormEvent } from "react";
+import { Suspense, useEffect, useState, type FormEvent } from "react";
 
+import { PageError } from "@/components/feedback/PageError";
 import { LangSwitcher } from "@/components/LangSwitcher";
 import { resolveFromPath } from "@/lib/return-path";
+import {
+  probeLoginSession,
+  type LoginSessionProbe,
+} from "@/providers/auth-provider";
+import { useSessionStore } from "@/providers/session-store";
 
 function LoginForm() {
   const t = useTranslate();
@@ -81,32 +87,88 @@ function LoginFallback() {
   );
 }
 
-export default function LoginPage() {
+type LoginGateView = "probing" | "form" | "load_error";
+
+function applyLoginProbe(
+  result: LoginSessionProbe,
+  fromPath: string,
+  setView: (view: Exclude<LoginGateView, "probing">) => void,
+) {
+  if (result === "active") {
+    window.location.assign(fromPath);
+    return;
+  }
+  setView(result === "load_error" ? "load_error" : "form");
+}
+
+function LoginGate() {
   const t = useTranslate();
+  const searchParams = useSearchParams();
+  const identityError = useSessionStore((s) => s.identityError);
+  const [view, setView] = useState<LoginGateView>("probing");
+  const fromPath = resolveFromPath(searchParams.get("from"));
+
+  useEffect(() => {
+    let cancelled = false;
+    void probeLoginSession().then((result) => {
+      if (cancelled) {
+        return;
+      }
+      applyLoginProbe(result, fromPath, setView);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [fromPath]);
+
+  if (view === "probing") {
+    return <LoginFallback />;
+  }
 
   return (
-    <Suspense fallback={<LoginFallback />}>
-      <Center mih="100vh" p="md">
-        <Paper p="xl" withBorder w={380}>
-          <Stack gap="md">
-            <GroupHeader />
-            <Stack gap={0}>
-              <Title order={3}>{t("app.title")}</Title>
-              <Text size="sm" c="dimmed">
-                {t("app.description")}
-              </Text>
-            </Stack>
-            <LoginForm />
-            <Anchor
-              size="xs"
-              href="https://github.com/hughluang/refraq"
-              target="_blank"
-            >
-              refraq
-            </Anchor>
+    <Center mih="100vh" p="md">
+      <Paper p="xl" withBorder w={380}>
+        <Stack gap="md">
+          <GroupHeader />
+          <Stack gap={0}>
+            <Title order={3}>{t("app.title")}</Title>
+            <Text size="sm" c="dimmed">
+              {t("app.description")}
+            </Text>
           </Stack>
-        </Paper>
-      </Center>
+          {view === "load_error" ? (
+            <PageError
+              message={
+                identityError === "identity_load_failed" || !identityError
+                  ? t("common.error.loadFailed")
+                  : identityError
+              }
+              onRetry={() => {
+                void probeLoginSession().then((result) => {
+                  applyLoginProbe(result, fromPath, setView);
+                });
+              }}
+            />
+          ) : (
+            <LoginForm />
+          )}
+          <Anchor
+            size="xs"
+            href="https://github.com/hughluang/refraq"
+            target="_blank"
+          >
+            refraq
+          </Anchor>
+        </Stack>
+      </Paper>
+    </Center>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginFallback />}>
+      <LoginGate />
     </Suspense>
   );
 }

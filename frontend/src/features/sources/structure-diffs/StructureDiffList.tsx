@@ -7,8 +7,8 @@ import { useCallback, useEffect, useState } from "react";
 
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { ForbiddenState } from "@/components/feedback/ForbiddenState";
+import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageError } from "@/components/feedback/PageError";
-import { PageLoader } from "@/components/feedback/PageLoader";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { listStructureDiffs } from "@/features/sources/api";
@@ -67,13 +67,15 @@ export function StructureDiffList({ sourceId }: Props) {
     void load();
   }, [load]);
 
-  if (canLoading || canShow === undefined) return <PageLoader />;
-  if (!canShow.can) return <ForbiddenState reason={canShow.reason} />;
-  if (loading) return <PageLoader />;
-  if (error) return <PageError message={error} />;
+  const aclPending = canLoading || canShow === undefined;
+
+  if (!aclPending && canShow && !canShow.can) {
+    return <ForbiddenState reason={canShow.reason} />;
+  }
 
   const title = `${t("structureDiffs.title")} · ${sourceId}`;
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const showSkeleton = aclPending || loading;
 
   return (
     <PageChrome
@@ -89,13 +91,23 @@ export function StructureDiffList({ sourceId }: Props) {
           >
             {t("structureDiffs.backToSources")}
           </Button>
-          <Button size="sm" variant="light" onClick={() => void load()}>
+          <Button
+            size="sm"
+            variant="light"
+            loading={loading}
+            disabled={aclPending}
+            onClick={() => void load()}
+          >
             {t("jobs.refresh")}
           </Button>
         </Group>
       }
     >
-      {items.length === 0 ? (
+      {showSkeleton ? (
+        <PageBodySkeleton />
+      ) : error ? (
+        <PageError message={error} onRetry={() => void load()} />
+      ) : items.length === 0 ? (
         <EmptyState message={t("structureDiffs.empty")} />
       ) : (
         <>

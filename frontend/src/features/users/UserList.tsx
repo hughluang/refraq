@@ -20,7 +20,7 @@ import { useState } from "react";
 
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
-import { PageLoader } from "@/components/feedback/PageLoader";
+import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { UserRoleBadge } from "@/features/users/UserRoleBadge";
@@ -109,7 +109,7 @@ export function UserList() {
       actions={createAction}
     >
       {isLoading ? (
-        <PageLoader />
+        <PageBodySkeleton />
       ) : rows.length === 0 ? (
         <EmptyState
           action={

@@ -10,7 +10,10 @@ export function loginRedirectWithFrom(): string {
   if (typeof window === "undefined") {
     return "/login";
   }
+  if (window.location.pathname.startsWith("/login")) {
+    return "/login";
+  }
   const path = `${window.location.pathname}${window.location.search}`;
-  const from = resolveFromPath(path.startsWith("/login") ? "/console" : path);
+  const from = resolveFromPath(path);
   return `/login?from=${encodeURIComponent(from)}`;
 }

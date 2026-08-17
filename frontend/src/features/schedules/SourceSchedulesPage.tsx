@@ -7,8 +7,8 @@ import { useCallback, useEffect, useState } from "react";
 
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { ForbiddenState } from "@/components/feedback/ForbiddenState";
+import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageError } from "@/components/feedback/PageError";
-import { PageLoader } from "@/components/feedback/PageLoader";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
@@ -83,13 +83,18 @@ export function SourceSchedulesPage({ sourceId }: Props) {
     void load();
   }, [load, canRun?.can]);
 
-  if (canLoading || canRun === undefined) return <PageLoader />;
-  if (!canRun.can) return <ForbiddenState reason={canRun.reason} />;
-  if (loading && items.length === 0 && error === null) return <PageLoader />;
+  const aclPending = canLoading || canRun === undefined;
+
+  if (!aclPending && canRun && !canRun.can) {
+    return <ForbiddenState reason={canRun.reason} />;
+  }
 
   const title = sourceLabel
     ? `${t("schedules.related.title")} · ${sourceLabel}`
     : `${t("schedules.related.title")} · ${sourceId}`;
+
+  const showSkeleton =
+    aclPending || (loading && items.length === 0 && error === null);
 
   return (
     <>
@@ -110,18 +115,25 @@ export function SourceSchedulesPage({ sourceId }: Props) {
               size="sm"
               variant="light"
               loading={loading}
+              disabled={aclPending || !canRun?.can}
               onClick={() => void load()}
             >
               {t("schedules.refresh")}
             </Button>
-            <Button size="sm" onClick={() => setCreating(true)}>
+            <Button
+              size="sm"
+              disabled={aclPending || !canRun?.can}
+              onClick={() => setCreating(true)}
+            >
               {t("schedules.create")}
             </Button>
           </Group>
         }
       >
-        {error && items.length === 0 ? (
-          <PageError message={error} />
+        {showSkeleton ? (
+          <PageBodySkeleton />
+        ) : error && items.length === 0 ? (
+          <PageError message={error} onRetry={() => void load()} />
         ) : items.length === 0 ? (
           <EmptyState message={t("schedules.related.empty")} />
         ) : (

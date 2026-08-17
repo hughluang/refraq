@@ -19,8 +19,9 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { EmptyState } from "@/components/feedback/EmptyState";
+import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageError } from "@/components/feedback/PageError";
-import { PageLoader } from "@/components/feedback/PageLoader";
+import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
   createSource,
@@ -291,26 +292,33 @@ export function SourceList() {
   );
 
   if (loading) {
-    return <PageLoader />;
+    return (
+      <PageChrome
+        title={t("sources.title")}
+        description={t("sources.description")}
+        actions={createAction}
+      >
+        <PageBodySkeleton />
+      </PageChrome>
+    );
   }
   if (error) {
-    return <PageError message={error} />;
+    return (
+      <PageChrome
+        title={t("sources.title")}
+        description={t("sources.description")}
+      >
+        <PageError message={error} />
+      </PageChrome>
+    );
   }
 
   return (
-    <Stack gap="md">
-      <Group justify="space-between" align="flex-start" wrap="wrap">
-        <Stack gap={4} style={{ flex: 1, minWidth: 0 }}>
-          <h2 className="m_8a5d1357 mantine-Title-root" data-order={2}>
-            {t("sources.title")}
-          </h2>
-          <p className="m_b6d8b162 mantine-Text-root" data-size="sm">
-            {t("sources.description")}
-          </p>
-        </Stack>
-        {createAction}
-      </Group>
-
+    <PageChrome
+      title={t("sources.title")}
+      description={t("sources.description")}
+      actions={createAction}
+    >
       {items.length === 0 ? (
         <EmptyState message={t("sources.empty")} />
       ) : (
@@ -610,6 +618,6 @@ export function SourceList() {
           </Stack>
         </Modal>
       </Modal.Stack>
-    </Stack>
+    </PageChrome>
   );
 }

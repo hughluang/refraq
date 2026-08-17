@@ -16,7 +16,7 @@ import {
 } from "@refinedev/core";
 import Link from "next/link";
 
-import { PageLoader } from "@/components/feedback/PageLoader";
+import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import type { RoleRow } from "@/features/roles/types";
@@ -71,7 +71,7 @@ export function UserCreateForm() {
   return (
     <PageChrome title={t("users.create.title")}>
       {rolesQuery.query.isLoading ? (
-        <PageLoader />
+        <PageBodySkeleton rows={5} />
       ) : (
         <form
           onSubmit={form.onSubmit((values) =>

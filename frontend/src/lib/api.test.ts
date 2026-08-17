@@ -37,4 +37,19 @@ describe("apiClient Problem Details", () => {
     );
     await expect(apiClient("/auth/me")).rejects.toBeInstanceOf(ApiError);
   });
+
+  it("aborts when timeoutMs elapses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) => {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(init.signal?.reason ?? new DOMException("Aborted", "AbortError"));
+          });
+        });
+      }),
+    );
+
+    await expect(apiClient("/auth/me", { timeoutMs: 5 })).rejects.toThrow();
+  });
 });
