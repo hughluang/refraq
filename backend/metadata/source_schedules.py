@@ -17,11 +17,17 @@ from backend.metadata.errors import (
 from backend.metadata.sources.store import SourceRecord, get_source_store
 from backend.worker.api import (
     get_schedule,
+    initial_next_run_at,
     schedule_out,
     validate_cadence,
+    withdraw_schedules_by_owner_ref,
 )
 from backend.worker.errors import ScheduleSystemImmutable
-from backend.worker.schemas.schedules import ScheduleOut, ScheduleTargetOut
+from backend.worker.schemas.schedules import (
+    ScheduleLastJobOut,
+    ScheduleOut,
+    ScheduleTargetOut,
+)
 from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store
 
 __all__ = [
@@ -36,6 +42,7 @@ __all__ = [
     "public_schedule",
     "require_runnable_schedule",
     "seed_default_structure_schedule",
+    "structure_owner_ref",
     "structure_schedule_label",
     "structure_schedule_label_for_record",
     "structure_schedule_key",
@@ -45,6 +52,10 @@ STRUCTURE_ENQUEUE_TASK_NAME = "backend.metadata.source_jobs.fire_scheduled_struc
 _STRUCTURE_SCHEDULE_KEY_PREFIX = "structure:"
 DEFAULT_STRUCTURE_CRON = "0 2 * * *"
 DEFAULT_STRUCTURE_SCHEDULE_TIMEZONE = "UTC"
+
+
+def structure_owner_ref(source_id: str) -> str:
+    return f"metadata:source:{source_id}"
 
 
 def structure_schedule_key(source_id: str, schedule_id: str) -> str:
@@ -84,7 +95,8 @@ def public_schedule(
     Missing ``source_id`` is not an error (next kind only changes this facade).
     Pass ``source_key`` when the caller already has the Source to skip a lookup.
     """
-    projected = schedule_out(record)
+    last_job = _last_job_for_schedule(record.id)
+    projected = schedule_out(record, last_job=last_job)
     if record.system:
         return projected
     source_id = record.kwargs_json.get("source_id")
@@ -105,14 +117,27 @@ def public_schedule(
     )
 
 
+def _last_job_for_schedule(schedule_id: str) -> ScheduleLastJobOut | None:
+    jobs = [
+        job
+        for job in get_job_store().list()
+        if job.trigger_kind == "schedule" and job.trigger_ref == schedule_id
+    ]
+    if not jobs:
+        return None
+    latest = max(jobs, key=lambda j: j.created_at)
+    return ScheduleLastJobOut(
+        id=latest.id,
+        status=latest.status,
+        finished_at=latest.finished_at,
+        created_at=latest.created_at,
+        error_code=latest.error_code,
+    )
+
+
 def delete_structure_schedules_by_source_id(source_id: str) -> None:
-    """Remove all structure schedules whose target is this Source (hard-delete cascade)."""
-    store = get_schedule_store()
-    for record in list(store.list(include_system=True)):
-        if record.system:
-            continue
-        if record.kwargs_json.get("source_id") == source_id:
-            store.delete(record.id)
+    """Withdraw structure schedules for this Source via opaque owner_ref."""
+    withdraw_schedules_by_owner_ref(structure_owner_ref(source_id))
 
 
 def _require_database_source(source_id: str):
@@ -138,6 +163,13 @@ def _new_structure_schedule_record(
     cron_value = cron.strip() if cron else None
     now = utc_now()
     schedule_id = f"sched_{uuid.uuid4().hex[:12]}"
+    next_run = initial_next_run_at(
+        cron=cron_value,
+        schedule_timezone=schedule_timezone,
+        interval_seconds=interval_seconds if not cron_value else None,
+        enabled=enabled,
+        after=now,
+    )
     return ScheduledTaskRecord(
         id=schedule_id,
         key=structure_schedule_key(source.id, schedule_id),
@@ -150,7 +182,9 @@ def _new_structure_schedule_record(
         kwargs_json={"source_id": source.id, "schedule_id": schedule_id},
         system=False,
         schedule_timezone=schedule_timezone,
+        owner_ref=structure_owner_ref(source.id),
         last_run_at=now,
+        next_run_at=next_run,
         created_at=now,
         updated_at=now,
     )

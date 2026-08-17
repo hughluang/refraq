@@ -82,7 +82,9 @@ def cancel_job(
         raise JobNotCancellable()
     was_queued = record.status == "queued"
     updated = mark_cancelled(job_id)
-    assert updated is not None
+    if updated is None or updated.status != "cancelled":
+        # Race: another writer already terminalized the row.
+        raise JobNotCancellable()
     logged = append_job_log(job_id, level="warn", message="cancelled")
     assert logged is not None
     if was_queued:

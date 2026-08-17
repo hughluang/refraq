@@ -84,25 +84,36 @@ Rules:
 - Endpoint or credential change updates the **same Source** (replace full `access`) — not a new Source row. Catalog Objects stay under that Source; the next structure Job uses the updated endpoint.
 - Prefer the authoritative / primary endpoint; do not register read replicas as alternate Sources for the same physical server.
 - Disabling a Source blocks new ingestion until re-enabled (existing catalog snapshots remain readable unless later retention rules say otherwise).
-- A Source may be **hard-deleted** only while `status=disabled` (`DELETE /sources/{id}`); soft delete remains out of scope. Hard-delete also removes that Source's structure **Scheduled Task**s (all schedules whose target is the Source).
+- A Source may be **hard-deleted** only while `status=disabled` (`DELETE /sources/{id}`); soft delete remains out of scope. Hard-delete calls schedule **withdraw** with the same opaque `owner_ref` the facade wrote at create (e.g. `metadata:source:{id}`). That is not a Source FK cascade and not a scan of schedule kwargs for `source_id`. The scheduler never interprets Source.
 - Non-`database` kinds are out of scope for slice A implementation; models and APIs must not hard-code that every Source requires `engine` / `access`. Kind-specific scope fields for non-database kinds arrive with those kinds.
 - Pre-0011 rows that used plaintext access plus a separate secret column are **not** auto-migrated; operators re-enter connectivity after cutover.
 
 ### 4.2 Structure Job and schedule facades
 
-Platform **Job** and **Scheduled Task** rules live in `docs/business-jobs.md` and `docs/business-scheduled-tasks.md`. Metadata owns the Source-scoped schedule facade that uses those mechanisms for structure collection.
+Platform **Job** and **Scheduled Task** rules live in `docs/business-jobs.md` and `docs/business-scheduled-tasks.md`. Those mechanisms are **not** Metadata objects and are **not** owned by Source.
+
+Metadata owns only the **facades** that use them for structure collection:
+
+| Facade | Role |
+| --- | --- |
+| `POST/GET /sources/{id}/schedules` | Register / list structure schedules whose **target** is this Source (operator create path) |
+| Seed / ensure on Source create or mutating update | Insert the product-default structure schedule when needed (`sources:write`) |
+| Hard-delete Source | **Withdraw** schedules by opaque `owner_ref` (same literal written at create). Scheduler does not know Source |
+| `POST /schedules/{id}/run`, Beat tick | Mint structure **Jobs** (always). Domain constraints run at Job execution |
 
 Rules:
 
-- Structure **Jobs** are minted only by a **Scheduled Task** (`docs/api-contracts-schedules.md` run-now and Beat). Slice A database structure `input` is `{ "source_id": "…" }` only. Minting requires `jobs:run` and, for database Sources, a usable encrypted access blob. Enqueue writes `summary` (`structure · {source_key}`) and `trigger_kind=schedule` / `trigger_ref` = schedule id. Operator run-now also sets `created_by`. There is no `POST /sources/{id}/jobs` and no MCP enqueue.
-- Workers load reachability from the Source identified in `input`; `input` does not carry endpoint material.
-- Successful structure Jobs write/refresh **Catalog Objects** on the Source identified in `input`, and produce at most one **Structure Diff** for that Source. **Job result** envelope: `{ "schema": "structure.diff.v1", "class", "counts", "structure_diff_id" }`. Failed, cancelled, or fail-safe Jobs write neither result nor Diff.
-- Related Jobs hang on the schedule (`GET /schedules/{id}/jobs`). Structure Diff browse is a Source-scoped Console page (`/console/sources/:id/structure-diffs`, `metadata:read`), not a new nav module. Global Job observe is the **Operations** module `jobs`. Source Console related-schedules **workbench** is `/console/sources/:id/schedules` (create plus enable/disable, edit, delete, run-now, related Jobs), not a Source Job list.
-- Structure schedule create/list uses the **Source facade**: `POST/GET /sources/{id}/schedules`. First slice: `work_kind=structure`; several schedules may target one Source. Default name `structure · {source_key}` (not unique); key `structure:{source_id}:{schedule_id}`. Patch/delete/run-now are by schedule id on `/schedules/{id}`.
-- Creating a database Source seeds one such schedule (same default cadence). Operators may add more, disable, or delete including the last one; zero schedules is allowed until the next mutating Source update, which inserts one product-default schedule when a database Source has none (disabled schedules count as present). That ensure writes `schedule.create` for the PATCH User; `PATCH /sources/{id}` includes the inserted `schedule` only when it actually inserted. Create and GET still omit it. It is not a process-start scan and not **Foundation Upgrade**.
-- Create writes `last_run_at=now` as the due-tick cursor so the first automatic fire is the next wall-clock slot strictly after create. Run-now does not move that cursor.
+- Structure **Jobs** are minted only by a **Scheduled Task** (run-now or Beat). Slice A database structure `input` is `{ "source_id": "…" }` only. There is no `POST /sources/{id}/jobs` and no MCP enqueue.
+- Enqueue writes `summary` (`structure · {source_key}`) and `trigger_kind=schedule` / `trigger_ref` = schedule id. Operator run-now also sets `created_by`. Minting does **not** enforce structure single-flight or Source usable status; those fail on the Job during execution (`JOB_ALREADY_ACTIVE` / `JOB_SOURCE_DISABLED`).
+- Creating a structure schedule via the facade requires `jobs:run` and a database Source with an access blob (registration gate). The schedule row still carries only opaque `owner_ref` (literal such as `metadata:source:{id}`) — not a Source FK. Product HTTP cannot set `owner_ref`.
+- Workers load reachability from the Source identified in Job `input`; `input` does not carry endpoint material.
+- Successful structure Jobs write/refresh **Catalog Objects** on that Source and produce at most one **Structure Diff**. **Job result** envelope: `{ "schema": "structure.diff.v1", "class", "counts", "structure_diff_id" }`. Failed, cancelled, or fail-safe Jobs write neither result nor Diff.
+- Related Jobs hang on the **schedule** (`GET /schedules/{id}/jobs`), not on Source. Structure Diff browse is a Source-scoped Console page (`/console/sources/:id/structure-diffs`, `metadata:read`). Global Job observe is **Operations** `jobs`. Source related-schedules **workbench** is `/console/sources/:id/schedules` (facade create plus manage), not a Source Job list.
+- Facade create/list: first slice `work_kind=structure`; several schedules may target one Source. Default name `structure · {source_key}` (not unique); key `structure:{source_id}:{schedule_id}` (facade convention). Patch / delete / run-now are by schedule id on `/schedules/{id}` (mechanism HTTP).
+- Creating a database Source seeds one such schedule (product default cadence). Operators may add more, disable, or delete including the last one; zero schedules is allowed until the next mutating Source update, which inserts one product-default schedule when a database Source has none (disabled schedules count as present). That ensure writes `schedule.create` for the PATCH User; `PATCH /sources/{id}` includes the inserted `schedule` only when it actually inserted. Create and GET still omit it. It is not a process-start scan and not **Foundation Upgrade**.
+- Create writes `last_run_at=now` and stores `next_run_at` as the next legal commitment (or null if created disabled). Run-now does not move those fields.
 - Breaking **Structure Diff** does not pause the schedule or block the next structure Job (§9).
-- **Structure single-flight** (at most one non-terminal structure Job per Source) is catalog-write serialization, not a Scheduled Task mutex.
+- **Structure single-flight** (at most one non-terminal structure Job per Source) is catalog-write serialization on the Source, enforced at Job **execution**, not a Scheduled Task mutex and not a schedule mint / HTTP conflict.
 
 ### 4.3 Catalog Object And Columns
 
@@ -271,10 +282,10 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
 - **FK → join derivation:** each collected foreign key upserts a join edge with `origin=foreign_key`
   and evidence naming the FK constraint. Re-collection updates or tombstones those edges; it must
   not delete or overwrite edges with `origin=human` or `origin=mcp`.
-- **Structure single-flight:** at most one non-terminal `kind=structure` Job per Source
-  (`JOB_ALREADY_ACTIVE`). This is catalog-write serialization on the Source, not a **Scheduled Task**
-  mutex. Enforced when minting a structure Job (run-now or Beat) using Job store queries (not a Celery
-  lock; authority remains the Job table). Beat swallows the conflict; operator run-now returns it.
+- **Structure single-flight:** at most one non-terminal `kind=structure` Job may run catalog writes per Source
+  (`JOB_ALREADY_ACTIVE` on the colliding Job). This is catalog-write serialization on the Source, not a **Scheduled Task**
+  mutex. Enforced when the structure Job **executes** (not when the schedule mints). Authority remains the Job table.
+  The schedule always mints; Beat does not swallow; run-now does not HTTP-409 for this reason.
   Re-run = new Job after terminal status.
 - Collectors read **Source `engine` / decrypted `access`** (scope and credentials together). Introspection uses
   engine-native catalogs (`pg_catalog`, `sys.*`, `ALL_`/`DBA_`).

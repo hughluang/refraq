@@ -7,10 +7,11 @@ from backend.core.time import utc_now
 
 from backend.jobs.store import (
     append_job_log,
+    claim_queued,
     get_job_store,
     mark_failed,
-    mark_running,
     mark_succeeded,
+    occupancy_worker_id,
 )
 from backend.metadata.catalog.store import (
     CatalogColumnRecord,
@@ -34,12 +35,26 @@ from backend.metadata.structure_diffs.service import persist_structure_diff
 from backend.metadata.type_mappings.service import assign_normalized_types
 
 
+def _claim_worker_id() -> str:
+    try:
+        from celery import current_task
+
+        request = getattr(current_task, "request", None)
+        hostname = getattr(request, "hostname", None) if request is not None else None
+        return occupancy_worker_id(hostname if hostname else None)
+    except Exception:  # noqa: BLE001
+        return occupancy_worker_id(None)
+
+
 def run_structure_job(job_id: str) -> dict[str, str]:
-    current = mark_running(job_id, celery_task_id=job_id)
+    current = claim_queued(
+        job_id, celery_task_id=job_id, claimed_by=_claim_worker_id()
+    )
     if current is None:
-        return {"status": "missing"}
-    if current.status != "running":
-        return {"status": current.status}
+        existing = get_job_store().get(job_id)
+        if existing is None:
+            return {"status": "missing"}
+        return {"status": existing.status}
     if current.kind != "structure":
         return _fail(
             job_id,
@@ -57,12 +72,36 @@ def run_structure_job(job_id: str) -> dict[str, str]:
             error_summary="structure job requires source_id",
         )
 
+    # Structure single-flight at execution: earlier running Job wins; later fails.
+    me_key = (current.started_at or current.created_at, current.id)
+    for other in get_job_store().list(kind="structure"):
+        if other.id == job_id:
+            continue
+        if other.input.get("source_id") != source_id:
+            continue
+        if other.status != "running":
+            continue
+        other_key = (other.started_at or other.created_at, other.id)
+        if other_key < me_key:
+            return _fail(
+                job_id,
+                error_code="JOB_ALREADY_ACTIVE",
+                error_summary="A non-terminal structure job already exists for this source",
+            )
+
     source = get_source_store().get_source(source_id)
     if source is None:
         return _fail(
             job_id,
             error_code="JOB_INPUT_INVALID",
             error_summary="Source not found",
+        )
+
+    if source.status != "active":
+        return _fail(
+            job_id,
+            error_code="JOB_SOURCE_DISABLED",
+            error_summary="Source is not usable for jobs",
         )
 
     if _cancelled(job_id):

@@ -28,6 +28,7 @@ Platform durable asynchronous execution. Each product domain interprets `kind` a
 | summary | Human-readable enqueue snapshot of the work target; not a domain foreign key |
 | trigger | `trigger_kind` / `trigger_ref` — how the Job was started |
 | trigger presentation | `trigger_actor_name` (User display name) and `trigger_schedule_name` (**Scheduled Task** name); not identity |
+| scheduled_for | Due-slot Instant consumed for an automatic fire; null for operator run-now. Idempotency key with `trigger_ref` when not null |
 | created_by | User id (null when Beat fires; set when an operator run-now fires the schedule) |
 | timestamps / error summary / log | Operational visibility |
 
@@ -35,6 +36,9 @@ Rules:
 
 - Job is **not** owned by Source. Do not treat `source_id` as a universal Job column — it lives in `input` when required.
 - Structure **Jobs** are minted only by a **Scheduled Task** (due tick or operator run-now). There is no Source HTTP enqueue and no MCP enqueue in this phase. Platform-wide observe uses `GET /jobs` and `GET /jobs/{id}` / `.../logs` / cancel. Related Jobs for a schedule: `GET /schedules/{id}/jobs`. There is no global `POST /jobs` create.
+- Entering execution requires a `queued → running` claim (CAS). Broker redelivery of a non-queued Job must not re-run domain work.
+- **Occupancy** (Job primitive; shares Beat with schedules only because the platform has one periodic clock): the worker renews declarations on its running Jobs; a system Scheduled Task marks stale occupancy `JOB_WORKER_LOST` and over-limit runs `JOB_RUNNING_TIMEOUT`. Lost-detection SLA assumes Beat is alive: if Beat is down, occupancy reaping stops; bringing up the API alone does not clear a false `RUNNING`. On worker start, abandon leftover running claims for this worker identity immediately (no freshness filter) as `JOB_WORKER_LOST` — not a global reap; a same-identity restart must not treat the previous attempt as still running.
+- Structure single-flight / Source usability are Metadata execution rules on structure Jobs, not Job-table ownership by Source and not schedule mint gates.
 - Jobs are durable records; queue transport is Redis-backed via Celery.
 - Observing Jobs uses public Job fields only. Kind-specific outcome fields stay inside **Job result** (and on domain records such as **Structure Diff**), not as public Job attributes.
 - Job lists do not include **Job result** as a column. Job detail may present it as the uninterpreted JSON document and does not unpack kind-specific keys into Job chrome.

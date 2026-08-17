@@ -13,7 +13,6 @@ __all__ = [
     "CatalogJoinNotFound",
     "CatalogObjectNotFound",
     "CatalogSearchQueryRequired",
-    "JobAlreadyActive",
     "JobInputInvalid",
     "JobSecretMissing",
     "JobSourceDisabled",
@@ -245,14 +244,6 @@ class JobInputInvalid(AppError):
 
     def _default_message(self) -> str:
         return "Job kind or input is invalid"
-
-
-class JobAlreadyActive(AppError):
-    code = "JOB_ALREADY_ACTIVE"
-    http_status = 409
-
-    def _default_message(self) -> str:
-        return "A non-terminal structure job already exists for this source"
 
 
 class SourceValidationError(AppError):

@@ -190,6 +190,7 @@ Domains mint structure **Jobs** only via a **Scheduled Task** (due tick or run-n
 API (or a **Scheduled Task**) enqueues; a Celery worker executes; operator-visible status lives on the Postgres job record.
 Lifecycle stamps (`created_at`, `started_at`, `finished_at`, log line times) are **Instants**.
 Successful Jobs may carry a nullable generic **Job result**; failed/cancelled/fail-safe Jobs leave it null.
+Occupancy lost-detection (~60s → `JOB_WORKER_LOST`) assumes Beat is alive; if Beat is down, reaping stops — API alone does not clear a false `RUNNING`.
 Avoid calling it an Ingestion Job. Avoid running long work inside the Management Console API request.
 Avoid treating a Job as a **Scheduled Task**, or reading Celery result/Flower as the product lifecycle.
 Avoid promoting domain foreign keys into universal Job fields.
@@ -203,16 +204,29 @@ Avoid Celery result backend, **Management Audit Event** `result`, treating resul
 
 ### Scheduled Task
 
-A platform schedule definition (interval or cron) stored in Postgres that triggers work when due, and the only Console/HTTP/MCP path that mints domain **Jobs**.
+The platform **scheduling foundation**: a cadence intent stored in Postgres that commits a next-due Instant (`next_run_at`), consumes a due tick only by minting a domain **Job**, and can be paused or **withdrawn** by the calling domain via opaque **owner_ref**.
 Celery Beat reads these rows (single Beat replica). Distinct from any one **Job** instance.
-A platform mechanism like **Job**, not a product domain, not a Metadata business object, and not a field of **Source**.
-Operator identity is a closed work kind plus target, not a Celery task name. Several structure schedules may target one Source. Cron wall clock uses **Schedule Timezone**; `last_run_at` is an **Instant** cursor (missed cron slots are skipped). Operator run-now enqueues without moving that cursor.
+A platform mechanism like **Job**, not a product domain, not a Metadata business object, and **not owned by Source** (no Source FK; scheduler never parses Source).
+Operator-facing identity is a closed work kind plus target projected by a **domain facade** (first slice: Metadata structure + Source), not a Celery task name. Facades may register several structure schedules that *target* one Source; that target lives in facade/kwargs projection, not as schedule ownership.
+Cron wall clock uses **Schedule Timezone**; `last_run_at` is the consumed-due cursor Instant; `next_run_at` is the stored commitment (null when paused). Operator run-now enqueues without moving those fields. Observation “last run” joins related **Jobs**.
 Console operator copy, docs that name the row, and identifiers whose referent is this entity use **schedule**, not clock.
 Avoid storing product schedules only in Redis Beat state or static code when operators need to change them.
 Avoid treating Celery `timezone` as the business schedule zone.
-Avoid treating a Scheduled Task as a Job, or putting cron on a **Source**.
-Avoid treating structure single-flight as a schedule mutex.
+Avoid treating a Scheduled Task as a Job, putting cron **on** a **Source**, or treating Source delete as an ORM cascade into schedules.
+Avoid scanning schedule kwargs for `source_id` as the withdraw key (use **owner_ref**).
+Avoid treating structure single-flight as a schedule mutex, Beat skip, or schedule HTTP conflict.
+Avoid treating Scheduled Task **as** a DAG/workflow; dispatched work may later be those kinds.
 Avoid Clock as a product noun, Console label, or identifier for this entity. Avoid renaming Instant test `Clock` / `get_clock`, cron wall-clock English, or ADR file `0025-clock-first-structure-jobs.md`.
+Avoid treating stored `next_run_at` as a debt of missed ticks or computing it only on GET.
+
+### owner_ref
+
+Opaque string on a **Scheduled Task** written only by a domain facade (product HTTP cannot set it). Create and withdraw must use the same literal (Metadata structure: `metadata:source:{id}`). Null only for platform system rows. The scheduler stores and matches it; it does not parse domain meaning.
+
+### Withdraw (schedule)
+
+Caller asks the scheduler to delete all non-system definitions matching an **owner_ref** and immediately terminalize unfinished **Jobs** those schedules minted (`cancelled`). Historical Jobs remain. Distinct from pause (`enabled=false`) and from single-row `DELETE /schedules/{id}`.
+Avoid “cascade from Source”, “wait for the worker”, or scanning kwargs for Source id.
 
 ### Instant
 

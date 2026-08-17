@@ -42,5 +42,8 @@ celery_app.set_default()
 install_request_id_log_filter()
 connect_celery_request_id()
 
+# Occupancy renew / startup local reap (Job primitive; shares Beat with schedules).
+import backend.worker.occupancy  # noqa: E402,F401
+
 # Alias for `celery -A backend.worker.app`
 app = celery_app

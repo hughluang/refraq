@@ -3,6 +3,14 @@ export type ScheduleTarget = {
   source_key: string | null;
 };
 
+export type ScheduleLastJob = {
+  id: string;
+  status: string;
+  finished_at: string | null;
+  created_at: string | null;
+  error_code: string | null;
+};
+
 export type ScheduledTask = {
   id: string;
   key: string;
@@ -14,6 +22,8 @@ export type ScheduledTask = {
   cron: string | null;
   schedule_timezone: string;
   last_run_at: string | null;
+  next_run_at: string | null;
+  last_job: ScheduleLastJob | null;
   created_at: string;
   updated_at: string;
 };

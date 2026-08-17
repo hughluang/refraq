@@ -2,19 +2,26 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import replace
+from datetime import datetime
 
+from backend.core.config import get_settings
 from backend.core.time import utc_now
-from backend.worker.cron import parse_cron_fields, validate_schedule_timezone
+from backend.jobs.api import revoke_queued_delivery
+from backend.jobs.store import cancel_unfinished_for_schedule
+from backend.worker.cron import compute_next_run_at, parse_cron_fields, validate_schedule_timezone
 from backend.worker.errors import (
     ScheduleCadenceInvalid,
     ScheduleNotFound,
     ScheduleSystemImmutable,
 )
 from backend.worker.models import REAPER_SCHEDULE_KEY, REAPER_TASK_NAME
-from backend.worker.schemas.schedules import ScheduleOut
+from backend.worker.schemas.schedules import ScheduleLastJobOut, ScheduleOut
 from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "ensure_system_schedules",
@@ -23,6 +30,8 @@ __all__ = [
     "patch_schedule",
     "schedule_out",
     "validate_cadence",
+    "withdraw_schedules_by_owner_ref",
+    "initial_next_run_at",
 ]
 
 
@@ -45,6 +54,9 @@ def ensure_system_schedules() -> None:
             args_json=[],
             kwargs_json={},
             system=True,
+            owner_ref=None,
+            last_run_at=now,
+            next_run_at=now,
             created_at=now,
             updated_at=now,
         )
@@ -76,7 +88,29 @@ def validate_cadence(
         raise ScheduleCadenceInvalid("interval_seconds must be positive")
 
 
-def schedule_out(record: ScheduledTaskRecord) -> ScheduleOut:
+def initial_next_run_at(
+    *,
+    cron: str | None,
+    schedule_timezone: str,
+    interval_seconds: int | None,
+    enabled: bool,
+    after: datetime | None = None,
+) -> datetime | None:
+    if not enabled:
+        return None
+    return compute_next_run_at(
+        cron=cron,
+        schedule_timezone=schedule_timezone,
+        interval_seconds=interval_seconds,
+        after=utc_now() if after is None else after,
+    )
+
+
+def schedule_out(
+    record: ScheduledTaskRecord,
+    *,
+    last_job: ScheduleLastJobOut | None = None,
+) -> ScheduleOut:
     """Map a mechanism Scheduled Task record to HTTP fields (no domain work_kind)."""
     return ScheduleOut(
         id=record.id,
@@ -89,6 +123,8 @@ def schedule_out(record: ScheduledTaskRecord) -> ScheduleOut:
         cron=record.cron,
         schedule_timezone=record.schedule_timezone,
         last_run_at=record.last_run_at,
+        next_run_at=record.next_run_at,
+        last_job=last_job,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
@@ -145,20 +181,64 @@ def patch_schedule(
         schedule_timezone=next_zone,
     )
     now = utc_now()
+    next_enabled = record.enabled if enabled is None else enabled
+    cadence_changed = cron_set or interval_set or timezone_set
+    enabled_changed = enabled is not None and enabled != record.enabled
+
+    if not next_enabled:
+        next_run = None
+    elif next_enabled and (enabled_changed or cadence_changed):
+        next_run = compute_next_run_at(
+            cron=next_cron,
+            schedule_timezone=next_zone,
+            interval_seconds=next_interval,
+            after=now,
+        )
+    else:
+        next_run = record.next_run_at
+
     updated = replace(
         record,
-        enabled=record.enabled if enabled is None else enabled,
+        enabled=next_enabled,
         name=record.name if name is None else name.strip(),
         cron=next_cron,
         interval_seconds=next_interval,
         schedule_timezone=next_zone,
+        next_run_at=next_run,
         updated_at=now,
     )
     return get_schedule_store().upsert(updated)
+
+
+def _cancel_and_revoke_for_schedule(schedule_id: str) -> None:
+    cancelled = cancel_unfinished_for_schedule(schedule_id)
+    settings = get_settings()
+    for job in cancelled:
+        try:
+            revoke_queued_delivery(job.id, settings=settings)
+        except Exception:
+            logger.exception(
+                "schedule withdraw revoke failed schedule=%s job=%s",
+                schedule_id,
+                job.id,
+            )
 
 
 def delete_schedule(schedule_id: str) -> None:
     record = get_schedule(schedule_id)
     if record.system:
         raise ScheduleSystemImmutable()
+    _cancel_and_revoke_for_schedule(schedule_id)
     get_schedule_store().delete(schedule_id)
+
+
+def withdraw_schedules_by_owner_ref(owner_ref: str) -> int:
+    """Delete all non-system schedules with this opaque owner_ref; cancel unfinished Jobs."""
+    if not owner_ref:
+        return 0
+    store = get_schedule_store()
+    records = store.list_by_owner_ref(owner_ref)
+    for record in records:
+        _cancel_and_revoke_for_schedule(record.id)
+        store.delete(record.id)
+    return len(records)

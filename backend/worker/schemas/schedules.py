@@ -11,6 +11,14 @@ class ScheduleTargetOut(BaseModel):
     source_key: str | None = None
 
 
+class ScheduleLastJobOut(BaseModel):
+    id: str
+    status: str
+    finished_at: Instant | None = None
+    created_at: Instant | None = None
+    error_code: str | None = None
+
+
 class ScheduleOut(BaseModel):
     id: str
     key: str
@@ -22,6 +30,8 @@ class ScheduleOut(BaseModel):
     cron: str | None
     schedule_timezone: str
     last_run_at: Instant | None
+    next_run_at: Instant | None = None
+    last_job: ScheduleLastJobOut | None = None
     created_at: Instant
     updated_at: Instant
 

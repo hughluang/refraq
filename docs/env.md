@@ -26,7 +26,8 @@ Current `backend/.env.example` defines:
 - `REFRAQ_SECRETS_MASTER_KEY=change-me-secrets-master-key` (metadata foundation: encrypt Source secrets at rest)
 - `CELERY_BROKER_URL=redis://127.0.0.1:6379/2` (Celery broker; prefer a logical DB separate from Session `REDIS_URL`). If unset, broker is derived from `REDIS_URL` (`…/2`); if both unset, resolution fails (no localhost invent).
 - `REFRAQ_JOB_WORKER_CONCURRENCY=1` (Celery worker concurrency hint)
-- `REFRAQ_JOB_RUNNING_TIMEOUT_SEC=3600` (stuck `running` **Job** reaper threshold)
+- `REFRAQ_JOB_RUNNING_TIMEOUT_SEC=3600` (**Job** running time limit → `JOB_RUNNING_TIMEOUT`)
+- `REFRAQ_JOB_LOST_DETECTION_SEC=60` (occupancy stale window → `JOB_WORKER_LOST`; SLA assumes Beat is alive — if Beat is down, occupancy reaping stops; API alone does not clear a false `RUNNING`)
 - `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD=0.75` (abort structure catalog write when absent ratio exceeds this)
 - `REFRAQ_QUERY_TIMEOUT_SEC=30` (controlled query dual timeout: application + engine statement/command timeout)
 - `REFRAQ_QUERY_MAX_ROWS=1000` (platform cap for controlled query `max_rows`; request default is 100)
@@ -74,6 +75,7 @@ Self-deploy Compose exposes only the web service to browsers; the API stays on t
 - `CELERY_BROKER_URL` (required when running Celery worker/beat; default same host Redis DB `2`)
 - `REFRAQ_JOB_WORKER_CONCURRENCY`
 - `REFRAQ_JOB_RUNNING_TIMEOUT_SEC`
+- `REFRAQ_JOB_LOST_DETECTION_SEC`
 - `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD`
 - `REFRAQ_QUERY_TIMEOUT_SEC`
 - `REFRAQ_QUERY_MAX_ROWS`
@@ -116,7 +118,7 @@ Platform async runtime (`docs/adr/0006-celery-platform-async-runtime.md`):
 
 - API process: create durable Job rows and enqueue via Celery after commit (`docs/api-contracts-jobs.md`)
 - Worker: `celery -A backend.worker.app worker --concurrency="${REFRAQ_JOB_WORKER_CONCURRENCY:-1}"`
-- Beat (single replica): `celery -A backend.worker.app beat` — reads **Scheduled Task** rows from Postgres; do not run multiple Beat replicas. Loop `max_interval` is ~5s; schedule reload `sync_every` is 30s (operator PATCH cadence is visible on the next sync).
+- Beat (single replica): `celery -A backend.worker.app beat` — reads **Scheduled Task** rows from Postgres; do not run multiple Beat replicas. Loop `max_interval` is ~5s; schedule reload `sync_every` is 30s (operator PATCH cadence is visible on the next sync). An overdue in-memory commitment is dispatched **once** until the next reload (or 30s retry if the store row is still overdue); Beat does not tight-loop send while the worker consumes the tick. Occupancy lost-detection (~60s → `JOB_WORKER_LOST`) is driven by the system reaper Scheduled Task on this Beat; if Beat is stopped, that reaping stops — starting only the API does not recover false `RUNNING` Jobs.
 - Worker and Beat share `DATABASE_URL`, `CELERY_BROKER_URL`, and (when decrypting secrets) `REFRAQ_SECRETS_MASTER_KEY`
 - After Foundation Upgrade, restart worker and Beat. Code on disk does not change a live process's registered names; a leftover worker after a `task_name` revision yields Beat `NotRegistered` and structure clocks that never mint. Confirm with `celery -A backend.worker.app inspect registered` that registered names match Scheduled Task rows.
 - No Celery result backend; operator-visible status and run logs live on Postgres Job rows (`log_body`; later large attachments if needed)

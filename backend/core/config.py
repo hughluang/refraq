@@ -69,6 +69,10 @@ class Settings(BaseSettings):
         default=3600,
         validation_alias="REFRAQ_JOB_RUNNING_TIMEOUT_SEC",
     )
+    refraq_job_lost_detection_sec: int = Field(
+        default=60,
+        validation_alias="REFRAQ_JOB_LOST_DETECTION_SEC",
+    )
     refraq_catalog_fail_safe_threshold: float = Field(
         default=0.75,
         validation_alias="REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD",

@@ -8,7 +8,7 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Protocol
 
-from sqlalchemy import select
+from sqlalchemy import case, select, update
 from sqlalchemy.orm import Session
 
 from backend.core.config import get_settings
@@ -30,7 +30,9 @@ class ScheduledTaskRecord:
     kwargs_json: dict = field(default_factory=dict)
     system: bool = False
     schedule_timezone: str = "UTC"
+    owner_ref: str | None = None
     last_run_at: datetime | None = None
+    next_run_at: datetime | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -42,7 +44,13 @@ class ScheduleStore(Protocol):
 
     def get_by_key(self, key: str) -> ScheduledTaskRecord | None: ...
 
-    def get_by_id(self, schedule_id: str) -> ScheduledTaskRecord | None: ...
+    def get_by_id(
+        self,
+        schedule_id: str,
+        *,
+        session: Session | None = None,
+        for_update: bool = False,
+    ) -> ScheduledTaskRecord | None: ...
 
     def list(
         self, *, include_system: bool = False, session: Session | None = None
@@ -50,9 +58,18 @@ class ScheduleStore(Protocol):
 
     def list_enabled(self) -> list[ScheduledTaskRecord]: ...
 
+    def list_by_owner_ref(self, owner_ref: str) -> list[ScheduledTaskRecord]: ...
+
     def delete(self, schedule_id: str) -> bool: ...
 
-    def touch_last_run(self, key: str, when: datetime) -> None: ...
+    def consume_due_cursor(
+        self,
+        schedule_id: str,
+        *,
+        last_run_at: datetime,
+        next_if_enabled: datetime | None,
+        session: Session | None = None,
+    ) -> ScheduledTaskRecord | None: ...
 
 
 class MemoryScheduleStore:
@@ -72,7 +89,14 @@ class MemoryScheduleStore:
         with self._lock:
             return self._by_key.get(key)
 
-    def get_by_id(self, schedule_id: str) -> ScheduledTaskRecord | None:
+    def get_by_id(
+        self,
+        schedule_id: str,
+        *,
+        session: Session | None = None,
+        for_update: bool = False,
+    ) -> ScheduledTaskRecord | None:
+        del session, for_update
         with self._lock:
             for record in self._by_key.values():
                 if record.id == schedule_id:
@@ -94,6 +118,14 @@ class MemoryScheduleStore:
         with self._lock:
             return [r for r in self._by_key.values() if r.enabled]
 
+    def list_by_owner_ref(self, owner_ref: str) -> list[ScheduledTaskRecord]:
+        with self._lock:
+            return [
+                r
+                for r in self._by_key.values()
+                if not r.system and r.owner_ref == owner_ref
+            ]
+
     def delete(self, schedule_id: str) -> bool:
         with self._lock:
             for key, record in list(self._by_key.items()):
@@ -102,12 +134,42 @@ class MemoryScheduleStore:
                     return True
             return False
 
-    def touch_last_run(self, key: str, when: datetime) -> None:
+    def consume_due_cursor(
+        self,
+        schedule_id: str,
+        *,
+        last_run_at: datetime,
+        next_if_enabled: datetime | None,
+        session: Session | None = None,
+    ) -> ScheduledTaskRecord | None:
+        """Write last_run_at / next using the row's current enabled (not a stale snapshot)."""
+        del session
+        now = utc_now()
         with self._lock:
-            record = self._by_key.get(key)
-            if record is not None:
-                record.last_run_at = when
-                record.updated_at = when
+            for key, record in self._by_key.items():
+                if record.id != schedule_id:
+                    continue
+                updated = ScheduledTaskRecord(
+                    id=record.id,
+                    key=record.key,
+                    name=record.name,
+                    enabled=record.enabled,
+                    interval_seconds=record.interval_seconds,
+                    cron=record.cron,
+                    task_name=record.task_name,
+                    args_json=list(record.args_json),
+                    kwargs_json=dict(record.kwargs_json),
+                    system=record.system,
+                    schedule_timezone=record.schedule_timezone,
+                    owner_ref=record.owner_ref,
+                    last_run_at=last_run_at,
+                    next_run_at=next_if_enabled if record.enabled else None,
+                    created_at=record.created_at,
+                    updated_at=now,
+                )
+                self._by_key[key] = updated
+                return updated
+            return None
 
 
 class SqlScheduleStore:
@@ -140,7 +202,9 @@ class SqlScheduleStore:
         row.args_json = list(record.args_json)
         row.kwargs_json = dict(record.kwargs_json)
         row.system = record.system
+        row.owner_ref = record.owner_ref
         row.last_run_at = record.last_run_at
+        row.next_run_at = record.next_run_at
         row.created_at = record.created_at
         row.updated_at = record.updated_at
         session.flush()
@@ -153,10 +217,34 @@ class SqlScheduleStore:
             )
             return _row_to_schedule(row) if row else None
 
-    def get_by_id(self, schedule_id: str) -> ScheduledTaskRecord | None:
-        with session_scope() as session:
-            row = session.get(ScheduledTaskRow, schedule_id)
-            return _row_to_schedule(row) if row else None
+    def get_by_id(
+        self,
+        schedule_id: str,
+        *,
+        session: Session | None = None,
+        for_update: bool = False,
+    ) -> ScheduledTaskRecord | None:
+        if session is not None:
+            return self._get_by_id_on(
+                session, schedule_id, for_update=for_update
+            )
+        with session_scope() as owned:
+            return self._get_by_id_on(
+                owned, schedule_id, for_update=False
+            )
+
+    def _get_by_id_on(
+        self,
+        session: Session,
+        schedule_id: str,
+        *,
+        for_update: bool = False,
+    ) -> ScheduledTaskRecord | None:
+        stmt = select(ScheduledTaskRow).where(ScheduledTaskRow.id == schedule_id)
+        if for_update:
+            stmt = stmt.with_for_update()
+        row = session.scalar(stmt)
+        return _row_to_schedule(row) if row else None
 
     def list(
         self, *, include_system: bool = False, session: Session | None = None
@@ -182,6 +270,16 @@ class SqlScheduleStore:
             ).all()
             return [_row_to_schedule(row) for row in rows]
 
+    def list_by_owner_ref(self, owner_ref: str) -> list[ScheduledTaskRecord]:
+        with session_scope() as session:
+            rows = session.scalars(
+                select(ScheduledTaskRow).where(
+                    ScheduledTaskRow.system.is_(False),
+                    ScheduledTaskRow.owner_ref == owner_ref,
+                )
+            ).all()
+            return [_row_to_schedule(row) for row in rows]
+
     def delete(self, schedule_id: str) -> bool:
         with session_scope() as session:
             row = session.get(ScheduledTaskRow, schedule_id)
@@ -190,14 +288,56 @@ class SqlScheduleStore:
             session.delete(row)
             return True
 
-    def touch_last_run(self, key: str, when: datetime) -> None:
-        with session_scope() as session:
-            row = session.scalar(
-                select(ScheduledTaskRow).where(ScheduledTaskRow.key == key)
+    def consume_due_cursor(
+        self,
+        schedule_id: str,
+        *,
+        last_run_at: datetime,
+        next_if_enabled: datetime | None,
+        session: Session | None = None,
+    ) -> ScheduledTaskRecord | None:
+        """Write last_run_at / next using the row's current enabled (not a stale snapshot)."""
+        if session is not None:
+            return self._consume_due_cursor_on(
+                session,
+                schedule_id,
+                last_run_at=last_run_at,
+                next_if_enabled=next_if_enabled,
             )
-            if row is not None:
-                row.last_run_at = when
-                row.updated_at = when
+        with session_scope() as owned:
+            return self._consume_due_cursor_on(
+                owned,
+                schedule_id,
+                last_run_at=last_run_at,
+                next_if_enabled=next_if_enabled,
+            )
+
+    def _consume_due_cursor_on(
+        self,
+        session: Session,
+        schedule_id: str,
+        *,
+        last_run_at: datetime,
+        next_if_enabled: datetime | None,
+    ) -> ScheduledTaskRecord | None:
+        now = utc_now()
+        result = session.execute(
+            update(ScheduledTaskRow)
+            .where(ScheduledTaskRow.id == schedule_id)
+            .values(
+                last_run_at=last_run_at,
+                next_run_at=case(
+                    (ScheduledTaskRow.enabled.is_(True), next_if_enabled),
+                    else_=None,
+                ),
+                updated_at=now,
+            )
+        )
+        session.flush()
+        if result.rowcount == 0:  # type: ignore[attr-defined]
+            return None
+        row = session.get(ScheduledTaskRow, schedule_id)
+        return _row_to_schedule(row) if row else None
 
 
 def _row_to_schedule(row: object) -> ScheduledTaskRecord:
@@ -214,7 +354,9 @@ def _row_to_schedule(row: object) -> ScheduledTaskRecord:
         kwargs_json=dict(row.kwargs_json or {}),
         system=row.system,
         schedule_timezone=getattr(row, "schedule_timezone", None) or "UTC",
+        owner_ref=getattr(row, "owner_ref", None),
         last_run_at=row.last_run_at,
+        next_run_at=getattr(row, "next_run_at", None),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

@@ -31,6 +31,8 @@ class ScheduledTaskRow(Base):
     args_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     kwargs_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    owner_ref: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
     last_run_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)

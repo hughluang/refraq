@@ -47,7 +47,7 @@ Celery `timezone` / `enable_utc` is worker message time, **not** business Schedu
 - Every Scheduled Task has **Schedule Timezone** (IANA, default `"UTC"`).
 - **Cron** uses that zone for wall-clock interpretation (DST rules below).
 - **`interval_seconds`** is a UTC absolute interval and **ignores** Schedule Timezone. After downtime, interval schedules (including the system reaper) may fire one catch-up beat.
-- Product **cron** does **not** catch up missed slots. After downtime, the next fire is the next legal wall-clock slot at or after now (the current minute if it matches the expression and that slot Instant is later than `last_run_at`).
+- Product **cron** does **not** catch up missed slots. After downtime, the next fire is the next legal wall-clock slot at or after now (the current minute if it matches the expression and that slot Instant is later than `last_run_at`). "At or after now" is that matching wall-clock minute — the slot Instant is the minute's start, which may be earlier than `Clock.now()` — not "the next Instant strictly after now". A stale commitment must not skip that current slot; see `docs/business-scheduled-tasks.md` (rewrite `next_run_at` to the current-slot Instant and mint it in the same due handling via a second consume; do not mint the stale tick).
 - `last_run_at` and Job lifecycle stamps remain Instants. `last_run_at` is a consumed-fire cursor, not a stored next-run.
 - Do not repoint Celery process timezone to the business schedule zone.
 

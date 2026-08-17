@@ -132,7 +132,8 @@ export function SourceSchedulesPage({ sourceId }: Props) {
                 <Table.Th>{t("schedules.fields.cadence")}</Table.Th>
                 <Table.Th>{t("schedules.fields.timezone")}</Table.Th>
                 <Table.Th>{t("schedules.fields.enabled")}</Table.Th>
-                <Table.Th>{t("schedules.fields.lastRun")}</Table.Th>
+                <Table.Th>{t("schedules.fields.nextRun")}</Table.Th>
+                <Table.Th>{t("schedules.fields.lastJob")}</Table.Th>
                 <Table.Th />
               </Table.Tr>
             </Table.Thead>
@@ -174,10 +175,33 @@ export function SourceSchedulesPage({ sourceId }: Props) {
                   </Table.Td>
                   <Table.Td>
                     <Text size="sm">
-                      {task.last_run_at
-                        ? formatInstant(task.last_run_at)
-                        : "—"}
+                      {!task.enabled
+                        ? t("schedules.fields.nextRunPaused")
+                        : task.next_run_at
+                          ? formatInstant(task.next_run_at)
+                          : "—"}
                     </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    {task.last_job ? (
+                      <>
+                        <Text size="sm">
+                          {task.last_job.finished_at
+                            ? formatInstant(task.last_job.finished_at)
+                            : task.last_job.created_at
+                              ? formatInstant(task.last_job.created_at)
+                              : "—"}
+                        </Text>
+                        <Text size="xs" c="dimmed">
+                          {task.last_job.status}
+                          {task.last_job.error_code
+                            ? ` · ${task.last_job.error_code}`
+                            : ""}
+                        </Text>
+                      </>
+                    ) : (
+                      <Text size="sm">—</Text>
+                    )}
                   </Table.Td>
                   <Table.Td>
                     <ScheduleRowActions

@@ -62,6 +62,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
     "worker": frozenset(
         {
             "worker.api",
+            "worker.due",
             "worker.errors",
             "worker.schemas",
             "worker.routers",

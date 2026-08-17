@@ -25,6 +25,7 @@ HTTP protocol failures: [`docs/conventions-errors.md`](conventions-errors.md). J
   "trigger_ref": "sched_01HZX",
   "trigger_actor_name": null,
   "trigger_schedule_name": "structure · mes-prod",
+  "scheduled_for": "2026-08-05T02:00:00Z",
   "created_by_user_id": null,
   "created_at": "2026-08-05T02:00:00Z",
   "started_at": null,
@@ -65,11 +66,14 @@ Rules:
 
 `class` is `breaking` | `non_breaking` | `unchanged`. Full locators live on the **Structure Diff** (`docs/api-contracts-metadata.md`), not in `result`. Other kinds keep `result` null.
 - **`trigger_kind`** / **`trigger_ref`** describe how the Job was started (`user` | `schedule` | `mcp` | `system`, plus optional id). Structure minting in this phase is `schedule` with `trigger_ref` = Scheduled Task id. Historical `user` / `mcp` rows may remain. Coexist with **`created_by_user_id`** (operator run-now sets created_by; Beat leaves it null).
+- **`scheduled_for`** is the due-slot Instant consumed for an automatic fire; null for operator run-now. Due mint is idempotent on `(trigger_ref, scheduled_for)` when `scheduled_for` is not null.
 - **`trigger_actor_name`** is presentation-only: when `trigger_kind` is `user` and `trigger_ref` resolves to a known User, it is that User's `display_name`; otherwise `null`.
 - **`trigger_schedule_name`** is presentation-only: when `trigger_kind` is `schedule` and `trigger_ref` resolves to a known Scheduled Task, it is that schedule's `name`. Otherwise `null` (deleted schedule). Not an identity field — **`trigger_ref`** remains authoritative. Console Triggered-by uses this in the same column as `trigger_actor_name` (missing name falls back to `trigger_ref`).
 - Operator-visible run log lives on the Job row as **`log_body`** (newline-separated lines). List/get Job shapes do **not** include full `log_body`; use `GET /jobs/{id}/logs`. Optional **`log_updated_at`** may appear on JobOut.
 - No universal `source_id` columns on Job; domain ids appear inside `input` when the kind requires them.
 - Slice A `kind=structure` for `kind=database` Sources: `input` includes `source_id` only. Workers load reachability from the Source.
+- Entering execution requires a `queued → running` claim. Broker redelivery of a non-queued Job must not re-run domain work.
+- **`JOB_WORKER_LOST`**: occupancy stale (worker gone). **`JOB_RUNNING_TIMEOUT`**: still occupied but past the running time limit. Distinct codes; both leave status `failed`. Lost-detection SLA assumes Beat is alive; if Beat is down, occupancy reaping stops — API alone does not clear a false `RUNNING`.
 
 ## 3. Endpoints
 
@@ -99,11 +103,13 @@ Returns `{ "job_id", "body", "updated_at" }` where `body` is the full multiline 
 
 | code | When |
 | --- | --- |
-| `JOB_SOURCE_DISABLED` | Source not usable (run-now) |
+| `JOB_SOURCE_DISABLED` | Structure Job found the Source not usable when executing |
 | `JOB_SECRET_MISSING` | No usable Source secret when required |
 | `JOB_INPUT_INVALID` | Kind/input failed domain validation (including missing Source `engine`/`access`) |
 | `JOB_NOT_CANCELLABLE` | Job already terminal |
-| `JOB_ALREADY_ACTIVE` | Non-terminal structure Job already exists for this Source (run-now returns this; Beat swallows it) |
+| `JOB_ALREADY_ACTIVE` | Structure Job execution found another non-terminal structure Job for the same Source (catalog-write serialization). Not a schedule mint / HTTP conflict |
+| `JOB_WORKER_LOST` | Occupancy stale; worker gone |
+| `JOB_RUNNING_TIMEOUT` | Job exceeded the running time limit while still occupied |
 | `JOB_FAIL_SAFE` | Absent ratio exceeded fail-safe threshold; catalog unchanged |
 | `JOB_COLLECT_FAILED` | Connector collect aborted; catalog unchanged |
 | `JOB_ENDPOINT_FAILED` | Connector could not open the live endpoint |
@@ -114,7 +120,7 @@ Stable aliases of older draft codes (`INGESTION_*`) must not be reintroduced in 
 
 ### Structure single-flight
 
-Minting `kind=structure` rejects with `JOB_ALREADY_ACTIVE` when a non-terminal structure Job whose `input.source_id` matches the schedule's target Source already exists. Authority is the Postgres/memory Job table, not Celery. This serializes catalog writes; it is not a Scheduled Task mutex.
+At most one non-terminal `kind=structure` Job may **run** catalog writes per Source. Enforced when the structure Job **executes**: if another running structure Job for the same `input.source_id` already wins, this Job ends `failed` with `JOB_ALREADY_ACTIVE`. Authority is the Job table, not Celery and not the schedule. The **Scheduled Task** always mints; Source busy is never a schedule mint skip or HTTP 409.
 
 ## 5. Slice Notes
 

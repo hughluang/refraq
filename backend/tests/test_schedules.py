@@ -20,8 +20,15 @@ from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.role_store import get_role_store, reset_role_store  # noqa: E402
 from backend.admin.user_store import get_user_store, reset_user_store  # noqa: E402
 from backend.core.config import reset_settings_cache  # noqa: E402
-from backend.core.time import FixedClock, parse_instant, reset_clock, set_clock  # noqa: E402
-from backend.jobs.store import create_queued_job, get_job_store, reset_job_store  # noqa: E402
+from backend.core.time import (  # noqa: E402
+    FixedClock,
+    format_instant,
+    parse_instant,
+    reset_clock,
+    set_clock,
+    utc_now,
+)
+from backend.jobs.store import claim_queued, create_queued_job, get_job_store, reset_job_store  # noqa: E402
 from backend.main import app  # noqa: E402
 from backend.metadata import source_jobs as source_jobs_mod  # noqa: E402
 from backend.metadata.source_jobs import fire_scheduled_structure  # noqa: E402
@@ -32,7 +39,6 @@ from backend.metadata.source_schedules import (  # noqa: E402
 from backend.metadata.sources.store import reset_source_store  # noqa: E402
 from backend.worker.api import ensure_system_schedules, schedule_out  # noqa: E402
 from backend.worker.app import celery_app  # noqa: E402
-from backend.worker.cron import ZoneCronSchedule  # noqa: E402
 from backend.worker.models import REAPER_SCHEDULE_KEY  # noqa: E402
 from backend.worker.scheduler import DatabaseScheduler  # noqa: E402
 from backend.worker.schedules import (  # noqa: E402
@@ -40,6 +46,31 @@ from backend.worker.schedules import (  # noqa: E402
     get_schedule_store,
     reset_schedule_store,
 )
+
+
+def _due_at(schedule_id: str) -> str:
+    """Simulate Beat delivery kwargs: commitment Instant frozen at send time."""
+    record = get_schedule_store().get_by_id(schedule_id)
+    assert record is not None
+    assert record.next_run_at is not None
+    return format_instant(record.next_run_at, timespec="microseconds")
+
+
+def _fire(
+    schedule_id: str,
+    *,
+    due_at: str | None = ...,  # type: ignore[assignment]
+    source_id: str | None = None,
+):
+    """Call fire_scheduled_structure; default due_at from store next (Beat snapshot)."""
+    kwargs: dict = {"schedule_id": schedule_id}
+    if due_at is ...:
+        kwargs["due_at"] = _due_at(schedule_id)
+    elif due_at is not None:
+        kwargs["due_at"] = due_at
+    if source_id is not None:
+        kwargs["source_id"] = source_id
+    return fire_scheduled_structure(**kwargs)
 
 
 @pytest.fixture()
@@ -234,39 +265,22 @@ def test_patch_empty_name_restores_default(client: TestClient) -> None:
     assert blank.json()["schedule"]["name"] == "structure · mes-prod"
 
 
-def test_create_does_not_fire_immediately() -> None:
+def test_create_does_not_fire_immediately(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "backend.metadata.structure_jobs.service.run_structure_job",
+        lambda job_id: {"status": "succeeded"},
+    )
     clock = FixedClock(parse_instant("2026-08-13T10:15:00Z"))
     set_clock(clock)
     try:
-        schedule = ZoneCronSchedule("0 2 * * *", schedule_timezone="UTC")
-        due, _rem = schedule.is_due(clock.now())
-        assert due is False
-    finally:
-        reset_clock()
-
-
-def test_missed_cron_slot_does_not_catch_up() -> None:
-    clock = FixedClock(parse_instant("2026-08-13T10:00:00Z"))
-    set_clock(clock)
-    try:
-        schedule = ZoneCronSchedule("0 2 * * *", schedule_timezone="UTC")
-        last = parse_instant("2026-08-01T02:00:00Z")
-        due, rem = schedule.is_due(last)
-        assert due is False
-        nxt = clock.now() + timedelta(seconds=rem)
-        assert nxt == parse_instant("2026-08-14T02:00:00Z")
-    finally:
-        reset_clock()
-
-
-def test_current_matching_minute_fires_once() -> None:
-    clock = FixedClock(parse_instant("2026-08-13T02:00:30Z"))
-    set_clock(clock)
-    try:
-        schedule = ZoneCronSchedule("0 2 * * *", schedule_timezone="UTC")
-        last = parse_instant("2026-08-12T02:00:00Z")
-        due, _rem = schedule.is_due(last)
-        assert due is True
+        source = _make_source(client, key="no-immediate")
+        created = _post_daily(client, source["id"])
+        assert created.status_code == 201, created.text
+        result = _fire(created.json()["schedule"]["id"])
+        assert result["status"] == "not_due"
+        assert get_job_store().list(kind="structure") == []
     finally:
         reset_clock()
 
@@ -292,9 +306,25 @@ def test_reload_clears_heap_and_follows_new_cadence(client: TestClient) -> None:
     assert scheduler._heap is None
 
 
-def test_overlap_skip_does_not_fail_schedule(client: TestClient) -> None:
+def test_overlap_still_mints_when_source_busy(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Schedule mint ignores Source single-flight; always creates a Job when due."""
+    monkeypatch.setattr(
+        "backend.metadata.structure_jobs.service.run_structure_job",
+        lambda job_id: {"status": "succeeded"},
+    )
     source = _make_source(client)
-    created = _post_daily(client, source["id"])
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "structure",
+            "interval_seconds": 3600,
+            "schedule_timezone": "UTC",
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 201, created.text
     schedule_id = created.json()["schedule"]["id"]
     create_queued_job(
         kind="structure",
@@ -304,21 +334,54 @@ def test_overlap_skip_does_not_fail_schedule(client: TestClient) -> None:
         trigger_kind="user",
         trigger_ref="user_1",
     )
-    result = fire_scheduled_structure(schedule_id)
-    assert result["status"] == "skipped"
-    assert result["reason"] == "already_active"
-    assert len(get_job_store().list(kind="structure")) == 1
+    from dataclasses import replace
+
+    from backend.core.time import utc_now
+
+    record = get_schedule_store().get_by_id(schedule_id)
+    assert record is not None
+    get_schedule_store().upsert(
+        replace(record, next_run_at=utc_now() - timedelta(minutes=1))
+    )
+    result = _fire(schedule_id)
+    assert result["status"] == "queued"
+    assert "job_id" in result
+    assert len(get_job_store().list(kind="structure")) == 2
 
 
-def test_disabled_source_tick_skips(client: TestClient) -> None:
+def test_disabled_source_tick_still_mints(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "backend.metadata.structure_jobs.service.run_structure_job",
+        lambda job_id: {"status": "succeeded"},
+    )
     source = _make_source(client)
-    created = _post_daily(client, source["id"])
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "structure",
+            "interval_seconds": 3600,
+            "schedule_timezone": "UTC",
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 201, created.text
     schedule_id = created.json()["schedule"]["id"]
     disable = client.patch(f"/sources/{source['id']}", json={"status": "disabled"})
     assert disable.status_code == 200
-    result = fire_scheduled_structure(schedule_id)
-    assert result["status"] == "skipped"
-    assert result["reason"] == "source_unusable"
+    from dataclasses import replace
+
+    from backend.core.time import utc_now
+
+    record = get_schedule_store().get_by_id(schedule_id)
+    assert record is not None
+    get_schedule_store().upsert(
+        replace(record, next_run_at=utc_now() - timedelta(minutes=1))
+    )
+    result = _fire(schedule_id)
+    assert result["status"] == "queued"
+    assert len(get_job_store().list(kind="structure")) == 1
 
 
 def _structure_record(*, source_id: str = "src_abc") -> ScheduledTaskRecord:
@@ -443,15 +506,38 @@ def test_structure_mint_task_lives_on_fire_scheduled_structure() -> None:
     assert not hasattr(source_jobs_mod, "enqueue_scheduled_structure")
 
 
-def test_missing_schedule_tick_skips() -> None:
+def test_missing_due_at_does_not_mint() -> None:
     result = fire_scheduled_structure("sched_does_not_exist")
-    assert result["status"] == "skipped"
-    assert result["reason"] == "missing_target"
+    assert result["status"] == "missing_due_at"
+    assert get_job_store().list(kind="structure") == []
 
 
-def test_missing_source_tick_skips() -> None:
-    from backend.core.time import utc_now
+def test_deleted_schedule_with_due_at_mints_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "backend.metadata.source_jobs.run_job.apply_async",
+        lambda *a, **k: type("R", (), {"id": "eager-stub"})(),
+    )
+    due = utc_now() - timedelta(minutes=1)
+    result = fire_scheduled_structure(
+        "sched_does_not_exist",
+        source_id="src_gone",
+        due_at=format_instant(due, timespec="microseconds"),
+    )
+    assert result["status"] == "cancelled"
+    jobs = get_job_store().list(kind="structure")
+    assert len(jobs) == 1
+    assert jobs[0].status == "cancelled"
+    assert jobs[0].scheduled_for == due
+    assert jobs[0].trigger_ref == "sched_does_not_exist"
 
+
+def test_missing_source_tick_still_mints(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "backend.metadata.structure_jobs.service.run_structure_job",
+        lambda job_id: {"status": "succeeded"},
+    )
     now = utc_now()
     get_schedule_store().upsert(
         ScheduledTaskRecord(
@@ -459,8 +545,8 @@ def test_missing_source_tick_skips() -> None:
             key="structure:src_does_not_exist:sched_orphan",
             name="orphan",
             enabled=True,
-            interval_seconds=None,
-            cron="0 2 * * *",
+            interval_seconds=3600,
+            cron=None,
             task_name=STRUCTURE_ENQUEUE_TASK_NAME,
             args_json=[],
             kwargs_json={
@@ -469,14 +555,18 @@ def test_missing_source_tick_skips() -> None:
             },
             system=False,
             schedule_timezone="UTC",
+            owner_ref="metadata:source:src_does_not_exist",
             last_run_at=now,
+            next_run_at=now - timedelta(minutes=1),
             created_at=now,
             updated_at=now,
         )
     )
-    result = fire_scheduled_structure("sched_orphan")
-    assert result["status"] == "skipped"
-    assert result["reason"] == "source_unusable"
+    result = _fire("sched_orphan")
+    assert result["status"] == "queued"
+    jobs = get_job_store().list(kind="structure")
+    assert len(jobs) == 1
+    assert jobs[0].trigger_ref == "sched_orphan"
 
 
 def test_cadence_invalid(client: TestClient) -> None:
@@ -549,8 +639,14 @@ def test_run_now_allowed_when_disabled(
     assert client.patch(
         f"/schedules/{schedule_id}", json={"enabled": False}
     ).status_code == 200
+    paused = client.get(f"/schedules/{schedule_id}").json()["schedule"]
+    assert paused["next_run_at"] is None
     ran = client.post(f"/schedules/{schedule_id}/run")
     assert ran.status_code == 202, ran.text
+    assert ran.json()["job"]["scheduled_for"] is None
+    still = client.get(f"/schedules/{schedule_id}").json()["schedule"]
+    assert still["next_run_at"] is None
+    assert still["enabled"] is False
 
 
 def test_run_now_rejects_system_schedule(client: TestClient) -> None:
@@ -562,11 +658,9 @@ def test_run_now_rejects_system_schedule(client: TestClient) -> None:
     assert ran.json()["code"] == "SCHEDULE_SYSTEM_IMMUTABLE"
 
 
-def test_run_now_single_flight_returns_conflict(
+def test_run_now_mints_when_source_busy(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from backend.jobs.store import create_queued_job, mark_running
-
     monkeypatch.setattr(
         "backend.metadata.structure_jobs.service.run_structure_job",
         lambda job_id: {"status": "succeeded"},
@@ -578,10 +672,12 @@ def test_run_now_single_flight_returns_conflict(
         kind="structure",
         input={"source_id": source["id"]},
     )
-    mark_running(job.id)
+    claimed = claim_queued(job.id)
+    assert claimed is not None
     second = client.post(f"/schedules/{schedule_id}/run")
-    assert second.status_code == 409
-    assert second.json()["code"] == "JOB_ALREADY_ACTIVE"
+    assert second.status_code == 202, second.text
+    assert second.json()["job"]["id"] != job.id
+    assert len(get_job_store().list(kind="structure")) == 2
 
 
 def test_schedule_jobs_filtered_by_trigger_ref(
@@ -862,4 +958,578 @@ def test_patch_same_name_or_empty_body_does_not_seed(client: TestClient) -> None
     assert empty.status_code == 200
     assert "schedule" not in empty.json()
     assert list_structure_schedules(source.id) == []
+
+
+def test_cron_current_slot_mints(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "backend.metadata.structure_jobs.service.run_structure_job",
+        lambda job_id: {"status": "succeeded"},
+    )
+    clock = FixedClock(parse_instant("2026-08-15T02:00:05Z"))
+    set_clock(clock)
+    try:
+        source = _make_source(client, key="slot-mint")
+        created = _post_daily(client, source["id"])
+        schedule_id = created.json()["schedule"]["id"]
+        from dataclasses import replace
+
+        record = get_schedule_store().get_by_id(schedule_id)
+        assert record is not None
+        slot = parse_instant("2026-08-15T02:00:00Z")
+        get_schedule_store().upsert(
+            replace(
+                record,
+                next_run_at=slot,
+                last_run_at=parse_instant("2026-08-14T02:00:00Z"),
+            )
+        )
+        result = _fire(schedule_id)
+        assert result["status"] == "queued"
+        jobs = get_job_store().list(kind="structure")
+        assert len(jobs) == 1
+        assert jobs[0].scheduled_for == slot
+        refreshed = get_schedule_store().get_by_id(schedule_id)
+        assert refreshed is not None
+        assert refreshed.last_run_at == clock.now()
+        assert refreshed.next_run_at == parse_instant("2026-08-16T02:00:00Z")
+    finally:
+        reset_clock()
+
+
+def test_cron_cross_slot_advances_without_mint(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "backend.metadata.structure_jobs.service.run_structure_job",
+        lambda job_id: {"status": "succeeded"},
+    )
+    clock = FixedClock(parse_instant("2026-08-15T05:00:00Z"))
+    set_clock(clock)
+    try:
+        source = _make_source(client, key="cross-slot")
+        created = _post_daily(client, source["id"])
+        schedule_id = created.json()["schedule"]["id"]
+        from dataclasses import replace
+
+        record = get_schedule_store().get_by_id(schedule_id)
+        assert record is not None
+        last = parse_instant("2026-08-14T02:00:00Z")
+        get_schedule_store().upsert(
+            replace(
+                record,
+                next_run_at=parse_instant("2026-08-15T02:00:00Z"),
+                last_run_at=last,
+            )
+        )
+        result = _fire(schedule_id)
+        assert result["status"] == "skip_cross_slot"
+        assert get_job_store().list(kind="structure") == []
+        refreshed = get_schedule_store().get_by_id(schedule_id)
+        assert refreshed is not None
+        assert refreshed.last_run_at == last
+        assert refreshed.next_run_at == parse_instant("2026-08-16T02:00:00Z")
+    finally:
+        reset_clock()
+
+
+def test_cron_stale_commitment_keeps_today_slot(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stale yesterday commitment at today's matching minute: second consume mints today."""
+    monkeypatch.setattr(
+        "backend.metadata.structure_jobs.service.run_structure_job",
+        lambda job_id: {"status": "succeeded"},
+    )
+    clock = FixedClock(parse_instant("2026-08-15T02:00:05Z"))
+    set_clock(clock)
+    try:
+        source = _make_source(client, key="keep-today")
+        created = _post_daily(client, source["id"])
+        schedule_id = created.json()["schedule"]["id"]
+        from dataclasses import replace
+
+        record = get_schedule_store().get_by_id(schedule_id)
+        assert record is not None
+        yesterday = parse_instant("2026-08-14T02:00:00Z")
+        today_slot = parse_instant("2026-08-15T02:00:00Z")
+        get_schedule_store().upsert(
+            replace(
+                record,
+                next_run_at=yesterday,
+                last_run_at=parse_instant("2026-08-13T02:00:00Z"),
+            )
+        )
+        result = _fire(schedule_id)
+        assert result["status"] == "queued"
+        jobs = get_job_store().list(kind="structure")
+        assert len(jobs) == 1
+        assert jobs[0].scheduled_for == today_slot
+        assert jobs[0].scheduled_for != yesterday
+        refreshed = get_schedule_store().get_by_id(schedule_id)
+        assert refreshed is not None
+        assert refreshed.last_run_at == clock.now()
+        assert refreshed.next_run_at == parse_instant("2026-08-16T02:00:00Z")
+    finally:
+        reset_clock()
+
+
+def test_cron_stale_commitment_past_slot_skips_without_mint(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stale yesterday commitment after today's slot has passed: no mint, advance next."""
+    monkeypatch.setattr(
+        "backend.metadata.structure_jobs.service.run_structure_job",
+        lambda job_id: {"status": "succeeded"},
+    )
+    clock = FixedClock(parse_instant("2026-08-15T05:00:00Z"))
+    set_clock(clock)
+    try:
+        source = _make_source(client, key="stale-past")
+        created = _post_daily(client, source["id"])
+        schedule_id = created.json()["schedule"]["id"]
+        from dataclasses import replace
+
+        record = get_schedule_store().get_by_id(schedule_id)
+        assert record is not None
+        last = parse_instant("2026-08-13T02:00:00Z")
+        get_schedule_store().upsert(
+            replace(
+                record,
+                next_run_at=parse_instant("2026-08-14T02:00:00Z"),
+                last_run_at=last,
+            )
+        )
+        result = _fire(schedule_id)
+        assert result["status"] == "skip_cross_slot"
+        assert get_job_store().list(kind="structure") == []
+        refreshed = get_schedule_store().get_by_id(schedule_id)
+        assert refreshed is not None
+        assert refreshed.last_run_at == last
+        assert refreshed.next_run_at == parse_instant("2026-08-16T02:00:00Z")
+    finally:
+        reset_clock()
+
+
+def test_pause_does_not_cancel_queued_job(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "backend.metadata.source_jobs.run_job.apply_async",
+        lambda *a, **k: type("R", (), {"id": "eager-stub"})(),
+    )
+    source = _make_source(client, key="pause-keep")
+    created = _post_daily(client, source["id"])
+    schedule_id = created.json()["schedule"]["id"]
+    ran = client.post(f"/schedules/{schedule_id}/run")
+    assert ran.status_code == 202
+    job_id = ran.json()["job"]["id"]
+    assert client.patch(
+        f"/schedules/{schedule_id}", json={"enabled": False}
+    ).status_code == 200
+    stored = get_job_store().get(job_id)
+    assert stored is not None
+    assert stored.status == "queued"
+    paused = client.get(f"/schedules/{schedule_id}").json()["schedule"]
+    assert paused["next_run_at"] is None
+
+
+def test_delete_schedule_cancels_unfinished(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "backend.metadata.source_jobs.run_job.apply_async",
+        lambda *a, **k: type("R", (), {"id": "eager-stub"})(),
+    )
+    source = _make_source(client, key="del-cancel")
+    created = _post_daily(client, source["id"])
+    schedule_id = created.json()["schedule"]["id"]
+    ran = client.post(f"/schedules/{schedule_id}/run")
+    job_id = ran.json()["job"]["id"]
+    assert client.delete(f"/schedules/{schedule_id}").status_code == 204
+    stored = get_job_store().get(job_id)
+    assert stored is not None
+    assert stored.status == "cancelled"
+    assert stored.finished_at is not None
+
+
+def test_delete_schedule_logs_revoke_failure_and_still_cancels(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(
+        "backend.metadata.source_jobs.run_job.apply_async",
+        lambda *a, **k: type("R", (), {"id": "eager-stub"})(),
+    )
+
+    def _broker_down(*_a, **_k):
+        raise RuntimeError("broker down")
+
+    monkeypatch.setattr("backend.worker.api.revoke_queued_delivery", _broker_down)
+    source = _make_source(client, key="del-revoke-fail")
+    created = _post_daily(client, source["id"])
+    schedule_id = created.json()["schedule"]["id"]
+    ran = client.post(f"/schedules/{schedule_id}/run")
+    job_id = ran.json()["job"]["id"]
+    with caplog.at_level("ERROR", logger="backend.worker.api"):
+        assert client.delete(f"/schedules/{schedule_id}").status_code == 204
+    stored = get_job_store().get(job_id)
+    assert stored is not None
+    assert stored.status == "cancelled"
+    assert "schedule withdraw revoke failed" in caplog.text
+    assert job_id in caplog.text
+    assert schedule_id in caplog.text
+
+
+def test_initial_next_run_at_none_when_disabled() -> None:
+    from backend.worker.api import initial_next_run_at
+
+    assert (
+        initial_next_run_at(
+            cron="0 2 * * *",
+            schedule_timezone="UTC",
+            interval_seconds=None,
+            enabled=False,
+            after=parse_instant("2026-08-15T01:00:00Z"),
+        )
+        is None
+    )
+
+
+def test_initial_next_run_at_uses_after_anchor() -> None:
+    from backend.worker.api import initial_next_run_at
+
+    nxt = initial_next_run_at(
+        cron="0 2 * * *",
+        schedule_timezone="UTC",
+        interval_seconds=None,
+        enabled=True,
+        after=parse_instant("2026-08-15T01:00:00Z"),
+    )
+    assert nxt == parse_instant("2026-08-15T02:00:00Z")
+
+
+def test_initial_next_run_at_rejects_non_datetime_after() -> None:
+    from backend.worker.api import initial_next_run_at
+
+    with pytest.raises(TypeError):
+        initial_next_run_at(
+            cron="0 2 * * *",
+            schedule_timezone="UTC",
+            interval_seconds=None,
+            enabled=True,
+            after="2026-08-15T01:00:00Z",  # type: ignore[arg-type]
+        )
+
+
+def test_owner_ref_written_and_withdraw_on_source_delete(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "backend.metadata.source_jobs.run_job.apply_async",
+        lambda *a, **k: type("R", (), {"id": "eager-stub"})(),
+    )
+    source = _make_source(client, key="owner-ref")
+    created = _post_daily(client, source["id"])
+    schedule_id = created.json()["schedule"]["id"]
+    record = get_schedule_store().get_by_id(schedule_id)
+    assert record is not None
+    assert record.owner_ref == f"metadata:source:{source['id']}"
+    ran = client.post(f"/schedules/{schedule_id}/run")
+    job_id = ran.json()["job"]["id"]
+    assert client.patch(
+        f"/sources/{source['id']}", json={"status": "disabled"}
+    ).status_code == 200
+    assert client.delete(f"/sources/{source['id']}").status_code == 204
+    assert get_schedule_store().get_by_id(schedule_id) is None
+    stored = get_job_store().get(job_id)
+    assert stored is not None
+    assert stored.status == "cancelled"
+
+
+def test_schedule_last_job_observation(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "backend.metadata.structure_jobs.service.run_structure_job",
+        lambda job_id: {"status": "succeeded"},
+    )
+    source = _make_source(client, key="last-job")
+    created = _post_daily(client, source["id"])
+    schedule = created.json()["schedule"]
+    assert schedule["last_job"] is None
+    assert schedule["next_run_at"] is not None
+    ran = client.post(f"/schedules/{schedule['id']}/run")
+    assert ran.status_code == 202
+    refreshed = client.get(f"/schedules/{schedule['id']}").json()["schedule"]
+    assert refreshed["last_job"] is not None
+    assert refreshed["last_job"]["id"] == ran.json()["job"]["id"]
+
+
+def test_inflight_delete_mints_cancelled_job(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Beat already delivered; worker runs after DELETE — still mint cancelled."""
+    from dataclasses import replace
+
+    monkeypatch.setattr(
+        "backend.metadata.source_jobs.run_job.apply_async",
+        lambda *a, **k: type("R", (), {"id": "eager-stub"})(),
+    )
+    source = _make_source(client, key="inflight-del")
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "structure",
+            "interval_seconds": 3600,
+            "schedule_timezone": "UTC",
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 201, created.text
+    schedule_id = created.json()["schedule"]["id"]
+    record = get_schedule_store().get_by_id(schedule_id)
+    assert record is not None
+    due = utc_now() - timedelta(minutes=1)
+    get_schedule_store().upsert(replace(record, next_run_at=due))
+    delivered = _due_at(schedule_id)
+    assert client.delete(f"/schedules/{schedule_id}").status_code == 204
+    result = fire_scheduled_structure(
+        schedule_id,
+        source_id=source["id"],
+        due_at=delivered,
+    )
+    assert result["status"] == "cancelled"
+    jobs = get_job_store().list(kind="structure")
+    assert len(jobs) == 1
+    assert jobs[0].status == "cancelled"
+    assert jobs[0].scheduled_for == due
+    assert jobs[0].trigger_ref == schedule_id
+    assert get_schedule_store().get_by_id(schedule_id) is None
+
+
+def test_unique_collision_still_advances_next(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Already-minted scheduled_for still consumes the tick (UNIQUE still pushes next)."""
+    from dataclasses import replace
+
+    monkeypatch.setattr(
+        "backend.metadata.source_jobs.run_job.apply_async",
+        lambda *a, **k: type("R", (), {"id": "eager-stub"})(),
+    )
+    clock = FixedClock(parse_instant("2026-08-15T02:00:05Z"))
+    set_clock(clock)
+    try:
+        source = _make_source(client, key="uniq-adv")
+        created = _post_daily(client, source["id"])
+        schedule_id = created.json()["schedule"]["id"]
+        slot = parse_instant("2026-08-15T02:00:00Z")
+        record = get_schedule_store().get_by_id(schedule_id)
+        assert record is not None
+        get_schedule_store().upsert(
+            replace(
+                record,
+                next_run_at=slot,
+                last_run_at=parse_instant("2026-08-14T02:00:00Z"),
+            )
+        )
+        # Simulate crash after INSERT Job, before cursor move.
+        existing = create_queued_job(
+            kind="structure",
+            input={"source_id": source["id"]},
+            trigger_kind="schedule",
+            trigger_ref=schedule_id,
+            scheduled_for=slot,
+            created_at=clock.now(),
+        )
+        result = _fire(schedule_id)
+        assert result["status"] == "already_minted"
+        assert result["job_id"] == existing.id
+        jobs = get_job_store().list(kind="structure")
+        assert len(jobs) == 1
+        refreshed = get_schedule_store().get_by_id(schedule_id)
+        assert refreshed is not None
+        assert refreshed.last_run_at == existing.created_at
+        assert refreshed.next_run_at == parse_instant("2026-08-16T02:00:00Z")
+    finally:
+        reset_clock()
+
+
+def test_missing_target_mints_cancelled_job(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    monkeypatch.setattr(
+        "backend.metadata.source_jobs.run_job.apply_async",
+        lambda *a, **k: type("R", (), {"id": "eager-stub"})(),
+    )
+    source = _make_source(client, key="miss-tgt")
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "structure",
+            "interval_seconds": 3600,
+            "schedule_timezone": "UTC",
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 201, created.text
+    schedule_id = created.json()["schedule"]["id"]
+    record = get_schedule_store().get_by_id(schedule_id)
+    assert record is not None
+    due = utc_now() - timedelta(minutes=1)
+    get_schedule_store().upsert(
+        replace(
+            record,
+            kwargs_json={},
+            next_run_at=due,
+        )
+    )
+    result = _fire(schedule_id)
+    assert result["status"] == "cancelled"
+    jobs = get_job_store().list(kind="structure")
+    assert len(jobs) == 1
+    assert jobs[0].status == "cancelled"
+    assert jobs[0].scheduled_for == due
+    refreshed = get_schedule_store().get_by_id(schedule_id)
+    assert refreshed is not None
+    assert refreshed.last_run_at is not None
+    assert refreshed.next_run_at is not None
+    assert refreshed.next_run_at > utc_now() - timedelta(seconds=5)
+
+
+def test_inflight_disable_mints_cancelled_job(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Beat already delivered; worker runs after PATCH enabled=false — mint cancelled."""
+    from dataclasses import replace
+
+    monkeypatch.setattr(
+        "backend.metadata.source_jobs.run_job.apply_async",
+        lambda *a, **k: type("R", (), {"id": "eager-stub"})(),
+    )
+    source = _make_source(client, key="inflight-dis")
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "structure",
+            "interval_seconds": 3600,
+            "schedule_timezone": "UTC",
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 201, created.text
+    schedule_id = created.json()["schedule"]["id"]
+    record = get_schedule_store().get_by_id(schedule_id)
+    assert record is not None
+    due = utc_now() - timedelta(minutes=1)
+    get_schedule_store().upsert(replace(record, next_run_at=due))
+    delivered = _due_at(schedule_id)
+    assert client.patch(
+        f"/schedules/{schedule_id}", json={"enabled": False}
+    ).status_code == 200
+    result = fire_scheduled_structure(
+        schedule_id,
+        source_id=source["id"],
+        due_at=delivered,
+    )
+    assert result["status"] == "cancelled"
+    jobs = get_job_store().list(kind="structure")
+    assert len(jobs) == 1
+    assert jobs[0].status == "cancelled"
+    assert jobs[0].scheduled_for == due
+    refreshed = get_schedule_store().get_by_id(schedule_id)
+    assert refreshed is not None
+    assert refreshed.enabled is False
+    assert refreshed.next_run_at is None
+    assert refreshed.last_run_at is not None
+
+
+def test_paused_cron_cross_slot_does_not_mint_or_restore_next(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Paused + delivered Instant already past current slot: skip, keep next null."""
+    from dataclasses import replace
+
+    monkeypatch.setattr(
+        "backend.metadata.source_jobs.run_job.apply_async",
+        lambda *a, **k: type("R", (), {"id": "eager-stub"})(),
+    )
+    clock = FixedClock(parse_instant("2026-08-15T05:00:00Z"))
+    set_clock(clock)
+    try:
+        source = _make_source(client, key="pause-cross")
+        created = _post_daily(client, source["id"])
+        schedule_id = created.json()["schedule"]["id"]
+        record = get_schedule_store().get_by_id(schedule_id)
+        assert record is not None
+        due = parse_instant("2026-08-15T02:00:00Z")
+        get_schedule_store().upsert(
+            replace(
+                record,
+                next_run_at=due,
+                last_run_at=parse_instant("2026-08-14T02:00:00Z"),
+            )
+        )
+        delivered = _due_at(schedule_id)
+        assert client.patch(
+            f"/schedules/{schedule_id}", json={"enabled": False}
+        ).status_code == 200
+        result = fire_scheduled_structure(
+            schedule_id,
+            source_id=source["id"],
+            due_at=delivered,
+        )
+        assert result["status"] == "skip_cross_slot"
+        assert get_job_store().list(kind="structure") == []
+        refreshed = get_schedule_store().get_by_id(schedule_id)
+        assert refreshed is not None
+        assert refreshed.enabled is False
+        assert refreshed.next_run_at is None
+        assert refreshed.last_run_at == parse_instant("2026-08-14T02:00:00Z")
+    finally:
+        reset_clock()
+
+
+def test_interval_catchup_scheduled_for_and_next(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    monkeypatch.setattr(
+        "backend.metadata.structure_jobs.service.run_structure_job",
+        lambda job_id: {"status": "succeeded"},
+    )
+    clock = FixedClock(parse_instant("2026-08-15T10:00:00Z"))
+    set_clock(clock)
+    try:
+        source = _make_source(client, key="int-catch")
+        created = client.post(
+            f"/sources/{source['id']}/schedules",
+            json={
+                "kind": "structure",
+                "interval_seconds": 3600,
+                "schedule_timezone": "UTC",
+                "enabled": True,
+            },
+        )
+        assert created.status_code == 201, created.text
+        schedule_id = created.json()["schedule"]["id"]
+        past = parse_instant("2026-08-15T09:00:00Z")
+        record = get_schedule_store().get_by_id(schedule_id)
+        assert record is not None
+        get_schedule_store().upsert(replace(record, next_run_at=past))
+        result = _fire(schedule_id)
+        assert result["status"] == "queued"
+        jobs = get_job_store().list(kind="structure")
+        assert len(jobs) == 1
+        assert jobs[0].scheduled_for == past
+        refreshed = get_schedule_store().get_by_id(schedule_id)
+        assert refreshed is not None
+        assert refreshed.last_run_at == clock.now()
+        assert refreshed.next_run_at == clock.now() + timedelta(seconds=3600)
+    finally:
+        reset_clock()
 
