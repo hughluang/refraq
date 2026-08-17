@@ -65,10 +65,6 @@ class Settings(BaseSettings):
         default=1,
         validation_alias="REFRAQ_JOB_WORKER_CONCURRENCY",
     )
-    refraq_job_running_timeout_sec: int = Field(
-        default=3600,
-        validation_alias="REFRAQ_JOB_RUNNING_TIMEOUT_SEC",
-    )
     refraq_job_lost_detection_sec: int = Field(
         default=60,
         validation_alias="REFRAQ_JOB_LOST_DETECTION_SEC",

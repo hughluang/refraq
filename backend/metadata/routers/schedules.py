@@ -29,6 +29,7 @@ class CreateStructureScheduleRequest(BaseModel):
     schedule_timezone: str = "UTC"
     enabled: bool = True
     name: str | None = None
+    running_timeout_sec: int | None = None
 
 
 @router.post("/sources/{source_id}/schedules", status_code=status.HTTP_201_CREATED)
@@ -46,6 +47,7 @@ def create_source_schedule(
         schedule_timezone=payload.schedule_timezone,
         enabled=payload.enabled,
         name=payload.name,
+        running_timeout_sec=payload.running_timeout_sec,
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),
     )

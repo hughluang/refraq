@@ -90,6 +90,7 @@ def test_reaper_marks_running_timeout() -> None:
     job = create_queued_job(
         kind="structure",
         input={"source_id": "src_1"},
+        running_timeout_sec=3600,
     )
     claimed = claim_queued(job.id)
     assert claimed is not None
@@ -105,6 +106,27 @@ def test_reaper_marks_running_timeout() -> None:
     assert stored is not None
     assert stored.status == "failed"
     assert stored.error_code == ERROR_RUNNING_TIMEOUT
+
+
+def test_reaper_skips_null_running_timeout() -> None:
+    job = create_queued_job(
+        kind="structure",
+        input={"source_id": "src_1"},
+    )
+    claimed = claim_queued(job.id)
+    assert claimed is not None
+    stored = get_job_store().get(job.id)
+    assert stored is not None
+    stored.started_at = utc_now() - timedelta(hours=2)
+    stored.locked_at = utc_now()
+    get_job_store().save(stored)
+
+    count = reap_stuck_running_jobs()
+    assert count == 0
+    stored = get_job_store().get(job.id)
+    assert stored is not None
+    assert stored.status == "running"
+    assert stored.error_code is None
 
 
 def test_reaper_marks_worker_lost() -> None:

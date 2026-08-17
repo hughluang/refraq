@@ -26,7 +26,6 @@ Current `backend/.env.example` defines:
 - `REFRAQ_SECRETS_MASTER_KEY=change-me-secrets-master-key` (metadata foundation: encrypt Source secrets at rest)
 - `CELERY_BROKER_URL=redis://127.0.0.1:6379/2` (Celery broker; prefer a logical DB separate from Session `REDIS_URL`). If unset, broker is derived from `REDIS_URL` (`…/2`); if both unset, resolution fails (no localhost invent).
 - `REFRAQ_JOB_WORKER_CONCURRENCY=1` (Celery worker concurrency hint)
-- `REFRAQ_JOB_RUNNING_TIMEOUT_SEC=3600` (**Job** running time limit → `JOB_RUNNING_TIMEOUT`)
 - `REFRAQ_JOB_LOST_DETECTION_SEC=60` (occupancy stale window → `JOB_WORKER_LOST`; SLA assumes Beat is alive — if Beat is down, occupancy reaping stops; API alone does not clear a false `RUNNING`)
 - `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD=0.75` (abort structure catalog write when absent ratio exceeds this)
 - `REFRAQ_QUERY_TIMEOUT_SEC=30` (controlled query dual timeout: application + engine statement/command timeout)
@@ -74,7 +73,6 @@ Self-deploy Compose exposes only the web service to browsers; the API stays on t
 - `REFRAQ_SECRETS_MASTER_KEY` (required to store/read Source secrets)
 - `CELERY_BROKER_URL` (required when running Celery worker/beat; default same host Redis DB `2`)
 - `REFRAQ_JOB_WORKER_CONCURRENCY`
-- `REFRAQ_JOB_RUNNING_TIMEOUT_SEC`
 - `REFRAQ_JOB_LOST_DETECTION_SEC`
 - `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD`
 - `REFRAQ_QUERY_TIMEOUT_SEC`

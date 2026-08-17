@@ -12,12 +12,13 @@ Related boundaries:
 - Metadata structure schedule **facade** (`POST/GET /sources/{id}/schedules`), Source create-time seed, **owner_ref** withdraw on Source delete, and mutating Source-update ensure: `docs/business-metadata.md`.
 - Schedule-first minting: `docs/adr/0025-clock-first-structure-jobs.md`.
 - Create-time seed: `docs/adr/0026-seed-structure-schedule-on-source-create.md`.
+- **Running Time Limit**: `docs/adr/0027-running-time-limit-on-schedule.md`.
 - Time / due rules: `docs/conventions-time.md`.
 
 ## 2. Service outline
 
 ```text
-Intent (definition: cadence / timezone / enabled / opaque owner_ref)
+Intent (definition: cadence / timezone / enabled / optional Running Time Limit / opaque owner_ref)
   → Commitment (stored next_run_at; not a debt ledger)
     → Due (consuming a tick = minting one Job, one atomic event)
       → Attempt fate (queued → running → terminal)  ← Job
@@ -42,6 +43,7 @@ Platform cadence definition. Does not contain extract SQL, transforms, a depende
 | enabled | Pause automatic due-ticks without delete; run-now still allowed |
 | cadence | Exactly one of `interval_seconds` or five-field `cron` |
 | schedule_timezone | IANA; interprets cron wall clock; ignored for interval |
+| running_timeout_sec | Optional **Running Time Limit** (positive seconds). Null / omit / seed = no control. Mint copies this onto the Job; the reaper does not live-read it. Cooperative stamp; not process kill |
 | owner_ref | Opaque caller association written by the domain facade; product HTTP cannot set it; null only for system rows |
 | last_run_at | Instant of the last **consumed due event** (Clock Instant when the Job was minted for that tick — not "last successful run"; run-now does not move it; cron cross-slot skip does not move it) |
 | next_run_at | Stored commitment Instant; null when disabled. Due iff `enabled` and `next_run_at <= Clock.now()`. Not computed on GET |
@@ -52,7 +54,7 @@ Rules:
 - Create via a **domain facade** (today: `POST /sources/{id}/schedules`), plus Metadata’s create-time seed when registering a database **Source**, plus a mutating Source update when a database Source has zero structure schedules. Platform `GET/PATCH/DELETE /schedules` list and edit cadence / enabled / delete. No global create. No PUT replace.
 - The schedule is **not owned by** Source / Entity / Serving. Facades register schedules; `owner_ref` is an opaque string (Metadata structure uses a facade-chosen literal such as `metadata:source:{id}`). The scheduler never parses it and never scans kwargs for Source id.
 - Job ↔ schedule association is `trigger_kind=schedule` and `trigger_ref` = schedule id. Structure single-flight is Metadata catalog-write serialization on the Source at Job **execution**, not a schedule lock.
-- `PATCH` is RFC 5789 partial (cadence / timezone / enabled / name). Changing cadence or timezone rewrites `next_run_at` only; already-minted Jobs keep running.
+- `PATCH` is RFC 5789 partial (cadence / timezone / enabled / name / `running_timeout_sec`). Changing cadence or timezone rewrites `next_run_at` only; already-minted Jobs keep running (including their minted Running Time Limit snapshot). Present `running_timeout_sec` null clears the definition to no-control; omission leaves the stored value. Non-positive is rejected (`SCHEDULE_RUNNING_TIMEOUT_INVALID`).
 - Permission is `jobs:run`. No `schedules:*` key.
 - System rows (`system=true`, e.g. stuck-Job reaper) stay enabled, are excluded from the default list and Console, and cannot be PATCHed, DELETEd, or run-now via product APIs. Their `owner_ref` is null. Tests may pass `?system=true` to list them.
 - **Due dispatch:** Beat selects enabled rows with `next_run_at <= Clock.now()`. Whether a tick is **consumed** is decided only by that column — not by a Celery crontab `is_due(last_run_at)` clock. Beat may debounce **delivery** of the same in-memory commitment Instant (one send, then wait for store reload / 30s retry) so it does not tight-loop before the worker writes the next commitment.
@@ -60,7 +62,7 @@ Rules:
   - **Cron cross-slot:** if the delivered / committed Instant is not the current legal slot, do **not** mint that Instant (no catch-up of missed slots) and do **not** change `last_run_at`. Then: if the current legal slot still matches and is later than the consumed cursor, rewrite `next_run_at` to **that current-slot Instant** and, in the **same due handling**, consume that identity a second time to mint the Job — do not remap the stale Instant onto a different `scheduled_for` in the first consumption. If the whole handling fails, Beat may redeliver the **stale** Instant; the worker runs the same second-consume path again. Otherwise (current slot empty or already consumed) advance `next_run_at` to the next legal slot after the current minute. "After now" is the matching wall-clock minute, not Instant `≥ Clock.now()`.
   - **Interval:** a past `next_run_at` means one catch-up tick. After mint, `next_run_at = mint Instant + interval` (must be `≥ now`). No wall-clock anchor grid.
   - Due path is idempotent on `(trigger_ref, scheduled_for)` when `scheduled_for` is not null.
-- Operator run-now (`POST /schedules/{id}/run`) mints a Job with the same trigger fields and `created_by` = the operator. It does **not** update `last_run_at` or `next_run_at`. Disabled schedules accept run-now. System rows reject it. Run-now Jobs have `scheduled_for` null.
+- Operator run-now (`POST /schedules/{id}/run`) mints a Job with the same trigger fields and `created_by` = the operator. It does **not** update `last_run_at` or `next_run_at`. Disabled schedules accept run-now. System rows reject it. Run-now Jobs have `scheduled_for` null. Due tick and run-now both snapshot `running_timeout_sec` from the definition at mint.
 - The scheduler does **not** interpret Source usability or structure single-flight. Domain Jobs always mint; structure collision / disabled Source fail on the Job during execution (`failed` + domain `error_code`), never as schedule skip or HTTP 409 from the schedule surface.
 - In-flight due (delivery already started, Job row not yet inserted) that meets disable or delete still mints and immediately marks the Job `cancelled`; that tick is consumed. Delivery carries the commitment Instant being consumed; the worker honors that Instant as the tick identity even when pause has cleared `next_run_at` or the definition row is already gone.
 - Pause (`enabled=false`): set `next_run_at` null immediately; already queued/running Jobs **keep running** (not cancelled by pause). Re-enable recomputes `next_run_at` from now (no catch-up of paused time).
@@ -76,6 +78,7 @@ Rules:
 - Source “related schedules” is a **Source-scoped workbench** at `/console/sources/:id/schedules` (not a sidebar module, not registered as `sources.show`): toolbar create plus the same row actions (enable/disable, edit, delete, run-now, related Jobs). `jobs:run` gates the surface.
 - Console delete asks for confirmation; HTTP `DELETE` remains immediate.
 - Screen copy uses **schedule**. Do not label `last_run_at` as "Last run". Disabled rows show paused, not "unknown next".
+- Create/edit may set optional **Running Time Limit**. Empty = no control. No new schedule-list column in this slice.
 
 ## 5. Non-Goals
 

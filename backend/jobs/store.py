@@ -51,6 +51,7 @@ class JobRecord:
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+    running_timeout_sec: int | None = None
 
 
 class UniqueScheduledForError(Exception):
@@ -210,6 +211,7 @@ class SqlJobStore:
             log_body=record.log_body,
             log_updated_at=record.log_updated_at,
             scheduled_for=record.scheduled_for,
+            running_timeout_sec=record.running_timeout_sec,
             claimed_by=record.claimed_by,
             locked_at=record.locked_at,
             created_at=record.created_at,
@@ -267,6 +269,7 @@ class SqlJobStore:
             row.log_body = record.log_body
             row.log_updated_at = record.log_updated_at
             row.scheduled_for = record.scheduled_for
+            row.running_timeout_sec = record.running_timeout_sec
             row.claimed_by = record.claimed_by
             row.locked_at = record.locked_at
             row.started_at = record.started_at
@@ -426,6 +429,7 @@ def _row_to_job(row: object) -> JobRecord:
         log_body=row.log_body or "",
         log_updated_at=row.log_updated_at,
         scheduled_for=getattr(row, "scheduled_for", None),
+        running_timeout_sec=getattr(row, "running_timeout_sec", None),
         claimed_by=getattr(row, "claimed_by", None),
         locked_at=getattr(row, "locked_at", None),
         created_at=row.created_at,
@@ -476,6 +480,7 @@ def create_queued_job(
     trigger_ref: str | None = None,
     log_body: str = "",
     scheduled_for: datetime | None = None,
+    running_timeout_sec: int | None = None,
     session: Session | None = None,
     created_at: datetime | None = None,
 ) -> JobRecord:
@@ -496,6 +501,7 @@ def create_queued_job(
         log_body=log_body,
         log_updated_at=now if log_body else None,
         scheduled_for=scheduled_for,
+        running_timeout_sec=running_timeout_sec,
         claimed_by=None,
         locked_at=None,
         created_at=now,
@@ -669,14 +675,16 @@ def reap_stale_occupancy() -> int:
 
 
 def reap_running_timeouts() -> int:
-    """Mark running Jobs past the running time limit as JOB_RUNNING_TIMEOUT."""
-    timeout = get_settings().refraq_job_running_timeout_sec
-    cutoff = utc_now() - timedelta(seconds=timeout)
+    """Mark running Jobs past their minted Running Time Limit as JOB_RUNNING_TIMEOUT."""
+    now = utc_now()
     store = get_job_store()
     reaped = 0
     for record in store.list(status="running"):
+        timeout = record.running_timeout_sec
+        if timeout is None:
+            continue
         started = record.started_at or record.created_at
-        if started > cutoff:
+        if started > now - timedelta(seconds=timeout):
             continue
         updated = mark_failed(
             record.id,

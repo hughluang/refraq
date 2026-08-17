@@ -6,6 +6,7 @@ from backend.core.config import get_settings
 from backend.core.time import utc_now
 
 from backend.jobs.store import (
+    TERMINAL,
     append_job_log,
     claim_queued,
     get_job_store,
@@ -104,8 +105,9 @@ def run_structure_job(job_id: str) -> dict[str, str]:
             error_summary="Source is not usable for jobs",
         )
 
-    if _cancelled(job_id):
-        return {"status": "cancelled"}
+    stopped = _stopped(job_id)
+    if stopped is not None:
+        return stopped
 
     append_job_log(job_id, level="info", message=f"loaded source {source.key}")
 
@@ -134,8 +136,9 @@ def run_structure_job(job_id: str) -> dict[str, str]:
             error_summary=f"No connector for engine {source.engine}",
         )
 
-    if _cancelled(job_id):
-        return {"status": "cancelled"}
+    stopped = _stopped(job_id)
+    if stopped is not None:
+        return stopped
 
     append_job_log(job_id, level="info", message="collecting structure…")
     try:
@@ -144,12 +147,14 @@ def run_structure_job(job_id: str) -> dict[str, str]:
             progress=StructureCollectLog(job_id),
         )
     except ConnectorError as exc:
-        if _cancelled(job_id):
-            return {"status": "cancelled"}
+        stopped = _stopped(job_id)
+        if stopped is not None:
+            return stopped
         return _fail(job_id, error_code=exc.code, error_summary=exc.message)
 
-    if _cancelled(job_id):
-        return {"status": "cancelled"}
+    stopped = _stopped(job_id)
+    if stopped is not None:
+        return stopped
 
     col_count = sum(len(obj.columns) for obj in collected.objects)
     append_job_log(
@@ -175,6 +180,9 @@ def run_structure_job(job_id: str) -> dict[str, str]:
     ]
     catalog = get_catalog_store()
     existing = catalog.list_present_for_source(source_id)
+    stopped = _stopped(job_id)
+    if stopped is not None:
+        return stopped
     append_job_log(job_id, level="info", message="applying catalog snapshot…")
     try:
         apply_structure_snapshot(
@@ -231,11 +239,14 @@ def _fail(job_id: str, *, error_code: str, error_summary: str) -> dict[str, str]
     return {"status": "failed", "error_code": error_code}
 
 
-def _cancelled(job_id: str) -> bool:
+def _stopped(job_id: str) -> dict[str, str] | None:
+    """Honor cooperative terminal stamps (cancel, timeout, occupancy lost)."""
     record = get_job_store().get(job_id)
     if record is None:
-        return True
-    return record.status == "cancelled"
+        return {"status": "missing"}
+    if record.status in TERMINAL:
+        return {"status": record.status}
+    return None
 
 
 def _to_catalog_records(

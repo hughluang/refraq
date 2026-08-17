@@ -156,6 +156,7 @@ def test_post_inserts_multiple_structure_schedules(client: TestClient) -> None:
     assert "args_json" not in body
     assert "kwargs_json" not in body
     assert "system" not in body
+    assert body["running_timeout_sec"] is None
 
     second = _post_daily(client, source["id"], cron="0 3 * * *")
     assert second.status_code == 201, second.text
@@ -579,6 +580,139 @@ def test_cadence_invalid(client: TestClient) -> None:
     assert resp.json()["code"] == "SCHEDULE_CADENCE_INVALID"
 
 
+def test_create_schedule_running_timeout_snapshots_on_run_now(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "backend.metadata.structure_jobs.service.run_structure_job",
+        lambda job_id: {"status": "succeeded"},
+    )
+    source = _make_source(client, key="timeout-src")
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "structure",
+            "cron": "0 2 * * *",
+            "schedule_timezone": "UTC",
+            "enabled": True,
+            "running_timeout_sec": 120,
+        },
+    )
+    assert created.status_code == 201, created.text
+    schedule = created.json()["schedule"]
+    assert schedule["running_timeout_sec"] == 120
+    ran = client.post(f"/schedules/{schedule['id']}/run")
+    assert ran.status_code == 202, ran.text
+    assert ran.json()["job"]["running_timeout_sec"] == 120
+
+
+def test_due_mint_snapshots_running_timeout(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "backend.metadata.source_jobs.run_job.apply_async",
+        lambda *a, **k: type("R", (), {"id": "eager-stub"})(),
+    )
+    source = _make_source(client, key="timeout-due")
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "structure",
+            "interval_seconds": 3600,
+            "schedule_timezone": "UTC",
+            "enabled": True,
+            "running_timeout_sec": 45,
+        },
+    )
+    schedule_id = created.json()["schedule"]["id"]
+    from dataclasses import replace
+
+    record = get_schedule_store().get_by_id(schedule_id)
+    assert record is not None
+    get_schedule_store().upsert(
+        replace(record, next_run_at=utc_now() - timedelta(minutes=1))
+    )
+    result = _fire(schedule_id)
+    assert result["status"] == "queued"
+    jobs = get_job_store().list(kind="structure")
+    assert len(jobs) == 1
+    assert jobs[0].running_timeout_sec == 45
+
+
+def test_create_rejects_zero_running_timeout(client: TestClient) -> None:
+    source = _make_source(client, key="timeout-zero")
+    resp = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "structure",
+            "cron": "0 2 * * *",
+            "schedule_timezone": "UTC",
+            "enabled": True,
+            "running_timeout_sec": 0,
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "SCHEDULE_RUNNING_TIMEOUT_INVALID"
+
+
+def test_patch_running_timeout_omit_leaves_and_null_clears(
+    client: TestClient,
+) -> None:
+    source = _make_source(client, key="timeout-patch")
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "structure",
+            "cron": "0 2 * * *",
+            "schedule_timezone": "UTC",
+            "enabled": True,
+            "running_timeout_sec": 90,
+        },
+    )
+    schedule_id = created.json()["schedule"]["id"]
+    omitted = client.patch(f"/schedules/{schedule_id}", json={"enabled": True})
+    assert omitted.status_code == 200
+    assert omitted.json()["schedule"]["running_timeout_sec"] == 90
+    cleared = client.patch(
+        f"/schedules/{schedule_id}", json={"running_timeout_sec": None}
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["schedule"]["running_timeout_sec"] is None
+
+
+def test_patch_running_timeout_does_not_rewrite_in_flight_job(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "backend.metadata.structure_jobs.service.run_structure_job",
+        lambda job_id: {"status": "succeeded"},
+    )
+    source = _make_source(client, key="timeout-inflight")
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "structure",
+            "cron": "0 2 * * *",
+            "schedule_timezone": "UTC",
+            "enabled": True,
+            "running_timeout_sec": 60,
+        },
+    )
+    schedule_id = created.json()["schedule"]["id"]
+    ran = client.post(f"/schedules/{schedule_id}/run")
+    assert ran.status_code == 202, ran.text
+    job_id = ran.json()["job"]["id"]
+    assert ran.json()["job"]["running_timeout_sec"] == 60
+    patched = client.patch(
+        f"/schedules/{schedule_id}", json={"running_timeout_sec": 600}
+    )
+    assert patched.status_code == 200
+    assert patched.json()["schedule"]["running_timeout_sec"] == 600
+    detail = client.get(f"/jobs/{job_id}")
+    assert detail.status_code == 200
+    assert detail.json()["job"]["running_timeout_sec"] == 60
+
+
 def test_cadence_rejects_non_positive_interval(client: TestClient) -> None:
     source = _make_source(client)
     resp = client.post(
@@ -786,6 +920,7 @@ def test_source_create_seeds_default_structure_schedule(client: TestClient) -> N
     assert seed["schedule_timezone"] == "UTC"
     assert seed["enabled"] is True
     assert seed["interval_seconds"] is None
+    assert seed["running_timeout_sec"] is None
     assert seed["name"] == "structure · seed-src"
     jobs = client.get("/jobs")
     assert jobs.status_code == 200

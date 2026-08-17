@@ -20,7 +20,13 @@ from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import get_user_store, reset_user_store  # noqa: E402
 from backend.core.config import get_settings, reset_settings_cache  # noqa: E402
 from backend.core.time import utc_now  # noqa: E402
-from backend.jobs.store import create_queued_job, get_job_store  # noqa: E402
+from backend.jobs.store import (  # noqa: E402
+    ERROR_RUNNING_TIMEOUT,
+    create_queued_job,
+    get_job_store,
+    mark_cancelled,
+    mark_failed,
+)
 from backend.main import app  # noqa: E402
 from backend.metadata.catalog.records import CatalogColumnRecord, CatalogObjectRecord  # noqa: E402
 from backend.metadata.catalog.store import get_catalog_store  # noqa: E402
@@ -247,3 +253,72 @@ def test_fail_safe_runner_writes_no_result_or_diff(
     assert diffs == []
     present = get_catalog_store().list_present_for_source(source.id)
     assert len(present) == 4
+
+
+def test_running_timeout_during_collect_does_not_write_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _source()
+    _seed_tables(source, ["orders"])
+    job = create_queued_job(kind="structure", input={"source_id": source.id})
+
+    class TimeoutDuringCollect(_FakeConnector):
+        def collect_structure(self, endpoint, progress=None) -> CollectedStructure:
+            collected = super().collect_structure(endpoint, progress)
+            marked = mark_failed(
+                job.id,
+                error_code=ERROR_RUNNING_TIMEOUT,
+                error_summary="Job exceeded running time limit",
+                from_statuses=("running",),
+            )
+            assert marked is not None
+            assert marked.status == "failed"
+            return collected
+
+    monkeypatch.setattr(
+        "backend.metadata.connectors.runtime.get_connector",
+        lambda engine: TimeoutDuringCollect(["orders", "lines"]),
+    )
+    out = run_structure_job(job.id)
+    assert out["status"] == "failed"
+    stored = get_job_store().get(job.id)
+    assert stored is not None
+    assert stored.status == "failed"
+    assert stored.error_code == ERROR_RUNNING_TIMEOUT
+    assert stored.result is None
+    diffs, total = get_structure_diff_store().list_for_source(source.id)
+    assert total == 0
+    assert diffs == []
+    present = get_catalog_store().list_present_for_source(source.id)
+    assert [obj.name for obj in present] == ["orders"]
+
+
+def test_cancel_during_collect_does_not_write_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _source()
+    _seed_tables(source, ["orders"])
+    job = create_queued_job(kind="structure", input={"source_id": source.id})
+
+    class CancelDuringCollect(_FakeConnector):
+        def collect_structure(self, endpoint, progress=None) -> CollectedStructure:
+            collected = super().collect_structure(endpoint, progress)
+            marked = mark_cancelled(job.id)
+            assert marked is not None
+            assert marked.status == "cancelled"
+            return collected
+
+    monkeypatch.setattr(
+        "backend.metadata.connectors.runtime.get_connector",
+        lambda engine: CancelDuringCollect(["orders", "lines"]),
+    )
+    out = run_structure_job(job.id)
+    assert out["status"] == "cancelled"
+    stored = get_job_store().get(job.id)
+    assert stored is not None
+    assert stored.status == "cancelled"
+    assert stored.result is None
+    diffs, total = get_structure_diff_store().list_for_source(source.id)
+    assert total == 0
+    present = get_catalog_store().list_present_for_source(source.id)
+    assert [obj.name for obj in present] == ["orders"]

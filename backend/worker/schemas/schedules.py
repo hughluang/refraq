@@ -29,6 +29,7 @@ class ScheduleOut(BaseModel):
     interval_seconds: int | None
     cron: str | None
     schedule_timezone: str
+    running_timeout_sec: int | None = None
     last_run_at: Instant | None
     next_run_at: Instant | None = None
     last_job: ScheduleLastJobOut | None = None
@@ -50,3 +51,4 @@ class SchedulePatchRequest(BaseModel):
     cron: str | None = None
     interval_seconds: int | None = None
     schedule_timezone: str | None = None
+    running_timeout_sec: int | None = None

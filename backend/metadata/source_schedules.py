@@ -20,6 +20,7 @@ from backend.worker.api import (
     initial_next_run_at,
     schedule_out,
     validate_cadence,
+    validate_running_timeout,
     withdraw_schedules_by_owner_ref,
 )
 from backend.worker.errors import ScheduleSystemImmutable
@@ -159,6 +160,7 @@ def _new_structure_schedule_record(
     schedule_timezone: str,
     enabled: bool,
     name: str | None,
+    running_timeout_sec: int | None = None,
 ) -> ScheduledTaskRecord:
     cron_value = cron.strip() if cron else None
     now = utc_now()
@@ -185,6 +187,7 @@ def _new_structure_schedule_record(
         owner_ref=structure_owner_ref(source.id),
         last_run_at=now,
         next_run_at=next_run,
+        running_timeout_sec=running_timeout_sec,
         created_at=now,
         updated_at=now,
     )
@@ -214,6 +217,7 @@ def create_structure_schedule(
     schedule_timezone: str,
     enabled: bool,
     name: str | None,
+    running_timeout_sec: int | None = None,
     actor_user_id: str | None,
     actor_token_id: str | None,
 ) -> ScheduleOut:
@@ -225,6 +229,7 @@ def create_structure_schedule(
         interval_seconds=interval_seconds,
         schedule_timezone=schedule_timezone,
     )
+    timeout = validate_running_timeout(running_timeout_sec)
     record = _new_structure_schedule_record(
         source,
         cron=cron,
@@ -232,6 +237,7 @@ def create_structure_schedule(
         schedule_timezone=schedule_timezone,
         enabled=enabled,
         name=name,
+        running_timeout_sec=timeout,
     )
     stored = get_schedule_store().upsert(record)
     persist_audit_event(

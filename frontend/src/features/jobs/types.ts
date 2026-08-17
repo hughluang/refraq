@@ -10,6 +10,7 @@ export type Job = {
   trigger_actor_name: string | null;
   trigger_schedule_name: string | null;
   created_by_user_id: string | null;
+  running_timeout_sec?: number | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;

@@ -21,6 +21,7 @@ export type ScheduledTask = {
   interval_seconds: number | null;
   cron: string | null;
   schedule_timezone: string;
+  running_timeout_sec: number | null;
   last_run_at: string | null;
   next_run_at: string | null;
   last_job: ScheduleLastJob | null;
@@ -33,6 +34,7 @@ export type CreateScheduleBody = {
   cron?: string | null;
   interval_seconds?: number | null;
   schedule_timezone: string;
+  running_timeout_sec?: number | null;
   enabled: boolean;
   name?: string | null;
 };
@@ -43,4 +45,5 @@ export type PatchScheduleBody = {
   cron?: string | null;
   interval_seconds?: number | null;
   schedule_timezone?: string;
+  running_timeout_sec?: number | null;
 };

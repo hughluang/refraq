@@ -27,6 +27,7 @@ class ScheduledTaskRow(Base):
     schedule_timezone: Mapped[str] = mapped_column(
         String(64), nullable=False, default="UTC"
     )
+    running_timeout_sec: Mapped[int | None] = mapped_column(Integer, nullable=True)
     task_name: Mapped[str] = mapped_column(String(256), nullable=False)
     args_json: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     kwargs_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)

@@ -18,6 +18,11 @@ import {
   createSourceSchedule,
   patchSchedule,
 } from "@/features/schedules/api";
+import {
+  isAllowedTimeoutInput,
+  timeoutFromTask,
+  timeoutPayload,
+} from "@/features/schedules/runningTimeoutField";
 import type { ScheduledTask } from "@/features/schedules/types";
 import { ApiError } from "@/lib/api";
 
@@ -44,6 +49,7 @@ type FormValues = {
   cron: string;
   interval_seconds: number | string;
   schedule_timezone: string;
+  running_timeout_sec: number | "";
   enabled: boolean;
   name: string;
 };
@@ -63,6 +69,7 @@ function valuesFromTask(task: ScheduledTask | null): FormValues {
     cron: task?.cron ?? "0 2 * * *",
     interval_seconds: task?.interval_seconds ?? 3600,
     schedule_timezone: task?.schedule_timezone ?? "UTC",
+    running_timeout_sec: timeoutFromTask(task?.running_timeout_sec),
     enabled: task?.enabled ?? true,
     name: task?.name ?? "",
   };
@@ -99,16 +106,26 @@ export function ScheduleFormModal({
   }, [opened, sourceId, schedule?.id]);
 
   async function handleSave() {
+    const timeoutInput = form.values.running_timeout_sec;
+    if (!isAllowedTimeoutInput(timeoutInput)) {
+      form.setFieldError(
+        "running_timeout_sec",
+        t("schedules.validation.runningTimeout"),
+      );
+      return;
+    }
     setLoading(true);
     try {
       const timezone = form.values.schedule_timezone.trim() || "UTC";
       const name = form.values.name.trim();
+      const running_timeout_sec = timeoutPayload(timeoutInput);
       const cadenceBody =
         form.values.cadence === "interval"
           ? {
               interval_seconds: Number(form.values.interval_seconds),
               cron: null as string | null,
               schedule_timezone: timezone,
+              running_timeout_sec,
               enabled: form.values.enabled,
               name,
             }
@@ -120,6 +137,7 @@ export function ScheduleFormModal({
                       ?.cron ?? form.values.cron.trim()),
               interval_seconds: null as number | null,
               schedule_timezone: timezone,
+              running_timeout_sec,
               enabled: form.values.enabled,
               name,
             };
@@ -187,6 +205,24 @@ export function ScheduleFormModal({
           data={TIMEZONES}
           searchable
           {...form.getInputProps("schedule_timezone")}
+        />
+        <NumberInput
+          label={t("schedules.fields.runningTimeout")}
+          description={t("schedules.fields.runningTimeoutHelp")}
+          min={1}
+          allowDecimal={false}
+          allowNegative={false}
+          value={form.values.running_timeout_sec}
+          error={form.errors.running_timeout_sec}
+          onChange={(value) => {
+            if (value === "" || value == null) {
+              form.setFieldValue("running_timeout_sec", "");
+              return;
+            }
+            if (typeof value === "number") {
+              form.setFieldValue("running_timeout_sec", value);
+            }
+          }}
         />
         <TextInput
           label={t("schedules.fields.name")}

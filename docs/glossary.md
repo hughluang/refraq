@@ -191,11 +191,13 @@ API (or a **Scheduled Task**) enqueues; a Celery worker executes; operator-visib
 Lifecycle stamps (`created_at`, `started_at`, `finished_at`, log line times) are **Instants**.
 Successful Jobs may carry a nullable generic **Job result**; failed/cancelled/fail-safe Jobs leave it null.
 Occupancy lost-detection (~60s → `JOB_WORKER_LOST`) assumes Beat is alive; if Beat is down, reaping stops — API alone does not clear a false `RUNNING`.
+A minted **Running Time Limit** snapshot may end the Job `failed` with `JOB_RUNNING_TIMEOUT`; a null snapshot is not limited this way. That stamp is cooperative: the worker process is not killed; the structure runner stops before catalog write.
 Avoid calling it an Ingestion Job. Avoid running long work inside the Management Console API request.
 Avoid treating a Job as a **Scheduled Task**, or reading Celery result/Flower as the product lifecycle.
 Avoid promoting domain foreign keys into universal Job fields.
 Avoid promoting kind-specific result fields (for example structure `class`) into universal Job fields.
 Avoid overloading enqueue **summary** with outcome, or writing `{}` to mean “no result”.
+Avoid treating a global env as the **Running Time Limit** definition, or conflating worker-lost with running-timeout.
 
 ### Job result
 
@@ -208,7 +210,7 @@ The platform **scheduling foundation**: a cadence intent stored in Postgres that
 Celery Beat reads these rows (single Beat replica). Distinct from any one **Job** instance.
 A platform mechanism like **Job**, not a product domain, not a Metadata business object, and **not owned by Source** (no Source FK; scheduler never parses Source).
 Operator-facing identity is a closed work kind plus target projected by a **domain facade** (first slice: Metadata structure + Source), not a Celery task name. Facades may register several structure schedules that *target* one Source; that target lives in facade/kwargs projection, not as schedule ownership.
-Cron wall clock uses **Schedule Timezone**; `last_run_at` is the consumed-due cursor Instant; `next_run_at` is the stored commitment (null when paused). Operator run-now enqueues without moving those fields. Observation “last run” joins related **Jobs**.
+Cron wall clock uses **Schedule Timezone**; `last_run_at` is the consumed-due cursor Instant; `next_run_at` is the stored commitment (null when paused). An optional **Running Time Limit** on the definition is copied onto each minted **Job**. Operator run-now enqueues without moving those fields. Observation “last run” joins related **Jobs**.
 Console operator copy, docs that name the row, and identifiers whose referent is this entity use **schedule**, not clock.
 Avoid storing product schedules only in Redis Beat state or static code when operators need to change them.
 Avoid treating Celery `timezone` as the business schedule zone.
@@ -218,6 +220,12 @@ Avoid treating structure single-flight as a schedule mutex, Beat skip, or schedu
 Avoid treating Scheduled Task **as** a DAG/workflow; dispatched work may later be those kinds.
 Avoid Clock as a product noun, Console label, or identifier for this entity. Avoid renaming Instant test `Clock` / `get_clock`, cron wall-clock English, or ADR file `0025-clock-first-structure-jobs.md`.
 Avoid treating stored `next_run_at` as a debt of missed ticks or computing it only on GET.
+Avoid treating **Running Time Limit** as cron wall-clock or a global Job env.
+
+### Running Time Limit
+
+An optional positive-second bound on a **Scheduled Task** (`running_timeout_sec`) for how long a minted **Job** may stay `running`. Default, seed, and omit are null: the reaper does not mark `JOB_RUNNING_TIMEOUT`. Mint copies the value onto the Job; the reaper reads only that snapshot. PATCH of the definition does not rewrite in-flight Jobs. The stamp is cooperative (not process kill); the structure runner does not write catalog after it. Console: Running time limit.
+Avoid wall-clock, timeout, clock, a global env as the definition, a platform safety cap beside the schedule field, live-reading the schedule at reap time, merging with occupancy / `JOB_WORKER_LOST`, or treating null as a hidden 3600s default.
 
 ### owner_ref
 
@@ -238,6 +246,7 @@ Avoid wall-clock local time, treating cron hour/minute as a stored Instant, or e
 
 An IANA zone on a **Scheduled Task** that interprets **cron** wall-clock fields; ignored for interval schedules; not part of an **Instant** and not the Celery process timezone.
 Avoid storing the zone inside a timestamptz Instant, conflating with **Display Timezone**, or assuming interval schedules shift when the zone changes.
+Avoid calling **Running Time Limit** wall-clock.
 
 ### Operations Nav Group
 

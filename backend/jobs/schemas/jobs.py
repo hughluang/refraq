@@ -20,6 +20,7 @@ class JobOut(BaseModel):
     trigger_actor_name: str | None = None
     trigger_schedule_name: str | None = None
     scheduled_for: Instant | None = None
+    running_timeout_sec: int | None = None
     created_by_user_id: str | None
     created_at: Instant
     started_at: Instant | None

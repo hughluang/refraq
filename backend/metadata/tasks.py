@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from celery import shared_task
 
-from backend.jobs.store import get_job_store, mark_failed
+from backend.jobs.store import TERMINAL, get_job_store, mark_failed
 from backend.metadata.structure_jobs.service import run_structure_job
 
 
@@ -15,8 +15,8 @@ def run_job(job_id: str) -> dict[str, str]:
     current = get_job_store().get(job_id)
     if current is None:
         return {"status": "missing"}
-    if current.status == "cancelled":
-        return {"status": "cancelled"}
+    if current.status in TERMINAL:
+        return {"status": current.status}
     if current.kind == "structure":
         return run_structure_job(job_id)
     mark_failed(

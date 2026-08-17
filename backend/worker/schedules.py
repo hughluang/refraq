@@ -33,6 +33,7 @@ class ScheduledTaskRecord:
     owner_ref: str | None = None
     last_run_at: datetime | None = None
     next_run_at: datetime | None = None
+    running_timeout_sec: int | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
 
@@ -164,6 +165,7 @@ class MemoryScheduleStore:
                     owner_ref=record.owner_ref,
                     last_run_at=last_run_at,
                     next_run_at=next_if_enabled if record.enabled else None,
+                    running_timeout_sec=record.running_timeout_sec,
                     created_at=record.created_at,
                     updated_at=now,
                 )
@@ -198,6 +200,7 @@ class SqlScheduleStore:
         row.interval_seconds = record.interval_seconds
         row.cron = record.cron
         row.schedule_timezone = record.schedule_timezone or "UTC"
+        row.running_timeout_sec = record.running_timeout_sec
         row.task_name = record.task_name
         row.args_json = list(record.args_json)
         row.kwargs_json = dict(record.kwargs_json)
@@ -357,6 +360,7 @@ def _row_to_schedule(row: object) -> ScheduledTaskRecord:
         owner_ref=getattr(row, "owner_ref", None),
         last_run_at=row.last_run_at,
         next_run_at=getattr(row, "next_run_at", None),
+        running_timeout_sec=getattr(row, "running_timeout_sec", None),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

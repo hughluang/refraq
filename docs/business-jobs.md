@@ -13,6 +13,7 @@ Related boundaries:
 - **Scheduled Task** (the schedule that mints domain Jobs): `docs/business-scheduled-tasks.md`.
 - Metadata **structure** kind, Source facade, single-flight, and **Structure Diff**: `docs/business-metadata.md`.
 - Schedule-first minting: `docs/adr/0025-clock-first-structure-jobs.md`.
+- **Running Time Limit** (schedule definition, Job snapshot): `docs/adr/0027-running-time-limit-on-schedule.md`.
 
 ## 2. Object Model
 
@@ -29,6 +30,7 @@ Platform durable asynchronous execution. Each product domain interprets `kind` a
 | trigger | `trigger_kind` / `trigger_ref` — how the Job was started |
 | trigger presentation | `trigger_actor_name` (User display name) and `trigger_schedule_name` (**Scheduled Task** name); not identity |
 | scheduled_for | Due-slot Instant consumed for an automatic fire; null for operator run-now. Idempotency key with `trigger_ref` when not null |
+| running_timeout_sec | Minted **Running Time Limit** snapshot (nullable positive seconds). Null = reaper does not mark `JOB_RUNNING_TIMEOUT`. Not a live read of the schedule |
 | created_by | User id (null when Beat fires; set when an operator run-now fires the schedule) |
 | timestamps / error summary / log | Operational visibility |
 
@@ -37,7 +39,8 @@ Rules:
 - Job is **not** owned by Source. Do not treat `source_id` as a universal Job column — it lives in `input` when required.
 - Structure **Jobs** are minted only by a **Scheduled Task** (due tick or operator run-now). There is no Source HTTP enqueue and no MCP enqueue in this phase. Platform-wide observe uses `GET /jobs` and `GET /jobs/{id}` / `.../logs` / cancel. Related Jobs for a schedule: `GET /schedules/{id}/jobs`. There is no global `POST /jobs` create.
 - Entering execution requires a `queued → running` claim (CAS). Broker redelivery of a non-queued Job must not re-run domain work.
-- **Occupancy** (Job primitive; shares Beat with schedules only because the platform has one periodic clock): the worker renews declarations on its running Jobs; a system Scheduled Task marks stale occupancy `JOB_WORKER_LOST` and over-limit runs `JOB_RUNNING_TIMEOUT`. Lost-detection SLA assumes Beat is alive: if Beat is down, occupancy reaping stops; bringing up the API alone does not clear a false `RUNNING`. On worker start, abandon leftover running claims for this worker identity immediately (no freshness filter) as `JOB_WORKER_LOST` — not a global reap; a same-identity restart must not treat the previous attempt as still running.
+- **Occupancy** (Job primitive; shares Beat with schedules only because the platform has one periodic clock): the worker renews declarations on its running Jobs; a system Scheduled Task marks stale occupancy `JOB_WORKER_LOST`. Lost-detection SLA assumes Beat is alive: if Beat is down, occupancy reaping stops; bringing up the API alone does not clear a false `RUNNING`. On worker start, abandon leftover running claims for this worker identity immediately (no freshness filter) as `JOB_WORKER_LOST` — not a global reap; a same-identity restart must not treat the previous attempt as still running.
+- **Running Time Limit** is defined on the **Scheduled Task**, not as a Job or env primitive. Mint copies `running_timeout_sec` onto the Job. The same system reaper marks a still-occupied run `JOB_RUNNING_TIMEOUT` when that snapshot is not null and `started_at` is older than the snapshot. Null snapshot: skip. Cooperative CAS `running → failed`; not process kill. The structure runner treats a terminal Job (`cancelled` or `failed`) as stop and does not apply a catalog snapshot or persist a **Structure Diff** after that stamp. Collect already in flight may finish. PATCH of the schedule field does not rewrite in-flight Jobs.
 - Structure single-flight / Source usability are Metadata execution rules on structure Jobs, not Job-table ownership by Source and not schedule mint gates.
 - Jobs are durable records; queue transport is Redis-backed via Celery.
 - Observing Jobs uses public Job fields only. Kind-specific outcome fields stay inside **Job result** (and on domain records such as **Structure Diff**), not as public Job attributes.

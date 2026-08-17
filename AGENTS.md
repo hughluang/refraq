@@ -11,6 +11,7 @@ The Management Foundation login/session/permission slice (Management Console) is
 - Use documents under `docs/` as the source of truth when code does not yet define behavior.
 - Prefer small, verifiable changes.
 - Never commit secrets or real credentials.
+- Committed code, comments, and docs stay English. Chinese UI copy belongs only in `frontend/src/locales/zh-CN/`; native locale labels may also live in `frontend/src/providers/locale-catalog.ts`. Do not put CJK in `docs/`, `CONTEXT.md`, ADRs, identifiers, or comments. Check: `python3 scripts/check_staged_cjk.py` (staged) or `--all` (working tree).
 
 ## Read First
 

@@ -61,6 +61,7 @@ def enqueue_structure_job(
     actor_user_id: str | None,
     trigger_ref: str,
     scheduled_for: datetime | None = None,
+    running_timeout_sec: int | None = None,
 ) -> JobRecord:
     """Create a schedule-triggered structure Job and dispatch the worker.
 
@@ -87,6 +88,7 @@ def enqueue_structure_job(
         trigger_ref=trigger_ref,
         log_body=queued_line,
         scheduled_for=scheduled_for,
+        running_timeout_sec=running_timeout_sec,
     )
     dispatch_queued_job(job)
     return get_job_store().get(job.id) or job
@@ -108,6 +110,7 @@ def run_structure_schedule(
         actor_user_id=actor_user_id,
         trigger_ref=record.id,
         scheduled_for=None,
+        running_timeout_sec=record.running_timeout_sec,
     )
     persist_audit_event(
         actor_user_id=actor_user_id,
@@ -156,6 +159,9 @@ def _mint_on_session(
             trigger_ref=schedule_id,
             log_body=queued_line,
             scheduled_for=scheduled_for,
+            running_timeout_sec=(
+                cadence.running_timeout_sec if cadence is not None else None
+            ),
             session=session,
             created_at=now,
         )

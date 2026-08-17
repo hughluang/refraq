@@ -148,6 +148,14 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
               </Text>
               {formatJobDuration(job)}
             </Text>
+            {job.running_timeout_sec != null ? (
+              <Text size="sm">
+                <Text span c="dimmed">
+                  {t("jobs.fields.runningTimeout")}:{" "}
+                </Text>
+                {job.running_timeout_sec}s
+              </Text>
+            ) : null}
           </Group>
           {job.error_code ? (
             <Text size="sm" c="red">

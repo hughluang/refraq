@@ -15,6 +15,7 @@ from backend.worker.cron import compute_next_run_at, parse_cron_fields, validate
 from backend.worker.errors import (
     ScheduleCadenceInvalid,
     ScheduleNotFound,
+    ScheduleRunningTimeoutInvalid,
     ScheduleSystemImmutable,
 )
 from backend.worker.models import REAPER_SCHEDULE_KEY, REAPER_TASK_NAME
@@ -30,6 +31,7 @@ __all__ = [
     "patch_schedule",
     "schedule_out",
     "validate_cadence",
+    "validate_running_timeout",
     "withdraw_schedules_by_owner_ref",
     "initial_next_run_at",
 ]
@@ -88,6 +90,14 @@ def validate_cadence(
         raise ScheduleCadenceInvalid("interval_seconds must be positive")
 
 
+def validate_running_timeout(value: int | None) -> int | None:
+    if value is None:
+        return None
+    if value < 1:
+        raise ScheduleRunningTimeoutInvalid()
+    return value
+
+
 def initial_next_run_at(
     *,
     cron: str | None,
@@ -122,6 +132,7 @@ def schedule_out(
         interval_seconds=record.interval_seconds,
         cron=record.cron,
         schedule_timezone=record.schedule_timezone,
+        running_timeout_sec=record.running_timeout_sec,
         last_run_at=record.last_run_at,
         next_run_at=record.next_run_at,
         last_job=last_job,
@@ -145,9 +156,11 @@ def patch_schedule(
     cron: str | None = None,
     interval_seconds: int | None = None,
     schedule_timezone: str | None = None,
+    running_timeout_sec: int | None = None,
     cron_set: bool = False,
     interval_set: bool = False,
     timezone_set: bool = False,
+    timeout_set: bool = False,
 ) -> ScheduledTaskRecord:
     record = get_schedule(schedule_id)
     if record.system:
@@ -180,6 +193,11 @@ def patch_schedule(
         interval_seconds=next_interval,
         schedule_timezone=next_zone,
     )
+    next_timeout = (
+        validate_running_timeout(running_timeout_sec)
+        if timeout_set
+        else record.running_timeout_sec
+    )
     now = utc_now()
     next_enabled = record.enabled if enabled is None else enabled
     cadence_changed = cron_set or interval_set or timezone_set
@@ -204,6 +222,7 @@ def patch_schedule(
         cron=next_cron,
         interval_seconds=next_interval,
         schedule_timezone=next_zone,
+        running_timeout_sec=next_timeout,
         next_run_at=next_run,
         updated_at=now,
     )

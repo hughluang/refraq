@@ -7,6 +7,7 @@ from backend.core.errors import AppError
 __all__ = [
     "ScheduleCadenceInvalid",
     "ScheduleNotFound",
+    "ScheduleRunningTimeoutInvalid",
     "ScheduleSystemImmutable",
 ]
 
@@ -33,3 +34,11 @@ class ScheduleCadenceInvalid(AppError):
 
     def _default_message(self) -> str:
         return "Scheduled Task cadence is invalid"
+
+
+class ScheduleRunningTimeoutInvalid(AppError):
+    code = "SCHEDULE_RUNNING_TIMEOUT_INVALID"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Running Time Limit must be a positive number of seconds"
