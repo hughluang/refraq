@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord, UserStore, get_user_store
+from backend.core.pagination import PageParams, page_params
 from backend.jobs.api import get_schedule_name_store, present_jobs
 from backend.jobs.schemas.jobs import JobListResponse
 from backend.jobs.store import JobStatus
@@ -92,14 +93,22 @@ def list_schedule_jobs(
     schedule_id: str,
     kind: str | None = None,
     status_filter: JobStatus | None = Query(default=None, alias="status"),
+    page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
     _: UserRecord = Depends(require_permission("jobs:run")),
     users: UserStore = Depends(get_user_store),
 ) -> JobListResponse:
-    records = list_jobs_for_schedule(
-        schedule_id, kind=kind, status=status_filter
+    records, total = list_jobs_for_schedule(
+        schedule_id,
+        kind=kind,
+        status=status_filter,
+        limit=page.limit,
+        offset=page.offset,
     )
     return JobListResponse(
         items=present_jobs(
             records, users=users, schedules=get_schedule_name_store()
-        )
+        ),
+        total=total,
+        limit=page.limit,
+        offset=page.offset,
     )

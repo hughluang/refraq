@@ -1,10 +1,11 @@
 "use client";
 
-import { Button, Group, Pagination, Table, Text } from "@mantine/core";
+import { Button, Group, Table, Text } from "@mantine/core";
 import { useCan, useTranslate } from "@refinedev/core";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback } from "react";
 
+import { ListPager } from "@/components/display/ListPager";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { ForbiddenState } from "@/components/feedback/ForbiddenState";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
@@ -13,9 +14,9 @@ import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { listStructureDiffs } from "@/features/sources/api";
 import { StructureDiffClassBadge } from "@/features/sources/structure-diffs/StructureDiffClassBadge";
-import type { StructureDiff } from "@/features/sources/types";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
-import { ApiError } from "@/lib/api";
+import { usePagedList } from "@/hooks/usePagedList";
+import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
 
@@ -39,33 +40,17 @@ export function StructureDiffList({ sourceId }: Props) {
     action: ModuleAction.show,
   });
 
-  const [items, setItems] = useState<StructureDiff[]>([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const fetchPage = useCallback(
+    (query: PageQuery) => listStructureDiffs(sourceId, query),
+    [sourceId],
+  );
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const offset = (page - 1) * PAGE_SIZE;
-      const listRes = await listStructureDiffs(sourceId, {
-        limit: PAGE_SIZE,
-        offset,
-      });
-      setItems(listRes.items);
-      setTotal(listRes.total);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.detail : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [sourceId, page]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const { items, total, page, setPage, loading, error, reload, pageSize } =
+    usePagedList({
+      pageSize: PAGE_SIZE,
+      fetch: fetchPage,
+      resetDeps: [sourceId],
+    });
 
   const aclPending = canLoading || canShow === undefined;
 
@@ -74,8 +59,7 @@ export function StructureDiffList({ sourceId }: Props) {
   }
 
   const title = `${t("structureDiffs.title")} · ${sourceId}`;
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const showSkeleton = aclPending || loading;
+  const showSkeleton = aclPending || (loading && items.length === 0);
 
   return (
     <PageChrome
@@ -96,7 +80,7 @@ export function StructureDiffList({ sourceId }: Props) {
             variant="light"
             loading={loading}
             disabled={aclPending}
-            onClick={() => void load()}
+            onClick={() => void reload()}
           >
             {t("jobs.refresh")}
           </Button>
@@ -106,7 +90,7 @@ export function StructureDiffList({ sourceId }: Props) {
       {showSkeleton ? (
         <PageBodySkeleton />
       ) : error ? (
-        <PageError message={error} onRetry={() => void load()} />
+        <PageError message={error} onRetry={() => void reload()} />
       ) : items.length === 0 ? (
         <EmptyState message={t("structureDiffs.empty")} />
       ) : (
@@ -155,14 +139,12 @@ export function StructureDiffList({ sourceId }: Props) {
               ))}
             </Table.Tbody>
           </Table>
-          {pageCount > 1 ? (
-            <Pagination
-              mt="md"
-              value={page}
-              onChange={setPage}
-              total={pageCount}
-            />
-          ) : null}
+          <ListPager
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onChange={setPage}
+          />
         </>
       )}
     </PageChrome>

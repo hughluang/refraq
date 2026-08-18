@@ -8,6 +8,7 @@ Business rules: `docs/business-jobs.md` (platform Job) and `docs/business-metada
 Auth: Session or User PAT. Permissions: `jobs:run` unless noted.
 Instants: [`docs/conventions-time.md`](conventions-time.md) (UTC `Z` on the wire).
 HTTP protocol failures: [`docs/conventions-errors.md`](conventions-errors.md). Job `error_code` / `error_message` remain resource fields on a successful GET, not Problem Details.
+List envelopes: [`docs/conventions-pagination.md`](conventions-pagination.md).
 
 ## 2. Job Shape
 
@@ -81,21 +82,23 @@ Rules:
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/jobs` | `jobs:run` | Platform list all Jobs (`status`, `kind` query filters) |
+| `GET` | `/jobs` | `jobs:run` | Platform list all Jobs (`status`, `kind`, **Offset Page**) |
 | `GET` | `/jobs/{id}` | `jobs:run` | Get Job by id |
 | `GET` | `/jobs/{id}/logs` | `jobs:run` | Get Job `log_body` (`{ job_id, body, updated_at }`) |
 | `POST` | `/jobs/{id}/cancel` | `jobs:run` | Cancel if not terminal |
-| `GET` | `/schedules/{id}/jobs` | `jobs:run` | Jobs this schedule minted (`trigger_kind=schedule` and `trigger_ref=id`) |
+| `GET` | `/schedules/{id}/jobs` | `jobs:run` | Jobs this schedule minted (`trigger_kind=schedule` and `trigger_ref=id`; **Offset Page**) |
 
 Structure minting is `POST /schedules/{id}/run` (`docs/api-contracts-schedules.md`). There is no `POST /sources/{id}/jobs` and no `GET /sources/{id}/jobs`.
 
 ### `GET /jobs`
 
-Platform-wide list (newest first). Query params may include `status`, `kind`.
+Platform-wide **Offset Page** (newest first: `created_at DESC`, `id DESC`). Query params: `status`, `kind`, `limit` (default **50**, max **200**), `offset` (default **0**).
+
+Response: `{ "items": […], "total": N, "limit": L, "offset": O }`. `total` is the filtered set.
 
 ### `GET /schedules/{id}/jobs`
 
-Jobs whose trigger points at this Scheduled Task. Missing schedule → `SCHEDULE_NOT_FOUND`. Query params may include `status`, `kind`. Historical user/mcp Jobs are not included.
+Jobs whose trigger points at this Scheduled Task (`trigger_kind=schedule` and `trigger_ref=id`). Same **Offset Page** envelope, defaults, max, and ordering as `GET /jobs`. Query params: `status`, `kind`, `limit`, `offset`. Missing schedule → `SCHEDULE_NOT_FOUND`. Historical user/mcp Jobs are not included.
 
 ### `GET /jobs/{id}/logs`
 

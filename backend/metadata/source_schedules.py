@@ -119,14 +119,14 @@ def public_schedule(
 
 
 def _last_job_for_schedule(schedule_id: str) -> ScheduleLastJobOut | None:
-    jobs = [
-        job
-        for job in get_job_store().list()
-        if job.trigger_kind == "schedule" and job.trigger_ref == schedule_id
-    ]
+    jobs, _ = get_job_store().list(
+        trigger_kind="schedule",
+        trigger_ref=schedule_id,
+        limit=1,
+    )
     if not jobs:
         return None
-    latest = max(jobs, key=lambda j: j.created_at)
+    latest = jobs[0]
     return ScheduleLastJobOut(
         id=latest.id,
         status=latest.status,
@@ -320,13 +320,18 @@ def list_jobs_for_schedule(
     *,
     kind: str | None = None,
     status: JobStatus | None = None,
-) -> list[JobRecord]:
+    limit: int | None = None,
+    offset: int = 0,
+) -> tuple[list[JobRecord], int]:
     get_schedule(schedule_id)
-    return [
-        job
-        for job in get_job_store().list(kind=kind, status=status)
-        if job.trigger_kind == "schedule" and job.trigger_ref == schedule_id
-    ]
+    return get_job_store().list(
+        kind=kind,
+        status=status,
+        trigger_kind="schedule",
+        trigger_ref=schedule_id,
+        limit=limit,
+        offset=offset,
+    )
 
 
 def require_runnable_schedule(schedule_id: str) -> ScheduledTaskRecord:

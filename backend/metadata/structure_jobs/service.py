@@ -75,7 +75,8 @@ def run_structure_job(job_id: str) -> dict[str, str]:
 
     # Structure single-flight at execution: earlier running Job wins; later fails.
     me_key = (current.started_at or current.created_at, current.id)
-    for other in get_job_store().list(kind="structure"):
+    others, _ = get_job_store().list(kind="structure")
+    for other in others:
         if other.id == job_id:
             continue
         if other.input.get("source_id") != source_id:

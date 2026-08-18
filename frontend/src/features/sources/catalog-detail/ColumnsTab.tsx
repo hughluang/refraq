@@ -4,7 +4,6 @@ import {
   Badge,
   Button,
   Group,
-  Pagination,
   Select,
   Stack,
   Table,
@@ -15,6 +14,7 @@ import {
 import { useNotification, useTranslate } from "@refinedev/core";
 import { useEffect, useMemo, useState, Fragment } from "react";
 
+import { ListPager } from "@/components/display/ListPager";
 import { patchColumnSemanticsBatch } from "@/features/sources/api";
 import type {
   CatalogObject,
@@ -518,20 +518,12 @@ export function ColumnsTab({
         </Table.Tbody>
       </Table>
 
-      <Group justify="space-between">
-        <Text size="sm" c="dimmed">
-          {t("catalog.columns.pageShowing", {
-            from: filtered.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1,
-            to: Math.min(page * PAGE_SIZE, filtered.length),
-            total: filtered.length,
-          })}
-        </Text>
-        <Pagination
-          value={page}
-          onChange={setPage}
-          total={Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))}
-        />
-      </Group>
+      <ListPager
+        page={page}
+        pageSize={PAGE_SIZE}
+        total={filtered.length}
+        onChange={setPage}
+      />
     </Stack>
   );
 }

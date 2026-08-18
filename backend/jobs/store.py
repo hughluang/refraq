@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Any, Literal, Sequence
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from backend.core.config import get_settings
@@ -104,14 +104,27 @@ class MemoryJobStore:
         *,
         kind: str | None = None,
         status: JobStatus | None = None,
-    ) -> list[JobRecord]:
+        trigger_kind: str | None = None,
+        trigger_ref: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[JobRecord], int]:
         with self._lock:
             items = list(self._by_id.values())
             if kind is not None:
                 items = [r for r in items if r.kind == kind]
             if status is not None:
                 items = [r for r in items if r.status == status]
-            return sorted(items, key=lambda r: r.created_at, reverse=True)
+            if trigger_kind is not None:
+                items = [r for r in items if r.trigger_kind == trigger_kind]
+            if trigger_ref is not None:
+                items = [r for r in items if r.trigger_ref == trigger_ref]
+            items.sort(key=lambda r: (r.created_at, r.id), reverse=True)
+            total = len(items)
+            start = max(0, offset)
+            if limit is None:
+                return items[start:], total
+            return items[start : start + max(0, limit)], total
 
     def claim_queued(
         self,
@@ -283,16 +296,35 @@ class SqlJobStore:
         *,
         kind: str | None = None,
         status: JobStatus | None = None,
-    ) -> list[JobRecord]:
+        trigger_kind: str | None = None,
+        trigger_ref: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[JobRecord], int]:
         with session_scope() as session:
-            stmt = select(JobRow)
+            filters = []
             if kind is not None:
-                stmt = stmt.where(JobRow.kind == kind)
+                filters.append(JobRow.kind == kind)
             if status is not None:
-                stmt = stmt.where(JobRow.status == status)
-            stmt = stmt.order_by(JobRow.created_at.desc())
+                filters.append(JobRow.status == status)
+            if trigger_kind is not None:
+                filters.append(JobRow.trigger_kind == trigger_kind)
+            if trigger_ref is not None:
+                filters.append(JobRow.trigger_ref == trigger_ref)
+            count_stmt = select(func.count()).select_from(JobRow)
+            if filters:
+                count_stmt = count_stmt.where(*filters)
+            total = int(session.execute(count_stmt).scalar_one())
+            stmt = select(JobRow)
+            if filters:
+                stmt = stmt.where(*filters)
+            stmt = stmt.order_by(JobRow.created_at.desc(), JobRow.id.desc())
+            if offset:
+                stmt = stmt.offset(offset)
+            if limit is not None:
+                stmt = stmt.limit(limit)
             rows = session.scalars(stmt).all()
-            return [_row_to_job(row) for row in rows]
+            return [_row_to_job(row) for row in rows], total
 
     def claim_queued(
         self,
@@ -604,9 +636,8 @@ def cancel_unfinished_for_schedule(schedule_id: str) -> list[JobRecord]:
     """Immediately cancel queued/running Jobs minted by this schedule."""
     store = get_job_store()
     cancelled: list[JobRecord] = []
-    for record in store.list():
-        if record.trigger_kind != "schedule" or record.trigger_ref != schedule_id:
-            continue
+    records, _ = store.list(trigger_kind="schedule", trigger_ref=schedule_id)
+    for record in records:
         if record.status in TERMINAL:
             continue
         updated = mark_cancelled(record.id)
@@ -651,7 +682,7 @@ def fail_leftover_occupancy(claimed_by: str) -> int:
     """
     leftovers = [
         record
-        for record in get_job_store().list(status="running")
+        for record in get_job_store().list(status="running")[0]
         if record.claimed_by == claimed_by
     ]
     return _fail_worker_lost(
@@ -666,7 +697,7 @@ def reap_stale_occupancy() -> int:
     cutoff = utc_now() - timedelta(seconds=lost_sec)
     stale = [
         record
-        for record in get_job_store().list(status="running")
+        for record in get_job_store().list(status="running")[0]
         if (record.locked_at or record.started_at or record.created_at) <= cutoff
     ]
     return _fail_worker_lost(
@@ -680,7 +711,7 @@ def reap_running_timeouts() -> int:
     now = utc_now()
     store = get_job_store()
     reaped = 0
-    for record in store.list(status="running"):
+    for record in store.list(status="running")[0]:
         timeout = record.running_timeout_sec
         if timeout is None:
             continue

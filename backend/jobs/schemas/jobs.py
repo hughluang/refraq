@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.pagination import OffsetPage
 from backend.core.time import Instant
 from typing import Any
 
@@ -30,8 +31,8 @@ class JobOut(BaseModel):
     log_updated_at: Instant | None = None
 
 
-class JobListResponse(BaseModel):
-    items: list[JobOut]
+class JobListResponse(OffsetPage[JobOut]):
+    pass
 
 
 class JobResponse(BaseModel):

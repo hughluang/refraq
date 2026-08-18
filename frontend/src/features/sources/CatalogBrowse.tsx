@@ -5,7 +5,6 @@ import {
   Button,
   Checkbox,
   Group,
-  Pagination,
   Select,
   Stack,
   Table,
@@ -16,13 +15,16 @@ import { useNotification, useTranslate } from "@refinedev/core";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
+import { ListPager } from "@/components/display/ListPager";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageError } from "@/components/feedback/PageError";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { listCatalogObjects, listSources } from "@/features/sources/api";
-import type { CatalogObject, Source } from "@/features/sources/types";
+import type { Source } from "@/features/sources/types";
+import { usePagedList } from "@/hooks/usePagedList";
 import { ApiError } from "@/lib/api";
+import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 100;
 
@@ -36,15 +38,45 @@ export function CatalogBrowse() {
   const [sourceId, setSourceId] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
-  const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [items, setItems] = useState<CatalogObject[]>([]);
-  const [listLoading, setListLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [semanticsReady, setSemanticsReady] =
     useState<SemanticsReadyFilter>("all");
   const [includeAbsent, setIncludeAbsent] = useState(true);
+
+  const onError = useCallback(
+    (message: string) => {
+      open?.({ type: "error", message });
+    },
+    [open],
+  );
+
+  const fetchPage = useCallback(
+    (query: PageQuery) =>
+      listCatalogObjects(sourceId as string, debouncedQ || undefined, {
+        ...query,
+        include_absent: includeAbsent,
+        business_semantics_ready:
+          semanticsReady === "all" ? undefined : semanticsReady === "ready",
+      }),
+    [sourceId, debouncedQ, includeAbsent, semanticsReady],
+  );
+
+  const {
+    items,
+    total,
+    page,
+    setPage,
+    loading: listLoading,
+    reload,
+    pageSize,
+  } = usePagedList({
+    pageSize: PAGE_SIZE,
+    fetch: fetchPage,
+    resetDeps: [sourceId, debouncedQ, includeAbsent, semanticsReady],
+    enabled: Boolean(sourceId),
+    onError,
+  });
 
   const loadSources = useCallback(async () => {
     setLoading(true);
@@ -61,36 +93,6 @@ export function CatalogBrowse() {
     }
   }, [sourceId]);
 
-  const loadObjects = useCallback(async () => {
-    if (!sourceId) {
-      setItems([]);
-      setTotal(0);
-      return;
-    }
-    setListLoading(true);
-    try {
-      const offset = (page - 1) * PAGE_SIZE;
-      const data = await listCatalogObjects(sourceId, debouncedQ || undefined, {
-        limit: PAGE_SIZE,
-        offset,
-        include_absent: includeAbsent,
-        business_semantics_ready:
-          semanticsReady === "all"
-            ? undefined
-            : semanticsReady === "ready",
-      });
-      setItems(data.items);
-      setTotal(data.total);
-    } catch (err) {
-      open?.({
-        type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
-      });
-    } finally {
-      setListLoading(false);
-    }
-  }, [sourceId, debouncedQ, page, includeAbsent, semanticsReady, open]);
-
   useEffect(() => {
     void loadSources();
   }, [loadSources]);
@@ -100,18 +102,10 @@ export function CatalogBrowse() {
     return () => window.clearTimeout(timer);
   }, [q]);
 
-  useEffect(() => {
-    setPage(1);
-  }, [sourceId, debouncedQ, includeAbsent, semanticsReady]);
-
-  useEffect(() => {
-    void loadObjects();
-  }, [loadObjects]);
-
   if (error && !loading) return <PageError message={error} />;
 
   const refreshAction = (
-    <Button size="sm" variant="light" onClick={() => void loadObjects()}>
+    <Button size="sm" variant="light" onClick={() => void reload()}>
       {t("catalog.refresh")}
     </Button>
   );
@@ -241,20 +235,12 @@ export function CatalogBrowse() {
                   ))}
                 </Table.Tbody>
               </Table>
-              <Group justify="space-between">
-                <Text size="sm" c="dimmed">
-                  {t("catalog.list.showing", {
-                    from: (page - 1) * PAGE_SIZE + 1,
-                    to: Math.min(page * PAGE_SIZE, total),
-                    total,
-                  })}
-                </Text>
-                <Pagination
-                  value={page}
-                  onChange={setPage}
-                  total={Math.max(1, Math.ceil(total / PAGE_SIZE))}
-                />
-              </Group>
+              <ListPager
+                page={page}
+                pageSize={pageSize}
+                total={total}
+                onChange={setPage}
+              />
             </Stack>
           )}
         </>

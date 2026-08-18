@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.pagination import OffsetPage
 from backend.core.time import Instant
 from typing import Literal
 
@@ -130,25 +131,16 @@ class CatalogObjectOut(BaseModel):
     collected_at: Instant | None = None
 
 
-class CatalogObjectListResponse(BaseModel):
-    items: list[CatalogObjectOut]
-    total: int = 0
-    limit: int = 100
-    offset: int = 0
+class CatalogObjectListResponse(OffsetPage[CatalogObjectOut]):
+    pass
 
 
-class CatalogObjectSearchResponse(BaseModel):
-    items: list[CatalogObjectOut]
-    total: int
-    limit: int
-    offset: int
+class CatalogObjectSearchResponse(OffsetPage[CatalogObjectOut]):
+    pass
 
 
-class CatalogColumnSearchResponse(BaseModel):
-    items: list[CatalogColumnOut]
-    total: int
-    limit: int
-    offset: int
+class CatalogColumnSearchResponse(OffsetPage[CatalogColumnOut]):
+    pass
 
 
 class CatalogObjectResponse(BaseModel):

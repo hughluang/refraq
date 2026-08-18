@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 
+from backend.core.pagination import OffsetPage
 from backend.core.time import Instant
 from pydantic import BaseModel, Field
 
@@ -24,11 +25,8 @@ class BusinessDomainOut(BaseModel):
     updated_at: Instant
 
 
-class BusinessDomainListResponse(BaseModel):
-    items: list[BusinessDomainOut]
-    total: int = 0
-    limit: int = 100
-    offset: int = 0
+class BusinessDomainListResponse(OffsetPage[BusinessDomainOut]):
+    pass
 
 
 class BusinessDomainResponse(BaseModel):

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
+from backend.core.pagination import PageParams, page_params
 from backend.metadata.catalog import service as catalog_service
 from backend.metadata.query import service as query_service
 from backend.metadata.query.compile_sample import SampleFilterSpec, SampleOrderSpec
@@ -143,8 +144,7 @@ def list_objects(
     object_type: str | None = None,
     include_absent: bool = True,
     business_semantics_ready: bool | None = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
+    page: PageParams = Depends(page_params(default_limit=100, max_limit=500)),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectListResponse:
     items, total = catalog_service.list_objects_for_source(
@@ -153,14 +153,14 @@ def list_objects(
         object_type=object_type,
         include_absent=include_absent,
         business_semantics_ready=business_semantics_ready,
-        limit=limit,
-        offset=offset,
+        limit=page.limit,
+        offset=page.offset,
     )
     return CatalogObjectListResponse(
         items=[_object_out(o) for o in items],
         total=total,
-        limit=limit,
-        offset=offset,
+        limit=page.limit,
+        offset=page.offset,
     )
 
 @router.get("/catalog/objects/search", response_model=CatalogObjectSearchResponse)
@@ -168,22 +168,21 @@ def search_objects(
     q: str = Query(..., min_length=1),
     source_id: str | None = None,
     object_type: str | None = None,
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+    page: PageParams = Depends(page_params(default_limit=20, max_limit=100)),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectSearchResponse:
     items, total = catalog_service.search_objects(
         q,
         source_id=source_id,
         object_type=object_type,
-        limit=limit,
-        offset=offset,
+        limit=page.limit,
+        offset=page.offset,
     )
     return CatalogObjectSearchResponse(
         items=[_object_out(o) for o in items],
         total=total,
-        limit=limit,
-        offset=offset,
+        limit=page.limit,
+        offset=page.offset,
     )
 
 @router.get("/catalog/columns/search", response_model=CatalogColumnSearchResponse)
@@ -191,22 +190,21 @@ def search_columns(
     q: str = Query(..., min_length=1),
     source_id: str | None = None,
     object_type: str | None = None,
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+    page: PageParams = Depends(page_params(default_limit=20, max_limit=100)),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogColumnSearchResponse:
     items, total = catalog_service.search_columns(
         q,
         source_id=source_id,
         object_type=object_type,
-        limit=limit,
-        offset=offset,
+        limit=page.limit,
+        offset=page.offset,
     )
     return CatalogColumnSearchResponse(
         items=[_column_out(c) for c in items],
         total=total,
-        limit=limit,
-        offset=offset,
+        limit=page.limit,
+        offset=page.offset,
     )
 
 @router.get("/objects/{object_id}", response_model=CatalogObjectResponse)

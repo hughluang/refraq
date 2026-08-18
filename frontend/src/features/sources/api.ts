@@ -1,5 +1,6 @@
 import { apiClient } from "@/lib/api";
 import type { ScheduledTask } from "@/features/schedules/types";
+import type { OffsetPage } from "@/lib/pagination";
 import type {
   CatalogColumn,
   CatalogJoin,
@@ -289,7 +290,7 @@ export function listStructureDiffs(
   if (params?.limit != null) q.set("limit", String(params.limit));
   if (params?.offset != null) q.set("offset", String(params.offset));
   const suffix = q.toString() ? `?${q.toString()}` : "";
-  return apiClient<{ items: StructureDiff[]; total: number }>(
+  return apiClient<OffsetPage<StructureDiff>>(
     `/sources/${sourceId}/structure-diffs${suffix}`,
   );
 }

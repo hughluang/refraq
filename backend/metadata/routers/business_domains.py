@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, Response, status
 
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
+from backend.core.pagination import PageParams, page_params
 from backend.metadata.business_domains import service as domain_service
 from backend.metadata.business_domains.store import BusinessDomainRecord
 from backend.metadata.schemas.business_domains import (
@@ -33,16 +34,17 @@ def _domain_out(record: BusinessDomainRecord) -> BusinessDomainOut:
 @router.get("/business-domains", response_model=BusinessDomainListResponse)
 def list_business_domains(
     q: str | None = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
+    page: PageParams = Depends(page_params(default_limit=100, max_limit=500)),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> BusinessDomainListResponse:
-    items, total = domain_service.list_domains(q=q, limit=limit, offset=offset)
+    items, total = domain_service.list_domains(
+        q=q, limit=page.limit, offset=page.offset
+    )
     return BusinessDomainListResponse(
         items=[_domain_out(i) for i in items],
         total=total,
-        limit=limit,
-        offset=offset,
+        limit=page.limit,
+        offset=page.offset,
     )
 
 

@@ -5,6 +5,7 @@ import type {
   PatchScheduleBody,
   ScheduledTask,
 } from "@/features/schedules/types";
+import type { OffsetPage } from "@/lib/pagination";
 
 export function listSchedules() {
   return apiClient<{ items: ScheduledTask[] }>("/schedules");
@@ -48,6 +49,15 @@ export function runSchedule(scheduleId: string) {
   });
 }
 
-export function listScheduleJobs(scheduleId: string) {
-  return apiClient<{ items: Job[] }>(`/schedules/${scheduleId}/jobs`);
+export function listScheduleJobs(
+  scheduleId: string,
+  params?: { kind?: string; status?: string; limit?: number; offset?: number },
+) {
+  const q = new URLSearchParams();
+  if (params?.kind) q.set("kind", params.kind);
+  if (params?.status) q.set("status", params.status);
+  if (params?.limit != null) q.set("limit", String(params.limit));
+  if (params?.offset != null) q.set("offset", String(params.offset));
+  const suffix = q.toString() ? `?${q.toString()}` : "";
+  return apiClient<OffsetPage<Job>>(`/schedules/${scheduleId}/jobs${suffix}`);
 }

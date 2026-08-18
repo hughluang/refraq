@@ -41,12 +41,14 @@ Responsibilities:
 - `core/secrets.py`: application secret encryption helpers
 - `core/errors.py`: `AppError` (code + http_status) and HTTP Problem Details serialization
 - `core/request_id.py`: `X-Request-ID` middleware helpers, log filter, Celery header transfer
+- `core/pagination.py`: Offset Page query dependency (`page_params`) and envelope (`OffsetPage`)
 - `core/upgrade.py`: **Foundation Upgrade** (advisory-locked Alembic migrate, then call domain System Role ensure, system schedules, and Type Mapping seeds); exit non-zero on failure
 - `core/entry.py`: official product start path (run Foundation Upgrade, then serve); exit non-zero if upgrade fails (does not serve)
 - Process probes (health/ready HTTP adapters)
 
 Time contract: [`docs/conventions-time.md`](conventions-time.md), ADR [`0022`](adr/0022-unified-time-contract.md).
 Error / request-id contract: [`docs/conventions-errors.md`](conventions-errors.md), ADR [`0023`](adr/0023-api-problem-details.md).
+Pagination contract: [`docs/conventions-pagination.md`](conventions-pagination.md), ADR [`0029`](adr/0029-offset-page-as-platform-list-envelope.md).
 
 Must not contain:
 
@@ -248,6 +250,7 @@ Responsibilities:
 
 - Shared API helpers
 - Small framework-agnostic utility code
+- Offset Page types and page-math helpers (`lib/pagination.ts`); paged-list state lives in `hooks/usePagedList.ts`; the list footer is `components/display/ListPager.tsx`
 
 Must not contain:
 

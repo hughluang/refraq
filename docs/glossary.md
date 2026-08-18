@@ -400,6 +400,12 @@ Mapped to HTTP `401`.
 
 The agreed request and response shape between frontend and backend.
 
+### Offset Page
+
+The platform envelope for a paged collection list: `{ "items", "total", "limit", "offset" }`. `total` is the filtered set. Newest-first pages order by `created_at DESC` with an `id` tiebreaker.
+Contract: [`docs/conventions-pagination.md`](conventions-pagination.md).
+Avoid `{items}`-only collection responses for new lists; avoid `total_count`; avoid a Cursor Page without ADR admission; avoid treating page bounds as Job retention.
+
 ## Repository And Process
 
 ### Project Boundary

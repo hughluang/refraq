@@ -48,6 +48,11 @@ from backend.worker.schedules import (  # noqa: E402
 )
 
 
+def _structure_jobs():
+    items, _ = get_job_store().list(kind="structure")
+    return items
+
+
 def _due_at(schedule_id: str) -> str:
     """Simulate Beat delivery kwargs: commitment Instant frozen at send time."""
     record = get_schedule_store().get_by_id(schedule_id)
@@ -281,7 +286,7 @@ def test_create_does_not_fire_immediately(
         assert created.status_code == 201, created.text
         result = _fire(created.json()["schedule"]["id"])
         assert result["status"] == "not_due"
-        assert get_job_store().list(kind="structure") == []
+        assert _structure_jobs() == []
     finally:
         reset_clock()
 
@@ -347,7 +352,7 @@ def test_overlap_still_mints_when_source_busy(
     result = _fire(schedule_id)
     assert result["status"] == "queued"
     assert "job_id" in result
-    assert len(get_job_store().list(kind="structure")) == 2
+    assert len(_structure_jobs()) == 2
 
 
 def test_disabled_source_tick_still_mints(
@@ -382,7 +387,7 @@ def test_disabled_source_tick_still_mints(
     )
     result = _fire(schedule_id)
     assert result["status"] == "queued"
-    assert len(get_job_store().list(kind="structure")) == 1
+    assert len(_structure_jobs()) == 1
 
 
 def _structure_record(*, source_id: str = "src_abc") -> ScheduledTaskRecord:
@@ -510,7 +515,7 @@ def test_structure_mint_task_lives_on_fire_scheduled_structure() -> None:
 def test_missing_due_at_does_not_mint() -> None:
     result = fire_scheduled_structure("sched_does_not_exist")
     assert result["status"] == "missing_due_at"
-    assert get_job_store().list(kind="structure") == []
+    assert _structure_jobs() == []
 
 
 def test_deleted_schedule_with_due_at_mints_cancelled(
@@ -527,7 +532,7 @@ def test_deleted_schedule_with_due_at_mints_cancelled(
         due_at=format_instant(due, timespec="microseconds"),
     )
     assert result["status"] == "cancelled"
-    jobs = get_job_store().list(kind="structure")
+    jobs = _structure_jobs()
     assert len(jobs) == 1
     assert jobs[0].status == "cancelled"
     assert jobs[0].scheduled_for == due
@@ -565,7 +570,7 @@ def test_missing_source_tick_still_mints(monkeypatch: pytest.MonkeyPatch) -> Non
     )
     result = _fire("sched_orphan")
     assert result["status"] == "queued"
-    jobs = get_job_store().list(kind="structure")
+    jobs = _structure_jobs()
     assert len(jobs) == 1
     assert jobs[0].trigger_ref == "sched_orphan"
 
@@ -634,7 +639,7 @@ def test_due_mint_snapshots_running_timeout(
     )
     result = _fire(schedule_id)
     assert result["status"] == "queued"
-    jobs = get_job_store().list(kind="structure")
+    jobs = _structure_jobs()
     assert len(jobs) == 1
     assert jobs[0].running_timeout_sec == 45
 
@@ -811,7 +816,7 @@ def test_run_now_mints_when_source_busy(
     second = client.post(f"/schedules/{schedule_id}/run")
     assert second.status_code == 202, second.text
     assert second.json()["job"]["id"] != job.id
-    assert len(get_job_store().list(kind="structure")) == 2
+    assert len(_structure_jobs()) == 2
 
 
 def test_schedule_jobs_filtered_by_trigger_ref(
@@ -1122,7 +1127,7 @@ def test_cron_current_slot_mints(
         )
         result = _fire(schedule_id)
         assert result["status"] == "queued"
-        jobs = get_job_store().list(kind="structure")
+        jobs = _structure_jobs()
         assert len(jobs) == 1
         assert jobs[0].scheduled_for == slot
         refreshed = get_schedule_store().get_by_id(schedule_id)
@@ -1160,7 +1165,7 @@ def test_cron_cross_slot_advances_without_mint(
         )
         result = _fire(schedule_id)
         assert result["status"] == "skip_cross_slot"
-        assert get_job_store().list(kind="structure") == []
+        assert _structure_jobs() == []
         refreshed = get_schedule_store().get_by_id(schedule_id)
         assert refreshed is not None
         assert refreshed.last_run_at == last
@@ -1198,7 +1203,7 @@ def test_cron_stale_commitment_keeps_today_slot(
         )
         result = _fire(schedule_id)
         assert result["status"] == "queued"
-        jobs = get_job_store().list(kind="structure")
+        jobs = _structure_jobs()
         assert len(jobs) == 1
         assert jobs[0].scheduled_for == today_slot
         assert jobs[0].scheduled_for != yesterday
@@ -1238,7 +1243,7 @@ def test_cron_stale_commitment_past_slot_skips_without_mint(
         )
         result = _fire(schedule_id)
         assert result["status"] == "skip_cross_slot"
-        assert get_job_store().list(kind="structure") == []
+        assert _structure_jobs() == []
         refreshed = get_schedule_store().get_by_id(schedule_id)
         assert refreshed is not None
         assert refreshed.last_run_at == last
@@ -1435,7 +1440,7 @@ def test_inflight_delete_mints_cancelled_job(
         due_at=delivered,
     )
     assert result["status"] == "cancelled"
-    jobs = get_job_store().list(kind="structure")
+    jobs = _structure_jobs()
     assert len(jobs) == 1
     assert jobs[0].status == "cancelled"
     assert jobs[0].scheduled_for == due
@@ -1481,7 +1486,7 @@ def test_unique_collision_still_advances_next(
         result = _fire(schedule_id)
         assert result["status"] == "already_minted"
         assert result["job_id"] == existing.id
-        jobs = get_job_store().list(kind="structure")
+        jobs = _structure_jobs()
         assert len(jobs) == 1
         refreshed = get_schedule_store().get_by_id(schedule_id)
         assert refreshed is not None
@@ -1524,7 +1529,7 @@ def test_missing_target_mints_cancelled_job(
     )
     result = _fire(schedule_id)
     assert result["status"] == "cancelled"
-    jobs = get_job_store().list(kind="structure")
+    jobs = _structure_jobs()
     assert len(jobs) == 1
     assert jobs[0].status == "cancelled"
     assert jobs[0].scheduled_for == due
@@ -1571,7 +1576,7 @@ def test_inflight_disable_mints_cancelled_job(
         due_at=delivered,
     )
     assert result["status"] == "cancelled"
-    jobs = get_job_store().list(kind="structure")
+    jobs = _structure_jobs()
     assert len(jobs) == 1
     assert jobs[0].status == "cancelled"
     assert jobs[0].scheduled_for == due
@@ -1618,7 +1623,7 @@ def test_paused_cron_cross_slot_does_not_mint_or_restore_next(
             due_at=delivered,
         )
         assert result["status"] == "skip_cross_slot"
-        assert get_job_store().list(kind="structure") == []
+        assert _structure_jobs() == []
         refreshed = get_schedule_store().get_by_id(schedule_id)
         assert refreshed is not None
         assert refreshed.enabled is False
@@ -1658,7 +1663,7 @@ def test_interval_catchup_scheduled_for_and_next(
         get_schedule_store().upsert(replace(record, next_run_at=past))
         result = _fire(schedule_id)
         assert result["status"] == "queued"
-        jobs = get_job_store().list(kind="structure")
+        jobs = _structure_jobs()
         assert len(jobs) == 1
         assert jobs[0].scheduled_for == past
         refreshed = get_schedule_store().get_by_id(schedule_id)

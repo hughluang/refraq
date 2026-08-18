@@ -9,7 +9,7 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Any, Protocol
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from backend.core.config import get_settings
 from backend.core.db import session_scope
@@ -72,7 +72,7 @@ class MemoryStructureDiffStore:
             items = [
                 r for r in self._by_id.values() if r.source_id == source_id
             ]
-        items.sort(key=lambda r: r.created_at, reverse=True)
+        items.sort(key=lambda r: (r.created_at, r.id), reverse=True)
         total = len(items)
         return items[offset : offset + limit], total
 
@@ -108,12 +108,19 @@ class SqlStructureDiffStore:
         self, source_id: str, *, limit: int = 50, offset: int = 0
     ) -> tuple[list[StructureDiffRecord], int]:
         with session_scope() as session:
-            base = select(StructureDiffRow).where(
-                StructureDiffRow.source_id == source_id
+            total = int(
+                session.execute(
+                    select(func.count())
+                    .select_from(StructureDiffRow)
+                    .where(StructureDiffRow.source_id == source_id)
+                ).scalar_one()
             )
-            total = len(session.scalars(base).all())
             stmt = (
-                base.order_by(StructureDiffRow.created_at.desc())
+                select(StructureDiffRow)
+                .where(StructureDiffRow.source_id == source_id)
+                .order_by(
+                    StructureDiffRow.created_at.desc(), StructureDiffRow.id.desc()
+                )
                 .offset(offset)
                 .limit(limit)
             )

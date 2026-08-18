@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.core.pagination import OffsetPage
 from backend.core.time import Instant
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -30,11 +31,8 @@ class StructureDiffOut(StructureDiffListItemOut):
     changes: list[dict[str, Any]]
 
 
-class StructureDiffListResponse(BaseModel):
-    items: list[StructureDiffListItemOut]
-    total: int = 0
-    limit: int = 50
-    offset: int = 0
+class StructureDiffListResponse(OffsetPage[StructureDiffListItemOut]):
+    pass
 
 
 class StructureDiffResponse(BaseModel):

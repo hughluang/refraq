@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
+from backend.core.pagination import OffsetPage
 from backend.core.time import Instant
 from pydantic import BaseModel, Field
 
@@ -41,11 +42,8 @@ class TypeMappingOut(BaseModel):
     updated_at: Instant
 
 
-class TypeMappingListResponse(BaseModel):
-    items: list[TypeMappingOut]
-    total: int = 0
-    limit: int = 100
-    offset: int = 0
+class TypeMappingListResponse(OffsetPage[TypeMappingOut]):
+    pass
 
 
 class TypeMappingResponse(BaseModel):

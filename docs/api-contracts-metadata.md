@@ -7,6 +7,7 @@ HTTP contracts for collected **Catalog Objects**, semantics, join edges, search,
 Business rules: `docs/business-metadata.md`.
 Auth: Session or User PAT.
 HTTP protocol failures: [`docs/conventions-errors.md`](conventions-errors.md).
+List envelopes: [`docs/conventions-pagination.md`](conventions-pagination.md).
 
 Slice / permission availability:
 
@@ -104,7 +105,7 @@ Identity is `source_id` (+ object coordinates). `collected_at` is optional prove
 | `GET` | `/objects/{id}/ddl` | `metadata:read` | DDL text when stored |
 | `POST` | `/objects/{id}/sample` | `catalog:sample` | Catalog Sample live peek (§8) |
 
-List response: `{ "items": […], "total": N, "limit": L, "offset": O }` when pagination params are used; `limit` default 100, max 500. `total` is the filtered set.
+**Offset Page** response: `{ "items": […], "total": N, "limit": L, "offset": O }`. `limit` default 100, max 500. `total` is the filtered set. Order: `schema_name`, `name`, `object_type`.
 
 List `q` is optional. When set, it matches a literal case-insensitive substring of `schema_name`, `name`, or `business_name` (not `locator_key`, not `business_description`). `include_absent` defaults true (tombstones stay in **Current catalog**). `business_semantics_ready` is optional `true` | `false`; omit means no readiness filter.
 
@@ -114,10 +115,10 @@ A **Structure Diff** belongs to a **Source** and was produced by one successful 
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/sources/{id}/structure-diffs` | `metadata:read` | List Diffs for this Source (newest first; `limit`/`offset`) |
+| `GET` | `/sources/{id}/structure-diffs` | `metadata:read` | List Diffs for this Source (newest first; **Offset Page**) |
 | `GET` | `/structure-diffs/{id}` | `metadata:read` | Diff detail including full `changes` |
 
-List item includes `id`, `source_id`, `job_id`, `class`, `counts`, `created_at` (not full `changes`). Detail adds `changes`: arrays of `{ "change", "locator_key" }` plus `from`/`to` when the change is type, PK, or nullable.
+**Offset Page** response: `{ "items": […], "total": N, "limit": L, "offset": O }`. `limit` default 50, max 200. Order: `created_at DESC`, `id DESC`. List item includes `id`, `source_id`, `job_id`, `class`, `counts`, `created_at` (not full `changes`). Detail adds `changes`: arrays of `{ "change", "locator_key" }` plus `from`/`to` when the change is type, PK, or nullable.
 
 `class` / `counts` match the structure **Job result** envelope (`docs/api-contracts-jobs.md`). `change` values include `object_added`, `object_removed`, `column_added`, `column_removed`, `type_changed`, `pk_changed`, `nullable_tightened`, `nullable_widened`, `comment_or_default_changed`, and FK/index kinds that do not raise `class`.
 
@@ -164,22 +165,22 @@ Validation:
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/business-domains` | `metadata:read` | List domains (`q`, `limit`, `offset`) |
+| `GET` | `/business-domains` | `metadata:read` | List domains (`q`; **Offset Page**, `limit` default 100, max 500) |
 | `POST` | `/business-domains` | `metadata:write` | Create (`code`, `name`, `description?`) |
 | `PATCH` | `/business-domains/{id}` | `metadata:write` | Patch `name` / `description` (`code` immutable) |
 | `DELETE` | `/business-domains/{id}` | `metadata:write` | Delete; blocked when referenced (`BUSINESS_DOMAIN_IN_USE`) |
 
-Domain shape: `{ "id", "code", "name", "description", "created_at", "updated_at" }`.
+**Offset Page** response: `{ "items": […], "total": N, "limit": L, "offset": O }`. Order: `code`, `id`. Domain shape: `{ "id", "code", "name", "description", "created_at", "updated_at" }`.
 Create conflicts on duplicate `code` → `BUSINESS_DOMAIN_CODE_CONFLICT`. Missing id → `BUSINESS_DOMAIN_NOT_FOUND`.
 
 ## 4.2 Type Mapping Endpoints (ADR 0024)
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/type-mappings` | `metadata:read` | List mappings (`q`, `engine`, `origin`, `limit`, `offset`) |
+| `GET` | `/type-mappings` | `metadata:read` | List mappings (`q`, `engine`, `origin`; **Offset Page**, `limit` default 100, max 500) |
 | `PATCH` | `/type-mappings/{id}` | `metadata:write` | Set `normalized_type` on a non-seed row |
 
-No POST or DELETE. Mapping shape: `{ "id", "engine", "native_type", "normalized_type", "origin", "created_at", "updated_at" }`. `origin` is `product` \| `job` \| `user`.
+No POST or DELETE. **Offset Page** response: `{ "items": […], "total": N, "limit": L, "offset": O }`. Order: `engine`, `native_type`, `id`. Mapping shape: `{ "id", "engine", "native_type", "normalized_type", "origin", "created_at", "updated_at" }`. `origin` is `product` \| `job` \| `user`.
 
 PATCH body: `{ "normalized_type": "<one of 11 buckets>" }` — any closed Normalized Type except `unknown`. Product seed (`origin=product`) → `TYPE_MAPPING_SEED_IMMUTABLE`. Target `unknown` → `TYPE_MAPPING_UNKNOWN_FORBIDDEN`. Missing id → `TYPE_MAPPING_NOT_FOUND`. Successful PATCH writes a **Management Audit Event** (`resource_type=type_mapping`, `action=type_mapping.patch`).
 
@@ -245,7 +246,7 @@ Reject joins that lack evidence with `JOIN_EVIDENCE_REQUIRED`. Cross-Source edge
 
 Query params: `q` (**required**, non-empty for both objects and columns), `source_id`, `object_type`, `limit` (default 20, max 100), `offset`.
 
-Response: `{ "items": […], "total": N, "limit": L, "offset": O }`. Ranking: exact locator/name → prefix → name substring → business name/description substring.
+**Offset Page** response: `{ "items": […], "total": N, "limit": L, "offset": O }`. Ranking: exact locator/name → prefix → name substring → business name/description substring, then a locator/`id` tiebreaker.
 
 ## 7. Controlled Query (D)
 

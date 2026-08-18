@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 
 from backend.admin.deps import require_permission
 from backend.admin.user_store import UserRecord
+from backend.core.pagination import PageParams, page_params
 from backend.metadata.schemas.structure_diffs import (
     StructureDiffListItemOut,
     StructureDiffListResponse,
@@ -47,18 +48,17 @@ def _detail_out(record: StructureDiffRecord) -> StructureDiffOut:
 )
 def list_source_structure_diffs(
     source_id: str,
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+    page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> StructureDiffListResponse:
     items, total = diff_service.list_structure_diffs(
-        source_id, limit=limit, offset=offset
+        source_id, limit=page.limit, offset=page.offset
     )
     return StructureDiffListResponse(
         items=[_item_out(r) for r in items],
         total=total,
-        limit=limit,
-        offset=offset,
+        limit=page.limit,
+        offset=page.offset,
     )
 
 

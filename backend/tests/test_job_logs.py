@@ -113,7 +113,11 @@ def test_list_jobs_and_logs_http(client: TestClient) -> None:
 
     listed = client.get("/jobs")
     assert listed.status_code == 200
-    items = listed.json()["items"]
+    payload = listed.json()
+    assert payload["total"] >= 2
+    assert payload["limit"] == 50
+    assert payload["offset"] == 0
+    items = payload["items"]
     assert any(i["id"] == job.id for i in items)
     row = next(i for i in items if i["id"] == job.id)
     assert row["summary"] == "structure · demo"

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from backend.admin.audit import persist_audit_event
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord, UserStore, get_user_store
+from backend.core.pagination import PageParams, page_params
 from backend.core.config import get_settings
 from backend.jobs.api import (
     get_schedule_name_store,
@@ -32,10 +33,16 @@ def list_jobs(
     users: UserStore = Depends(get_user_store),
     kind: str | None = Query(default=None),
     status: JobStatus | None = Query(default=None),
+    page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> JobListResponse:
-    items = get_job_store().list(kind=kind, status=status)
+    items, total = get_job_store().list(
+        kind=kind, status=status, limit=page.limit, offset=page.offset
+    )
     return JobListResponse(
-        items=present_jobs(items, users=users, schedules=get_schedule_name_store())
+        items=present_jobs(items, users=users, schedules=get_schedule_name_store()),
+        total=total,
+        limit=page.limit,
+        offset=page.offset,
     )
 
 
