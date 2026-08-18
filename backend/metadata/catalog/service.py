@@ -335,6 +335,7 @@ def list_objects_for_source(
     q: str | None = None,
     object_type: str | None = None,
     include_absent: bool = True,
+    business_semantics_ready: bool | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> tuple[list[ObjectView], int]:
@@ -344,6 +345,7 @@ def list_objects_for_source(
         name_search=q,
         include_absent=include_absent,
         object_type=object_type,
+        business_semantics_ready=business_semantics_ready,
         limit=limit,
         offset=offset,
     )

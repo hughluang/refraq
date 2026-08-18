@@ -115,6 +115,7 @@ Returns `{ "job_id", "body", "updated_at" }` where `body` is the full multiline 
 | `JOB_FAIL_SAFE` | Absent ratio exceeded fail-safe threshold; catalog unchanged |
 | `JOB_COLLECT_FAILED` | Connector collect aborted; catalog unchanged |
 | `JOB_ENDPOINT_FAILED` | Connector could not open the live endpoint |
+| `JOB_EXECUTION_FAILED` | Runner aborted unexpectedly (including catalog persist). Job is terminalized so occupancy does not keep a false `RUNNING` |
 | `SCHEDULE_NOT_FOUND` | `GET /schedules/{id}/jobs` or run-now on a missing schedule |
 | `SCHEDULE_SYSTEM_IMMUTABLE` | run-now on a system schedule |
 

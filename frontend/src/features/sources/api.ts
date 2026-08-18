@@ -114,6 +114,7 @@ export function listCatalogObjects(
     offset?: number;
     object_type?: string;
     include_absent?: boolean;
+    business_semantics_ready?: boolean;
   },
 ) {
   const params = new URLSearchParams();
@@ -123,6 +124,12 @@ export function listCatalogObjects(
   if (opts?.object_type) params.set("object_type", opts.object_type);
   if (opts?.include_absent != null) {
     params.set("include_absent", String(opts.include_absent));
+  }
+  if (opts?.business_semantics_ready != null) {
+    params.set(
+      "business_semantics_ready",
+      String(opts.business_semantics_ready),
+    );
   }
   const query = params.toString() ? `?${params.toString()}` : "";
   return apiClient<{

@@ -228,6 +228,37 @@ def test_successful_structure_job_writes_result_and_diff(
     assert job_get.json()["job"]["summary"] == "structure · diff-src"
 
 
+def test_unexpected_snapshot_error_marks_job_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _source()
+    monkeypatch.setattr(
+        "backend.metadata.connectors.runtime.get_connector",
+        lambda engine: _FakeConnector(["orders"]),
+    )
+    monkeypatch.setattr(
+        "backend.metadata.structure_jobs.service.apply_structure_snapshot",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError(
+                "sending query and params failed: number of parameters "
+                "must be between 0 and 65535"
+            )
+        ),
+    )
+    job = create_queued_job(kind="structure", input={"source_id": source.id})
+    out = run_structure_job(job.id)
+    assert out["status"] == "failed"
+    assert out["error_code"] == "JOB_EXECUTION_FAILED"
+    stored = get_job_store().get(job.id)
+    assert stored is not None
+    assert stored.status == "failed"
+    assert stored.error_code == "JOB_EXECUTION_FAILED"
+    assert stored.result is None
+    diffs, total = get_structure_diff_store().list_for_source(source.id)
+    assert total == 0
+    assert diffs == []
+
+
 def test_fail_safe_runner_writes_no_result_or_diff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -322,3 +353,12 @@ def test_cancel_during_collect_does_not_write_catalog(
     assert total == 0
     present = get_catalog_store().list_present_for_source(source.id)
     assert [obj.name for obj in present] == ["orders"]
+
+
+def test_source_join_select_uses_subquery_not_expanded_ids() -> None:
+    from backend.metadata.catalog.store.sql import _select_joins_for_source
+
+    compiled = _select_joins_for_source("src_big").compile()
+    sql = str(compiled).lower()
+    assert "catalog_columns" in sql
+    assert len(compiled.params) <= 2

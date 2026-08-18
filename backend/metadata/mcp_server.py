@@ -134,6 +134,7 @@ def list_objects(
     source_locator_key: str,
     q: str | None = None,
     object_type: str | None = None,
+    business_semantics_ready: bool | None = None,
     limit: int | None = None,
     offset: int | None = None,
 ) -> str:
@@ -148,6 +149,7 @@ def list_objects(
             source.id,
             q=q,
             object_type=object_type,
+            business_semantics_ready=business_semantics_ready,
             limit=lim,
             offset=off,
         )

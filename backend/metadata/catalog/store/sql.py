@@ -8,8 +8,8 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import or_, select
-from sqlalchemy.orm import selectinload
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import defer, noload, selectinload
 
 from backend.core.db import session_scope
 from backend.metadata.catalog.identity import _recompute_column_locator, _recompute_object_locator
@@ -43,6 +43,27 @@ def _loads_json(raw: str | None) -> Any:
         return None
     return json.loads(raw)
 
+
+def _select_joins_for_source(source_id: str):
+    """Joins whose endpoints sit on this Source. Subquery — never bind every column id.
+
+    An expanded ``IN (:id1, :id2, …)`` hits PostgreSQL's 65535 bind-parameter cap
+    on large catalogs (one Source can have hundreds of thousands of columns).
+    """
+
+    source_col_ids = (
+        select(CatalogColumnRow.id)
+        .join(CatalogObjectRow, CatalogColumnRow.object_id == CatalogObjectRow.id)
+        .where(CatalogObjectRow.source_id == source_id)
+    )
+    return select(CatalogJoinRow).where(
+        or_(
+            CatalogJoinRow.from_column_id.in_(source_col_ids),
+            CatalogJoinRow.to_column_id.in_(source_col_ids),
+        )
+    )
+
+
 class SqlCatalogStore:
     def list_objects(
         self,
@@ -51,36 +72,46 @@ class SqlCatalogStore:
         name_search: str | None = None,
         include_absent: bool = True,
         object_type: str | None = None,
+        business_semantics_ready: bool | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> tuple[list[CatalogObjectRecord], int]:
 
+        filters = _list_object_filters(
+            source_id,
+            name_search=name_search,
+            include_absent=include_absent,
+            object_type=object_type,
+            business_semantics_ready=business_semantics_ready,
+        )
         with session_scope() as session:
+            count_stmt = (
+                select(func.count()).select_from(CatalogObjectRow).where(*filters)
+            )
+            total = int(session.execute(count_stmt).scalar_one())
             stmt = (
                 select(CatalogObjectRow)
-                .where(CatalogObjectRow.source_id == source_id)
-                .options(selectinload(CatalogObjectRow.columns))
+                .where(*filters)
+                .options(
+                    noload(CatalogObjectRow.columns),
+                    noload(CatalogObjectRow.foreign_keys),
+                    noload(CatalogObjectRow.indexes),
+                    defer(CatalogObjectRow.ddl),
+                )
                 .order_by(
                     CatalogObjectRow.schema_name,
                     CatalogObjectRow.name,
                     CatalogObjectRow.object_type,
                 )
+                .offset(offset)
             )
-            if not include_absent:
-                stmt = stmt.where(CatalogObjectRow.is_present.is_(True))
-            if object_type is not None:
-                stmt = stmt.where(CatalogObjectRow.object_type == object_type)
+            if limit is not None:
+                stmt = stmt.limit(limit)
             rows = session.scalars(stmt).all()
-            records = [_row_to_object(r) for r in rows]
-            if name_search:
-                q = name_search.lower()
-                records = [
-                    o
-                    for o in records
-                    if q in o.name.lower() or q in o.schema_name.lower()
-                ]
-            total = len(records)
-            return _paginate(records, limit=limit, offset=offset), total
+            return (
+                [_row_to_object(r, include_structure=False) for r in rows],
+                total,
+            )
 
     def search_objects(
         self,
@@ -197,8 +228,27 @@ class SqlCatalogStore:
             return _row_to_column(row) if row else None
 
     def list_present_for_source(self, source_id: str) -> list[CatalogObjectRecord]:
-        items, _ = self.list_objects(source_id, include_absent=False)
-        return items
+        with session_scope() as session:
+            rows = list(
+                session.scalars(
+                    select(CatalogObjectRow)
+                    .where(
+                        CatalogObjectRow.source_id == source_id,
+                        CatalogObjectRow.is_present.is_(True),
+                    )
+                    .options(
+                        selectinload(CatalogObjectRow.columns),
+                        selectinload(CatalogObjectRow.foreign_keys),
+                        selectinload(CatalogObjectRow.indexes),
+                    )
+                    .order_by(
+                        CatalogObjectRow.schema_name,
+                        CatalogObjectRow.name,
+                        CatalogObjectRow.object_type,
+                    )
+                ).all()
+            )
+            return [_row_to_object(r) for r in rows]
 
     def run_structure_refresh(
         self,
@@ -223,21 +273,8 @@ class SqlCatalogStore:
                 ).all()
             )
             existing_objects = [_row_to_object(r) for r in rows]
-            col_ids = [c.id for o in existing_objects for c in o.columns]
-            existing_joins: list[CatalogJoinRecord] = []
-            if col_ids:
-
-                join_rows = list(
-                    session.scalars(
-                        select(CatalogJoinRow).where(
-                            or_(
-                                CatalogJoinRow.from_column_id.in_(col_ids),
-                                CatalogJoinRow.to_column_id.in_(col_ids),
-                            )
-                        )
-                    ).all()
-                )
-                existing_joins = [_row_to_join(j) for j in join_rows]
+            join_rows = list(session.scalars(_select_joins_for_source(source_id)).all())
+            existing_joins = [_row_to_join(j) for j in join_rows]
 
             now = utc_now()
             plan = build_plan(existing_objects, existing_joins, now)
@@ -485,28 +522,11 @@ class SqlCatalogStore:
 
     def list_all_joins_for_source(self, source_id: str) -> list[CatalogJoinRecord]:
         with session_scope() as session:
-            col_ids = list(
-                session.scalars(
-                    select(CatalogColumnRow.id)
-                    .join(
-                        CatalogObjectRow,
-                        CatalogColumnRow.object_id == CatalogObjectRow.id,
-                    )
-                    .where(CatalogObjectRow.source_id == source_id)
-                ).all()
-            )
-            if not col_ids:
-                return []
             rows = list(
                 session.scalars(
-                    select(CatalogJoinRow)
-                    .where(
-                        or_(
-                            CatalogJoinRow.from_column_id.in_(col_ids),
-                            CatalogJoinRow.to_column_id.in_(col_ids),
-                        )
+                    _select_joins_for_source(source_id).order_by(
+                        CatalogJoinRow.created_at
                     )
-                    .order_by(CatalogJoinRow.created_at)
                 ).all()
             )
             return [_row_to_join(r) for r in rows]
@@ -561,6 +581,42 @@ class SqlCatalogStore:
             session.delete(row)
             session.flush()
             return True
+
+def _escape_like_literal(value: str) -> str:
+    return (
+        value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    )
+
+
+def _list_object_filters(
+    source_id: str,
+    *,
+    name_search: str | None,
+    include_absent: bool,
+    object_type: str | None,
+    business_semantics_ready: bool | None,
+) -> list[Any]:
+    filters: list[Any] = [CatalogObjectRow.source_id == source_id]
+    if not include_absent:
+        filters.append(CatalogObjectRow.is_present.is_(True))
+    if object_type is not None:
+        filters.append(CatalogObjectRow.object_type == object_type)
+    if business_semantics_ready is not None:
+        filters.append(
+            CatalogObjectRow.business_semantics_ready.is_(business_semantics_ready)
+        )
+    needle = (name_search or "").strip()
+    if needle:
+        pattern = f"%{_escape_like_literal(needle)}%"
+        filters.append(
+            or_(
+                CatalogObjectRow.name.ilike(pattern, escape="\\"),
+                CatalogObjectRow.schema_name.ilike(pattern, escape="\\"),
+                CatalogObjectRow.business_name.ilike(pattern, escape="\\"),
+            )
+        )
+    return filters
+
 
 def _sql_persist_object(session: Any, obj: CatalogObjectRecord, *, now: datetime) -> None:
     """Write a fully-merged CatalogObjectRecord (no merge rules)."""
@@ -786,33 +842,41 @@ def _row_to_join(row: object) -> CatalogJoinRecord:
         created_at=row.created_at,
     )
 
-def _row_to_object(row: object) -> CatalogObjectRecord:
+def _row_to_object(
+    row: object, *, include_structure: bool = True
+) -> CatalogObjectRecord:
     assert isinstance(row, CatalogObjectRow)
-    columns = [
-        _row_to_column(c) for c in sorted(row.columns, key=lambda x: x.ordinal)
-    ]
-    foreign_keys = [
-        CatalogForeignKeyRecord(
-            id=fk.id,
-            name=fk.name,
-            columns=_loads_json(fk.columns_json) or [],
-            ref_schema=fk.ref_schema,
-            ref_table=fk.ref_table,
-            ref_columns=_loads_json(fk.ref_columns_json) or [],
-            is_present=fk.is_present,
-        )
-        for fk in getattr(row, "foreign_keys", []) or []
-    ]
-    indexes = [
-        CatalogIndexRecord(
-            id=idx.id,
-            name=idx.name,
-            columns=_loads_json(idx.columns_json) or [],
-            is_unique=idx.is_unique,
-            is_present=idx.is_present,
-        )
-        for idx in getattr(row, "indexes", []) or []
-    ]
+    columns: list[CatalogColumnRecord] = []
+    foreign_keys: list[CatalogForeignKeyRecord] = []
+    indexes: list[CatalogIndexRecord] = []
+    ddl: str | None = None
+    if include_structure:
+        columns = [
+            _row_to_column(c) for c in sorted(row.columns, key=lambda x: x.ordinal)
+        ]
+        foreign_keys = [
+            CatalogForeignKeyRecord(
+                id=fk.id,
+                name=fk.name,
+                columns=_loads_json(fk.columns_json) or [],
+                ref_schema=fk.ref_schema,
+                ref_table=fk.ref_table,
+                ref_columns=_loads_json(fk.ref_columns_json) or [],
+                is_present=fk.is_present,
+            )
+            for fk in getattr(row, "foreign_keys", []) or []
+        ]
+        indexes = [
+            CatalogIndexRecord(
+                id=idx.id,
+                name=idx.name,
+                columns=_loads_json(idx.columns_json) or [],
+                is_unique=idx.is_unique,
+                is_present=idx.is_present,
+            )
+            for idx in getattr(row, "indexes", []) or []
+        ]
+        ddl = row.ddl
     return CatalogObjectRecord(
         id=row.id,
         source_id=row.source_id,
@@ -820,7 +884,7 @@ def _row_to_object(row: object) -> CatalogObjectRecord:
         object_type=row.object_type,
         schema_name=row.schema_name,
         name=row.name,
-        ddl=row.ddl,
+        ddl=ddl,
         comment=row.comment,
         primary_key=_loads_json(row.primary_key_json),
         is_present=row.is_present,

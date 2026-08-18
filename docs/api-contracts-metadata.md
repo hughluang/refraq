@@ -93,18 +93,20 @@ Identity is `source_id` (+ object coordinates). `collected_at` is optional prove
 `field_kind` is read-only on semantics writes (structure-held). `model_routing_hint` is not in this phase.
 `time_semantics`, `status_semantics`, `relation_summary`, and `confidence` are removed from read and write contracts (ADR 0015); time/status meaning lives on column descriptions (and optional free-text `semantic_type` / `enum_catalog` — closed vocabulary deferred, ADR 0016); object relationships live in join edges.
 `business_domain` on read is `{ "id", "code", "name" } | null` (ADR 0017). Object semantics writes accept `business_domain_code` (not the nested object); a present JSON `null` (or blank string) clears the domain link (ADR 0018).
-`foreign_keys` and `indexes` are included on object detail (`GET /objects/{id}` and semantics write responses); list/search endpoints return empty arrays for these fields.
+`foreign_keys` and `indexes` are included on object detail (`GET /objects/{id}` and semantics write responses); list/search endpoints return empty arrays for these fields and empty `ddl`.
 
 ## 3. Browse Endpoints (A+)
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/sources/{id}/objects` | `metadata:read` | List objects (query: `q`, `object_type`, `include_absent`, `limit`, `offset`) |
+| `GET` | `/sources/{id}/objects` | `metadata:read` | List objects (query: `q`, `object_type`, `include_absent`, `business_semantics_ready`, `limit`, `offset`) |
 | `GET` | `/objects/{id}` | `metadata:read` | Object detail including columns |
 | `GET` | `/objects/{id}/ddl` | `metadata:read` | DDL text when stored |
 | `POST` | `/objects/{id}/sample` | `catalog:sample` | Catalog Sample live peek (§8) |
 
-List response: `{ "items": […], "total": N, "limit": L, "offset": O }` when pagination params are used; `limit` default 100, max 500.
+List response: `{ "items": […], "total": N, "limit": L, "offset": O }` when pagination params are used; `limit` default 100, max 500. `total` is the filtered set.
+
+List `q` is optional. When set, it matches a literal case-insensitive substring of `schema_name`, `name`, or `business_name` (not `locator_key`, not `business_description`). `include_absent` defaults true (tombstones stay in **Current catalog**). `business_semantics_ready` is optional `true` | `false`; omit means no readiness filter.
 
 ## 3.1 Structure Diff
 

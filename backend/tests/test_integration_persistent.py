@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import re
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import make_url
 
 pytestmark = pytest.mark.integration
@@ -196,3 +197,198 @@ def test_disable_user_revokes_sessions(persistent_client: TestClient) -> None:
     persistent_client.cookies.set("refraq_sid", op_sid)
     me = persistent_client.get("/auth/me")
     assert me.status_code == 401
+
+
+def test_sql_list_objects_is_constant_queries(persistent_client: TestClient) -> None:
+    from backend.core.db import get_engine
+    from backend.core.time import utc_now
+    from backend.metadata.catalog.store import (
+        CatalogColumnRecord,
+        CatalogIndexRecord,
+        CatalogObjectRecord,
+        get_catalog_store,
+        new_column_id,
+        new_index_id,
+        new_object_id,
+        reset_catalog_store,
+    )
+    from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
+    from backend.metadata.sources.service import require_source
+    from backend.metadata.sources.store import reset_source_store
+
+    reset_source_store()
+    reset_catalog_store()
+
+    login = persistent_client.post(
+        "/auth/login",
+        json={"account": "root", "password": "s3cret"},
+    )
+    assert login.status_code == 200
+    key = f"listsql{uuid.uuid4().hex[:8]}"
+    created = persistent_client.post(
+        "/sources",
+        json={
+            "key": key,
+            "name": key,
+            "kind": "database",
+            "engine": "postgresql",
+            "access": {
+                "host": "127.0.0.1",
+                "port": 5432,
+                "username": "u",
+                "password": "p",
+                "ssl_mode": "require",
+                "database": "MES",
+                "schema": "public",
+                "extra": {},
+            },
+        },
+    )
+    assert created.status_code == 201, created.text
+    source_id = created.json()["source"]["id"]
+
+    reset_catalog_store()
+    now = utc_now()
+    collected: list[CatalogObjectRecord] = []
+    for i in range(20):
+        object_id = new_object_id()
+        columns = [
+            CatalogColumnRecord(
+                id=new_column_id(),
+                object_id=object_id,
+                locator_key=f"col/postgresql/{key}/public/table/t{i}/column/c{j}",
+                name=f"c{j}",
+                ordinal=j,
+                data_type="int",
+                nullable=False,
+                is_present=True,
+                default_value=None,
+                comment=None,
+                business_name=None,
+                business_description=None,
+                column_semantics=None,
+                enum_catalog=None,
+                semantic_source=None,
+                field_kind="column",
+                created_at=now,
+                updated_at=now,
+            )
+            for j in range(8)
+        ]
+        collected.append(
+            CatalogObjectRecord(
+                id=object_id,
+                source_id=source_id,
+                locator_key=f"obj/postgresql/{key}/public/table/t{i}",
+                object_type="table",
+                schema_name="public",
+                name=f"t{i}",
+                ddl=f"CREATE TABLE t{i} ();",
+                comment=None,
+                primary_key=["c0"],
+                is_present=True,
+                business_name=f"Biz t{i}" if i == 7 else None,
+                business_description="needle should not match list q",
+                object_category=None,
+                grain_description=None,
+                business_primary_key=None,
+                business_domain_id=None,
+                evidence_summary=None,
+                open_questions=None,
+                semantic_source=None,
+                business_semantics_ready=(i % 2 == 0),
+                semantics_updated_at=None,
+                last_structure_job_id="job_list",
+                collected_at=now,
+                created_at=now,
+                updated_at=now,
+                columns=columns,
+                foreign_keys=[],
+                indexes=[
+                    CatalogIndexRecord(
+                        id=new_index_id(),
+                        name=f"ix_t{i}",
+                        columns=["c0"],
+                        is_unique=True,
+                        is_present=True,
+                    )
+                ],
+            )
+        )
+    apply_structure_snapshot(
+        source=require_source(source_id),
+        job_id="job_list",
+        collected=collected,
+        schema_scope=None,
+        fail_safe_threshold=1.0,
+    )
+
+    store = get_catalog_store()
+    statements: list[str] = []
+
+    def _on_execute(
+        conn: object,
+        cursor: object,
+        statement: str,
+        parameters: object,
+        context: object,
+        executemany: bool,
+    ) -> None:
+        statements.append(statement)
+
+    engine = get_engine()
+    event.listen(engine, "before_cursor_execute", _on_execute)
+    try:
+        items, total = store.list_objects(source_id, limit=5, offset=0)
+    finally:
+        event.remove(engine, "before_cursor_execute", _on_execute)
+
+    assert total == 20
+    assert len(items) == 5
+    assert all(not o.columns and not o.indexes and o.ddl is None for o in items)
+    child = [
+        sql
+        for sql in statements
+        if "catalog_columns" in sql.lower()
+        or "catalog_indexes" in sql.lower()
+        or "catalog_foreign_keys" in sql.lower()
+    ]
+    assert child == []
+    object_sql = [sql for sql in statements if "catalog_objects" in sql.lower()]
+    assert len(object_sql) == 2
+
+    named, named_total = store.list_objects(source_id, name_search="Biz t7")
+    assert named_total == 1
+    assert named[0].name == "t7"
+
+    desc, desc_total = store.list_objects(source_id, name_search="needle")
+    assert desc_total == 0
+    assert desc == []
+
+    _ready, ready_total = store.list_objects(
+        source_id, business_semantics_ready=True, limit=100
+    )
+    assert ready_total == 10
+
+    present = store.list_present_for_source(source_id)
+    assert len(present) == 20
+    assert all(o.columns for o in present)
+    assert all(o.indexes for o in present)
+
+    apply_structure_snapshot(
+        source=require_source(source_id),
+        job_id="job_tomb",
+        collected=collected[:-1],
+        schema_scope=None,
+        fail_safe_threshold=1.0,
+    )
+    _with_absent, with_absent_total = store.list_objects(
+        source_id, include_absent=True, limit=5
+    )
+    _present_only, present_only_total = store.list_objects(
+        source_id, include_absent=False, limit=5
+    )
+    assert with_absent_total == 20
+    assert present_only_total == 19
+    assert with_absent_total != present_only_total
+    assert len(store.list_present_for_source(source_id)) == 19

@@ -26,10 +26,12 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 | --- | --- | --- |
 | `search_sources` | `sources:read` | Search/list Sources (`query_text`, `limit`, `offset`) |
 | `get_source` | `sources:read` | Source detail by `source_locator_key` (projected `access`) |
-| `list_objects` | `metadata:read` | Catalog Objects under a Source locator (`q`, `object_type`, `limit`, `offset`) |
+| `list_objects` | `metadata:read` | Catalog Objects under a Source locator (`q`, `object_type`, `business_semantics_ready`, `limit`, `offset`) |
 | `get_object` | `metadata:read` | Object + columns by `object_locator_key` (includes semantics when present; columns omit `normalized_type`) |
 | `get_object_ddl` | `metadata:read` | DDL when present |
 | `get_job` | `jobs:run` | Job by id (status, input, summary, nullable `result`) |
+
+`list_objects` is the Per-Source object list (same summary projection as HTTP). Optional `q` is a literal substring of schema, technical name, or `business_name`. Optional `business_semantics_ready` is `true` | `false`. This tool has no `include_absent` argument; tombstones are included. Items omit columns, foreign keys, indexes, and DDL.
 
 ## 4. Semantics
 

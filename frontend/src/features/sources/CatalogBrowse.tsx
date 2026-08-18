@@ -14,7 +14,7 @@ import {
 } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
@@ -25,6 +25,8 @@ import type { CatalogObject, Source } from "@/features/sources/types";
 import { ApiError } from "@/lib/api";
 
 const PAGE_SIZE = 100;
+
+type SemanticsReadyFilter = "all" | "ready" | "not_ready";
 
 export function CatalogBrowse() {
   const t = useTranslate();
@@ -40,7 +42,8 @@ export function CatalogBrowse() {
   const [listLoading, setListLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [onlyNotReady, setOnlyNotReady] = useState(false);
+  const [semanticsReady, setSemanticsReady] =
+    useState<SemanticsReadyFilter>("all");
   const [includeAbsent, setIncludeAbsent] = useState(true);
 
   const loadSources = useCallback(async () => {
@@ -71,6 +74,10 @@ export function CatalogBrowse() {
         limit: PAGE_SIZE,
         offset,
         include_absent: includeAbsent,
+        business_semantics_ready:
+          semanticsReady === "all"
+            ? undefined
+            : semanticsReady === "ready",
       });
       setItems(data.items);
       setTotal(data.total);
@@ -82,7 +89,7 @@ export function CatalogBrowse() {
     } finally {
       setListLoading(false);
     }
-  }, [sourceId, debouncedQ, page, includeAbsent, open]);
+  }, [sourceId, debouncedQ, page, includeAbsent, semanticsReady, open]);
 
   useEffect(() => {
     void loadSources();
@@ -95,16 +102,11 @@ export function CatalogBrowse() {
 
   useEffect(() => {
     setPage(1);
-  }, [sourceId, debouncedQ, includeAbsent]);
+  }, [sourceId, debouncedQ, includeAbsent, semanticsReady]);
 
   useEffect(() => {
     void loadObjects();
   }, [loadObjects]);
-
-  const visibleItems = useMemo(() => {
-    if (!onlyNotReady) return items;
-    return items.filter((obj) => !obj.business_semantics_ready);
-  }, [items, onlyNotReady]);
 
   if (error && !loading) return <PageError message={error} />;
 
@@ -143,11 +145,28 @@ export function CatalogBrowse() {
               w={220}
               rightSection={listLoading ? <Text size="xs">…</Text> : null}
             />
-            <Checkbox
-              label={t("catalog.list.onlyNotReady")}
-              checked={onlyNotReady}
-              onChange={(e) => setOnlyNotReady(e.currentTarget.checked)}
-              mb={4}
+            <Select
+              label={t("catalog.fields.ready")}
+              data={[
+                {
+                  value: "all",
+                  label: t("catalog.list.semanticsReady.all"),
+                },
+                {
+                  value: "not_ready",
+                  label: t("catalog.list.semanticsReady.notReady"),
+                },
+                {
+                  value: "ready",
+                  label: t("catalog.list.semanticsReady.ready"),
+                },
+              ]}
+              value={semanticsReady}
+              onChange={(value) =>
+                setSemanticsReady((value as SemanticsReadyFilter | null) ?? "all")
+              }
+              allowDeselect={false}
+              w={180}
             />
             <Checkbox
               label={t("catalog.list.includeAbsent")}
@@ -177,7 +196,7 @@ export function CatalogBrowse() {
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
-                  {visibleItems.map((obj) => (
+                  {items.map((obj) => (
                     <Table.Tr key={obj.id}>
                       <Table.Td>{obj.schema_name}</Table.Td>
                       <Table.Td>{obj.name}</Table.Td>

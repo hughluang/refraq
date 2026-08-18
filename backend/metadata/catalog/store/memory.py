@@ -40,6 +40,7 @@ class MemoryCatalogStore:
         name_search: str | None = None,
         include_absent: bool = True,
         object_type: str | None = None,
+        business_semantics_ready: bool | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> tuple[list[CatalogObjectRecord], int]:
@@ -49,16 +50,19 @@ class MemoryCatalogStore:
                 items = [o for o in items if o.is_present]
             if object_type is not None:
                 items = [o for o in items if o.object_type == object_type]
-            if name_search:
-                q = name_search.lower()
+            if business_semantics_ready is not None:
                 items = [
                     o
                     for o in items
-                    if q in o.name.lower() or q in o.schema_name.lower()
+                    if o.business_semantics_ready is business_semantics_ready
                 ]
+            needle = (name_search or "").strip().lower()
+            if needle:
+                items = [o for o in items if _matches_list_q(o, needle)]
             items = sorted(items, key=lambda o: (o.schema_name, o.name, o.object_type))
             total = len(items)
-            return _paginate(items, limit=limit, offset=offset), total
+            page = _paginate(items, limit=limit, offset=offset)
+            return [_list_projection(o) for o in page], total
 
     def search_objects(
         self,
@@ -158,8 +162,15 @@ class MemoryCatalogStore:
             return None
 
     def list_present_for_source(self, source_id: str) -> list[CatalogObjectRecord]:
-        items, _ = self.list_objects(source_id, include_absent=False)
-        return items
+        with self._lock:
+            items = [
+                o
+                for o in self._objects.values()
+                if o.source_id == source_id and o.is_present
+            ]
+            return sorted(
+                items, key=lambda o: (o.schema_name, o.name, o.object_type)
+            )
 
     def run_structure_refresh(
         self,
@@ -505,4 +516,16 @@ class MemoryCatalogStore:
                 return False
             self._join_by_pair.pop((join.from_column_id, join.to_column_id), None)
             return True
+
+
+def _matches_list_q(obj: CatalogObjectRecord, needle: str) -> bool:
+    if needle in obj.name.lower() or needle in obj.schema_name.lower():
+        return True
+    if obj.business_name and needle in obj.business_name.lower():
+        return True
+    return False
+
+
+def _list_projection(obj: CatalogObjectRecord) -> CatalogObjectRecord:
+    return replace(obj, columns=[], foreign_keys=[], indexes=[], ddl=None)
 

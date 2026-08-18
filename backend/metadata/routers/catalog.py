@@ -142,6 +142,7 @@ def list_objects(
     q: str | None = None,
     object_type: str | None = None,
     include_absent: bool = True,
+    business_semantics_ready: bool | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     _: UserRecord = Depends(require_permission("metadata:read")),
@@ -151,6 +152,7 @@ def list_objects(
         q=q,
         object_type=object_type,
         include_absent=include_absent,
+        business_semantics_ready=business_semantics_ready,
         limit=limit,
         offset=offset,
     )

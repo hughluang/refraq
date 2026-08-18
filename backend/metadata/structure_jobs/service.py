@@ -194,6 +194,12 @@ def run_structure_job(job_id: str) -> dict[str, str]:
         )
     except CatalogWriteAborted as exc:
         return _fail(job_id, error_code=exc.code, error_summary=exc.message)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            job_id,
+            error_code="JOB_EXECUTION_FAILED",
+            error_summary=str(exc)[:400],
+        )
 
     facts = compute_structure_diff(
         existing=existing,

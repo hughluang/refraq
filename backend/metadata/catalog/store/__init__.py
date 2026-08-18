@@ -37,6 +37,7 @@ class CatalogStore(Protocol):
         name_search: str | None = None,
         include_absent: bool = True,
         object_type: str | None = None,
+        business_semantics_ready: bool | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> tuple[list[CatalogObjectRecord], int]: ...

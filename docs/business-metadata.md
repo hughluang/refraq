@@ -107,7 +107,7 @@ Rules:
 - Enqueue writes `summary` (`structure · {source_key}`) and `trigger_kind=schedule` / `trigger_ref` = schedule id. Operator run-now also sets `created_by`. Minting does **not** enforce structure single-flight or Source usable status; those fail on the Job during execution (`JOB_ALREADY_ACTIVE` / `JOB_SOURCE_DISABLED`).
 - Creating a structure schedule via the facade requires `jobs:run` and a database Source with an access blob (registration gate). The schedule row still carries only opaque `owner_ref` (literal such as `metadata:source:{id}`) — not a Source FK. Product HTTP cannot set `owner_ref`.
 - Workers load reachability from the Source identified in Job `input`; `input` does not carry endpoint material.
-- Successful structure Jobs write/refresh **Catalog Objects** on that Source and produce at most one **Structure Diff**. **Job result** envelope: `{ "schema": "structure.diff.v1", "class", "counts", "structure_diff_id" }`. Failed, cancelled, or fail-safe Jobs write neither result nor Diff. The structure runner honors a cooperative terminal stamp (`cancelled`, `JOB_RUNNING_TIMEOUT`, `JOB_WORKER_LOST`) before applying a catalog snapshot.
+- Successful structure Jobs write/refresh **Catalog Objects** on that Source and produce at most one **Structure Diff**. **Job result** envelope: `{ "schema": "structure.diff.v1", "class", "counts", "structure_diff_id" }`. Failed, cancelled, or fail-safe Jobs write neither result nor Diff. An unexpected runner abort (including catalog persist) ends the Job `failed` with `JOB_EXECUTION_FAILED` so occupancy does not keep a false `RUNNING`. The structure runner honors a cooperative terminal stamp (`cancelled`, `JOB_RUNNING_TIMEOUT`, `JOB_WORKER_LOST`) before applying a catalog snapshot.
 - Related Jobs hang on the **schedule** (`GET /schedules/{id}/jobs`), not on Source. Structure Diff browse is a Source-scoped Console page (`/console/sources/:id/structure-diffs`, `metadata:read`). Global Job observe is **Operations** `jobs`. Source related-schedules **workbench** is `/console/sources/:id/schedules` (facade create plus manage), not a Source Job list.
 - Facade create/list: first slice `work_kind=structure`; several schedules may target one Source. Default name `structure · {source_key}` (not unique); key `structure:{source_id}:{schedule_id}` (facade convention). Patch / delete / run-now are by schedule id on `/schedules/{id}` (mechanism HTTP).
 - Creating a database Source seeds one such schedule (product default cadence). Operators may add more, disable, or delete including the last one; zero schedules is allowed until the next mutating Source update, which inserts one product-default schedule when a database Source has none (disabled schedules count as present). That ensure writes `schedule.create` for the PATCH User; `PATCH /sources/{id}` includes the inserted `schedule` only when it actually inserted. Create and GET still omit it. It is not a process-start scan and not **Foundation Upgrade**.
@@ -409,8 +409,15 @@ Rules:
   `limit`/`offset`. Empty or omitted query is rejected for both object and column search.
 - Ranking tiers (portable lexical, identical in memory and SQL stores): exact locator/name →
   prefix → name substring → business name/description substring.
-- Per-Source object list supports the same pagination and `include_absent` / `object_type` filters
-  (list `q` remains optional; search endpoints require non-empty query).
+- Per-Source object list pages **Current catalog** under one Source. Pagination uses
+  `limit`/`offset`. Filters: `include_absent` (default include tombstones), `object_type`,
+  optional `business_semantics_ready` (`true` | `false`; omit for no readiness filter).
+  List `q` is optional; when present it is a literal case-insensitive substring of schema,
+  technical name, or **Object Semantics** business name (not **Locator**, not business
+  description; `%` and `_` are literal). Search endpoints require a non-empty query and
+  use ranking, including locator and description. List items are summaries: empty
+  `columns` / `foreign_keys` / `indexes` and empty `ddl`. Currently present objects as a
+  structure graph (**Structure Diff**, **Join Path**) are not this list.
 
 ## 11. Controlled Query (Slice D)
 

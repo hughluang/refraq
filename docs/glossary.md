@@ -281,6 +281,12 @@ A collected structural unit (table, view, materialized view, or equivalent) unde
 Avoid calling a Catalog Object a Data Product or Business Entity.
 Avoid treating catalog identity as anything other than Source-scoped.
 
+### Current catalog
+
+The live Catalog Objects under a Source after the last successful structure Job, including tombstones (`is_present=false`). Authoritative; not versioned per Job.
+The Per-Source object list pages this set as summaries (optional literal substring on schema, technical name, or business name; optional filter on **Object Semantics** readiness). Columns, foreign keys, indexes, and DDL are not part of that list projection.
+Avoid Catalog Snapshot; avoid treating **Structure Diff** as the live catalog; avoid requiring a search query to page a Source's objects; avoid matching locator or business description on list `q`.
+
 ### Locator
 
 A readable unique key addressing a Source (`src/…`), Catalog Object (`obj/…`), or column (`col/…`).
