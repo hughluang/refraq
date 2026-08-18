@@ -59,6 +59,8 @@ class TypeMappingStore(Protocol):
 
     def get_by_key(self, engine: str, native_type: str) -> TypeMappingRecord | None: ...
 
+    def list_for_engine(self, engine: str) -> list[TypeMappingRecord]: ...
+
     def create(self, record: TypeMappingRecord) -> TypeMappingRecord: ...
 
     def insert_if_absent(self, record: TypeMappingRecord) -> TypeMappingRecord: ...
@@ -108,6 +110,14 @@ class MemoryTypeMappingStore:
         with self._lock:
             mapping_id = self._by_key.get((engine, native_type))
             return self._rows.get(mapping_id) if mapping_id else None
+
+    def list_for_engine(self, engine: str) -> list[TypeMappingRecord]:
+        with self._lock:
+            return [
+                row
+                for row in self._rows.values()
+                if row.engine == engine
+            ]
 
     def create(self, record: TypeMappingRecord) -> TypeMappingRecord:
         with self._lock:
@@ -205,6 +215,13 @@ class SqlTypeMappingStore:
                 )
             ).scalar_one_or_none()
             return _row_to_record(row) if row else None
+
+    def list_for_engine(self, engine: str) -> list[TypeMappingRecord]:
+        with session_scope() as session:
+            rows = session.scalars(
+                select(TypeMappingRow).where(TypeMappingRow.engine == engine)
+            ).all()
+            return [_row_to_record(row) for row in rows]
 
     def create(self, record: TypeMappingRecord) -> TypeMappingRecord:
         with session_scope() as session:

@@ -179,7 +179,7 @@ class MemoryCatalogStore:
             [list[CatalogObjectRecord], list[CatalogJoinRecord], datetime],
             StructureRefreshPlan,
         ],
-    ) -> None:
+    ) -> StructureRefreshPlan:
         """Atomic load → build_plan → persist (zero merge/origin rules)."""
         with self._lock:
             objects_backup = dict(self._objects)
@@ -198,6 +198,7 @@ class MemoryCatalogStore:
                 now = utc_now()
                 plan = build_plan(existing, existing_joins, now)
                 self._persist_structure_plan_unlocked(plan, now=now)
+                return plan
             except CatalogWriteAborted:
                 self._objects = objects_backup
                 self._joins = joins_backup
@@ -212,6 +213,13 @@ class MemoryCatalogStore:
     ) -> None:
         for obj in plan.objects:
             self._objects[obj.id] = obj
+        for oid in plan.stamp_object_ids:
+            obj = self._objects[oid]
+            self._objects[oid] = replace(
+                obj,
+                collected_at=plan.collected_at,
+                last_structure_job_id=plan.last_structure_job_id,
+            )
         for jid in plan.delete_join_ids:
             join = self._joins.pop(jid, None)
             if join is not None:

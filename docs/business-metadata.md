@@ -244,6 +244,8 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
   - objects: type (`table` \| `view` \| `materialized_view`), schema, name, native comment, DDL when obtainable
   - columns: name, full type string (precision/length when the engine exposes it), **Normalized Type** (snapshot from **Type Mapping** for that engine + canonical native type), nullable, default value, native comment, ordinal
   - primary key column names; foreign keys (name, from/to columns); unique constraints; indexes
+- A structure Job never writes Object Semantics or Column Semantics. Those fields belong to
+  human/agent patch surfaces; refresh must not overwrite them.
 - **Current catalog** is authoritative (not a per-Job version history). Natural key:
   `(source_id, schema_name, name, object_type)`. Surrogate ids are preserved across successful refreshes.
 - **Success-only commit:** only a Job that reaches a complete successful collect may mutate catalog.

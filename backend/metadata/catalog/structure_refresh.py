@@ -7,6 +7,7 @@ from datetime import datetime
 
 from backend.metadata.catalog.records import CatalogJoinRecord, CatalogObjectRecord
 from backend.metadata.catalog.store import get_catalog_store
+from backend.metadata.catalog.structure_diff import StructureDiffFacts
 from backend.metadata.catalog.structure_merge import (
     StructureRefreshPlan,
     build_structure_refresh_plan,
@@ -59,16 +60,16 @@ def apply_structure_snapshot(
     collected: list[CatalogObjectRecord],
     schema_scope: str | None,
     fail_safe_threshold: float,
-) -> None:
+) -> StructureDiffFacts:
     """Commit structure upsert/absent only after a complete successful collect.
 
     Identity (engine / kind / key) is taken from ``source``; the fail-safe
     threshold is supplied by the caller. Fail-safe, identity match, FK/index
     merge, Join Origin, and Object Semantics survival live in
-    ``structure_merge``; the store adapter only loads inputs and persists the
-    resulting ``StructureRefreshPlan`` inside one lock/transaction.
+    ``structure_merge``. The store loads one baseline, persists the delta
+    plan, and returns Diff facts computed from that same baseline.
     """
-    get_catalog_store().run_structure_refresh(
+    plan = get_catalog_store().run_structure_refresh(
         source.id,
         _bind_structure_refresh_plan(
             source_id=source.id,
@@ -81,3 +82,4 @@ def apply_structure_snapshot(
             source_key=source.key,
         ),
     )
+    return plan.diff

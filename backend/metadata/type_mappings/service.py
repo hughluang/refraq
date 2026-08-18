@@ -51,44 +51,64 @@ def list_mappings(
     )
 
 
-def resolve_normalized_type(*, engine: str, data_type: str) -> str:
-    """Look up or insert Type Mapping; never overwrites an existing row."""
+def _mapping_table(*, engine: str, native_types: set[str]) -> dict[str, str]:
+    """Resolve distinct canonical native types; insert missing as origin=job."""
     cleaned_engine = (engine or "").strip()
     if not cleaned_engine:
+        raise ValueError("engine is required to resolve Normalized Type")
+    needed = {canonical for canonical in native_types if canonical}
+    if not needed:
+        return {}
+    store = get_type_mapping_store()
+    by_native = {
+        row.native_type: row.normalized_type
+        for row in store.list_for_engine(cleaned_engine)
+    }
+    now = utc_now()
+    for canonical in sorted(needed - set(by_native)):
+        inserted = store.insert_if_absent(
+            TypeMappingRecord(
+                id=new_type_mapping_id(),
+                engine=cleaned_engine,
+                native_type=canonical,
+                normalized_type="unknown",
+                origin="job",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        by_native[canonical] = inserted.normalized_type
+    return by_native
+
+
+def resolve_normalized_type(*, engine: str, data_type: str) -> str:
+    """Look up or insert Type Mapping; never overwrites an existing row."""
+    if not (engine or "").strip():
         raise ValueError("engine is required to resolve Normalized Type")
     canonical = canonicalize_native_type(data_type)
     if not canonical:
         return "unknown"
-    store = get_type_mapping_store()
-    existing = store.get_by_key(cleaned_engine, canonical)
-    if existing is not None:
-        return existing.normalized_type
-    now = utc_now()
-    inserted = store.insert_if_absent(
-        TypeMappingRecord(
-            id=new_type_mapping_id(),
-            engine=cleaned_engine,
-            native_type=canonical,
-            normalized_type="unknown",
-            origin="job",
-            created_at=now,
-            updated_at=now,
-        )
-    )
-    return inserted.normalized_type
+    table = _mapping_table(engine=engine, native_types={canonical})
+    return table[canonical]
 
 
 def assign_normalized_types(
     objects: list[CatalogObjectRecord], *, engine: str
 ) -> list[CatalogObjectRecord]:
     """Set each column's Normalized Type snapshot. Merge stays a pure function."""
+    canonicals = {
+        canonicalize_native_type(col.data_type)
+        for obj in objects
+        for col in obj.columns
+    }
+    table = _mapping_table(engine=engine, native_types=canonicals)
     out: list[CatalogObjectRecord] = []
     for obj in objects:
         cols = [
             replace(
                 col,
-                normalized_type=resolve_normalized_type(
-                    engine=engine, data_type=col.data_type
+                normalized_type=table.get(
+                    canonicalize_native_type(col.data_type), "unknown"
                 ),
             )
             for col in obj.columns

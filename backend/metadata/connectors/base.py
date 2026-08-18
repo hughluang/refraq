@@ -83,8 +83,11 @@ class CollectProgress(Protocol):
     def listed_objects(self, total: int) -> None:
         """Object-list query returned ``total`` objects to collect."""
 
-    def object_done(self, done: int, total: int) -> None:
-        """Finished collecting one object; ``done`` is 1-based."""
+    def fetched(self, part: str, rows: int) -> None:
+        """Finished one schema-scoped fetch; ``part`` names the result set."""
+
+    def assembled(self, total: int) -> None:
+        """Finished grouping the six fetches into ``total`` collected objects."""
 
 
 class EngineConnector(Protocol):

@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import datetime
 
+from backend.metadata.catalog.structure_diff import (
+    StructureDiffFacts,
+    compute_structure_diff,
+)
 from backend.metadata.catalog.fk_join_sync import (
     _fk_edges_for_object,
     merge_fk_snapshot,
@@ -22,6 +26,8 @@ from backend.metadata.catalog.identity import (
 )
 from backend.metadata.catalog.records import (
     CatalogColumnRecord,
+    CatalogForeignKeyRecord,
+    CatalogIndexRecord,
     CatalogJoinRecord,
     CatalogObjectRecord,
     CatalogWriteAborted,
@@ -49,6 +55,10 @@ class StructureRefreshPlan:
     objects: tuple[CatalogObjectRecord, ...]
     delete_join_ids: tuple[str, ...]
     upsert_joins: tuple[StructureJoinUpsert, ...]
+    stamp_object_ids: tuple[str, ...]
+    last_structure_job_id: str
+    collected_at: datetime
+    diff: StructureDiffFacts
 
 
 def merge_columns_snapshot(
@@ -91,6 +101,18 @@ def merge_columns_snapshot(
                 )
             )
         else:
+            field_kind = col.field_kind or prev.field_kind
+            changed = (
+                prev.locator_key != col_locator
+                or prev.ordinal != col.ordinal
+                or prev.data_type != col.data_type
+                or prev.normalized_type != col.normalized_type
+                or prev.nullable != col.nullable
+                or prev.default_value != col.default_value
+                or prev.comment != col.comment
+                or prev.field_kind != field_kind
+                or not prev.is_present
+            )
             new_cols.append(
                 replace(
                     prev,
@@ -101,9 +123,9 @@ def merge_columns_snapshot(
                     nullable=col.nullable,
                     default_value=col.default_value,
                     comment=col.comment,
-                    field_kind=col.field_kind or prev.field_kind,
+                    field_kind=field_kind,
                     is_present=True,
-                    updated_at=now,
+                    updated_at=now if changed else prev.updated_at,
                 )
             )
     for name, prev in col_by_name.items():
@@ -267,6 +289,8 @@ def build_structure_refresh_plan(
             foreign_keys=fks,
             indexes=idxs,
         )
+        if _structure_equal(match, updated):
+            continue
         by_id[match.id] = updated
         touched_ids.add(match.id)
 
@@ -319,9 +343,112 @@ def build_structure_refresh_plan(
             )
         )
 
+    stamp_object_ids = tuple(
+        obj.id
+        for obj in final_objects
+        if obj.is_present
+        and obj.source_id == source_id
+        and (schema_scope is None or obj.schema_name == schema_scope)
+    )
+    diff = compute_structure_diff(
+        existing=[o for o in existing_objects if o.is_present],
+        incoming=incoming,
+        schema_scope=schema_scope,
+    )
     return StructureRefreshPlan(
         source_id=source_id,
         objects=tuple(by_id[oid] for oid in touched_ids),
         delete_join_ids=tuple(delete_ids),
         upsert_joins=tuple(upserts),
+        stamp_object_ids=stamp_object_ids,
+        last_structure_job_id=job_id,
+        collected_at=now,
+        diff=diff,
     )
+
+
+def _structure_equal(
+    existing: CatalogObjectRecord, incoming: CatalogObjectRecord
+) -> bool:
+    return (
+        existing.locator_key == incoming.locator_key
+        and existing.object_type == incoming.object_type
+        and existing.schema_name == incoming.schema_name
+        and existing.name == incoming.name
+        and existing.ddl == incoming.ddl
+        and existing.comment == incoming.comment
+        and existing.primary_key == incoming.primary_key
+        and existing.is_present == incoming.is_present
+        and _columns_equal(existing.columns, incoming.columns)
+        and _fks_equal(existing.foreign_keys, incoming.foreign_keys)
+        and _indexes_equal(existing.indexes, incoming.indexes)
+    )
+
+
+def _columns_equal(
+    existing: list[CatalogColumnRecord], incoming: list[CatalogColumnRecord]
+) -> bool:
+    if len(existing) != len(incoming):
+        return False
+    for left, right in zip(existing, incoming, strict=True):
+        if (
+            left.id != right.id
+            or left.locator_key != right.locator_key
+            or left.name != right.name
+            or left.ordinal != right.ordinal
+            or left.data_type != right.data_type
+            or left.normalized_type != right.normalized_type
+            or left.nullable != right.nullable
+            or left.default_value != right.default_value
+            or left.comment != right.comment
+            or left.field_kind != right.field_kind
+            or left.is_present != right.is_present
+        ):
+            return False
+    return True
+
+
+def _fks_equal(
+    existing: list[CatalogForeignKeyRecord],
+    incoming: list[CatalogForeignKeyRecord],
+) -> bool:
+    left = [
+        (
+            fk.name,
+            tuple(fk.columns),
+            fk.ref_schema,
+            fk.ref_table,
+            tuple(fk.ref_columns),
+            fk.is_present,
+            fk.id,
+        )
+        for fk in existing
+    ]
+    right = [
+        (
+            fk.name,
+            tuple(fk.columns),
+            fk.ref_schema,
+            fk.ref_table,
+            tuple(fk.ref_columns),
+            fk.is_present,
+            fk.id,
+        )
+        for fk in incoming
+    ]
+    return left == right
+
+
+def _indexes_equal(
+    existing: list[CatalogIndexRecord],
+    incoming: list[CatalogIndexRecord],
+) -> bool:
+    left = [
+        (idx.name, tuple(idx.columns), idx.is_unique, idx.is_present, idx.id)
+        for idx in existing
+    ]
+    right = [
+        (idx.name, tuple(idx.columns), idx.is_unique, idx.is_present, idx.id)
+        for idx in incoming
+    ]
+    return left == right

@@ -36,7 +36,12 @@ from backend.metadata.sources.service import create_source  # noqa: E402
 from backend.metadata.type_mappings.seeds import (  # noqa: E402
     ensure_product_type_mappings,
 )
+from backend.metadata.catalog.records import (  # noqa: E402
+    CatalogColumnRecord,
+    CatalogObjectRecord,
+)
 from backend.metadata.type_mappings.service import (  # noqa: E402
+    assign_normalized_types,
     patch_mapping,
     resolve_normalized_type,
 )
@@ -175,6 +180,81 @@ def test_seeded_aliases_are_distinct_keys() -> None:
     assert varchar.id != varying.id
     assert canonicalize_native_type("varchar(50)") == "varchar"
     assert canonicalize_native_type("character varying(100)") == "character varying"
+
+
+def test_assign_normalized_types_resolves_distinct_canonicals() -> None:
+    reset_type_mapping_store()
+    ensure_product_type_mappings()
+    now = utc_now()
+
+    def _col(name: str, data_type: str, ordinal: int) -> CatalogColumnRecord:
+        return CatalogColumnRecord(
+            id=f"col_{name}",
+            object_id="obj_1",
+            locator_key=f"col/{name}",
+            name=name,
+            ordinal=ordinal,
+            data_type=data_type,
+            nullable=True,
+            is_present=True,
+            default_value=None,
+            comment=None,
+            business_name=None,
+            business_description=None,
+            column_semantics=None,
+            enum_catalog=None,
+            semantic_source=None,
+            field_kind="column",
+            created_at=now,
+            updated_at=now,
+        )
+
+    incoming = [
+        CatalogObjectRecord(
+            id="obj_1",
+            source_id="src_1",
+            locator_key="obj/mssql/s/dbo/table/t",
+            object_type="table",
+            schema_name="dbo",
+            name="t",
+            ddl=None,
+            comment=None,
+            primary_key=None,
+            is_present=True,
+            business_name=None,
+            business_description=None,
+            object_category=None,
+            grain_description=None,
+            business_primary_key=None,
+            business_domain_id=None,
+            evidence_summary=None,
+            open_questions=None,
+            semantic_source=None,
+            business_semantics_ready=False,
+            semantics_updated_at=None,
+            last_structure_job_id=None,
+            collected_at=now,
+            created_at=now,
+            updated_at=now,
+            columns=[
+                _col("id", "int", 1),
+                _col("code", "varchar(50)", 2),
+                _col("note", "varchar(200)", 3),
+                _col("shape", "geometry", 4),
+                _col("blank", "", 5),
+            ],
+        )
+    ]
+    assigned = assign_normalized_types(incoming, engine="mssql")
+    types = {c.name: c.normalized_type for c in assigned[0].columns}
+    assert types["id"] == "integer"
+    assert types["code"] == "string"
+    assert types["note"] == "string"
+    assert types["shape"] == "unknown"
+    assert types["blank"] == "unknown"
+    store = get_type_mapping_store()
+    assert store.get_by_key("mssql", "geometry") is not None
+    assert store.get_by_key("mssql", "") is None
 
 
 def test_homonym_seeds() -> None:

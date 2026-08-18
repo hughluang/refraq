@@ -392,3 +392,145 @@ def test_sql_list_objects_is_constant_queries(persistent_client: TestClient) -> 
     assert present_only_total == 19
     assert with_absent_total != present_only_total
     assert len(store.list_present_for_source(source_id)) == 19
+
+
+def test_sql_refresh_keeps_patched_semantics(persistent_client: TestClient) -> None:
+    from backend.core.time import utc_now
+    from backend.metadata.catalog.store import (
+        CatalogColumnRecord,
+        CatalogObjectRecord,
+        get_catalog_store,
+        new_column_id,
+        new_object_id,
+        reset_catalog_store,
+    )
+    from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
+    from backend.metadata.sources.service import require_source
+    from backend.metadata.sources.store import reset_source_store
+
+    reset_source_store()
+    reset_catalog_store()
+    login = persistent_client.post(
+        "/auth/login",
+        json={"account": "root", "password": "s3cret"},
+    )
+    assert login.status_code == 200
+    key = f"sem{uuid.uuid4().hex[:8]}"
+    created = persistent_client.post(
+        "/sources",
+        json={
+            "key": key,
+            "name": key,
+            "kind": "database",
+            "engine": "postgresql",
+            "access": {
+                "host": "127.0.0.1",
+                "port": 5432,
+                "username": "u",
+                "password": "p",
+                "ssl_mode": "require",
+                "database": "MES",
+                "schema": "public",
+                "extra": {},
+            },
+        },
+    )
+    assert created.status_code == 201, created.text
+    source_id = created.json()["source"]["id"]
+    reset_catalog_store()
+    now = utc_now()
+    object_id = new_object_id()
+    column_id = new_column_id()
+    incoming = CatalogObjectRecord(
+        id=object_id,
+        source_id=source_id,
+        locator_key=f"obj/postgresql/{key}/public/table/orders",
+        object_type="table",
+        schema_name="public",
+        name="orders",
+        ddl=None,
+        comment=None,
+        primary_key=["id"],
+        is_present=True,
+        business_name=None,
+        business_description=None,
+        object_category=None,
+        grain_description=None,
+        business_primary_key=None,
+        business_domain_id=None,
+        evidence_summary=None,
+        open_questions=None,
+        semantic_source=None,
+        business_semantics_ready=False,
+        semantics_updated_at=None,
+        last_structure_job_id="job_seed",
+        collected_at=now,
+        created_at=now,
+        updated_at=now,
+        columns=[
+            CatalogColumnRecord(
+                id=column_id,
+                object_id=object_id,
+                locator_key=f"col/postgresql/{key}/public/table/orders/column/id",
+                name="id",
+                ordinal=1,
+                data_type="integer",
+                nullable=False,
+                is_present=True,
+                default_value=None,
+                comment=None,
+                business_name=None,
+                business_description=None,
+                column_semantics=None,
+                enum_catalog=None,
+                semantic_source=None,
+                field_kind="column",
+                created_at=now,
+                updated_at=now,
+            )
+        ],
+        foreign_keys=[],
+        indexes=[],
+    )
+    apply_structure_snapshot(
+        source=require_source(source_id),
+        job_id="job_seed",
+        collected=[incoming],
+        schema_scope=None,
+        fail_safe_threshold=1.0,
+    )
+    store = get_catalog_store()
+    store.patch_object_semantics(
+        object_id,
+        business_name="Orders",
+        business_semantics_ready=True,
+    )
+    store.patch_column_semantics(
+        column_id,
+        business_name="Order id",
+        column_semantics={"role": "pk"},
+    )
+    changed = CatalogObjectRecord(
+        **{
+            **incoming.__dict__,
+            "columns": [
+                CatalogColumnRecord(
+                    **{**incoming.columns[0].__dict__, "data_type": "bigint"}
+                )
+            ],
+        }
+    )
+    apply_structure_snapshot(
+        source=require_source(source_id),
+        job_id="job_refresh",
+        collected=[changed],
+        schema_scope=None,
+        fail_safe_threshold=1.0,
+    )
+    obj = store.get_object(object_id)
+    assert obj is not None
+    assert obj.business_name == "Orders"
+    assert obj.business_semantics_ready is True
+    assert obj.columns[0].data_type == "bigint"
+    assert obj.columns[0].business_name == "Order id"
+    assert obj.columns[0].column_semantics == {"role": "pk"}

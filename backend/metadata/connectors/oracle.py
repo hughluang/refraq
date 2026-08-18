@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 from urllib.parse import quote_plus
 
 import oracledb
 from sqlalchemy import create_engine, text
 
 from backend.metadata.connectors.base import (
-    CollectedColumn,
-    CollectedForeignKey,
-    CollectedIndex,
-    CollectedObject,
     CollectedStructure,
     CollectProgress,
     ConnectorError,
@@ -20,6 +17,17 @@ from backend.metadata.connectors.base import (
     SourceEndpoint,
     fetch_query_result,
     query_endpoint_error,
+)
+from backend.metadata.connectors.structure_rows import (
+    ColumnRow,
+    DefinitionRow,
+    ForeignKeyColumnRow,
+    IndexColumnRow,
+    KeyColumnRow,
+    ObjectRow,
+    StructureRows,
+    assemble,
+    stream_mappings,
 )
 
 
@@ -66,291 +74,37 @@ class OracleConnector:
         try:
             with eng.connect() as conn:
                 params: dict[str, object] = {"owner": owner_filter}
-                obj_sql = text(
-                    """
-                    SELECT
-                      owner AS schema_name,
-                      table_name AS name,
-                      'table' AS object_type
-                    FROM all_tables
-                    WHERE owner = :owner
-                    UNION ALL
-                    SELECT
-                      owner AS schema_name,
-                      view_name AS name,
-                      'view' AS object_type
-                    FROM all_views
-                    WHERE owner = :owner
-                    UNION ALL
-                    SELECT
-                      owner AS schema_name,
-                      mview_name AS name,
-                      'materialized_view' AS object_type
-                    FROM all_mviews
-                    WHERE owner = :owner
-                    ORDER BY 1, 2
-                    """
-                )
-                rows = conn.execute(obj_sql, params).mappings().all()
-                total = len(rows)
-                if progress is not None:
-                    progress.listed_objects(total)
-                objects: list[CollectedObject] = []
-                for index, row in enumerate(rows, start=1):
-                    schema = row["schema_name"]
-                    name = row["name"]
-                    object_type = row["object_type"]
-                    ddl = None
-                    if object_type in {"view", "materialized_view"}:
-                        ddl = self._view_ddl(conn, schema, name, object_type)
-                    objects.append(
-                        CollectedObject(
-                            schema_name=schema,
-                            name=name,
-                            object_type=object_type,
-                            columns=self._columns(conn, schema, name),
-                            ddl=ddl,
-                            comment=self._table_comment(conn, schema, name),
-                            primary_key=self._primary_key(conn, schema, name),
-                            foreign_keys=self._foreign_keys(conn, schema, name),
-                            indexes=self._indexes(conn, schema, name),
-                        )
+                objects = [
+                    ObjectRow(
+                        object_key=_object_key(
+                            row["schema_name"], row["name"], row["object_type"]
+                        ),
+                        schema_name=row["schema_name"],
+                        name=row["name"],
+                        object_type=row["object_type"],
+                        comment=row["comment"],
                     )
-                    if progress is not None:
-                        progress.object_done(index, total)
-                return CollectedStructure(objects=objects)
+                    for row in stream_mappings(conn, _OBJECT_SQL, params)
+                ]
+                if progress is not None:
+                    progress.listed_objects(len(objects))
+                return assemble(
+                    StructureRows(
+                        objects=objects,
+                        columns=_column_rows(conn, params),
+                        primary_keys=_primary_key_rows(conn, params),
+                        foreign_keys=_foreign_key_rows(conn, params),
+                        indexes=_index_rows(conn, params),
+                        definitions=_definition_rows(conn, params),
+                    ),
+                    progress=progress,
+                )
         except ConnectorError:
             raise
         except Exception as exc:  # noqa: BLE001
             raise ConnectorError("JOB_COLLECT_FAILED", str(exc)) from exc
         finally:
             eng.dispose()
-
-    def _columns(
-        self, conn: object, owner: str, table_name: str
-    ) -> list[CollectedColumn]:
-        sql = text(
-            """
-            SELECT
-              c.column_name AS name,
-              c.column_id AS ordinal,
-              CASE
-                WHEN c.data_type IN ('VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'RAW')
-                  THEN c.data_type || '(' || c.data_length || ')'
-                WHEN c.data_type IN ('NUMBER') AND c.data_precision IS NOT NULL
-                  THEN c.data_type || '(' || c.data_precision
-                       || CASE
-                            WHEN c.data_scale IS NOT NULL
-                              THEN ',' || c.data_scale
-                            ELSE ''
-                          END || ')'
-                ELSE c.data_type
-              END AS data_type,
-              CASE c.nullable WHEN 'Y' THEN 1 ELSE 0 END AS nullable,
-              c.data_default AS default_value,
-              cc.comments AS comment
-            FROM all_tab_columns c
-            LEFT JOIN all_col_comments cc
-              ON cc.owner = c.owner
-             AND cc.table_name = c.table_name
-             AND cc.column_name = c.column_name
-            WHERE c.owner = :owner AND c.table_name = :table_name
-            ORDER BY c.column_id
-            """
-        )
-        rows = conn.execute(  # type: ignore[attr-defined]
-            sql, {"owner": owner, "table_name": table_name}
-        ).mappings().all()
-        return [
-            CollectedColumn(
-                name=r["name"],
-                ordinal=int(r["ordinal"] or 0),
-                data_type=str(r["data_type"]),
-                nullable=bool(r["nullable"]),
-                default_value=(
-                    str(r["default_value"]).strip()
-                    if r["default_value"] is not None
-                    else None
-                ),
-                comment=r["comment"],
-            )
-            for r in rows
-        ]
-
-    def _table_comment(self, conn: object, owner: str, table_name: str) -> str | None:
-        sql = text(
-            """
-            SELECT comments
-            FROM all_tab_comments
-            WHERE owner = :owner AND table_name = :table_name
-            """
-        )
-        row = conn.execute(  # type: ignore[attr-defined]
-            sql, {"owner": owner, "table_name": table_name}
-        ).mappings().first()
-        if row and row["comments"]:
-            return str(row["comments"])
-        return None
-
-    def _primary_key(self, conn: object, owner: str, table_name: str) -> list[str]:
-        sql = text(
-            """
-            SELECT cols.column_name AS name
-            FROM all_constraints cons
-            JOIN all_cons_columns cols
-              ON cons.owner = cols.owner
-             AND cons.constraint_name = cols.constraint_name
-            WHERE cons.owner = :owner
-              AND cons.table_name = :table_name
-              AND cons.constraint_type = 'P'
-            ORDER BY cols.position
-            """
-        )
-        rows = conn.execute(  # type: ignore[attr-defined]
-            sql, {"owner": owner, "table_name": table_name}
-        ).mappings().all()
-        return [r["name"] for r in rows]
-
-    def _foreign_keys(
-        self, conn: object, owner: str, table_name: str
-    ) -> list[CollectedForeignKey]:
-        sql = text(
-            """
-            SELECT
-              cons.constraint_name AS name,
-              r_cons.owner AS ref_schema,
-              r_cons.table_name AS ref_table
-            FROM all_constraints cons
-            JOIN all_constraints r_cons
-              ON cons.r_owner = r_cons.owner
-             AND cons.r_constraint_name = r_cons.constraint_name
-            WHERE cons.owner = :owner
-              AND cons.table_name = :table_name
-              AND cons.constraint_type = 'R'
-            ORDER BY cons.constraint_name
-            """
-        )
-        rows = conn.execute(  # type: ignore[attr-defined]
-            sql, {"owner": owner, "table_name": table_name}
-        ).mappings().all()
-        out: list[CollectedForeignKey] = []
-        for r in rows:
-            cols_sql = text(
-                """
-                SELECT
-                  local_cols.column_name AS col_name,
-                  ref_cols.column_name AS ref_name,
-                  local_cols.position AS ord
-                FROM all_cons_columns local_cols
-                JOIN all_constraints cons
-                  ON cons.owner = local_cols.owner
-                 AND cons.constraint_name = local_cols.constraint_name
-                JOIN all_cons_columns ref_cols
-                  ON ref_cols.owner = cons.r_owner
-                 AND ref_cols.constraint_name = cons.r_constraint_name
-                 AND ref_cols.position = local_cols.position
-                WHERE local_cols.owner = :owner
-                  AND local_cols.constraint_name = :cname
-                ORDER BY local_cols.position
-                """
-            )
-            col_rows = conn.execute(  # type: ignore[attr-defined]
-                cols_sql, {"owner": owner, "cname": r["name"]}
-            ).mappings().all()
-            out.append(
-                CollectedForeignKey(
-                    name=r["name"],
-                    columns=[c["col_name"] for c in col_rows],
-                    ref_schema=r["ref_schema"],
-                    ref_table=r["ref_table"],
-                    ref_columns=[c["ref_name"] for c in col_rows],
-                )
-            )
-        return out
-
-    def _indexes(
-        self, conn: object, owner: str, table_name: str
-    ) -> list[CollectedIndex]:
-        sql = text(
-            """
-            SELECT
-              i.index_name AS name,
-              CASE i.uniqueness WHEN 'UNIQUE' THEN 1 ELSE 0 END AS is_unique
-            FROM all_indexes i
-            WHERE i.table_owner = :owner
-              AND i.table_name = :table_name
-              AND i.index_type != 'LOB'
-              AND NOT EXISTS (
-                SELECT 1
-                FROM all_constraints c
-                WHERE c.owner = i.owner
-                  AND c.index_name = i.index_name
-                  AND c.constraint_type = 'P'
-              )
-            ORDER BY i.index_name
-            """
-        )
-        rows = conn.execute(  # type: ignore[attr-defined]
-            sql, {"owner": owner, "table_name": table_name}
-        ).mappings().all()
-        out: list[CollectedIndex] = []
-        for r in rows:
-            cols_sql = text(
-                """
-                SELECT column_name AS name
-                FROM all_ind_columns
-                WHERE index_owner = :owner AND index_name = :iname
-                ORDER BY column_position
-                """
-            )
-            col_rows = conn.execute(  # type: ignore[attr-defined]
-                cols_sql, {"owner": owner, "iname": r["name"]}
-            ).mappings().all()
-            out.append(
-                CollectedIndex(
-                    name=r["name"],
-                    columns=[c["name"] for c in col_rows],
-                    is_unique=bool(r["is_unique"]),
-                )
-            )
-        return out
-
-    def _view_ddl(
-        self, conn: object, owner: str, name: str, object_type: str
-    ) -> str | None:
-        # Prefer DBMS_METADATA; fall back to ALL_VIEWS.TEXT for ordinary views.
-        try:
-            ddl_type = "MATERIALIZED_VIEW" if object_type == "materialized_view" else "VIEW"
-            sql = text(
-                """
-                SELECT dbms_metadata.get_ddl(:ddl_type, :name, :owner) AS ddl
-                FROM dual
-                """
-            )
-            row = conn.execute(  # type: ignore[attr-defined]
-                sql, {"ddl_type": ddl_type, "name": name, "owner": owner}
-            ).mappings().first()
-            if row and row["ddl"]:
-                return str(row["ddl"])
-        except Exception:  # noqa: BLE001 — optional path
-            pass
-        if object_type == "view":
-            try:
-                sql = text(
-                    """
-                    SELECT text AS ddl
-                    FROM all_views
-                    WHERE owner = :owner AND view_name = :name
-                    """
-                )
-                row = conn.execute(  # type: ignore[attr-defined]
-                    sql, {"owner": owner, "name": name}
-                ).mappings().first()
-                if row and row["ddl"]:
-                    return f"CREATE OR REPLACE VIEW {owner}.{name} AS\n{row['ddl']}"
-            except Exception:  # noqa: BLE001
-                return None
-        return None
 
     def _engine(self, endpoint: SourceEndpoint, *, timeout_sec: int | None = None):
         mode = endpoint.ssl_mode or "disable"
@@ -370,7 +124,6 @@ class OracleConnector:
         }
         if thick:
             try:
-
                 oracledb.init_oracle_client()
             except Exception as exc:  # noqa: BLE001
                 raise ConnectorError(
@@ -386,3 +139,286 @@ class OracleConnector:
             # oracledb: call_timeout in milliseconds (JDBC setQueryTimeout analogue).
             connect_args["call_timeout"] = max(1, int(timeout_sec) * 1000)
         return create_engine(url, pool_pre_ping=True, connect_args=connect_args)
+
+
+def _object_key(owner: str, name: str, object_type: str) -> str:
+    return f"{object_type}:{owner}.{name}"
+
+
+def _row_object_key(row: Any) -> str:
+    return _object_key(row["schema_name"], row["object_name"], row["object_type"])
+
+
+_OBJECT_SQL = text(
+    """
+    SELECT
+      t.owner AS schema_name,
+      t.table_name AS name,
+      'table' AS object_type,
+      c.comments AS comment
+    FROM all_tables t
+    LEFT JOIN all_tab_comments c
+      ON c.owner = t.owner AND c.table_name = t.table_name
+    WHERE t.owner = :owner
+    UNION ALL
+    SELECT
+      v.owner AS schema_name,
+      v.view_name AS name,
+      'view' AS object_type,
+      c.comments AS comment
+    FROM all_views v
+    LEFT JOIN all_tab_comments c
+      ON c.owner = v.owner AND c.table_name = v.view_name
+    WHERE v.owner = :owner
+    UNION ALL
+    SELECT
+      m.owner AS schema_name,
+      m.mview_name AS name,
+      'materialized_view' AS object_type,
+      c.comments AS comment
+    FROM all_mviews m
+    LEFT JOIN all_tab_comments c
+      ON c.owner = m.owner AND c.table_name = m.mview_name
+    WHERE m.owner = :owner
+    ORDER BY 1, 2, 3
+    """
+)
+
+# Same identity set as _OBJECT_SQL (without comments). Detail fetches join this
+# so a table and materialized_view that share owner+name each get their own key.
+_OBJECT_IDENTITY = """
+      SELECT t.owner AS schema_name, t.table_name AS name, 'table' AS object_type
+      FROM all_tables t
+      WHERE t.owner = :owner
+      UNION ALL
+      SELECT v.owner, v.view_name, 'view'
+      FROM all_views v
+      WHERE v.owner = :owner
+      UNION ALL
+      SELECT m.owner, m.mview_name, 'materialized_view'
+      FROM all_mviews m
+      WHERE m.owner = :owner
+"""
+
+_COLUMN_SQL = text(
+    f"""
+    SELECT
+      o.object_type AS object_type,
+      c.owner AS schema_name,
+      c.table_name AS object_name,
+      c.column_name AS name,
+      c.column_id AS ordinal,
+      CASE
+        WHEN c.data_type IN ('VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'RAW')
+          THEN c.data_type || '(' || c.data_length || ')'
+        WHEN c.data_type IN ('NUMBER') AND c.data_precision IS NOT NULL
+          THEN c.data_type || '(' || c.data_precision
+               || CASE
+                    WHEN c.data_scale IS NOT NULL
+                      THEN ',' || c.data_scale
+                    ELSE ''
+                  END || ')'
+        ELSE c.data_type
+      END AS data_type,
+      CASE c.nullable WHEN 'Y' THEN 1 ELSE 0 END AS nullable,
+      c.data_default AS default_value,
+      cc.comments AS comment
+    FROM all_tab_columns c
+    JOIN (
+      {_OBJECT_IDENTITY}
+    ) o ON o.schema_name = c.owner AND o.name = c.table_name
+    LEFT JOIN all_col_comments cc
+      ON cc.owner = c.owner
+     AND cc.table_name = c.table_name
+     AND cc.column_name = c.column_name
+    WHERE c.owner = :owner
+    ORDER BY c.table_name, o.object_type, c.column_id
+    """
+)
+
+_PRIMARY_KEY_SQL = text(
+    f"""
+    SELECT
+      o.object_type AS object_type,
+      cons.owner AS schema_name,
+      cons.table_name AS object_name,
+      cols.column_name AS name,
+      cols.position AS ordinal
+    FROM all_constraints cons
+    JOIN all_cons_columns cols
+      ON cons.owner = cols.owner
+     AND cons.constraint_name = cols.constraint_name
+    JOIN (
+      {_OBJECT_IDENTITY}
+    ) o ON o.schema_name = cons.owner AND o.name = cons.table_name
+    WHERE cons.owner = :owner
+      AND cons.constraint_type = 'P'
+    ORDER BY cons.table_name, o.object_type, cols.position
+    """
+)
+
+_FOREIGN_KEY_SQL = text(
+    f"""
+    SELECT
+      o.object_type AS object_type,
+      cons.owner AS schema_name,
+      cons.table_name AS object_name,
+      cons.constraint_name AS constraint_name,
+      local_cols.column_name AS column_name,
+      r_cons.owner AS ref_schema,
+      r_cons.table_name AS ref_table,
+      ref_cols.column_name AS ref_column,
+      local_cols.position AS ordinal
+    FROM all_constraints cons
+    JOIN all_constraints r_cons
+      ON cons.r_owner = r_cons.owner
+     AND cons.r_constraint_name = r_cons.constraint_name
+    JOIN all_cons_columns local_cols
+      ON local_cols.owner = cons.owner
+     AND local_cols.constraint_name = cons.constraint_name
+    JOIN all_cons_columns ref_cols
+      ON ref_cols.owner = cons.r_owner
+     AND ref_cols.constraint_name = cons.r_constraint_name
+     AND ref_cols.position = local_cols.position
+    JOIN (
+      {_OBJECT_IDENTITY}
+    ) o ON o.schema_name = cons.owner AND o.name = cons.table_name
+    WHERE cons.owner = :owner
+      AND cons.constraint_type = 'R'
+    ORDER BY cons.table_name, o.object_type, cons.constraint_name, local_cols.position
+    """
+)
+
+_INDEX_SQL = text(
+    f"""
+    SELECT
+      o.object_type AS object_type,
+      i.table_owner AS schema_name,
+      i.table_name AS object_name,
+      i.index_name AS index_name,
+      ic.column_name AS column_name,
+      ic.column_position AS ordinal,
+      CASE i.uniqueness WHEN 'UNIQUE' THEN 1 ELSE 0 END AS is_unique
+    FROM all_indexes i
+    JOIN all_ind_columns ic
+      ON ic.index_owner = i.owner
+     AND ic.index_name = i.index_name
+    JOIN (
+      {_OBJECT_IDENTITY}
+    ) o ON o.schema_name = i.table_owner AND o.name = i.table_name
+    WHERE i.table_owner = :owner
+      AND i.index_type != 'LOB'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM all_constraints c
+        WHERE c.owner = i.owner
+          AND c.index_name = i.index_name
+          AND c.constraint_type = 'P'
+      )
+    ORDER BY i.table_name, o.object_type, i.index_name, ic.column_position
+    """
+)
+
+_DEFINITION_SQL = text(
+    """
+    SELECT
+      'view' AS object_type,
+      owner AS schema_name,
+      view_name AS object_name,
+      dbms_metadata.get_ddl('VIEW', view_name, owner) AS ddl
+    FROM all_views
+    WHERE owner = :owner
+    UNION ALL
+    SELECT
+      'materialized_view' AS object_type,
+      owner AS schema_name,
+      mview_name AS object_name,
+      dbms_metadata.get_ddl('MATERIALIZED_VIEW', mview_name, owner) AS ddl
+    FROM all_mviews
+    WHERE owner = :owner
+    """
+)
+
+_DEFINITION_FALLBACK_SQL = text(
+    """
+    SELECT
+      'view' AS object_type,
+      owner AS schema_name,
+      view_name AS object_name,
+      text AS ddl
+    FROM all_views
+    WHERE owner = :owner
+    """
+)
+
+
+def _column_rows(conn: object, params: dict[str, object]):
+    for row in stream_mappings(conn, _COLUMN_SQL, params):
+        yield ColumnRow(
+            object_key=_row_object_key(row),
+            name=row["name"],
+            ordinal=int(row["ordinal"] or 0),
+            data_type=str(row["data_type"]),
+            nullable=bool(row["nullable"]),
+            default_value=(
+                str(row["default_value"]).strip()
+                if row["default_value"] is not None
+                else None
+            ),
+            comment=row["comment"],
+        )
+
+
+def _primary_key_rows(conn: object, params: dict[str, object]):
+    for row in stream_mappings(conn, _PRIMARY_KEY_SQL, params):
+        yield KeyColumnRow(
+            object_key=_row_object_key(row),
+            name=row["name"],
+            ordinal=int(row["ordinal"] or 0),
+        )
+
+
+def _foreign_key_rows(conn: object, params: dict[str, object]):
+    for row in stream_mappings(conn, _FOREIGN_KEY_SQL, params):
+        yield ForeignKeyColumnRow(
+            object_key=_row_object_key(row),
+            constraint_name=row["constraint_name"],
+            column_name=row["column_name"],
+            ref_schema=row["ref_schema"],
+            ref_table=row["ref_table"],
+            ref_column=row["ref_column"],
+            ordinal=int(row["ordinal"] or 0),
+        )
+
+
+def _index_rows(conn: object, params: dict[str, object]):
+    for row in stream_mappings(conn, _INDEX_SQL, params):
+        yield IndexColumnRow(
+            object_key=_row_object_key(row),
+            index_name=row["index_name"],
+            column_name=row["column_name"],
+            ordinal=int(row["ordinal"] or 0),
+            is_unique=bool(row["is_unique"]),
+        )
+
+
+def _definition_rows(conn: object, params: dict[str, object]):
+    try:
+        for row in stream_mappings(conn, _DEFINITION_SQL, params):
+            ddl = str(row["ddl"]) if row["ddl"] else None
+            yield DefinitionRow(object_key=_row_object_key(row), ddl=ddl)
+        return
+    except Exception:  # noqa: BLE001 — optional path
+        pass
+    try:
+        for row in stream_mappings(conn, _DEFINITION_FALLBACK_SQL, params):
+            if not row["ddl"]:
+                yield DefinitionRow(object_key=_row_object_key(row), ddl=None)
+                continue
+            ddl = (
+                f"CREATE OR REPLACE VIEW {row['schema_name']}.{row['object_name']} "
+                f"AS\n{row['ddl']}"
+            )
+            yield DefinitionRow(object_key=_row_object_key(row), ddl=ddl)
+    except Exception:  # noqa: BLE001
+        return

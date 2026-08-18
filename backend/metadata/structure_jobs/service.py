@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import time
+
+from celery import current_task
+
 from backend.core.config import get_settings
 from backend.core.time import utc_now
 
@@ -20,11 +24,9 @@ from backend.metadata.catalog.store import (
     CatalogIndexRecord,
     CatalogObjectRecord,
     CatalogWriteAborted,
-    get_catalog_store,
     new_column_id,
     new_object_id,
 )
-from backend.metadata.catalog.structure_diff import compute_structure_diff
 from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
 from backend.metadata.connectors.base import CollectedStructure, ConnectorError
 from backend.metadata.connectors.runtime import prepare
@@ -38,8 +40,6 @@ from backend.metadata.type_mappings.service import assign_normalized_types
 
 def _claim_worker_id() -> str:
     try:
-        from celery import current_task
-
         request = getattr(current_task, "request", None)
         hostname = getattr(request, "hostname", None) if request is not None else None
         return occupancy_worker_id(hostname if hostname else None)
@@ -171,21 +171,26 @@ def run_structure_job(job_id: str) -> dict[str, str]:
         job_id=job_id,
         collected=collected,
     )
+    t_phase = time.perf_counter()
     records = assign_normalized_types(records, engine=source.engine)
+    append_job_log(
+        job_id,
+        level="info",
+        message=f"assigned normalized types in {time.perf_counter() - t_phase:.1f}s",
+    )
     unknown_locators = [
         col.locator_key
         for obj in records
         for col in obj.columns
         if col.normalized_type == "unknown"
     ]
-    catalog = get_catalog_store()
-    existing = catalog.list_present_for_source(source_id)
     stopped = _stopped(job_id)
     if stopped is not None:
         return stopped
     append_job_log(job_id, level="info", message="applying catalog snapshot…")
+    t_phase = time.perf_counter()
     try:
-        apply_structure_snapshot(
+        facts = apply_structure_snapshot(
             source=source,
             job_id=job_id,
             collected=records,
@@ -200,12 +205,13 @@ def run_structure_job(job_id: str) -> dict[str, str]:
             error_code="JOB_EXECUTION_FAILED",
             error_summary=str(exc)[:400],
         )
-
-    facts = compute_structure_diff(
-        existing=existing,
-        incoming=records,
-        schema_scope=bound.endpoint.schema_filter,
+    append_job_log(
+        job_id,
+        level="info",
+        message=f"catalog snapshot applied in {time.perf_counter() - t_phase:.1f}s",
     )
+
+    t_phase = time.perf_counter()
     diff = persist_structure_diff(
         source_id=source_id,
         job_id=job_id,
@@ -216,7 +222,10 @@ def run_structure_job(job_id: str) -> dict[str, str]:
     append_job_log(
         job_id,
         level="info",
-        message=f"succeeded class={facts.diff_class}",
+        message=(
+            f"succeeded class={facts.diff_class} "
+            f"(diff {time.perf_counter() - t_phase:.1f}s)"
+        ),
     )
     if unknown_locators:
         sample = ", ".join(unknown_locators[:10])

@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 from backend.core.time import utc_now
+import hashlib
 import json
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, or_, select
-from sqlalchemy.orm import defer, noload, selectinload
+from sqlalchemy import func, or_, select, text, update
+from sqlalchemy.orm import Session, defer, noload, selectinload
 
-from backend.core.db import session_scope
+from backend.core.db import get_engine, session_scope
 from backend.metadata.catalog.identity import _recompute_column_locator, _recompute_object_locator
 from backend.metadata.catalog.records import (
     CatalogColumnRecord,
@@ -257,69 +258,57 @@ class SqlCatalogStore:
             [list[CatalogObjectRecord], list[CatalogJoinRecord], datetime],
             StructureRefreshPlan,
         ],
-    ) -> None:
-        """Atomic load → build_plan → persist (zero merge/origin rules)."""
+    ) -> StructureRefreshPlan:
+        """Load baseline, build a delta plan, persist changed rows only.
 
-        with session_scope() as session:
-            rows = list(
-                session.scalars(
-                    select(CatalogObjectRow)
-                    .where(CatalogObjectRow.source_id == source_id)
-                    .options(
-                        selectinload(CatalogObjectRow.columns),
-                        selectinload(CatalogObjectRow.foreign_keys),
-                        selectinload(CatalogObjectRow.indexes),
-                    )
-                ).all()
+        Per-Source serialization is a session-level advisory lock held across
+        read → plan → write. Merge stays a pure function outside the write
+        transaction.
+        """
+        lock_keys = _source_lock_keys(source_id)
+        conn = get_engine().connect()
+        try:
+            conn.execute(
+                text("SELECT pg_advisory_lock(:a, :b)"),
+                {"a": lock_keys[0], "b": lock_keys[1]},
             )
-            existing_objects = [_row_to_object(r) for r in rows]
-            join_rows = list(session.scalars(_select_joins_for_source(source_id)).all())
-            existing_joins = [_row_to_join(j) for j in join_rows]
-
-            now = utc_now()
-            plan = build_plan(existing_objects, existing_joins, now)
-
-            # Joins reference catalog_columns via FK without ORM relationships, so
-            # flush order is not inferred — delete joins, then persist objects/columns,
-            # then upsert joins (with an explicit flush before join inserts).
-            for jid in plan.delete_join_ids:
-                row = session.get(CatalogJoinRow, jid)
-                if row is not None:
-                    session.delete(row)
-            if plan.delete_join_ids:
-                session.flush()
-
-            for obj in plan.objects:
-                _sql_persist_object(session, obj, now=now)
-            session.flush()
-
-            for upsert in plan.upsert_joins:
-                existing = session.scalars(
-                    select(CatalogJoinRow).where(
-                        CatalogJoinRow.from_column_id == upsert.from_column_id,
-                        CatalogJoinRow.to_column_id == upsert.to_column_id,
-                    )
-                ).first()
-                if existing is not None:
-                    existing.evidence = upsert.evidence
-                    existing.join_kind = upsert.join_kind
-                    existing.join_expression = upsert.join_expression
-                    existing.origin = upsert.origin
-                else:
-                    session.add(
-                        CatalogJoinRow(
-                            id=new_join_id(),
-                            from_column_id=upsert.from_column_id,
-                            to_column_id=upsert.to_column_id,
-                            evidence=upsert.evidence,
-                            join_kind=upsert.join_kind,
-                            join_expression=upsert.join_expression,
-                            origin=upsert.origin,
-                            created_by_user_id=None,
-                            created_at=now,
+            conn.commit()
+            with Session(bind=conn, autoflush=False, autocommit=False) as session:
+                rows = list(
+                    session.scalars(
+                        select(CatalogObjectRow)
+                        .where(CatalogObjectRow.source_id == source_id)
+                        .options(
+                            selectinload(CatalogObjectRow.columns),
+                            selectinload(CatalogObjectRow.foreign_keys),
+                            selectinload(CatalogObjectRow.indexes),
                         )
-                    )
-            session.flush()
+                    ).all()
+                )
+                existing_objects = [_row_to_object(r) for r in rows]
+                join_rows = list(
+                    session.scalars(_select_joins_for_source(source_id)).all()
+                )
+                existing_joins = [_row_to_join(j) for j in join_rows]
+                session.commit()
+
+                now = utc_now()
+                plan = build_plan(existing_objects, existing_joins, now)
+                _sql_persist_plan(session, plan, now=now)
+                session.commit()
+            return plan
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            try:
+                conn.execute(
+                    text("SELECT pg_advisory_unlock(:a, :b)"),
+                    {"a": lock_keys[0], "b": lock_keys[1]},
+                )
+                conn.commit()
+            finally:
+                conn.close()
 
     def recompute_locators_for_source(
         self,
@@ -618,6 +607,81 @@ def _list_object_filters(
     return filters
 
 
+_STAMP_CHUNK = 1000
+
+
+def _source_lock_keys(source_id: str) -> tuple[int, int]:
+    digest = hashlib.blake2b(
+        f"structure-refresh:{source_id}".encode(), digest_size=8
+    ).digest()
+    return (
+        int.from_bytes(digest[:4], "big", signed=True),
+        int.from_bytes(digest[4:], "big", signed=True),
+    )
+
+
+def _sql_persist_plan(
+    session: Any, plan: StructureRefreshPlan, *, now: datetime
+) -> None:
+    # Joins reference catalog_columns via FK without ORM relationships, so
+    # flush order is not inferred — delete joins, then persist objects/columns,
+    # then upsert joins (with an explicit flush before join inserts).
+    for jid in plan.delete_join_ids:
+        row = session.get(CatalogJoinRow, jid)
+        if row is not None:
+            session.delete(row)
+    if plan.delete_join_ids:
+        session.flush()
+
+    for obj in plan.objects:
+        _sql_persist_object(session, obj, now=now)
+    session.flush()
+    _sql_stamp_objects(session, plan)
+    session.flush()
+
+    for upsert in plan.upsert_joins:
+        existing = session.scalars(
+            select(CatalogJoinRow).where(
+                CatalogJoinRow.from_column_id == upsert.from_column_id,
+                CatalogJoinRow.to_column_id == upsert.to_column_id,
+            )
+        ).first()
+        if existing is not None:
+            existing.evidence = upsert.evidence
+            existing.join_kind = upsert.join_kind
+            existing.join_expression = upsert.join_expression
+            existing.origin = upsert.origin
+        else:
+            session.add(
+                CatalogJoinRow(
+                    id=new_join_id(),
+                    from_column_id=upsert.from_column_id,
+                    to_column_id=upsert.to_column_id,
+                    evidence=upsert.evidence,
+                    join_kind=upsert.join_kind,
+                    join_expression=upsert.join_expression,
+                    origin=upsert.origin,
+                    created_by_user_id=None,
+                    created_at=now,
+                )
+            )
+    session.flush()
+
+
+def _sql_stamp_objects(session: Any, plan: StructureRefreshPlan) -> None:
+    ids = list(plan.stamp_object_ids)
+    for offset in range(0, len(ids), _STAMP_CHUNK):
+        chunk = ids[offset : offset + _STAMP_CHUNK]
+        session.execute(
+            update(CatalogObjectRow)
+            .where(CatalogObjectRow.id.in_(chunk))
+            .values(
+                collected_at=plan.collected_at,
+                last_structure_job_id=plan.last_structure_job_id,
+            )
+        )
+
+
 def _sql_persist_object(session: Any, obj: CatalogObjectRecord, *, now: datetime) -> None:
     """Write a fully-merged CatalogObjectRecord (no merge rules)."""
 
@@ -671,17 +735,6 @@ def _sql_persist_object(session: Any, obj: CatalogObjectRecord, *, now: datetime
         row.last_structure_job_id = obj.last_structure_job_id
         row.collected_at = obj.collected_at
         row.updated_at = obj.updated_at
-        row.business_name = obj.business_name
-        row.business_description = obj.business_description
-        row.object_category = obj.object_category
-        row.grain_description = obj.grain_description
-        row.business_primary_key_json = _dumps_json(obj.business_primary_key)
-        row.business_domain_id = obj.business_domain_id
-        row.evidence_summary_json = _dumps_json(obj.evidence_summary)
-        row.open_questions_json = _dumps_json(obj.open_questions)
-        row.semantic_source = obj.semantic_source
-        row.business_semantics_ready = obj.business_semantics_ready
-        row.semantics_updated_at = obj.semantics_updated_at
 
     col_by_id = {c.id: c for c in list(row.columns)}
     seen_col_ids: set[str] = set()
@@ -724,11 +777,6 @@ def _sql_persist_object(session: Any, obj: CatalogObjectRecord, *, now: datetime
             prev.field_kind = col.field_kind or prev.field_kind
             prev.is_present = col.is_present
             prev.updated_at = col.updated_at
-            prev.business_name = col.business_name
-            prev.business_description = col.business_description
-            prev.column_semantics_json = _dumps_json(col.column_semantics)
-            prev.enum_catalog_json = _dumps_json(col.enum_catalog)
-            prev.semantic_source = col.semantic_source
 
     for cid, prev in col_by_id.items():
         if cid not in seen_col_ids:
