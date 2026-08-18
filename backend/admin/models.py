@@ -83,3 +83,14 @@ class AuditEventRow(Base):
     action: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     result: Mapped[str] = mapped_column(String(32), nullable=False)
     detail: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+
+class SystemParameterRow(Base):
+    __tablename__ = "system_parameters"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[object] = mapped_column(JSONB, nullable=False)
+    previous_value: Mapped[object | None] = mapped_column(JSONB, nullable=True)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_by_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)

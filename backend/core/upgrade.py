@@ -17,6 +17,7 @@ from backend.admin.roles import ensure_system_role
 from backend.core.config import get_settings
 from backend.metadata.type_mappings.seeds import ensure_product_type_mappings
 from backend.worker.api import ensure_system_schedules
+from backend.worker.parameters import assemble_system_parameters
 
 # Stable 64-bit signed key derived from product identity (not a generic magic number).
 _ADVISORY_LOCK_KEY = int.from_bytes(
@@ -43,7 +44,7 @@ def migrate_with_advisory_lock(database_url: str) -> None:
 
 
 def run_upgrade(database_url: str) -> None:
-    """Foundation Upgrade: migrate schema, then ensure System Role, system schedules, and Type Mapping seeds."""
+    """Foundation Upgrade: migrate schema, then ensure System Role, System Parameters, system schedules, and Type Mapping seeds."""
     _run_under_advisory_lock(database_url, ensure_roles=True)
 
 
@@ -74,6 +75,7 @@ def _run_under_advisory_lock(database_url: str, *, ensure_roles: bool) -> None:
                 command.upgrade(_alembic_config(database_url), "head")
                 if ensure_roles:
                     ensure_system_role(get_role_store())
+                    assemble_system_parameters()
                     ensure_system_schedules()
                     ensure_product_type_mappings()
             finally:

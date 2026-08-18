@@ -1,21 +1,10 @@
+import type { JsonSchemaProperty } from "@/lib/json-schema";
+
+export type { JsonSchemaProperty };
+
 export type Engine = "postgresql" | "mssql" | "oracle";
 
 export type SourceAccess = Record<string, unknown>;
-
-export type JsonSchemaProperty = {
-  type?: string | string[];
-  description?: string;
-  default?: unknown;
-  enum?: string[];
-  minimum?: number;
-  maximum?: number;
-  minLength?: number;
-  maxLength?: number;
-  "x-secret"?: boolean;
-  additionalProperties?: JsonSchemaProperty | boolean;
-  properties?: Record<string, JsonSchemaProperty>;
-  propertyNames?: JsonSchemaProperty;
-};
 
 export type ConnectorSpec = {
   $id?: string;

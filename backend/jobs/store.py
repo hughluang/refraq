@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from backend.core.config import get_settings
 from backend.core.db import session_scope
 from backend.jobs.models import JobRow
+from backend.jobs.parameters import reaper_lost_detection_sec
 
 
 JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
@@ -661,7 +662,7 @@ def fail_leftover_occupancy(claimed_by: str) -> int:
 
 def reap_stale_occupancy() -> int:
     """Mark running Jobs with stale occupancy as JOB_WORKER_LOST (Beat observer)."""
-    lost_sec = get_settings().refraq_job_lost_detection_sec
+    lost_sec = reaper_lost_detection_sec()
     cutoff = utc_now() - timedelta(seconds=lost_sec)
     stale = [
         record

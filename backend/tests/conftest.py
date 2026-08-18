@@ -13,7 +13,7 @@ os.environ.setdefault("CELERY_BROKER_URL", "memory://")
 
 import pytest
 
-from backend.admin.settings_override import reset_settings_override
+from backend.admin.system_parameters import reset_system_parameters
 from backend.core.config import reset_settings_cache
 from backend.core.db import reset_db_singletons
 from backend.core.redis_client import reset_redis_singleton
@@ -32,7 +32,7 @@ from backend.metadata.type_mappings.store import reset_type_mapping_store
 from backend.worker.schedules import reset_schedule_store
 
 reset_settings_cache()
-reset_settings_override()
+reset_system_parameters()
 reset_clock()
 
 
@@ -46,7 +46,7 @@ def pytest_configure(config: pytest.Config) -> None:
 @pytest.fixture(autouse=True)
 def _reset_foundation_singletons() -> None:
     reset_settings_cache()
-    reset_settings_override()
+    reset_system_parameters()
     reset_clock()
     reset_user_store()
     reset_role_store()
@@ -77,6 +77,6 @@ def _reset_foundation_singletons() -> None:
     reset_schedule_store()
     reset_db_singletons()
     reset_redis_singleton()
-    reset_settings_override()
+    reset_system_parameters()
     reset_settings_cache()
     reset_clock()

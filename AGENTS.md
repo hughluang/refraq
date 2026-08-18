@@ -18,11 +18,12 @@ The Management Foundation login/session/permission slice (Management Console) is
 For repository structure and long-lived development guidance, read:
 
 1. `docs/development.md`
-2. `docs/backend-layout.md` (backend package tiers, published APIs, placement)
-3. `docs/architecture.md`
-4. `docs/modules.md`
-5. domain or contract documents under `docs/` that match the task (metadata: `docs/business-metadata.md`, `docs/business-user-tokens.md`; jobs/schedules: `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`; matching `docs/api-contracts-*.md`)
-6. root `CONTEXT.md` for domain language
+2. `docs/conventions-docs.md` (document types, skeleton, writing rules)
+3. `docs/backend-layout.md` (backend package tiers, published APIs, placement)
+4. `docs/architecture.md`
+5. `docs/modules.md`
+6. domain or contract documents under `docs/` that match the task (metadata: `docs/business-metadata.md`, `docs/business-user-tokens.md`; jobs/schedules: `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`; matching `docs/api-contracts-*.md`)
+7. root `CONTEXT.md` for domain language
 
 ## Notes
 

@@ -9,6 +9,11 @@ from celery import Celery
 from backend.core.celery_broker import celery_broker_url
 from backend.core.config import get_settings
 from backend.core.request_id import connect_celery_request_id, install_request_id_log_filter
+from backend.worker.api import ensure_system_schedules
+from backend.worker.parameters import BEAT_MAX_INTERVAL_SEC, assemble_system_parameters
+
+assemble_system_parameters()
+ensure_system_schedules()
 
 
 def create_celery_app() -> Celery:
@@ -19,14 +24,13 @@ def create_celery_app() -> Celery:
         result_backend=None,
         task_ignore_result=True,
         task_track_started=False,
-        worker_concurrency=settings.refraq_job_worker_concurrency,
         imports=(
             "backend.metadata.tasks",
             "backend.metadata.source_jobs",
             "backend.worker.tasks",
         ),
         beat_scheduler="backend.worker.scheduler:DatabaseScheduler",
-        beat_max_loop_interval=5,
+        beat_max_loop_interval=BEAT_MAX_INTERVAL_SEC,
         timezone="UTC",
         enable_utc=True,
     )

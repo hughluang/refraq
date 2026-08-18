@@ -204,7 +204,6 @@ def test_logout_delete_cookie_matches_secure_attrs(
     secure_settings = Settings(
         store_backend="memory",
         admin_session_secret="test-secret",
-        admin_session_ttl_hours=8,
         initial_admin_account="root",
         initial_admin_password="s3cret",
     )

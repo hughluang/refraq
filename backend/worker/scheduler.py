@@ -7,7 +7,9 @@ from datetime import timedelta
 from celery.beat import ScheduleEntry, Scheduler
 
 from backend.core.time import format_instant
-from backend.worker.cron import BEAT_COMMITMENT_RETRY_SECONDS, CommitmentSchedule
+from backend.worker.api import ensure_system_schedules
+from backend.worker.cron import CommitmentSchedule
+from backend.worker.parameters import BEAT_MAX_INTERVAL_SEC, BEAT_SYNC_EVERY_SEC
 from backend.worker.schedules import get_schedule_store
 
 
@@ -28,15 +30,19 @@ class DatabaseScheduler(Scheduler):
     even after pause clears next_run_at or delete removes the row.
     """
 
-    sync_every = int(BEAT_COMMITMENT_RETRY_SECONDS)
-    max_interval = 5
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.sync_every = BEAT_SYNC_EVERY_SEC
+        self.max_interval = BEAT_MAX_INTERVAL_SEC
 
     def setup_schedule(self) -> None:
+        ensure_system_schedules()
         super().setup_schedule()
         self.merge_inplace(self._load_entries())
         self._heap = None
 
     def sync(self) -> None:
+        ensure_system_schedules()
         self.merge_inplace(self._load_entries())
         super().sync()
         self._heap = None

@@ -46,7 +46,7 @@ Foundation P0 delivered people, permissions, and Console mount contract. Product
 1. **Source is the business/catalog identity and, for database kinds, owns live reachability and credentials** — `engine` and a per-engine validated **access** JSON document that carries both connectivity and catalog scope (engine-dialect keys; secrets inside that document), stored as one application-encrypted blob on the Source row (ADR 0011 / 0021).
 2. **Catalog Object identity is Source-scoped only**.
 3. **Long work never blocks the API process** — enqueue **Jobs**; workers execute.
-4. **Credentials are secrets** — the whole access document is encrypted at rest in Postgres; read APIs strip `x-secret` fields; write/edit APIs may return the full decrypted tree; never written to Settings Override or logs.
+4. **Credentials are secrets** — the whole access document is encrypted at rest in Postgres; read APIs strip `x-secret` fields; write/edit APIs may return the full decrypted tree; never written to a **System Parameter** or logs.
 5. **Backend Permission catalog is authoritative** for Console, REST, and MCP.
 6. **MCP authenticates a User** (Session or User PAT), not an anonymous service key and not a Client in this phase.
 7. **Write honesty** for semantics and joins — evidence-backed join edges; incomplete understanding stays incomplete (open questions allowed); do not invent business meaning.
@@ -474,7 +474,7 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - Access request and contract approval workflows
 - Client / machine-token management APIs
 - Console P1: scope switcher implementation, global search implementation, theme workshops, notification center
-- Persisted multi-replica Settings Override (unless a concrete metadata-config blocker appears)
+- Registering `metadata` **System Parameter**s (catalog fail-safe threshold, query timeout / max rows) — candidates listed in `docs/business-system-parameters.md` §5.1, delivered after the first slice
 - Object-level ACL
 - Write SQL / unrestricted SQL consoles
 - Migrating or dual-reading legacy `dbmeta` datasets

@@ -10,7 +10,7 @@ import threading
 
 from celery.signals import worker_ready, worker_shutdown
 
-from backend.core.config import get_settings
+from backend.jobs.parameters import job_lost_detection_sec
 from backend.jobs.store import (
     UNKNOWN_WORKER_ID,
     fail_leftover_occupancy,
@@ -34,7 +34,7 @@ def _renew_loop() -> None:
         touch_occupancy(_worker_id)
     except Exception:  # noqa: BLE001
         logger.exception("occupancy renew failed worker=%s", _worker_id)
-    lost = get_settings().refraq_job_lost_detection_sec
+    lost = job_lost_detection_sec()
     interval = max(5.0, float(lost) / 3.0)
     _timer = threading.Timer(interval, _renew_loop)
     _timer.daemon = True

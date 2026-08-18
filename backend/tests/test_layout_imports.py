@@ -36,12 +36,15 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "admin.session_store",
             "admin.token_store",
             "admin.audit_store",
+            "admin.system_parameters",
+            "admin.parameters",
             "admin.routers",
         }
     ),
     "jobs": frozenset(
         {
             "jobs.api",
+            "jobs.parameters",
             "jobs.store",
             "jobs.errors",
             "jobs.schemas",
@@ -61,6 +64,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
     ),
     "worker": frozenset(
         {
+            "worker.parameters",
             "worker.api",
             "worker.due",
             "worker.errors",
@@ -169,6 +173,10 @@ def test_layout_imports(path: Path) -> None:
                 if importer == "core.upgrade" and target_pkg in {"admin", "worker", "metadata"}:
                     if target_pkg == "worker":
                         if imported == "worker.api" or imported.startswith("worker.api."):
+                            continue
+                        if imported == "worker.parameters" or imported.startswith(
+                            "worker.parameters."
+                        ):
                             continue
                     elif target_pkg == "metadata":
                         if _is_published_import("metadata", imported):

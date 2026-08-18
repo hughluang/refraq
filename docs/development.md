@@ -18,6 +18,7 @@ This document records the stable development conventions for contributors workin
 - Architecture decisions that are hard to reverse live under `docs/adr/`.
 - Local process files belong in `.process/` and are not part of the committed baseline.
 - Formal documents must stay self-contained and must not depend on local process files.
+- Document types, skeleton, and writing rules: `docs/conventions-docs.md`.
 
 ## Working Style
 
@@ -94,5 +95,6 @@ Treat `docs/product-core/*` as **long-horizon** reference only (files are marked
 11. `docs/api-contracts-users.md`
 12. `docs/api-contracts-roles.md`
 13. `docs/api-contracts-console.md`
-14. `docs/api-contracts-settings.md`
-15. `docs/env.md`
+14. `docs/business-system-parameters.md`, `docs/adr/0028-system-parameters.md`
+15. `docs/api-contracts-settings.md`
+16. `docs/env.md`

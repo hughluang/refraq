@@ -12,10 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from celery.schedules import BaseSchedule, schedstate
 
 from backend.core.time import ensure_aware_utc, resolve_wall_time, utc_now
-
-# Match DatabaseScheduler.sync_every: after dispatching an overdue commitment,
-# wait this long before retrying if the store row is still overdue.
-BEAT_COMMITMENT_RETRY_SECONDS = 30.0
+from backend.worker.parameters import BEAT_SYNC_EVERY_SEC
 
 
 def validate_schedule_timezone(name: str) -> ZoneInfo:
@@ -169,7 +166,7 @@ class CommitmentSchedule(BaseSchedule):
     Business due remains ``next_run_at <= now``. Beat's ``last_run_at`` is only a
     delivery cursor for this in-memory snapshot: after one dispatch of a given
     commitment Instant, do not tight-loop send. Retry if the store is still
-    overdue after ``BEAT_COMMITMENT_RETRY_SECONDS``.
+    overdue after ``BEAT_SYNC_EVERY_SEC``.
     """
 
     def __init__(self, next_run_at: datetime | None, **kwargs):
@@ -187,17 +184,17 @@ class CommitmentSchedule(BaseSchedule):
     def is_due(self, last_run_at: datetime | None):
         now = ensure_aware_utc(self.now())
         if self.next_run_at is None:
-            return schedstate(False, BEAT_COMMITMENT_RETRY_SECONDS)
+            return schedstate(False, float(BEAT_SYNC_EVERY_SEC))
         if self.next_run_at > now:
             rem = (self.next_run_at - now).total_seconds()
             return schedstate(False, max(rem, 1.0))
         if last_run_at is not None:
             dispatched_at = ensure_aware_utc(last_run_at)
             if dispatched_at >= self.next_run_at:
-                wait = BEAT_COMMITMENT_RETRY_SECONDS - (now - dispatched_at).total_seconds()
+                wait = float(BEAT_SYNC_EVERY_SEC) - (now - dispatched_at).total_seconds()
                 if wait > 0:
                     return schedstate(False, max(wait, 1.0))
-        return schedstate(True, BEAT_COMMITMENT_RETRY_SECONDS)
+        return schedstate(True, float(BEAT_SYNC_EVERY_SEC))
 
     def now(self) -> datetime:
         return utc_now()

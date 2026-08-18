@@ -168,7 +168,7 @@ Rules:
 - Frontend checks are UX only; backend remains authoritative
 - Seeded `operator` keeps `console:access` + `dashboard:read` only (no `settings:*`, no metadata write/query/sample/token/audit by default)
 - Metadata permission meanings: `docs/business-metadata.md` §6; User PAT: `docs/business-user-tokens.md`
-- Session TTL used at login is the **effective** value (env or Settings Override); changing TTL does not rewrite existing sessions — see `docs/api-contracts-settings.md`
+- Session TTL used at login is the **effective** value of the `admin_session_ttl_hours` **System Parameter** (stored value, seeded 8; no env fallback); changing TTL does not rewrite existing sessions — see `docs/business-system-parameters.md` and `docs/api-contracts-settings.md`
 
 ## 9. Route Protection Rule
 

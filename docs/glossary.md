@@ -63,15 +63,21 @@ Avoid treating it as a second frontend catalog, as navigation grouping, or as th
 
 ### Platform Settings
 
-The Console Module for platform system parameters (non-secret operational configuration exposed in the Console).
-Distinct from Administration master data (Users / Roles).
-Avoid conflating it with user preferences or Data Product governance.
+The Console Module that presents **System Parameter**s.
+Distinct from Administration master data (Users / Roles) and from **Account Center**.
+Avoid treating the module as the parameter itself, or conflating it with user preferences or Data Product governance.
+
+### System Parameter
+
+A named, site-wide configuration key that an operator can decide from the business, presented by **Platform Settings**.
+The product seeds a default stored row; that row is what the operator sees. Consumers derive a safe value from the declared constraint when the stored value sits outside it. Reset restores the seed default.
+A field of one **Scheduled Task** / **Source** / **User** is not a **System Parameter**. Occupancy lost-detection and session TTL are **System Parameter**s. Changing session TTL does not rewrite existing **Session**s. Widening lost-detection is live; tightening waits one old renew interval before the reaper cutoff shrinks. The hidden system reaper **Scheduled Task** interval is derived from lost-detection. Worker concurrency is a deployment concern. Beat loop / reload intervals are in-code constants (`docs/business-system-parameters.md` §5.2).
+Avoid env as the home of these keys; avoid Settings Override as a second entity; avoid Platform Parameter; avoid **Account Center** preferences; avoid treating the Console Module as the key; avoid moving **Running Time Limit** here; avoid editing the hidden system **Scheduled Task** as the reaper-interval UI; avoid putting an engineering tuning knob (pool size, loop interval, replica count) on this page.
 
 ### Settings Override
 
-An in-process runtime overlay over env-backed Settings for a narrow writable set (session TTL in this slice).
-Restart clears it; it is not a Store Backend and must not mutate `core` Settings objects as the source of truth.
-Avoid calling it persistent configuration or feature flags.
+Retired as a named entity. A persisted override is a state on a **System Parameter**, not a second object.
+The former in-process overlay is the thing this slice replaces.
 
 ### Plugin
 
@@ -133,7 +139,7 @@ Avoid Schedule Timezone, worker process timezone, or treating the preference as 
 ### Account Center
 
 The current User’s self-service Console surface for profile, local password change, UI locale, **Display Timezone**, and User PAT management.
-Avoid conflating with platform Settings / system parameters, or treating User PAT as a sidebar Administration module.
+Avoid conflating with **Platform Settings** / **System Parameter**, or treating User PAT as a sidebar Administration module.
 
 ### Backing Service
 
@@ -190,7 +196,7 @@ Domains mint structure **Jobs** only via a **Scheduled Task** (due tick or run-n
 API (or a **Scheduled Task**) enqueues; a Celery worker executes; operator-visible status lives on the Postgres job record.
 Lifecycle stamps (`created_at`, `started_at`, `finished_at`, log line times) are **Instants**.
 Successful Jobs may carry a nullable generic **Job result**; failed/cancelled/fail-safe Jobs leave it null.
-Occupancy lost-detection (~60s → `JOB_WORKER_LOST`) assumes Beat is alive; if Beat is down, reaping stops — API alone does not clear a false `RUNNING`.
+Occupancy lost-detection is a **System Parameter** (seed 60s → `JOB_WORKER_LOST`) and assumes Beat is alive; if Beat is down, reaping stops — API alone does not clear a false `RUNNING`. Widening the window is live; tightening waits one old renew interval before the reaper uses the new cutoff.
 A minted **Running Time Limit** snapshot may end the Job `failed` with `JOB_RUNNING_TIMEOUT`; a null snapshot is not limited this way. That stamp is cooperative: the worker process is not killed; the structure runner stops before catalog write.
 Avoid calling it an Ingestion Job. Avoid running long work inside the Management Console API request.
 Avoid treating a Job as a **Scheduled Task**, or reading Celery result/Flower as the product lifecycle.

@@ -72,6 +72,8 @@ Each **platform kernel / platform primitive / product domain** package has an ex
 | `backend.admin.session_store` | `SessionStore`, `get_session_store`, `reset_session_store` |
 | `backend.admin.token_store` | Token store ports used by deps/tokens HTTP |
 | `backend.admin.audit_store` | Audit store ports used by audit HTTP / writers |
+| `backend.admin.system_parameters` | System Parameter mechanism (registry, occupy, `read_stored_parameter` / `resolve_int`, store reset). Does not name domain knobs |
+| `backend.admin.parameters` | Admin-owned parameter specs and typed accessors |
 | `backend.admin.routers.*` | Foundation HTTP adapters (mounted by `main` only) |
 
 Import the leaf module that owns the symbol. Do not add a pure re-export facade.
@@ -81,6 +83,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Module | Published for |
 |--------|----------------|
 | `backend.jobs.api` | Seam policy only: `present_jobs` (JobRecord→JobOut), `revoke_queued_delivery`, schedule-name port bind (`bind_schedule_name_store` / `get_schedule_name_store`); composition injects the Scheduled Task name adapter so `jobs` never imports `worker` |
+| `backend.jobs.parameters` | Job-owned parameter specs and typed accessors (`job_lost_detection_sec`, reaper grace) |
 | `backend.jobs.store` | Store port used by domain facades and reaper (create/get/status transitions, `JobRecord`, `TERMINAL`, `append_job_log`, `format_job_log_line`; `create` / terminal CAS accept an optional SQLAlchemy session so a caller can join an existing transaction) |
 | `backend.jobs.errors` | Mechanism Job errors (`JobNotFound`, `JobNotCancellable`, …) |
 | `backend.jobs.schemas.*` | Mechanism Job response shapes (shared with domain facades) |
@@ -102,6 +105,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 
 | Module | Published for |
 |--------|----------------|
+| `backend.worker.parameters` | `assemble_system_parameters` (composition collects every package's published spec list and occupies seeds), Beat in-code constants, and the reaper interval derived from lost-detection |
 | `backend.worker.api` | Schedule seam policy (`schedule_out` mechanism fields only — no Source / structure shape — cadence / NotFound / system immutable, `ensure_system_schedules`); not a store re-export |
 | `backend.worker.due` | Due-tick consumption helpers (commitment → mint decision); used by domain Beat tasks |
 | `backend.worker.schedules` | Store port (`ScheduledTaskRecord`, get/list/upsert; `upsert` / `list` accept an optional SQLAlchemy session so a caller can join an existing transaction) used by the API seam and domain facades |
@@ -188,7 +192,7 @@ Enforcement: `backend/tests/test_no_inline_imports.py`. Rationale: ADR 0020.
 
 Forward rules:
 
-1. `core` depends on no platform kernel / primitive / product-domain business package (upgrade may import **published** `admin`, `worker.api`, and `metadata.type_mappings.seeds` only for orchestration).
+1. `core` depends on no platform kernel / primitive / product-domain business package (upgrade may import **published** `admin`, `worker.api`, `worker.parameters`, and `metadata.type_mappings.seeds` only for orchestration).
 2. **Product domain ↔ product domain:** no direct imports. Collaborate via shared-kernel protocols or composition binding—extend this contract with an explicit edge when needed.
 3. **Product domain → platform kernel / primitive:** published API only (Conformist).
 4. Platform primitive → platform kernel: default none; if needed, add an explicit whitelist edge via published API.
@@ -200,9 +204,9 @@ Concrete edges:
 | From | May import |
 |------|------------|
 | `main` (composition) | `core`, published `admin` / `jobs` / `metadata` / `worker` (including their `routers.*` for mount), Site Bootstrap helpers |
-| `core` | stdlib, third parties, Alembic; `admin.roles` published symbols from `upgrade` only; `metadata.type_mappings.seeds` from `upgrade` only |
-| `admin` | `core`; own stores/schemas/routers |
-| `jobs` | `core`; own store/schemas/routers; published `admin` when cancel/audit needs it |
+| `core` | stdlib, third parties, Alembic; `admin.roles` published symbols from `upgrade` only; `worker.api` / `worker.parameters` from `upgrade` only; `metadata.type_mappings.seeds` from `upgrade` only |
+| `admin` | `core`; own stores/schemas/routers / `system_parameters` / `parameters` |
+| `jobs` | `core`; own store/schemas/routers / `parameters`; published `admin` (audit, System Parameter resolver) |
 | `metadata` | `core`; published `admin`; published `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; own modules |
 | `worker` | `core`; published `admin` / `jobs` / `metadata` for assembly and system tasks |
 | `alembic` | `core` Base + every package `models` module |
@@ -211,7 +215,7 @@ Concrete edges:
 ## 9. Enforcement
 
 - This document plus [`docs/modules.md`](modules.md) Allowed Dependencies stay aligned with code.
-- Automated checks: packages must not import another package's unpublished modules; `core` must not import business packages except the upgrade→`admin.roles` edge; business code must not import `worker.app`; production modules must not use function-body imports except the Import placement allowlist.
+- Automated checks: packages must not import another package's unpublished modules; `core` must not import business packages except the upgrade→published `admin` / `worker.api` / `worker.parameters` / `metadata.type_mappings.seeds` edges; business code must not import `worker.app`; production modules must not use function-body imports except the Import placement allowlist.
 - Checks live under `backend/tests/` (layout/import tests and `test_no_inline_imports.py`). Temporary allowlists, if any, are registered in that test and removed when migration phases finish—not by editing this contract.
 
 ## 10. Repository root under `backend/`

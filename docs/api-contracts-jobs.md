@@ -75,7 +75,7 @@ Rules:
 - No universal `source_id` columns on Job; domain ids appear inside `input` when the kind requires them.
 - Slice A `kind=structure` for `kind=database` Sources: `input` includes `source_id` only. Workers load reachability from the Source.
 - Entering execution requires a `queued → running` claim. Broker redelivery of a non-queued Job must not re-run domain work.
-- **`JOB_WORKER_LOST`**: occupancy stale (worker gone). **`JOB_RUNNING_TIMEOUT`**: still occupied, the Job snapshot `running_timeout_sec` is set, and elapsed `started_at` exceeds that snapshot. Distinct codes; both leave status `failed`. Cooperative: the worker process is not killed; the structure runner does not apply a catalog snapshot after the stamp. Lost-detection SLA assumes Beat is alive; if Beat is down, occupancy reaping stops — API alone does not clear a false `RUNNING`.
+- **`JOB_WORKER_LOST`**: occupancy stale (worker gone). The stale window is the `job_lost_detection_sec` **System Parameter**. **`JOB_RUNNING_TIMEOUT`**: still occupied, the Job snapshot `running_timeout_sec` is set, and elapsed `started_at` exceeds that snapshot. Distinct codes; both leave status `failed`. Cooperative: the worker process is not killed; the structure runner does not apply a catalog snapshot after the stamp. Lost-detection SLA assumes Beat is alive; if Beat is down, occupancy reaping stops — API alone does not clear a false `RUNNING`.
 
 ## 3. Endpoints
 

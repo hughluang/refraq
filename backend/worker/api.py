@@ -12,6 +12,7 @@ from backend.core.time import utc_now
 from backend.jobs.api import revoke_queued_delivery
 from backend.jobs.store import cancel_unfinished_for_schedule
 from backend.worker.cron import compute_next_run_at, parse_cron_fields, validate_schedule_timezone
+from backend.jobs.parameters import job_lost_detection_sec
 from backend.worker.errors import (
     ScheduleCadenceInvalid,
     ScheduleNotFound,
@@ -38,31 +39,44 @@ __all__ = [
 
 
 def ensure_system_schedules() -> None:
-    """Idempotent seed for platform Scheduled Tasks (reaper)."""
+    """Idempotent seed for platform Scheduled Tasks (reaper).
+
+    Interval follows the declared lost-detection tolerance; an existing row is aligned.
+    """
     store = get_schedule_store()
-    if store.get_by_key(REAPER_SCHEDULE_KEY) is not None:
-        return
+    interval = job_lost_detection_sec()
+    existing = store.get_by_key(REAPER_SCHEDULE_KEY)
     now = utc_now()
-    store.upsert(
-        ScheduledTaskRecord(
-            id=f"sched_{uuid.uuid4().hex[:12]}",
-            key=REAPER_SCHEDULE_KEY,
-            name="Reap stuck jobs",
-            enabled=True,
-            interval_seconds=60,
-            cron=None,
-            schedule_timezone="UTC",
-            task_name=REAPER_TASK_NAME,
-            args_json=[],
-            kwargs_json={},
-            system=True,
-            owner_ref=None,
-            last_run_at=now,
-            next_run_at=now,
-            created_at=now,
-            updated_at=now,
+    if existing is None:
+        store.upsert(
+            ScheduledTaskRecord(
+                id=f"sched_{uuid.uuid4().hex[:12]}",
+                key=REAPER_SCHEDULE_KEY,
+                name="Reap stuck jobs",
+                enabled=True,
+                interval_seconds=interval,
+                cron=None,
+                schedule_timezone="UTC",
+                task_name=REAPER_TASK_NAME,
+                args_json=[],
+                kwargs_json={},
+                system=True,
+                owner_ref=None,
+                last_run_at=now,
+                next_run_at=now,
+                created_at=now,
+                updated_at=now,
+            )
         )
-    )
+        return
+    if existing.interval_seconds != interval:
+        store.upsert(
+            replace(
+                existing,
+                interval_seconds=interval,
+                updated_at=now,
+            )
+        )
 
 
 def validate_cadence(

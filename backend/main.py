@@ -42,7 +42,7 @@ from backend.admin.routers.audit import router as audit_router
 from backend.admin.routers.auth import router as auth_router_instance
 from backend.admin.routers.console import router as console_router
 from backend.admin.routers.roles import router as roles_router
-from backend.admin.routers.settings import router as settings_router
+from backend.admin.system_parameters.router import router as settings_router
 from backend.admin.routers.tokens import router as tokens_router
 from backend.admin.routers.users import router as users_router
 from backend.jobs.api import bind_schedule_name_store
@@ -57,6 +57,8 @@ from backend.metadata.routers.sources import router as sources_router
 from backend.metadata.routers.structure_diffs import router as structure_diffs_router
 from backend.metadata.routers.type_mappings import router as type_mappings_router
 from backend.metadata.type_mappings.seeds import ensure_product_type_mappings
+from backend.worker.api import ensure_system_schedules
+from backend.worker.parameters import assemble_system_parameters
 
 # Composition injects the Scheduled Task name adapter so jobs never imports worker.
 bind_schedule_name_store(get_schedule_store)
@@ -68,6 +70,8 @@ install_request_id_log_filter()
 
 def _bootstrap_site(target_settings: Settings) -> None:
     """Site Bootstrap: empty-store seed only. Does not run Foundation Upgrade."""
+    assemble_system_parameters()
+    ensure_system_schedules()
     if os.getenv("REFRAQ_SKIP_SEED") == "1":
         return
     roles = get_role_store()

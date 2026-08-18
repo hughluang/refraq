@@ -20,16 +20,19 @@ Current `backend/.env.example` defines:
 - `DATABASE_URL=postgresql+psycopg://refraq:refraq@127.0.0.1:5432/refraq`
 - `REDIS_URL=redis://127.0.0.1:6379/0`
 - `ADMIN_SESSION_SECRET=change-me`
-- `ADMIN_SESSION_TTL_HOURS=8`
 - `INITIAL_ADMIN_ACCOUNT=root`
 - `INITIAL_ADMIN_PASSWORD=change-me`
 - `REFRAQ_SECRETS_MASTER_KEY=change-me-secrets-master-key` (metadata foundation: encrypt Source secrets at rest)
 - `CELERY_BROKER_URL=redis://127.0.0.1:6379/2` (Celery broker; prefer a logical DB separate from Session `REDIS_URL`). If unset, broker is derived from `REDIS_URL` (`…/2`); if both unset, resolution fails (no localhost invent).
-- `REFRAQ_JOB_WORKER_CONCURRENCY=1` (Celery worker concurrency hint)
-- `REFRAQ_JOB_LOST_DETECTION_SEC=60` (occupancy stale window → `JOB_WORKER_LOST`; SLA assumes Beat is alive — if Beat is down, occupancy reaping stops; API alone does not clear a false `RUNNING`)
-- `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD=0.75` (abort structure catalog write when absent ratio exceeds this)
-- `REFRAQ_QUERY_TIMEOUT_SEC=30` (controlled query dual timeout: application + engine statement/command timeout)
-- `REFRAQ_QUERY_MAX_ROWS=1000` (platform cap for controlled query `max_rows`; request default is 100)
+- `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD=0.75` (abort structure catalog write when absent ratio exceeds this; **System Parameter** candidate owned by `metadata` — `docs/business-system-parameters.md` §5.1)
+- `REFRAQ_QUERY_TIMEOUT_SEC=30` (controlled query dual timeout: application + engine statement/command timeout; **System Parameter** candidate — §5.1)
+- `REFRAQ_QUERY_MAX_ROWS=1000` (platform cap for controlled query `max_rows`; request default is 100; **System Parameter** candidate — §5.1)
+
+Session TTL and occupancy lost-detection are **System Parameter**s (`docs/business-system-parameters.md` §5). They are not environment variables. A leftover name matching a registered key (`ADMIN_SESSION_TTL_HOURS`, `REFRAQ_JOB_LOST_DETECTION_SEC`, or the key itself in uppercase) is ignored and reported at startup as dead. The stored row is the only home.
+
+Worker concurrency is neither. It is owned by the deployment and set on the worker command line (§8); `REFRAQ_JOB_WORKER_CONCURRENCY` is retired and reading it is not implemented anywhere. Beat loop / reload intervals and the reaper poll interval are in-code constants or derived from lost-detection (`docs/business-system-parameters.md` §5.2), not environment variables and not System Parameters.
+
+Remove `ADMIN_SESSION_TTL_HOURS` and `REFRAQ_JOB_LOST_DETECTION_SEC` from live `.env` files. Changing them and restarting has no effect. Tune session TTL and lost-detection in Platform Settings. Set concurrency where the worker is launched.
 
 `REFRAQ_STORE_BACKEND=memory` is for automated tests only. Do not use it in production examples.
 Metadata foundation variables are required when running ingestion/secret features; Foundation-only local login may still boot without them until those code paths are exercised.
@@ -67,16 +70,13 @@ Self-deploy Compose exposes only the web service to browsers; the API stays on t
 - `DATABASE_URL` (required when `persistent`)
 - `REDIS_URL` (required when `persistent`)
 - `ADMIN_SESSION_SECRET` (reserved for future signed-cookie usage; v1 sessions are server-managed)
-- `ADMIN_SESSION_TTL_HOURS`
 - `INITIAL_ADMIN_ACCOUNT`
 - `INITIAL_ADMIN_PASSWORD`
 - `REFRAQ_SECRETS_MASTER_KEY` (required to store/read Source secrets)
 - `CELERY_BROKER_URL` (required when running Celery worker/beat; default same host Redis DB `2`)
-- `REFRAQ_JOB_WORKER_CONCURRENCY`
-- `REFRAQ_JOB_LOST_DETECTION_SEC`
-- `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD`
-- `REFRAQ_QUERY_TIMEOUT_SEC`
-- `REFRAQ_QUERY_MAX_ROWS`
+- `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD` (metadata candidate; not yet a System Parameter)
+- `REFRAQ_QUERY_TIMEOUT_SEC` (metadata candidate; not yet a System Parameter)
+- `REFRAQ_QUERY_MAX_ROWS` (metadata candidate; not yet a System Parameter)
 - `REFRAQ_INTEGRATION_DATABASE_URL` (pytest `@pytest.mark.integration` only; default `…/refraq_test`)
 - `REFRAQ_INTEGRATION_REDIS_URL` (integration only; default `redis://127.0.0.1:6379/1`)
 - `REFRAQ_INTEGRATION_CELERY_BROKER_URL` (integration only; default `redis://127.0.0.1:6379/3`)
@@ -115,8 +115,8 @@ On backend startup, if the user store is empty, default roles are ensured and a 
 Platform async runtime (`docs/adr/0006-celery-platform-async-runtime.md`):
 
 - API process: create durable Job rows and enqueue via Celery after commit (`docs/api-contracts-jobs.md`)
-- Worker: `celery -A backend.worker.app worker --concurrency="${REFRAQ_JOB_WORKER_CONCURRENCY:-1}"`
-- Beat (single replica): `celery -A backend.worker.app beat` — reads **Scheduled Task** rows from Postgres; do not run multiple Beat replicas. Loop `max_interval` is ~5s; schedule reload `sync_every` is 30s (operator PATCH cadence is visible on the next sync). An overdue in-memory commitment is dispatched **once** until the next reload (or 30s retry if the store row is still overdue); Beat does not tight-loop send while the worker consumes the tick. Occupancy lost-detection (~60s → `JOB_WORKER_LOST`) is driven by the system reaper Scheduled Task on this Beat; if Beat is stopped, that reaping stops — starting only the API does not recover false `RUNNING` Jobs.
+- Worker: `celery -A backend.worker.app worker` — concurrency is a deployment concern, not a **System Parameter** (`docs/business-system-parameters.md` §5.2). No flag is passed, so Celery's own default (one process per CPU) applies; a deployment that needs to pin capacity passes `--concurrency` on this command line, and sizes it together with the replica count. The local `.vscode` launch configuration pins `--pool=solo --concurrency=1` because a debugger needs a single process; it overrides no stored value
+- Beat (single replica): `celery -A backend.worker.app beat` — reads **Scheduled Task** rows from Postgres; do not run multiple Beat replicas. Loop `max_interval` and schedule reload `sync_every` are in-code constants (`BEAT_MAX_INTERVAL_SEC = 5`, `BEAT_SYNC_EVERY_SEC = 30`; `docs/business-system-parameters.md` §5.2). An overdue in-memory commitment is dispatched **once** until the next reload (or `BEAT_SYNC_EVERY_SEC` retry if the store row is still overdue); Beat does not tight-loop send while the worker consumes the tick. Occupancy lost-detection (`job_lost_detection_sec`, seed 60 → `JOB_WORKER_LOST`) is driven by the system reaper Scheduled Task on this Beat. Beat sync copies that same lost-detection value onto the reaper row's `interval_seconds` and does not recompute `next_run_at`, so tightening may wait for the current tick. If Beat is stopped, that reaping stops — starting only the API does not recover false `RUNNING` Jobs.
 - Worker and Beat share `DATABASE_URL`, `CELERY_BROKER_URL`, and (when decrypting secrets) `REFRAQ_SECRETS_MASTER_KEY`
 - After Foundation Upgrade, restart worker and Beat. Code on disk does not change a live process's registered names; a leftover worker after a `task_name` revision yields Beat `NotRegistered` and structure clocks that never mint. Confirm with `celery -A backend.worker.app inspect registered` that registered names match Scheduled Task rows.
 - No Celery result backend; operator-visible status and run logs live on Postgres Job rows (`log_body`; later large attachments if needed)

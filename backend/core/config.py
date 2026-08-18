@@ -41,10 +41,6 @@ class Settings(BaseSettings):
         default="change-me",
         validation_alias="ADMIN_SESSION_SECRET",
     )
-    admin_session_ttl_hours: int = Field(
-        default=8,
-        validation_alias="ADMIN_SESSION_TTL_HOURS",
-    )
     initial_admin_account: str = Field(
         default="root",
         validation_alias="INITIAL_ADMIN_ACCOUNT",
@@ -60,14 +56,6 @@ class Settings(BaseSettings):
     celery_broker_url: str | None = Field(
         default=None,
         validation_alias="CELERY_BROKER_URL",
-    )
-    refraq_job_worker_concurrency: int = Field(
-        default=1,
-        validation_alias="REFRAQ_JOB_WORKER_CONCURRENCY",
-    )
-    refraq_job_lost_detection_sec: int = Field(
-        default=60,
-        validation_alias="REFRAQ_JOB_LOST_DETECTION_SEC",
     )
     refraq_catalog_fail_safe_threshold: float = Field(
         default=0.75,

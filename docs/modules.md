@@ -71,7 +71,8 @@ Recommended modules:
 - `admin/deps.py`
 - `admin/security.py`
 - `admin/console_modules.py` (code-seeded Console Module catalog)
-- `admin/settings_override.py` (in-process Settings Override; not Store Backend)
+- `admin/system_parameters/` (System Parameter mechanism: registry, store, resolver, occupy, HTTP)
+- `admin/parameters.py` (admin-owned System Parameter specs and typed accessors)
 - `admin/roles.py` (Role domain: System Role ensure, Site Bootstrap seed, write invariants)
 - `admin/audit.py` (audit write facade)
 - Foundation stores: `user_store`, `role_store`, `session_store`, `token_store`, `audit_store`
@@ -82,7 +83,8 @@ Must not contain:
 - Platform Job table ownership (belongs in `jobs/`)
 - Celery app / Beat / Scheduled Task (belongs in `worker/`)
 
-Do not put Console Module catalog, Settings Override, or System Role ensure rules into `backend/core/`.
+Do not put Console Module catalog, System Parameter mechanism, or System Role ensure rules into `backend/core/`.
+The mechanism package must not name an occupancy window, a Beat loop, or a Session.
 Do not pre-create empty packages for future capabilities before implementation.
 
 ### `backend/jobs/`
@@ -91,6 +93,7 @@ Responsibilities:
 
 - Platform **Job** ORM (`jobs` table), store adapters, and lifecycle status machine
 - Opaque generic `input` payload; no domain foreign keys as universal columns
+- `jobs/parameters.py` (Job-owned System Parameter specs and typed accessors)
 - Shared helpers used by domain enqueue paths and the stuck-Job reaper
 - Job observation presentation (`present_jobs`: trigger actor / schedule names); Scheduled Task name lookup is an injected adapter
 - Mechanism-resource HTTP (get/cancel by Job id) under `jobs/routers/`
@@ -132,6 +135,7 @@ Must not contain:
 Responsibilities:
 
 - Celery application factory and process entry (`celery -A backend.worker.app`)
+- `worker/parameters.py` (composition `assemble_system_parameters`, Beat in-code constants, reaper interval derived from lost-detection)
 - **Scheduled Task** ORM, system schedule seed, and Postgres-backed Beat scheduler
 - Mechanism Scheduled Task HTTP (`worker/routers/`: list/get/patch/delete)
 - Platform system tasks (for example stuck **Job** reaper)
@@ -271,9 +275,9 @@ To add a locale: add `locales/<code>/common.json`, register it in `i18n.config.t
 
 See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 
-- `core` → no business packages except `upgrade` → published `admin` / `worker.api`
+- `core` → no business packages except `upgrade` → published `admin` / `worker.api` / `worker.parameters`
 - `admin` → `core` (+ own modules)
-- `jobs` → `core`; published `admin` when needed
+- `jobs` → `core`; published `admin` (including System Parameter resolver) when needed
 - `metadata` → `core`; published `admin` / `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`
 - `worker` → `core`; published surfaces for assembly
 - `main` → `core` + package routers / bootstrap via published surfaces
@@ -312,7 +316,7 @@ For the login/permission slice, each concern should land here:
 - User resource UI: `frontend/src/features/users/`
 - Role resource UI: `frontend/src/features/roles/`
 - Console navigation API: `backend/admin/routers/console.py` + `admin/console_modules.py`
-- Platform settings API: `backend/admin/routers/settings.py` + `admin/settings_override.py`
+- Platform settings API: `backend/admin/system_parameters/` (mechanism HTTP) + `<package>/parameters.py` declarations
 - Settings UI: `frontend/src/features/settings/`
 
 ## 7. Metadata / Operations Console Ownership

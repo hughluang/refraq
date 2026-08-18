@@ -149,3 +149,31 @@ def test_domain_entry_kwargs_include_due_at_system_does_not() -> None:
         assert "due_at" not in system_entry.kwargs
     finally:
         reset_clock()
+
+
+def test_scheduler_sync_aligns_reaper_interval_without_recomputing_next() -> None:
+    from backend.admin.system_parameters import reset_parameter, set_parameter
+    from backend.worker.parameters import assemble_system_parameters
+
+    assemble_system_parameters()
+    reset_parameter("job_lost_detection_sec", actor_user_id=None)
+    ensure_system_schedules()
+    scheduler = DatabaseScheduler(app=celery_app, lazy=True)
+    scheduler.setup_schedule()
+    before = get_schedule_store().get_by_key(REAPER_SCHEDULE_KEY)
+    assert before is not None
+    assert before.interval_seconds == 60
+    next_before = before.next_run_at
+    try:
+        set_parameter("job_lost_detection_sec", 90, actor_user_id=None)
+        mid = get_schedule_store().get_by_key(REAPER_SCHEDULE_KEY)
+        assert mid is not None
+        assert mid.interval_seconds == 60
+        scheduler.sync()
+        updated = get_schedule_store().get_by_key(REAPER_SCHEDULE_KEY)
+        assert updated is not None
+        assert updated.interval_seconds == 90
+        assert updated.next_run_at == next_before
+    finally:
+        reset_parameter("job_lost_detection_sec", actor_user_id=None)
+        ensure_system_schedules()
