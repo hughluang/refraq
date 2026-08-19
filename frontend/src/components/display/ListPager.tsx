@@ -10,20 +10,32 @@ type ListPagerProps = {
   pageSize: number;
   total: number;
   onChange: (page: number) => void;
+  disabled?: boolean;
 };
 
-export function ListPager({ page, pageSize, total, onChange }: ListPagerProps) {
+export function ListPager({
+  page,
+  pageSize,
+  total,
+  onChange,
+  disabled = false,
+}: ListPagerProps) {
   const t = useTranslate();
   const { from, to } = showingRange(total, page, pageSize);
   const pageCount = pageCountOf(total, pageSize);
 
   return (
-    <Group justify="space-between" mt="md">
-      <Text size="sm" c="dimmed">
+    <Group justify="space-between" mt="md" style={{ flexShrink: 0 }}>
+      <Text size="sm" c="dimmed" aria-live="polite" aria-atomic="true">
         {t("common.showing", { from, to, total })}
       </Text>
       {pageCount > 1 ? (
-        <Pagination value={page} onChange={onChange} total={pageCount} />
+        <Pagination
+          value={page}
+          onChange={onChange}
+          total={pageCount}
+          disabled={disabled}
+        />
       ) : null}
     </Group>
   );

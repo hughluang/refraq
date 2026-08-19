@@ -1,21 +1,24 @@
 "use client";
 
 import {
+  Anchor,
   Badge,
   Button,
   Checkbox,
+  CloseButton,
   Group,
+  Loader,
   Select,
-  Stack,
   Table,
   Text,
   TextInput,
+  Tooltip,
 } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
-import { ListPager } from "@/components/display/ListPager";
+import { ListTable } from "@/components/display/ListTable";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageError } from "@/components/feedback/PageError";
@@ -24,9 +27,11 @@ import { listCatalogObjects, listSources } from "@/features/sources/api";
 import type { Source } from "@/features/sources/types";
 import { usePagedList } from "@/hooks/usePagedList";
 import { ApiError } from "@/lib/api";
+import { listPresentationOf } from "@/lib/list-state";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 100;
+const COLUMN_COUNT = 7;
 
 type SemanticsReadyFilter = "all" | "ready" | "not_ready";
 
@@ -103,6 +108,25 @@ export function CatalogBrowse() {
     return () => window.clearTimeout(timer);
   }, [q]);
 
+  const filtersOffDefault =
+    q !== "" || semanticsReady !== "all" || !includeAbsent;
+  const filtered =
+    Boolean(debouncedQ) || semanticsReady !== "all" || !includeAbsent;
+  const listPresentation = listPresentationOf({
+    loading: listLoading,
+    error: listError,
+    total,
+    itemCount: items.length,
+    filtered,
+  });
+
+  function clearFilters() {
+    setQ("");
+    setDebouncedQ("");
+    setSemanticsReady("all");
+    setIncludeAbsent(true);
+  }
+
   if (error && !loading) return <PageError message={error} />;
 
   const refreshAction = (
@@ -110,6 +134,19 @@ export function CatalogBrowse() {
       {t("catalog.refresh")}
     </Button>
   );
+
+  const searchRightSection = listLoading ? (
+    <Loader size="xs" />
+  ) : q ? (
+    <CloseButton
+      size="sm"
+      aria-label={t("common.search.clear")}
+      onClick={() => {
+        setQ("");
+        setDebouncedQ("");
+      }}
+    />
+  ) : null;
 
   return (
     <PageChrome
@@ -119,9 +156,11 @@ export function CatalogBrowse() {
     >
       {loading && sources.length === 0 ? (
         <PageBodySkeleton />
+      ) : sources.length === 0 ? (
+        <EmptyState message={t("catalog.list.noSources")} />
       ) : (
         <>
-          <Group mb="md" align="flex-end" wrap="wrap">
+          <Group align="flex-end" wrap="wrap">
             <Select
               label={t("catalog.fields.source")}
               data={sources.map((s) => ({
@@ -129,8 +168,11 @@ export function CatalogBrowse() {
                 label: `${s.key} — ${s.name}`,
               }))}
               value={sourceId}
-              onChange={setSourceId}
+              onChange={(value) => {
+                if (value) setSourceId(value);
+              }}
               searchable
+              allowDeselect={false}
               w={320}
             />
             <TextInput
@@ -138,7 +180,8 @@ export function CatalogBrowse() {
               value={q}
               onChange={(e) => setQ(e.currentTarget.value)}
               w={220}
-              rightSection={listLoading ? <Text size="xs">…</Text> : null}
+              rightSection={searchRightSection}
+              rightSectionPointerEvents={listLoading ? "none" : "auto"}
             />
             <Select
               label={t("catalog.fields.ready")}
@@ -158,7 +201,9 @@ export function CatalogBrowse() {
               ]}
               value={semanticsReady}
               onChange={(value) =>
-                setSemanticsReady((value as SemanticsReadyFilter | null) ?? "all")
+                setSemanticsReady(
+                  (value as SemanticsReadyFilter | null) ?? "all",
+                )
               }
               allowDeselect={false}
               w={180}
@@ -169,83 +214,87 @@ export function CatalogBrowse() {
               onChange={(e) => setIncludeAbsent(e.currentTarget.checked)}
               mb={4}
             />
+            {filtersOffDefault ? (
+              <Button
+                variant="subtle"
+                size="xs"
+                onClick={clearFilters}
+                mb={4}
+              >
+                {t("common.filters.clear")}
+              </Button>
+            ) : null}
           </Group>
 
-          {listLoading && items.length === 0 ? (
-            <PageBodySkeleton />
-          ) : listError && items.length === 0 ? (
-            <PageError message={listError} onRetry={() => void reload()} />
-          ) : !sourceId || total === 0 ? (
-            <EmptyState message={t("catalog.empty")} />
-          ) : (
-            <Stack gap="sm">
-              <Table striped highlightOnHover>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>{t("catalog.fields.schema")}</Table.Th>
-                    <Table.Th>{t("catalog.fields.name")}</Table.Th>
-                    <Table.Th>{t("catalog.fields.businessName")}</Table.Th>
-                    <Table.Th>{t("catalog.fields.type")}</Table.Th>
-                    <Table.Th>{t("catalog.fields.ready")}</Table.Th>
-                    <Table.Th>{t("catalog.fields.locator")}</Table.Th>
-                    <Table.Th>{t("catalog.fields.present")}</Table.Th>
-                    <Table.Th />
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {items.map((obj) => (
-                    <Table.Tr key={obj.id}>
-                      <Table.Td>{obj.schema_name}</Table.Td>
-                      <Table.Td>{obj.name}</Table.Td>
-                      <Table.Td>{obj.business_name ?? "—"}</Table.Td>
-                      <Table.Td>{obj.object_type}</Table.Td>
-                      <Table.Td>
-                        <Badge
-                          color={obj.business_semantics_ready ? "green" : "gray"}
-                        >
-                          {obj.business_semantics_ready
-                            ? t("catalog.semantics.ready")
-                            : t("catalog.semantics.notReady")}
-                        </Badge>
-                      </Table.Td>
-                      <Table.Td>
-                        <Text
-                          size="xs"
-                          c="dimmed"
-                          style={{ wordBreak: "break-all" }}
-                        >
-                          {obj.locator_key}
-                        </Text>
-                      </Table.Td>
-                      <Table.Td>
-                        <Badge color={obj.is_present ? "green" : "gray"}>
-                          {obj.is_present
-                            ? t("catalog.fields.presentValue")
-                            : t("catalog.fields.absentValue")}
-                        </Badge>
-                      </Table.Td>
-                      <Table.Td>
-                        <Button
-                          component={Link}
-                          href={`/console/catalog/${obj.id}`}
-                          size="xs"
-                          variant="light"
-                        >
-                          {t("catalog.detail")}
-                        </Button>
-                      </Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-              <ListPager
-                page={page}
-                pageSize={pageSize}
-                total={total}
-                onChange={setPage}
-              />
-            </Stack>
-          )}
+          <ListTable
+            state={listPresentation.state}
+            columnCount={COLUMN_COUNT}
+            refreshing={listPresentation.refreshing}
+            errorMessage={listError}
+            onRetry={() => void reload()}
+            emptyMessage={t("catalog.empty")}
+            noMatchMessage={t("catalog.list.noMatch")}
+            head={
+              <Table.Tr>
+                <Table.Th>{t("catalog.fields.schema")}</Table.Th>
+                <Table.Th>{t("catalog.fields.name")}</Table.Th>
+                <Table.Th>{t("catalog.fields.businessName")}</Table.Th>
+                <Table.Th>{t("catalog.fields.type")}</Table.Th>
+                <Table.Th>{t("catalog.fields.ready")}</Table.Th>
+                <Table.Th>{t("catalog.fields.locator")}</Table.Th>
+                <Table.Th>{t("catalog.fields.present")}</Table.Th>
+              </Table.Tr>
+            }
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPageChange={setPage}
+          >
+            {items.map((obj) => (
+              <Table.Tr key={obj.id}>
+                <Table.Td>{obj.schema_name}</Table.Td>
+                <Table.Td>
+                  <Anchor
+                    component={Link}
+                    href={`/console/catalog/${obj.id}`}
+                    size="sm"
+                  >
+                    {obj.name}
+                  </Anchor>
+                </Table.Td>
+                <Table.Td>{obj.business_name ?? "—"}</Table.Td>
+                <Table.Td>{obj.object_type}</Table.Td>
+                <Table.Td>
+                  <Badge
+                    variant={obj.business_semantics_ready ? "light" : "outline"}
+                    color={obj.business_semantics_ready ? "green" : "gray"}
+                  >
+                    {obj.business_semantics_ready
+                      ? t("catalog.semantics.ready")
+                      : t("catalog.semantics.notReady")}
+                  </Badge>
+                </Table.Td>
+                <Table.Td maw={280} style={{ maxWidth: 280, overflow: "hidden" }}>
+                  <Tooltip label={obj.locator_key}>
+                    <Text size="xs" c="dimmed" truncate>
+                      {obj.locator_key}
+                    </Text>
+                  </Tooltip>
+                </Table.Td>
+                <Table.Td>
+                  {obj.is_present ? (
+                    <Text size="sm" c="dimmed">
+                      {t("catalog.fields.presentValue")}
+                    </Text>
+                  ) : (
+                    <Badge variant="light" color="orange">
+                      {t("catalog.fields.absentValue")}
+                    </Badge>
+                  )}
+                </Table.Td>
+              </Table.Tr>
+            ))}
+          </ListTable>
         </>
       )}
     </PageChrome>

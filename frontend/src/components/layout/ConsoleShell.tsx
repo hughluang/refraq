@@ -143,6 +143,8 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
         collapsed: { mobile: !opened },
       }}
       padding="md"
+      h="100dvh"
+      style={{ overflow: "hidden" }}
     >
       <AppShell.Header>
         <Group h="100%" px="md" justify="space-between">
@@ -224,7 +226,14 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
           : null}
       </AppShell.Navbar>
 
-      <AppShell.Main>{mainContent}</AppShell.Main>
+      <AppShell.Main
+        display="flex"
+        h="100dvh"
+        mih={0}
+        style={{ flexDirection: "column", overflow: "hidden" }}
+      >
+        {mainContent}
+      </AppShell.Main>
     </AppShell>
   );
 }

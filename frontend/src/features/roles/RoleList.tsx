@@ -11,14 +11,12 @@ import {
 import Link from "next/link";
 import { useState } from "react";
 
-import { ListPager } from "@/components/display/ListPager";
-import { EmptyState } from "@/components/feedback/EmptyState";
-import { PageError } from "@/components/feedback/PageError";
-import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
+import { ListTable } from "@/components/display/ListTable";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import type { RoleRow } from "@/features/roles/types";
 import { ApiError } from "@/lib/api";
+import { listPresentationOf } from "@/lib/list-state";
 
 const PAGE_SIZE = 50;
 
@@ -37,8 +35,19 @@ export function RoleList() {
 
   const rows = tableQuery.data?.data ?? [];
   const total = tableQuery.data?.total ?? 0;
-  const isLoading = tableQuery.isLoading;
-  const error = tableQuery.error;
+  const errorMessage =
+    tableQuery.error == null
+      ? null
+      : tableQuery.error instanceof ApiError
+        ? tableQuery.error.detail
+        : t("common.error.loadFailed");
+  const listPresentation = listPresentationOf({
+    loading: tableQuery.isFetching,
+    error: errorMessage,
+    total,
+    itemCount: rows.length,
+    filtered: false,
+  });
 
   function confirmDelete() {
     if (!pending) return;
@@ -72,105 +81,90 @@ export function RoleList() {
     </CanAccess>
   );
 
-  if (error) {
-    const message =
-      error instanceof ApiError
-        ? error.detail
-        : t("common.error.loadFailed");
-    return (
-      <PageChrome
-        title={t("roles.title")}
-        description={t("roles.description")}
-      >
-        <PageError message={message} onRetry={() => tableQuery.refetch()} />
-      </PageChrome>
-    );
-  }
-
   return (
     <PageChrome
       title={t("roles.title")}
       description={t("roles.description")}
       actions={createAction}
     >
-      {isLoading && rows.length === 0 ? (
-        <PageBodySkeleton />
-      ) : total === 0 ? (
-        <EmptyState />
-      ) : (
-        <>
-          <Table highlightOnHover striped withTableBorder>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>{t("roles.fields.key")}</Table.Th>
-                <Table.Th>{t("roles.fields.name")}</Table.Th>
-                <Table.Th>{t("roles.fields.permissions")}</Table.Th>
-                <Table.Th>{t("roles.fields.users")}</Table.Th>
-                <Table.Th>{t("roles.fields.actions")}</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {rows.map((row) => {
-                const canDelete =
-                  canWrite?.can && !row.locked && row.user_count === 0;
-                return (
-                  <Table.Tr key={row.id}>
-                    <Table.Td>
-                      <Group gap="xs">
-                        <Text size="sm">{row.key}</Text>
-                        {row.locked ? (
-                          <Badge size="xs" color="red" variant="light">
-                            {t("roles.locked")}
-                          </Badge>
-                        ) : null}
-                      </Group>
-                    </Table.Td>
-                    <Table.Td>{row.name}</Table.Td>
-                    <Table.Td>
-                      <Text size="sm" c="dimmed">
-                        {row.permissions.length}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>{row.user_count}</Table.Td>
-                    <Table.Td>
-                      <Group gap="xs">
-                        <CanAccess resource={ModuleId.roles} action={ModuleAction.edit}>
-                          <Button
-                            component={Link}
-                            href={`/console/roles/${row.id}`}
-                            size="xs"
-                            variant="light"
-                            disabled={row.locked}
-                          >
-                            {t("roles.edit")}
-                          </Button>
-                        </CanAccess>
-                        <CanAccess resource={ModuleId.roles} action={ModuleAction.delete}>
-                          <Button
-                            size="xs"
-                            variant="light"
-                            color="red"
-                            disabled={!canDelete || mutation.isPending}
-                            onClick={() => setPending(row)}
-                          >
-                            {t("roles.delete")}
-                          </Button>
-                        </CanAccess>
-                      </Group>
-                    </Table.Td>
-                  </Table.Tr>
-                );
-              })}
-            </Table.Tbody>
-          </Table>
-          <ListPager
-            page={currentPage}
-            pageSize={PAGE_SIZE}
-            total={total}
-            onChange={setCurrentPage}
-          />
-        </>
-      )}
+      <ListTable
+        state={listPresentation.state}
+        columnCount={5}
+        refreshing={listPresentation.refreshing}
+        errorMessage={errorMessage}
+        onRetry={() => void tableQuery.refetch()}
+        head={
+          <Table.Tr>
+            <Table.Th>{t("roles.fields.key")}</Table.Th>
+            <Table.Th>{t("roles.fields.name")}</Table.Th>
+            <Table.Th>{t("roles.fields.permissions")}</Table.Th>
+            <Table.Th>{t("roles.fields.users")}</Table.Th>
+            <Table.Th>{t("roles.fields.actions")}</Table.Th>
+          </Table.Tr>
+        }
+        page={currentPage}
+        pageSize={PAGE_SIZE}
+        total={total}
+        onPageChange={setCurrentPage}
+      >
+        {rows.map((row) => {
+          const canDelete =
+            canWrite?.can && !row.locked && row.user_count === 0;
+          return (
+            <Table.Tr key={row.id}>
+              <Table.Td>
+                <Group gap="xs">
+                  <Text size="sm">{row.key}</Text>
+                  {row.locked ? (
+                    <Badge size="xs" color="red" variant="light">
+                      {t("roles.locked")}
+                    </Badge>
+                  ) : null}
+                </Group>
+              </Table.Td>
+              <Table.Td>{row.name}</Table.Td>
+              <Table.Td>
+                <Text size="sm" c="dimmed">
+                  {row.permissions.length}
+                </Text>
+              </Table.Td>
+              <Table.Td>{row.user_count}</Table.Td>
+              <Table.Td>
+                <Group gap="xs">
+                  <CanAccess
+                    resource={ModuleId.roles}
+                    action={ModuleAction.edit}
+                  >
+                    <Button
+                      component={Link}
+                      href={`/console/roles/${row.id}`}
+                      size="xs"
+                      variant="light"
+                      disabled={row.locked}
+                    >
+                      {t("roles.edit")}
+                    </Button>
+                  </CanAccess>
+                  <CanAccess
+                    resource={ModuleId.roles}
+                    action={ModuleAction.delete}
+                  >
+                    <Button
+                      size="xs"
+                      variant="light"
+                      color="red"
+                      disabled={!canDelete || mutation.isPending}
+                      onClick={() => setPending(row)}
+                    >
+                      {t("roles.delete")}
+                    </Button>
+                  </CanAccess>
+                </Group>
+              </Table.Td>
+            </Table.Tr>
+          );
+        })}
+      </ListTable>
 
       <Modal
         opened={pending !== null}

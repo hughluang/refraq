@@ -20,7 +20,13 @@ export function PageChrome({
   children,
 }: PageChromeProps) {
   return (
-    <Stack gap="md">
+    <Stack
+      gap="md"
+      flex={1}
+      h="100%"
+      mih={0}
+      style={{ overflow: "auto" }}
+    >
       <PageBreadcrumb />
       <SectionHeader
         title={title}

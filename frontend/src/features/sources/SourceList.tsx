@@ -18,10 +18,7 @@ import { CanAccess, useCan, useNotification, useTranslate } from "@refinedev/cor
 import Link from "next/link";
 import { useCallback, useState } from "react";
 
-import { ListPager } from "@/components/display/ListPager";
-import { EmptyState } from "@/components/feedback/EmptyState";
-import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
-import { PageError } from "@/components/feedback/PageError";
+import { ListTable } from "@/components/display/ListTable";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
@@ -43,6 +40,7 @@ import type {
 } from "@/features/sources/types";
 import { usePagedList } from "@/hooks/usePagedList";
 import { ApiError } from "@/lib/api";
+import { listPresentationOf } from "@/lib/list-state";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 100;
@@ -112,6 +110,12 @@ export function SourceList() {
     canWrite?.can || canRunJobs?.can || canReadDiffs?.can,
   );
 
+  const onError = useCallback(
+    (message: string) => {
+      open?.({ type: "error", message });
+    },
+    [open],
+  );
   const fetchPage = useCallback(
     (query: PageQuery) => listSources(query),
     [],
@@ -120,7 +124,15 @@ export function SourceList() {
     usePagedList({
       pageSize: PAGE_SIZE,
       fetch: fetchPage,
+      onError,
     });
+  const listPresentation = listPresentationOf({
+    loading,
+    error,
+    total,
+    itemCount: items.length,
+    filtered: false,
+  });
 
   const form = useForm<IdentityForm>({
     initialValues: emptyIdentity(),
@@ -286,142 +298,126 @@ export function SourceList() {
     </CanAccess>
   );
 
-  if (error && items.length === 0 && !loading) {
-    return (
-      <PageChrome
-        title={t("sources.title")}
-        description={t("sources.description")}
-      >
-        <PageError message={error} />
-      </PageChrome>
-    );
-  }
-
   return (
     <PageChrome
       title={t("sources.title")}
       description={t("sources.description")}
       actions={createAction}
     >
-      {loading && items.length === 0 ? (
-        <PageBodySkeleton />
-      ) : total === 0 ? (
-        <EmptyState message={t("sources.empty")} />
-      ) : (
-        <>
-          <Table striped highlightOnHover withTableBorder>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>{t("sources.fields.key")}</Table.Th>
-                <Table.Th>{t("sources.fields.name")}</Table.Th>
-                <Table.Th>{t("sources.fields.engine")}</Table.Th>
-                <Table.Th>{t("sources.fields.host")}</Table.Th>
-                <Table.Th>{t("sources.fields.database")}</Table.Th>
-                <Table.Th>{t("sources.fields.status")}</Table.Th>
-                <Table.Th>{t("sources.fields.hasAccess")}</Table.Th>
-                {showActions ? (
-                  <Table.Th>{t("sources.fields.actions")}</Table.Th>
-                ) : null}
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {items.map((source) => (
-                <Table.Tr key={source.id}>
-                  <Table.Td>{source.key}</Table.Td>
-                  <Table.Td>{source.name}</Table.Td>
-                  <Table.Td>{source.engine ?? "—"}</Table.Td>
-                  <Table.Td>
-                    {typeof source.access?.host === "string"
-                      ? source.access.host
-                      : "—"}
-                  </Table.Td>
-                  <Table.Td>{scopeLabel(source)}</Table.Td>
-                  <Table.Td>
-                    <Badge
-                      color={source.status === "active" ? "green" : "gray"}
+      <ListTable
+        state={listPresentation.state}
+        columnCount={showActions ? 8 : 7}
+        refreshing={listPresentation.refreshing}
+        errorMessage={error}
+        onRetry={() => void reload()}
+        emptyMessage={t("sources.empty")}
+        head={
+          <Table.Tr>
+            <Table.Th>{t("sources.fields.key")}</Table.Th>
+            <Table.Th>{t("sources.fields.name")}</Table.Th>
+            <Table.Th>{t("sources.fields.engine")}</Table.Th>
+            <Table.Th>{t("sources.fields.host")}</Table.Th>
+            <Table.Th>{t("sources.fields.database")}</Table.Th>
+            <Table.Th>{t("sources.fields.status")}</Table.Th>
+            <Table.Th>{t("sources.fields.hasAccess")}</Table.Th>
+            {showActions ? (
+              <Table.Th>{t("sources.fields.actions")}</Table.Th>
+            ) : null}
+          </Table.Tr>
+        }
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        onPageChange={setPage}
+      >
+        {items.map((source) => (
+          <Table.Tr key={source.id}>
+            <Table.Td>{source.key}</Table.Td>
+            <Table.Td>{source.name}</Table.Td>
+            <Table.Td>{source.engine ?? "—"}</Table.Td>
+            <Table.Td>
+              {typeof source.access?.host === "string"
+                ? source.access.host
+                : "—"}
+            </Table.Td>
+            <Table.Td>{scopeLabel(source)}</Table.Td>
+            <Table.Td>
+              <Badge
+                color={source.status === "active" ? "green" : "gray"}
+                variant="light"
+              >
+                {source.status}
+              </Badge>
+            </Table.Td>
+            <Table.Td>
+              {source.has_access
+                ? t("sources.fields.hasAccessYes")
+                : t("sources.fields.hasAccessNo")}
+            </Table.Td>
+            {showActions ? (
+              <Table.Td>
+                <Group gap="xs" wrap="nowrap">
+                  <CanAccess
+                    resource={ModuleId.sources}
+                    action={ModuleAction.show}
+                  >
+                    <Button
+                      component={Link}
+                      href={`/console/sources/${source.id}/structure-diffs`}
+                      size="compact-xs"
+                      variant="default"
+                    >
+                      {t("structureDiffs.open")}
+                    </Button>
+                  </CanAccess>
+                  <CanAccess
+                    resource={ModuleId.jobs}
+                    action={ModuleAction.list}
+                  >
+                    <Button
+                      component={Link}
+                      href={`/console/sources/${source.id}/schedules`}
+                      size="compact-xs"
                       variant="light"
                     >
-                      {source.status}
-                    </Badge>
-                  </Table.Td>
-                  <Table.Td>
-                    {source.has_access
-                      ? t("sources.fields.hasAccessYes")
-                      : t("sources.fields.hasAccessNo")}
-                  </Table.Td>
-                  {showActions ? (
-                    <Table.Td>
-                      <Group gap="xs" wrap="nowrap">
-                        <CanAccess
-                          resource={ModuleId.sources}
-                          action={ModuleAction.show}
-                        >
+                      {t("schedules.related.open")}
+                    </Button>
+                  </CanAccess>
+                  {canWrite?.can ? (
+                    <>
+                      <Button
+                        size="compact-xs"
+                        variant="light"
+                        onClick={() => void openEdit(source)}
+                      >
+                        {t("sources.edit")}
+                      </Button>
+                      <Tooltip
+                        label={t("sources.delete.disabledHint")}
+                        disabled={source.status === "disabled"}
+                      >
+                        <span>
                           <Button
-                            component={Link}
-                            href={`/console/sources/${source.id}/structure-diffs`}
-                            size="compact-xs"
-                            variant="default"
-                          >
-                            {t("structureDiffs.open")}
-                          </Button>
-                        </CanAccess>
-                        <CanAccess
-                          resource={ModuleId.jobs}
-                          action={ModuleAction.list}
-                        >
-                          <Button
-                            component={Link}
-                            href={`/console/sources/${source.id}/schedules`}
                             size="compact-xs"
                             variant="light"
+                            color="red"
+                            disabled={
+                              source.status !== "disabled" || deleting
+                            }
+                            onClick={() => setPendingDelete(source)}
                           >
-                            {t("schedules.related.open")}
+                            {t("sources.delete")}
                           </Button>
-                        </CanAccess>
-                        {canWrite?.can ? (
-                          <>
-                            <Button
-                              size="compact-xs"
-                              variant="light"
-                              onClick={() => void openEdit(source)}
-                            >
-                              {t("sources.edit")}
-                            </Button>
-                            <Tooltip
-                              label={t("sources.delete.disabledHint")}
-                              disabled={source.status === "disabled"}
-                            >
-                              <span>
-                                <Button
-                                  size="compact-xs"
-                                  variant="light"
-                                  color="red"
-                                  disabled={
-                                    source.status !== "disabled" || deleting
-                                  }
-                                  onClick={() => setPendingDelete(source)}
-                                >
-                                  {t("sources.delete")}
-                                </Button>
-                              </span>
-                            </Tooltip>
-                          </>
-                        ) : null}
-                      </Group>
-                    </Table.Td>
+                        </span>
+                      </Tooltip>
+                    </>
                   ) : null}
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
-          <ListPager
-            page={page}
-            pageSize={pageSize}
-            total={total}
-            onChange={setPage}
-          />
-        </>
-      )}
+                </Group>
+              </Table.Td>
+            ) : null}
+          </Table.Tr>
+        ))}
+      </ListTable>
 
       <Modal.Stack>
         <Modal

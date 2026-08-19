@@ -5,11 +5,9 @@ import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
-import { ListPager } from "@/components/display/ListPager";
-import { EmptyState } from "@/components/feedback/EmptyState";
+import { ListTable } from "@/components/display/ListTable";
 import { ForbiddenState } from "@/components/feedback/ForbiddenState";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
-import { PageError } from "@/components/feedback/PageError";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
@@ -24,6 +22,7 @@ import { getSource } from "@/features/sources/api";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { usePagedList } from "@/hooks/usePagedList";
 import { ApiError } from "@/lib/api";
+import { listPresentationOf } from "@/lib/list-state";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
@@ -74,6 +73,13 @@ export function SourceSchedulesPage({ sourceId }: Props) {
       enabled: Boolean(canRun?.can),
       onError,
     });
+  const listPresentation = listPresentationOf({
+    loading,
+    error,
+    total,
+    itemCount: items.length,
+    filtered: false,
+  });
 
   useEffect(() => {
     if (!canRun?.can) return;
@@ -93,9 +99,6 @@ export function SourceSchedulesPage({ sourceId }: Props) {
   const title = sourceLabel
     ? `${t("schedules.related.title")} · ${sourceLabel}`
     : `${t("schedules.related.title")} · ${sourceId}`;
-
-  const showSkeleton =
-    aclPending || (loading && items.length === 0 && error === null);
 
   return (
     <>
@@ -131,111 +134,108 @@ export function SourceSchedulesPage({ sourceId }: Props) {
           </Group>
         }
       >
-        {showSkeleton ? (
+        {aclPending ? (
           <PageBodySkeleton />
-        ) : error && items.length === 0 ? (
-          <PageError message={error} onRetry={() => void reload()} />
-        ) : total === 0 ? (
-          <EmptyState message={t("schedules.related.empty")} />
         ) : (
-          <>
-            <Table striped highlightOnHover>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>{t("schedules.fields.name")}</Table.Th>
-                  <Table.Th>{t("schedules.fields.cadence")}</Table.Th>
-                  <Table.Th>{t("schedules.fields.timezone")}</Table.Th>
-                  <Table.Th>{t("schedules.fields.enabled")}</Table.Th>
-                  <Table.Th>{t("schedules.fields.nextRun")}</Table.Th>
-                  <Table.Th>{t("schedules.fields.lastJob")}</Table.Th>
-                  <Table.Th />
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {items.map((task) => (
-                  <Table.Tr key={task.id}>
-                    <Table.Td>
-                      <Text size="sm">{task.name}</Text>
-                      <Text size="xs" c="dimmed" ff="monospace">
-                        {task.id}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="sm" ff="monospace">
-                        {cadenceLabel(task)}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>{timezoneLabel(task)}</Table.Td>
-                    <Table.Td>
-                      <Switch
-                        checked={task.enabled}
-                        onChange={async (event) => {
-                          try {
-                            await patchSchedule(task.id, {
-                              enabled: event.currentTarget.checked,
-                            });
-                            await reload();
-                          } catch (err) {
-                            open?.({
-                              type: "error",
-                              message:
-                                err instanceof ApiError
-                                  ? err.detail
-                                  : String(err),
-                            });
-                          }
-                        }}
-                      />
-                    </Table.Td>
-                    <Table.Td>
+          <ListTable
+            state={listPresentation.state}
+            columnCount={7}
+            refreshing={listPresentation.refreshing}
+            errorMessage={error}
+            onRetry={() => void reload()}
+            emptyMessage={t("schedules.related.empty")}
+            head={
+              <Table.Tr>
+                <Table.Th>{t("schedules.fields.name")}</Table.Th>
+                <Table.Th>{t("schedules.fields.cadence")}</Table.Th>
+                <Table.Th>{t("schedules.fields.timezone")}</Table.Th>
+                <Table.Th>{t("schedules.fields.enabled")}</Table.Th>
+                <Table.Th>{t("schedules.fields.nextRun")}</Table.Th>
+                <Table.Th>{t("schedules.fields.lastJob")}</Table.Th>
+                <Table.Th />
+              </Table.Tr>
+            }
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPageChange={setPage}
+          >
+            {items.map((task) => (
+              <Table.Tr key={task.id}>
+                <Table.Td>
+                  <Text size="sm">{task.name}</Text>
+                  <Text size="xs" c="dimmed" ff="monospace">
+                    {task.id}
+                  </Text>
+                </Table.Td>
+                <Table.Td>
+                  <Text size="sm" ff="monospace">
+                    {cadenceLabel(task)}
+                  </Text>
+                </Table.Td>
+                <Table.Td>{timezoneLabel(task)}</Table.Td>
+                <Table.Td>
+                  <Switch
+                    checked={task.enabled}
+                    onChange={async (event) => {
+                      try {
+                        await patchSchedule(task.id, {
+                          enabled: event.currentTarget.checked,
+                        });
+                        await reload();
+                      } catch (err) {
+                        open?.({
+                          type: "error",
+                          message:
+                            err instanceof ApiError
+                              ? err.detail
+                              : String(err),
+                        });
+                      }
+                    }}
+                  />
+                </Table.Td>
+                <Table.Td>
+                  <Text size="sm">
+                    {!task.enabled
+                      ? t("schedules.fields.nextRunPaused")
+                      : task.next_run_at
+                        ? formatInstant(task.next_run_at)
+                        : "—"}
+                  </Text>
+                </Table.Td>
+                <Table.Td>
+                  {task.last_job ? (
+                    <>
                       <Text size="sm">
-                        {!task.enabled
-                          ? t("schedules.fields.nextRunPaused")
-                          : task.next_run_at
-                            ? formatInstant(task.next_run_at)
+                        {task.last_job.finished_at
+                          ? formatInstant(task.last_job.finished_at)
+                          : task.last_job.created_at
+                            ? formatInstant(task.last_job.created_at)
                             : "—"}
                       </Text>
-                    </Table.Td>
-                    <Table.Td>
-                      {task.last_job ? (
-                        <>
-                          <Text size="sm">
-                            {task.last_job.finished_at
-                              ? formatInstant(task.last_job.finished_at)
-                              : task.last_job.created_at
-                                ? formatInstant(task.last_job.created_at)
-                                : "—"}
-                          </Text>
-                          <Text size="xs" c="dimmed">
-                            {task.last_job.status}
-                            {task.last_job.error_code
-                              ? ` · ${task.last_job.error_code}`
-                              : ""}
-                          </Text>
-                        </>
-                      ) : (
-                        <Text size="sm">—</Text>
-                      )}
-                    </Table.Td>
-                    <Table.Td>
-                      <ScheduleRowActions
-                        task={task}
-                        onEdit={() => setEditing(task)}
-                        onJobs={() => setJobsTask(task)}
-                        onChanged={() => void reload()}
-                      />
-                    </Table.Td>
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
-            <ListPager
-              page={page}
-              pageSize={pageSize}
-              total={total}
-              onChange={setPage}
-            />
-          </>
+                      <Text size="xs" c="dimmed">
+                        {task.last_job.status}
+                        {task.last_job.error_code
+                          ? ` · ${task.last_job.error_code}`
+                          : ""}
+                      </Text>
+                    </>
+                  ) : (
+                    <Text size="sm">—</Text>
+                  )}
+                </Table.Td>
+                <Table.Td>
+                  <ScheduleRowActions
+                    task={task}
+                    onEdit={() => setEditing(task)}
+                    onJobs={() => setJobsTask(task)}
+                    onChanged={() => void reload()}
+                  />
+                </Table.Td>
+              </Table.Tr>
+            ))}
+          </ListTable>
         )}
       </PageChrome>
       <Modal.Stack>

@@ -18,16 +18,14 @@ import {
 import Link from "next/link";
 import { useState } from "react";
 
-import { ListPager } from "@/components/display/ListPager";
-import { EmptyState } from "@/components/feedback/EmptyState";
-import { PageError } from "@/components/feedback/PageError";
-import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
+import { ListTable } from "@/components/display/ListTable";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { UserRoleBadge } from "@/features/users/UserRoleBadge";
 import type { UserRow, UserStatus } from "@/features/users/types";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
+import { listPresentationOf } from "@/lib/list-state";
 import type { CurrentUser } from "@/providers/session-store";
 
 const PAGE_SIZE = 50;
@@ -49,8 +47,19 @@ export function UserList() {
 
   const rows = tableQuery.data?.data ?? [];
   const total = tableQuery.data?.total ?? 0;
-  const isLoading = tableQuery.isLoading;
-  const error = tableQuery.error;
+  const errorMessage =
+    tableQuery.error == null
+      ? null
+      : tableQuery.error instanceof ApiError
+        ? tableQuery.error.detail
+        : t("common.error.loadFailed");
+  const listPresentation = listPresentationOf({
+    loading: tableQuery.isFetching,
+    error: errorMessage,
+    total,
+    itemCount: rows.length,
+    filtered: false,
+  });
 
   function confirmToggle() {
     if (!pending) return;
@@ -90,85 +99,62 @@ export function UserList() {
     </CanAccess>
   );
 
-  if (error) {
-    const message =
-      error instanceof ApiError
-        ? error.detail
-        : t("common.error.loadFailed");
-    return (
-      <PageChrome
-        title={t("users.title")}
-        description={t("users.description")}
-      >
-        <PageError message={message} onRetry={() => tableQuery.refetch()} />
-      </PageChrome>
-    );
-  }
-
   return (
     <PageChrome
       title={t("users.title")}
       description={t("users.description")}
       actions={createAction}
     >
-      {isLoading && rows.length === 0 ? (
-        <PageBodySkeleton />
-      ) : total === 0 ? (
-        <EmptyState />
-      ) : (
-        <>
-          <Table highlightOnHover striped withTableBorder>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>{t("users.fields.account")}</Table.Th>
-                <Table.Th>{t("users.fields.displayName")}</Table.Th>
-                <Table.Th>{t("users.fields.role")}</Table.Th>
-                <Table.Th>{t("users.fields.status")}</Table.Th>
-                <Table.Th>{t("users.fields.lastLoginAt")}</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {rows.map((row) => {
-                const isSelf = identity?.id === row.id;
-                return (
-                  <Table.Tr key={row.id}>
-                    <Table.Td>{row.account}</Table.Td>
-                    <Table.Td>{row.display_name}</Table.Td>
-                    <Table.Td>
-                      <UserRoleBadge
-                        roleName={row.role_name}
-                        roleKey={row.role_key}
-                      />
-                    </Table.Td>
-                    <Table.Td>
-                      <Switch
-                        checked={row.status === "active"}
-                        onChange={() => setPending(row)}
-                        disabled={
-                          !canWrite?.can || mutation.isPending || isSelf
-                        }
-                        size="sm"
-                        aria-label={
-                          row.status === "active"
-                            ? t("users.status.active")
-                            : t("users.status.disabled")
-                        }
-                      />
-                    </Table.Td>
-                    <Table.Td>{formatInstant(row.last_login_at)}</Table.Td>
-                  </Table.Tr>
-                );
-              })}
-            </Table.Tbody>
-          </Table>
-          <ListPager
-            page={currentPage}
-            pageSize={PAGE_SIZE}
-            total={total}
-            onChange={setCurrentPage}
-          />
-        </>
-      )}
+      <ListTable
+        state={listPresentation.state}
+        columnCount={5}
+        refreshing={listPresentation.refreshing}
+        errorMessage={errorMessage}
+        onRetry={() => void tableQuery.refetch()}
+        head={
+          <Table.Tr>
+            <Table.Th>{t("users.fields.account")}</Table.Th>
+            <Table.Th>{t("users.fields.displayName")}</Table.Th>
+            <Table.Th>{t("users.fields.role")}</Table.Th>
+            <Table.Th>{t("users.fields.status")}</Table.Th>
+            <Table.Th>{t("users.fields.lastLoginAt")}</Table.Th>
+          </Table.Tr>
+        }
+        page={currentPage}
+        pageSize={PAGE_SIZE}
+        total={total}
+        onPageChange={setCurrentPage}
+      >
+        {rows.map((row) => {
+          const isSelf = identity?.id === row.id;
+          return (
+            <Table.Tr key={row.id}>
+              <Table.Td>{row.account}</Table.Td>
+              <Table.Td>{row.display_name}</Table.Td>
+              <Table.Td>
+                <UserRoleBadge
+                  roleName={row.role_name}
+                  roleKey={row.role_key}
+                />
+              </Table.Td>
+              <Table.Td>
+                <Switch
+                  checked={row.status === "active"}
+                  onChange={() => setPending(row)}
+                  disabled={!canWrite?.can || mutation.isPending || isSelf}
+                  size="sm"
+                  aria-label={
+                    row.status === "active"
+                      ? t("users.status.active")
+                      : t("users.status.disabled")
+                  }
+                />
+              </Table.Td>
+              <Table.Td>{formatInstant(row.last_login_at)}</Table.Td>
+            </Table.Tr>
+          );
+        })}
+      </ListTable>
 
       <Modal
         opened={pending !== null}

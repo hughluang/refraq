@@ -5,7 +5,6 @@ import {
   Badge,
   Button,
   Group,
-  Stack,
   Tabs,
   Text,
   Tooltip,
@@ -16,6 +15,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { PageError } from "@/components/feedback/PageError";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
+import { FillColumn } from "@/components/layout/FillColumn";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { getCatalogObject, getSource } from "@/features/sources/api";
@@ -133,7 +133,7 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
         </Group>
       }
     >
-      <Stack gap="md">
+      <FillColumn gap="md">
         <Group gap="sm" wrap="wrap">
           <Badge variant="light">{object.object_type}</Badge>
           <Badge color={object.is_present ? "green" : "gray"}>
@@ -182,7 +182,26 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
           </Tooltip>
         </Group>
 
-        <Tabs value={activeTab} onChange={setActiveTab} keepMounted>
+        <Tabs
+          value={activeTab}
+          onChange={setActiveTab}
+          keepMounted
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+          }}
+          styles={{
+            panel: {
+              flex: 1,
+              minHeight: 0,
+              overflow: "auto",
+              display: "flex",
+              flexDirection: "column",
+            },
+          }}
+        >
           <Tabs.List>
             <Tabs.Tab value="overview">{t("catalog.tabs.overview")}</Tabs.Tab>
             <Tabs.Tab value="columns">{t("catalog.tabs.columns")}</Tabs.Tab>
@@ -208,14 +227,14 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
           <Tabs.Panel value="sample" pt="md">
             <SampleTab object={object} source={source} />
           </Tabs.Panel>
-          <Tabs.Panel value="joins" pt="md">
+          <Tabs.Panel value="joins" pt="md" style={{ overflow: "hidden" }}>
             <JoinsTab object={object} writable={writable} />
           </Tabs.Panel>
           <Tabs.Panel value="ddl" pt="md">
             <DdlTab ddl={object.ddl} />
           </Tabs.Panel>
         </Tabs>
-      </Stack>
+      </FillColumn>
     </PageChrome>
   );
 }

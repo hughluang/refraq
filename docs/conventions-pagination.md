@@ -87,7 +87,7 @@ Catalog Sample and Controlled Query are row peeks, not collection lists. They ke
 
 ## 7. Console
 
-Paged Management Console tables use one footer: `ListPager` (`frontend/src/components/display/ListPager.tsx`). Count text always renders; page numbers render only when there is more than one page. Filter controls stay in the content toolbar (`docs/ui-console-layout.md`). Do not hand-roll prev/next buttons for an Offset Page.
+Paged Management Console tables use one footer: `ListPager` (`frontend/src/components/display/ListPager.tsx`), composed by `ListTable` (`docs/ui-console-layout.md`). Count text always renders; page numbers render only when there is more than one page. `ListTable` disables paging while the first page is loading or existing rows are refreshing. Filter controls stay in the content toolbar. Do not hand-roll prev/next buttons for an Offset Page. Client-side slices that are not Offset Page lists (Catalog Columns) may compose `ListPager` without `ListTable`.
 
 Pickers that need a closed option set (role Select, Source Select) fetch one page at that list's documented max `limit`. They are not a second envelope.
 
@@ -105,7 +105,7 @@ Pickers that need a closed option set (role Select, Source Select) fetch one pag
 ## 9. Implementation Entry
 
 - HTTP params and envelope: `backend.core.pagination` (`page_params`, `OffsetPage`).
-- Console: `frontend/src/lib/pagination.ts`, `frontend/src/hooks/usePagedList.ts`, `frontend/src/components/display/ListPager.tsx`.
+- Console: `frontend/src/lib/pagination.ts`, `frontend/src/lib/list-state.ts`, `frontend/src/hooks/usePagedList.ts`, `frontend/src/components/display/ListTable.tsx` (composes `ListPager`).
 - See [`docs/modules.md`](modules.md) and [`docs/backend-layout.md`](backend-layout.md).
 
 ## 10. Non-Goals

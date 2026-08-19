@@ -237,7 +237,7 @@ This is the main integration layer for the first login/permission slice.
 Responsibilities:
 
 - Reusable UI building blocks
-- Shared layout shells and feedback primitives
+- Shared layout shells and feedback primitives (`PageChrome`, remaining-space `FillColumn`, `ListTable`)
 
 Must not contain:
 
@@ -250,7 +250,7 @@ Responsibilities:
 
 - Shared API helpers
 - Small framework-agnostic utility code
-- Offset Page types and page-math helpers (`lib/pagination.ts`); paged-list state lives in `hooks/usePagedList.ts`; the list footer is `components/display/ListPager.tsx`
+- Offset Page types and page-math helpers (`lib/pagination.ts`); paged-list fetch state lives in `hooks/usePagedList.ts`; list status decisions live in `lib/list-state.ts` (`listPresentationOf` returns `{ state, refreshing }`); the list table is `components/display/ListTable.tsx` (composes `ListPager`)
 
 Must not contain:
 
