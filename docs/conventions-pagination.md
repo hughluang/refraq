@@ -50,6 +50,8 @@ The convention owns param names, envelope keys, the ordering guarantee, and the 
 
 Pagination bounds the **response**. It does not bound the table. A clock-appended stream (Jobs) still grows; retention is a separate mechanism.
 
+An `offset` past the end of the filtered set is still `200`. The envelope returns empty `items` and the same `total`; it is not a `404` and it is not an error.
+
 ## 3. Total Ordering
 
 An Offset Page requires a deterministic total order. `offset > 0` is undefined without it.
@@ -75,19 +77,11 @@ A Whole-Set Read is not a page. It is a composite configuration document bounded
 
 Do not rewrite these as Offset Pages.
 
-These HTTP lists still return `{ "items": [...] }` without `total` / `limit` / `offset`. They are **not** Whole-Set Reads. Do not copy this shape for a new list:
-
-- `GET /users`
-- `GET /roles`
-- `GET /tokens`
-- `GET /sources`
-- `GET /schedules`
-- `GET /sources/{id}/schedules`
-- `GET /objects/{id}/joins`
-
 ## 6. MCP
 
 MCP list tools that correspond to an Offset Page HTTP list use the same fields: `limit`, `offset`, and a result carrying `items`, `total`, `limit`, `offset`. They do not invent a second envelope.
+
+MCP list tools clamp out-of-range `limit` / `offset` to the documented default and max and echo the applied values. HTTP Offset Page lists reject the same inputs with `422 REQUEST_INVALID`.
 
 Catalog Sample and Controlled Query are row peeks, not collection lists. They keep `has_more` (heuristic) and do not add `total`.
 
@@ -95,7 +89,7 @@ Catalog Sample and Controlled Query are row peeks, not collection lists. They ke
 
 Paged Management Console tables use one footer: `ListPager` (`frontend/src/components/display/ListPager.tsx`). Count text always renders; page numbers render only when there is more than one page. Filter controls stay in the content toolbar (`docs/ui-console-layout.md`). Do not hand-roll prev/next buttons for an Offset Page.
 
-Foundation Refine tables that still fetch `{items}` and page in the client are not a second legal Console pattern; they wait on those lists adopting Offset Page.
+Pickers that need a closed option set (role Select, Source Select) fetch one page at that list's documented max `limit`. They are not a second envelope.
 
 ## 8. Forbidden
 
@@ -106,7 +100,7 @@ Foundation Refine tables that still fetch `{items}` and page in the client are n
 5. Computing Offset Page `total` by materializing every filtered row.
 6. A default `limit` with no documented max cap.
 7. Treating page bounds as Job/log retention.
-8. Copying `{items}`-only Foundation lists as the pattern for a new collection.
+8. A new collection list that returns `{items}` only (Whole-Set Reads in §5 are the exception).
 
 ## 9. Implementation Entry
 
@@ -119,5 +113,4 @@ Foundation Refine tables that still fetch `{items}` and page in the client are n
 - Job or log retention / pruning.
 - Catalog Sample and Controlled Query row peeks (`has_more`, `REFRAQ_QUERY_MAX_ROWS`).
 - Migrating `GET /audit/events` off Cursor Page.
-- Rewriting the `{items}`-only lists named in §5 in this document.
 - A global page-size number imposed on every endpoint.

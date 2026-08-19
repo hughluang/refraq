@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Response, status
 
+from backend.core.pagination import PageParams, page_params
+
 from backend.admin import roles as role_domain
 from backend.admin.deps import require_permission
 from backend.admin.errors import RoleInUse, RoleNotFound
@@ -53,9 +55,15 @@ def list_roles(
     _user: UserRecord = Depends(require_permission("roles:read")),
     roles: RoleStore = Depends(get_role_store),
     users: UserStore = Depends(get_user_store),
+    page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> RoleListResponse:
-    items = [_to_summary(record, users) for record in roles.list_roles()]
-    return RoleListResponse(items=items)
+    records, total = roles.list_roles(limit=page.limit, offset=page.offset)
+    return RoleListResponse(
+        items=[_to_summary(record, users) for record in records],
+        total=total,
+        limit=page.limit,
+        offset=page.offset,
+    )
 
 
 @router.post(

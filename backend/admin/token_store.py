@@ -12,11 +12,12 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Protocol
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from backend.admin.models import UserPatRow
 from backend.core.config import get_settings
 from backend.core.db import session_scope
+from backend.core.pagination import apply_offset_page, apply_sql_page
 
 
 TOKEN_PREFIX = "rfq_pat_"
@@ -46,7 +47,9 @@ def generate_token_secret() -> tuple[str, str, str]:
     return secret, prefix, hash_token(secret)
 
 class TokenStore(Protocol):
-    def list_for_user(self, user_id: str) -> list[TokenRecord]: ...
+    def list_for_user(
+        self, user_id: str, *, limit: int | None = None, offset: int = 0
+    ) -> tuple[list[TokenRecord], int]: ...
     def get_by_id(self, token_id: str) -> TokenRecord | None: ...
 
     def get_by_hash(self, token_hash: str) -> TokenRecord | None: ...
@@ -72,14 +75,17 @@ class MemoryTokenStore:
         self._by_hash: dict[str, str] = {}
         self._lock = threading.Lock()
 
-    def list_for_user(self, user_id: str) -> list[TokenRecord]:
+    def list_for_user(
+        self, user_id: str, *, limit: int | None = None, offset: int = 0
+    ) -> tuple[list[TokenRecord], int]:
         with self._lock:
             items = [
                 r
                 for r in self._by_id.values()
                 if r.user_id == user_id and r.deleted_at is None
             ]
-            return sorted(items, key=lambda r: (r.created_at, r.id), reverse=True)
+            items.sort(key=lambda r: (r.created_at, r.id), reverse=True)
+            return apply_offset_page(items, limit=limit, offset=offset)
 
     def get_by_id(self, token_id: str) -> TokenRecord | None:
         with self._lock:
@@ -151,17 +157,28 @@ class MemoryTokenStore:
                 record.last_used_at = when
 
 class SqlTokenStore:
-    def list_for_user(self, user_id: str) -> list[TokenRecord]:
+    def list_for_user(
+        self, user_id: str, *, limit: int | None = None, offset: int = 0
+    ) -> tuple[list[TokenRecord], int]:
         with session_scope() as session:
-            rows = session.scalars(
-                select(UserPatRow)
-                .where(
-                    UserPatRow.user_id == user_id,
-                    UserPatRow.deleted_at.is_(None),
+            pred = (
+                UserPatRow.user_id == user_id,
+                UserPatRow.deleted_at.is_(None),
+            )
+            total = int(
+                session.scalar(
+                    select(func.count()).select_from(UserPatRow).where(*pred)
                 )
-                .order_by(UserPatRow.created_at.desc(), UserPatRow.id.desc())
-            ).all()
-            return [_row_to_token(row) for row in rows]
+                or 0
+            )
+            stmt = apply_sql_page(
+                select(UserPatRow)
+                .where(*pred)
+                .order_by(UserPatRow.created_at.desc(), UserPatRow.id.desc()),
+                limit=limit,
+                offset=offset,
+            )
+            return [_row_to_token(row) for row in session.scalars(stmt).all()], total
 
     def get_by_id(self, token_id: str) -> TokenRecord | None:
         with session_scope() as session:

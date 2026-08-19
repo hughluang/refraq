@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request, Response, status
 
+from backend.core.pagination import PageParams, page_params
+
 from backend.admin.audit import persist_audit_event
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
@@ -43,9 +45,15 @@ def _source_out(record: SourceRecord) -> SourceOut:
 @router.get("/sources", response_model=SourceListResponse)
 def list_sources(
     _: UserRecord = Depends(require_permission("sources:read")),
+    page: PageParams = Depends(page_params(default_limit=100, max_limit=500)),
 ) -> SourceListResponse:
-    items = [_source_out(r) for r in get_source_store().list_sources()]
-    return SourceListResponse(items=items)
+    records, total = get_source_store().list_sources(limit=page.limit, offset=page.offset)
+    return SourceListResponse(
+        items=[_source_out(r) for r in records],
+        total=total,
+        limit=page.limit,
+        offset=page.offset,
+    )
 
 
 @router.get(

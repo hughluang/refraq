@@ -279,10 +279,6 @@ def seed_default_structure_schedule(
     return public_schedule(stored, source_key=source.key)
 
 
-def _has_structure_schedule(source_id: str, records: list[ScheduledTaskRecord]) -> bool:
-    return any(record.kwargs_json.get("source_id") == source_id for record in records)
-
-
 def ensure_default_structure_schedule_if_none(
     source: SourceRecord,
     *,
@@ -293,8 +289,10 @@ def ensure_default_structure_schedule_if_none(
     """Insert the product-default structure schedule when this database Source has none."""
     if source.kind != "database":
         return None
-    existing = get_schedule_store().list(include_system=False, session=session)
-    if _has_structure_schedule(source.id, existing):
+    _existing, total = get_schedule_store().list_by_owner_ref(
+        structure_owner_ref(source.id), limit=1, session=session
+    )
+    if total > 0:
         return None
     return seed_default_structure_schedule(
         source,
@@ -304,15 +302,16 @@ def ensure_default_structure_schedule_if_none(
     )
 
 
-def list_structure_schedules(source_id: str) -> list[ScheduleOut]:
+def list_structure_schedules(
+    source_id: str, *, limit: int | None = None, offset: int = 0
+) -> tuple[list[ScheduleOut], int]:
     source = get_source_store().get_source(source_id)
     if source is None:
         raise SourceNotFound()
-    items: list[ScheduleOut] = []
-    for record in get_schedule_store().list(include_system=False):
-        if record.kwargs_json.get("source_id") == source_id:
-            items.append(public_schedule(record, source_key=source.key))
-    return items
+    records, total = get_schedule_store().list_by_owner_ref(
+        structure_owner_ref(source_id), limit=limit, offset=offset
+    )
+    return [public_schedule(record, source_key=source.key) for record in records], total
 
 
 def list_jobs_for_schedule(

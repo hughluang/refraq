@@ -206,11 +206,13 @@ PATCH body: `{ "normalized_type": "<one of 11 buckets>" }` — any closed Normal
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/objects/{id}/joins` | `metadata:read` | List joins touching object |
+| `GET` | `/objects/{id}/joins` | `metadata:read` | List joins touching object (**Offset Page**) |
 | `PUT` | `/joins` | `metadata:write` | Upsert single edge (`origin=human` when via Console) |
 | `PUT` | `/joins:batch` | `metadata:write` | Batch upsert; all edges same Source |
 | `DELETE` | `/joins/{id}` | `metadata:write` | Remove edge |
 | `GET` | `/joins/path` | `metadata:read` | Join path lookup |
+
+**Offset Page** response for `GET /objects/{id}/joins`: `{ "items": […], "total": N, "limit": L, "offset": O }`. `limit` default 50, max 200. Order: `created_at ASC`, `id ASC`. `total` is joins that touch this object.
 
 Batch request:
 

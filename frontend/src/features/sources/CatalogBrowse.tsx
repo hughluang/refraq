@@ -68,6 +68,7 @@ export function CatalogBrowse() {
     page,
     setPage,
     loading: listLoading,
+    error: listError,
     reload,
     pageSize,
   } = usePagedList({
@@ -81,7 +82,7 @@ export function CatalogBrowse() {
   const loadSources = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await listSources();
+      const data = await listSources({ limit: 500 });
       setSources(data.items);
       if (!sourceId && data.items[0]) {
         setSourceId(data.items[0].id);
@@ -172,6 +173,8 @@ export function CatalogBrowse() {
 
           {listLoading && items.length === 0 ? (
             <PageBodySkeleton />
+          ) : listError && items.length === 0 ? (
+            <PageError message={listError} onRetry={() => void reload()} />
           ) : !sourceId || total === 0 ? (
             <EmptyState message={t("catalog.empty")} />
           ) : (

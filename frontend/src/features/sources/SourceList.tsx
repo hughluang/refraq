@@ -16,8 +16,9 @@ import {
 import { useForm } from "@mantine/form";
 import { CanAccess, useCan, useNotification, useTranslate } from "@refinedev/core";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
+import { ListPager } from "@/components/display/ListPager";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageError } from "@/components/feedback/PageError";
@@ -40,7 +41,11 @@ import type {
   Source,
   SourceAccess,
 } from "@/features/sources/types";
+import { usePagedList } from "@/hooks/usePagedList";
 import { ApiError } from "@/lib/api";
+import type { PageQuery } from "@/lib/pagination";
+
+const PAGE_SIZE = 100;
 
 type IdentityForm = {
   key: string;
@@ -92,9 +97,6 @@ export function SourceList() {
     action: ModuleAction.show,
   });
 
-  const [items, setItems] = useState<Source[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Source | null>(null);
   const [busy, setBusy] = useState(false);
@@ -110,22 +112,15 @@ export function SourceList() {
     canWrite?.can || canRunJobs?.can || canReadDiffs?.can,
   );
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const srcs = await listSources();
-      setItems(srcs.items);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.detail : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const fetchPage = useCallback(
+    (query: PageQuery) => listSources(query),
+    [],
+  );
+  const { items, total, page, setPage, loading, error, reload, pageSize } =
+    usePagedList({
+      pageSize: PAGE_SIZE,
+      fetch: fetchPage,
+    });
 
   const form = useForm<IdentityForm>({
     initialValues: emptyIdentity(),
@@ -271,7 +266,7 @@ export function SourceList() {
         message: t("sources.delete.success"),
       });
       setPendingDelete(null);
-      await load();
+      await reload();
     } catch (err) {
       open?.({
         type: "error",
@@ -291,18 +286,7 @@ export function SourceList() {
     </CanAccess>
   );
 
-  if (loading) {
-    return (
-      <PageChrome
-        title={t("sources.title")}
-        description={t("sources.description")}
-        actions={createAction}
-      >
-        <PageBodySkeleton />
-      </PageChrome>
-    );
-  }
-  if (error) {
+  if (error && items.length === 0 && !loading) {
     return (
       <PageChrome
         title={t("sources.title")}
@@ -319,114 +303,124 @@ export function SourceList() {
       description={t("sources.description")}
       actions={createAction}
     >
-      {items.length === 0 ? (
+      {loading && items.length === 0 ? (
+        <PageBodySkeleton />
+      ) : total === 0 ? (
         <EmptyState message={t("sources.empty")} />
       ) : (
-        <Table striped highlightOnHover withTableBorder>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>{t("sources.fields.key")}</Table.Th>
-              <Table.Th>{t("sources.fields.name")}</Table.Th>
-              <Table.Th>{t("sources.fields.engine")}</Table.Th>
-              <Table.Th>{t("sources.fields.host")}</Table.Th>
-              <Table.Th>{t("sources.fields.database")}</Table.Th>
-              <Table.Th>{t("sources.fields.status")}</Table.Th>
-              <Table.Th>{t("sources.fields.hasAccess")}</Table.Th>
-              {showActions ? (
-                <Table.Th>{t("sources.fields.actions")}</Table.Th>
-              ) : null}
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {items.map((source) => (
-              <Table.Tr key={source.id}>
-                <Table.Td>{source.key}</Table.Td>
-                <Table.Td>{source.name}</Table.Td>
-                <Table.Td>{source.engine ?? "—"}</Table.Td>
-                <Table.Td>
-                  {typeof source.access?.host === "string"
-                    ? source.access.host
-                    : "—"}
-                </Table.Td>
-                <Table.Td>{scopeLabel(source)}</Table.Td>
-                <Table.Td>
-                  <Badge
-                    color={source.status === "active" ? "green" : "gray"}
-                    variant="light"
-                  >
-                    {source.status}
-                  </Badge>
-                </Table.Td>
-                <Table.Td>
-                  {source.has_access
-                    ? t("sources.fields.hasAccessYes")
-                    : t("sources.fields.hasAccessNo")}
-                </Table.Td>
+        <>
+          <Table striped highlightOnHover withTableBorder>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>{t("sources.fields.key")}</Table.Th>
+                <Table.Th>{t("sources.fields.name")}</Table.Th>
+                <Table.Th>{t("sources.fields.engine")}</Table.Th>
+                <Table.Th>{t("sources.fields.host")}</Table.Th>
+                <Table.Th>{t("sources.fields.database")}</Table.Th>
+                <Table.Th>{t("sources.fields.status")}</Table.Th>
+                <Table.Th>{t("sources.fields.hasAccess")}</Table.Th>
                 {showActions ? (
-                  <Table.Td>
-                    <Group gap="xs" wrap="nowrap">
-                      <CanAccess
-                        resource={ModuleId.sources}
-                        action={ModuleAction.show}
-                      >
-                        <Button
-                          component={Link}
-                          href={`/console/sources/${source.id}/structure-diffs`}
-                          size="compact-xs"
-                          variant="default"
-                        >
-                          {t("structureDiffs.open")}
-                        </Button>
-                      </CanAccess>
-                      <CanAccess
-                        resource={ModuleId.jobs}
-                        action={ModuleAction.list}
-                      >
-                        <Button
-                          component={Link}
-                          href={`/console/sources/${source.id}/schedules`}
-                          size="compact-xs"
-                          variant="light"
-                        >
-                          {t("schedules.related.open")}
-                        </Button>
-                      </CanAccess>
-                      {canWrite?.can ? (
-                        <>
-                          <Button
-                            size="compact-xs"
-                            variant="light"
-                            onClick={() => void openEdit(source)}
-                          >
-                            {t("sources.edit")}
-                          </Button>
-                          <Tooltip
-                            label={t("sources.delete.disabledHint")}
-                            disabled={source.status === "disabled"}
-                          >
-                            <span>
-                              <Button
-                                size="compact-xs"
-                                variant="light"
-                                color="red"
-                                disabled={
-                                  source.status !== "disabled" || deleting
-                                }
-                                onClick={() => setPendingDelete(source)}
-                              >
-                                {t("sources.delete")}
-                              </Button>
-                            </span>
-                          </Tooltip>
-                        </>
-                      ) : null}
-                    </Group>
-                  </Table.Td>
+                  <Table.Th>{t("sources.fields.actions")}</Table.Th>
                 ) : null}
               </Table.Tr>
-            ))}
-          </Table.Tbody>
-        </Table>
+            </Table.Thead>
+            <Table.Tbody>
+              {items.map((source) => (
+                <Table.Tr key={source.id}>
+                  <Table.Td>{source.key}</Table.Td>
+                  <Table.Td>{source.name}</Table.Td>
+                  <Table.Td>{source.engine ?? "—"}</Table.Td>
+                  <Table.Td>
+                    {typeof source.access?.host === "string"
+                      ? source.access.host
+                      : "—"}
+                  </Table.Td>
+                  <Table.Td>{scopeLabel(source)}</Table.Td>
+                  <Table.Td>
+                    <Badge
+                      color={source.status === "active" ? "green" : "gray"}
+                      variant="light"
+                    >
+                      {source.status}
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td>
+                    {source.has_access
+                      ? t("sources.fields.hasAccessYes")
+                      : t("sources.fields.hasAccessNo")}
+                  </Table.Td>
+                  {showActions ? (
+                    <Table.Td>
+                      <Group gap="xs" wrap="nowrap">
+                        <CanAccess
+                          resource={ModuleId.sources}
+                          action={ModuleAction.show}
+                        >
+                          <Button
+                            component={Link}
+                            href={`/console/sources/${source.id}/structure-diffs`}
+                            size="compact-xs"
+                            variant="default"
+                          >
+                            {t("structureDiffs.open")}
+                          </Button>
+                        </CanAccess>
+                        <CanAccess
+                          resource={ModuleId.jobs}
+                          action={ModuleAction.list}
+                        >
+                          <Button
+                            component={Link}
+                            href={`/console/sources/${source.id}/schedules`}
+                            size="compact-xs"
+                            variant="light"
+                          >
+                            {t("schedules.related.open")}
+                          </Button>
+                        </CanAccess>
+                        {canWrite?.can ? (
+                          <>
+                            <Button
+                              size="compact-xs"
+                              variant="light"
+                              onClick={() => void openEdit(source)}
+                            >
+                              {t("sources.edit")}
+                            </Button>
+                            <Tooltip
+                              label={t("sources.delete.disabledHint")}
+                              disabled={source.status === "disabled"}
+                            >
+                              <span>
+                                <Button
+                                  size="compact-xs"
+                                  variant="light"
+                                  color="red"
+                                  disabled={
+                                    source.status !== "disabled" || deleting
+                                  }
+                                  onClick={() => setPendingDelete(source)}
+                                >
+                                  {t("sources.delete")}
+                                </Button>
+                              </span>
+                            </Tooltip>
+                          </>
+                        ) : null}
+                      </Group>
+                    </Table.Td>
+                  ) : null}
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+          <ListPager
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onChange={setPage}
+          />
+        </>
       )}
 
       <Modal.Stack>
@@ -475,7 +469,7 @@ export function SourceList() {
                   });
                 }
                 setModalOpen(false);
-                await load();
+                await reload();
               } catch (err) {
                 open?.({
                   type: "error",

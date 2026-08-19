@@ -321,8 +321,17 @@ def patch_columns_semantics_batch(
 def list_object_joins(
     object_id: str,
     _: UserRecord = Depends(require_permission("metadata:read")),
+    page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> JoinListResponse:
-    return JoinListResponse(items=[_join_out(j) for j in catalog_service.list_joins(object_id)])
+    items, total = catalog_service.list_joins(
+        object_id, limit=page.limit, offset=page.offset
+    )
+    return JoinListResponse(
+        items=[_join_out(j) for j in items],
+        total=total,
+        limit=page.limit,
+        offset=page.offset,
+    )
 
 @router.put("/joins", response_model=JoinResponse)
 def upsert_join(

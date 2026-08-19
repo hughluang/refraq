@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, status
 
+from backend.core.pagination import PageParams, page_params
+
 from backend.admin.deps import require_permission
 from backend.admin.errors import (
     AccountInvalidLocale,
@@ -36,9 +38,15 @@ def list_users(
     _user: UserRecord = Depends(require_permission("users:read")),
     users: UserStore = Depends(get_user_store),
     roles: RoleStore = Depends(get_role_store),
+    page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> UserListResponse:
-    items = [build_user_summary(record, roles) for record in users.list_users()]
-    return UserListResponse(items=items)
+    records, total = users.list_users(limit=page.limit, offset=page.offset)
+    return UserListResponse(
+        items=[build_user_summary(record, roles) for record in records],
+        total=total,
+        limit=page.limit,
+        offset=page.offset,
+    )
 
 
 @router.post(

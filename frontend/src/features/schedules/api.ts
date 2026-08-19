@@ -7,13 +7,24 @@ import type {
 } from "@/features/schedules/types";
 import type { OffsetPage } from "@/lib/pagination";
 
-export function listSchedules() {
-  return apiClient<{ items: ScheduledTask[] }>("/schedules");
+export function listSchedules(params?: { limit?: number; offset?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.limit != null) qs.set("limit", String(params.limit));
+  if (params?.offset != null) qs.set("offset", String(params.offset));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiClient<OffsetPage<ScheduledTask>>(`/schedules${suffix}`);
 }
 
-export function listSourceSchedules(sourceId: string) {
-  return apiClient<{ items: ScheduledTask[] }>(
-    `/sources/${sourceId}/schedules`,
+export function listSourceSchedules(
+  sourceId: string,
+  params?: { limit?: number; offset?: number },
+) {
+  const qs = new URLSearchParams();
+  if (params?.limit != null) qs.set("limit", String(params.limit));
+  if (params?.offset != null) qs.set("offset", String(params.offset));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiClient<OffsetPage<ScheduledTask>>(
+    `/sources/${sourceId}/schedules${suffix}`,
   );
 }
 

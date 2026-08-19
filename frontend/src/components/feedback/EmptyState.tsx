@@ -1,20 +1,17 @@
 "use client";
 
-import { Stack, Text } from "@mantine/core";
+import { Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import type { ReactNode } from "react";
 
 type EmptyStateProps = {
   message?: string;
-  action?: ReactNode;
 };
 
-export function EmptyState({ message, action }: EmptyStateProps) {
+export function EmptyState({ message }: EmptyStateProps) {
   const t = useTranslate();
   return (
-    <Stack gap="sm" align="flex-start" py="md">
-      <Text c="dimmed">{message ?? t("common.empty")}</Text>
-      {action}
-    </Stack>
+    <Text c="dimmed" py="md">
+      {message ?? t("common.empty")}
+    </Text>
   );
 }

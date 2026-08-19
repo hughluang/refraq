@@ -61,6 +61,8 @@ Purpose: list User records.
 
 - Permission: `users:read`
 
+**Offset Page** (oldest first: `created_at ASC`, `id ASC`). Query params: `limit` (default **50**, max **200**), `offset` (default **0**).
+
 ### Response: `200`
 
 ```json
@@ -79,7 +81,10 @@ Purpose: list User records.
       "identity_source": "local",
       "last_login_at": "2026-07-30T08:00:00Z"
     }
-  ]
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
 }
 ```
 

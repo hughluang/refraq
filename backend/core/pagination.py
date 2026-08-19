@@ -13,6 +13,7 @@ from fastapi import Query
 from pydantic import BaseModel
 
 T = TypeVar("T")
+S = TypeVar("S")
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,3 +41,24 @@ def page_params(
         return PageParams(limit=limit, offset=offset)
 
     return dependency
+
+
+def apply_offset_page(
+    items: list[T], *, limit: int | None, offset: int = 0
+) -> tuple[list[T], int]:
+    """Slice an already-filtered, already-ordered in-memory set."""
+    total = len(items)
+    start = max(0, offset)
+    if limit is None:
+        return items[start:], total
+    return items[start : start + max(0, limit)], total
+
+
+def apply_sql_page(stmt: S, *, limit: int | None, offset: int = 0) -> S:
+    """Apply offset/limit to a SQLAlchemy select. `limit=None` is unbounded."""
+    start = max(0, offset)
+    if start:
+        stmt = stmt.offset(start)
+    if limit is not None:
+        stmt = stmt.limit(max(0, limit))
+    return stmt

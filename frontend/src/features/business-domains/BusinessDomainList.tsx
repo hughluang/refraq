@@ -13,12 +13,12 @@ import {
 import { useForm } from "@mantine/form";
 import {
   CanAccess,
-  useCan,
   useNotification,
   useTranslate,
 } from "@refinedev/core";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
+import { ListPager } from "@/components/display/ListPager";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
@@ -31,7 +31,11 @@ import {
 } from "@/features/business-domains/api";
 import type { BusinessDomain } from "@/features/business-domains/types";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
+import { usePagedList } from "@/hooks/usePagedList";
 import { ApiError } from "@/lib/api";
+import type { PageQuery } from "@/lib/pagination";
+
+const PAGE_SIZE = 100;
 
 type CreateForm = {
   code: string;
@@ -47,14 +51,7 @@ type EditForm = {
 export function BusinessDomainList() {
   const t = useTranslate();
   const { open } = useNotification();
-  const { data: canWrite } = useCan({
-    resource: ModuleId.businessDomains,
-    action: ModuleAction.create,
-  });
 
-  const [items, setItems] = useState<BusinessDomain[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<BusinessDomain | null>(null);
@@ -68,25 +65,21 @@ export function BusinessDomainList() {
     initialValues: { name: "", description: "" },
   });
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await listBusinessDomains({
+  const fetchPage = useCallback(
+    (query: PageQuery) =>
+      listBusinessDomains({
         q: q.trim() || undefined,
-        limit: 500,
-      });
-      setItems(data.items);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.detail : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [q]);
+        ...query,
+      }),
+    [q],
+  );
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const { items, total, page, setPage, loading, error, reload, pageSize } =
+    usePagedList({
+      pageSize: PAGE_SIZE,
+      fetch: fetchPage,
+      resetDeps: [q],
+    });
 
   const submitCreate = async (values: CreateForm) => {
     setBusy(true);
@@ -102,7 +95,7 @@ export function BusinessDomainList() {
         type: "success",
         message: t("businessDomains.create.success"),
       });
-      await load();
+      await reload();
     } catch (err) {
       open?.({
         type: "error",
@@ -126,7 +119,7 @@ export function BusinessDomainList() {
         type: "success",
         message: t("businessDomains.update.success"),
       });
-      await load();
+      await reload();
     } catch (err) {
       open?.({
         type: "error",
@@ -147,7 +140,7 @@ export function BusinessDomainList() {
         type: "success",
         message: t("businessDomains.delete.success"),
       });
-      await load();
+      await reload();
     } catch (err) {
       open?.({
         type: "error",
@@ -175,7 +168,7 @@ export function BusinessDomainList() {
         title={t("businessDomains.title")}
         description={t("businessDomains.description")}
       >
-        <PageError message={error} onRetry={() => void load()} />
+        <PageError message={error} onRetry={() => void reload()} />
       </PageChrome>
     );
   }
@@ -194,87 +187,87 @@ export function BusinessDomainList() {
           w={280}
         />
       </Group>
-      {loading ? (
+      {loading && items.length === 0 ? (
         <PageBodySkeleton />
-      ) : items.length === 0 ? (
-        <EmptyState
-          action={
-            canWrite?.can ? (
-              <Button size="xs" onClick={() => setCreateOpen(true)}>
-                {t("businessDomains.create")}
-              </Button>
-            ) : undefined
-          }
-        />
+      ) : total === 0 ? (
+        <EmptyState />
       ) : (
-        <Table striped highlightOnHover>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>{t("businessDomains.fields.code")}</Table.Th>
-              <Table.Th>{t("businessDomains.fields.name")}</Table.Th>
-              <Table.Th>{t("businessDomains.fields.description")}</Table.Th>
-              <Table.Th>{t("businessDomains.fields.updatedAt")}</Table.Th>
-              <Table.Th />
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {items.map((row) => (
-              <Table.Tr key={row.id}>
-                <Table.Td>
-                  <Text ff="monospace" size="sm">
-                    {row.code}
-                  </Text>
-                </Table.Td>
-                <Table.Td>{row.name}</Table.Td>
-                <Table.Td>
-                  <Text size="sm" c="dimmed" lineClamp={2}>
-                    {row.description || "—"}
-                  </Text>
-                </Table.Td>
-                <Table.Td>
-                  <Text size="sm" c="dimmed">
-                    {row.updated_at}
-                  </Text>
-                </Table.Td>
-                <Table.Td>
-                  <Group gap="xs" justify="flex-end">
-                    <CanAccess
-                      resource={ModuleId.businessDomains}
-                      action={ModuleAction.edit}
-                    >
-                      <Button
-                        size="xs"
-                        variant="light"
-                        onClick={() => {
-                          setEditTarget(row);
-                          editForm.setValues({
-                            name: row.name,
-                            description: row.description ?? "",
-                          });
-                        }}
-                      >
-                        {t("actions.edit")}
-                      </Button>
-                    </CanAccess>
-                    <CanAccess
-                      resource={ModuleId.businessDomains}
-                      action={ModuleAction.delete}
-                    >
-                      <Button
-                        size="xs"
-                        color="red"
-                        variant="light"
-                        onClick={() => setDeleteTarget(row)}
-                      >
-                        {t("actions.delete")}
-                      </Button>
-                    </CanAccess>
-                  </Group>
-                </Table.Td>
+        <>
+          <Table striped highlightOnHover>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>{t("businessDomains.fields.code")}</Table.Th>
+                <Table.Th>{t("businessDomains.fields.name")}</Table.Th>
+                <Table.Th>{t("businessDomains.fields.description")}</Table.Th>
+                <Table.Th>{t("businessDomains.fields.updatedAt")}</Table.Th>
+                <Table.Th />
               </Table.Tr>
-            ))}
-          </Table.Tbody>
-        </Table>
+            </Table.Thead>
+            <Table.Tbody>
+              {items.map((row) => (
+                <Table.Tr key={row.id}>
+                  <Table.Td>
+                    <Text ff="monospace" size="sm">
+                      {row.code}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>{row.name}</Table.Td>
+                  <Table.Td>
+                    <Text size="sm" c="dimmed" lineClamp={2}>
+                      {row.description || "—"}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm" c="dimmed">
+                      {row.updated_at}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Group gap="xs" justify="flex-end">
+                      <CanAccess
+                        resource={ModuleId.businessDomains}
+                        action={ModuleAction.edit}
+                      >
+                        <Button
+                          size="xs"
+                          variant="light"
+                          onClick={() => {
+                            setEditTarget(row);
+                            editForm.setValues({
+                              name: row.name,
+                              description: row.description ?? "",
+                            });
+                          }}
+                        >
+                          {t("actions.edit")}
+                        </Button>
+                      </CanAccess>
+                      <CanAccess
+                        resource={ModuleId.businessDomains}
+                        action={ModuleAction.delete}
+                      >
+                        <Button
+                          size="xs"
+                          color="red"
+                          variant="light"
+                          onClick={() => setDeleteTarget(row)}
+                        >
+                          {t("actions.delete")}
+                        </Button>
+                      </CanAccess>
+                    </Group>
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+          <ListPager
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onChange={setPage}
+          />
+        </>
       )}
 
       <Modal

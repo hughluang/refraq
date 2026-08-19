@@ -81,6 +81,8 @@ Purpose: list Role records.
 
 - Permission: `roles:read`
 
+**Offset Page** (locked first, then `key ASC`, `id ASC`). Query params: `limit` (default **50**, max **200**), `offset` (default **0**).
+
 ### Response: `200`
 
 ```json
@@ -103,7 +105,10 @@ Purpose: list Role records.
       "locked": true,
       "user_count": 1
     }
-  ]
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
 }
 ```
 

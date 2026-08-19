@@ -19,8 +19,12 @@ import type {
   StructureDiff,
 } from "@/features/sources/types";
 
-export function listSources() {
-  return apiClient<{ items: Source[] }>("/sources");
+export function listSources(params?: { limit?: number; offset?: number }) {
+  const qs = new URLSearchParams();
+  if (params?.limit != null) qs.set("limit", String(params.limit));
+  if (params?.offset != null) qs.set("offset", String(params.offset));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiClient<OffsetPage<Source>>(`/sources${suffix}`);
 }
 
 export function getAccessSchema(engine: Engine) {
@@ -225,8 +229,17 @@ export function patchColumnSemanticsBatch(
   });
 }
 
-export function listObjectJoins(objectId: string) {
-  return apiClient<{ items: CatalogJoin[] }>(`/objects/${objectId}/joins`);
+export function listObjectJoins(
+  objectId: string,
+  params?: { limit?: number; offset?: number },
+) {
+  const qs = new URLSearchParams();
+  if (params?.limit != null) qs.set("limit", String(params.limit));
+  if (params?.offset != null) qs.set("offset", String(params.offset));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiClient<OffsetPage<CatalogJoin>>(
+    `/objects/${objectId}/joins${suffix}`,
+  );
 }
 
 export function upsertJoin(body: {

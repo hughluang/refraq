@@ -58,8 +58,8 @@ Rules:
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/sources/{id}/schedules` | `jobs:run` | Insert a structure schedule for this Source (operator create path) |
-| `GET` | `/sources/{id}/schedules` | `jobs:run` | List structure schedules whose target is this Source |
-| `GET` | `/schedules` | `jobs:run` | Platform list (default excludes `system=true`; tests may pass `?system=true`) |
+| `GET` | `/sources/{id}/schedules` | `jobs:run` | List structure schedules whose target is this Source (**Offset Page**) |
+| `GET` | `/schedules` | `jobs:run` | Platform list (default excludes `system=true`; tests may pass `?system=true`; **Offset Page**) |
 | `GET` | `/schedules/{id}` | `jobs:run` | Get by id (system rows visible for debug) |
 | `PATCH` | `/schedules/{id}` | `jobs:run` | Partial update: `enabled`, cadence, `schedule_timezone`, `name`, `running_timeout_sec` |
 | `DELETE` | `/schedules/{id}` | `jobs:run` | Delete definition; unfinished Jobs for this schedule immediately cancelled |
@@ -105,11 +105,13 @@ Any subset of `enabled`, `name`, `cron`, `interval_seconds`, `schedule_timezone`
 
 ### `GET /schedules`
 
-Newest `created_at` first. Default `include_system=false`. Query `system=true` includes system rows (tests / debug).
+**Offset Page** (newest first: `created_at DESC`, `id DESC`). Query params: `limit` (default **50**, max **200**), `offset` (default **0**), `system` (default `false`; `true` includes system rows for tests / debug).
+
+Response: `{ "items": […], "total": N, "limit": L, "offset": O }`. `total` is the filtered set.
 
 ### `GET /sources/{id}/schedules`
 
-Same public shape, filtered to schedules whose target is this Source. Missing Source → `SOURCE_NOT_FOUND`. Empty list is `200` with `items: []` (allowed after the operator deletes the last schedule; a newly created database Source has one seed).
+Same **Offset Page** envelope, defaults, max, and ordering. Scoped to structure schedules whose `owner_ref` is this Source. Missing Source → `SOURCE_NOT_FOUND`. Empty page is `200` with `items: []` (allowed after the operator deletes the last schedule; a newly created database Source has one seed).
 
 ### `DELETE`
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.pagination import OffsetPage
 from backend.core.time import Instant
 from pydantic import BaseModel
 
@@ -37,8 +38,8 @@ class ScheduleOut(BaseModel):
     updated_at: Instant
 
 
-class ScheduleListResponse(BaseModel):
-    items: list[ScheduleOut]
+class ScheduleListResponse(OffsetPage[ScheduleOut]):
+    pass
 
 
 class ScheduleResponse(BaseModel):

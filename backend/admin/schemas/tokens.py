@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 
+from backend.core.pagination import OffsetPage
 from backend.core.time import Instant
 from pydantic import BaseModel, Field
 
@@ -17,8 +18,8 @@ class TokenMetadata(BaseModel):
     last_used_at: Instant | None
 
 
-class TokenListResponse(BaseModel):
-    items: list[TokenMetadata]
+class TokenListResponse(OffsetPage[TokenMetadata]):
+    pass
 
 
 class CreateTokenRequest(BaseModel):

@@ -14,8 +14,9 @@ import {
 } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
+import { ListPager } from "@/components/display/ListPager";
 import {
   deleteJoin,
   getJoinPath,
@@ -23,20 +24,18 @@ import {
   searchCatalogColumns,
   upsertJoin,
 } from "@/features/sources/api";
-import type {
-  CatalogJoin,
-  CatalogObject,
-  JoinPathResult,
-} from "@/features/sources/types";
+import type { CatalogObject, JoinPathResult } from "@/features/sources/types";
+import { usePagedList } from "@/hooks/usePagedList";
 import { ApiError } from "@/lib/api";
+import type { PageQuery } from "@/lib/pagination";
+
+const PAGE_SIZE = 50;
 
 type SelectOption = { value: string; label: string };
 
 type JoinsTabProps = {
   object: CatalogObject;
-  joins: CatalogJoin[];
   writable: boolean;
-  onJoinsChanged: (joins: CatalogJoin[]) => void;
 };
 
 function columnLabel(detail: CatalogObject, columnId: string): string {
@@ -45,12 +44,7 @@ function columnLabel(detail: CatalogObject, columnId: string): string {
   return `${col.name} · ${col.locator_key}`;
 }
 
-export function JoinsTab({
-  object,
-  joins,
-  writable,
-  onJoinsChanged,
-}: JoinsTabProps) {
+export function JoinsTab({ object, writable }: JoinsTabProps) {
   const t = useTranslate();
   const { open } = useNotification();
   const [saving, setSaving] = useState(false);
@@ -68,6 +62,31 @@ export function JoinsTab({
   const [maxHops, setMaxHops] = useState(2);
   const [pathLoading, setPathLoading] = useState(false);
   const [pathResult, setPathResult] = useState<JoinPathResult | null>(null);
+
+  const onError = useCallback(
+    (message: string) => {
+      open?.({ type: "error", message });
+    },
+    [open],
+  );
+  const fetchPage = useCallback(
+    (query: PageQuery) => listObjectJoins(object.id, query),
+    [object.id],
+  );
+  const {
+    items: joins,
+    total,
+    page,
+    setPage,
+    pageSize,
+    reload,
+    error,
+  } = usePagedList({
+    pageSize: PAGE_SIZE,
+    fetch: fetchPage,
+    resetDeps: [object.id],
+    onError,
+  });
 
   useEffect(() => {
     setJoinFromId(object.columns[0]?.id ?? null);
@@ -139,8 +158,7 @@ export function JoinsTab({
         join_kind: joinKind || "INNER",
         join_expression: joinExpression.trim() || null,
       });
-      const joinRes = await listObjectJoins(object.id);
-      onJoinsChanged(joinRes.items);
+      await reload();
       setJoinEvidence("");
       setJoinExpression("");
       open?.({ type: "success", message: t("catalog.joins.saved") });
@@ -158,8 +176,7 @@ export function JoinsTab({
     setSaving(true);
     try {
       await deleteJoin(joinId);
-      const joinRes = await listObjectJoins(object.id);
-      onJoinsChanged(joinRes.items);
+      await reload();
       open?.({ type: "success", message: t("catalog.joins.deleted") });
     } catch (err) {
       open?.({
@@ -262,75 +279,87 @@ export function JoinsTab({
 
       <Stack gap="xs">
         <Title order={5}>{t("catalog.joins.title")}</Title>
-        {joins.length === 0 ? (
+        {error ? (
+          <Text size="sm" c="red">
+            {error}
+          </Text>
+        ) : total === 0 ? (
           <Text size="sm" c="dimmed">
             {t("catalog.joins.empty")}
           </Text>
         ) : (
-          <Table>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>{t("catalog.joins.from")}</Table.Th>
-                <Table.Th>{t("catalog.joins.to")}</Table.Th>
-                <Table.Th>{t("catalog.joins.kind")}</Table.Th>
-                <Table.Th>{t("catalog.joins.expression")}</Table.Th>
-                <Table.Th>{t("catalog.joins.evidence")}</Table.Th>
-                <Table.Th>{t("catalog.joins.origin")}</Table.Th>
-                <Table.Th>{t("catalog.joins.createdAt")}</Table.Th>
-                {writable ? <Table.Th /> : null}
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {joins.map((join) => {
-                const auto = join.origin === "foreign_key";
-                return (
-                  <Table.Tr key={join.id}>
-                    <Table.Td>
-                      <Text size="xs" style={{ wordBreak: "break-all" }}>
-                        {join.from_column_locator_key ??
-                          columnLabel(object, join.from_column_id)}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="xs" style={{ wordBreak: "break-all" }}>
-                        {join.to_column_locator_key ??
-                          columnLabel(object, join.to_column_id)}
-                      </Text>
-                    </Table.Td>
-                    <Table.Td>{join.join_kind ?? "INNER"}</Table.Td>
-                    <Table.Td>{join.join_expression ?? "—"}</Table.Td>
-                    <Table.Td>{join.evidence}</Table.Td>
-                    <Table.Td>
-                      <Group gap={4}>
-                        <Text size="sm">{join.origin ?? "—"}</Text>
-                        {auto ? (
-                          <Badge size="xs" color="gray">
-                            {t("catalog.joins.autoDerived")}
-                          </Badge>
-                        ) : null}
-                      </Group>
-                    </Table.Td>
-                    <Table.Td>{join.created_at}</Table.Td>
-                    {writable ? (
+          <>
+            <Table>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>{t("catalog.joins.from")}</Table.Th>
+                  <Table.Th>{t("catalog.joins.to")}</Table.Th>
+                  <Table.Th>{t("catalog.joins.kind")}</Table.Th>
+                  <Table.Th>{t("catalog.joins.expression")}</Table.Th>
+                  <Table.Th>{t("catalog.joins.evidence")}</Table.Th>
+                  <Table.Th>{t("catalog.joins.origin")}</Table.Th>
+                  <Table.Th>{t("catalog.joins.createdAt")}</Table.Th>
+                  {writable ? <Table.Th /> : null}
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {joins.map((join) => {
+                  const auto = join.origin === "foreign_key";
+                  return (
+                    <Table.Tr key={join.id}>
                       <Table.Td>
-                        {auto ? null : (
-                          <Button
-                            size="xs"
-                            variant="subtle"
-                            color="red"
-                            loading={saving}
-                            onClick={() => void removeJoinEdge(join.id)}
-                          >
-                            {t("catalog.joins.delete")}
-                          </Button>
-                        )}
+                        <Text size="xs" style={{ wordBreak: "break-all" }}>
+                          {join.from_column_locator_key ??
+                            columnLabel(object, join.from_column_id)}
+                        </Text>
                       </Table.Td>
-                    ) : null}
-                  </Table.Tr>
-                );
-              })}
-            </Table.Tbody>
-          </Table>
+                      <Table.Td>
+                        <Text size="xs" style={{ wordBreak: "break-all" }}>
+                          {join.to_column_locator_key ??
+                            columnLabel(object, join.to_column_id)}
+                        </Text>
+                      </Table.Td>
+                      <Table.Td>{join.join_kind ?? "INNER"}</Table.Td>
+                      <Table.Td>{join.join_expression ?? "—"}</Table.Td>
+                      <Table.Td>{join.evidence}</Table.Td>
+                      <Table.Td>
+                        <Group gap={4}>
+                          <Text size="sm">{join.origin ?? "—"}</Text>
+                          {auto ? (
+                            <Badge size="xs" color="gray">
+                              {t("catalog.joins.autoDerived")}
+                            </Badge>
+                          ) : null}
+                        </Group>
+                      </Table.Td>
+                      <Table.Td>{join.created_at}</Table.Td>
+                      {writable ? (
+                        <Table.Td>
+                          {auto ? null : (
+                            <Button
+                              size="xs"
+                              variant="subtle"
+                              color="red"
+                              loading={saving}
+                              onClick={() => void removeJoinEdge(join.id)}
+                            >
+                              {t("catalog.joins.delete")}
+                            </Button>
+                          )}
+                        </Table.Td>
+                      ) : null}
+                    </Table.Tr>
+                  );
+                })}
+              </Table.Tbody>
+            </Table>
+            <ListPager
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onChange={setPage}
+            />
+          </>
         )}
       </Stack>
 

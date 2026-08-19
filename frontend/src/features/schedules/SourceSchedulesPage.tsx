@@ -5,6 +5,7 @@ import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
+import { ListPager } from "@/components/display/ListPager";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { ForbiddenState } from "@/components/feedback/ForbiddenState";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
@@ -21,7 +22,11 @@ import { ScheduleRowActions } from "@/features/schedules/ScheduleRowActions";
 import type { ScheduledTask } from "@/features/schedules/types";
 import { getSource } from "@/features/sources/api";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { usePagedList } from "@/hooks/usePagedList";
 import { ApiError } from "@/lib/api";
+import type { PageQuery } from "@/lib/pagination";
+
+const PAGE_SIZE = 50;
 
 function cadenceLabel(task: ScheduledTask): string {
   if (task.interval_seconds) return `${task.interval_seconds}s`;
@@ -46,42 +51,38 @@ export function SourceSchedulesPage({ sourceId }: Props) {
     action: ModuleAction.list,
   });
 
-  const [items, setItems] = useState<ScheduledTask[]>([]);
   const [sourceLabel, setSourceLabel] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<ScheduledTask | null>(null);
   const [jobsTask, setJobsTask] = useState<ScheduledTask | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const [sourceResult, listResult] = await Promise.allSettled([
-      getSource(sourceId),
-      listSourceSchedules(sourceId),
-    ]);
-    if (sourceResult.status === "fulfilled") {
-      const source = sourceResult.value.source;
-      setSourceLabel(`${source.key} — ${source.name}`);
-    } else {
-      setSourceLabel(null);
-    }
-    if (listResult.status === "fulfilled") {
-      setItems(listResult.value.items);
-      setError(null);
-    } else {
-      const err = listResult.reason;
-      const message = err instanceof ApiError ? err.detail : String(err);
-      setError(message);
+  const onError = useCallback(
+    (message: string) => {
       open?.({ type: "error", message });
-    }
-    setLoading(false);
-  }, [sourceId, open]);
+    },
+    [open],
+  );
+  const fetchPage = useCallback(
+    (query: PageQuery) => listSourceSchedules(sourceId, query),
+    [sourceId],
+  );
+  const { items, total, page, setPage, loading, error, reload, pageSize } =
+    usePagedList({
+      pageSize: PAGE_SIZE,
+      fetch: fetchPage,
+      resetDeps: [sourceId],
+      enabled: Boolean(canRun?.can),
+      onError,
+    });
 
   useEffect(() => {
     if (!canRun?.can) return;
-    void load();
-  }, [load, canRun?.can]);
+    void getSource(sourceId)
+      .then((res) => {
+        setSourceLabel(`${res.source.key} — ${res.source.name}`);
+      })
+      .catch(() => setSourceLabel(null));
+  }, [sourceId, canRun?.can]);
 
   const aclPending = canLoading || canRun === undefined;
 
@@ -116,7 +117,7 @@ export function SourceSchedulesPage({ sourceId }: Props) {
               variant="light"
               loading={loading}
               disabled={aclPending || !canRun?.can}
-              onClick={() => void load()}
+              onClick={() => void reload()}
             >
               {t("schedules.refresh")}
             </Button>
@@ -133,100 +134,108 @@ export function SourceSchedulesPage({ sourceId }: Props) {
         {showSkeleton ? (
           <PageBodySkeleton />
         ) : error && items.length === 0 ? (
-          <PageError message={error} onRetry={() => void load()} />
-        ) : items.length === 0 ? (
+          <PageError message={error} onRetry={() => void reload()} />
+        ) : total === 0 ? (
           <EmptyState message={t("schedules.related.empty")} />
         ) : (
-          <Table striped highlightOnHover>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>{t("schedules.fields.name")}</Table.Th>
-                <Table.Th>{t("schedules.fields.cadence")}</Table.Th>
-                <Table.Th>{t("schedules.fields.timezone")}</Table.Th>
-                <Table.Th>{t("schedules.fields.enabled")}</Table.Th>
-                <Table.Th>{t("schedules.fields.nextRun")}</Table.Th>
-                <Table.Th>{t("schedules.fields.lastJob")}</Table.Th>
-                <Table.Th />
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {items.map((task) => (
-                <Table.Tr key={task.id}>
-                  <Table.Td>
-                    <Text size="sm">{task.name}</Text>
-                    <Text size="xs" c="dimmed" ff="monospace">
-                      {task.id}
-                    </Text>
-                  </Table.Td>
-                  <Table.Td>
-                    <Text size="sm" ff="monospace">
-                      {cadenceLabel(task)}
-                    </Text>
-                  </Table.Td>
-                  <Table.Td>{timezoneLabel(task)}</Table.Td>
-                  <Table.Td>
-                    <Switch
-                      checked={task.enabled}
-                      onChange={async (event) => {
-                        try {
-                          await patchSchedule(task.id, {
-                            enabled: event.currentTarget.checked,
-                          });
-                          await load();
-                        } catch (err) {
-                          open?.({
-                            type: "error",
-                            message:
-                              err instanceof ApiError
-                                ? err.detail
-                                : String(err),
-                          });
-                        }
-                      }}
-                    />
-                  </Table.Td>
-                  <Table.Td>
-                    <Text size="sm">
-                      {!task.enabled
-                        ? t("schedules.fields.nextRunPaused")
-                        : task.next_run_at
-                          ? formatInstant(task.next_run_at)
-                          : "—"}
-                    </Text>
-                  </Table.Td>
-                  <Table.Td>
-                    {task.last_job ? (
-                      <>
-                        <Text size="sm">
-                          {task.last_job.finished_at
-                            ? formatInstant(task.last_job.finished_at)
-                            : task.last_job.created_at
-                              ? formatInstant(task.last_job.created_at)
-                              : "—"}
-                        </Text>
-                        <Text size="xs" c="dimmed">
-                          {task.last_job.status}
-                          {task.last_job.error_code
-                            ? ` · ${task.last_job.error_code}`
-                            : ""}
-                        </Text>
-                      </>
-                    ) : (
-                      <Text size="sm">—</Text>
-                    )}
-                  </Table.Td>
-                  <Table.Td>
-                    <ScheduleRowActions
-                      task={task}
-                      onEdit={() => setEditing(task)}
-                      onJobs={() => setJobsTask(task)}
-                      onChanged={() => void load()}
-                    />
-                  </Table.Td>
+          <>
+            <Table striped highlightOnHover>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>{t("schedules.fields.name")}</Table.Th>
+                  <Table.Th>{t("schedules.fields.cadence")}</Table.Th>
+                  <Table.Th>{t("schedules.fields.timezone")}</Table.Th>
+                  <Table.Th>{t("schedules.fields.enabled")}</Table.Th>
+                  <Table.Th>{t("schedules.fields.nextRun")}</Table.Th>
+                  <Table.Th>{t("schedules.fields.lastJob")}</Table.Th>
+                  <Table.Th />
                 </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
+              </Table.Thead>
+              <Table.Tbody>
+                {items.map((task) => (
+                  <Table.Tr key={task.id}>
+                    <Table.Td>
+                      <Text size="sm">{task.name}</Text>
+                      <Text size="xs" c="dimmed" ff="monospace">
+                        {task.id}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="sm" ff="monospace">
+                        {cadenceLabel(task)}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td>{timezoneLabel(task)}</Table.Td>
+                    <Table.Td>
+                      <Switch
+                        checked={task.enabled}
+                        onChange={async (event) => {
+                          try {
+                            await patchSchedule(task.id, {
+                              enabled: event.currentTarget.checked,
+                            });
+                            await reload();
+                          } catch (err) {
+                            open?.({
+                              type: "error",
+                              message:
+                                err instanceof ApiError
+                                  ? err.detail
+                                  : String(err),
+                            });
+                          }
+                        }}
+                      />
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="sm">
+                        {!task.enabled
+                          ? t("schedules.fields.nextRunPaused")
+                          : task.next_run_at
+                            ? formatInstant(task.next_run_at)
+                            : "—"}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td>
+                      {task.last_job ? (
+                        <>
+                          <Text size="sm">
+                            {task.last_job.finished_at
+                              ? formatInstant(task.last_job.finished_at)
+                              : task.last_job.created_at
+                                ? formatInstant(task.last_job.created_at)
+                                : "—"}
+                          </Text>
+                          <Text size="xs" c="dimmed">
+                            {task.last_job.status}
+                            {task.last_job.error_code
+                              ? ` · ${task.last_job.error_code}`
+                              : ""}
+                          </Text>
+                        </>
+                      ) : (
+                        <Text size="sm">—</Text>
+                      )}
+                    </Table.Td>
+                    <Table.Td>
+                      <ScheduleRowActions
+                        task={task}
+                        onEdit={() => setEditing(task)}
+                        onJobs={() => setJobsTask(task)}
+                        onChanged={() => void reload()}
+                      />
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+            <ListPager
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onChange={setPage}
+            />
+          </>
         )}
       </PageChrome>
       <Modal.Stack>
@@ -235,14 +244,14 @@ export function SourceSchedulesPage({ sourceId }: Props) {
           sourceId={sourceId}
           sourceLabel={sourceLabel ?? undefined}
           onClose={() => setCreating(false)}
-          onSaved={() => void load()}
+          onSaved={() => void reload()}
         />
         <ScheduleFormModal
           opened={editing !== null}
           schedule={editing}
           sourceLabel={sourceLabel ?? undefined}
           onClose={() => setEditing(null)}
-          onSaved={() => void load()}
+          onSaved={() => void reload()}
         />
         <ScheduleJobsModal
           scheduleId={jobsTask?.id ?? null}

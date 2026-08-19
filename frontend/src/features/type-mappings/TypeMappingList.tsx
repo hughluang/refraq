@@ -2,17 +2,22 @@
 
 import { Badge, Checkbox, Group, Select, Table, Text, TextInput } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
+import { ListPager } from "@/components/display/ListPager";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
+import { usePagedList } from "@/hooks/usePagedList";
 import { ApiError } from "@/lib/api";
+import type { PageQuery } from "@/lib/pagination";
 
 import { listTypeMappings, patchTypeMapping } from "./api";
 import type { PatchableNormalizedType, TypeMapping } from "./types";
+
+const PAGE_SIZE = 100;
 
 const PATCHABLE: PatchableNormalizedType[] = [
   "string",
@@ -36,35 +41,28 @@ export function TypeMappingList() {
     action: ModuleAction.edit,
   });
 
-  const [items, setItems] = useState<TypeMapping[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [engine, setEngine] = useState<string | null>(null);
   const [onlyGaps, setOnlyGaps] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await listTypeMappings({
+  const fetchPage = useCallback(
+    (query: PageQuery) =>
+      listTypeMappings({
         q: q.trim() || undefined,
         engine: engine || undefined,
         origin: onlyGaps ? "job" : undefined,
-        limit: 500,
-      });
-      setItems(data.items);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.detail : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [q, engine, onlyGaps]);
+        ...query,
+      }),
+    [q, engine, onlyGaps],
+  );
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const { items, total, page, setPage, loading, error, reload, pageSize } =
+    usePagedList({
+      pageSize: PAGE_SIZE,
+      fetch: fetchPage,
+      resetDeps: [q, engine, onlyGaps],
+    });
 
   const onPatch = async (row: TypeMapping, value: string | null) => {
     if (!value || value === row.normalized_type) return;
@@ -77,7 +75,7 @@ export function TypeMappingList() {
         type: "success",
         message: t("typeMappings.update.success"),
       });
-      await load();
+      await reload();
     } catch (err) {
       open?.({
         type: "error",
@@ -97,7 +95,7 @@ export function TypeMappingList() {
       description={t("typeMappings.description")}
     >
       {error ? (
-        <PageError message={error} onRetry={() => void load()} />
+        <PageError message={error} onRetry={() => void reload()} />
       ) : (
         <>
           <Group mb="md">
@@ -125,73 +123,81 @@ export function TypeMappingList() {
               onChange={(e) => setOnlyGaps(e.currentTarget.checked)}
             />
           </Group>
-          {loading ? (
+          {loading && items.length === 0 ? (
             <PageBodySkeleton />
-          ) : items.length === 0 ? (
+          ) : total === 0 ? (
             <EmptyState />
           ) : (
-            <Table striped highlightOnHover>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>{t("typeMappings.fields.engine")}</Table.Th>
-                  <Table.Th>{t("typeMappings.fields.nativeType")}</Table.Th>
-                  <Table.Th>{t("typeMappings.fields.normalizedType")}</Table.Th>
-                  <Table.Th>{t("typeMappings.fields.origin")}</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {items.map((row) => {
-                  const isSeed = row.origin === "product";
-                  return (
-                    <Table.Tr key={row.id}>
-                      <Table.Td>
-                        <Text ff="monospace" size="sm">
-                          {row.engine}
-                        </Text>
-                      </Table.Td>
-                      <Table.Td>
-                        <Text ff="monospace" size="sm">
-                          {row.native_type}
-                        </Text>
-                      </Table.Td>
-                      <Table.Td>
-                        {isSeed || !canWrite?.can ? (
-                          <Text size="sm">{row.normalized_type}</Text>
-                        ) : (
-                          <Select
+            <>
+              <Table striped highlightOnHover>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>{t("typeMappings.fields.engine")}</Table.Th>
+                    <Table.Th>{t("typeMappings.fields.nativeType")}</Table.Th>
+                    <Table.Th>{t("typeMappings.fields.normalizedType")}</Table.Th>
+                    <Table.Th>{t("typeMappings.fields.origin")}</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {items.map((row) => {
+                    const isSeed = row.origin === "product";
+                    return (
+                      <Table.Tr key={row.id}>
+                        <Table.Td>
+                          <Text ff="monospace" size="sm">
+                            {row.engine}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td>
+                          <Text ff="monospace" size="sm">
+                            {row.native_type}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td>
+                          {isSeed || !canWrite?.can ? (
+                            <Text size="sm">{row.normalized_type}</Text>
+                          ) : (
+                            <Select
+                              size="xs"
+                              w={160}
+                              value={
+                                row.normalized_type === "unknown"
+                                  ? null
+                                  : row.normalized_type
+                              }
+                              placeholder="unknown"
+                              data={PATCHABLE}
+                              disabled={busyId === row.id}
+                              onChange={(value) => void onPatch(row, value)}
+                            />
+                          )}
+                        </Table.Td>
+                        <Table.Td>
+                          <Badge
                             size="xs"
-                            w={160}
-                            value={
-                              row.normalized_type === "unknown"
-                                ? null
-                                : row.normalized_type
+                            color={
+                              row.origin === "product"
+                                ? "gray"
+                                : row.origin === "job"
+                                  ? "yellow"
+                                  : "blue"
                             }
-                            placeholder="unknown"
-                            data={PATCHABLE}
-                            disabled={busyId === row.id}
-                            onChange={(value) => void onPatch(row, value)}
-                          />
-                        )}
-                      </Table.Td>
-                      <Table.Td>
-                        <Badge
-                          size="xs"
-                          color={
-                            row.origin === "product"
-                              ? "gray"
-                              : row.origin === "job"
-                                ? "yellow"
-                                : "blue"
-                          }
-                        >
-                          {originLabel(row.origin)}
-                        </Badge>
-                      </Table.Td>
-                    </Table.Tr>
-                  );
-                })}
-              </Table.Tbody>
-            </Table>
+                          >
+                            {originLabel(row.origin)}
+                          </Badge>
+                        </Table.Td>
+                      </Table.Tr>
+                    );
+                  })}
+                </Table.Tbody>
+              </Table>
+              <ListPager
+                page={page}
+                pageSize={pageSize}
+                total={total}
+                onChange={setPage}
+              />
+            </>
           )}
         </>
       )}

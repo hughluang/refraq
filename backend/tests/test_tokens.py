@@ -99,8 +99,12 @@ def test_create_list_deactivate_restore_token(client: TestClient) -> None:
 
     listed = client.get("/tokens")
     assert listed.status_code == 200
-    assert len(listed.json()["items"]) == 1
-    assert "secret" not in listed.json()["items"][0]
+    body = listed.json()
+    assert body["total"] == 1
+    assert body["limit"] == 50
+    assert body["offset"] == 0
+    assert len(body["items"]) == 1
+    assert "secret" not in body["items"][0]
 
     me = client.get("/auth/me", headers={"Authorization": f"Bearer {secret}"})
     # Session cookie still present and preferred — still 200

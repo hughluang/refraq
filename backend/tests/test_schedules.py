@@ -974,9 +974,10 @@ def test_sources_write_without_jobs_run_still_seeds(client: TestClient) -> None:
     source_id = resp.json()["source"]["id"]
     forbidden = client.get(f"/sources/{source_id}/schedules")
     assert forbidden.status_code == 403
+    records, _ = get_schedule_store().list(include_system=False)
     matches = [
         record
-        for record in get_schedule_store().list(include_system=False)
+        for record in records
         if record.kwargs_json.get("source_id") == source_id
     ]
     assert len(matches) == 1
@@ -1004,7 +1005,7 @@ def test_seed_failure_does_not_leave_source(monkeypatch: pytest.MonkeyPatch) -> 
             access=_source_body("boom-src")["access"],
         )
     assert get_source_store().get_source_by_key("boom-src") is None
-    assert get_schedule_store().list(include_system=False) == []
+    assert get_schedule_store().list(include_system=False) == ([], 0)
 
 
 def test_patch_inserts_when_zero_structure_schedules(client: TestClient) -> None:
@@ -1015,7 +1016,7 @@ def test_patch_inserts_when_zero_structure_schedules(client: TestClient) -> None
     )
 
     source = _insert_source_without_schedule(key="ensure-src", name="Ensure")
-    assert list_structure_schedules(source.id) == []
+    assert list_structure_schedules(source.id) == ([], 0)
     me = client.get("/auth/me")
     assert me.status_code == 200
     actor_id = me.json()["user"]["id"]
@@ -1026,7 +1027,8 @@ def test_patch_inserts_when_zero_structure_schedules(client: TestClient) -> None
     assert "schedule" in body
     assert body["schedule"]["cron"] == DEFAULT_STRUCTURE_CRON
     assert body["schedule"]["work_kind"] == "structure"
-    items = list_structure_schedules(source.id)
+    items, total = list_structure_schedules(source.id)
+    assert total == 1
     assert len(items) == 1
     assert items[0].id == body["schedule"]["id"]
     events, _ = get_audit_store().list_events(action="schedule.create")
@@ -1036,7 +1038,7 @@ def test_patch_inserts_when_zero_structure_schedules(client: TestClient) -> None
     again = client.patch(f"/sources/{source.id}", json={"name": "Ensure again"})
     assert again.status_code == 200
     assert "schedule" not in again.json()
-    assert len(list_structure_schedules(source.id)) == 1
+    assert list_structure_schedules(source.id)[1] == 1
 
 
 def test_patch_skips_when_disabled_schedule_present(client: TestClient) -> None:
@@ -1093,11 +1095,11 @@ def test_patch_same_name_or_empty_body_does_not_seed(client: TestClient) -> None
     same = client.patch(f"/sources/{source.id}", json={"name": "Noop"})
     assert same.status_code == 200
     assert "schedule" not in same.json()
-    assert list_structure_schedules(source.id) == []
+    assert list_structure_schedules(source.id) == ([], 0)
     empty = client.patch(f"/sources/{source.id}", json={})
     assert empty.status_code == 200
     assert "schedule" not in empty.json()
-    assert list_structure_schedules(source.id) == []
+    assert list_structure_schedules(source.id) == ([], 0)
 
 
 def test_cron_current_slot_mints(

@@ -728,9 +728,14 @@ def set_column_semantics_batch(
         "skipped_columns": skipped_columns,
     }
 
-def list_joins(object_id: str) -> list[JoinView]:
+def list_joins(
+    object_id: str, *, limit: int | None = None, offset: int = 0
+) -> tuple[list[JoinView], int]:
     require_object(object_id)
-    return [join_view(j) for j in get_catalog_store().list_joins_for_object(object_id)]
+    records, total = get_catalog_store().list_joins_for_object(
+        object_id, limit=limit, offset=offset
+    )
+    return [join_view(j) for j in records], total
 
 def upsert_join(
     *,

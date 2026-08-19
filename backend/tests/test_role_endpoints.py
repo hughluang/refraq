@@ -91,7 +91,11 @@ def test_list_roles_includes_seeds(client: TestClient) -> None:
     _login_root(client)
     response = client.get("/roles")
     assert response.status_code == 200
-    by_key = {item["key"]: item for item in response.json()["items"]}
+    body = response.json()
+    assert body["total"] >= 2
+    assert body["limit"] == 50
+    assert body["offset"] == 0
+    by_key = {item["key"]: item for item in body["items"]}
     assert by_key["super_admin"]["locked"] is True
     assert by_key["operator"]["locked"] is False
     assert by_key["operator"]["user_count"] == 1

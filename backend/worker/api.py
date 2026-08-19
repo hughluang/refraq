@@ -270,7 +270,7 @@ def withdraw_schedules_by_owner_ref(owner_ref: str) -> int:
     if not owner_ref:
         return 0
     store = get_schedule_store()
-    records = store.list_by_owner_ref(owner_ref)
+    records, _ = store.list_by_owner_ref(owner_ref)
     for record in records:
         _cancel_and_revoke_for_schedule(record.id)
         store.delete(record.id)

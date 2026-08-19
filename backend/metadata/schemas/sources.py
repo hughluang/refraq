@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.pagination import OffsetPage
 from backend.core.time import Instant
 from typing import Any, Literal
 
@@ -24,8 +25,8 @@ class SourceOut(BaseModel):
     access_updated_at: Instant | None
 
 
-class SourceListResponse(BaseModel):
-    items: list[SourceOut]
+class SourceListResponse(OffsetPage[SourceOut]):
+    pass
 
 
 class SourceResponse(BaseModel):

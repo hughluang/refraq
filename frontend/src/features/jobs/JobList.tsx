@@ -70,7 +70,7 @@ export function JobList() {
     >
       {loading && items.length === 0 ? (
         <PageBodySkeleton />
-      ) : items.length === 0 ? (
+      ) : total === 0 ? (
         <EmptyState message={t("jobs.empty")} />
       ) : (
         <>

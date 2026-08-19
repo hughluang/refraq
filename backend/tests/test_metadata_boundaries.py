@@ -402,7 +402,7 @@ def test_fk_unresolved_aborts_and_keeps_snapshot() -> None:
         schema_scope=None,
         fail_safe_threshold=1.0,
     )
-    joins_before = store.list_joins_for_object("obj_orders")
+    joins_before, _ = store.list_joins_for_object("obj_orders")
     assert len(joins_before) == 1
     assert joins_before[0].origin == "foreign_key"
     assert joins_before[0].to_column_id == "col_cust_id"
@@ -433,7 +433,7 @@ def test_fk_unresolved_aborts_and_keeps_snapshot() -> None:
     assert exc.value.code == "JOB_FK_UNRESOLVED"
     present_after = {o.id: o.name for o in store.list_present_for_source("src_1")}
     assert present_after == present_before
-    joins_after = store.list_joins_for_object("obj_orders")
+    joins_after, _ = store.list_joins_for_object("obj_orders")
     assert len(joins_after) == 1
     assert joins_after[0].to_column_id == "col_cust_id"
 
@@ -504,7 +504,7 @@ def test_fk_retarget_clears_stale_edge() -> None:
         schema_scope=None,
         fail_safe_threshold=1.0,
     )
-    first = store.list_joins_for_object("obj_orders")
+    first, _ = store.list_joins_for_object("obj_orders")
     assert len(first) == 1
     assert first[0].to_column_id == "col_cust_id"
 
@@ -529,7 +529,7 @@ def test_fk_retarget_clears_stale_edge() -> None:
         schema_scope=None,
         fail_safe_threshold=1.0,
     )
-    second = store.list_joins_for_object("obj_orders")
+    second, _ = store.list_joins_for_object("obj_orders")
     assert len(second) == 1
     assert second[0].from_column_id == "col_ref"
     assert second[0].to_column_id == "col_part_id"

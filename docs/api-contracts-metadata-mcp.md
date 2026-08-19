@@ -57,11 +57,13 @@ Response: `{ updated_count, requested_count, skipped_columns }`.
 
 | Tool | Permission | Purpose |
 | --- | --- | --- |
-| `list_joins` | `metadata:read` | Joins for an object locator |
+| `list_joins` | `metadata:read` | Joins for an object locator (`limit`, `offset`; **Offset Page**) |
 | `upsert_join` | `metadata:write` | Single edge (`origin=mcp`) |
 | `upsert_joins` | `metadata:write` | Batch edges; all same Source; evidence required |
 | `delete_join` | `metadata:write` | Remove edge by join id |
 | `find_join_path` | `metadata:read` | Path lookup from start locator |
+
+`list_joins` args: object locator plus `limit` (default **50**, max **200**) and `offset` (default **0**). Result is the same **Offset Page** as HTTP `GET /objects/{id}/joins`: `{ "items", "total", "limit", "offset" }`. Order: `created_at ASC`, `id ASC`.
 
 `find_join_path` args: `start_locator_key` (required), optional `target_locator_key`, `max_hops` (1–5), `top_targets`.
 Returns `paths_found`, per-target `path_summary` / `hops`, `direct_joins` when start is a column and `max_hops=1`, and optional `reason` when no usable path is available (e.g. `TARGET_UNREACHABLE`).

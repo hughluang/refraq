@@ -20,6 +20,7 @@ import {
 } from "@refinedev/core";
 import { useState } from "react";
 
+import { ListPager } from "@/components/display/ListPager";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
@@ -40,6 +41,8 @@ import type { TokenMetadata, TokenStatus } from "@/features/tokens/types";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
 
+const PAGE_SIZE = 50;
+
 const STATUS_COLOR: Record<TokenStatus, string> = {
   active: "green",
   expired: "gray",
@@ -56,11 +59,10 @@ export function TokenList() {
   const t = useTranslate();
   const { open } = useNotification();
   const formatInstant = useFormatInstant();
-  const { tableQuery, currentPage, pageCount, setCurrentPage } =
-    useTable<TokenMetadata>({
-      resource: ModuleId.tokens,
-      pagination: { mode: "client", pageSize: 20 },
-    });
+  const { tableQuery, currentPage, setCurrentPage } = useTable<TokenMetadata>({
+    resource: ModuleId.tokens,
+    pagination: { mode: "server", pageSize: PAGE_SIZE },
+  });
 
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -94,6 +96,7 @@ export function TokenList() {
   });
 
   const rows = tableQuery.data?.data ?? [];
+  const total = tableQuery.data?.total ?? 0;
   const isLoading = tableQuery.isLoading;
   const error = tableQuery.error;
 
@@ -255,111 +258,98 @@ export function TokenList() {
         order={4}
       />
 
-      {isLoading ? (
+      {isLoading && rows.length === 0 ? (
         <PageBodySkeleton />
-      ) : rows.length === 0 ? (
+      ) : total === 0 ? (
         <EmptyState />
       ) : (
-        <Table highlightOnHover striped withTableBorder>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>{t("tokens.fields.name")}</Table.Th>
-              <Table.Th>{t("tokens.fields.prefix")}</Table.Th>
-              <Table.Th>{t("tokens.fields.status")}</Table.Th>
-              <Table.Th>{t("tokens.fields.expiresAt")}</Table.Th>
-              <Table.Th>{t("tokens.fields.createdAt")}</Table.Th>
-              <Table.Th>{t("tokens.fields.lastUsedAt")}</Table.Th>
-              <Table.Th>{t("tokens.fields.actions")}</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {rows.map((row) => {
-              const status = tokenStatus(row);
-              const isDeactivated = status === "deactivated";
-              return (
-                <Table.Tr key={row.id}>
-                  <Table.Td>{row.name}</Table.Td>
-                  <Table.Td>
-                    <Code>{row.prefix}</Code>
-                  </Table.Td>
-                  <Table.Td>
-                    <Badge
-                      size="xs"
-                      color={STATUS_COLOR[status]}
-                      variant="light"
-                    >
-                      {t(`tokens.status.${status}`)}
-                    </Badge>
-                  </Table.Td>
-                  <Table.Td>{formatInstant(row.expires_at)}</Table.Td>
-                  <Table.Td>{formatInstant(row.created_at)}</Table.Td>
-                  <Table.Td>{formatInstant(row.last_used_at)}</Table.Td>
-                  <Table.Td>
-                    <CanAccess
-                      resource={ModuleId.tokens}
-                      action={ModuleAction.delete}
-                    >
-                      <Group gap="xs" wrap="nowrap">
-                        {isDeactivated ? (
-                          <>
+        <>
+          <Table highlightOnHover striped withTableBorder>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>{t("tokens.fields.name")}</Table.Th>
+                <Table.Th>{t("tokens.fields.prefix")}</Table.Th>
+                <Table.Th>{t("tokens.fields.status")}</Table.Th>
+                <Table.Th>{t("tokens.fields.expiresAt")}</Table.Th>
+                <Table.Th>{t("tokens.fields.createdAt")}</Table.Th>
+                <Table.Th>{t("tokens.fields.lastUsedAt")}</Table.Th>
+                <Table.Th>{t("tokens.fields.actions")}</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {rows.map((row) => {
+                const status = tokenStatus(row);
+                const isDeactivated = status === "deactivated";
+                return (
+                  <Table.Tr key={row.id}>
+                    <Table.Td>{row.name}</Table.Td>
+                    <Table.Td>
+                      <Code>{row.prefix}</Code>
+                    </Table.Td>
+                    <Table.Td>
+                      <Badge
+                        size="xs"
+                        color={STATUS_COLOR[status]}
+                        variant="light"
+                      >
+                        {t(`tokens.status.${status}`)}
+                      </Badge>
+                    </Table.Td>
+                    <Table.Td>{formatInstant(row.expires_at)}</Table.Td>
+                    <Table.Td>{formatInstant(row.created_at)}</Table.Td>
+                    <Table.Td>{formatInstant(row.last_used_at)}</Table.Td>
+                    <Table.Td>
+                      <CanAccess
+                        resource={ModuleId.tokens}
+                        action={ModuleAction.delete}
+                      >
+                        <Group gap="xs" wrap="nowrap">
+                          {isDeactivated ? (
+                            <>
+                              <Button
+                                size="xs"
+                                variant="light"
+                                disabled={actionBusy}
+                                onClick={() => void onRestore(row)}
+                              >
+                                {t("tokens.restore")}
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="light"
+                                color="red"
+                                disabled={actionBusy}
+                                onClick={() => setPendingDelete(row)}
+                              >
+                                {t("tokens.delete")}
+                              </Button>
+                            </>
+                          ) : (
                             <Button
                               size="xs"
                               variant="light"
                               disabled={actionBusy}
-                              onClick={() => void onRestore(row)}
+                              onClick={() => setPendingDeactivate(row)}
                             >
-                              {t("tokens.restore")}
+                              {t("tokens.deactivate")}
                             </Button>
-                            <Button
-                              size="xs"
-                              variant="light"
-                              color="red"
-                              disabled={actionBusy}
-                              onClick={() => setPendingDelete(row)}
-                            >
-                              {t("tokens.delete")}
-                            </Button>
-                          </>
-                        ) : (
-                          <Button
-                            size="xs"
-                            variant="light"
-                            disabled={actionBusy}
-                            onClick={() => setPendingDeactivate(row)}
-                          >
-                            {t("tokens.deactivate")}
-                          </Button>
-                        )}
-                      </Group>
-                    </CanAccess>
-                  </Table.Td>
-                </Table.Tr>
-              );
-            })}
-          </Table.Tbody>
-        </Table>
+                          )}
+                        </Group>
+                      </CanAccess>
+                    </Table.Td>
+                  </Table.Tr>
+                );
+              })}
+            </Table.Tbody>
+          </Table>
+          <ListPager
+            page={currentPage}
+            pageSize={PAGE_SIZE}
+            total={total}
+            onChange={setCurrentPage}
+          />
+        </>
       )}
-
-      {pageCount > 1 ? (
-        <Group justify="flex-end" mt="md">
-          <Button
-            size="xs"
-            variant="default"
-            disabled={currentPage <= 1}
-            onClick={() => setCurrentPage(currentPage - 1)}
-          >
-            {t("common.prev")}
-          </Button>
-          <Button
-            size="xs"
-            variant="default"
-            disabled={currentPage >= pageCount}
-            onClick={() => setCurrentPage(currentPage + 1)}
-          >
-            {t("common.next")}
-          </Button>
-        </Group>
-      ) : null}
 
       <Modal
         opened={createOpen}

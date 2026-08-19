@@ -1,6 +1,10 @@
 import type { DataProvider } from "@refinedev/core";
 
 import { apiClient, ApiError } from "@/lib/api";
+import { pageToOffset, type OffsetPage } from "@/lib/pagination";
+
+/** Documented Offset Page max for users / roles / tokens pickers (`mode: "off"`). */
+const FOUNDATION_LIST_MAX_LIMIT = 200;
 
 const RESOURCE_BASE_URL: Record<string, string> = {
   users: "users",
@@ -20,7 +24,7 @@ type CrudParams<TVariables = Record<string, unknown>> = {
 };
 
 type GetListParams = CrudParams & {
-  pagination?: { current?: number; pageSize?: number; mode?: string };
+  pagination?: { currentPage?: number; pageSize?: number; mode?: string };
   filters?: unknown[];
   sorters?: unknown[];
 };
@@ -54,10 +58,25 @@ export const dataProvider: DataProvider = {
 
   async getList<T = Record<string, unknown>>(params: GetListParams): Promise<GetListResult<T>> {
     const base = resourceBaseUrl(params.resource);
-    const data = await apiClient<{ items: T[] }>(`/${base}`);
+    if (params.resource === "permissions") {
+      const data = await apiClient<{ items: T[] }>(`/${base}`);
+      return {
+        data: data.items,
+        total: data.items.length,
+      };
+    }
+    const pageSize = params.pagination?.pageSize ?? 50;
+    const current = params.pagination?.currentPage ?? 1;
+    const limit =
+      params.pagination?.mode === "off" ? FOUNDATION_LIST_MAX_LIMIT : pageSize;
+    const offset =
+      params.pagination?.mode === "off" ? 0 : pageToOffset(current, pageSize);
+    const data = await apiClient<OffsetPage<T>>(
+      `/${base}?limit=${limit}&offset=${offset}`,
+    );
     return {
       data: data.items,
-      total: data.items.length,
+      total: data.total,
     };
   },
 

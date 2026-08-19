@@ -236,7 +236,7 @@ def test_apply_preserves_human_join_via_store() -> None:
         schema_scope=None,
         fail_safe_threshold=1.0,
     )
-    joins = store.list_joins_for_object("obj_orders")
+    joins, _ = store.list_joins_for_object("obj_orders")
     assert len(joins) == 1
     assert joins[0].id == human.id
     assert joins[0].origin == "human"

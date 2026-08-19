@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.pagination import OffsetPage
 from backend.core.time import Instant
 from typing import Literal
 
@@ -26,8 +27,8 @@ class UserSummary(BaseModel):
     last_login_at: Instant | None = None
 
 
-class UserListResponse(BaseModel):
-    items: list[UserSummary]
+class UserListResponse(OffsetPage[UserSummary]):
+    pass
 
 
 class CreateUserRequest(BaseModel):

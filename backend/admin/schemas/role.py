@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.core.pagination import OffsetPage
 from pydantic import BaseModel, Field
 
 
@@ -23,8 +24,8 @@ class RoleSummary(BaseModel):
     user_count: int
 
 
-class RoleListResponse(BaseModel):
-    items: list[RoleSummary]
+class RoleListResponse(OffsetPage[RoleSummary]):
+    pass
 
 
 class RoleResponse(BaseModel):

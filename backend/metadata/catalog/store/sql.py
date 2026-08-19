@@ -13,6 +13,7 @@ from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.orm import Session, defer, noload, selectinload
 
 from backend.core.db import get_engine, session_scope
+from backend.core.pagination import apply_sql_page
 from backend.metadata.catalog.identity import _recompute_column_locator, _recompute_object_locator
 from backend.metadata.catalog.records import (
     CatalogColumnRecord,
@@ -484,7 +485,9 @@ class SqlCatalogStore:
             ).first()
             return _row_to_join(row) if row else None
 
-    def list_joins_for_object(self, object_id: str) -> list[CatalogJoinRecord]:
+    def list_joins_for_object(
+        self, object_id: str, *, limit: int | None = None, offset: int = 0
+    ) -> tuple[list[CatalogJoinRecord], int]:
         with session_scope() as session:
             col_ids = list(
                 session.scalars(
@@ -494,20 +497,25 @@ class SqlCatalogStore:
                 ).all()
             )
             if not col_ids:
-                return []
-            rows = list(
-                session.scalars(
-                    select(CatalogJoinRow)
-                    .where(
-                        or_(
-                            CatalogJoinRow.from_column_id.in_(col_ids),
-                            CatalogJoinRow.to_column_id.in_(col_ids),
-                        )
-                    )
-                    .order_by(CatalogJoinRow.created_at)
-                ).all()
+                return [], 0
+            pred = or_(
+                CatalogJoinRow.from_column_id.in_(col_ids),
+                CatalogJoinRow.to_column_id.in_(col_ids),
             )
-            return [_row_to_join(r) for r in rows]
+            total = int(
+                session.scalar(
+                    select(func.count()).select_from(CatalogJoinRow).where(pred)
+                )
+                or 0
+            )
+            stmt = apply_sql_page(
+                select(CatalogJoinRow)
+                .where(pred)
+                .order_by(CatalogJoinRow.created_at, CatalogJoinRow.id),
+                limit=limit,
+                offset=offset,
+            )
+            return [_row_to_join(r) for r in session.scalars(stmt).all()], total
 
     def list_all_joins_for_source(self, source_id: str) -> list[CatalogJoinRecord]:
         with session_scope() as session:

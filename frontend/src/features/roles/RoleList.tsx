@@ -11,6 +11,7 @@ import {
 import Link from "next/link";
 import { useState } from "react";
 
+import { ListPager } from "@/components/display/ListPager";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
@@ -19,21 +20,23 @@ import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import type { RoleRow } from "@/features/roles/types";
 import { ApiError } from "@/lib/api";
 
+const PAGE_SIZE = 50;
+
 export function RoleList() {
   const t = useTranslate();
   const { data: canWrite } = useCan({
     resource: ModuleId.roles,
     action: ModuleAction.create,
   });
-  const { tableQuery, currentPage, pageCount, setCurrentPage } =
-    useTable<RoleRow>({
-      resource: ModuleId.roles,
-      pagination: { mode: "client", pageSize: 20 },
-    });
+  const { tableQuery, currentPage, setCurrentPage } = useTable<RoleRow>({
+    resource: ModuleId.roles,
+    pagination: { mode: "server", pageSize: PAGE_SIZE },
+  });
   const { mutate: deleteRole, mutation } = useDelete();
   const [pending, setPending] = useState<RoleRow | null>(null);
 
   const rows = tableQuery.data?.data ?? [];
+  const total = tableQuery.data?.total ?? 0;
   const isLoading = tableQuery.isLoading;
   const error = tableQuery.error;
 
@@ -90,105 +93,84 @@ export function RoleList() {
       description={t("roles.description")}
       actions={createAction}
     >
-      {isLoading ? (
+      {isLoading && rows.length === 0 ? (
         <PageBodySkeleton />
-      ) : rows.length === 0 ? (
-        <EmptyState
-          action={
-            canWrite?.can ? (
-              <Button component={Link} href="/console/roles/new" size="xs">
-                {t("roles.create")}
-              </Button>
-            ) : undefined
-          }
-        />
+      ) : total === 0 ? (
+        <EmptyState />
       ) : (
-        <Table highlightOnHover striped withTableBorder>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>{t("roles.fields.key")}</Table.Th>
-              <Table.Th>{t("roles.fields.name")}</Table.Th>
-              <Table.Th>{t("roles.fields.permissions")}</Table.Th>
-              <Table.Th>{t("roles.fields.users")}</Table.Th>
-              <Table.Th>{t("roles.fields.actions")}</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {rows.map((row) => {
-              const canDelete =
-                canWrite?.can && !row.locked && row.user_count === 0;
-              return (
-                <Table.Tr key={row.id}>
-                  <Table.Td>
-                    <Group gap="xs">
-                      <Text size="sm">{row.key}</Text>
-                      {row.locked ? (
-                        <Badge size="xs" color="red" variant="light">
-                          {t("roles.locked")}
-                        </Badge>
-                      ) : null}
-                    </Group>
-                  </Table.Td>
-                  <Table.Td>{row.name}</Table.Td>
-                  <Table.Td>
-                    <Text size="sm" c="dimmed">
-                      {row.permissions.length}
-                    </Text>
-                  </Table.Td>
-                  <Table.Td>{row.user_count}</Table.Td>
-                  <Table.Td>
-                    <Group gap="xs">
-                      <CanAccess resource={ModuleId.roles} action={ModuleAction.edit}>
-                        <Button
-                          component={Link}
-                          href={`/console/roles/${row.id}`}
-                          size="xs"
-                          variant="light"
-                          disabled={row.locked}
-                        >
-                          {t("roles.edit")}
-                        </Button>
-                      </CanAccess>
-                      <CanAccess resource={ModuleId.roles} action={ModuleAction.delete}>
-                        <Button
-                          size="xs"
-                          variant="light"
-                          color="red"
-                          disabled={!canDelete || mutation.isPending}
-                          onClick={() => setPending(row)}
-                        >
-                          {t("roles.delete")}
-                        </Button>
-                      </CanAccess>
-                    </Group>
-                  </Table.Td>
-                </Table.Tr>
-              );
-            })}
-          </Table.Tbody>
-        </Table>
+        <>
+          <Table highlightOnHover striped withTableBorder>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>{t("roles.fields.key")}</Table.Th>
+                <Table.Th>{t("roles.fields.name")}</Table.Th>
+                <Table.Th>{t("roles.fields.permissions")}</Table.Th>
+                <Table.Th>{t("roles.fields.users")}</Table.Th>
+                <Table.Th>{t("roles.fields.actions")}</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {rows.map((row) => {
+                const canDelete =
+                  canWrite?.can && !row.locked && row.user_count === 0;
+                return (
+                  <Table.Tr key={row.id}>
+                    <Table.Td>
+                      <Group gap="xs">
+                        <Text size="sm">{row.key}</Text>
+                        {row.locked ? (
+                          <Badge size="xs" color="red" variant="light">
+                            {t("roles.locked")}
+                          </Badge>
+                        ) : null}
+                      </Group>
+                    </Table.Td>
+                    <Table.Td>{row.name}</Table.Td>
+                    <Table.Td>
+                      <Text size="sm" c="dimmed">
+                        {row.permissions.length}
+                      </Text>
+                    </Table.Td>
+                    <Table.Td>{row.user_count}</Table.Td>
+                    <Table.Td>
+                      <Group gap="xs">
+                        <CanAccess resource={ModuleId.roles} action={ModuleAction.edit}>
+                          <Button
+                            component={Link}
+                            href={`/console/roles/${row.id}`}
+                            size="xs"
+                            variant="light"
+                            disabled={row.locked}
+                          >
+                            {t("roles.edit")}
+                          </Button>
+                        </CanAccess>
+                        <CanAccess resource={ModuleId.roles} action={ModuleAction.delete}>
+                          <Button
+                            size="xs"
+                            variant="light"
+                            color="red"
+                            disabled={!canDelete || mutation.isPending}
+                            onClick={() => setPending(row)}
+                          >
+                            {t("roles.delete")}
+                          </Button>
+                        </CanAccess>
+                      </Group>
+                    </Table.Td>
+                  </Table.Tr>
+                );
+              })}
+            </Table.Tbody>
+          </Table>
+          <ListPager
+            page={currentPage}
+            pageSize={PAGE_SIZE}
+            total={total}
+            onChange={setCurrentPage}
+          />
+        </>
       )}
-
-      {pageCount > 1 ? (
-        <Group justify="flex-end" mt="md">
-          <Button
-            size="xs"
-            variant="default"
-            disabled={currentPage <= 1}
-            onClick={() => setCurrentPage(currentPage - 1)}
-          >
-            {t("common.prev")}
-          </Button>
-          <Button
-            size="xs"
-            variant="default"
-            disabled={currentPage >= pageCount}
-            onClick={() => setCurrentPage(currentPage + 1)}
-          >
-            {t("common.next")}
-          </Button>
-        </Group>
-      ) : null}
 
       <Modal
         opened={pending !== null}

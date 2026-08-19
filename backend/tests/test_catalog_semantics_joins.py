@@ -398,7 +398,11 @@ def test_join_upsert_list_delete_and_audit(client: TestClient) -> None:
 
     listed = client.get(f"/objects/{obj.id}/joins")
     assert listed.status_code == 200
-    items = listed.json()["items"]
+    listed_body = listed.json()
+    assert listed_body["total"] == 1
+    assert listed_body["limit"] == 50
+    assert listed_body["offset"] == 0
+    items = listed_body["items"]
     assert len(items) == 1
     assert items[0]["id"] == join_id
 
@@ -410,6 +414,7 @@ def test_join_upsert_list_delete_and_audit(client: TestClient) -> None:
 
     listed2 = client.get(f"/objects/{obj.id}/joins")
     assert listed2.json()["items"] == []
+    assert listed2.json()["total"] == 0
 
     missing = client.delete(f"/joins/{join_id}")
     assert missing.status_code == 404
@@ -417,6 +422,38 @@ def test_join_upsert_list_delete_and_audit(client: TestClient) -> None:
 
     del_events, _ = get_audit_store().list_events(action="join.delete")
     assert del_events
+
+
+def test_joins_http_pages(client: TestClient) -> None:
+    source = _make_source(client, key="join-page")
+    obj = _seed_object(source["id"], object_id="obj_page")
+    a, b = obj.columns[0].id, obj.columns[1].id
+    first = client.put(
+        "/joins",
+        json={"from_column_id": a, "to_column_id": b, "evidence": "first edge"},
+    )
+    second = client.put(
+        "/joins",
+        json={
+            "from_column_id": a,
+            "to_column_id": "col_line_id",
+            "evidence": "second edge",
+        },
+    )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    first_id = first.json()["join"]["id"]
+    second_id = second.json()["join"]["id"]
+
+    page1 = client.get(f"/objects/{obj.id}/joins?limit=1&offset=0")
+    page2 = client.get(f"/objects/{obj.id}/joins?limit=1&offset=1")
+    assert page1.status_code == 200
+    assert page1.json()["total"] == 2
+    assert page1.json()["limit"] == 1
+    assert [item["id"] for item in page1.json()["items"]] == [first_id]
+    assert [item["id"] for item in page2.json()["items"]] == [second_id]
+    over = client.get(f"/objects/{obj.id}/joins?limit=201")
+    assert over.status_code == 422
 
 
 def test_join_cross_source_rejected(client: TestClient) -> None:

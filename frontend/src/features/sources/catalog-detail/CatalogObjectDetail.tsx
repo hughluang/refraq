@@ -18,21 +18,13 @@ import { PageError } from "@/components/feedback/PageError";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
-import {
-  getCatalogObject,
-  listObjectJoins,
-  listSources,
-} from "@/features/sources/api";
+import { getCatalogObject, getSource } from "@/features/sources/api";
 import { ColumnsTab } from "@/features/sources/catalog-detail/ColumnsTab";
 import { DdlTab } from "@/features/sources/catalog-detail/DdlTab";
 import { JoinsTab } from "@/features/sources/catalog-detail/JoinsTab";
 import { OverviewTab } from "@/features/sources/catalog-detail/OverviewTab";
 import { SampleTab } from "@/features/sources/catalog-detail/SampleTab";
-import type {
-  CatalogJoin,
-  CatalogObject,
-  Source,
-} from "@/features/sources/types";
+import type { CatalogObject, Source } from "@/features/sources/types";
 import { ApiError } from "@/lib/api";
 
 type CatalogObjectDetailProps = {
@@ -49,7 +41,6 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
   const writable = Boolean(canWrite?.can);
 
   const [object, setObject] = useState<CatalogObject | null>(null);
-  const [joins, setJoins] = useState<CatalogJoin[]>([]);
   const [source, setSource] = useState<Source | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -59,16 +50,18 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
     setLoading(true);
     setError(null);
     try {
-      const [objRes, joinRes, sourcesRes] = await Promise.all([
-        getCatalogObject(objectId),
-        listObjectJoins(objectId),
-        listSources(),
-      ]);
+      const objRes = await getCatalogObject(objectId);
       setObject(objRes.object);
-      setJoins(joinRes.items);
-      setSource(
-        sourcesRes.items.find((s) => s.id === objRes.object.source_id) ?? null,
-      );
+      try {
+        const srcRes = await getSource(objRes.object.source_id);
+        setSource(srcRes.source);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) {
+          setSource(null);
+        } else {
+          throw err;
+        }
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : String(err));
     } finally {
@@ -216,12 +209,7 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
             <SampleTab object={object} source={source} />
           </Tabs.Panel>
           <Tabs.Panel value="joins" pt="md">
-            <JoinsTab
-              object={object}
-              joins={joins}
-              writable={writable}
-              onJoinsChanged={setJoins}
-            />
+            <JoinsTab object={object} writable={writable} />
           </Tabs.Panel>
           <Tabs.Panel value="ddl" pt="md">
             <DdlTab ddl={object.ddl} />

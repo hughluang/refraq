@@ -18,6 +18,7 @@ from backend.admin.locales import DEFAULT_LOCALE
 from backend.admin.models import UserRow
 from backend.core.config import get_settings
 from backend.core.db import session_scope
+from backend.core.pagination import apply_offset_page, apply_sql_page
 
 
 UserStatus = Literal["active", "disabled"]
@@ -43,7 +44,9 @@ class UserStore(Protocol):
     def get_by_id(self, user_id: str) -> UserRecord | None: ...
 
     def get_by_account(self, account: str) -> UserRecord | None: ...
-    def list_users(self) -> list[UserRecord]: ...
+    def list_users(
+        self, *, limit: int | None = None, offset: int = 0
+    ) -> tuple[list[UserRecord], int]: ...
 
     def count_by_role_id(self, role_id: str) -> int: ...
     def create_user(
@@ -97,12 +100,15 @@ class MemoryUserStore:
                 return None
             return self._by_id.get(user_id)
 
-    def list_users(self) -> list[UserRecord]:
+    def list_users(
+        self, *, limit: int | None = None, offset: int = 0
+    ) -> tuple[list[UserRecord], int]:
         with self._lock:
-            return sorted(
+            items = sorted(
                 self._by_id.values(),
                 key=lambda record: (record.created_at, record.id),
             )
+            return apply_offset_page(items, limit=limit, offset=offset)
 
     def count_by_role_id(self, role_id: str) -> int:
         with self._lock:
@@ -202,12 +208,17 @@ class SqlUserStore:
             row = session.scalar(select(UserRow).where(UserRow.account == account))
             return _row_to_user(row) if row else None
 
-    def list_users(self) -> list[UserRecord]:
+    def list_users(
+        self, *, limit: int | None = None, offset: int = 0
+    ) -> tuple[list[UserRecord], int]:
         with session_scope() as session:
-            rows = session.scalars(
-                select(UserRow).order_by(UserRow.created_at, UserRow.id)
-            ).all()
-            return [_row_to_user(row) for row in rows]
+            total = int(session.scalar(select(func.count()).select_from(UserRow)) or 0)
+            stmt = apply_sql_page(
+                select(UserRow).order_by(UserRow.created_at, UserRow.id),
+                limit=limit,
+                offset=offset,
+            )
+            return [_row_to_user(row) for row in session.scalars(stmt).all()], total
 
     def count_by_role_id(self, role_id: str) -> int:
         with session_scope() as session:

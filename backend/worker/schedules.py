@@ -8,11 +8,12 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Protocol
 
-from sqlalchemy import case, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.orm import Session
 
 from backend.core.config import get_settings
 from backend.core.db import session_scope
+from backend.core.pagination import apply_offset_page, apply_sql_page
 from backend.core.time import utc_now
 from backend.worker.models import ScheduledTaskRow
 
@@ -54,12 +55,24 @@ class ScheduleStore(Protocol):
     ) -> ScheduledTaskRecord | None: ...
 
     def list(
-        self, *, include_system: bool = False, session: Session | None = None
-    ) -> list[ScheduledTaskRecord]: ...
+        self,
+        *,
+        include_system: bool = False,
+        session: Session | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[ScheduledTaskRecord], int]: ...
 
     def list_enabled(self) -> list[ScheduledTaskRecord]: ...
 
-    def list_by_owner_ref(self, owner_ref: str) -> list[ScheduledTaskRecord]: ...
+    def list_by_owner_ref(
+        self,
+        owner_ref: str,
+        *,
+        session: Session | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[ScheduledTaskRecord], int]: ...
 
     def delete(self, schedule_id: str) -> bool: ...
 
@@ -105,27 +118,42 @@ class MemoryScheduleStore:
             return None
 
     def list(
-        self, *, include_system: bool = False, session: Session | None = None
-    ) -> list[ScheduledTaskRecord]:
+        self,
+        *,
+        include_system: bool = False,
+        session: Session | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[ScheduledTaskRecord], int]:
         del session
         with self._lock:
             items = list(self._by_key.values())
         if not include_system:
             items = [record for record in items if not record.system]
-        items.sort(key=lambda record: record.created_at, reverse=True)
-        return items
+        items.sort(key=lambda record: (record.created_at, record.id), reverse=True)
+        return apply_offset_page(items, limit=limit, offset=offset)
 
     def list_enabled(self) -> list[ScheduledTaskRecord]:
         with self._lock:
             return [r for r in self._by_key.values() if r.enabled]
 
-    def list_by_owner_ref(self, owner_ref: str) -> list[ScheduledTaskRecord]:
+    def list_by_owner_ref(
+        self,
+        owner_ref: str,
+        *,
+        session: Session | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[ScheduledTaskRecord], int]:
+        del session
         with self._lock:
-            return [
+            items = [
                 r
                 for r in self._by_key.values()
                 if not r.system and r.owner_ref == owner_ref
             ]
+        items.sort(key=lambda record: (record.created_at, record.id), reverse=True)
+        return apply_offset_page(items, limit=limit, offset=offset)
 
     def delete(self, schedule_id: str) -> bool:
         with self._lock:
@@ -250,21 +278,40 @@ class SqlScheduleStore:
         return _row_to_schedule(row) if row else None
 
     def list(
-        self, *, include_system: bool = False, session: Session | None = None
-    ) -> list[ScheduledTaskRecord]:
+        self,
+        *,
+        include_system: bool = False,
+        session: Session | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[ScheduledTaskRecord], int]:
         if session is not None:
-            return self.list_on(session, include_system=include_system)
+            return self.list_on(
+                session, include_system=include_system, limit=limit, offset=offset
+            )
         with session_scope() as owned:
-            return self.list_on(owned, include_system=include_system)
+            return self.list_on(
+                owned, include_system=include_system, limit=limit, offset=offset
+            )
 
     def list_on(
-        self, session: Session, *, include_system: bool = False
-    ) -> list[ScheduledTaskRecord]:
-        stmt = select(ScheduledTaskRow).order_by(ScheduledTaskRow.created_at.desc())
+        self,
+        session: Session,
+        *,
+        include_system: bool = False,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[ScheduledTaskRecord], int]:
+        count_stmt = select(func.count()).select_from(ScheduledTaskRow)
+        stmt = select(ScheduledTaskRow).order_by(
+            ScheduledTaskRow.created_at.desc(), ScheduledTaskRow.id.desc()
+        )
         if not include_system:
+            count_stmt = count_stmt.where(ScheduledTaskRow.system.is_(False))
             stmt = stmt.where(ScheduledTaskRow.system.is_(False))
-        rows = session.scalars(stmt).all()
-        return [_row_to_schedule(row) for row in rows]
+        total = int(session.scalar(count_stmt) or 0)
+        stmt = apply_sql_page(stmt, limit=limit, offset=offset)
+        return [_row_to_schedule(row) for row in session.scalars(stmt).all()], total
 
     def list_enabled(self) -> list[ScheduledTaskRecord]:
         with session_scope() as session:
@@ -273,15 +320,51 @@ class SqlScheduleStore:
             ).all()
             return [_row_to_schedule(row) for row in rows]
 
-    def list_by_owner_ref(self, owner_ref: str) -> list[ScheduledTaskRecord]:
-        with session_scope() as session:
-            rows = session.scalars(
-                select(ScheduledTaskRow).where(
-                    ScheduledTaskRow.system.is_(False),
-                    ScheduledTaskRow.owner_ref == owner_ref,
-                )
-            ).all()
-            return [_row_to_schedule(row) for row in rows]
+    def list_by_owner_ref(
+        self,
+        owner_ref: str,
+        *,
+        session: Session | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[ScheduledTaskRecord], int]:
+        if session is not None:
+            return self._list_by_owner_ref_on(
+                session, owner_ref, limit=limit, offset=offset
+            )
+        with session_scope() as owned:
+            return self._list_by_owner_ref_on(
+                owned, owner_ref, limit=limit, offset=offset
+            )
+
+    def _list_by_owner_ref_on(
+        self,
+        session: Session,
+        owner_ref: str,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[ScheduledTaskRecord], int]:
+        pred = (
+            ScheduledTaskRow.system.is_(False),
+            ScheduledTaskRow.owner_ref == owner_ref,
+        )
+        total = int(
+            session.scalar(
+                select(func.count()).select_from(ScheduledTaskRow).where(*pred)
+            )
+            or 0
+        )
+        stmt = apply_sql_page(
+            select(ScheduledTaskRow)
+            .where(*pred)
+            .order_by(
+                ScheduledTaskRow.created_at.desc(), ScheduledTaskRow.id.desc()
+            ),
+            limit=limit,
+            offset=offset,
+        )
+        return [_row_to_schedule(row) for row in session.scalars(stmt).all()], total
 
     def delete(self, schedule_id: str) -> bool:
         with session_scope() as session:

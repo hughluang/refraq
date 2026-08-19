@@ -92,7 +92,7 @@ def search_sources(
     try:
         user, _token_id = _actor_from_token(authorization)
         _require(user, "sources:read")
-        items = get_source_store().list_sources()
+        items, _ = get_source_store().list_sources()
         if query_text:
             ql = query_text.lower()
             items = [
@@ -472,15 +472,27 @@ def search_columns(
         return _err(exc)
 
 @mcp.tool()
-def list_joins(authorization: str, object_locator_key: str) -> str:
+def list_joins(
+    authorization: str,
+    object_locator_key: str,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> str:
     """List joins for an object locator (metadata:read)."""
     try:
         user, _token_id = _actor_from_token(authorization)
         _require(user, "metadata:read")
         o = catalog_service.resolve_object_ref(object_locator_key)
-        items = catalog_service.list_joins(o.id)
+        lim = _clamp(limit, default=50, maximum=200)
+        off = max(0, int(offset or 0))
+        items, total = catalog_service.list_joins(o.id, limit=lim, offset=off)
         return _dumps(
-            {"items": [catalog_service.join_view_as_dict(j) for j in items]}
+            {
+                "items": [catalog_service.join_view_as_dict(j) for j in items],
+                "total": total,
+                "limit": lim,
+                "offset": off,
+            }
         )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)

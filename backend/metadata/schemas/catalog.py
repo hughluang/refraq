@@ -219,8 +219,8 @@ class JoinOut(BaseModel):
     created_at: Instant
 
 
-class JoinListResponse(BaseModel):
-    items: list[JoinOut]
+class JoinListResponse(OffsetPage[JoinOut]):
+    pass
 
 
 class JoinResponse(BaseModel):

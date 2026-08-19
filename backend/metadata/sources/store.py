@@ -9,12 +9,13 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Protocol
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.core.config import get_settings
 from backend.core.db import session_scope
+from backend.core.pagination import apply_offset_page, apply_sql_page
 from backend.metadata.errors import SourceKeyDuplicate, SourceNotFound
 from backend.metadata.locators import format_source_locator
 from backend.metadata.models import SourceRow
@@ -54,7 +55,9 @@ def ensure_source_locator(record: SourceRecord) -> SourceRecord:
     return replace(record, locator_key=locator)
 
 class SourceStore(Protocol):
-    def list_sources(self) -> list[SourceRecord]: ...
+    def list_sources(
+        self, *, limit: int | None = None, offset: int = 0
+    ) -> tuple[list[SourceRecord], int]: ...
     def get_source(self, source_id: str) -> SourceRecord | None: ...
 
     def get_source_by_key(self, key: str) -> SourceRecord | None: ...
@@ -72,12 +75,15 @@ class MemorySourceStore:
         self._by_locator: dict[str, str] = {}
         self._lock = threading.Lock()
 
-    def list_sources(self) -> list[SourceRecord]:
+    def list_sources(
+        self, *, limit: int | None = None, offset: int = 0
+    ) -> tuple[list[SourceRecord], int]:
         with self._lock:
-            return sorted(
+            items = sorted(
                 self._sources.values(),
                 key=lambda r: (r.key, r.id),
             )
+            return apply_offset_page(items, limit=limit, offset=offset)
 
     def get_source(self, source_id: str) -> SourceRecord | None:
         with self._lock:
@@ -139,10 +145,17 @@ class MemorySourceStore:
             return True
 
 class SqlSourceStore:
-    def list_sources(self) -> list[SourceRecord]:
+    def list_sources(
+        self, *, limit: int | None = None, offset: int = 0
+    ) -> tuple[list[SourceRecord], int]:
         with session_scope() as session:
-            rows = session.scalars(select(SourceRow).order_by(SourceRow.key)).all()
-            return [_row_to_source(r) for r in rows]
+            total = int(session.scalar(select(func.count()).select_from(SourceRow)) or 0)
+            stmt = apply_sql_page(
+                select(SourceRow).order_by(SourceRow.key, SourceRow.id),
+                limit=limit,
+                offset=offset,
+            )
+            return [_row_to_source(r) for r in session.scalars(stmt).all()], total
 
     def get_source(self, source_id: str) -> SourceRecord | None:
         with session_scope() as session:

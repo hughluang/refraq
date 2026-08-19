@@ -6,6 +6,8 @@ from backend.core.time import utc_now
 
 from fastapi import APIRouter, Depends, Request, Response, status
 
+from backend.core.pagination import PageParams, page_params
+
 from backend.admin.audit import persist_audit_event
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.errors import (
@@ -53,9 +55,15 @@ def _owned_visible(record: TokenRecord | None, user_id: str) -> TokenRecord:
 def list_tokens(
     user: UserRecord = Depends(require_permission("tokens:read")),
     tokens: TokenStore = Depends(get_token_store),
+    page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> TokenListResponse:
-    items = [_to_metadata(record) for record in tokens.list_for_user(user.id)]
-    return TokenListResponse(items=items)
+    records, total = tokens.list_for_user(user.id, limit=page.limit, offset=page.offset)
+    return TokenListResponse(
+        items=[_to_metadata(record) for record in records],
+        total=total,
+        limit=page.limit,
+        offset=page.offset,
+    )
 
 
 @router.post(

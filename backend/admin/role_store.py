@@ -8,13 +8,14 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Protocol
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 
 from backend.admin.errors import RoleKeyDuplicate
 from backend.admin.models import RoleRow
 from backend.core.config import get_settings
 from backend.core.db import session_scope
+from backend.core.pagination import apply_offset_page, apply_sql_page
 
 
 @dataclass
@@ -31,7 +32,9 @@ class RoleStore(Protocol):
     def get_by_id(self, role_id: str) -> RoleRecord | None: ...
 
     def get_by_key(self, key: str) -> RoleRecord | None: ...
-    def list_roles(self) -> list[RoleRecord]: ...
+    def list_roles(
+        self, *, limit: int | None = None, offset: int = 0
+    ) -> tuple[list[RoleRecord], int]: ...
 
     def insert(self, record: RoleRecord) -> None: ...
     def save(self, record: RoleRecord) -> None: ...
@@ -59,12 +62,15 @@ class MemoryRoleStore:
                 return None
             return self._by_id.get(role_id)
 
-    def list_roles(self) -> list[RoleRecord]:
+    def list_roles(
+        self, *, limit: int | None = None, offset: int = 0
+    ) -> tuple[list[RoleRecord], int]:
         with self._lock:
-            return sorted(
+            items = sorted(
                 self._by_id.values(),
-                key=lambda record: (0 if record.locked else 1, record.key),
+                key=lambda record: (0 if record.locked else 1, record.key, record.id),
             )
+            return apply_offset_page(items, limit=limit, offset=offset)
 
     def insert(self, record: RoleRecord) -> None:
         with self._lock:
@@ -105,11 +111,21 @@ class SqlRoleStore:
             row = session.scalar(select(RoleRow).where(RoleRow.key == key))
             return _row_to_role(row) if row else None
 
-    def list_roles(self) -> list[RoleRecord]:
+    def list_roles(
+        self, *, limit: int | None = None, offset: int = 0
+    ) -> tuple[list[RoleRecord], int]:
         with session_scope() as session:
-            rows = session.scalars(select(RoleRow)).all()
-            records = [_row_to_role(row) for row in rows]
-            return sorted(records, key=lambda record: (0 if record.locked else 1, record.key))
+            total = int(session.scalar(select(func.count()).select_from(RoleRow)) or 0)
+            stmt = apply_sql_page(
+                select(RoleRow).order_by(
+                    case((RoleRow.locked.is_(True), 0), else_=1),
+                    RoleRow.key,
+                    RoleRow.id,
+                ),
+                limit=limit,
+                offset=offset,
+            )
+            return [_row_to_role(row) for row in session.scalars(stmt).all()], total
 
     def insert(self, record: RoleRecord) -> None:
         try:

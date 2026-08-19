@@ -67,7 +67,7 @@ Source probe completed-failure remains HTTP 200 `{ "ok": false, "code", "message
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/sources` | `sources:read` | List Sources (projected `access`) |
+| `GET` | `/sources` | `sources:read` | List Sources (projected `access`; **Offset Page**) |
 | `GET` | `/sources/access-schema/{engine}` | `sources:read` | Connector Spec (JSON Schema) for SpecTree + validation |
 | `POST` | `/sources` | `sources:write` | Create (database kind requires engine + full `access` including secrets and dialect scope) |
 | `GET` | `/sources/{id}` | `sources:read` | Get (projected `access`) |
@@ -78,6 +78,12 @@ Source probe completed-failure remains HTTP 200 `{ "ok": false, "code", "message
 | `POST` | `/sources/{id}/test` | `sources:write` | Reachability probe for a stored Source |
 
 There is **no** `PUT /sources/{id}/secret`. Credential changes are a full `access` replace via create/patch (or probe override).
+
+### `GET /sources`
+
+**Offset Page** (`key ASC`, `id ASC`). Query params: `limit` (default **100**, max **500**), `offset` (default **0**).
+
+Response: `{ "items": […], "total": N, "limit": L, "offset": O }`. Items use the projected Source shape.
 
 ### `GET /sources/access-schema/{engine}`
 

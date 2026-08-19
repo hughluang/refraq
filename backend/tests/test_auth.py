@@ -111,7 +111,8 @@ def test_login_disabled_account_returns_account_disabled(
     store_bundle, client: TestClient
 ) -> None:
     user_store, _, _ = store_bundle
-    user_store.update_status(user_store.list_users()[0].id, "disabled")
+    users, _ = user_store.list_users()
+    user_store.update_status(users[0].id, "disabled")
 
     response = client.post(
         "/auth/login",
@@ -186,7 +187,8 @@ def test_me_with_expired_session_returns_unauthenticated(
     store_bundle, client: TestClient
 ) -> None:
     user_store, _, session_store = store_bundle
-    sid = session_store.create(user_store.list_users()[0].id, ttl_seconds=-1)
+    users, _ = user_store.list_users()
+    sid = session_store.create(users[0].id, ttl_seconds=-1)
 
     response = client.get("/auth/me", cookies={"refraq_sid": sid})
 

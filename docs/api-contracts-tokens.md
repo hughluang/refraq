@@ -30,7 +30,8 @@ HTTP protocol failures: [`docs/conventions-errors.md`](conventions-errors.md).
 ### `GET /tokens`
 
 - Permission: `tokens:read`
-- Returns `{ "items": [ /* metadata shapes */ ] }` (excludes soft-deleted)
+- **Offset Page** (newest first: `created_at DESC`, `id DESC`). Query params: `limit` (default **50**, max **200**), `offset` (default **0**).
+- Response: `{ "items": [ /* metadata shapes */ ], "total": N, "limit": L, "offset": O }` (excludes soft-deleted). `total` is the caller's non-deleted tokens.
 
 ### `POST /tokens`
 

@@ -94,6 +94,9 @@ def test_super_admin_can_list_users(client: TestClient) -> None:
     body = response.json()
     accounts = {item["account"] for item in body["items"]}
     assert accounts == {"root", "op"}
+    assert body["total"] == 2
+    assert body["limit"] == 50
+    assert body["offset"] == 0
 
 
 def test_operator_cannot_list_users(client: TestClient) -> None:
@@ -216,7 +219,8 @@ def test_super_admin_cannot_disable_themselves(client: TestClient) -> None:
 
 def test_disabled_user_cannot_login(store_bundle, client: TestClient) -> None:
     user_store, _, _ = store_bundle
-    op_record = next(r for r in user_store.list_users() if r.account == "op")
+    users, _ = user_store.list_users()
+    op_record = next(r for r in users if r.account == "op")
     user_store.update_status(op_record.id, "disabled")
 
     response = client.post(
@@ -265,7 +269,8 @@ def test_disable_revokes_target_sessions_and_requires_relogin(
     store_bundle, client: TestClient
 ) -> None:
     user_store, _, session_store = store_bundle
-    op = next(record for record in user_store.list_users() if record.account == "op")
+    users, _ = user_store.list_users()
+    op = next(record for record in users if record.account == "op")
     op_sid = session_store.create(op.id, ttl_seconds=3600)
 
     assert client.get("/auth/me", cookies={"refraq_sid": op_sid}).status_code == 200

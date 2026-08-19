@@ -18,6 +18,7 @@ import {
 import Link from "next/link";
 import { useState } from "react";
 
+import { ListPager } from "@/components/display/ListPager";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
@@ -29,6 +30,8 @@ import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
 import type { CurrentUser } from "@/providers/session-store";
 
+const PAGE_SIZE = 50;
+
 export function UserList() {
   const t = useTranslate();
   const formatInstant = useFormatInstant();
@@ -37,15 +40,15 @@ export function UserList() {
     resource: ModuleId.users,
     action: ModuleAction.create,
   });
-  const { tableQuery, currentPage, pageCount, setCurrentPage } =
-    useTable<UserRow>({
-      resource: ModuleId.users,
-      pagination: { mode: "client", pageSize: 20 },
-    });
+  const { tableQuery, currentPage, setCurrentPage } = useTable<UserRow>({
+    resource: ModuleId.users,
+    pagination: { mode: "server", pageSize: PAGE_SIZE },
+  });
   const { mutate: updateStatus, mutation } = useUpdate<UserRow>();
   const [pending, setPending] = useState<UserRow | null>(null);
 
   const rows = tableQuery.data?.data ?? [];
+  const total = tableQuery.data?.total ?? 0;
   const isLoading = tableQuery.isLoading;
   const error = tableQuery.error;
 
@@ -108,85 +111,64 @@ export function UserList() {
       description={t("users.description")}
       actions={createAction}
     >
-      {isLoading ? (
+      {isLoading && rows.length === 0 ? (
         <PageBodySkeleton />
-      ) : rows.length === 0 ? (
-        <EmptyState
-          action={
-            canWrite?.can ? (
-              <Button component={Link} href="/console/users/new" size="xs">
-                {t("users.create")}
-              </Button>
-            ) : undefined
-          }
-        />
+      ) : total === 0 ? (
+        <EmptyState />
       ) : (
-        <Table highlightOnHover striped withTableBorder>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>{t("users.fields.account")}</Table.Th>
-              <Table.Th>{t("users.fields.displayName")}</Table.Th>
-              <Table.Th>{t("users.fields.role")}</Table.Th>
-              <Table.Th>{t("users.fields.status")}</Table.Th>
-              <Table.Th>{t("users.fields.lastLoginAt")}</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {rows.map((row) => {
-              const isSelf = identity?.id === row.id;
-              return (
-                <Table.Tr key={row.id}>
-                  <Table.Td>{row.account}</Table.Td>
-                  <Table.Td>{row.display_name}</Table.Td>
-                  <Table.Td>
-                    <UserRoleBadge
-                      roleName={row.role_name}
-                      roleKey={row.role_key}
-                    />
-                  </Table.Td>
-                  <Table.Td>
-                    <Switch
-                      checked={row.status === "active"}
-                      onChange={() => setPending(row)}
-                      disabled={
-                        !canWrite?.can || mutation.isPending || isSelf
-                      }
-                      size="sm"
-                      aria-label={
-                        row.status === "active"
-                          ? t("users.status.active")
-                          : t("users.status.disabled")
-                      }
-                    />
-                  </Table.Td>
-                  <Table.Td>{formatInstant(row.last_login_at)}</Table.Td>
-                </Table.Tr>
-              );
-            })}
-          </Table.Tbody>
-        </Table>
+        <>
+          <Table highlightOnHover striped withTableBorder>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>{t("users.fields.account")}</Table.Th>
+                <Table.Th>{t("users.fields.displayName")}</Table.Th>
+                <Table.Th>{t("users.fields.role")}</Table.Th>
+                <Table.Th>{t("users.fields.status")}</Table.Th>
+                <Table.Th>{t("users.fields.lastLoginAt")}</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {rows.map((row) => {
+                const isSelf = identity?.id === row.id;
+                return (
+                  <Table.Tr key={row.id}>
+                    <Table.Td>{row.account}</Table.Td>
+                    <Table.Td>{row.display_name}</Table.Td>
+                    <Table.Td>
+                      <UserRoleBadge
+                        roleName={row.role_name}
+                        roleKey={row.role_key}
+                      />
+                    </Table.Td>
+                    <Table.Td>
+                      <Switch
+                        checked={row.status === "active"}
+                        onChange={() => setPending(row)}
+                        disabled={
+                          !canWrite?.can || mutation.isPending || isSelf
+                        }
+                        size="sm"
+                        aria-label={
+                          row.status === "active"
+                            ? t("users.status.active")
+                            : t("users.status.disabled")
+                        }
+                      />
+                    </Table.Td>
+                    <Table.Td>{formatInstant(row.last_login_at)}</Table.Td>
+                  </Table.Tr>
+                );
+              })}
+            </Table.Tbody>
+          </Table>
+          <ListPager
+            page={currentPage}
+            pageSize={PAGE_SIZE}
+            total={total}
+            onChange={setCurrentPage}
+          />
+        </>
       )}
-
-      {pageCount > 1 ? (
-        <Group justify="flex-end" mt="md">
-          <Button
-            size="xs"
-            variant="default"
-            disabled={currentPage <= 1}
-            onClick={() => setCurrentPage(currentPage - 1)}
-          >
-            {t("common.prev")}
-          </Button>
-          <Button
-            size="xs"
-            variant="default"
-            disabled={currentPage >= pageCount}
-            onClick={() => setCurrentPage(currentPage + 1)}
-          >
-            {t("common.next")}
-          </Button>
-        </Group>
-      ) : null}
 
       <Modal
         opened={pending !== null}

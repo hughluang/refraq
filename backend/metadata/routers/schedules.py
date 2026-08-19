@@ -62,8 +62,14 @@ def create_source_schedule(
 def list_source_schedules(
     source_id: str,
     _: UserRecord = Depends(require_permission("jobs:run")),
+    page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> ScheduleListResponse:
-    return ScheduleListResponse(items=list_structure_schedules(source_id))
+    items, total = list_structure_schedules(
+        source_id, limit=page.limit, offset=page.offset
+    )
+    return ScheduleListResponse(
+        items=items, total=total, limit=page.limit, offset=page.offset
+    )
 
 
 @router.post("/schedules/{schedule_id}/run", status_code=status.HTTP_202_ACCEPTED)

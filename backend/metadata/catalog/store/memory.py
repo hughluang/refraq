@@ -13,6 +13,7 @@ from backend.metadata.business_domains.store import (
     MemoryBusinessDomainStore,
     get_business_domain_store,
 )
+from backend.core.pagination import apply_offset_page
 from backend.metadata.catalog.identity import _recompute_column_locator, _recompute_object_locator
 from backend.metadata.catalog.records import (
     CatalogColumnRecord,
@@ -467,18 +468,21 @@ class MemoryCatalogStore:
                 return None
             return self._joins.get(join_id)
 
-    def list_joins_for_object(self, object_id: str) -> list[CatalogJoinRecord]:
+    def list_joins_for_object(
+        self, object_id: str, *, limit: int | None = None, offset: int = 0
+    ) -> tuple[list[CatalogJoinRecord], int]:
         with self._lock:
             obj = self._objects.get(object_id)
             if obj is None:
-                return []
+                return [], 0
             col_ids = {c.id for c in obj.columns}
             items = [
                 j
                 for j in self._joins.values()
                 if j.from_column_id in col_ids or j.to_column_id in col_ids
             ]
-            return sorted(items, key=lambda j: j.created_at)
+            items.sort(key=lambda j: (j.created_at, j.id))
+            return apply_offset_page(items, limit=limit, offset=offset)
 
     def list_all_joins_for_source(self, source_id: str) -> list[CatalogJoinRecord]:
         with self._lock:

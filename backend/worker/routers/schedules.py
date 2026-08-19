@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 
+from backend.core.pagination import PageParams, page_params
+
 from backend.admin.audit import persist_audit_event
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
@@ -30,9 +32,17 @@ router = APIRouter(tags=["schedules"])
 def list_platform_schedules(
     _: UserRecord = Depends(require_permission("jobs:run")),
     system: bool = Query(default=False),
+    page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> ScheduleListResponse:
-    records = get_schedule_store().list(include_system=system)
-    return ScheduleListResponse(items=[public_schedule(record) for record in records])
+    records, total = get_schedule_store().list(
+        include_system=system, limit=page.limit, offset=page.offset
+    )
+    return ScheduleListResponse(
+        items=[public_schedule(record) for record in records],
+        total=total,
+        limit=page.limit,
+        offset=page.offset,
+    )
 
 
 @router.get("/schedules/{schedule_id}", response_model=ScheduleResponse)
