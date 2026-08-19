@@ -327,3 +327,10 @@ For the login/permission slice, each concern should land here:
 - Job observation (list, detail, logs, cancel, trigger presentation): `frontend/src/features/jobs/`
 - Scheduled Task definition workbench (platform list, Source related-schedules page `/console/sources/:id/schedules`, run-now, related Jobs HTTP): `frontend/src/features/schedules/`
 - Source / catalog / Structure Diff: `frontend/src/features/sources/` — does not own Job types or `/jobs` HTTP
+- Source registry HTTP: `frontend/src/features/sources/api/sources.ts`
+- Current catalog HTTP: `frontend/src/features/sources/api/catalog.ts`
+- Object Semantics HTTP: `frontend/src/features/sources/api/semantics.ts`
+- Join Path HTTP: `frontend/src/features/sources/api/joins.ts`
+- Catalog Sample HTTP: `frontend/src/features/sources/api/sample.ts`; Console ACL is identity action `sample` (`catalog:sample`)
+- Structure Diff HTTP: `frontend/src/features/sources/api/structure-diffs.ts`
+- Catalog Object Console logic: `frontend/src/features/sources/catalog-detail/` (`sampleFilters`, `columnDrafts`, `joinEdges`, `catalogStatus`)

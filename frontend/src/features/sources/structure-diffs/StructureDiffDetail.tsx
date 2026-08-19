@@ -18,7 +18,7 @@ import { PageError } from "@/components/feedback/PageError";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { JobDetailModal } from "@/features/jobs/JobDetailModal";
-import { getStructureDiff } from "@/features/sources/api";
+import { getStructureDiff } from "@/features/sources/api/structure-diffs";
 import { StructureDiffClassBadge } from "@/features/sources/structure-diffs/StructureDiffClassBadge";
 import {
   COUNT_ORDER,

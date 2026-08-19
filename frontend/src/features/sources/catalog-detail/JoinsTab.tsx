@@ -19,35 +19,42 @@ import { useCallback, useEffect, useState } from "react";
 import { ListTable } from "@/components/display/ListTable";
 import { FillColumn } from "@/components/layout/FillColumn";
 import { SectionHeader } from "@/components/layout/SectionHeader";
+import { searchCatalogColumns } from "@/features/sources/api/catalog";
 import {
   deleteJoin,
   getJoinPath,
   listObjectJoins,
-  searchCatalogColumns,
   upsertJoin,
-} from "@/features/sources/api";
+} from "@/features/sources/api/joins";
+import {
+  type JoinSelectOption,
+  columnLabel,
+  columnOptionLabel,
+  isAutoDerivedJoin,
+  mergeSelectedOption,
+  retainSelectedOption,
+  validateJoinDraft,
+} from "@/features/sources/catalog-detail/joinEdges";
 import type { CatalogObject, JoinPathResult } from "@/features/sources/types";
 import { usePagedList } from "@/hooks/usePagedList";
+import { useSearchDebounce } from "@/hooks/useSearchDebounce";
 import { ApiError } from "@/lib/api";
 import { listPresentationOf } from "@/lib/list-state";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
 
-type SelectOption = { value: string; label: string };
-
 type JoinsTabProps = {
   object: CatalogObject;
   writable: boolean;
+  listEnabled?: boolean;
 };
 
-function columnLabel(detail: CatalogObject, columnId: string): string {
-  const col = detail.columns.find((c) => c.id === columnId);
-  if (!col) return columnId;
-  return `${col.name} · ${col.locator_key}`;
-}
-
-export function JoinsTab({ object, writable }: JoinsTabProps) {
+export function JoinsTab({
+  object,
+  writable,
+  listEnabled = true,
+}: JoinsTabProps) {
   const t = useTranslate();
   const { open } = useNotification();
   const [saving, setSaving] = useState(false);
@@ -59,8 +66,8 @@ export function JoinsTab({ object, writable }: JoinsTabProps) {
   const [joinKind, setJoinKind] = useState<string | null>("INNER");
   const [joinExpression, setJoinExpression] = useState("");
   const [toSearch, setToSearch] = useState("");
-  const [debouncedToSearch, setDebouncedToSearch] = useState("");
-  const [toOptions, setToOptions] = useState<SelectOption[]>([]);
+  const debouncedToSearch = useSearchDebounce(toSearch);
+  const [toOptions, setToOptions] = useState<JoinSelectOption[]>([]);
   const [toSearchLoading, setToSearchLoading] = useState(false);
   const [maxHops, setMaxHops] = useState(2);
   const [pathLoading, setPathLoading] = useState(false);
@@ -90,6 +97,7 @@ export function JoinsTab({ object, writable }: JoinsTabProps) {
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
     resetDeps: [object.id],
+    enabled: listEnabled,
     onError,
   });
   const listPresentation = listPresentationOf({
@@ -102,19 +110,13 @@ export function JoinsTab({ object, writable }: JoinsTabProps) {
 
   useEffect(() => {
     setJoinFromId(object.columns[0]?.id ?? null);
-  }, [object.id, object.columns]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedToSearch(toSearch), 300);
-    return () => window.clearTimeout(timer);
-  }, [toSearch]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Overview save must not reset the from-column picker
+  }, [object.id]);
 
   useEffect(() => {
     const query = debouncedToSearch.trim();
     if (!query) {
-      setToOptions((prev) =>
-        joinToId ? prev.filter((o) => o.value === joinToId) : [],
-      );
+      setToOptions((prev) => retainSelectedOption(prev, joinToId));
       return;
     }
     let cancelled = false;
@@ -128,13 +130,9 @@ export function JoinsTab({ object, writable }: JoinsTabProps) {
         if (cancelled) return;
         const next = data.items.map((c) => ({
           value: c.id,
-          label: `${c.name} · ${c.locator_key}`,
+          label: columnOptionLabel(c.name, c.locator_key),
         }));
-        setToOptions((prev) => {
-          if (!joinToId || next.some((o) => o.value === joinToId)) return next;
-          const selected = prev.find((o) => o.value === joinToId);
-          return selected ? [selected, ...next] : next;
-        });
+        setToOptions((prev) => mergeSelectedOption(next, joinToId, prev));
       })
       .catch((err) => {
         if (cancelled) return;
@@ -152,21 +150,21 @@ export function JoinsTab({ object, writable }: JoinsTabProps) {
   }, [debouncedToSearch, object.source_id, joinToId, open]);
 
   const saveJoinEdge = async () => {
-    const evidence = joinEvidence.trim();
-    if (!evidence) {
-      open?.({ type: "error", message: t("catalog.joins.evidenceRequired") });
-      return;
-    }
-    if (!joinFromId || !joinToId) {
-      open?.({ type: "error", message: t("catalog.joins.toColumnRequired") });
+    const check = validateJoinDraft({
+      evidence: joinEvidence,
+      fromId: joinFromId,
+      toId: joinToId,
+    });
+    if (!check.ok) {
+      open?.({ type: "error", message: t(check.messageKey) });
       return;
     }
     setSaving(true);
     try {
       await upsertJoin({
-        from_column_id: joinFromId,
-        to_column_id: joinToId,
-        evidence,
+        from_column_id: check.fromId,
+        to_column_id: check.toId,
+        evidence: check.evidence,
         join_kind: joinKind || "INNER",
         join_expression: joinExpression.trim() || null,
       });
@@ -249,7 +247,7 @@ export function JoinsTab({ object, writable }: JoinsTabProps) {
               label={t("catalog.joins.from")}
               data={object.columns.map((c) => ({
                 value: c.id,
-                label: `${c.name} · ${c.locator_key}`,
+                label: columnOptionLabel(c.name, c.locator_key),
               }))}
               value={joinFromId}
               onChange={setJoinFromId}
@@ -345,19 +343,19 @@ export function JoinsTab({ object, writable }: JoinsTabProps) {
         onPageChange={setPage}
       >
         {joins.map((join) => {
-          const auto = join.origin === "foreign_key";
+          const auto = isAutoDerivedJoin(join.origin);
           return (
             <Table.Tr key={join.id}>
               <Table.Td>
                 <Text size="xs" style={{ wordBreak: "break-all" }}>
                   {join.from_column_locator_key ??
-                    columnLabel(object, join.from_column_id)}
+                    columnLabel(object.columns, join.from_column_id)}
                 </Text>
               </Table.Td>
               <Table.Td>
                 <Text size="xs" style={{ wordBreak: "break-all" }}>
                   {join.to_column_locator_key ??
-                    columnLabel(object, join.to_column_id)}
+                    columnLabel(object.columns, join.to_column_id)}
                 </Text>
               </Table.Td>
               <Table.Td>{join.join_kind ?? "INNER"}</Table.Td>

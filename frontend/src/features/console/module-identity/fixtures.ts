@@ -86,6 +86,7 @@ export const MODULE_IDENTITY_FIXTURE: ModuleIdentity[] = [
       edit: "metadata:write",
       delete: null,
       show: "metadata:read",
+      sample: "catalog:sample",
     },
   },
   {

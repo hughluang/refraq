@@ -10,7 +10,7 @@ import { ForbiddenState } from "@/components/feedback/ForbiddenState";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
-import { listStructureDiffs } from "@/features/sources/api";
+import { listStructureDiffs } from "@/features/sources/api/structure-diffs";
 import { StructureDiffClassBadge } from "@/features/sources/structure-diffs/StructureDiffClassBadge";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { usePagedList } from "@/hooks/usePagedList";

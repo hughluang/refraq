@@ -189,7 +189,6 @@
   "catalog.sample.opContains": "含有",
   "catalog.sample.opIsNull": "为空",
   "catalog.sample.forbidden": "当前账号没有 catalog:sample 权限，无法预览样本数据。",
-  "catalog.sample.noSource": "未找到关联 Source，无法预览样本数据。",
   "catalog.sample.empty": "尚未加载样本数据",
   "catalog.sample.stale": "过滤、排序或每页行数已变更，需重新加载。",
   "catalog.sample.unstableOrder": "未指定排序时，使用偏移分页可能漏行或重复。",

@@ -15,18 +15,18 @@ import {
   Title,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
-import { useNotification, useTranslate } from "@refinedev/core";
+import { useTranslate } from "@refinedev/core";
 import { useEffect, useMemo, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
 import { listBusinessDomains } from "@/features/business-domains/api";
 import type { BusinessDomain } from "@/features/business-domains/types";
-import { patchObjectSemantics } from "@/features/sources/api";
+import { patchObjectSemantics } from "@/features/sources/api/semantics";
+import { useSemanticsSave } from "@/features/sources/catalog-detail/useSemanticsSave";
 import type {
   CatalogObject,
   ObjectCategory,
 } from "@/features/sources/types";
-import { ApiError } from "@/lib/api";
 
 const OBJECT_CATEGORY_OPTIONS: { value: ObjectCategory; label: string }[] = [
   { value: "transaction_fact", label: "transaction_fact" },
@@ -68,8 +68,7 @@ function formFromObject(obj: CatalogObject): OverviewFormValues {
 
 export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
   const t = useTranslate();
-  const { open } = useNotification();
-  const [saving, setSaving] = useState(false);
+  const { saving, save: saveSemantics } = useSemanticsSave(onSaved);
   const [domains, setDomains] = useState<BusinessDomain[]>([]);
   const form = useForm<OverviewFormValues>({
     initialValues: formFromObject(object),
@@ -101,9 +100,8 @@ export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
   );
 
   const save = async (values: OverviewFormValues) => {
-    setSaving(true);
-    try {
-      const data = await patchObjectSemantics(object.id, {
+    const saved = await saveSemantics(() =>
+      patchObjectSemantics(object.id, {
         business_name: values.business_name,
         business_description: values.business_description,
         object_category:
@@ -113,17 +111,10 @@ export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
         business_primary_key: values.business_primary_key,
         evidence_summary: values.evidence_summary,
         open_questions: values.open_questions,
-      });
-      onSaved(data.object);
-      form.setValues(formFromObject(data.object));
-      open?.({ type: "success", message: t("catalog.semantics.saved") });
-    } catch (err) {
-      open?.({
-        type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
-      });
-    } finally {
-      setSaving(false);
+      }),
+    );
+    if (saved) {
+      form.setValues(formFromObject(saved));
     }
   };
 

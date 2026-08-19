@@ -13,6 +13,20 @@ export type CanEvaluateResult = {
   reason?: string;
 };
 
+/** Reasons `accessControlProvider.can` returns before identities/permissions exist. */
+export const ACCESS_NOT_READY_REASONS = [
+  "module_identity_not_ready",
+  "user_permissions_not_ready",
+] as const;
+
+export function isAccessEvaluationPending(
+  isLoading: boolean,
+  data: { can?: boolean; reason?: string } | undefined,
+): boolean {
+  if (isLoading || data === undefined) return true;
+  return ACCESS_NOT_READY_REASONS.some((reason) => data.reason === reason);
+}
+
 function actionPermission(
   module: ModuleIdentity,
   action: string,
@@ -23,6 +37,7 @@ function actionPermission(
   if (action === "edit") return actions.edit;
   if (action === "delete") return actions.delete;
   if (action === "show") return actions.show;
+  if (action === "sample") return actions.sample;
   return undefined;
 }
 

@@ -5,6 +5,7 @@ import {
   Badge,
   Button,
   Group,
+  Loader,
   NumberInput,
   Select,
   Stack,
@@ -12,83 +13,46 @@ import {
   Text,
   TextInput,
 } from "@mantine/core";
-import { useNotification, useTranslate } from "@refinedev/core";
-import { useEffect, useMemo, useState } from "react";
+import { useTranslate } from "@refinedev/core";
+import { useMemo } from "react";
 
 import { EmptyState } from "@/components/feedback/EmptyState";
-import { runObjectSample } from "@/features/sources/api";
 import {
-  defaultSampleOrderColumn,
   formatSampleCell,
   isSampleFilterOp,
-  sampleFilterSnapshot,
-  type SampleFilter,
 } from "@/features/sources/catalog-detail/sampleFilters";
-import type { CatalogObject, SampleResult, Source } from "@/features/sources/types";
-import { ApiError } from "@/lib/api";
-import { useSessionStore } from "@/providers/session-store";
+import {
+  DEFAULT_SAMPLE_LIMIT,
+  useCatalogSample,
+} from "@/features/sources/catalog-detail/useCatalogSample";
+import type { CatalogObject } from "@/features/sources/types";
 
 type SampleTabProps = {
   object: CatalogObject;
-  source: Source | null;
 };
 
-type AppliedParams = {
-  limit: number;
-  offset: number;
-  filterKey: string;
-  orderColumn: string | null;
-  orderDirection: "asc" | "desc";
-};
-
-const DEFAULT_FILTER: SampleFilter = {
-  column: null,
-  op: "eq",
-  value: "",
-};
-
-const DEFAULT_LIMIT = 50;
-
-export function SampleTab({ object, source }: SampleTabProps) {
+export function SampleTab({ object }: SampleTabProps) {
   const t = useTranslate();
-  const { open } = useNotification();
-  const canSample = useSessionStore((s) =>
-    Boolean(s.user?.permissions.includes("catalog:sample")),
-  );
-
-  const [limit, setLimit] = useState(DEFAULT_LIMIT);
-  const [offset, setOffset] = useState(0);
-  const [filter, setFilter] = useState<SampleFilter>(DEFAULT_FILTER);
-  const [orderColumn, setOrderColumn] = useState<string | null>(() =>
-    defaultSampleOrderColumn(object),
-  );
-  const [orderDirection, setOrderDirection] = useState<"asc" | "desc">("asc");
-  const [result, setResult] = useState<SampleResult | null>(null);
-  const [applied, setApplied] = useState<AppliedParams | null>(null);
-  const [forbidden, setForbidden] = useState(false);
-  const [running, setRunning] = useState(false);
-
-  useEffect(() => {
-    setLimit(DEFAULT_LIMIT);
-    setOffset(0);
-    setFilter(DEFAULT_FILTER);
-    setOrderColumn(defaultSampleOrderColumn(object));
-    setOrderDirection("asc");
-    setResult(null);
-    setApplied(null);
-    setForbidden(false);
-  }, [object.id]);
-
-  const filterKey = useMemo(() => sampleFilterSnapshot(filter), [filter]);
-  const stale = Boolean(
-    result &&
-      applied &&
-      (applied.limit !== limit ||
-        applied.offset !== offset ||
-        applied.filterKey !== filterKey ||
-        applied.orderColumn !== orderColumn ||
-        applied.orderDirection !== orderDirection),
-  );
+  const sample = useCatalogSample(object);
+  const {
+    canSamplePending,
+    canSample,
+    forbidden,
+    limit,
+    setLimit,
+    setOffset,
+    filter,
+    setFilter,
+    orderColumn,
+    setOrderColumn,
+    orderDirection,
+    setOrderDirection,
+    result,
+    stale,
+    unstableOrder,
+    running,
+    run,
+  } = sample;
 
   const columnOptions = useMemo(
     () =>
@@ -108,70 +72,14 @@ export function SampleTab({ object, source }: SampleTabProps) {
     [t],
   );
 
-  const unstableOrder = offset > 0 && !orderColumn;
-
-  const run = async (nextOffset: number = offset) => {
-    setRunning(true);
-    try {
-      const filters =
-        filter.column != null
-          ? [
-              {
-                column: filter.column,
-                op: filter.op,
-                value: filter.op === "is_null" ? "" : filter.value,
-              },
-            ]
-          : [];
-      const order_by =
-        orderColumn != null
-          ? [{ column: orderColumn, direction: orderDirection }]
-          : [];
-      const data = await runObjectSample(object.id, {
-        filters,
-        order_by,
-        offset: nextOffset,
-        limit,
-        include_sql: false,
-      });
-      setOffset(nextOffset);
-      setResult(data);
-      setApplied({
-        limit,
-        offset: nextOffset,
-        filterKey,
-        orderColumn,
-        orderDirection,
-      });
-      setForbidden(false);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 403) {
-        setForbidden(true);
-        setResult(null);
-        setApplied(null);
-        return;
-      }
-      open?.({
-        type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
-      });
-    } finally {
-      setRunning(false);
-    }
-  };
+  if (canSamplePending) {
+    return <Loader size="sm" />;
+  }
 
   if (!canSample || forbidden) {
     return (
       <Text size="sm" c="dimmed">
         {t("catalog.sample.forbidden")}
-      </Text>
-    );
-  }
-
-  if (!source) {
-    return (
-      <Text size="sm" c="dimmed">
-        {t("catalog.sample.noSource")}
       </Text>
     );
   }
@@ -185,7 +93,7 @@ export function SampleTab({ object, source }: SampleTabProps) {
           label={t("catalog.sample.pageSize")}
           value={limit}
           onChange={(v) => {
-            setLimit(typeof v === "number" ? v : DEFAULT_LIMIT);
+            setLimit(typeof v === "number" ? v : DEFAULT_SAMPLE_LIMIT);
             setOffset(0);
           }}
           min={1}

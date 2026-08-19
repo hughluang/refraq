@@ -12,6 +12,7 @@ export type ModuleActions = {
   edit?: string | null;
   delete?: string | null;
   show?: string | null;
+  sample?: string | null;
 };
 
 export type ModuleIdentity = {

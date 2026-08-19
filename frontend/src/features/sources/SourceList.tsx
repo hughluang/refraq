@@ -30,7 +30,7 @@ import {
   patchSource,
   testSource,
   testSourceDraft,
-} from "@/features/sources/api";
+} from "@/features/sources/api/sources";
 import { SpecTree, defaultsFromSchema } from "@/features/sources/SpecTree";
 import type {
   ConnectorSpec,

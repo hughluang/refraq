@@ -69,6 +69,7 @@ def get_module_identities(
                     edit=module.actions.edit,
                     delete=module.actions.delete,
                     show=module.actions.show,
+                    sample=module.actions.sample,
                 ),
             )
             for module in identities

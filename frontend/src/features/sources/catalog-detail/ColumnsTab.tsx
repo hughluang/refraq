@@ -11,166 +11,95 @@ import {
   TextInput,
   Textarea,
 } from "@mantine/core";
-import { useNotification, useTranslate } from "@refinedev/core";
-import { useEffect, useMemo, useState, Fragment } from "react";
+import { useTranslate } from "@refinedev/core";
+import { useEffect, useMemo, useRef, useState, Fragment } from "react";
 
 import { ListPager } from "@/components/display/ListPager";
-import { patchColumnSemanticsBatch } from "@/features/sources/api";
-import type {
-  CatalogObject,
-  ColumnSemantics,
-  EnumCatalogEntry,
-} from "@/features/sources/types";
-import { ApiError } from "@/lib/api";
+import { patchColumnSemanticsBatch } from "@/features/sources/api/semantics";
+import {
+  type ColumnDraft,
+  type ColumnFilter,
+  batchItemsFromDirty,
+  dirtyColumnIds,
+  draftFromColumn,
+  draftsFromColumns,
+  filterColumns,
+  foreignKeyNames,
+  primaryKeyNames,
+  shouldReplaceColumnDrafts,
+} from "@/features/sources/catalog-detail/columnDrafts";
+import { useSemanticsSave } from "@/features/sources/catalog-detail/useSemanticsSave";
+import type { CatalogObject } from "@/features/sources/types";
 
 const PAGE_SIZE = 50;
-
-type ColumnDraft = {
-  business_name: string;
-  business_description: string;
-  column_semantics: ColumnSemantics;
-  enum_catalog: EnumCatalogEntry[];
-};
-
-type ColumnFilter =
-  | "all"
-  | "empty"
-  | "filled"
-  | "enum"
-  | "pk"
-  | "fk"
-  | "absent";
 
 type ColumnsTabProps = {
   object: CatalogObject;
   writable: boolean;
   onSaved: (object: CatalogObject) => void;
+  reloadEpoch: number;
 };
-
-function draftFromColumn(col: CatalogObject["columns"][number]): ColumnDraft {
-  return {
-    business_name: col.business_name ?? "",
-    business_description: col.business_description ?? "",
-    column_semantics: {
-      semantic_type: col.column_semantics?.semantic_type ?? "",
-      value_pattern: col.column_semantics?.value_pattern ?? "",
-      unit: col.column_semantics?.unit ?? "",
-    },
-    enum_catalog: (col.enum_catalog ?? []).map((e) => ({
-      code: e.code,
-      label: e.label,
-      description: e.description ?? "",
-    })),
-  };
-}
-
-function draftsEqual(a: ColumnDraft, b: ColumnDraft): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
-function normalizeForSave(draft: ColumnDraft) {
-  const semanticType = draft.column_semantics.semantic_type?.trim() || null;
-  const valuePattern = draft.column_semantics.value_pattern?.trim() || null;
-  const unit = draft.column_semantics.unit?.trim() || null;
-  const hasSemantics = Boolean(semanticType || valuePattern || unit);
-  return {
-    business_name: draft.business_name,
-    business_description: draft.business_description,
-    column_semantics: hasSemantics
-      ? {
-          semantic_type: semanticType,
-          value_pattern: valuePattern,
-          unit,
-        }
-      : null,
-    enum_catalog: draft.enum_catalog
-      .filter((e) => e.code.trim())
-      .map((e) => ({
-        code: e.code.trim(),
-        label: e.label.trim() || e.code.trim(),
-        description: e.description?.trim() || null,
-      })),
-  };
-}
 
 export function ColumnsTab({
   object,
   writable,
   onSaved,
+  reloadEpoch,
 }: ColumnsTabProps) {
   const t = useTranslate();
-  const { open } = useNotification();
+  const { saving, save } = useSemanticsSave(onSaved);
   const [drafts, setDrafts] = useState<Record<string, ColumnDraft>>({});
   const [baseline, setBaseline] = useState<Record<string, ColumnDraft>>({});
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<ColumnFilter>("all");
   const [page, setPage] = useState(1);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [saving, setSaving] = useState(false);
+  const draftScopeRef = useRef<{
+    objectId?: string;
+    reloadEpoch?: number;
+  }>({});
 
   useEffect(() => {
-    const next: Record<string, ColumnDraft> = {};
-    for (const col of object.columns) {
-      next[col.id] = draftFromColumn(col);
-    }
+    const previous = draftScopeRef.current;
+    const replace = shouldReplaceColumnDrafts({
+      objectId: object.id,
+      previousObjectId: previous.objectId,
+      reloadEpoch,
+      previousReloadEpoch: previous.reloadEpoch,
+    });
+    draftScopeRef.current = { objectId: object.id, reloadEpoch };
+    if (!replace) return;
+    const next = draftsFromColumns(object.columns);
     setDrafts(next);
     setBaseline(next);
     setExpanded({});
     setPage(1);
-  }, [object.id, object.columns]);
+  }, [object.id, object.columns, reloadEpoch]);
 
   const pkSet = useMemo(
-    () => new Set(object.primary_key ?? []),
+    () => primaryKeyNames(object.primary_key),
     [object.primary_key],
   );
-  const fkSet = useMemo(() => {
-    const set = new Set<string>();
-    for (const fk of object.foreign_keys ?? []) {
-      for (const name of fk.columns) set.add(name);
-    }
-    return set;
-  }, [object.foreign_keys]);
+  const fkSet = useMemo(
+    () => foreignKeyNames(object.foreign_keys),
+    [object.foreign_keys],
+  );
 
-  const dirtyIds = useMemo(() => {
-    return object.columns
-      .filter((col) => {
-        const draft = drafts[col.id];
-        const base = baseline[col.id];
-        if (!draft || !base) return false;
-        return !draftsEqual(draft, base);
-      })
-      .map((c) => c.id);
-  }, [object.columns, drafts, baseline]);
+  const dirtyIds = useMemo(
+    () => dirtyColumnIds(object.columns, drafts, baseline),
+    [object.columns, drafts, baseline],
+  );
 
-  const filtered = useMemo(() => {
-    const query = q.trim().toLowerCase();
-    return object.columns.filter((col) => {
-      const draft = drafts[col.id] ?? draftFromColumn(col);
-      if (query) {
-        const hay = `${col.name} ${draft.business_name} ${col.locator_key}`.toLowerCase();
-        if (!hay.includes(query)) return false;
-      }
-      const hasName = Boolean(draft.business_name.trim());
-      const hasDesc = Boolean(draft.business_description.trim());
-      const hasEnum = draft.enum_catalog.length > 0;
-      switch (filter) {
-        case "empty":
-          return !(hasName && hasDesc);
-        case "filled":
-          return hasName && hasDesc;
-        case "enum":
-          return hasEnum;
-        case "pk":
-          return pkSet.has(col.name);
-        case "fk":
-          return fkSet.has(col.name);
-        case "absent":
-          return !col.is_present;
-        default:
-          return true;
-      }
-    });
-  }, [object.columns, drafts, q, filter, pkSet, fkSet]);
+  const filtered = useMemo(
+    () =>
+      filterColumns(object.columns, drafts, {
+        query: q,
+        filter,
+        pkNames: pkSet,
+        fkNames: fkSet,
+      }),
+    [object.columns, drafts, q, filter, pkSet, fkSet],
+  );
 
   useEffect(() => {
     setPage(1);
@@ -191,28 +120,16 @@ export function ColumnsTab({
 
   const saveDirty = async () => {
     if (!dirtyIds.length) return;
-    setSaving(true);
-    try {
-      const columns = dirtyIds.map((id) => {
-        const col = object.columns.find((c) => c.id === id)!;
-        const draft = drafts[id];
-        const payload = normalizeForSave(draft);
-        return {
-          column_name: col.name,
-          ...payload,
-        };
-      });
-      const data = await patchColumnSemanticsBatch(object.id, columns);
-      onSaved(data.object);
-      open?.({ type: "success", message: t("catalog.semantics.saved") });
-    } catch (err) {
-      open?.({
-        type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
-      });
-    } finally {
-      setSaving(false);
-    }
+    const saved = await save(() =>
+      patchColumnSemanticsBatch(
+        object.id,
+        batchItemsFromDirty(object.columns, drafts, dirtyIds),
+      ),
+    );
+    if (!saved) return;
+    const next = draftsFromColumns(saved.columns);
+    setDrafts(next);
+    setBaseline(next);
   };
 
   return (

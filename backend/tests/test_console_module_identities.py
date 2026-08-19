@@ -35,6 +35,7 @@ EXPECTED_IDENTITIES = {
             "edit": None,
             "delete": None,
             "show": None,
+            "sample": None,
         },
     },
     "users": {
@@ -51,6 +52,7 @@ EXPECTED_IDENTITIES = {
             "edit": "users:write",
             "delete": "users:write",
             "show": None,
+            "sample": None,
         },
     },
     "roles": {
@@ -67,6 +69,7 @@ EXPECTED_IDENTITIES = {
             "edit": "roles:write",
             "delete": "roles:write",
             "show": None,
+            "sample": None,
         },
     },
     "tokens": {
@@ -78,6 +81,7 @@ EXPECTED_IDENTITIES = {
             "edit": "tokens:write",
             "delete": "tokens:write",
             "show": None,
+            "sample": None,
         },
     },
     "sources": {
@@ -94,6 +98,7 @@ EXPECTED_IDENTITIES = {
             "edit": "sources:write",
             "delete": "sources:write",
             "show": "metadata:read",
+            "sample": None,
         },
     },
     "catalog": {
@@ -110,6 +115,7 @@ EXPECTED_IDENTITIES = {
             "edit": "metadata:write",
             "delete": None,
             "show": "metadata:read",
+            "sample": "catalog:sample",
         },
     },
     "business-domains": {
@@ -126,6 +132,7 @@ EXPECTED_IDENTITIES = {
             "edit": "metadata:write",
             "delete": "metadata:write",
             "show": None,
+            "sample": None,
         },
     },
     "type-mappings": {
@@ -142,6 +149,7 @@ EXPECTED_IDENTITIES = {
             "edit": "metadata:write",
             "delete": None,
             "show": None,
+            "sample": None,
         },
     },
     "jobs": {
@@ -153,6 +161,7 @@ EXPECTED_IDENTITIES = {
             "edit": None,
             "delete": None,
             "show": None,
+            "sample": None,
         },
     },
     "schedules": {
@@ -169,6 +178,7 @@ EXPECTED_IDENTITIES = {
             "edit": "jobs:run",
             "delete": "jobs:run",
             "show": None,
+            "sample": None,
         },
     },
     "settings": {
@@ -185,6 +195,7 @@ EXPECTED_IDENTITIES = {
             "edit": "settings:write",
             "delete": None,
             "show": None,
+            "sample": None,
         },
     },
 }

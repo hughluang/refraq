@@ -18,6 +18,13 @@ function messageOf(err: unknown): string {
   return err instanceof ApiError ? err.detail : String(err);
 }
 
+export function shouldApplyPagedListResult(
+  startedGeneration: number,
+  latestGeneration: number,
+): boolean {
+  return startedGeneration === latestGeneration;
+}
+
 export function usePagedList<T>({
   pageSize,
   fetch,
@@ -30,6 +37,7 @@ export function usePagedList<T>({
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const generationRef = useRef(0);
   const resetKey = JSON.stringify(resetDeps);
   const resetKeyRef = useRef(resetKey);
   const fetchPage = resetKeyRef.current === resetKey ? page : 1;
@@ -41,7 +49,9 @@ export function usePagedList<T>({
   }
 
   const load = useCallback(async () => {
+    const started = ++generationRef.current;
     if (!enabled) {
+      if (!shouldApplyPagedListResult(started, generationRef.current)) return;
       setItems([]);
       setTotal(0);
       setError(null);
@@ -54,15 +64,19 @@ export function usePagedList<T>({
         limit: pageSize,
         offset: pageToOffset(fetchPage, pageSize),
       });
+      if (!shouldApplyPagedListResult(started, generationRef.current)) return;
       setItems(data.items);
       setTotal(data.total);
       setError(null);
     } catch (err) {
+      if (!shouldApplyPagedListResult(started, generationRef.current)) return;
       const message = messageOf(err);
       setError(message);
       onError?.(message);
     } finally {
-      setLoading(false);
+      if (shouldApplyPagedListResult(started, generationRef.current)) {
+        setLoading(false);
+      }
     }
   }, [enabled, fetch, fetchPage, onError, pageSize]);
 

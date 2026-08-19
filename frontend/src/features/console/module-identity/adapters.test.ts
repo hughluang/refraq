@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   evaluateCan,
+  isAccessEvaluationPending,
   matchPath,
   toRefineResources,
 } from "@/features/console/module-identity/adapters";
@@ -113,6 +114,28 @@ describe("evaluateCan", () => {
     ).toEqual({ can: true });
   });
 
+  it("grants catalog sample with catalog:sample", () => {
+    expect(
+      evaluateCan(
+        MODULE_IDENTITY_FIXTURE,
+        ["catalog:sample"],
+        "catalog",
+        "sample",
+      ),
+    ).toEqual({ can: true });
+  });
+
+  it("denies catalog sample when only metadata:write is present", () => {
+    expect(
+      evaluateCan(
+        MODULE_IDENTITY_FIXTURE,
+        ["metadata:write"],
+        "catalog",
+        "sample",
+      ),
+    ).toEqual({ can: false, reason: "catalog:sample" });
+  });
+
   it("rejects unknown resource and unsupported action", () => {
     expect(evaluateCan(MODULE_IDENTITY_FIXTURE, [], "nope", "list")).toEqual({
       can: false,
@@ -121,6 +144,38 @@ describe("evaluateCan", () => {
     expect(
       evaluateCan(MODULE_IDENTITY_FIXTURE, ["settings:read"], "settings", "create"),
     ).toEqual({ can: false, reason: "unsupported_action" });
+  });
+});
+
+describe("isAccessEvaluationPending", () => {
+  it("treats loading and undefined data as pending", () => {
+    expect(isAccessEvaluationPending(true, { can: false })).toBe(true);
+    expect(isAccessEvaluationPending(false, undefined)).toBe(true);
+  });
+
+  it("treats identity and permission bootstrap reasons as pending", () => {
+    expect(
+      isAccessEvaluationPending(false, {
+        can: false,
+        reason: "module_identity_not_ready",
+      }),
+    ).toBe(true);
+    expect(
+      isAccessEvaluationPending(false, {
+        can: false,
+        reason: "user_permissions_not_ready",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat a resolved catalog:sample deny as pending", () => {
+    expect(
+      isAccessEvaluationPending(false, {
+        can: false,
+        reason: "catalog:sample",
+      }),
+    ).toBe(false);
+    expect(isAccessEvaluationPending(false, { can: true })).toBe(false);
   });
 });
 

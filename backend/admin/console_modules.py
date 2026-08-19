@@ -24,6 +24,7 @@ class ModuleActions:
     edit: Permission | None = None
     delete: Permission | None = None
     show: Permission | None = None
+    sample: Permission | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +134,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
             list="metadata:read",
             edit="metadata:write",
             show="metadata:read",
+            sample="catalog:sample",
         ),
         group_order=25,
         module_order=20,

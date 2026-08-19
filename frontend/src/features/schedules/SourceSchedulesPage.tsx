@@ -18,7 +18,7 @@ import { ScheduleFormModal } from "@/features/schedules/ScheduleFormModal";
 import { ScheduleJobsModal } from "@/features/schedules/ScheduleJobsModal";
 import { ScheduleRowActions } from "@/features/schedules/ScheduleRowActions";
 import type { ScheduledTask } from "@/features/schedules/types";
-import { getSource } from "@/features/sources/api";
+import { getSource } from "@/features/sources/api/sources";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { usePagedList } from "@/hooks/usePagedList";
 import { ApiError } from "@/lib/api";

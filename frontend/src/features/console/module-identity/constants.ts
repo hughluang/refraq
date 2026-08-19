@@ -22,6 +22,7 @@ export const ModuleAction = {
   edit: "edit",
   delete: "delete",
   show: "show",
+  sample: "sample",
 } as const;
 
 export type ModuleActionName = (typeof ModuleAction)[keyof typeof ModuleAction];

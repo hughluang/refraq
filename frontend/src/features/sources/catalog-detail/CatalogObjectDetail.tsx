@@ -17,14 +17,22 @@ import { PageError } from "@/components/feedback/PageError";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { FillColumn } from "@/components/layout/FillColumn";
 import { PageChrome } from "@/components/layout/PageChrome";
-import { ModuleAction, ModuleId } from "@/features/console/module-identity";
-import { getCatalogObject, getSource } from "@/features/sources/api";
+import {
+  isAccessEvaluationPending,
+  ModuleAction,
+  ModuleId,
+} from "@/features/console/module-identity";
+import { getCatalogObject } from "@/features/sources/api/catalog";
+import {
+  catalogPresence,
+  catalogSemanticsReady,
+} from "@/features/sources/catalog-detail/catalogStatus";
 import { ColumnsTab } from "@/features/sources/catalog-detail/ColumnsTab";
 import { DdlTab } from "@/features/sources/catalog-detail/DdlTab";
 import { JoinsTab } from "@/features/sources/catalog-detail/JoinsTab";
 import { OverviewTab } from "@/features/sources/catalog-detail/OverviewTab";
 import { SampleTab } from "@/features/sources/catalog-detail/SampleTab";
-import type { CatalogObject, Source } from "@/features/sources/types";
+import type { CatalogObject } from "@/features/sources/types";
 import { ApiError } from "@/lib/api";
 
 type CatalogObjectDetailProps = {
@@ -38,40 +46,67 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
     resource: ModuleId.catalog,
     action: ModuleAction.edit,
   });
+  const { data: canSampleData, isLoading: canSampleLoading } = useCan({
+    resource: ModuleId.catalog,
+    action: ModuleAction.sample,
+  });
+  const canSamplePending = isAccessEvaluationPending(
+    canSampleLoading,
+    canSampleData,
+  );
+  const showSampleTab = canSamplePending || Boolean(canSampleData?.can);
   const writable = Boolean(canWrite?.can);
 
   const [object, setObject] = useState<CatalogObject | null>(null);
-  const [source, setSource] = useState<Source | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string | null>("overview");
+  const [reloadEpoch, setReloadEpoch] = useState(0);
+  const [joinsVisited, setJoinsVisited] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const objRes = await getCatalogObject(objectId);
-      setObject(objRes.object);
-      try {
-        const srcRes = await getSource(objRes.object.source_id);
-        setSource(srcRes.source);
-      } catch (err) {
-        if (err instanceof ApiError && err.status === 404) {
-          setSource(null);
-        } else {
-          throw err;
-        }
+  const load = useCallback(
+    async (opts?: { refresh?: boolean }) => {
+      const refresh = Boolean(opts?.refresh);
+      if (!refresh) {
+        setLoading(true);
       }
-    } catch (err) {
-      setError(err instanceof ApiError ? err.detail : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [objectId]);
+      setError(null);
+      try {
+        const objRes = await getCatalogObject(objectId);
+        setObject(objRes.object);
+        if (refresh) {
+          setReloadEpoch((n) => n + 1);
+        }
+      } catch (err) {
+        setError(err instanceof ApiError ? err.detail : String(err));
+        if (!refresh) {
+          setObject(null);
+        }
+      } finally {
+        setLoading(false);
+      }
+    },
+    [objectId],
+  );
 
   useEffect(() => {
+    setReloadEpoch(0);
+    setJoinsVisited(false);
+    setActiveTab("overview");
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (activeTab === "joins") {
+      setJoinsVisited(true);
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!showSampleTab && activeTab === "sample") {
+      setActiveTab("overview");
+    }
+  }, [showSampleTab, activeTab]);
 
   const title = useMemo(() => {
     if (!object) return t("catalog.detail");
@@ -113,6 +148,11 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
     );
   }
 
+  const presence = catalogPresence(object.is_present);
+  const semanticsReady = catalogSemanticsReady(
+    Boolean(object.business_semantics_ready),
+  );
+
   return (
     <PageChrome
       title={title}
@@ -127,7 +167,11 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
           >
             {t("catalog.backToList")}
           </Button>
-          <Button size="sm" variant="light" onClick={() => void load()}>
+          <Button
+            size="sm"
+            variant="light"
+            onClick={() => void load({ refresh: true })}
+          >
             {t("catalog.refresh")}
           </Button>
         </Group>
@@ -136,17 +180,9 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
       <FillColumn gap="md">
         <Group gap="sm" wrap="wrap">
           <Badge variant="light">{object.object_type}</Badge>
-          <Badge color={object.is_present ? "green" : "gray"}>
-            {object.is_present
-              ? t("catalog.fields.presentValue")
-              : t("catalog.fields.absentValue")}
-          </Badge>
-          <Badge
-            color={object.business_semantics_ready ? "green" : "gray"}
-          >
-            {object.business_semantics_ready
-              ? t("catalog.semantics.ready")
-              : t("catalog.semantics.notReady")}
+          <Badge color={presence.color}>{t(presence.labelKey)}</Badge>
+          <Badge color={semanticsReady.color}>
+            {t(semanticsReady.labelKey)}
           </Badge>
           <Text size="sm" c="dimmed">
             {t("catalog.semantics.provenance")}: {object.semantic_source ?? "—"}
@@ -205,7 +241,9 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
           <Tabs.List>
             <Tabs.Tab value="overview">{t("catalog.tabs.overview")}</Tabs.Tab>
             <Tabs.Tab value="columns">{t("catalog.tabs.columns")}</Tabs.Tab>
-            <Tabs.Tab value="sample">{t("catalog.tabs.sample")}</Tabs.Tab>
+            {showSampleTab ? (
+              <Tabs.Tab value="sample">{t("catalog.tabs.sample")}</Tabs.Tab>
+            ) : null}
             <Tabs.Tab value="joins">{t("catalog.tabs.joins")}</Tabs.Tab>
             <Tabs.Tab value="ddl">{t("catalog.tabs.ddl")}</Tabs.Tab>
           </Tabs.List>
@@ -221,14 +259,21 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
             <ColumnsTab
               object={object}
               writable={writable}
+              reloadEpoch={reloadEpoch}
               onSaved={(next) => setObject(next)}
             />
           </Tabs.Panel>
-          <Tabs.Panel value="sample" pt="md">
-            <SampleTab object={object} source={source} />
-          </Tabs.Panel>
+          {showSampleTab ? (
+            <Tabs.Panel value="sample" pt="md">
+              <SampleTab object={object} />
+            </Tabs.Panel>
+          ) : null}
           <Tabs.Panel value="joins" pt="md" style={{ overflow: "hidden" }}>
-            <JoinsTab object={object} writable={writable} />
+            <JoinsTab
+              object={object}
+              writable={writable}
+              listEnabled={joinsVisited}
+            />
           </Tabs.Panel>
           <Tabs.Panel value="ddl" pt="md">
             <DdlTab ddl={object.ddl} />

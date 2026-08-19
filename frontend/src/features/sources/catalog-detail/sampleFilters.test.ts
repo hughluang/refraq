@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildSampleRequest,
   defaultSampleOrderColumn,
   formatSampleCell,
   isSampleFilterOp,
+  isSampleStale,
+  isUnstableOrder,
   sampleFilterSnapshot,
 } from "@/features/sources/catalog-detail/sampleFilters";
 
@@ -79,5 +82,70 @@ describe("formatSampleCell", () => {
     expect(formatSampleCell(42)).toBe("42");
     expect(formatSampleCell(true)).toBe("true");
     expect(formatSampleCell("hi")).toBe("hi");
+  });
+});
+
+describe("buildSampleRequest", () => {
+  it("omits filters when no column is selected", () => {
+    expect(
+      buildSampleRequest(
+        { column: null, op: "eq", value: "x" },
+        null,
+        "asc",
+        10,
+        50,
+      ),
+    ).toEqual({
+      filters: [],
+      order_by: [],
+      offset: 10,
+      limit: 50,
+      include_sql: false,
+    });
+  });
+
+  it("clears is_null value and includes order_by", () => {
+    expect(
+      buildSampleRequest(
+        { column: "status", op: "is_null", value: "x" },
+        "id",
+        "desc",
+        0,
+        20,
+      ),
+    ).toEqual({
+      filters: [{ column: "status", op: "is_null", value: "" }],
+      order_by: [{ column: "id", direction: "desc" }],
+      offset: 0,
+      limit: 20,
+      include_sql: false,
+    });
+  });
+});
+
+describe("isSampleStale", () => {
+  const current = {
+    limit: 50,
+    offset: 0,
+    filterKey: "a",
+    orderColumn: "id",
+    orderDirection: "asc" as const,
+  };
+
+  it("is false when nothing has been applied", () => {
+    expect(isSampleStale(null, current)).toBe(false);
+  });
+
+  it("is true when applied params differ", () => {
+    expect(isSampleStale({ ...current, offset: 50 }, current)).toBe(true);
+    expect(isSampleStale(current, current)).toBe(false);
+  });
+});
+
+describe("isUnstableOrder", () => {
+  it("warns when paging without an order column", () => {
+    expect(isUnstableOrder(50, null)).toBe(true);
+    expect(isUnstableOrder(50, "id")).toBe(false);
+    expect(isUnstableOrder(0, null)).toBe(false);
   });
 });

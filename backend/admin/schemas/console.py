@@ -34,6 +34,7 @@ class ModuleActionsResponse(BaseModel):
     edit: str | None = None
     delete: str | None = None
     show: str | None = None
+    sample: str | None = None
 
 
 class ModuleIdentityResponse(BaseModel):

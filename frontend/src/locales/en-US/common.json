@@ -189,7 +189,6 @@
   "catalog.sample.opContains": "Contains",
   "catalog.sample.opIsNull": "Is null",
   "catalog.sample.forbidden": "Your account lacks catalog:sample; sample preview is unavailable.",
-  "catalog.sample.noSource": "Related Source was not found; sample preview is unavailable.",
   "catalog.sample.empty": "No sample loaded yet",
   "catalog.sample.stale": "Filters, order, or page size changed; reload to refresh.",
   "catalog.sample.unstableOrder": "Offset pagination without Order by may skip or repeat rows.",

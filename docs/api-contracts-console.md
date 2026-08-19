@@ -93,6 +93,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
 - Requires: authenticated User (Session or User PAT) and `console:access`
 - **Not** filtered by per-module permissions (contrast with navigation)
 - Does **not** include group or sort fields (those remain navigation-only)
+- `actions.sample` is a non-route UX action (Catalog Sample). Only `catalog` maps it to `catalog:sample`; other modules return `null`.
 
 ### Response: `200`
 
@@ -108,7 +109,8 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
         "create": null,
         "edit": null,
         "delete": null,
-        "show": null
+        "show": null,
+        "sample": null
       }
     },
     {
@@ -159,7 +161,8 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
         "create": null,
         "edit": "metadata:write",
         "delete": null,
-        "show": "metadata:read"
+        "show": "metadata:read",
+        "sample": "catalog:sample"
       }
     },
     {
@@ -211,7 +214,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
 | `roles` | `admin` | `/console/roles` | `roles:read` | create/edit/delete → `roles:write`; create `/console/roles/new`; edit `/console/roles/:id` |
 | `tokens` | `admin` (identity only; **not** in navigation) | `null` (no Console page; UI in Account Center) | `tokens:read` | create/edit/delete → `tokens:write`; see `docs/business-account.md` |
 | `sources` | `metadata` | `/console/sources` | `sources:read` | create/edit/delete → `sources:write` |
-| `catalog` | `metadata` | `/console/catalog` | `metadata:read` | edit → `metadata:write`; show → `metadata:read`; show route `/console/catalog/:id` |
+| `catalog` | `metadata` | `/console/catalog` | `metadata:read` | edit → `metadata:write`; show → `metadata:read`; sample → `catalog:sample` (no route); show route `/console/catalog/:id` |
 | `business-domains` | `metadata` | `/console/business-domains` | `metadata:read` | create/edit/delete → `metadata:write` |
 | `type-mappings` | `metadata` | `/console/type-mappings` | `metadata:read` | edit → `metadata:write` (no create/delete) |
 | `jobs` | `operations` | `/console/jobs` | `jobs:run` | — |

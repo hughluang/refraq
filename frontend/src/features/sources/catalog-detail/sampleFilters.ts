@@ -1,3 +1,5 @@
+import type { SampleRequestBody } from "@/features/sources/types";
+
 export type SampleFilterOp = "eq" | "neq" | "contains" | "is_null";
 
 export type SampleFilter = {
@@ -9,6 +11,14 @@ export type SampleFilter = {
 export type SampleOrderBy = {
   column: string;
   direction: "asc" | "desc";
+};
+
+export type SampleAppliedParams = {
+  limit: number;
+  offset: number;
+  filterKey: string;
+  orderColumn: string | null;
+  orderDirection: "asc" | "desc";
 };
 
 export function isSampleFilterOp(value: string): value is SampleFilterOp {
@@ -42,4 +52,53 @@ export function formatSampleCell(cell: unknown): string {
   if (cell === null || cell === undefined) return "NULL";
   if (typeof cell === "object") return JSON.stringify(cell);
   return String(cell);
+}
+
+export function buildSampleRequest(
+  filter: SampleFilter,
+  orderColumn: string | null,
+  orderDirection: SampleOrderBy["direction"],
+  offset: number,
+  limit: number,
+): SampleRequestBody {
+  const filters =
+    filter.column != null
+      ? [
+          {
+            column: filter.column,
+            op: filter.op,
+            value: filter.op === "is_null" ? "" : filter.value,
+          },
+        ]
+      : [];
+  const order_by: SampleOrderBy[] =
+    orderColumn != null ? [{ column: orderColumn, direction: orderDirection }] : [];
+  return {
+    filters,
+    order_by,
+    offset,
+    limit,
+    include_sql: false,
+  };
+}
+
+export function isSampleStale(
+  applied: SampleAppliedParams | null,
+  current: SampleAppliedParams,
+): boolean {
+  if (applied == null) return false;
+  return (
+    applied.limit !== current.limit ||
+    applied.offset !== current.offset ||
+    applied.filterKey !== current.filterKey ||
+    applied.orderColumn !== current.orderColumn ||
+    applied.orderDirection !== current.orderDirection
+  );
+}
+
+export function isUnstableOrder(
+  offset: number,
+  orderColumn: string | null,
+): boolean {
+  return offset > 0 && !orderColumn;
 }

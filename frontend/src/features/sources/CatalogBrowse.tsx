@@ -23,9 +23,15 @@ import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageError } from "@/components/feedback/PageError";
 import { PageChrome } from "@/components/layout/PageChrome";
-import { listCatalogObjects, listSources } from "@/features/sources/api";
+import { listCatalogObjects } from "@/features/sources/api/catalog";
+import { listSources } from "@/features/sources/api/sources";
+import {
+  catalogPresence,
+  catalogSemanticsReady,
+} from "@/features/sources/catalog-detail/catalogStatus";
 import type { Source } from "@/features/sources/types";
 import { usePagedList } from "@/hooks/usePagedList";
+import { useSearchDebounce } from "@/hooks/useSearchDebounce";
 import { ApiError } from "@/lib/api";
 import { listPresentationOf } from "@/lib/list-state";
 import type { PageQuery } from "@/lib/pagination";
@@ -42,7 +48,7 @@ export function CatalogBrowse() {
   const [sources, setSources] = useState<Source[]>([]);
   const [sourceId, setSourceId] = useState<string | null>(null);
   const [q, setQ] = useState("");
-  const [debouncedQ, setDebouncedQ] = useState("");
+  const debouncedQ = useSearchDebounce(q);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [semanticsReady, setSemanticsReady] =
@@ -103,13 +109,6 @@ export function CatalogBrowse() {
     void loadSources();
   }, [loadSources]);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedQ(q), 300);
-    return () => window.clearTimeout(timer);
-  }, [q]);
-
-  const filtersOffDefault =
-    q !== "" || semanticsReady !== "all" || !includeAbsent;
   const filtered =
     Boolean(debouncedQ) || semanticsReady !== "all" || !includeAbsent;
   const listPresentation = listPresentationOf({
@@ -122,7 +121,6 @@ export function CatalogBrowse() {
 
   function clearFilters() {
     setQ("");
-    setDebouncedQ("");
     setSemanticsReady("all");
     setIncludeAbsent(true);
   }
@@ -143,7 +141,6 @@ export function CatalogBrowse() {
       aria-label={t("common.search.clear")}
       onClick={() => {
         setQ("");
-        setDebouncedQ("");
       }}
     />
   ) : null;
@@ -214,7 +211,7 @@ export function CatalogBrowse() {
               onChange={(e) => setIncludeAbsent(e.currentTarget.checked)}
               mb={4}
             />
-            {filtersOffDefault ? (
+            {filtered ? (
               <Button
                 variant="subtle"
                 size="xs"
@@ -250,7 +247,12 @@ export function CatalogBrowse() {
             total={total}
             onPageChange={setPage}
           >
-            {items.map((obj) => (
+            {items.map((obj) => {
+              const ready = catalogSemanticsReady(
+                Boolean(obj.business_semantics_ready),
+              );
+              const presence = catalogPresence(obj.is_present);
+              return (
               <Table.Tr key={obj.id}>
                 <Table.Td>{obj.schema_name}</Table.Td>
                 <Table.Td>
@@ -267,11 +269,9 @@ export function CatalogBrowse() {
                 <Table.Td>
                   <Badge
                     variant={obj.business_semantics_ready ? "light" : "outline"}
-                    color={obj.business_semantics_ready ? "green" : "gray"}
+                    color={ready.color}
                   >
-                    {obj.business_semantics_ready
-                      ? t("catalog.semantics.ready")
-                      : t("catalog.semantics.notReady")}
+                    {t(ready.labelKey)}
                   </Badge>
                 </Table.Td>
                 <Table.Td maw={280} style={{ maxWidth: 280, overflow: "hidden" }}>
@@ -284,16 +284,17 @@ export function CatalogBrowse() {
                 <Table.Td>
                   {obj.is_present ? (
                     <Text size="sm" c="dimmed">
-                      {t("catalog.fields.presentValue")}
+                      {t(presence.labelKey)}
                     </Text>
                   ) : (
                     <Badge variant="light" color="orange">
-                      {t("catalog.fields.absentValue")}
+                      {t(presence.labelKey)}
                     </Badge>
                   )}
                 </Table.Td>
               </Table.Tr>
-            ))}
+              );
+            })}
           </ListTable>
         </>
       )}
