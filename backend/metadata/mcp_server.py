@@ -20,7 +20,11 @@ from backend.core.time import format_instant
 from backend.jobs.errors import JobNotFound
 from backend.jobs.store import get_job_store
 from backend.metadata.business_domains import service as domain_service
-from backend.metadata.catalog import service as catalog_service
+from backend.metadata.catalog import join_writes as catalog_joins
+from backend.metadata.catalog import refs as catalog_refs
+from backend.metadata.catalog import semantics as catalog_semantics
+from backend.metadata.catalog import service as catalog_reads
+from backend.metadata.catalog import views as catalog_views
 from backend.metadata.query import service as query_service
 from backend.metadata.sources import service as source_service
 from backend.metadata.sources.store import get_source_store
@@ -74,12 +78,12 @@ def _clamp(value: int | None, *, default: int, maximum: int) -> int:
     return max(1, min(maximum, int(value)))
 
 def _object_payload(
-    view: catalog_service.ObjectView, *, include_columns: bool
+    view: catalog_views.ObjectView, *, include_columns: bool
 ) -> dict[str, Any]:
-    return catalog_service.object_view_as_dict(view, include_columns=include_columns)
+    return catalog_views.object_view_as_dict(view, include_columns=include_columns)
 
 def _join_payload_from_record(record: Any) -> dict[str, Any]:
-    return catalog_service.join_view_as_dict(catalog_service.join_view(record))
+    return catalog_views.join_view_as_dict(catalog_views.join_view(record))
 
 @mcp.tool()
 def search_sources(
@@ -123,7 +127,7 @@ def get_source(authorization: str, source_locator_key: str) -> str:
     try:
         user, _token_id = _actor_from_token(authorization)
         _require(user, "sources:read")
-        s = catalog_service.resolve_source_ref(source_locator_key)
+        s = catalog_refs.resolve_source_ref(source_locator_key)
         return _dumps(source_service.public_view(s))
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
@@ -142,10 +146,10 @@ def list_objects(
     try:
         user, _token_id = _actor_from_token(authorization)
         _require(user, "metadata:read")
-        source = catalog_service.resolve_source_ref(source_locator_key)
+        source = catalog_refs.resolve_source_ref(source_locator_key)
         lim = _clamp(limit, default=100, maximum=500)
         off = max(0, int(offset or 0))
-        items, total = catalog_service.list_objects_for_source(
+        items, total = catalog_reads.list_objects_for_source(
             source.id,
             q=q,
             object_type=object_type,
@@ -170,7 +174,7 @@ def get_object(authorization: str, object_locator_key: str) -> str:
     try:
         user, _token_id = _actor_from_token(authorization)
         _require(user, "metadata:read")
-        view = catalog_service.get_object(object_locator_key)
+        view = catalog_reads.get_object(object_locator_key)
         return _dumps(_object_payload(view, include_columns=True))
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
@@ -181,7 +185,7 @@ def get_object_ddl(authorization: str, object_locator_key: str) -> str:
     try:
         user, _token_id = _actor_from_token(authorization)
         _require(user, "metadata:read")
-        ddl = catalog_service.get_object_ddl(object_locator_key)
+        ddl = catalog_reads.get_object_ddl(object_locator_key)
         return _dumps({"id": ddl.id, "locator_key": ddl.locator_key, "ddl": ddl.ddl})
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
@@ -218,7 +222,7 @@ def get_object_semantics(authorization: str, object_locator_key: str) -> str:
     try:
         user, _token_id = _actor_from_token(authorization)
         _require(user, "metadata:read")
-        view = catalog_service.get_object_semantics(object_locator_key)
+        view = catalog_semantics.get_object_semantics(object_locator_key)
         return _dumps(
             {
                 "locator_key": view.locator_key,
@@ -240,17 +244,6 @@ def get_object_semantics(authorization: str, object_locator_key: str) -> str:
         return _err(exc)
 
 @mcp.tool()
-def inspect_object(authorization: str, object_locator_key: str) -> str:
-    """Object semantics + columns aggregate (metadata:read)."""
-    try:
-        user, _token_id = _actor_from_token(authorization)
-        _require(user, "metadata:read")
-        view = catalog_service.inspect_object(object_locator_key)
-        return _dumps(_object_payload(view, include_columns=True))
-    except Exception as exc:  # noqa: BLE001
-        return _err(exc)
-
-@mcp.tool()
 def set_object_semantics(
     authorization: str,
     object_locator_key: str,
@@ -267,7 +260,7 @@ def set_object_semantics(
     try:
         user, token_id = _actor_from_token(authorization)
         _require(user, "metadata:write")
-        o = catalog_service.resolve_object_ref(object_locator_key)
+        o = catalog_refs.resolve_object_ref(object_locator_key)
         data = _mcp_strip_empty(
             {
                 "business_name": business_name,
@@ -280,7 +273,7 @@ def set_object_semantics(
                 "open_questions": open_questions,
             }
         )
-        record = catalog_service.patch_object_semantics(
+        record = catalog_semantics.patch_object_semantics(
             object_id=o.id,
             data=data,
             actor_user_id=user.id,
@@ -290,7 +283,7 @@ def set_object_semantics(
         return _dumps(
             {
                 "object": _object_payload(
-                    catalog_service.object_view(record, include_columns=False),
+                    catalog_views.object_view(record, include_columns=False),
                     include_columns=False,
                 )
             }
@@ -308,7 +301,7 @@ def set_column_semantics(
     try:
         user, token_id = _actor_from_token(authorization)
         _require(user, "metadata:write")
-        o = catalog_service.resolve_object_ref(object_locator_key)
+        o = catalog_refs.resolve_object_ref(object_locator_key)
         stripped_columns: list[dict[str, Any]] = []
         for item in columns:
             name = item.get("column_name")
@@ -316,7 +309,7 @@ def set_column_semantics(
             cleaned = _mcp_strip_empty(rest)
             cleaned["column_name"] = name
             stripped_columns.append(cleaned)
-        result = catalog_service.set_column_semantics_batch(
+        result = catalog_semantics.set_column_semantics_batch(
             object_id=o.id,
             columns=stripped_columns,
             actor_user_id=user.id,
@@ -414,10 +407,10 @@ def search_objects(
         _require(user, "metadata:read")
         source_id = None
         if source_locator_key:
-            source_id = catalog_service.resolve_source_ref(source_locator_key).id
+            source_id = catalog_refs.resolve_source_ref(source_locator_key).id
         lim = _clamp(limit, default=20, maximum=100)
         off = max(0, int(offset or 0))
-        items, total = catalog_service.search_objects(
+        items, total = catalog_reads.search_objects(
             query_text or "",
             source_id=source_id,
             object_type=object_type,
@@ -450,10 +443,10 @@ def search_columns(
         _require(user, "metadata:read")
         source_id = None
         if source_locator_key:
-            source_id = catalog_service.resolve_source_ref(source_locator_key).id
+            source_id = catalog_refs.resolve_source_ref(source_locator_key).id
         lim = _clamp(limit, default=20, maximum=100)
         off = max(0, int(offset or 0))
-        items, total = catalog_service.search_columns(
+        items, total = catalog_reads.search_columns(
             query_text or "",
             source_id=source_id,
             object_type=object_type,
@@ -462,7 +455,7 @@ def search_columns(
         )
         return _dumps(
             {
-                "items": [catalog_service.column_view_as_dict(c) for c in items],
+                "items": [catalog_views.column_view_as_dict(c) for c in items],
                 "total": total,
                 "limit": lim,
                 "offset": off,
@@ -482,13 +475,13 @@ def list_joins(
     try:
         user, _token_id = _actor_from_token(authorization)
         _require(user, "metadata:read")
-        o = catalog_service.resolve_object_ref(object_locator_key)
+        o = catalog_refs.resolve_object_ref(object_locator_key)
         lim = _clamp(limit, default=50, maximum=200)
         off = max(0, int(offset or 0))
-        items, total = catalog_service.list_joins(o.id, limit=lim, offset=off)
+        items, total = catalog_joins.list_joins(o.id, limit=lim, offset=off)
         return _dumps(
             {
-                "items": [catalog_service.join_view_as_dict(j) for j in items],
+                "items": [catalog_views.join_view_as_dict(j) for j in items],
                 "total": total,
                 "limit": lim,
                 "offset": off,
@@ -510,9 +503,9 @@ def upsert_join(
     try:
         user, token_id = _actor_from_token(authorization)
         _require(user, "metadata:write")
-        from_col = catalog_service.resolve_column_ref(from_column_locator_key)
-        to_col = catalog_service.resolve_column_ref(to_column_locator_key)
-        record = catalog_service.upsert_join(
+        from_col = catalog_refs.resolve_column_ref(from_column_locator_key)
+        to_col = catalog_refs.resolve_column_ref(to_column_locator_key)
+        record = catalog_joins.upsert_join(
             from_column_id=from_col.id,
             to_column_id=to_col.id,
             evidence=evidence,
@@ -551,8 +544,8 @@ def upsert_joins(
                     }
                 )
                 continue
-            from_col = catalog_service.resolve_column_ref(str(from_ref))
-            to_col = catalog_service.resolve_column_ref(str(to_ref))
+            from_col = catalog_refs.resolve_column_ref(str(from_ref))
+            to_col = catalog_refs.resolve_column_ref(str(to_ref))
             normalized.append(
                 {
                     "from_column_id": from_col.id,
@@ -576,7 +569,7 @@ def upsert_joins(
                     "items": [],
                 }
             )
-        items, created, known = catalog_service.upsert_joins_batch(
+        items, created, known = catalog_joins.upsert_joins_batch(
             joins=normalized,
             actor_user_id=user.id,
             actor_token_id=token_id,
@@ -600,7 +593,7 @@ def delete_join(authorization: str, join_id: str) -> str:
     try:
         user, token_id = _actor_from_token(authorization)
         _require(user, "metadata:write")
-        catalog_service.delete_join(
+        catalog_joins.delete_join(
             join_id=join_id,
             actor_user_id=user.id,
             actor_token_id=token_id,
@@ -621,7 +614,7 @@ def find_join_path(
     try:
         user, _token_id = _actor_from_token(authorization)
         _require(user, "metadata:read")
-        result = catalog_service.lookup_join_paths(
+        result = catalog_reads.lookup_join_paths(
             start_locator_key,
             target_locator_key,
             max_hops=_clamp(max_hops, default=1, maximum=5),
@@ -640,7 +633,7 @@ def find_join_path(
                     for path in result.paths
                 ],
                 "direct_joins": [
-                    catalog_service.join_view_as_dict(j) for j in result.direct_joins
+                    catalog_views.join_view_as_dict(j) for j in result.direct_joins
                 ],
                 "reason": result.reason,
             }
@@ -661,7 +654,7 @@ def run_sql(
     try:
         user, token_id = _actor_from_token(authorization)
         _require(user, "query:run")
-        source = catalog_service.resolve_source_ref(source_locator_key)
+        source = catalog_refs.resolve_source_ref(source_locator_key)
         outcome = query_service.run_controlled_query(
             source_id=source.id,
             sql=sql,

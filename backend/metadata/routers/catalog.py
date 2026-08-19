@@ -7,7 +7,10 @@ from fastapi import APIRouter, Depends, Query, Request, Response, status
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
 from backend.core.pagination import PageParams, page_params
-from backend.metadata.catalog import service as catalog_service
+from backend.metadata.catalog import join_writes as catalog_joins
+from backend.metadata.catalog import semantics as catalog_semantics
+from backend.metadata.catalog import service as catalog_reads
+from backend.metadata.catalog import views as catalog_views
 from backend.metadata.query import service as query_service
 from backend.metadata.query.compile_sample import SampleFilterSpec, SampleOrderSpec
 from backend.metadata.schemas.catalog import (
@@ -41,7 +44,7 @@ from backend.metadata.schemas.query import SampleRequest, SampleResponse
 
 router = APIRouter(tags=["catalog"])
 
-def _column_out(view: catalog_service.ColumnView) -> CatalogColumnOut:
+def _column_out(view: catalog_views.ColumnView) -> CatalogColumnOut:
     return CatalogColumnOut(
         id=view.id,
         locator_key=view.locator_key,
@@ -61,7 +64,7 @@ def _column_out(view: catalog_service.ColumnView) -> CatalogColumnOut:
         normalized_type=view.normalized_type,
     )
 
-def _object_out(view: catalog_service.ObjectView) -> CatalogObjectOut:
+def _object_out(view: catalog_views.ObjectView) -> CatalogObjectOut:
 
     domain = None
     if view.business_domain is not None:
@@ -116,7 +119,7 @@ def _object_out(view: catalog_service.ObjectView) -> CatalogObjectOut:
         collected_at=view.collected_at,
     )
 
-def _join_out(view: catalog_service.JoinView) -> JoinOut:
+def _join_out(view: catalog_views.JoinView) -> JoinOut:
     return JoinOut(
         id=view.id,
         from_column_id=view.from_column_id,
@@ -132,10 +135,10 @@ def _join_out(view: catalog_service.JoinView) -> JoinOut:
     )
 
 def _object_out_from_record(record, *, include_columns: bool) -> CatalogObjectOut:
-    return _object_out(catalog_service.object_view(record, include_columns=include_columns))
+    return _object_out(catalog_views.object_view(record, include_columns=include_columns))
 
 def _join_out_from_record(record) -> JoinOut:
-    return _join_out(catalog_service.join_view(record))
+    return _join_out(catalog_views.join_view(record))
 
 @router.get("/sources/{source_id}/objects", response_model=CatalogObjectListResponse)
 def list_objects(
@@ -147,7 +150,7 @@ def list_objects(
     page: PageParams = Depends(page_params(default_limit=100, max_limit=500)),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectListResponse:
-    items, total = catalog_service.list_objects_for_source(
+    items, total = catalog_reads.list_objects_for_source(
         source_id,
         q=q,
         object_type=object_type,
@@ -171,7 +174,7 @@ def search_objects(
     page: PageParams = Depends(page_params(default_limit=20, max_limit=100)),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectSearchResponse:
-    items, total = catalog_service.search_objects(
+    items, total = catalog_reads.search_objects(
         q,
         source_id=source_id,
         object_type=object_type,
@@ -193,7 +196,7 @@ def search_columns(
     page: PageParams = Depends(page_params(default_limit=20, max_limit=100)),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogColumnSearchResponse:
-    items, total = catalog_service.search_columns(
+    items, total = catalog_reads.search_columns(
         q,
         source_id=source_id,
         object_type=object_type,
@@ -212,14 +215,14 @@ def get_object(
     object_id: str,
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectResponse:
-    return CatalogObjectResponse(object=_object_out(catalog_service.get_object(object_id)))
+    return CatalogObjectResponse(object=_object_out(catalog_reads.get_object(object_id)))
 
 @router.get("/objects/{object_id}/ddl", response_model=CatalogDdlResponse)
 def get_object_ddl(
     object_id: str,
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogDdlResponse:
-    ddl = catalog_service.get_object_ddl(object_id)
+    ddl = catalog_reads.get_object_ddl(object_id)
     return CatalogDdlResponse(id=ddl.id, ddl=ddl.ddl)
 
 @router.post("/objects/{object_id}/sample", response_model=SampleResponse)
@@ -265,7 +268,7 @@ def patch_object_semantics(
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> CatalogObjectResponse:
     data = payload.model_dump(exclude_unset=True)
-    record = catalog_service.patch_object_semantics(
+    record = catalog_semantics.patch_object_semantics(
         object_id=object_id,
         data=data,
         actor_user_id=user.id,
@@ -284,14 +287,14 @@ def patch_column_semantics(
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> CatalogColumnResponse:
     data = payload.model_dump(exclude_unset=True)
-    record, _applied = catalog_service.patch_column_semantics(
+    record, _applied = catalog_semantics.patch_column_semantics(
         column_id=column_id,
         data=data,
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),
         semantic_source="user_input",
     )
-    return CatalogColumnResponse(column=_column_out(catalog_service.column_view(record)))
+    return CatalogColumnResponse(column=_column_out(catalog_views.column_view(record)))
 
 @router.patch(
     "/objects/{object_id}/columns/semantics",
@@ -303,7 +306,7 @@ def patch_columns_semantics_batch(
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> CatalogColumnsSemanticsBatchResponse:
-    result = catalog_service.set_column_semantics_batch(
+    result = catalog_semantics.set_column_semantics_batch(
         object_id=object_id,
         columns=[item.model_dump(exclude_unset=True) for item in payload.columns],
         actor_user_id=user.id,
@@ -311,7 +314,7 @@ def patch_columns_semantics_batch(
         semantic_source="user_input",
     )
     return CatalogColumnsSemanticsBatchResponse(
-        object=_object_out(catalog_service.get_object(object_id)),
+        object=_object_out(catalog_reads.get_object(object_id)),
         updated_count=result["updated_count"],
         requested_count=result["requested_count"],
         skipped_columns=result["skipped_columns"],
@@ -323,7 +326,7 @@ def list_object_joins(
     _: UserRecord = Depends(require_permission("metadata:read")),
     page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> JoinListResponse:
-    items, total = catalog_service.list_joins(
+    items, total = catalog_joins.list_joins(
         object_id, limit=page.limit, offset=page.offset
     )
     return JoinListResponse(
@@ -339,7 +342,7 @@ def upsert_join(
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> JoinResponse:
-    record = catalog_service.upsert_join(
+    record = catalog_joins.upsert_join(
         from_column_id=payload.from_column_id,
         to_column_id=payload.to_column_id,
         evidence=payload.evidence,
@@ -357,7 +360,7 @@ def upsert_joins_batch(
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> JoinBatchResponse:
-    items, created, known = catalog_service.upsert_joins_batch(
+    items, created, known = catalog_joins.upsert_joins_batch(
         joins=[j.model_dump() for j in payload.joins],
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),
@@ -377,7 +380,7 @@ def get_join_path(
     top_targets: int = Query(default=3, ge=1, le=20),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> JoinPathResponse:
-    result = catalog_service.lookup_join_paths(
+    result = catalog_reads.lookup_join_paths(
         start,
         target,
         max_hops=max_hops,
@@ -417,7 +420,7 @@ def delete_join(
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> Response:
-    catalog_service.delete_join(
+    catalog_joins.delete_join(
         join_id=join_id,
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),

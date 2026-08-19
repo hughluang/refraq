@@ -24,7 +24,7 @@ from backend.core.time import utc_now  # noqa: E402
 from backend.jobs.store import create_queued_job, get_job_store  # noqa: E402
 from backend.main import app  # noqa: E402
 from backend.metadata.catalog.normalized_type import canonicalize_native_type  # noqa: E402
-from backend.metadata.catalog.service import ColumnView, column_view_as_dict  # noqa: E402
+from backend.metadata.catalog.views import ColumnView, column_view_as_dict  # noqa: E402
 from backend.metadata.catalog.store import get_catalog_store  # noqa: E402
 from backend.metadata.connectors.base import (  # noqa: E402
     CollectedColumn,

@@ -244,7 +244,7 @@ def test_apply_preserves_human_join_via_store() -> None:
 
 
 def test_service_foreign_key_upsert_keeps_human_join() -> None:
-    from backend.metadata.catalog import service as catalog_service
+    from backend.metadata.catalog import join_writes as catalog_joins
 
     store = get_catalog_store()
     now = utc_now()
@@ -267,7 +267,7 @@ def test_service_foreign_key_upsert_keeps_human_join() -> None:
         schema_scope=None,
         fail_safe_threshold=1.0,
     )
-    human = catalog_service.upsert_join(
+    human = catalog_joins.upsert_join(
         from_column_id="col_cust_fk",
         to_column_id="col_cust_id",
         evidence="analyst confirmed",
@@ -275,7 +275,7 @@ def test_service_foreign_key_upsert_keeps_human_join() -> None:
         actor_token_id=None,
         origin="human",
     )
-    kept = catalog_service.upsert_join(
+    kept = catalog_joins.upsert_join(
         from_column_id="col_cust_fk",
         to_column_id="col_cust_id",
         evidence="FK fk_orders_customer",

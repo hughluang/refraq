@@ -43,7 +43,7 @@ class StructureWrite(Protocol):
     def persist_plan(self, plan: StructureRefreshPlan) -> None: ...
 
 
-class CatalogStore(Protocol):
+class CatalogReadStore(Protocol):
     def list_objects(
         self,
         source_id: str,
@@ -88,12 +88,8 @@ class CatalogStore(Protocol):
 
     def list_present_for_source(self, source_id: str) -> list[CatalogObjectRecord]: ...
 
-    def structure_write(
-        self, source_id: str
-    ) -> AbstractContextManager[StructureWrite]: ...
 
-    def delete_objects_for_source(self, source_id: str) -> None: ...
-
+class CatalogSemanticsStore(Protocol):
     def patch_object_semantics(
         self,
         object_id: str,
@@ -122,6 +118,8 @@ class CatalogStore(Protocol):
         field_kind: Any = UNSET,
     ) -> CatalogColumnRecord | None: ...
 
+
+class CatalogJoinStore(Protocol):
     def get_join(self, join_id: str) -> CatalogJoinRecord | None: ...
 
     def get_join_by_pair(
@@ -150,6 +148,14 @@ class CatalogStore(Protocol):
 
     def delete_join(self, join_id: str) -> bool: ...
 
+
+class CatalogStructureStore(Protocol):
+    def structure_write(
+        self, source_id: str
+    ) -> AbstractContextManager[StructureWrite]: ...
+
+    def delete_objects_for_source(self, source_id: str) -> None: ...
+
     def recompute_locators_for_source(
         self,
         source_id: str,
@@ -158,6 +164,28 @@ class CatalogStore(Protocol):
         kind: str,
         source_key: str,
     ) -> int: ...
+
+
+class CatalogGraphStore(Protocol):
+    """BFS Join Path needs: object/column getters, present list, all joins."""
+
+    def get_object(self, object_id: str) -> CatalogObjectRecord | None: ...
+
+    def get_column(self, column_id: str) -> CatalogColumnRecord | None: ...
+
+    def list_present_for_source(self, source_id: str) -> list[CatalogObjectRecord]: ...
+
+    def list_all_joins_for_source(self, source_id: str) -> list[CatalogJoinRecord]: ...
+
+
+class CatalogStore(
+    CatalogReadStore,
+    CatalogSemanticsStore,
+    CatalogJoinStore,
+    CatalogStructureStore,
+    Protocol,
+):
+    """Full catalog persistence (union of narrow protocols)."""
 
 
 _memory_singleton: MemoryCatalogStore | None = None
@@ -198,6 +226,11 @@ __all__ = [
     "CatalogIndexRecord",
     "CatalogObjectRecord",
     "CatalogJoinRecord",
+    "CatalogReadStore",
+    "CatalogSemanticsStore",
+    "CatalogJoinStore",
+    "CatalogStructureStore",
+    "CatalogGraphStore",
     "CatalogStore",
     "StructureWrite",
     "MemoryCatalogStore",

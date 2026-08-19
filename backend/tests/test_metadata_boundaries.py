@@ -329,9 +329,9 @@ def test_illegal_semantics_and_field_kind_not_writable(client: TestClient) -> No
     assert refreshed.field_kind == before_kind
     assert refreshed.business_name == "Order Id"
 
-    from backend.metadata.catalog import service as catalog_service
+    from backend.metadata.catalog import semantics as catalog_semantics
 
-    batch = catalog_service.set_column_semantics_batch(
+    batch = catalog_semantics.set_column_semantics_batch(
         object_id=obj.id,
         columns=[{"column_name": "missing_col", "business_name": "X"}],
         actor_user_id="user_1",

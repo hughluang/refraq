@@ -38,7 +38,6 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 | Tool | Permission | Purpose |
 | --- | --- | --- |
 | `get_object_semantics` | `metadata:read` | Compact object semantics by locator |
-| `inspect_object` | `metadata:read` | Object semantics + columns aggregate |
 | `set_object_semantics` | `metadata:write` | Incremental object semantics write (`semantic_source=mcp`) |
 | `set_column_semantics` | `metadata:write` | Batch column semantics under one object locator |
 | `list_business_domains` | `metadata:read` | List Business Domains |

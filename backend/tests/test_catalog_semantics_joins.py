@@ -539,7 +539,7 @@ def test_patch_object_open_questions_and_ready(client: TestClient) -> None:
 
 
 def test_mcp_overwrites_existing_semantics(client: TestClient) -> None:
-    from backend.metadata.catalog import service as catalog_service
+    from backend.metadata.catalog import semantics as catalog_semantics
 
     source = _make_source(client)
     obj = _seed_object(source["id"])
@@ -550,7 +550,7 @@ def test_mcp_overwrites_existing_semantics(client: TestClient) -> None:
     assert patched.status_code == 200
     assert patched.json()["object"]["semantic_source"] == "user_input"
 
-    record = catalog_service.patch_object_semantics(
+    record = catalog_semantics.patch_object_semantics(
         object_id=obj.id,
         data={
             "business_name": "Agent Name",
@@ -568,12 +568,12 @@ def test_mcp_overwrites_existing_semantics(client: TestClient) -> None:
 
 
 def test_batch_semantics_updated_count_only_on_apply(client: TestClient) -> None:
-    from backend.metadata.catalog import service as catalog_service
+    from backend.metadata.catalog import semantics as catalog_semantics
 
     source = _make_source(client)
     obj = _seed_object(source["id"])
     col_name = obj.columns[0].name
-    empty = catalog_service.set_column_semantics_batch(
+    empty = catalog_semantics.set_column_semantics_batch(
         object_id=obj.id,
         columns=[{"column_name": col_name}],
         actor_user_id="user_1",
@@ -583,7 +583,7 @@ def test_batch_semantics_updated_count_only_on_apply(client: TestClient) -> None
     assert empty["updated_count"] == 0
     assert empty["skipped_columns"][0]["reason"] == "no_changes"
 
-    applied = catalog_service.set_column_semantics_batch(
+    applied = catalog_semantics.set_column_semantics_batch(
         object_id=obj.id,
         columns=[{"column_name": col_name, "business_name": "WO ID"}],
         actor_user_id="user_1",
@@ -778,7 +778,8 @@ def test_http_clears_column_semantics_blob_and_enum_catalog(
 
 
 def test_mcp_strip_empty_does_not_clear_existing(client: TestClient) -> None:
-    from backend.metadata.catalog import service as catalog_service
+    from backend.metadata.catalog import refs as catalog_refs
+    from backend.metadata.catalog import semantics as catalog_semantics
     from backend.metadata.mcp_server import _mcp_strip_empty
 
     source = _make_source(client)
@@ -813,7 +814,7 @@ def test_mcp_strip_empty_does_not_clear_existing(client: TestClient) -> None:
         }
     )
     assert stripped == {}
-    unchanged = catalog_service.patch_object_semantics(
+    unchanged = catalog_semantics.patch_object_semantics(
         object_id=obj.id,
         data=stripped,
         actor_user_id="user_1",
@@ -842,7 +843,7 @@ def test_mcp_strip_empty_does_not_clear_existing(client: TestClient) -> None:
             ),
         }
     ]
-    batch = catalog_service.set_column_semantics_batch(
+    batch = catalog_semantics.set_column_semantics_batch(
         object_id=obj.id,
         columns=stripped_cols,
         actor_user_id="user_1",
@@ -851,5 +852,5 @@ def test_mcp_strip_empty_does_not_clear_existing(client: TestClient) -> None:
     )
     assert batch["updated_count"] == 0
     assert batch["skipped_columns"][0]["reason"] == "no_changes"
-    col = catalog_service.require_column(obj.columns[0].id)
+    col = catalog_refs.require_column(obj.columns[0].id)
     assert col.business_name == "WO Id Kept"

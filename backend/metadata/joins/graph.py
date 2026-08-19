@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 from backend.metadata.catalog.store import (
     CatalogColumnRecord,
+    CatalogGraphStore,
     CatalogJoinRecord,
-    CatalogStore,
 )
 from backend.metadata.errors import JoinCrossSource
 
@@ -25,6 +25,8 @@ class JoinPathHop:
     join: CatalogJoinRecord
     from_column_id: str
     to_column_id: str
+    from_column_locator_key: str | None
+    to_column_locator_key: str | None
 
 
 @dataclass
@@ -51,7 +53,7 @@ class JoinPathResult:
 
 def find_join_paths(
     *,
-    store: CatalogStore,
+    store: CatalogGraphStore,
     start_object_id: str | None = None,
     start_column_id: str | None = None,
     target_object_id: str | None = None,
@@ -94,12 +96,14 @@ def find_join_paths(
 
     objects = store.list_present_for_source(source_id)
     col_to_object: dict[str, str] = {}
+    col_locator: dict[str, str] = {}
     object_columns: dict[str, list[str]] = {}
     for obj in objects:
-        present = [c.id for c in obj.columns if c.is_present]
-        object_columns[obj.id] = present
-        for cid in present:
-            col_to_object[cid] = obj.id
+        present = [c for c in obj.columns if c.is_present]
+        object_columns[obj.id] = [c.id for c in present]
+        for col in present:
+            col_to_object[col.id] = obj.id
+            col_locator[col.id] = col.locator_key
 
     joins = store.list_all_joins_for_source(source_id)
     adjacency: dict[str, list[tuple[str, CatalogJoinRecord]]] = {}
@@ -165,6 +169,8 @@ def find_join_paths(
                         join=join,
                         from_column_id=local_col,
                         to_column_id=neighbor,
+                        from_column_locator_key=col_locator.get(local_col),
+                        to_column_locator_key=col_locator.get(neighbor),
                     )
                 ]
                 if len(next_hops) > max_hops:
@@ -213,7 +219,7 @@ def find_join_paths(
 
 def _resolve_start_columns(
     *,
-    store: CatalogStore,
+    store: CatalogGraphStore,
     start_object_id: str | None,
     start_column_id: str | None,
 ) -> list[CatalogColumnRecord]:
@@ -228,7 +234,7 @@ def _resolve_start_columns(
     return []
 
 
-def _source_for_column(store: CatalogStore, column_id: str) -> str | None:
+def _source_for_column(store: CatalogGraphStore, column_id: str) -> str | None:
     col = store.get_column(column_id)
     if col is None:
         return None

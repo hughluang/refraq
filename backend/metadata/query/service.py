@@ -11,7 +11,7 @@ from typing import Any
 from backend.admin.audit import persist_audit_event
 from backend.core.config import get_settings
 from backend.core.errors import AppError
-from backend.metadata.catalog import service as catalog_service
+from backend.metadata.catalog.service import get_object
 from backend.metadata.connectors.base import ConnectorError, QueryResult
 from backend.metadata.connectors.runtime import prepare, run_bounded
 from backend.metadata.errors import (
@@ -307,7 +307,7 @@ def run_catalog_sample(
                 f"exceeds platform cap {platform_cap}"
             )
 
-        obj = catalog_service.get_object(object_id)
+        obj = get_object(object_id)
         success_resource_id = obj.id
         source = require_source(obj.source_id)
         if not source.engine:

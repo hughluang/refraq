@@ -26,6 +26,7 @@ from backend.core.config import reset_settings_cache  # noqa: E402
 from backend.jobs.store import reset_job_store  # noqa: E402
 from backend.main import app  # noqa: E402
 from backend.metadata.catalog import service as catalog_service  # noqa: E402
+from backend.metadata.catalog import semantics as catalog_semantics  # noqa: E402
 from backend.metadata.catalog.store import (  # noqa: E402
     CatalogColumnRecord,
     CatalogObjectRecord,
@@ -185,13 +186,9 @@ def test_service_read_model_and_semantics() -> None:
     assert len(detail.columns) == 1
     assert detail.columns[0].name == "id"
 
-    sem = catalog_service.get_object_semantics(a.locator_key)
+    sem = catalog_semantics.get_object_semantics(a.locator_key)
     assert sem.business_name == "Biz orders"
     assert sem.business_semantics_ready is True
-
-    inspect = catalog_service.inspect_object(a.locator_key)
-    assert inspect.id == detail.id
-    assert len(inspect.columns) == 1
 
 
 def test_list_q_and_readiness_filters_and_present_keeps_columns() -> None:
