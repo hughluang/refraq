@@ -114,9 +114,9 @@ Responsibilities:
 - Source domain models and services (embedded reachability for database kinds); `sources.access` interprets Connector Spec (validate / seal / project / endpoint)
 - Connector adapters (PostgreSQL, MSSQL, Oracle) consume `SourceEndpoint`; outbound invocation shell in `connectors/runtime` binds an already-interpreted endpoint
 - Domain facade for structure **Jobs** minted via **Scheduled Task** (run-now / Beat) and Source-scoped schedule **facade** (`POST/GET /sources/{id}/schedules`, `owner_ref` withdraw). Does not own the Scheduled Task table
-- Structure Job runtime in `structure_jobs/service` (`run_structure_job`: collect → Normalized Type → refresh → Structure Diff)
+- Structure Job runtime in `structure_jobs/service` (`run_structure_job`: collect → Normalized Type → structure refresh)
 - Domain Celery work units (`@shared_task`); discovered by `worker`: structure minting in `source_jobs`, Job kind dispatch in `tasks.py`
-- Catalog object / semantics / join / controlled query / Catalog Sample services (`catalog/service` owns browse, search, Join Path, and semantics/join writes; sample compile+run lives under `query/`; structure refresh orchestration in `catalog/structure_refresh`, plan merge in `catalog/structure_merge`, Join Origin policy in `catalog/join_origin`; persistence adapters only persist)
+- Catalog object / semantics / join / controlled query / Catalog Sample services (`catalog/service` owns browse, search, Join Path, and semantics/join writes; sample compile+run lives under `query/`; structure refresh orchestration in `catalog/structure_refresh` commits Current catalog and Structure Diff via catalog `structure_write` primitives + Diff persist; plan merge in `catalog/structure_merge`, Join Origin policy in `catalog/join_origin`; persistence adapters only persist)
 - Business Domain registry (global flat entity referenced by catalog objects)
 - Type Mapping registry (global engine + native type → Normalized Type; product seeds via Upgrade)
 - Domain use-case HTTP under `metadata/routers/` and shapes under `metadata/schemas/` (adapters only: auth + transport)

@@ -36,6 +36,10 @@ from backend.metadata.sources.store import (  # noqa: E402
     get_source_store,
     reset_source_store,
 )
+from backend.metadata.structure_diffs.store import (  # noqa: E402
+    get_structure_diff_store,
+    reset_structure_diff_store,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -44,6 +48,7 @@ def _memory_store(monkeypatch: pytest.MonkeyPatch) -> None:
     reset_settings_cache()
     reset_catalog_store()
     reset_source_store()
+    reset_structure_diff_store()
     now = utc_now()
     get_source_store().create_source(
         SourceRecord(
@@ -234,3 +239,180 @@ def test_stamp_missing_object_id_raises() -> None:
     )
     with pytest.raises(KeyError, match="missing"):
         store._persist_structure_plan_unlocked(plan, now=now)
+
+
+def test_apply_persists_structure_diff() -> None:
+    now = utc_now()
+    table = _table(now=now)
+    commit = apply_structure_snapshot(
+        source=require_source("src_1"),
+        job_id="job_seed",
+        collected=[table],
+        schema_scope=None,
+        fail_safe_threshold=1.0,
+    )
+    assert commit.facts.diff_class == "non_breaking"
+    assert commit.structure_diff_id
+    envelope = commit.result_envelope()
+    assert envelope["schema"] == "structure.diff.v1"
+    assert envelope["structure_diff_id"] == commit.structure_diff_id
+    diffs, total = get_structure_diff_store().list_for_source("src_1")
+    assert total == 1
+    assert diffs[0].id == commit.structure_diff_id
+    assert diffs[0].job_id == "job_seed"
+
+
+def test_fail_safe_apply_persists_no_structure_diff() -> None:
+    from backend.metadata.catalog.store import CatalogWriteAborted
+
+    now = utc_now()
+    tables = [
+        CatalogObjectRecord(
+            id=f"obj_t{i}",
+            source_id="src_1",
+            locator_key=f"obj/postgresql/demo/public/table/t{i}",
+            object_type="table",
+            schema_name="public",
+            name=f"t{i}",
+            ddl=None,
+            comment=None,
+            primary_key=["id"],
+            is_present=True,
+            business_name=None,
+            business_description=None,
+            object_category=None,
+            grain_description=None,
+            business_primary_key=None,
+            business_domain_id=None,
+            evidence_summary=None,
+            open_questions=None,
+            semantic_source=None,
+            business_semantics_ready=False,
+            semantics_updated_at=None,
+            last_structure_job_id="job_seed",
+            collected_at=now,
+            created_at=now,
+            updated_at=now,
+            columns=[
+                CatalogColumnRecord(
+                    id=f"col_t{i}_id",
+                    object_id=f"obj_t{i}",
+                    locator_key=(
+                        f"col/postgresql/demo/public/table/t{i}/column/id"
+                    ),
+                    name="id",
+                    ordinal=1,
+                    data_type="integer",
+                    nullable=False,
+                    is_present=True,
+                    default_value=None,
+                    comment=None,
+                    business_name=None,
+                    business_description=None,
+                    column_semantics=None,
+                    enum_catalog=None,
+                    semantic_source=None,
+                    field_kind="column",
+                    created_at=now,
+                    updated_at=now,
+                )
+            ],
+        )
+        for i in range(4)
+    ]
+    apply_structure_snapshot(
+        source=require_source("src_1"),
+        job_id="job_seed",
+        collected=tables,
+        schema_scope=None,
+        fail_safe_threshold=1.0,
+    )
+    seed_diffs, seed_total = get_structure_diff_store().list_for_source("src_1")
+    assert seed_total == 1
+    with pytest.raises(CatalogWriteAborted) as exc:
+        apply_structure_snapshot(
+            source=require_source("src_1"),
+            job_id="job_bad",
+            collected=[tables[0]],
+            schema_scope=None,
+            fail_safe_threshold=0.5,
+        )
+    assert exc.value.code == "JOB_FAIL_SAFE"
+    diffs, total = get_structure_diff_store().list_for_source("src_1")
+    assert total == seed_total
+    assert [d.job_id for d in diffs] == [d.job_id for d in seed_diffs]
+    assert not any(d.job_id == "job_bad" for d in diffs)
+
+
+def test_diff_persist_failure_leaves_catalog_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = utc_now()
+    table = _table(now=now)
+
+    def _boom(**_kwargs: object) -> None:
+        raise RuntimeError("diff persist failed")
+
+    monkeypatch.setattr(
+        "backend.metadata.catalog.structure_refresh.persist_structure_diff",
+        _boom,
+    )
+    with pytest.raises(RuntimeError, match="diff persist failed"):
+        apply_structure_snapshot(
+            source=require_source("src_1"),
+            job_id="job_fail",
+            collected=[table],
+            schema_scope=None,
+            fail_safe_threshold=1.0,
+        )
+    assert get_catalog_store().get_object("obj_orders") is None
+    diffs, total = get_structure_diff_store().list_for_source("src_1")
+    assert total == 0
+    assert diffs == []
+
+
+def test_diff_create_then_raise_rolls_back_catalog_and_diff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Memory Diff is a separate dict; create-then-raise must undo both sides."""
+    from backend.metadata.structure_diffs.store import (
+        StructureDiffRecord,
+        new_structure_diff_id,
+    )
+
+    now = utc_now()
+    store = get_structure_diff_store()
+    # Many older Diffs must not block job_id compensation (no page scan).
+    for i in range(250):
+        store.create(
+            StructureDiffRecord(
+                id=new_structure_diff_id(),
+                source_id="src_1",
+                job_id=f"job_hist_{i}",
+                diff_class="unchanged",
+                counts=empty_counts(),
+                changes=[],
+                created_at=now,
+            )
+        )
+    table = _table(now=now)
+    real_create = store.create
+
+    def _create_then_raise(record: StructureDiffRecord, *, session=None):  # noqa: ANN001
+        real_create(record, session=session)
+        raise RuntimeError("diff create after-write failure")
+
+    monkeypatch.setattr(store, "create", _create_then_raise)
+    with pytest.raises(RuntimeError, match="diff create after-write failure"):
+        apply_structure_snapshot(
+            source=require_source("src_1"),
+            job_id="job_partial",
+            collected=[table],
+            schema_scope=None,
+            fail_safe_threshold=1.0,
+        )
+    assert get_catalog_store().get_object("obj_orders") is None
+    diffs, total = store.list_for_source("src_1", limit=300)
+    assert total == 250
+    assert not any(d.job_id == "job_partial" for d in diffs)
+    assert store.delete_for_job("job_partial") == 0

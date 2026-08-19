@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable
-from datetime import datetime
+from contextlib import AbstractContextManager
 from functools import lru_cache
 from typing import Any, Protocol
+
+from sqlalchemy.orm import Session
 
 from backend.core.config import get_settings
 from backend.metadata.catalog.records import (
@@ -27,6 +28,19 @@ from backend.metadata.catalog.store.memory import MemoryCatalogStore
 from backend.metadata.catalog.store.sql import SqlCatalogStore
 from backend.metadata.catalog.structure_merge import StructureRefreshPlan
 from backend.metadata.errors import CatalogObjectNotFound
+
+
+class StructureWrite(Protocol):
+    """Locked catalog write unit: load baseline, persist plan (no merge)."""
+
+    @property
+    def session(self) -> Session | None: ...
+
+    def load_baseline(
+        self,
+    ) -> tuple[list[CatalogObjectRecord], list[CatalogJoinRecord]]: ...
+
+    def persist_plan(self, plan: StructureRefreshPlan) -> None: ...
 
 
 class CatalogStore(Protocol):
@@ -74,14 +88,9 @@ class CatalogStore(Protocol):
 
     def list_present_for_source(self, source_id: str) -> list[CatalogObjectRecord]: ...
 
-    def run_structure_refresh(
-        self,
-        source_id: str,
-        build_plan: Callable[
-            [list[CatalogObjectRecord], list[CatalogJoinRecord], datetime],
-            StructureRefreshPlan,
-        ],
-    ) -> StructureRefreshPlan: ...
+    def structure_write(
+        self, source_id: str
+    ) -> AbstractContextManager[StructureWrite]: ...
 
     def delete_objects_for_source(self, source_id: str) -> None: ...
 
@@ -190,6 +199,7 @@ __all__ = [
     "CatalogObjectRecord",
     "CatalogJoinRecord",
     "CatalogStore",
+    "StructureWrite",
     "MemoryCatalogStore",
     "SqlCatalogStore",
     "get_catalog_store",

@@ -10,6 +10,7 @@ from functools import lru_cache
 from typing import Any, Protocol
 
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from backend.core.config import get_settings
 from backend.core.db import session_scope
@@ -40,13 +41,19 @@ def new_structure_diff_id() -> str:
 
 
 class StructureDiffStore(Protocol):
-    def create(self, record: StructureDiffRecord) -> StructureDiffRecord: ...
+    def create(
+        self, record: StructureDiffRecord, *, session: Session | None = None
+    ) -> StructureDiffRecord: ...
 
     def get(self, diff_id: str) -> StructureDiffRecord | None: ...
 
     def list_for_source(
         self, source_id: str, *, limit: int = 50, offset: int = 0
     ) -> tuple[list[StructureDiffRecord], int]: ...
+
+    def delete(self, diff_id: str) -> bool: ...
+
+    def delete_for_job(self, job_id: str) -> int: ...
 
     def delete_for_source(self, source_id: str) -> None: ...
 
@@ -56,7 +63,10 @@ class MemoryStructureDiffStore:
         self._by_id: dict[str, StructureDiffRecord] = {}
         self._lock = threading.Lock()
 
-    def create(self, record: StructureDiffRecord) -> StructureDiffRecord:
+    def create(
+        self, record: StructureDiffRecord, *, session: Session | None = None
+    ) -> StructureDiffRecord:
+        del session
         with self._lock:
             self._by_id[record.id] = record
             return record
@@ -76,6 +86,17 @@ class MemoryStructureDiffStore:
         total = len(items)
         return items[offset : offset + limit], total
 
+    def delete(self, diff_id: str) -> bool:
+        with self._lock:
+            return self._by_id.pop(diff_id, None) is not None
+
+    def delete_for_job(self, job_id: str) -> int:
+        with self._lock:
+            drop = [i for i, r in self._by_id.items() if r.job_id == job_id]
+            for i in drop:
+                del self._by_id[i]
+            return len(drop)
+
     def delete_for_source(self, source_id: str) -> None:
         with self._lock:
             drop = [i for i, r in self._by_id.items() if r.source_id == source_id]
@@ -84,20 +105,29 @@ class MemoryStructureDiffStore:
 
 
 class SqlStructureDiffStore:
-    def create(self, record: StructureDiffRecord) -> StructureDiffRecord:
-        with session_scope() as session:
-            row = StructureDiffRow(
-                id=record.id,
-                source_id=record.source_id,
-                job_id=record.job_id,
-                diff_class=record.diff_class,
-                counts=dict(record.counts),
-                changes=list(record.changes),
-                created_at=record.created_at,
-            )
-            session.add(row)
-            session.flush()
-            return _row_to_diff(row)
+    def create(
+        self, record: StructureDiffRecord, *, session: Session | None = None
+    ) -> StructureDiffRecord:
+        if session is not None:
+            return self._create_on(session, record)
+        with session_scope() as owned:
+            return self._create_on(owned, record)
+
+    def _create_on(
+        self, session: Session, record: StructureDiffRecord
+    ) -> StructureDiffRecord:
+        row = StructureDiffRow(
+            id=record.id,
+            source_id=record.source_id,
+            job_id=record.job_id,
+            diff_class=record.diff_class,
+            counts=dict(record.counts),
+            changes=list(record.changes),
+            created_at=record.created_at,
+        )
+        session.add(row)
+        session.flush()
+        return _row_to_diff(row)
 
     def get(self, diff_id: str) -> StructureDiffRecord | None:
         with session_scope() as session:
@@ -126,6 +156,27 @@ class SqlStructureDiffStore:
             )
             items = [_row_to_diff(r) for r in session.scalars(stmt).all()]
             return items, total
+
+    def delete(self, diff_id: str) -> bool:
+        with session_scope() as session:
+            row = session.get(StructureDiffRow, diff_id)
+            if row is None:
+                return False
+            session.delete(row)
+            return True
+
+    def delete_for_job(self, job_id: str) -> int:
+        with session_scope() as session:
+            rows = list(
+                session.scalars(
+                    select(StructureDiffRow).where(
+                        StructureDiffRow.job_id == job_id
+                    )
+                ).all()
+            )
+            for row in rows:
+                session.delete(row)
+            return len(rows)
 
     def delete_for_source(self, source_id: str) -> None:
         with session_scope() as session:

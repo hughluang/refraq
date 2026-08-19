@@ -34,7 +34,6 @@ from backend.metadata.structure_jobs.collect_log import StructureCollectLog
 from backend.metadata.locators import format_column_locator, format_object_locator
 from backend.metadata.sources.access import decrypt_access_blob
 from backend.metadata.sources.store import get_source_store
-from backend.metadata.structure_diffs.service import persist_structure_diff
 from backend.metadata.type_mappings.service import assign_normalized_types
 
 
@@ -191,7 +190,7 @@ def run_structure_job(job_id: str) -> dict[str, str]:
     append_job_log(job_id, level="info", message="applying catalog snapshot…")
     t_phase = time.perf_counter()
     try:
-        facts = apply_structure_snapshot(
+        commit = apply_structure_snapshot(
             source=source,
             job_id=job_id,
             collected=records,
@@ -209,23 +208,9 @@ def run_structure_job(job_id: str) -> dict[str, str]:
     append_job_log(
         job_id,
         level="info",
-        message=f"catalog snapshot applied in {time.perf_counter() - t_phase:.1f}s",
-    )
-
-    t_phase = time.perf_counter()
-    diff = persist_structure_diff(
-        source_id=source_id,
-        job_id=job_id,
-        diff_class=facts.diff_class,
-        counts=facts.counts,
-        changes=facts.changes_document(),
-    )
-    append_job_log(
-        job_id,
-        level="info",
         message=(
-            f"succeeded class={facts.diff_class} "
-            f"(diff {time.perf_counter() - t_phase:.1f}s)"
+            f"succeeded class={commit.facts.diff_class} "
+            f"in {time.perf_counter() - t_phase:.1f}s"
         ),
     )
     if unknown_locators:
@@ -239,7 +224,7 @@ def run_structure_job(job_id: str) -> dict[str, str]:
                 f"({sample}{ellipsis})"
             ),
         )
-    final = mark_succeeded(job_id, result=facts.result_envelope(diff.id))
+    final = mark_succeeded(job_id, result=commit.result_envelope())
     if final is None:
         return {"status": "missing"}
     return {"status": final.status}

@@ -279,9 +279,9 @@ def test_fail_safe_runner_writes_no_result_or_diff(
     assert stored is not None
     assert stored.error_code == "JOB_FAIL_SAFE"
     assert stored.result is None
-    diffs, total = get_structure_diff_store().list_for_source(source.id)
-    assert total == 0
-    assert diffs == []
+    diffs, _total = get_structure_diff_store().list_for_source(source.id)
+    assert all(d.job_id != job.id for d in diffs)
+    assert any(d.job_id == "job_old" for d in diffs)
     present = get_catalog_store().list_present_for_source(source.id)
     assert len(present) == 4
 
@@ -317,9 +317,8 @@ def test_running_timeout_during_collect_does_not_write_catalog(
     assert stored.status == "failed"
     assert stored.error_code == ERROR_RUNNING_TIMEOUT
     assert stored.result is None
-    diffs, total = get_structure_diff_store().list_for_source(source.id)
-    assert total == 0
-    assert diffs == []
+    diffs, _total = get_structure_diff_store().list_for_source(source.id)
+    assert all(d.job_id != job.id for d in diffs)
     present = get_catalog_store().list_present_for_source(source.id)
     assert [obj.name for obj in present] == ["orders"]
 
@@ -349,8 +348,8 @@ def test_cancel_during_collect_does_not_write_catalog(
     assert stored is not None
     assert stored.status == "cancelled"
     assert stored.result is None
-    diffs, total = get_structure_diff_store().list_for_source(source.id)
-    assert total == 0
+    diffs, _total = get_structure_diff_store().list_for_source(source.id)
+    assert all(d.job_id != job.id for d in diffs)
     present = get_catalog_store().list_present_for_source(source.id)
     assert [obj.name for obj in present] == ["orders"]
 

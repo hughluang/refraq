@@ -5,9 +5,9 @@ from __future__ import annotations
 from backend.core.time import utc_now
 import hashlib
 import json
-from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import datetime
-from typing import Any
+from typing import Any, Iterator
 
 from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.orm import Session, defer, noload, selectinload
@@ -64,6 +64,41 @@ def _select_joins_for_source(source_id: str):
             CatalogJoinRow.to_column_id.in_(source_col_ids),
         )
     )
+
+
+class _SqlStructureWrite:
+    def __init__(self, session: Session, source_id: str) -> None:
+        self._session = session
+        self._source_id = source_id
+
+    @property
+    def session(self) -> Session:
+        return self._session
+
+    def load_baseline(
+        self,
+    ) -> tuple[list[CatalogObjectRecord], list[CatalogJoinRecord]]:
+        rows = list(
+            self._session.scalars(
+                select(CatalogObjectRow)
+                .where(CatalogObjectRow.source_id == self._source_id)
+                .options(
+                    selectinload(CatalogObjectRow.columns),
+                    selectinload(CatalogObjectRow.foreign_keys),
+                    selectinload(CatalogObjectRow.indexes),
+                )
+            ).all()
+        )
+        existing_objects = [_row_to_object(r) for r in rows]
+        join_rows = list(
+            self._session.scalars(_select_joins_for_source(self._source_id)).all()
+        )
+        existing_joins = [_row_to_join(j) for j in join_rows]
+        self._session.commit()
+        return existing_objects, existing_joins
+
+    def persist_plan(self, plan: StructureRefreshPlan) -> None:
+        _sql_persist_plan(self._session, plan, now=utc_now())
 
 
 class SqlCatalogStore:
@@ -252,19 +287,14 @@ class SqlCatalogStore:
             )
             return [_row_to_object(r) for r in rows]
 
-    def run_structure_refresh(
-        self,
-        source_id: str,
-        build_plan: Callable[
-            [list[CatalogObjectRecord], list[CatalogJoinRecord], datetime],
-            StructureRefreshPlan,
-        ],
-    ) -> StructureRefreshPlan:
-        """Load baseline, build a delta plan, persist changed rows only.
+    @contextmanager
+    def structure_write(self, source_id: str) -> Iterator[_SqlStructureWrite]:
+        """Locked catalog write unit: load baseline, persist plan (no merge).
 
         Per-Source serialization is a session-level advisory lock held across
-        read → plan → write. Merge stays a pure function outside the write
-        transaction.
+        read → plan → write. Merge stays a pure function outside the store.
+        Successful exit commits the write session once (catalog plan + any
+        Diff rows flushed on the same session).
         """
         lock_keys = _source_lock_keys(source_id)
         conn = get_engine().connect()
@@ -274,30 +304,16 @@ class SqlCatalogStore:
                 {"a": lock_keys[0], "b": lock_keys[1]},
             )
             conn.commit()
-            with Session(bind=conn, autoflush=False, autocommit=False) as session:
-                rows = list(
-                    session.scalars(
-                        select(CatalogObjectRow)
-                        .where(CatalogObjectRow.source_id == source_id)
-                        .options(
-                            selectinload(CatalogObjectRow.columns),
-                            selectinload(CatalogObjectRow.foreign_keys),
-                            selectinload(CatalogObjectRow.indexes),
-                        )
-                    ).all()
-                )
-                existing_objects = [_row_to_object(r) for r in rows]
-                join_rows = list(
-                    session.scalars(_select_joins_for_source(source_id)).all()
-                )
-                existing_joins = [_row_to_join(j) for j in join_rows]
+            session = Session(bind=conn, autoflush=False, autocommit=False)
+            write = _SqlStructureWrite(session, source_id)
+            try:
+                yield write
                 session.commit()
-
-                now = utc_now()
-                plan = build_plan(existing_objects, existing_joins, now)
-                _sql_persist_plan(session, plan, now=now)
-                session.commit()
-            return plan
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
         except Exception:
             conn.rollback()
             raise

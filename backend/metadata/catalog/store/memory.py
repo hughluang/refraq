@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from backend.core.time import utc_now
 import threading
-from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime
-from typing import Any
+from typing import Any, Iterator
 
 from backend.metadata.business_domains.store import (
     MemoryBusinessDomainStore,
@@ -19,12 +19,40 @@ from backend.metadata.catalog.records import (
     CatalogColumnRecord,
     CatalogJoinRecord,
     CatalogObjectRecord,
-    CatalogWriteAborted,
     UNSET,
     new_join_id,
 )
 from backend.metadata.catalog.search_rank import _paginate, _search_rank
 from backend.metadata.catalog.structure_merge import StructureRefreshPlan
+
+
+class _MemoryStructureWrite:
+    def __init__(self, store: MemoryCatalogStore, source_id: str) -> None:
+        self._store = store
+        self._source_id = source_id
+
+    @property
+    def session(self) -> None:
+        return None
+
+    def load_baseline(
+        self,
+    ) -> tuple[list[CatalogObjectRecord], list[CatalogJoinRecord]]:
+        existing = [
+            o
+            for o in self._store._objects.values()
+            if o.source_id == self._source_id
+        ]
+        col_ids = {c.id for o in existing for c in o.columns}
+        existing_joins = [
+            j
+            for j in self._store._joins.values()
+            if j.from_column_id in col_ids or j.to_column_id in col_ids
+        ]
+        return existing, existing_joins
+
+    def persist_plan(self, plan: StructureRefreshPlan) -> None:
+        self._store._persist_structure_plan_unlocked(plan, now=utc_now())
 
 
 class MemoryCatalogStore:
@@ -173,34 +201,17 @@ class MemoryCatalogStore:
                 items, key=lambda o: (o.schema_name, o.name, o.object_type)
             )
 
-    def run_structure_refresh(
-        self,
-        source_id: str,
-        build_plan: Callable[
-            [list[CatalogObjectRecord], list[CatalogJoinRecord], datetime],
-            StructureRefreshPlan,
-        ],
-    ) -> StructureRefreshPlan:
-        """Atomic load → build_plan → persist (zero merge/origin rules)."""
+    @contextmanager
+    def structure_write(self, source_id: str) -> Iterator[_MemoryStructureWrite]:
+        """Locked catalog write unit (zero merge/origin rules)."""
         with self._lock:
             objects_backup = dict(self._objects)
             joins_backup = dict(self._joins)
             join_by_pair_backup = dict(self._join_by_pair)
+            write = _MemoryStructureWrite(self, source_id)
             try:
-                existing = [
-                    o for o in self._objects.values() if o.source_id == source_id
-                ]
-                col_ids = {c.id for o in existing for c in o.columns}
-                existing_joins = [
-                    j
-                    for j in self._joins.values()
-                    if j.from_column_id in col_ids or j.to_column_id in col_ids
-                ]
-                now = utc_now()
-                plan = build_plan(existing, existing_joins, now)
-                self._persist_structure_plan_unlocked(plan, now=now)
-                return plan
-            except CatalogWriteAborted:
+                yield write
+            except Exception:
                 self._objects = objects_backup
                 self._joins = joins_backup
                 self._join_by_pair = join_by_pair_backup

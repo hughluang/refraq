@@ -258,9 +258,11 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
   `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD` (default `0.75`), the Job fails with `JOB_FAIL_SAFE` and
   writes nothing (no catalog mutation, no **Job result**, no **Structure Diff**). Fail-safe answers
   “was this collect untrustworthy?”; it is not drift detection.
-- **Structure Diff (detect, do not act):** after a successful commit, compare existing vs incoming
-  (same identity and `schema_scope` as merge; do not reverse-engineer the touched-object plan) and
-  persist a **Structure Diff** on the Source, associated with the Job. Write **Job result**
+- **Structure Diff (detect, do not act):** a successful structure refresh commits
+  **Current catalog** and a **Structure Diff** computed from that same baseline
+  (same identity and `schema_scope` as merge; do not reverse-engineer the touched-object
+  plan) in one write. The Diff belongs to the Source and is associated with the Job. The Job runner
+  then writes **Job result**
   `{ "schema": "structure.diff.v1", "class", "counts", "structure_diff_id" }`. Do not change Job
   status, pause a **Scheduled Task**, or block the next structure Job when `class=breaking`.
   Do not put outcome into enqueue **summary**.
