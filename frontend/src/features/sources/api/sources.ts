@@ -55,7 +55,7 @@ export function patchSource(
     access: SourceAccess;
   }>,
 ) {
-  return apiClient<{ source: Source; schedule?: ScheduledTask }>(
+  return apiClient<{ source: Source; schedules?: ScheduledTask[] }>(
     `/sources/${sourceId}`,
     {
       method: "PATCH",

@@ -1,28 +1,25 @@
-"""Join Origin policy: structure-derived vs human/mcp protection."""
+"""Join attester constants and automatic insert-vs-skip."""
 
 from __future__ import annotations
 
 from typing import Literal
 
-PROTECTED_JOIN_ORIGINS = frozenset({"human", "mcp"})
 STRUCTURE_JOIN_ORIGIN = "foreign_key"
+SQL_LINEAGE_JOIN_ORIGIN = "sql_lineage"
+HUMAN_JOIN_ORIGIN = "human"
+MCP_JOIN_ORIGIN = "mcp"
 
-JoinWriteDecision = Literal["keep_existing", "apply"]
+JoinInsertDecision = Literal["insert", "skip_protected", "skip_rejected"]
 
 
-def resolve_join_write(
-    *,
-    existing_origin: str | None,
-    incoming_origin: str,
-) -> JoinWriteDecision:
-    """Decide whether an incoming join write may replace an existing edge.
+def decide_automatic_insert(*, existing_rejected: bool | None) -> JoinInsertDecision:
+    """Whether an automatic Job may insert a join for this directed pair.
 
-    Structure-derived ``foreign_key`` must not overwrite human/mcp edges.
+    ``existing_rejected`` is None when the pair has no row. Automatic Jobs never
+    update or delete an existing row.
     """
-    if (
-        incoming_origin == STRUCTURE_JOIN_ORIGIN
-        and existing_origin is not None
-        and existing_origin in PROTECTED_JOIN_ORIGINS
-    ):
-        return "keep_existing"
-    return "apply"
+    if existing_rejected is None:
+        return "insert"
+    if existing_rejected:
+        return "skip_rejected"
+    return "skip_protected"

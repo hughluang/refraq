@@ -1,0 +1,10 @@
+---
+description: Cursor plan 文件用中文编写
+alwaysApply: true
+---
+
+# Plan 文件语言
+
+编写或更新 Cursor plan（`*.plan.md`、CreatePlan 产出、`.cursor/plans/`）时：标题、overview、正文、todos 使用中文。
+
+已提交合同 `docs/`、代码注释、标识符、ADR、`CONTEXT.md` 仍为英文。不要把中文写进那些文件。中文 UI 文案只属于 `frontend/src/locales/zh-CN/`。

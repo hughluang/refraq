@@ -108,7 +108,11 @@ export function ScheduleList() {
               </Text>
             </Table.Td>
             <Table.Td>
-              <Badge variant="light">{task.work_kind ?? "—"}</Badge>
+              <Badge variant="light">
+                {task.work_kind
+                  ? t(`schedules.workKind.${task.work_kind}`)
+                  : "—"}
+              </Badge>
             </Table.Td>
             <Table.Td>
               <Text size="sm">{targetLabel(task)}</Text>

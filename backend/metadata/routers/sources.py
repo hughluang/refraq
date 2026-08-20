@@ -175,9 +175,9 @@ def patch_source(
         result="success",
         detail={"fields": sorted(data.keys())},
     )
-    if seeded is None:
+    if not seeded:
         return PatchSourceResponse(source=_source_out(record))
-    return PatchSourceResponse(source=_source_out(record), schedule=seeded)
+    return PatchSourceResponse(source=_source_out(record), schedules=seeded)
 
 
 @router.delete(

@@ -12,18 +12,18 @@ from backend.core.pagination import PageParams, page_params
 from backend.jobs.api import get_schedule_name_store, present_jobs
 from backend.jobs.schemas.jobs import JobListResponse
 from backend.jobs.store import JobStatus
-from backend.metadata.source_jobs import run_structure_schedule
+from backend.metadata.source_jobs import run_source_schedule as enqueue_run_now
 from backend.metadata.source_schedules import (
-    create_structure_schedule,
+    create_source_schedule as insert_source_schedule,
     list_jobs_for_schedule,
-    list_structure_schedules,
+    list_source_schedules as list_source_schedule_rows,
 )
 from backend.worker.schemas.schedules import ScheduleListResponse
 
 router = APIRouter(tags=["schedules-catalog"])
 
 
-class CreateStructureScheduleRequest(BaseModel):
+class CreateSourceScheduleRequest(BaseModel):
     kind: str
     cron: str | None = None
     interval_seconds: int | None = None
@@ -36,11 +36,11 @@ class CreateStructureScheduleRequest(BaseModel):
 @router.post("/sources/{source_id}/schedules", status_code=status.HTTP_201_CREATED)
 def create_source_schedule(
     source_id: str,
-    payload: CreateStructureScheduleRequest,
+    payload: CreateSourceScheduleRequest,
     request: Request,
     user: UserRecord = Depends(require_permission("jobs:run")),
 ) -> JSONResponse:
-    schedule = create_structure_schedule(
+    schedule = insert_source_schedule(
         source_id=source_id,
         kind=payload.kind,
         cron=payload.cron,
@@ -64,7 +64,7 @@ def list_source_schedules(
     _: UserRecord = Depends(require_permission("jobs:run")),
     page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> ScheduleListResponse:
-    items, total = list_structure_schedules(
+    items, total = list_source_schedule_rows(
         source_id, limit=page.limit, offset=page.offset
     )
     return ScheduleListResponse(
@@ -79,7 +79,7 @@ def run_source_schedule(
     user: UserRecord = Depends(require_permission("jobs:run")),
     users: UserStore = Depends(get_user_store),
 ) -> JSONResponse:
-    job = run_structure_schedule(
+    job = enqueue_run_now(
         schedule_id=schedule_id,
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),

@@ -16,10 +16,14 @@ __all__ = [
     "JobInputInvalid",
     "JobSecretMissing",
     "JobSourceDisabled",
+    "JoinAlreadyDefined",
+    "JoinAlreadyRejected",
     "JoinCrossSource",
     "JoinEvidenceRequired",
     "JoinInvalid",
+    "JoinNotRejected",
     "JoinPathUnavailable",
+    "JoinRejected",
     "LocatorInvalid",
     "QueryFailed",
     "QueryMultiStatement",
@@ -222,6 +226,42 @@ class JoinCrossSource(AppError):
         return "Join columns must belong to the same Source"
 
 
+class JoinAlreadyDefined(AppError):
+    code = "JOIN_ALREADY_DEFINED"
+    http_status = 409
+
+    def __init__(self, join_id: str) -> None:
+        self.join_id = join_id
+        super().__init__(f"Join already defined: {join_id}")
+
+
+class JoinRejected(AppError):
+    code = "JOIN_REJECTED"
+    http_status = 409
+
+    def __init__(self, join_id: str) -> None:
+        self.join_id = join_id
+        super().__init__(f"Join pair is rejected: {join_id}")
+
+
+class JoinAlreadyRejected(AppError):
+    code = "JOIN_ALREADY_REJECTED"
+    http_status = 409
+
+    def __init__(self, join_id: str) -> None:
+        self.join_id = join_id
+        super().__init__(f"Join is already rejected: {join_id}")
+
+
+class JoinNotRejected(AppError):
+    code = "JOIN_NOT_REJECTED"
+    http_status = 409
+
+    def __init__(self, join_id: str) -> None:
+        self.join_id = join_id
+        super().__init__(f"Join is not rejected: {join_id}")
+
+
 class JobSourceDisabled(AppError):
     code = "JOB_SOURCE_DISABLED"
     http_status = 400
@@ -292,6 +332,14 @@ class QueryFailed(AppError):
 
     def _default_message(self) -> str:
         return "Query execution failed"
+
+
+class SampleObjectTypeUnsupported(AppError):
+    code = "SAMPLE_OBJECT_TYPE_UNSUPPORTED"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Catalog Sample is not supported for this object type"
 
 
 class SampleColumnUnknown(AppError):

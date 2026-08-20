@@ -26,6 +26,7 @@ from backend.admin.user_store import reset_user_store
 from backend.jobs.store import reset_job_store
 from backend.metadata.business_domains.store import reset_business_domain_store
 from backend.metadata.catalog.store import reset_catalog_store
+from backend.metadata.catalog.kind_locks import reset_kind_execution_locks_for_tests
 from backend.metadata.sources.store import reset_source_store
 from backend.metadata.structure_diffs.store import reset_structure_diff_store
 from backend.metadata.type_mappings.store import reset_type_mapping_store
@@ -60,6 +61,7 @@ def _reset_foundation_singletons() -> None:
     reset_business_domain_store()
     reset_type_mapping_store()
     reset_schedule_store()
+    reset_kind_execution_locks_for_tests()
     reset_db_singletons()
     reset_redis_singleton()
     yield
@@ -75,6 +77,7 @@ def _reset_foundation_singletons() -> None:
     reset_business_domain_store()
     reset_type_mapping_store()
     reset_schedule_store()
+    reset_kind_execution_locks_for_tests()
     reset_db_singletons()
     reset_redis_singleton()
     reset_system_parameters()

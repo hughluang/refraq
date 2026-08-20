@@ -22,15 +22,19 @@ import { SectionHeader } from "@/components/layout/SectionHeader";
 import { searchCatalogColumns } from "@/features/sources/api/catalog";
 import {
   deleteJoin,
+  createJoin,
   getJoinPath,
   listObjectJoins,
-  upsertJoin,
+  patchJoin,
+  rejectJoin,
+  restoreJoin,
 } from "@/features/sources/api/joins";
 import {
   type JoinSelectOption,
   columnLabel,
   columnOptionLabel,
-  isAutoDerivedJoin,
+  joinRowActions,
+  joinRowState,
   mergeSelectedOption,
   retainSelectedOption,
   validateJoinDraft,
@@ -65,6 +69,7 @@ export function JoinsTab({
   const [joinEvidence, setJoinEvidence] = useState("");
   const [joinKind, setJoinKind] = useState<string | null>("INNER");
   const [joinExpression, setJoinExpression] = useState("");
+  const [editingJoinId, setEditingJoinId] = useState<string | null>(null);
   const [toSearch, setToSearch] = useState("");
   const debouncedToSearch = useSearchDebounce(toSearch);
   const [toOptions, setToOptions] = useState<JoinSelectOption[]>([]);
@@ -161,16 +166,25 @@ export function JoinsTab({
     }
     setSaving(true);
     try {
-      await upsertJoin({
-        from_column_id: check.fromId,
-        to_column_id: check.toId,
-        evidence: check.evidence,
-        join_kind: joinKind || "INNER",
-        join_expression: joinExpression.trim() || null,
-      });
+      if (editingJoinId) {
+        await patchJoin(editingJoinId, {
+          evidence: check.evidence,
+          join_kind: joinKind || "INNER",
+          join_expression: joinExpression.trim() || null,
+        });
+      } else {
+        await createJoin({
+          from_column_id: check.fromId,
+          to_column_id: check.toId,
+          evidence: check.evidence,
+          join_kind: joinKind || "INNER",
+          join_expression: joinExpression.trim() || null,
+        });
+      }
       await reload();
       setJoinEvidence("");
       setJoinExpression("");
+      setEditingJoinId(null);
       open?.({ type: "success", message: t("catalog.joins.saved") });
     } catch (err) {
       open?.({
@@ -188,6 +202,38 @@ export function JoinsTab({
       await deleteJoin(joinId);
       await reload();
       open?.({ type: "success", message: t("catalog.joins.deleted") });
+    } catch (err) {
+      open?.({
+        type: "error",
+        message: err instanceof ApiError ? err.detail : String(err),
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const rejectJoinEdge = async (joinId: string) => {
+    setSaving(true);
+    try {
+      await rejectJoin(joinId);
+      await reload();
+      open?.({ type: "success", message: t("catalog.joins.rejected") });
+    } catch (err) {
+      open?.({
+        type: "error",
+        message: err instanceof ApiError ? err.detail : String(err),
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const restoreJoinEdge = async (joinId: string) => {
+    setSaving(true);
+    try {
+      await restoreJoin(joinId);
+      await reload();
+      open?.({ type: "success", message: t("catalog.joins.restored") });
     } catch (err) {
       open?.({
         type: "error",
@@ -240,7 +286,9 @@ export function JoinsTab({
       {writable ? (
         <Stack gap="xs" style={{ flexShrink: 0 }}>
           <Text size="sm" fw={500}>
-            {t("catalog.joins.add")}
+            {editingJoinId
+              ? t("catalog.joins.amending")
+              : t("catalog.joins.add")}
           </Text>
           <Group align="flex-end" grow>
             <Select
@@ -253,6 +301,7 @@ export function JoinsTab({
               onChange={setJoinFromId}
               searchable
               size="sm"
+              disabled={editingJoinId != null}
             />
             <Select
               label={t("catalog.joins.toColumn")}
@@ -273,6 +322,7 @@ export function JoinsTab({
                     : t("catalog.joins.toColumnPlaceholder")
               }
               placeholder={t("catalog.joins.toColumnPlaceholder")}
+              disabled={editingJoinId != null}
             />
           </Group>
           <Group grow>
@@ -332,7 +382,7 @@ export function JoinsTab({
             <Table.Th>{t("catalog.joins.kind")}</Table.Th>
             <Table.Th>{t("catalog.joins.expression")}</Table.Th>
             <Table.Th>{t("catalog.joins.evidence")}</Table.Th>
-            <Table.Th>{t("catalog.joins.origin")}</Table.Th>
+            <Table.Th>{t("catalog.joins.state")}</Table.Th>
             <Table.Th>{t("catalog.joins.createdAt")}</Table.Th>
             {writable ? <Table.Th /> : null}
           </Table.Tr>
@@ -343,7 +393,8 @@ export function JoinsTab({
         onPageChange={setPage}
       >
         {joins.map((join) => {
-          const auto = isAutoDerivedJoin(join.origin);
+          const state = joinRowState(join);
+          const actions = joinRowActions(state);
           return (
             <Table.Tr key={join.id}>
               <Table.Td>
@@ -363,28 +414,92 @@ export function JoinsTab({
               <Table.Td>{join.evidence}</Table.Td>
               <Table.Td>
                 <Group gap={4}>
-                  <Text size="sm">{join.origin ?? "—"}</Text>
-                  {auto ? (
-                    <Badge size="xs" color="gray">
-                      {t("catalog.joins.autoDerived")}
+                  {state === "rejected" ? (
+                    <Badge size="xs" color="red">
+                      {t("catalog.joins.state.rejected")}
                     </Badge>
-                  ) : null}
+                  ) : state === "automated" ? (
+                    <Badge size="xs" color="gray">
+                      {t("catalog.joins.state.automated")}
+                    </Badge>
+                  ) : (
+                    <Badge size="xs" color="blue">
+                      {t("catalog.joins.state.manual")}
+                    </Badge>
+                  )}
                 </Group>
               </Table.Td>
               <Table.Td>{join.created_at}</Table.Td>
               {writable ? (
                 <Table.Td>
-                  {auto ? null : (
-                    <Button
-                      size="xs"
-                      variant="subtle"
-                      color="red"
-                      loading={saving}
-                      onClick={() => void removeJoinEdge(join.id)}
-                    >
-                      {t("catalog.joins.delete")}
-                    </Button>
-                  )}
+                  <Group gap={4} wrap="nowrap">
+                    {actions.restore ? (
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        loading={saving}
+                        onClick={() => void restoreJoinEdge(join.id)}
+                      >
+                        {t("catalog.joins.restore")}
+                      </Button>
+                    ) : (
+                      <>
+                        {actions.amend ? (
+                          <Button
+                            size="xs"
+                            variant="subtle"
+                            loading={saving}
+                            onClick={() => {
+                              setEditingJoinId(join.id);
+                              setJoinFromId(join.from_column_id);
+                              setJoinToId(join.to_column_id);
+                              setToOptions((prev) =>
+                                mergeSelectedOption(
+                                  prev,
+                                  join.to_column_id,
+                                  [
+                                    {
+                                      value: join.to_column_id,
+                                      label:
+                                        join.to_column_locator_key ??
+                                        join.to_column_id,
+                                    },
+                                  ],
+                                ),
+                              );
+                              setJoinKind(join.join_kind ?? "INNER");
+                              setJoinExpression(join.join_expression ?? "");
+                              setJoinEvidence(join.evidence);
+                            }}
+                          >
+                            {t("catalog.joins.amend")}
+                          </Button>
+                        ) : null}
+                        {actions.reject ? (
+                          <Button
+                            size="xs"
+                            variant="subtle"
+                            color="orange"
+                            loading={saving}
+                            onClick={() => void rejectJoinEdge(join.id)}
+                          >
+                            {t("catalog.joins.reject")}
+                          </Button>
+                        ) : null}
+                        {actions.delete ? (
+                          <Button
+                            size="xs"
+                            variant="subtle"
+                            color="red"
+                            loading={saving}
+                            onClick={() => void removeJoinEdge(join.id)}
+                          >
+                            {t("catalog.joins.delete")}
+                          </Button>
+                        ) : null}
+                      </>
+                    )}
+                  </Group>
                 </Table.Td>
               ) : null}
             </Table.Tr>
@@ -421,7 +536,7 @@ export function JoinsTab({
                 {path.hops.map((hop) => (
                   <Text key={hop.join_id} size="xs" c="dimmed">
                     {hop.from_column_locator_key} → {hop.to_column_locator_key}{" "}
-                    ({hop.join_kind}, {hop.origin})
+                    ({hop.join_kind})
                   </Text>
                 ))}
                 {path.target_object_id ? (

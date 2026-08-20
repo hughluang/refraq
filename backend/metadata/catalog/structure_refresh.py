@@ -44,7 +44,7 @@ def apply_structure_snapshot(
     that same baseline, then returns the commit outcome.
     """
     try:
-        with get_catalog_store().structure_write(source.id) as write:
+        with get_catalog_store().catalog_write(source.id) as write:
             existing_objects, existing_joins = write.load_baseline()
             plan = build_structure_refresh_plan(
                 source_id=source.id,

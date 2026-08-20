@@ -198,21 +198,28 @@ PATCH body: `{ "normalized_type": "<one of 11 buckets>" }` — any closed Normal
   "evidence": "FK fk_order_lines_order",
   "join_kind": "INNER",
   "join_expression": "a.order_id = b.order_id",
-  "origin": "foreign_key",
   "created_by_user_id": "user_001",
-  "created_at": "2026-08-05T03:00:00Z"
+  "created_at": "2026-08-05T03:00:00Z",
+  "is_rejected": false,
+  "rejected_at": null,
+  "rejected_by_user_id": null
 }
 ```
 
+`is_rejected` is computed from `rejected_at`. Console treats rows with null `created_by_user_id` as automated (no Console delete). HTTP/MCP `DELETE` is unchanged. There is no join `origin` field and no **Join Change** HTTP resource.
+
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/objects/{id}/joins` | `metadata:read` | List joins touching object (**Offset Page**) |
-| `PUT` | `/joins` | `metadata:write` | Upsert single edge (`origin=human` when via Console) |
-| `PUT` | `/joins:batch` | `metadata:write` | Batch upsert; all edges same Source |
+| `GET` | `/objects/{id}/joins` | `metadata:read` | List joins touching object, including rejected rows (**Offset Page**) |
+| `POST` | `/joins` | `metadata:write` | Create a single edge (Console/User; **Join Change** attester `human`); duplicate pair refused |
+| `POST` | `/joins:batch` | `metadata:write` | Batch create; asserted known pairs skipped; rejected pairs reported (`rejected_count`), not overwritten or restored |
+| `PATCH` | `/joins/{id}` | `metadata:write` | Amend evidence/kind/expression only |
+| `POST` | `/joins/{id}/reject` | `metadata:write` | **Join Rejection** |
+| `POST` | `/joins/{id}/restore` | `metadata:write` | Lift **Join Rejection** |
 | `DELETE` | `/joins/{id}` | `metadata:write` | Remove edge |
-| `GET` | `/joins/path` | `metadata:read` | Join path lookup |
+| `GET` | `/joins/path` | `metadata:read` | Join path lookup (omits rejected rows) |
 
-**Offset Page** response for `GET /objects/{id}/joins`: `{ "items": […], "total": N, "limit": L, "offset": O }`. `limit` default 50, max 200. Order: `created_at ASC`, `id ASC`. `total` is joins that touch this object.
+**Offset Page** response for `GET /objects/{id}/joins`: `{ "items": […], "total": N, "limit": L, "offset": O }`. `limit` default 50, max 200. Order: `created_at ASC`, `id ASC`. `total` is joins that touch this object, including rejected rows. No filter parameter in this slice (same default-include as **Current catalog** tombstones).
 
 Batch request:
 
@@ -230,14 +237,14 @@ Batch request:
 }
 ```
 
-Batch response: `{ "created_count": 1, "already_known_count": 0, "items": [Join] }`.
+Batch response: `{ "created_count": 1, "already_known_count": 0, "rejected_count": 0, "items": [Join] }`. Asserted known pairs increment `already_known_count`. Rejected pairs increment `rejected_count` and appear in `items` with `is_rejected`; evidence is not overwritten and the row is not restored.
 
 Path query params: `start` (object or column id or locator_key), optional `target`, `max_hops` (1–5, default 1), `top_targets` (default 3).
 
 Path response: `{ "paths_found": N, "paths": […], "direct_joins": […], "reason": null | "…" }`.
 `reason` may be set when no usable path is returned (e.g. `TARGET_UNREACHABLE`).
 
-Reject joins that lack evidence with `JOIN_EVIDENCE_REQUIRED`. Cross-Source edges → `JOIN_CROSS_SOURCE`. Self-loop → `JOIN_INVALID`.
+Reject joins that lack evidence with `JOIN_EVIDENCE_REQUIRED`. Cross-Source edges → `JOIN_CROSS_SOURCE`. Self-loop → `JOIN_INVALID`. Duplicate create on an asserted pair → `JOIN_ALREADY_DEFINED` (message includes join id). Single `POST /joins` create or `PATCH` amend on a rejected pair → `JOIN_REJECTED` (batch reports via `rejected_count` instead). Reject of an already-rejected row → `JOIN_ALREADY_REJECTED`. Restore of an asserted row → `JOIN_NOT_REJECTED`. Create is `201`.
 
 ## 6. Search Endpoints (Depth)
 
@@ -343,6 +350,7 @@ Errors: same Controlled Query codes when execution/guards fail (`QUERY_NOT_READO
 | code | When |
 | --- | --- |
 | `CATALOG_OBJECT_NOT_FOUND` | Unknown object id |
+| `SAMPLE_OBJECT_TYPE_UNSUPPORTED` | Catalog Sample on `procedure` or `function` |
 | `SAMPLE_COLUMN_UNKNOWN` | `columns` / filter / `order_by` references a column not on the object |
 | `SAMPLE_FILTER_INVALID` | Unknown filter op, empty `columns` list, or invalid filter payload |
 

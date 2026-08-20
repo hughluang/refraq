@@ -7,6 +7,7 @@ import logging
 from celery import shared_task
 
 from backend.jobs.store import TERMINAL, append_job_log, get_job_store, mark_failed
+from backend.metadata.join_detection_jobs.service import run_join_detection_job
 from backend.metadata.structure_jobs.service import run_structure_job
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,8 @@ def _dispatch_job(job_id: str) -> dict[str, str]:
         return {"status": current.status}
     if current.kind == "structure":
         return run_structure_job(job_id)
+    if current.kind == "join_detection":
+        return run_join_detection_job(job_id)
     mark_failed(
         job_id,
         error_code="JOB_INPUT_INVALID",

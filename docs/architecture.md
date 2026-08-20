@@ -38,7 +38,7 @@ The Management Foundation slice includes:
 
 ### In Scope For Metadata Foundation Phase
 
-- Source registry (embedded reachability for database kinds), structure **Jobs**, catalog browse, semantics, joins, controlled read-only query
+- Source registry (embedded reachability for database kinds), structure and join-detection **Jobs**, catalog browse, semantics, joins, controlled read-only query
 - User PAT for API/MCP; Celery platform async runtime (Redis broker) + **Job** / Scheduled Task in Postgres; encrypted Source secrets; management-plane audit
 - See `docs/business-metadata.md`
 

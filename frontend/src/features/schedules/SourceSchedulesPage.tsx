@@ -139,7 +139,7 @@ export function SourceSchedulesPage({ sourceId }: Props) {
         ) : (
           <ListTable
             state={listPresentation.state}
-            columnCount={7}
+            columnCount={8}
             refreshing={listPresentation.refreshing}
             errorMessage={error}
             onRetry={() => void reload()}
@@ -147,6 +147,7 @@ export function SourceSchedulesPage({ sourceId }: Props) {
             head={
               <Table.Tr>
                 <Table.Th>{t("schedules.fields.name")}</Table.Th>
+                <Table.Th>{t("schedules.fields.kind")}</Table.Th>
                 <Table.Th>{t("schedules.fields.cadence")}</Table.Th>
                 <Table.Th>{t("schedules.fields.timezone")}</Table.Th>
                 <Table.Th>{t("schedules.fields.enabled")}</Table.Th>
@@ -166,6 +167,13 @@ export function SourceSchedulesPage({ sourceId }: Props) {
                   <Text size="sm">{task.name}</Text>
                   <Text size="xs" c="dimmed" ff="monospace">
                     {task.id}
+                  </Text>
+                </Table.Td>
+                <Table.Td>
+                  <Text size="sm">
+                    {task.work_kind
+                      ? t(`schedules.workKind.${task.work_kind}`)
+                      : "—"}
                   </Text>
                 </Table.Td>
                 <Table.Td>

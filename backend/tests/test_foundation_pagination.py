@@ -201,11 +201,11 @@ def test_schedules_http_envelope_and_source_scope(client: TestClient) -> None:
     platform = client.get("/schedules")
     assert platform.status_code == 200
     body = platform.json()
-    assert body["total"] == 2
+    assert body["total"] == 4
     assert body["limit"] == 50
     page = client.get("/schedules?limit=1&offset=0")
     assert len(page.json()["items"]) == 1
-    assert page.json()["total"] == 2
+    assert page.json()["total"] == 4
     with_system = client.get("/schedules?system=true")
     assert with_system.status_code == 200
     assert with_system.json()["total"] > body["total"]
@@ -215,13 +215,13 @@ def test_schedules_http_envelope_and_source_scope(client: TestClient) -> None:
     scoped = client.get(f"/sources/{a_id}/schedules")
     assert scoped.status_code == 200
     scoped_body = scoped.json()
-    assert scoped_body["total"] == 1
+    assert scoped_body["total"] == 2
     assert scoped_body["limit"] == 50
     assert scoped_body["items"][0]["target"]["source_id"] == a_id
     other = client.get(f"/sources/{b_id}/schedules")
     assert other.json()["items"][0]["id"] != scoped_body["items"][0]["id"]
     past = client.get(f"/sources/{a_id}/schedules?offset=99")
     assert past.json()["items"] == []
-    assert past.json()["total"] == 1
+    assert past.json()["total"] == 2
     over_src = client.get(f"/sources/{a_id}/schedules?limit=201")
     assert over_src.status_code == 422

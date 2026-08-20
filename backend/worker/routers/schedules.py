@@ -11,7 +11,7 @@ from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
 from backend.metadata.source_schedules import (
     public_schedule,
-    structure_schedule_label_for_record,
+    schedule_label_for_record,
 )
 from backend.worker.api import (
     delete_schedule,
@@ -65,7 +65,7 @@ def patch_platform_schedule(
     updated = patch_schedule(
         schedule_id,
         enabled=payload.enabled,
-        name=structure_schedule_label_for_record(record, payload.name),
+        name=schedule_label_for_record(record, payload.name),
         cron=payload.cron,
         interval_seconds=payload.interval_seconds,
         schedule_timezone=payload.schedule_timezone,

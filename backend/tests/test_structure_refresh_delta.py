@@ -228,7 +228,6 @@ def test_stamp_missing_object_id_raises() -> None:
     plan = StructureRefreshPlan(
         source_id="src_1",
         objects=(),
-        delete_join_ids=(),
         upsert_joins=(),
         stamp_object_ids=("missing",),
         last_structure_job_id="job_x",

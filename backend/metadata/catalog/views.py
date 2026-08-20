@@ -121,9 +121,11 @@ class JoinView:
     evidence: str
     join_kind: str
     join_expression: str | None
-    origin: str
     created_by_user_id: str | None
     created_at: datetime
+    is_rejected: bool = False
+    rejected_at: datetime | None = None
+    rejected_by_user_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -136,7 +138,6 @@ class JoinPathHopView:
     join_kind: str
     join_expression: str | None
     evidence: str
-    origin: str
 
 
 @dataclass(frozen=True)
@@ -258,9 +259,11 @@ def join_view(record: CatalogJoinRecord) -> JoinView:
         evidence=record.evidence,
         join_kind=record.join_kind,
         join_expression=record.join_expression,
-        origin=record.origin,
         created_by_user_id=record.created_by_user_id,
         created_at=record.created_at,
+        is_rejected=record.is_rejected,
+        rejected_at=record.rejected_at,
+        rejected_by_user_id=record.rejected_by_user_id,
     )
 
 

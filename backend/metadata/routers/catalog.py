@@ -11,6 +11,7 @@ from backend.metadata.catalog import join_writes as catalog_joins
 from backend.metadata.catalog import semantics as catalog_semantics
 from backend.metadata.catalog import service as catalog_reads
 from backend.metadata.catalog import views as catalog_views
+from backend.metadata.catalog.join_origin import HUMAN_JOIN_ORIGIN
 from backend.metadata.query import service as query_service
 from backend.metadata.query.compile_sample import SampleFilterSpec, SampleOrderSpec
 from backend.metadata.schemas.catalog import (
@@ -35,6 +36,7 @@ from backend.metadata.schemas.catalog import (
     JoinPathHopOut,
     JoinPathOut,
     JoinPathResponse,
+    JoinPatchRequest,
     JoinResponse,
     JoinUpsertRequest,
     ObjectSemanticsPatchRequest,
@@ -129,9 +131,11 @@ def _join_out(view: catalog_views.JoinView) -> JoinOut:
         evidence=view.evidence,
         join_kind=view.join_kind,
         join_expression=view.join_expression,
-        origin=view.origin,
         created_by_user_id=view.created_by_user_id,
         created_at=view.created_at,
+        is_rejected=view.is_rejected,
+        rejected_at=view.rejected_at,
+        rejected_by_user_id=view.rejected_by_user_id,
     )
 
 def _object_out_from_record(record, *, include_columns: bool) -> CatalogObjectOut:
@@ -336,13 +340,13 @@ def list_object_joins(
         offset=page.offset,
     )
 
-@router.put("/joins", response_model=JoinResponse)
-def upsert_join(
+@router.post("/joins", response_model=JoinResponse, status_code=status.HTTP_201_CREATED)
+def create_join(
     payload: JoinUpsertRequest,
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> JoinResponse:
-    record = catalog_joins.upsert_join(
+    record = catalog_joins.create_join(
         from_column_id=payload.from_column_id,
         to_column_id=payload.to_column_id,
         evidence=payload.evidence,
@@ -350,25 +354,26 @@ def upsert_join(
         actor_token_id=get_actor_token_id(request),
         join_kind=payload.join_kind or "INNER",
         join_expression=payload.join_expression,
-        origin="human",
+        attester=HUMAN_JOIN_ORIGIN,
     )
     return JoinResponse(join=_join_out_from_record(record))
 
-@router.put("/joins:batch", response_model=JoinBatchResponse)
-def upsert_joins_batch(
+@router.post("/joins:batch", response_model=JoinBatchResponse)
+def create_joins_batch(
     payload: JoinBatchUpsertRequest,
     request: Request,
     user: UserRecord = Depends(require_permission("metadata:write")),
 ) -> JoinBatchResponse:
-    items, created, known = catalog_joins.upsert_joins_batch(
+    items, created, known, rejected = catalog_joins.upsert_joins_batch(
         joins=[j.model_dump() for j in payload.joins],
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),
-        origin="human",
+        attester=HUMAN_JOIN_ORIGIN,
     )
     return JoinBatchResponse(
         created_count=created,
         already_known_count=known,
+        rejected_count=rejected,
         items=[_join_out_from_record(j) for j in items],
     )
 
@@ -402,7 +407,6 @@ def get_join_path(
                         join_kind=hop.join_kind,
                         join_expression=hop.join_expression,
                         evidence=hop.evidence,
-                        origin=hop.origin,
                     )
                     for hop in path.hops
                 ],
@@ -413,6 +417,49 @@ def get_join_path(
         direct_joins=[_join_out(j) for j in result.direct_joins],
         reason=result.reason,
     )
+
+@router.patch("/joins/{join_id}", response_model=JoinResponse)
+def patch_join(
+    join_id: str,
+    payload: JoinPatchRequest,
+    request: Request,
+    user: UserRecord = Depends(require_permission("metadata:write")),
+) -> JoinResponse:
+    record = catalog_joins.amend_join(
+        join_id=join_id,
+        evidence=payload.evidence,
+        actor_user_id=user.id,
+        actor_token_id=get_actor_token_id(request),
+        join_kind=payload.join_kind or "INNER",
+        join_expression=payload.join_expression,
+    )
+    return JoinResponse(join=_join_out_from_record(record))
+
+@router.post("/joins/{join_id}/reject", response_model=JoinResponse)
+def reject_join(
+    join_id: str,
+    request: Request,
+    user: UserRecord = Depends(require_permission("metadata:write")),
+) -> JoinResponse:
+    record = catalog_joins.reject_join(
+        join_id=join_id,
+        actor_user_id=user.id,
+        actor_token_id=get_actor_token_id(request),
+    )
+    return JoinResponse(join=_join_out_from_record(record))
+
+@router.post("/joins/{join_id}/restore", response_model=JoinResponse)
+def restore_join(
+    join_id: str,
+    request: Request,
+    user: UserRecord = Depends(require_permission("metadata:write")),
+) -> JoinResponse:
+    record = catalog_joins.restore_join(
+        join_id=join_id,
+        actor_user_id=user.id,
+        actor_token_id=get_actor_token_id(request),
+    )
+    return JoinResponse(join=_join_out_from_record(record))
 
 @router.delete("/joins/{join_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_join(

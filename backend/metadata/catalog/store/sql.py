@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 from backend.core.time import utc_now
-import hashlib
 import json
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Iterator
 
-from sqlalchemy import func, or_, select, text, update
+from sqlalchemy import func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, defer, noload, selectinload
 
-from backend.core.db import get_engine, session_scope
+from backend.core.db import get_session_factory, session_scope
 from backend.core.pagination import apply_sql_page
 from backend.metadata.catalog.identity import _recompute_column_locator, _recompute_object_locator
 from backend.metadata.catalog.records import (
@@ -23,13 +23,27 @@ from backend.metadata.catalog.records import (
     CatalogObjectRecord,
     UNSET,
     new_join_id,
+    new_join_change_id,
 )
 from backend.metadata.catalog.search_rank import _paginate, _search_rank
 from backend.metadata.catalog.structure_merge import StructureRefreshPlan
+from backend.metadata.catalog.join_changes import (
+    CatalogJoinChangeRecord,
+    JOIN_CHANGE_AMEND,
+    JOIN_CHANGE_CREATE,
+    JOIN_CHANGE_REJECT,
+    JOIN_CHANGE_RESTORE,
+)
+from backend.metadata.catalog.join_origin import (
+    STRUCTURE_JOIN_ORIGIN,
+    SQL_LINEAGE_JOIN_ORIGIN,
+)
+from backend.metadata.join_detection_jobs.reconcile import JoinDetectionPlan
 from backend.metadata.models import (
     CatalogColumnRow,
     CatalogForeignKeyRow,
     CatalogIndexRow,
+    CatalogJoinChangeRow,
     CatalogJoinRow,
     CatalogObjectRow,
 )
@@ -99,6 +113,9 @@ class _SqlStructureWrite:
 
     def persist_plan(self, plan: StructureRefreshPlan) -> None:
         _sql_persist_plan(self._session, plan, now=utc_now())
+
+    def persist_join_detection_plan(self, plan: JoinDetectionPlan) -> int:
+        return _sql_persist_join_detection_plan(self._session, plan, now=utc_now())
 
 
 class SqlCatalogStore:
@@ -288,44 +305,23 @@ class SqlCatalogStore:
             return [_row_to_object(r) for r in rows]
 
     @contextmanager
-    def structure_write(self, source_id: str) -> Iterator[_SqlStructureWrite]:
-        """Locked catalog write unit: load baseline, persist plan (no merge).
+    def catalog_write(self, source_id: str) -> Iterator[_SqlStructureWrite]:
+        """Catalog write unit: load baseline, persist plan (no merge).
 
-        Per-Source serialization is a session-level advisory lock held across
-        read → plan → write. Merge stays a pure function outside the store.
-        Successful exit commits the write session once (catalog plan + any
-        Diff rows flushed on the same session).
+        Same-kind runner serialization is the **Kind execution lock** (ADR 0032),
+        not this write unit. Automatic join inserts use ON CONFLICT DO NOTHING.
+        Successful exit commits once (catalog plan + Diff rows on the same session).
         """
-        lock_keys = _source_lock_keys(source_id)
-        conn = get_engine().connect()
+        session = get_session_factory()()
+        write = _SqlStructureWrite(session, source_id)
         try:
-            conn.execute(
-                text("SELECT pg_advisory_lock(:a, :b)"),
-                {"a": lock_keys[0], "b": lock_keys[1]},
-            )
-            conn.commit()
-            session = Session(bind=conn, autoflush=False, autocommit=False)
-            write = _SqlStructureWrite(session, source_id)
-            try:
-                yield write
-                session.commit()
-            except Exception:
-                session.rollback()
-                raise
-            finally:
-                session.close()
+            yield write
+            session.commit()
         except Exception:
-            conn.rollback()
+            session.rollback()
             raise
         finally:
-            try:
-                conn.execute(
-                    text("SELECT pg_advisory_unlock(:a, :b)"),
-                    {"a": lock_keys[0], "b": lock_keys[1]},
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            session.close()
 
     def recompute_locators_for_source(
         self,
@@ -553,7 +549,7 @@ class SqlCatalogStore:
         created_by_user_id: str | None,
         join_kind: str = "INNER",
         join_expression: str | None = None,
-        origin: str = "human",
+        attester: str,
     ) -> CatalogJoinRecord:
 
         now = utc_now()
@@ -565,11 +561,6 @@ class SqlCatalogStore:
                 )
             ).first()
             if existing is not None:
-                existing.evidence = evidence
-                existing.join_kind = join_kind
-                existing.join_expression = join_expression
-                existing.origin = origin
-                session.flush()
                 return _row_to_join(existing)
             row = CatalogJoinRow(
                 id=new_join_id(),
@@ -578,13 +569,97 @@ class SqlCatalogStore:
                 evidence=evidence,
                 join_kind=join_kind,
                 join_expression=join_expression,
-                origin=origin,
                 created_by_user_id=created_by_user_id,
                 created_at=now,
             )
             session.add(row)
+            _sql_append_join_change(
+                session,
+                from_column_id=from_column_id,
+                to_column_id=to_column_id,
+                kind=JOIN_CHANGE_CREATE,
+                created_at=now,
+                attester=attester,
+                actor_user_id=created_by_user_id,
+            )
             session.flush()
             return _row_to_join(row)
+
+    def update_join(
+        self,
+        join_id: str,
+        *,
+        evidence: str,
+        join_kind: str,
+        join_expression: str | None,
+        actor_user_id: str | None,
+    ) -> CatalogJoinRecord | None:
+        now = utc_now()
+        with session_scope() as session:
+            row = session.get(CatalogJoinRow, join_id)
+            if row is None:
+                return None
+            row.evidence = evidence
+            row.join_kind = join_kind
+            row.join_expression = join_expression
+            _sql_append_join_change(
+                session,
+                from_column_id=row.from_column_id,
+                to_column_id=row.to_column_id,
+                kind=JOIN_CHANGE_AMEND,
+                created_at=now,
+                actor_user_id=actor_user_id,
+            )
+            session.flush()
+            return _row_to_join(row)
+
+    def set_join_rejection(
+        self,
+        join_id: str,
+        *,
+        rejected_at: datetime | None,
+        rejected_by_user_id: str | None,
+        actor_user_id: str | None = None,
+    ) -> CatalogJoinRecord | None:
+        now = utc_now()
+        with session_scope() as session:
+            row = session.get(CatalogJoinRow, join_id)
+            if row is None:
+                return None
+            kind = (
+                JOIN_CHANGE_RESTORE if rejected_at is None else JOIN_CHANGE_REJECT
+            )
+            row.rejected_at = rejected_at
+            row.rejected_by_user_id = rejected_by_user_id
+            _sql_append_join_change(
+                session,
+                from_column_id=row.from_column_id,
+                to_column_id=row.to_column_id,
+                kind=kind,
+                created_at=now,
+                actor_user_id=actor_user_id if actor_user_id is not None else rejected_by_user_id,
+            )
+            session.flush()
+            return _row_to_join(row)
+
+    def list_join_changes(
+        self,
+        *,
+        from_column_id: str,
+        to_column_id: str,
+    ) -> list[CatalogJoinChangeRecord]:
+        with session_scope() as session:
+            rows = list(
+                session.scalars(
+                    select(CatalogJoinChangeRow)
+                    .where(
+                        CatalogJoinChangeRow.from_column_id == from_column_id,
+                        CatalogJoinChangeRow.to_column_id == to_column_id,
+                    )
+                    .order_by(CatalogJoinChangeRow.created_at, CatalogJoinChangeRow.id)
+                ).all()
+            )
+            return [_row_to_join_change(r) for r in rows]
 
     def delete_join(self, join_id: str) -> bool:
         with session_scope() as session:
@@ -634,13 +709,70 @@ def _list_object_filters(
 _STAMP_CHUNK = 1000
 
 
-def _source_lock_keys(source_id: str) -> tuple[int, int]:
-    digest = hashlib.blake2b(
-        f"structure-refresh:{source_id}".encode(), digest_size=8
-    ).digest()
-    return (
-        int.from_bytes(digest[:4], "big", signed=True),
-        int.from_bytes(digest[4:], "big", signed=True),
+def _sql_insert_join_if_missing(
+    session: Any,
+    *,
+    from_column_id: str,
+    to_column_id: str,
+    evidence: str,
+    join_kind: str,
+    join_expression: str | None,
+    created_at: datetime,
+    attester: str,
+) -> bool:
+    """Insert a join row when the directed pair is absent; skip on unique conflict.
+
+    Returns True when a row (and Join Change create) was written.
+    """
+    join_id = new_join_id()
+    stmt = (
+        pg_insert(CatalogJoinRow)
+        .values(
+            id=join_id,
+            from_column_id=from_column_id,
+            to_column_id=to_column_id,
+            evidence=evidence,
+            join_kind=join_kind,
+            join_expression=join_expression,
+            created_by_user_id=None,
+            created_at=created_at,
+        )
+        .on_conflict_do_nothing(constraint="uq_catalog_joins_from_to")
+    )
+    result = session.execute(stmt)
+    if not result.rowcount:
+        return False
+    _sql_append_join_change(
+        session,
+        from_column_id=from_column_id,
+        to_column_id=to_column_id,
+        kind=JOIN_CHANGE_CREATE,
+        created_at=created_at,
+        attester=attester,
+    )
+    return True
+
+
+def _sql_append_join_change(
+    session: Any,
+    *,
+    from_column_id: str,
+    to_column_id: str,
+    kind: str,
+    created_at: datetime,
+    attester: str | None = None,
+    actor_user_id: str | None = None,
+) -> None:
+    session.add(
+        CatalogJoinChangeRow(
+            id=new_join_change_id(),
+            from_column_id=from_column_id,
+            to_column_id=to_column_id,
+            kind=kind,
+            attester=attester,
+            actor_user_id=actor_user_id,
+            created_at=created_at,
+        )
     )
 
 
@@ -648,15 +780,8 @@ def _sql_persist_plan(
     session: Any, plan: StructureRefreshPlan, *, now: datetime
 ) -> None:
     # Joins reference catalog_columns via FK without ORM relationships, so
-    # flush order is not inferred — delete joins, then persist objects/columns,
-    # then upsert joins (with an explicit flush before join inserts).
-    for jid in plan.delete_join_ids:
-        row = session.get(CatalogJoinRow, jid)
-        if row is not None:
-            session.delete(row)
-    if plan.delete_join_ids:
-        session.flush()
-
+    # flush order is not inferred — persist objects/columns, then insert
+    # missing joins (with an explicit flush before join inserts).
     for obj in plan.objects:
         _sql_persist_object(session, obj, now=now)
     session.flush()
@@ -664,32 +789,37 @@ def _sql_persist_plan(
     session.flush()
 
     for upsert in plan.upsert_joins:
-        existing = session.scalars(
-            select(CatalogJoinRow).where(
-                CatalogJoinRow.from_column_id == upsert.from_column_id,
-                CatalogJoinRow.to_column_id == upsert.to_column_id,
-            )
-        ).first()
-        if existing is not None:
-            existing.evidence = upsert.evidence
-            existing.join_kind = upsert.join_kind
-            existing.join_expression = upsert.join_expression
-            existing.origin = upsert.origin
-        else:
-            session.add(
-                CatalogJoinRow(
-                    id=new_join_id(),
-                    from_column_id=upsert.from_column_id,
-                    to_column_id=upsert.to_column_id,
-                    evidence=upsert.evidence,
-                    join_kind=upsert.join_kind,
-                    join_expression=upsert.join_expression,
-                    origin=upsert.origin,
-                    created_by_user_id=None,
-                    created_at=now,
-                )
-            )
+        _sql_insert_join_if_missing(
+            session,
+            from_column_id=upsert.from_column_id,
+            to_column_id=upsert.to_column_id,
+            evidence=upsert.evidence,
+            join_kind=upsert.join_kind,
+            join_expression=upsert.join_expression,
+            created_at=now,
+            attester=STRUCTURE_JOIN_ORIGIN,
+        )
     session.flush()
+
+
+def _sql_persist_join_detection_plan(
+    session: Any, plan: JoinDetectionPlan, *, now: datetime
+) -> int:
+    inserted = 0
+    for upsert in plan.upsert_joins:
+        if _sql_insert_join_if_missing(
+            session,
+            from_column_id=upsert.from_column_id,
+            to_column_id=upsert.to_column_id,
+            evidence=upsert.evidence,
+            join_kind=upsert.join_kind,
+            join_expression=upsert.join_expression,
+            created_at=now,
+            attester=SQL_LINEAGE_JOIN_ORIGIN,
+        ):
+            inserted += 1
+    session.flush()
+    return inserted
 
 
 def _sql_stamp_objects(session: Any, plan: StructureRefreshPlan) -> None:
@@ -909,8 +1039,22 @@ def _row_to_join(row: object) -> CatalogJoinRecord:
         evidence=row.evidence,
         join_kind=row.join_kind,
         join_expression=row.join_expression,
-        origin=row.origin,
         created_by_user_id=row.created_by_user_id,
+        created_at=row.created_at,
+        rejected_at=row.rejected_at,
+        rejected_by_user_id=row.rejected_by_user_id,
+    )
+
+
+def _row_to_join_change(row: object) -> CatalogJoinChangeRecord:
+    assert isinstance(row, CatalogJoinChangeRow)
+    return CatalogJoinChangeRecord(
+        id=row.id,
+        from_column_id=row.from_column_id,
+        to_column_id=row.to_column_id,
+        kind=row.kind,
+        attester=row.attester,
+        actor_user_id=row.actor_user_id,
         created_at=row.created_at,
     )
 

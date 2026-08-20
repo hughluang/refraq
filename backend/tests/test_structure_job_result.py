@@ -151,6 +151,39 @@ class _FakeConnector:
         return CollectedStructure(objects=objects)
 
 
+class _FakeConnectorWithNullDdlRoutine:
+    engine = "postgresql"
+
+    def test_connection(self, endpoint) -> None:  # noqa: ANN001
+        return None
+
+    def collect_structure(self, endpoint, progress=None) -> CollectedStructure:  # noqa: ANN001
+        return CollectedStructure(
+            objects=[
+                CollectedObject(
+                    schema_name="public",
+                    name="orders",
+                    object_type="table",
+                    columns=[
+                        CollectedColumn(
+                            name="id",
+                            ordinal=1,
+                            data_type="integer",
+                            nullable=False,
+                        )
+                    ],
+                    primary_key=["id"],
+                ),
+                CollectedObject(
+                    schema_name="public",
+                    name="fn_encrypted",
+                    object_type="function",
+                    ddl=None,
+                ),
+            ]
+        )
+
+
 def _source() -> object:
     return create_source(
         key="diff-src",
@@ -226,6 +259,23 @@ def test_successful_structure_job_writes_result_and_diff(
     assert job_get.status_code == 200
     assert job_get.json()["job"]["result"]["class"] == "non_breaking"
     assert job_get.json()["job"]["summary"] == "structure · diff-src"
+
+
+def test_structure_job_succeeds_when_routine_ddl_is_none(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient
+) -> None:
+    source = _source()
+    monkeypatch.setattr(
+        "backend.metadata.connectors.runtime.get_connector",
+        lambda engine: _FakeConnectorWithNullDdlRoutine(),
+    )
+    job = create_queued_job(kind="structure", input={"source_id": source.id})
+    out = run_structure_job(job.id)
+    assert out["status"] == "succeeded"
+    objects, _ = get_catalog_store().list_objects(source.id)
+    by_name = {obj.name: obj for obj in objects}
+    assert by_name["fn_encrypted"].ddl is None
+    assert by_name["fn_encrypted"].object_type == "function"
 
 
 def test_unexpected_snapshot_error_marks_job_failed(

@@ -27,7 +27,7 @@ from backend.metadata.connectors.structure_rows import (
     stream_mappings,
 )
 
-_OBJECT_TYPES = frozenset({"table", "view"})
+_OBJECT_TYPES = frozenset({"table", "view", "procedure", "function"})
 
 
 class MssqlConnector:
@@ -135,6 +135,10 @@ _OBJECT_SQL = text(
       CASE o.type
         WHEN 'U' THEN 'table'
         WHEN 'V' THEN 'view'
+        WHEN 'P' THEN 'procedure'
+        WHEN 'FN' THEN 'function'
+        WHEN 'IF' THEN 'function'
+        WHEN 'TF' THEN 'function'
         ELSE RTRIM(o.type)
       END AS object_type,
       o.object_id AS object_id,
@@ -146,7 +150,7 @@ _OBJECT_SQL = text(
      AND ep.minor_id = 0
      AND ep.name = 'MS_Description'
      AND ep.class = 1
-    WHERE o.type IN ('U', 'V')
+    WHERE o.type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
       AND s.name NOT IN ('sys', 'INFORMATION_SCHEMA')
       AND s.name = :schema_filter
     ORDER BY s.name, o.name
@@ -277,7 +281,7 @@ _DEFINITION_SQL = text(
     FROM sys.sql_modules m
     JOIN sys.objects o ON o.object_id = m.object_id
     JOIN sys.schemas s ON s.schema_id = o.schema_id
-    WHERE o.type = 'V'
+    WHERE o.type IN ('V', 'P', 'FN', 'IF', 'TF')
       AND s.name NOT IN ('sys', 'INFORMATION_SCHEMA')
       AND s.name = :schema_filter
     """

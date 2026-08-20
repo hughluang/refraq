@@ -23,12 +23,18 @@ import {
   timeoutFromTask,
   timeoutPayload,
 } from "@/features/schedules/runningTimeoutField";
+import {
+  dailyPresetLabelKey,
+  defaultCron,
+  isDailyCron,
+  scheduleKindFromTask,
+} from "@/features/schedules/scheduleKindField";
 import type { ScheduledTask } from "@/features/schedules/types";
 import { ApiError } from "@/lib/api";
 
 const PRESETS = [
   { value: "hourly", cron: "0 * * * *" },
-  { value: "daily", cron: "0 2 * * *" },
+  { value: "daily", cron: "" },
   { value: "weekly", cron: "0 2 * * 1" },
   { value: "custom", cron: "" },
   { value: "interval", cron: "" },
@@ -45,6 +51,7 @@ const TIMEZONES = [
 type CadenceKind = (typeof PRESETS)[number]["value"];
 
 type FormValues = {
+  kind: "structure" | "join_detection";
   cadence: CadenceKind;
   cron: string;
   interval_seconds: number | string;
@@ -54,19 +61,28 @@ type FormValues = {
   name: string;
 };
 
-function inferCadence(task: ScheduledTask | null): CadenceKind {
+function inferCadence(
+  task: ScheduledTask | null,
+  kind: ReturnType<typeof scheduleKindFromTask>,
+): CadenceKind {
   if (!task) return "daily";
   if (task.interval_seconds) return "interval";
+  if (isDailyCron(task.cron, kind)) return "daily";
   const match = PRESETS.find(
-    (preset) => preset.value !== "custom" && preset.cron === task.cron,
+    (preset) =>
+      preset.value !== "custom" &&
+      preset.value !== "daily" &&
+      preset.cron === task.cron,
   );
   return match?.value ?? "custom";
 }
 
 function valuesFromTask(task: ScheduledTask | null): FormValues {
+  const kind = scheduleKindFromTask(task?.work_kind);
   return {
-    cadence: inferCadence(task),
-    cron: task?.cron ?? "0 2 * * *",
+    kind,
+    cadence: inferCadence(task, kind),
+    cron: task?.cron ?? defaultCron(kind),
     interval_seconds: task?.interval_seconds ?? 3600,
     schedule_timezone: task?.schedule_timezone ?? "UTC",
     running_timeout_sec: timeoutFromTask(task?.running_timeout_sec),
@@ -133,8 +149,10 @@ export function ScheduleFormModal({
               cron:
                 form.values.cadence === "custom"
                   ? form.values.cron.trim()
-                  : (PRESETS.find((p) => p.value === form.values.cadence)
-                      ?.cron ?? form.values.cron.trim()),
+                  : form.values.cadence === "daily"
+                    ? defaultCron(form.values.kind)
+                    : (PRESETS.find((p) => p.value === form.values.cadence)
+                        ?.cron ?? form.values.cron.trim()),
               interval_seconds: null as number | null,
               schedule_timezone: timezone,
               running_timeout_sec,
@@ -145,7 +163,7 @@ export function ScheduleFormModal({
         await patchSchedule(schedule.id, cadenceBody);
       } else if (sourceId) {
         await createSourceSchedule(sourceId, {
-          kind: "structure",
+          kind: form.values.kind,
           ...cadenceBody,
         });
       } else {
@@ -171,11 +189,39 @@ export function ScheduleFormModal({
   return (
     <Modal opened={opened} onClose={onClose} title={title} size="md">
       <Stack gap="sm">
+        {schedule ? null : (
+          <Select
+            label={t("schedules.fields.kind")}
+            data={[
+              {
+                value: "structure",
+                label: t("schedules.workKind.structure"),
+              },
+              {
+                value: "join_detection",
+                label: t("schedules.workKind.join_detection"),
+              },
+            ]}
+            value={form.values.kind}
+            onChange={(value) => {
+              const kind =
+                value === "join_detection" ? "join_detection" : "structure";
+              const next: Partial<FormValues> = { kind };
+              if (form.values.cadence === "daily") {
+                next.cron = defaultCron(kind);
+              }
+              form.setValues(next);
+            }}
+          />
+        )}
         <Select
           label={t("schedules.fields.cadence")}
           data={PRESETS.map((preset) => ({
             value: preset.value,
-            label: t(`schedules.preset.${preset.value}`),
+            label:
+              preset.value === "daily"
+                ? t(dailyPresetLabelKey(form.values.kind))
+                : t(`schedules.preset.${preset.value}`),
           }))}
           {...form.getInputProps("cadence")}
         />
@@ -192,8 +238,10 @@ export function ScheduleFormModal({
             value={
               form.values.cadence === "custom"
                 ? form.values.cron
-                : (PRESETS.find((p) => p.value === form.values.cadence)?.cron ??
-                  form.values.cron)
+                : form.values.cadence === "daily"
+                  ? defaultCron(form.values.kind)
+                  : (PRESETS.find((p) => p.value === form.values.cadence)
+                      ?.cron ?? form.values.cron)
             }
             onChange={(event) =>
               form.setFieldValue("cron", event.currentTarget.value)

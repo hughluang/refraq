@@ -30,7 +30,7 @@ export type ScheduledTask = {
 };
 
 export type CreateScheduleBody = {
-  kind: "structure";
+  kind: "structure" | "join_detection";
   cron?: string | null;
   interval_seconds?: number | null;
   schedule_timezone: string;

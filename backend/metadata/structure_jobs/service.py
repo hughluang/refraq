@@ -18,6 +18,7 @@ from backend.jobs.store import (
     mark_succeeded,
     occupancy_worker_id,
 )
+from backend.metadata.catalog.kind_locks import hold_kind_execution_lock
 from backend.metadata.catalog.store import (
     CatalogColumnRecord,
     CatalogForeignKeyRecord,
@@ -72,24 +73,19 @@ def run_structure_job(job_id: str) -> dict[str, str]:
             error_summary="structure job requires source_id",
         )
 
-    # Structure single-flight at execution: earlier running Job wins; later fails.
-    me_key = (current.started_at or current.created_at, current.id)
-    others, _ = get_job_store().list(kind="structure")
-    for other in others:
-        if other.id == job_id:
-            continue
-        if other.input.get("source_id") != source_id:
-            continue
-        if other.status != "running":
-            continue
-        other_key = (other.started_at or other.created_at, other.id)
-        if other_key < me_key:
+    with hold_kind_execution_lock("structure", source_id) as lock:
+        if lock is None:
             return _fail(
                 job_id,
                 error_code="JOB_ALREADY_ACTIVE",
-                error_summary="A non-terminal structure job already exists for this source",
+                error_summary=(
+                    f"structure Kind execution lock held for source {source_id}"
+                ),
             )
+        return _run_structure_job_locked(job_id, source_id=source_id)
 
+
+def _run_structure_job_locked(job_id: str, *, source_id: str) -> dict[str, str]:
     source = get_source_store().get_source(source_id)
     if source is None:
         return _fail(

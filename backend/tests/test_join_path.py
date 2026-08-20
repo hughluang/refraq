@@ -130,7 +130,7 @@ def test_two_hop_join_path() -> None:
         to_column_id="col_b_id",
         evidence="fk_ab",
         created_by_user_id=None,
-        origin="human",
+        attester="human",
         join_expression="a.b_id = b.id",
     )
     store.upsert_join(
@@ -138,7 +138,7 @@ def test_two_hop_join_path() -> None:
         to_column_id="col_c_id",
         evidence="fk_bc",
         created_by_user_id=None,
-        origin="human",
+        attester="human",
         join_expression="b.c_id = c.id",
     )
 
@@ -172,7 +172,7 @@ def test_direct_joins_for_column_start() -> None:
         to_column_id="col_b_id",
         evidence="fk",
         created_by_user_id=None,
-        origin="human",
+        attester="human",
     )
     result = find_join_paths(
         store=store,
@@ -182,3 +182,44 @@ def test_direct_joins_for_column_start() -> None:
     )
     assert len(result.direct_joins) == 1
     assert result.direct_joins[0].from_column_id == "col_a_b"
+
+
+def test_rejected_join_is_omitted_from_paths() -> None:
+    store = get_catalog_store()
+    a = _table("obj_a", "a", [("col_a_id", "id"), ("col_a_b", "b_id")])
+    b = _table("obj_b", "b", [("col_b_id", "id")])
+    apply_structure_snapshot(
+        source=require_source("src_1"),
+        job_id="j1",
+        collected=[a, b],
+        schema_scope=None,
+        fail_safe_threshold=1.0,
+    )
+    join = store.upsert_join(
+        from_column_id="col_a_b",
+        to_column_id="col_b_id",
+        evidence="fk",
+        created_by_user_id=None,
+        attester="sql_lineage",
+    )
+    store.set_join_rejection(
+        join.id,
+        rejected_at=utc_now(),
+        rejected_by_user_id="u1",
+    )
+    result = find_join_paths(
+        store=store,
+        start_column_id="col_a_b",
+        max_hops=1,
+        top_targets=3,
+    )
+    assert result.direct_joins == []
+    hops = find_join_paths(
+        store=store,
+        start_object_id="obj_a",
+        target_object_id="obj_b",
+        max_hops=2,
+        top_targets=3,
+    )
+    assert hops.paths == []
+

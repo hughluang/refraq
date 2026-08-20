@@ -35,7 +35,7 @@ class SourceResponse(BaseModel):
 
 class PatchSourceResponse(BaseModel):
     source: SourceOut
-    schedule: ScheduleOut | None = None
+    schedules: list[ScheduleOut] | None = None
 
 
 class SourceAccessResponse(BaseModel):

@@ -1,4 +1,4 @@
-"""Structure refresh Join Origin protection (C1)."""
+"""Structure refresh insert-only joins (no overwrite, no FK stale-delete)."""
 
 from __future__ import annotations
 
@@ -13,6 +13,12 @@ os.environ["REFRAQ_SECRETS_MASTER_KEY"] = "test-secrets-master-key"
 os.environ.pop("DATABASE_URL", None)
 
 from backend.core.config import reset_settings_cache  # noqa: E402
+from backend.metadata.catalog.join_changes import JOIN_CHANGE_CREATE  # noqa: E402
+from backend.metadata.catalog.join_origin import (  # noqa: E402
+    HUMAN_JOIN_ORIGIN,
+    SQL_LINEAGE_JOIN_ORIGIN,
+    STRUCTURE_JOIN_ORIGIN,
+)
 from backend.metadata.catalog.records import (  # noqa: E402
     CatalogColumnRecord,
     CatalogForeignKeyRecord,
@@ -131,7 +137,17 @@ def _table(
     )
 
 
-def test_plan_skips_protected_human_join() -> None:
+def _fk_orders_customer() -> CatalogForeignKeyRecord:
+    return CatalogForeignKeyRecord(
+        name="fk_orders_customer",
+        columns=["customer_id"],
+        ref_schema="public",
+        ref_table="customers",
+        ref_columns=["id"],
+    )
+
+
+def test_plan_skips_existing_human_join() -> None:
     now = utc_now()
     customers = _table(
         object_id="obj_customers",
@@ -143,15 +159,7 @@ def test_plan_skips_protected_human_join() -> None:
         object_id="obj_orders",
         name="orders",
         columns=[("col_ord_id", "id"), ("col_cust_fk", "customer_id")],
-        foreign_keys=[
-            CatalogForeignKeyRecord(
-                name="fk_orders_customer",
-                columns=["customer_id"],
-                ref_schema="public",
-                ref_table="customers",
-                ref_columns=["id"],
-            )
-        ],
+        foreign_keys=[_fk_orders_customer()],
         now=now,
     )
     human_join = CatalogJoinRecord(
@@ -161,7 +169,6 @@ def test_plan_skips_protected_human_join() -> None:
         evidence="manual",
         join_kind="INNER",
         join_expression="customer_id = id",
-        origin="human",
         created_by_user_id="u1",
         created_at=now,
     )
@@ -178,7 +185,6 @@ def test_plan_skips_protected_human_join() -> None:
         source_key="demo",
         now=now,
     )
-    assert plan.delete_join_ids == ()
     assert plan.upsert_joins == ()
 
 
@@ -195,18 +201,9 @@ def test_apply_preserves_human_join_via_store() -> None:
         object_id="obj_orders",
         name="orders",
         columns=[("col_ord_id", "id"), ("col_cust_fk", "customer_id")],
-        foreign_keys=[
-            CatalogForeignKeyRecord(
-                name="fk_orders_customer",
-                columns=["customer_id"],
-                ref_schema="public",
-                ref_table="customers",
-                ref_columns=["id"],
-            )
-        ],
+        foreign_keys=[_fk_orders_customer()],
         now=now,
     )
-    # Seed without FK first so we can plant a human join on the pair.
     bare_orders = _table(
         object_id="obj_orders",
         name="orders",
@@ -225,9 +222,8 @@ def test_apply_preserves_human_join_via_store() -> None:
         to_column_id="col_cust_id",
         evidence="analyst confirmed",
         created_by_user_id="u1",
-        origin="human",
+        attester=HUMAN_JOIN_ORIGIN,
     )
-    assert human.origin == "human"
 
     apply_structure_snapshot(
         source=require_source("src_origin"),
@@ -239,14 +235,152 @@ def test_apply_preserves_human_join_via_store() -> None:
     joins, _ = store.list_joins_for_object("obj_orders")
     assert len(joins) == 1
     assert joins[0].id == human.id
-    assert joins[0].origin == "human"
     assert joins[0].evidence == "analyst confirmed"
+    assert joins[0].created_by_user_id == "u1"
+    changes = store.list_join_changes(
+        from_column_id="col_cust_fk",
+        to_column_id="col_cust_id",
+    )
+    assert len(changes) == 1
+    assert changes[0].kind == JOIN_CHANGE_CREATE
+    assert changes[0].attester == HUMAN_JOIN_ORIGIN
 
 
-def test_service_foreign_key_upsert_keeps_human_join() -> None:
-    from backend.metadata.catalog import join_writes as catalog_joins
-
+def test_apply_does_not_take_over_sql_lineage_join() -> None:
     store = get_catalog_store()
+    now = utc_now()
+    customers = _table(
+        object_id="obj_customers",
+        name="customers",
+        columns=[("col_cust_id", "id")],
+        now=now,
+    )
+    orders = _table(
+        object_id="obj_orders",
+        name="orders",
+        columns=[
+            ("col_ord_id", "id"),
+            ("col_cust_fk", "customer_id"),
+            ("col_alt", "alt_id"),
+        ],
+        foreign_keys=[_fk_orders_customer()],
+        now=now,
+    )
+    bare_orders = _table(
+        object_id="obj_orders",
+        name="orders",
+        columns=[
+            ("col_ord_id", "id"),
+            ("col_cust_fk", "customer_id"),
+            ("col_alt", "alt_id"),
+        ],
+        now=now,
+    )
+    apply_structure_snapshot(
+        source=require_source("src_origin"),
+        job_id="job_seed",
+        collected=[customers, bare_orders],
+        schema_scope=None,
+        fail_safe_threshold=1.0,
+    )
+    lineage_evidence = (
+        "SQL join in obj/postgresql/demo/public/view/v_orders: customer_id = id"
+    )
+    lineage = store.upsert_join(
+        from_column_id="col_cust_fk",
+        to_column_id="col_cust_id",
+        evidence=lineage_evidence,
+        created_by_user_id=None,
+        attester=SQL_LINEAGE_JOIN_ORIGIN,
+    )
+    other = store.upsert_join(
+        from_column_id="col_alt",
+        to_column_id="col_cust_id",
+        evidence="SQL join in obj/postgresql/demo/public/view/v_alt: alt_id = id",
+        created_by_user_id=None,
+        attester=SQL_LINEAGE_JOIN_ORIGIN,
+    )
+
+    apply_structure_snapshot(
+        source=require_source("src_origin"),
+        job_id="job_refresh",
+        collected=[customers, orders],
+        schema_scope=None,
+        fail_safe_threshold=1.0,
+    )
+    joins, total = store.list_joins_for_object("obj_orders")
+    assert total == 2
+    by_id = {join.id: join for join in joins}
+    kept = by_id[lineage.id]
+    assert kept.evidence == lineage_evidence
+    leftover = by_id[other.id]
+    assert leftover.evidence == other.evidence
+    changes = store.list_join_changes(
+        from_column_id="col_cust_fk",
+        to_column_id="col_cust_id",
+    )
+    assert [c.attester for c in changes] == [SQL_LINEAGE_JOIN_ORIGIN]
+
+
+def test_fk_removed_does_not_delete_join() -> None:
+    store = get_catalog_store()
+    now = utc_now()
+    customers = _table(
+        object_id="obj_customers",
+        name="customers",
+        columns=[("col_cust_id", "id")],
+        now=now,
+    )
+    orders_with_fk = _table(
+        object_id="obj_orders",
+        name="orders",
+        columns=[("col_ord_id", "id"), ("col_cust_fk", "customer_id")],
+        foreign_keys=[_fk_orders_customer()],
+        now=now,
+    )
+    orders_without_fk = _table(
+        object_id="obj_orders",
+        name="orders",
+        columns=[("col_ord_id", "id"), ("col_cust_fk", "customer_id")],
+        now=now,
+    )
+    apply_structure_snapshot(
+        source=require_source("src_origin"),
+        job_id="job_seed",
+        collected=[customers, orders_with_fk],
+        schema_scope=None,
+        fail_safe_threshold=1.0,
+    )
+    joins, total = store.list_joins_for_object("obj_orders")
+    assert total == 1
+    join_id = joins[0].id
+    changes = store.list_join_changes(
+        from_column_id="col_cust_fk",
+        to_column_id="col_cust_id",
+    )
+    assert len(changes) == 1
+    assert changes[0].kind == JOIN_CHANGE_CREATE
+    assert changes[0].attester == STRUCTURE_JOIN_ORIGIN
+
+    apply_structure_snapshot(
+        source=require_source("src_origin"),
+        job_id="job_drop_fk",
+        collected=[customers, orders_without_fk],
+        schema_scope=None,
+        fail_safe_threshold=1.0,
+    )
+    joins_after, total_after = store.list_joins_for_object("obj_orders")
+    assert total_after == 1
+    assert joins_after[0].id == join_id
+    obj = store.get_object("obj_orders")
+    assert obj is not None
+    assert all(not fk.is_present for fk in obj.foreign_keys)
+
+
+def test_service_duplicate_create_is_refused() -> None:
+    from backend.metadata.catalog import join_writes as catalog_joins
+    from backend.metadata.errors import JoinAlreadyDefined
+
     now = utc_now()
     customers = _table(
         object_id="obj_customers",
@@ -267,22 +401,23 @@ def test_service_foreign_key_upsert_keeps_human_join() -> None:
         schema_scope=None,
         fail_safe_threshold=1.0,
     )
-    human = catalog_joins.upsert_join(
+    human = catalog_joins.create_join(
         from_column_id="col_cust_fk",
         to_column_id="col_cust_id",
         evidence="analyst confirmed",
         actor_user_id="u1",
         actor_token_id=None,
-        origin="human",
+        attester=HUMAN_JOIN_ORIGIN,
     )
-    kept = catalog_joins.upsert_join(
-        from_column_id="col_cust_fk",
-        to_column_id="col_cust_id",
-        evidence="FK fk_orders_customer",
-        actor_user_id=None,
-        actor_token_id=None,
-        origin="foreign_key",
-    )
-    assert kept.id == human.id
-    assert kept.origin == "human"
-    assert kept.evidence == "analyst confirmed"
+    try:
+        catalog_joins.create_join(
+            from_column_id="col_cust_fk",
+            to_column_id="col_cust_id",
+            evidence="FK fk_orders_customer",
+            actor_user_id=None,
+            actor_token_id=None,
+            attester=STRUCTURE_JOIN_ORIGIN,
+        )
+        raise AssertionError("expected JoinAlreadyDefined")
+    except JoinAlreadyDefined as exc:
+        assert exc.join_id == human.id

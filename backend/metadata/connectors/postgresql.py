@@ -111,6 +111,16 @@ class PostgresqlConnector:
                     )
                     for row in stream_mappings(conn, _OBJECT_SQL, params)
                 ]
+                objects.extend(
+                    ObjectRow(
+                        object_key=str(int(row["oid"])),
+                        schema_name=row["schema_name"],
+                        name=row["name"],
+                        object_type=row["object_type"],
+                        comment=row["comment"],
+                    )
+                    for row in stream_mappings(conn, _ROUTINE_OBJECT_SQL, params)
+                )
                 if progress is not None:
                     progress.listed_objects(len(objects))
                 return assemble(
@@ -302,6 +312,41 @@ _DEFINITION_SQL = text(
     """
 )
 
+_ROUTINE_OBJECT_SQL = text(
+    f"""
+    SELECT
+      n.nspname AS schema_name,
+      CASE
+        WHEN pg_catalog.pg_get_function_identity_arguments(p.oid) = ''
+          THEN p.proname
+        ELSE p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')'
+      END AS name,
+      CASE p.prokind
+        WHEN 'p' THEN 'procedure'
+        ELSE 'function'
+      END AS object_type,
+      p.oid AS oid,
+      obj_description(p.oid, 'pg_proc') AS comment
+    FROM pg_catalog.pg_proc p
+    JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+    WHERE p.prokind IN ('f', 'p')
+      {_SCHEMA_SCOPE}
+    ORDER BY n.nspname, p.proname, p.oid
+    """
+)
+
+_ROUTINE_DEFINITION_SQL = text(
+    f"""
+    SELECT
+      p.oid AS object_key,
+      pg_catalog.pg_get_functiondef(p.oid) AS ddl
+    FROM pg_catalog.pg_proc p
+    JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+    WHERE p.prokind IN ('f', 'p')
+      {_SCHEMA_SCOPE}
+    """
+)
+
 
 def _column_rows(conn: object, params: dict[str, object]):
     for row in stream_mappings(conn, _COLUMN_SQL, params):
@@ -361,6 +406,12 @@ def _definition_rows(conn: object, params: dict[str, object]):
                 else "VIEW"
             )
             ddl = f"CREATE {keyword} {row['schema_name']}.{row['name']} AS\n{row['ddl']}"
+            yield DefinitionRow(object_key=str(int(row["object_key"])), ddl=ddl)
+    except Exception:  # noqa: BLE001 — ddl optional
+        pass
+    try:
+        for row in stream_mappings(conn, _ROUTINE_DEFINITION_SQL, params):
+            ddl = str(row["ddl"]) if row["ddl"] else None
             yield DefinitionRow(object_key=str(int(row["object_key"])), ddl=ddl)
     except Exception:  # noqa: BLE001 — ddl optional
         return

@@ -22,8 +22,21 @@ from backend.metadata.catalog.records import (
     UNSET,
     new_join_id,
 )
+from backend.metadata.catalog.join_changes import (
+    CatalogJoinChangeRecord,
+    JOIN_CHANGE_AMEND,
+    JOIN_CHANGE_CREATE,
+    JOIN_CHANGE_REJECT,
+    JOIN_CHANGE_RESTORE,
+    new_join_change,
+)
+from backend.metadata.catalog.join_origin import (
+    STRUCTURE_JOIN_ORIGIN,
+    SQL_LINEAGE_JOIN_ORIGIN,
+)
 from backend.metadata.catalog.search_rank import _paginate, _search_rank
 from backend.metadata.catalog.structure_merge import StructureRefreshPlan
+from backend.metadata.join_detection_jobs.reconcile import JoinDetectionPlan
 
 
 class _MemoryStructureWrite:
@@ -54,12 +67,16 @@ class _MemoryStructureWrite:
     def persist_plan(self, plan: StructureRefreshPlan) -> None:
         self._store._persist_structure_plan_unlocked(plan, now=utc_now())
 
+    def persist_join_detection_plan(self, plan: JoinDetectionPlan) -> int:
+        return self._store._persist_join_detection_plan_unlocked(plan, now=utc_now())
+
 
 class MemoryCatalogStore:
     def __init__(self) -> None:
         self._objects: dict[str, CatalogObjectRecord] = {}
         self._joins: dict[str, CatalogJoinRecord] = {}
         self._join_by_pair: dict[tuple[str, str], str] = {}
+        self._join_changes: list[CatalogJoinChangeRecord] = []
         self._lock = threading.Lock()
 
     def list_objects(
@@ -202,12 +219,17 @@ class MemoryCatalogStore:
             )
 
     @contextmanager
-    def structure_write(self, source_id: str) -> Iterator[_MemoryStructureWrite]:
-        """Locked catalog write unit (zero merge/origin rules)."""
+    def catalog_write(self, source_id: str) -> Iterator[_MemoryStructureWrite]:
+        """Catalog write unit (zero merge/origin rules).
+
+        Same-kind runner serialization is the Kind execution lock (ADR 0032).
+        This in-process lock only keeps one persist atomic in memory tests.
+        """
         with self._lock:
             objects_backup = dict(self._objects)
             joins_backup = dict(self._joins)
             join_by_pair_backup = dict(self._join_by_pair)
+            join_changes_backup = list(self._join_changes)
             write = _MemoryStructureWrite(self, source_id)
             try:
                 yield write
@@ -215,6 +237,7 @@ class MemoryCatalogStore:
                 self._objects = objects_backup
                 self._joins = joins_backup
                 self._join_by_pair = join_by_pair_backup
+                self._join_changes = join_changes_backup
                 raise
 
     def _persist_structure_plan_unlocked(
@@ -232,38 +255,66 @@ class MemoryCatalogStore:
                 collected_at=plan.collected_at,
                 last_structure_job_id=plan.last_structure_job_id,
             )
-        for jid in plan.delete_join_ids:
-            join = self._joins.pop(jid, None)
-            if join is not None:
-                self._join_by_pair.pop(
-                    (join.from_column_id, join.to_column_id), None
-                )
         for upsert in plan.upsert_joins:
             pair = (upsert.from_column_id, upsert.to_column_id)
-            existing_id = self._join_by_pair.get(pair)
-            if existing_id is not None:
-                prev = self._joins[existing_id]
-                self._joins[existing_id] = replace(
-                    prev,
-                    evidence=upsert.evidence,
-                    join_kind=upsert.join_kind,
-                    join_expression=upsert.join_expression,
-                    origin=upsert.origin,
-                )
-            else:
-                record = CatalogJoinRecord(
-                    id=new_join_id(),
+            if pair in self._join_by_pair:
+                continue
+            record = CatalogJoinRecord(
+                id=new_join_id(),
+                from_column_id=upsert.from_column_id,
+                to_column_id=upsert.to_column_id,
+                evidence=upsert.evidence,
+                join_kind=upsert.join_kind,
+                join_expression=upsert.join_expression,
+                created_by_user_id=None,
+                created_at=now,
+            )
+            self._joins[record.id] = record
+            self._join_by_pair[pair] = record.id
+            self._join_changes.append(
+                new_join_change(
                     from_column_id=upsert.from_column_id,
                     to_column_id=upsert.to_column_id,
-                    evidence=upsert.evidence,
-                    join_kind=upsert.join_kind,
-                    join_expression=upsert.join_expression,
-                    origin=upsert.origin,
-                    created_by_user_id=None,
+                    kind=JOIN_CHANGE_CREATE,
                     created_at=now,
+                    attester=STRUCTURE_JOIN_ORIGIN,
                 )
-                self._joins[record.id] = record
-                self._join_by_pair[pair] = record.id
+            )
+
+    def _persist_join_detection_plan_unlocked(
+        self,
+        plan: JoinDetectionPlan,
+        *,
+        now: datetime,
+    ) -> int:
+        inserted = 0
+        for upsert in plan.upsert_joins:
+            pair = (upsert.from_column_id, upsert.to_column_id)
+            if pair in self._join_by_pair:
+                continue
+            record = CatalogJoinRecord(
+                id=new_join_id(),
+                from_column_id=upsert.from_column_id,
+                to_column_id=upsert.to_column_id,
+                evidence=upsert.evidence,
+                join_kind=upsert.join_kind,
+                join_expression=upsert.join_expression,
+                created_by_user_id=None,
+                created_at=now,
+            )
+            self._joins[record.id] = record
+            self._join_by_pair[pair] = record.id
+            self._join_changes.append(
+                new_join_change(
+                    from_column_id=upsert.from_column_id,
+                    to_column_id=upsert.to_column_id,
+                    kind=JOIN_CHANGE_CREATE,
+                    created_at=now,
+                    attester=SQL_LINEAGE_JOIN_ORIGIN,
+                )
+            )
+            inserted += 1
+        return inserted
 
     def recompute_locators_for_source(
         self,
@@ -322,21 +373,13 @@ class MemoryCatalogStore:
         created_by_user_id: str | None,
         join_kind: str = "INNER",
         join_expression: str | None = None,
-        origin: str = "human",
+        attester: str,
     ) -> CatalogJoinRecord:
         pair = (from_column_id, to_column_id)
         existing_id = self._join_by_pair.get(pair)
         if existing_id is not None:
-            prev = self._joins[existing_id]
-            updated = replace(
-                prev,
-                evidence=evidence,
-                join_kind=join_kind,
-                join_expression=join_expression,
-                origin=origin,
-            )
-            self._joins[existing_id] = updated
-            return updated
+            return self._joins[existing_id]
+        now = utc_now()
         record = CatalogJoinRecord(
             id=new_join_id(),
             from_column_id=from_column_id,
@@ -344,12 +387,21 @@ class MemoryCatalogStore:
             evidence=evidence,
             join_kind=join_kind,
             join_expression=join_expression,
-            origin=origin,
             created_by_user_id=created_by_user_id,
-            created_at=utc_now(),
+            created_at=now,
         )
         self._joins[record.id] = record
         self._join_by_pair[pair] = record.id
+        self._join_changes.append(
+            new_join_change(
+                from_column_id=from_column_id,
+                to_column_id=to_column_id,
+                kind=JOIN_CHANGE_CREATE,
+                created_at=now,
+                attester=attester,
+                actor_user_id=created_by_user_id,
+            )
+        )
         return record
 
     def delete_objects_for_source(self, source_id: str) -> None:
@@ -519,7 +571,7 @@ class MemoryCatalogStore:
         created_by_user_id: str | None,
         join_kind: str = "INNER",
         join_expression: str | None = None,
-        origin: str = "human",
+        attester: str,
     ) -> CatalogJoinRecord:
         with self._lock:
             return self._upsert_join_unlocked(
@@ -529,8 +581,87 @@ class MemoryCatalogStore:
                 created_by_user_id=created_by_user_id,
                 join_kind=join_kind,
                 join_expression=join_expression,
-                origin=origin,
+                attester=attester,
             )
+
+    def update_join(
+        self,
+        join_id: str,
+        *,
+        evidence: str,
+        join_kind: str,
+        join_expression: str | None,
+        actor_user_id: str | None,
+    ) -> CatalogJoinRecord | None:
+        with self._lock:
+            prev = self._joins.get(join_id)
+            if prev is None:
+                return None
+            updated = replace(
+                prev,
+                evidence=evidence,
+                join_kind=join_kind,
+                join_expression=join_expression,
+            )
+            self._joins[join_id] = updated
+            self._join_changes.append(
+                new_join_change(
+                    from_column_id=updated.from_column_id,
+                    to_column_id=updated.to_column_id,
+                    kind=JOIN_CHANGE_AMEND,
+                    created_at=utc_now(),
+                    actor_user_id=actor_user_id,
+                )
+            )
+            return updated
+
+    def set_join_rejection(
+        self,
+        join_id: str,
+        *,
+        rejected_at: datetime | None,
+        rejected_by_user_id: str | None,
+        actor_user_id: str | None = None,
+    ) -> CatalogJoinRecord | None:
+        with self._lock:
+            prev = self._joins.get(join_id)
+            if prev is None:
+                return None
+            updated = replace(
+                prev,
+                rejected_at=rejected_at,
+                rejected_by_user_id=rejected_by_user_id,
+            )
+            self._joins[join_id] = updated
+            kind = (
+                JOIN_CHANGE_RESTORE if rejected_at is None else JOIN_CHANGE_REJECT
+            )
+            self._join_changes.append(
+                new_join_change(
+                    from_column_id=updated.from_column_id,
+                    to_column_id=updated.to_column_id,
+                    kind=kind,
+                    created_at=utc_now(),
+                    actor_user_id=actor_user_id
+                    if actor_user_id is not None
+                    else rejected_by_user_id,
+                )
+            )
+            return updated
+
+    def list_join_changes(
+        self,
+        *,
+        from_column_id: str,
+        to_column_id: str,
+    ) -> list[CatalogJoinChangeRecord]:
+        with self._lock:
+            return [
+                change
+                for change in self._join_changes
+                if change.from_column_id == from_column_id
+                and change.to_column_id == to_column_id
+            ]
 
     def delete_join(self, join_id: str) -> bool:
         with self._lock:

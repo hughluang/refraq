@@ -358,7 +358,7 @@ def test_service_lookup_join_paths() -> None:
         to_column_id="col_b_id",
         evidence="fk",
         created_by_user_id=None,
-        origin="human",
+        attester="human",
         join_expression="a.b_id = b.id",
     )
     result = catalog_service.lookup_join_paths(

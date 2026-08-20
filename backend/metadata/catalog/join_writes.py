@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from backend.admin.audit import persist_audit_event
-from backend.metadata.catalog.join_origin import resolve_join_write
+from backend.core.time import utc_now
+from backend.metadata.catalog.join_origin import HUMAN_JOIN_ORIGIN
 from backend.metadata.catalog.refs import require_column, require_join
 from backend.metadata.catalog.store import (
     CatalogJoinRecord,
@@ -15,9 +16,13 @@ from backend.metadata.catalog.store import (
 from backend.metadata.catalog.views import JoinView, join_view
 from backend.metadata.errors import (
     CatalogJoinNotFound,
+    JoinAlreadyDefined,
+    JoinAlreadyRejected,
     JoinCrossSource,
     JoinEvidenceRequired,
     JoinInvalid,
+    JoinNotRejected,
+    JoinRejected,
 )
 
 _EVIDENCE_AUDIT_MAX = 500
@@ -33,17 +38,14 @@ def list_joins(
     return [join_view(j) for j in records], total
 
 
-def upsert_join(
+def _validated_pair(
     *,
     from_column_id: str,
     to_column_id: str,
     evidence: str,
-    actor_user_id: str | None,
-    actor_token_id: str | None,
-    join_kind: str = "INNER",
-    join_expression: str | None = None,
-    origin: str = "human",
-) -> CatalogJoinRecord:
+    join_kind: str,
+    join_expression: str | None,
+) -> tuple[str, str, str]:
     cleaned = (evidence or "").strip()
     if not cleaned:
         raise JoinEvidenceRequired()
@@ -59,18 +61,33 @@ def upsert_join(
     if expression is None:
         expression = f"{from_col.name} = {to_col.name}"
     kind = (join_kind or "INNER").strip() or "INNER"
+    return cleaned, kind, expression
+
+
+def create_join(
+    *,
+    from_column_id: str,
+    to_column_id: str,
+    evidence: str,
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+    join_kind: str = "INNER",
+    join_expression: str | None = None,
+    attester: str = HUMAN_JOIN_ORIGIN,
+) -> CatalogJoinRecord:
+    cleaned, kind, expression = _validated_pair(
+        from_column_id=from_column_id,
+        to_column_id=to_column_id,
+        evidence=evidence,
+        join_kind=join_kind,
+        join_expression=join_expression,
+    )
     store = get_catalog_store()
     existing = store.get_join_by_pair(from_column_id, to_column_id)
-    existing_origin = existing.origin if existing is not None else None
-    if (
-        resolve_join_write(
-            existing_origin=existing_origin,
-            incoming_origin=origin,
-        )
-        == "keep_existing"
-    ):
-        assert existing is not None
-        return existing
+    if existing is not None:
+        if existing.is_rejected:
+            raise JoinRejected(existing.id)
+        raise JoinAlreadyDefined(existing.id)
     record = store.upsert_join(
         from_column_id=from_column_id,
         to_column_id=to_column_id,
@@ -78,21 +95,130 @@ def upsert_join(
         created_by_user_id=actor_user_id,
         join_kind=kind,
         join_expression=expression,
-        origin=origin,
+        attester=attester,
     )
     persist_audit_event(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
         resource_type="catalog_join",
         resource_id=record.id,
-        action="join.upsert",
+        action="join.create",
         result="success",
         detail={
             "from_column_id": from_column_id,
             "to_column_id": to_column_id,
             "evidence": cleaned[:_EVIDENCE_AUDIT_MAX],
             "join_kind": kind,
-            "origin": origin,
+            "attester": attester,
+        },
+    )
+    return record
+
+
+def amend_join(
+    *,
+    join_id: str,
+    evidence: str,
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+    join_kind: str = "INNER",
+    join_expression: str | None = None,
+) -> CatalogJoinRecord:
+    existing = require_join(join_id)
+    if existing.is_rejected:
+        raise JoinRejected(existing.id)
+    cleaned, kind, expression = _validated_pair(
+        from_column_id=existing.from_column_id,
+        to_column_id=existing.to_column_id,
+        evidence=evidence,
+        join_kind=join_kind,
+        join_expression=join_expression,
+    )
+    record = get_catalog_store().update_join(
+        join_id,
+        evidence=cleaned,
+        join_kind=kind,
+        join_expression=expression,
+        actor_user_id=actor_user_id,
+    )
+    if record is None:
+        raise CatalogJoinNotFound()
+    persist_audit_event(
+        actor_user_id=actor_user_id,
+        actor_token_id=actor_token_id,
+        resource_type="catalog_join",
+        resource_id=record.id,
+        action="join.patch",
+        result="success",
+        detail={
+            "from_column_id": record.from_column_id,
+            "to_column_id": record.to_column_id,
+            "evidence": cleaned[:_EVIDENCE_AUDIT_MAX],
+            "join_kind": kind,
+        },
+    )
+    return record
+
+
+def reject_join(
+    *,
+    join_id: str,
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+) -> CatalogJoinRecord:
+    existing = require_join(join_id)
+    if existing.is_rejected:
+        raise JoinAlreadyRejected(existing.id)
+    record = get_catalog_store().set_join_rejection(
+        join_id,
+        rejected_at=utc_now(),
+        rejected_by_user_id=actor_user_id,
+        actor_user_id=actor_user_id,
+    )
+    if record is None:
+        raise CatalogJoinNotFound()
+    persist_audit_event(
+        actor_user_id=actor_user_id,
+        actor_token_id=actor_token_id,
+        resource_type="catalog_join",
+        resource_id=join_id,
+        action="join.reject",
+        result="success",
+        detail={
+            "from_column_id": existing.from_column_id,
+            "to_column_id": existing.to_column_id,
+        },
+    )
+    return record
+
+
+def restore_join(
+    *,
+    join_id: str,
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+) -> CatalogJoinRecord:
+    existing = require_join(join_id)
+    if not existing.is_rejected:
+        raise JoinNotRejected(existing.id)
+    record = get_catalog_store().set_join_rejection(
+        join_id,
+        rejected_at=None,
+        rejected_by_user_id=None,
+        actor_user_id=actor_user_id,
+    )
+    if record is None:
+        raise CatalogJoinNotFound()
+    persist_audit_event(
+        actor_user_id=actor_user_id,
+        actor_token_id=actor_token_id,
+        resource_type="catalog_join",
+        resource_id=join_id,
+        action="join.restore",
+        result="success",
+        detail={
+            "from_column_id": existing.from_column_id,
+            "to_column_id": existing.to_column_id,
         },
     )
     return record
@@ -103,15 +229,19 @@ def upsert_joins_batch(
     joins: list[dict[str, Any]],
     actor_user_id: str | None,
     actor_token_id: str | None,
-    origin: str = "human",
-) -> tuple[list[CatalogJoinRecord], int, int]:
-    """Upsert many joins; all edges must share one Source. Returns items, created, known."""
+    attester: str = HUMAN_JOIN_ORIGIN,
+) -> tuple[list[CatalogJoinRecord], int, int, int]:
+    """Create many joins; skip asserted pairs; report rejected pairs; never restore.
+
+    All edges share one Source.
+    """
     if not joins:
-        return [], 0, 0
+        return [], 0, 0, 0
     store = get_catalog_store()
     source_id: str | None = None
     created = 0
     known = 0
+    rejected = 0
     items: list[CatalogJoinRecord] = []
     for item in joins:
         from_id = str(item["from_column_id"])
@@ -126,9 +256,15 @@ def upsert_joins_batch(
             source_id = from_obj.source_id
         elif from_obj.source_id != source_id:
             raise JoinCrossSource()
-        # Pair known?
         existing = store.get_join_by_pair(from_id, to_id)
-        record = upsert_join(
+        if existing is not None:
+            if existing.is_rejected:
+                rejected += 1
+            else:
+                known += 1
+            items.append(existing)
+            continue
+        record = create_join(
             from_column_id=from_id,
             to_column_id=to_id,
             evidence=str(item.get("evidence") or ""),
@@ -136,14 +272,11 @@ def upsert_joins_batch(
             actor_token_id=actor_token_id,
             join_kind=str(item.get("join_kind") or "INNER"),
             join_expression=item.get("join_expression"),
-            origin=origin,
+            attester=attester,
         )
-        if existing is not None:
-            known += 1
-        else:
-            created += 1
+        created += 1
         items.append(record)
-    return items, created, known
+    return items, created, known, rejected
 
 
 def delete_join(
