@@ -1,4 +1,4 @@
-"""Pure structure-refresh merge: identity, FK/index/column merge, Join Origin plan."""
+"""Pure structure-refresh merge: identity, FK/index/column merge, join insert plan."""
 
 from __future__ import annotations
 
@@ -14,10 +14,7 @@ from backend.metadata.catalog.fk_join_sync import (
     merge_fk_snapshot,
     merge_index_snapshot,
 )
-from backend.metadata.catalog.join_origin import (
-    STRUCTURE_JOIN_ORIGIN,
-    resolve_join_write,
-)
+from backend.metadata.catalog.join_origin import decide_automatic_insert
 from backend.metadata.catalog.identity import (
     _incoming_covers_existing,
     _match_existing_for_incoming,
@@ -43,7 +40,6 @@ class StructureJoinUpsert:
     to_column_id: str
     evidence: str
     join_expression: str
-    origin: str = "foreign_key"
     join_kind: str = "INNER"
 
 
@@ -53,7 +49,6 @@ class StructureRefreshPlan:
 
     source_id: str
     objects: tuple[CatalogObjectRecord, ...]
-    delete_join_ids: tuple[str, ...]
     upsert_joins: tuple[StructureJoinUpsert, ...]
     stamp_object_ids: tuple[str, ...]
     last_structure_job_id: str
@@ -304,34 +299,17 @@ def build_structure_refresh_plan(
         ):
             expected[(from_id, to_id)] = (evidence, expression)
 
-    source_col_ids = {
-        c.id for o in final_objects if o.source_id == source_id for c in o.columns
-    }
     joins_by_pair = {
         (j.from_column_id, j.to_column_id): j for j in existing_joins
     }
 
-    delete_ids: list[str] = []
-    for join in existing_joins:
-        if join.origin != "foreign_key":
-            continue
-        if join.from_column_id not in source_col_ids:
-            continue
-        pair = (join.from_column_id, join.to_column_id)
-        if pair not in expected:
-            delete_ids.append(join.id)
-
     upserts: list[StructureJoinUpsert] = []
     for (from_id, to_id), (evidence, expression) in expected.items():
         existing = joins_by_pair.get((from_id, to_id))
-        existing_origin = existing.origin if existing is not None else None
-        if (
-            resolve_join_write(
-                existing_origin=existing_origin,
-                incoming_origin=STRUCTURE_JOIN_ORIGIN,
-            )
-            == "keep_existing"
-        ):
+        existing_rejected = (
+            None if existing is None else existing.is_rejected
+        )
+        if decide_automatic_insert(existing_rejected=existing_rejected) != "insert":
             continue
         upserts.append(
             StructureJoinUpsert(
@@ -339,7 +317,6 @@ def build_structure_refresh_plan(
                 to_column_id=to_id,
                 evidence=evidence,
                 join_expression=expression,
-                origin=STRUCTURE_JOIN_ORIGIN,
             )
         )
 
@@ -358,7 +335,6 @@ def build_structure_refresh_plan(
     return StructureRefreshPlan(
         source_id=source_id,
         objects=tuple(by_id[oid] for oid in touched_ids),
-        delete_join_ids=tuple(delete_ids),
         upsert_joins=tuple(upserts),
         stamp_object_ids=stamp_object_ids,
         last_structure_job_id=job_id,

@@ -9,7 +9,7 @@ Auth: Session or User PAT. Permission: `jobs:run`.
 Instants: [`docs/conventions-time.md`](conventions-time.md) (UTC `Z` on the wire).
 HTTP protocol failures: [`docs/conventions-errors.md`](conventions-errors.md).
 
-Create is domain-facade (`POST /sources/{id}/schedules`) plus the database Source create-time seed and a mutating Source update (zero structure schedules). Platform list/get/patch/delete do not create rows and do not accept Celery `task_name` or `owner_ref`. Mechanism responses do not invent Source shape; the Metadata facade adds `work_kind` / `target`.
+Create is domain-facade (`POST /sources/{id}/schedules`) plus the database Source create-time seed and a mutating Source update (missing product-default schedule kinds). Platform list/get/patch/delete do not create rows and do not accept Celery `task_name` or `owner_ref`. Mechanism responses do not invent Source shape; the Metadata facade adds `work_kind` / `target`.
 
 ## 2. Public shape
 
@@ -44,21 +44,21 @@ Create is domain-facade (`POST /sources/{id}/schedules`) plus the database Sourc
 Rules:
 
 - Public fields never include `task_name`, `args_json`, `kwargs_json`, `system`, or `owner_ref`.
-- `work_kind` is the closed catalog of domain work (first slice: `structure`), filled by the Metadata facade. System / mechanism-only rows may return `work_kind` / `target` null.
-- `target` is facade projection of the work target (structure: Source id/key), **not** proof that the schedule is owned by Source. `target.source_key` is present when the facade can resolve the Source; after Source hard-delete, matching schedules are withdrawn by `owner_ref` so orphans should not remain on product paths.
+- `work_kind` is the closed catalog of domain work (`structure` \| `join_detection`), filled by the Metadata facade. System / mechanism-only rows may return `work_kind` / `target` null.
+- `target` is facade projection of the work target (Source id/key for `structure` and `join_detection`), **not** proof that the schedule is owned by Source. `target.source_key` is present when the facade can resolve the Source; after Source hard-delete, matching schedules are withdrawn by `owner_ref` so orphans should not remain on product paths.
 - Cadence is exactly one of `interval_seconds` (positive int) or five-field `cron`. `schedule_timezone` is IANA; ignored for interval.
 - `running_timeout_sec` is the optional **Running Time Limit** (positive int seconds). Null / omit / seed = no control. Mint copies it onto the Job. PATCH of this field does not rewrite in-flight Jobs.
 - `last_run_at` is the Instant cursor of the last **consumed due** mint (Clock Instant). Operator run-now does not change it. Cron cross-slot skip does not change it. It is not Console “last run”.
 - `next_run_at` is the stored commitment Instant. Null when `enabled=false`. Due is `enabled` and `next_run_at <= now`. GET returns the stored value; it is not computed on read.
 - `last_job` is an observation join to the latest Job with `trigger_kind=schedule` and `trigger_ref` = this schedule id (any status). Null when none. Not cached on the schedule row.
-- Several structure schedules may target one Source. Key `structure:{source_id}:{schedule_id}` is a Metadata facade naming convention (unique per row), not a schedule-table Source FK.
+- Several schedules of each kind may target one Source. Keys `structure:{source_id}:{schedule_id}` and `join_detection:{source_id}:{schedule_id}` are Metadata facade naming conventions (unique per row), not a schedule-table Source FK.
 
 ## 3. Endpoints
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/sources/{id}/schedules` | `jobs:run` | Insert a structure schedule for this Source (operator create path) |
-| `GET` | `/sources/{id}/schedules` | `jobs:run` | List structure schedules whose target is this Source (**Offset Page**) |
+| `POST` | `/sources/{id}/schedules` | `jobs:run` | Insert a Source-targeted schedule (`work_kind=structure` or `join_detection`) |
+| `GET` | `/sources/{id}/schedules` | `jobs:run` | List schedules whose target is this Source (both work kinds; **Offset Page**) |
 | `GET` | `/schedules` | `jobs:run` | Platform list (default excludes `system=true`; tests may pass `?system=true`; **Offset Page**) |
 | `GET` | `/schedules/{id}` | `jobs:run` | Get by id (system rows visible for debug) |
 | `PATCH` | `/schedules/{id}` | `jobs:run` | Partial update: `enabled`, cadence, `schedule_timezone`, `name`, `running_timeout_sec` |
@@ -84,7 +84,7 @@ There is no `PUT/GET/DELETE /sources/{id}/schedule` (singular replace).
 
 Rules:
 
-- `kind` must be `structure` in this slice.
+- `kind` must be `structure` or `join_detection`.
 - Exactly one of `cron` or `interval_seconds`.
 - `running_timeout_sec` omit or null = no control. A present non-positive value is rejected (`SCHEDULE_RUNNING_TIMEOUT_INVALID`).
 - Path `{id}` is the Source on the **facade** route; the facade validates a database Source with access, writes a unique key, sets Celery kwargs (`source_id`, `schedule_id`) and opaque `owner_ref` internally. The schedule table does not gain a Source FK.
@@ -97,7 +97,7 @@ Empty body. `202` `{ "job": { … } }` (Job shape). `trigger_kind=schedule`, `tr
 
 ### `PATCH /schedules/{id}` body
 
-Any subset of `enabled`, `name`, `cron`, `interval_seconds`, `schedule_timezone`, `running_timeout_sec`. Setting `cron` clears `interval_seconds` and vice versa. Sending both non-null is rejected. A present `schedule_timezone` (including empty or null) is validated as IANA; omission leaves the stored zone. Present `running_timeout_sec` null clears to no-control; omission leaves the stored value; a present non-positive value is rejected. Empty or whitespace `name` restores the default `structure · {source_key}`. System rows are rejected.
+Any subset of `enabled`, `name`, `cron`, `interval_seconds`, `schedule_timezone`, `running_timeout_sec`. Setting `cron` clears `interval_seconds` and vice versa. Sending both non-null is rejected. A present `schedule_timezone` (including empty or null) is validated as IANA; omission leaves the stored zone. Present `running_timeout_sec` null clears to no-control; omission leaves the stored value; a present non-positive value is rejected. Empty or whitespace `name` restores the default `structure · {source_key}` or `join_detection · {source_key}` for that schedule's work kind. System rows are rejected.
 
 - `enabled=false` → `next_run_at` null immediately; already queued/running Jobs keep running.
 - `enabled=true` → recompute `next_run_at` from now (no pause catch-up).
@@ -111,7 +111,7 @@ Response: `{ "items": […], "total": N, "limit": L, "offset": O }`. `total` is 
 
 ### `GET /sources/{id}/schedules`
 
-Same **Offset Page** envelope, defaults, max, and ordering. Scoped to structure schedules whose `owner_ref` is this Source. Missing Source → `SOURCE_NOT_FOUND`. Empty page is `200` with `items: []` (allowed after the operator deletes the last schedule; a newly created database Source has one seed).
+Same **Offset Page** envelope, defaults, max, and ordering. Scoped to schedules whose `owner_ref` is this Source (all work kinds). Missing Source → `SOURCE_NOT_FOUND`. Empty page is `200` with `items: []` (allowed after the operator deletes the last schedule; a newly created database Source has the product-default seeds).
 
 ### `DELETE`
 
@@ -126,8 +126,8 @@ Same **Offset Page** envelope, defaults, max, and ordering. Scoped to structure 
 | `SCHEDULE_CADENCE_INVALID` | Neither or both cadence fields; invalid cron; unknown IANA zone; non-positive interval |
 | `SCHEDULE_RUNNING_TIMEOUT_INVALID` | Present `running_timeout_sec` is not a positive integer |
 | `SCHEDULE_KIND_INVALID` | POST `kind` is not in the closed catalog |
-| `JOB_INPUT_INVALID` | Structure schedule requires a database Source with access |
-| `SOURCE_NOT_FOUND` | Facade path Source missing. Source delete withdraws structure schedules by `owner_ref` so orphans should not remain. |
+| `JOB_INPUT_INVALID` | A Source-targeted schedule requires a database Source with access |
+| `SOURCE_NOT_FOUND` | Facade path Source missing. Source delete withdraws Source-targeted schedules by `owner_ref` so orphans should not remain. |
 
 `JOB_ALREADY_ACTIVE` and `JOB_SOURCE_DISABLED` are Job execution / domain errors, not schedule mint HTTP codes.
 
@@ -144,4 +144,4 @@ Same **Offset Page** envelope, defaults, max, and ordering. Scoped to structure 
 - Operator-supplied Celery `task_name` or product-writable `owner_ref`
 - MCP schedule tools
 - Catchup / backfill / RRule
-- PUT replace of “the” structure schedule per Source
+- PUT replace of “the” schedule per Source or per work kind

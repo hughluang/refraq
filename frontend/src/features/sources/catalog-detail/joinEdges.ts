@@ -23,8 +23,32 @@ export function validateJoinDraft(input: {
   return { ok: true, evidence, fromId: input.fromId, toId: input.toId };
 }
 
-export function isAutoDerivedJoin(origin: string | null | undefined): boolean {
-  return origin === "foreign_key";
+export type JoinRowState = "rejected" | "automated" | "manual";
+
+export function joinRowState(join: {
+  created_by_user_id?: string | null;
+  is_rejected?: boolean | null;
+}): JoinRowState {
+  if (join.is_rejected) return "rejected";
+  if (!join.created_by_user_id) return "automated";
+  return "manual";
+}
+
+export function joinRowActions(state: JoinRowState): {
+  amend: boolean;
+  reject: boolean;
+  restore: boolean;
+  delete: boolean;
+} {
+  if (state === "rejected") {
+    return { amend: false, reject: false, restore: true, delete: false };
+  }
+  return {
+    amend: true,
+    reject: true,
+    restore: false,
+    delete: state === "manual",
+  };
 }
 
 export function columnOptionLabel(name: string, locatorKey: string): string {

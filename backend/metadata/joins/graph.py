@@ -105,7 +105,11 @@ def find_join_paths(
             col_to_object[col.id] = obj.id
             col_locator[col.id] = col.locator_key
 
-    joins = store.list_all_joins_for_source(source_id)
+    joins = [
+        join
+        for join in store.list_all_joins_for_source(source_id)
+        if not join.is_rejected
+    ]
     adjacency: dict[str, list[tuple[str, CatalogJoinRecord]]] = {}
     for join in joins:
         adjacency.setdefault(join.from_column_id, []).append(

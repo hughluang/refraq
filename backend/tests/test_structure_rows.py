@@ -139,3 +139,27 @@ def test_oracle_object_key_includes_object_type() -> None:
     assert _object_key("HR", "SALES", "table") != _object_key(
         "HR", "SALES", "materialized_view"
     )
+
+
+def test_assemble_routines_are_ddl_only() -> None:
+    collected = assemble(
+        StructureRows(
+            objects=[
+                ObjectRow("proc:1", "dbo", "refresh_orders", "procedure"),
+                ObjectRow("fn:1", "dbo", "fn_open()", "function"),
+            ],
+            columns=[],
+            definitions=[
+                DefinitionRow("proc:1", "CREATE PROCEDURE refresh_orders AS SELECT 1"),
+                DefinitionRow("fn:1", None),
+            ],
+        )
+    )
+    by_type = {obj.object_type: obj for obj in collected.objects}
+    assert by_type["procedure"].columns == []
+    assert by_type["procedure"].primary_key == []
+    assert by_type["procedure"].foreign_keys == []
+    assert by_type["procedure"].indexes == []
+    assert by_type["procedure"].ddl is not None
+    assert by_type["function"].ddl is None
+    assert by_type["function"].columns == []

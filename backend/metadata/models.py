@@ -244,8 +244,21 @@ class CatalogJoinRow(Base):
     evidence: Mapped[str] = mapped_column(Text, nullable=False)
     join_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="INNER")
     join_expression: Mapped[str | None] = mapped_column(Text, nullable=True)
-    origin: Mapped[str] = mapped_column(String(32), nullable=False, default="human")
     created_by_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    rejected_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    rejected_by_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class CatalogJoinChangeRow(Base):
+    __tablename__ = "catalog_join_changes"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    from_column_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    to_column_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    attester: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    actor_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
 

@@ -322,39 +322,39 @@ def test_structure_job_single_flight_at_execution(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Run-now always mints; second Job fails with JOB_ALREADY_ACTIVE when executed."""
-    from backend.jobs.store import claim_queued, create_queued_job
+    from backend.metadata.catalog.kind_locks import try_acquire_kind_execution_lock
     from backend.metadata.structure_jobs.service import run_structure_job
 
     source = _make_source(client, key="s1", database="db")
-    job = create_queued_job(
-        kind="structure",
-        input={"source_id": source["id"]},
-    )
-    claimed = claim_queued(job.id)
-    assert claimed is not None
-    created = client.post(
-        f"/sources/{source['id']}/schedules",
-        json={
-            "kind": "structure",
-            "cron": "0 2 * * *",
-            "schedule_timezone": "UTC",
-            "enabled": True,
-        },
-    )
-    assert created.status_code == 201, created.text
-    # Avoid eager Celery running the real collector before we assert mint.
-    monkeypatch.setattr(
-        "backend.metadata.source_jobs.run_job.apply_async",
-        lambda *a, **k: type("R", (), {"id": "eager-stub"})(),
-    )
-    resp = client.post(f"/schedules/{created.json()['schedule']['id']}/run")
-    assert resp.status_code == 202, resp.text
-    second_id = resp.json()["job"]["id"]
-    outcome = run_structure_job(second_id)
-    assert outcome["status"] == "failed"
-    stored = get_job_store().get(second_id)
-    assert stored is not None
-    assert stored.error_code == "JOB_ALREADY_ACTIVE"
+    held = try_acquire_kind_execution_lock("structure", source["id"])
+    assert held is not None
+    try:
+        created = client.post(
+            f"/sources/{source['id']}/schedules",
+            json={
+                "kind": "structure",
+                "cron": "0 2 * * *",
+                "schedule_timezone": "UTC",
+                "enabled": True,
+            },
+        )
+        assert created.status_code == 201, created.text
+        # Avoid eager Celery running the real collector before we assert mint.
+        monkeypatch.setattr(
+            "backend.metadata.source_jobs.run_job.apply_async",
+            lambda *a, **k: type("R", (), {"id": "eager-stub"})(),
+        )
+        resp = client.post(f"/schedules/{created.json()['schedule']['id']}/run")
+        assert resp.status_code == 202, resp.text
+        second_id = resp.json()["job"]["id"]
+        outcome = run_structure_job(second_id)
+        assert outcome["status"] == "failed"
+        stored = get_job_store().get(second_id)
+        assert stored is not None
+        assert stored.error_code == "JOB_ALREADY_ACTIVE"
+        assert "structure Kind execution lock" in (stored.error_summary or "")
+    finally:
+        held.release()
 
 
 def test_structure_job_input_only_source_id(
@@ -829,12 +829,12 @@ def test_public_view_strips_secrets_and_includes_access_updated_at(
     assert view["id"] == body["id"]
 
 
-def test_enqueue_structure_job_rejects_unusable_source(
+def test_enqueue_source_work_job_rejects_unusable_source(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from backend.metadata.errors import JobInputInvalid
     from backend.metadata.sources.store import SourceRecord, get_source_store
-    from backend.metadata.source_jobs import enqueue_structure_job
+    from backend.metadata.source_jobs import enqueue_source_work_job
     from backend.metadata.structure_jobs.service import run_structure_job
 
     monkeypatch.setattr(
@@ -846,7 +846,8 @@ def test_enqueue_structure_job_rejects_unusable_source(
     disabled = client.patch(f"/sources/{source['id']}", json={"status": "disabled"})
     assert disabled.status_code == 200
     # Mint always; Source usability is enforced at execution.
-    job = enqueue_structure_job(
+    job = enqueue_source_work_job(
+        kind="structure",
         source_id=source["id"],
         actor_user_id=None,
         trigger_ref="sched_test",
@@ -876,7 +877,8 @@ def test_enqueue_structure_job_rejects_unusable_source(
         )
     )
     with pytest.raises(JobInputInvalid) as exc:
-        enqueue_structure_job(
+        enqueue_source_work_job(
+            kind="structure",
             source_id="src_nondb",
             actor_user_id=None,
             trigger_ref="sched_test",

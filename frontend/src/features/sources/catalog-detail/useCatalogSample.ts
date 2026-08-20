@@ -9,6 +9,7 @@ import {
   ModuleAction,
   ModuleId,
 } from "@/features/console/module-identity";
+import { isSampleEligible } from "@/features/sources/catalog-detail/catalogObjectKind";
 import {
   buildSampleRequest,
   defaultSampleOrderColumn,
@@ -76,6 +77,9 @@ export function useCatalogSample(object: CatalogObject) {
   const unstableOrder = isUnstableOrder(offset, orderColumn);
 
   const run = async (nextOffset: number = offset) => {
+    if (!isSampleEligible(object.object_type)) {
+      return;
+    }
     setRunning(true);
     try {
       const data = await runObjectSample(

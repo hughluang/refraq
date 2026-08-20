@@ -36,9 +36,9 @@ from backend.metadata.sources.store import (
     new_source_id,
 )
 from backend.metadata.source_schedules import (
-    delete_structure_schedules_by_source_id,
-    ensure_default_structure_schedule_if_none,
-    seed_default_structure_schedule,
+    delete_source_schedules_by_source_id,
+    ensure_default_source_schedules_if_none,
+    seed_default_source_schedules,
 )
 from backend.worker.schemas.schedules import ScheduleOut
 
@@ -117,7 +117,7 @@ def create_source(
         store = cast(SqlSourceStore, get_source_store())
         with session_scope() as session:
             stored = store.create_source_on(session, record)
-            seed_default_structure_schedule(
+            seed_default_source_schedules(
                 stored,
                 session=session,
                 actor_user_id=actor_user_id,
@@ -132,7 +132,7 @@ def create_source(
         )
     except Exception:
         if get_source_store().get_source(record.id) is not None:
-            delete_structure_schedules_by_source_id(record.id)
+            delete_source_schedules_by_source_id(record.id)
             get_source_store().delete_source(record.id)
         raise
 
@@ -144,7 +144,7 @@ def _insert_source_and_seed(
     actor_token_id: str | None,
 ) -> SourceRecord:
     stored = get_source_store().create_source(record)
-    seed_default_structure_schedule(
+    seed_default_source_schedules(
         stored,
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -169,10 +169,10 @@ def _maybe_seed_after_update(
     actor_user_id: str | None,
     actor_token_id: str | None,
     session: Session | None = None,
-) -> ScheduleOut | None:
+) -> list[ScheduleOut]:
     if not changed:
-        return None
-    return ensure_default_structure_schedule_if_none(
+        return []
+    return ensure_default_source_schedules_if_none(
         saved,
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -190,7 +190,7 @@ def update_source(
     access: dict[str, Any] | None | object = ...,
     actor_user_id: str | None = None,
     actor_token_id: str | None = None,
-) -> tuple[SourceRecord, ScheduleOut | None]:
+) -> tuple[SourceRecord, list[ScheduleOut]]:
     store = get_source_store()
     existing = store.get_source(source_id)
     if existing is None:
@@ -220,7 +220,7 @@ def update_source(
         updated.access_updated_at = utc_now()
     updated.updated_at = utc_now()
     changed = _source_business_changed(existing, updated)
-    seeded: ScheduleOut | None = None
+    seeded: list[ScheduleOut] = []
     if get_settings().store_backend == "persistent":
         sql_store = cast(SqlSourceStore, store)
         with session_scope() as session:
@@ -260,7 +260,7 @@ def delete_source(source_id: str) -> SourceRecord:
 
     get_catalog_store().delete_objects_for_source(source_id)
     get_structure_diff_store().delete_for_source(source_id)
-    delete_structure_schedules_by_source_id(source_id)
+    delete_source_schedules_by_source_id(source_id)
     if not store.delete_source(source_id):
         raise SourceNotFound()
     return existing

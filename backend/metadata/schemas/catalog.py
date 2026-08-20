@@ -33,6 +33,7 @@ __all__ = [
     "JoinPathHopOut",
     "JoinPathOut",
     "JoinPathResponse",
+    "JoinPatchRequest",
     "JoinResponse",
     "JoinUpsertRequest",
     "ObjectCategory",
@@ -205,6 +206,12 @@ class JoinBatchUpsertRequest(BaseModel):
     joins: list[JoinUpsertRequest]
 
 
+class JoinPatchRequest(BaseModel):
+    evidence: str
+    join_kind: str | None = "INNER"
+    join_expression: str | None = None
+
+
 class JoinOut(BaseModel):
     id: str
     from_column_id: str
@@ -214,9 +221,11 @@ class JoinOut(BaseModel):
     evidence: str
     join_kind: str = "INNER"
     join_expression: str | None = None
-    origin: str = "human"
     created_by_user_id: str | None = None
     created_at: Instant
+    is_rejected: bool = False
+    rejected_at: Instant | None = None
+    rejected_by_user_id: str | None = None
 
 
 class JoinListResponse(OffsetPage[JoinOut]):
@@ -230,6 +239,7 @@ class JoinResponse(BaseModel):
 class JoinBatchResponse(BaseModel):
     created_count: int
     already_known_count: int
+    rejected_count: int
     items: list[JoinOut]
 
 
@@ -242,7 +252,6 @@ class JoinPathHopOut(BaseModel):
     join_kind: str
     join_expression: str | None = None
     evidence: str
-    origin: str
 
 
 class JoinPathOut(BaseModel):

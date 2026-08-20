@@ -144,9 +144,11 @@ export type CatalogJoin = {
   evidence: string;
   join_kind?: string;
   join_expression?: string | null;
-  origin?: string;
   created_by_user_id: string | null;
   created_at: string;
+  is_rejected?: boolean;
+  rejected_at?: string | null;
+  rejected_by_user_id?: string | null;
 };
 
 export type JoinPathHop = {
@@ -158,7 +160,6 @@ export type JoinPathHop = {
   join_kind: string;
   join_expression?: string | null;
   evidence: string;
-  origin: string;
 };
 
 export type JoinPath = {

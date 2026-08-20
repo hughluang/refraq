@@ -31,6 +31,7 @@ import { ColumnsTab } from "@/features/sources/catalog-detail/ColumnsTab";
 import { DdlTab } from "@/features/sources/catalog-detail/DdlTab";
 import { JoinsTab } from "@/features/sources/catalog-detail/JoinsTab";
 import { OverviewTab } from "@/features/sources/catalog-detail/OverviewTab";
+import { isSampleEligible } from "@/features/sources/catalog-detail/catalogObjectKind";
 import { SampleTab } from "@/features/sources/catalog-detail/SampleTab";
 import type { CatalogObject } from "@/features/sources/types";
 import { ApiError } from "@/lib/api";
@@ -54,7 +55,6 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
     canSampleLoading,
     canSampleData,
   );
-  const showSampleTab = canSamplePending || Boolean(canSampleData?.can);
   const writable = Boolean(canWrite?.can);
 
   const [object, setObject] = useState<CatalogObject | null>(null);
@@ -63,6 +63,11 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
   const [activeTab, setActiveTab] = useState<string | null>("overview");
   const [reloadEpoch, setReloadEpoch] = useState(0);
   const [joinsVisited, setJoinsVisited] = useState(false);
+  const sampleEligible = object
+    ? isSampleEligible(object.object_type)
+    : true;
+  const showSampleTab =
+    sampleEligible && (canSamplePending || Boolean(canSampleData?.can));
 
   const load = useCallback(
     async (opts?: { refresh?: boolean }) => {

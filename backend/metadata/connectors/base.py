@@ -52,7 +52,7 @@ class CollectedIndex:
 class CollectedObject:
     schema_name: str
     name: str
-    object_type: str  # table | view | materialized_view
+    object_type: str  # table | view | materialized_view | procedure | function
     columns: list[CollectedColumn] = field(default_factory=list)
     ddl: str | None = None
     comment: str | None = None

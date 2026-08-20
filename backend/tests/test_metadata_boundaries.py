@@ -404,8 +404,14 @@ def test_fk_unresolved_aborts_and_keeps_snapshot() -> None:
     )
     joins_before, _ = store.list_joins_for_object("obj_orders")
     assert len(joins_before) == 1
-    assert joins_before[0].origin == "foreign_key"
+    assert joins_before[0].created_by_user_id is None
     assert joins_before[0].to_column_id == "col_cust_id"
+    changes = store.list_join_changes(
+        from_column_id=joins_before[0].from_column_id,
+        to_column_id=joins_before[0].to_column_id,
+    )
+    assert len(changes) == 1
+    assert changes[0].attester == "foreign_key"
     present_before = {o.id: o.name for o in store.list_present_for_source("src_1")}
 
     broken_orders = _table(
@@ -471,7 +477,7 @@ def test_fk_column_mismatch_aborts() -> None:
     assert store.list_present_for_source("src_1") == []
 
 
-def test_fk_retarget_clears_stale_edge() -> None:
+def test_fk_retarget_inserts_new_edge_keeps_old() -> None:
     store = get_catalog_store()
     customers = _table(
         object_id="obj_customers",
@@ -530,7 +536,14 @@ def test_fk_retarget_clears_stale_edge() -> None:
         fail_safe_threshold=1.0,
     )
     second, _ = store.list_joins_for_object("obj_orders")
-    assert len(second) == 1
-    assert second[0].from_column_id == "col_ref"
-    assert second[0].to_column_id == "col_part_id"
-    assert second[0].origin == "foreign_key"
+    by_to = {join.to_column_id: join for join in second}
+    assert set(by_to) == {"col_cust_id", "col_part_id"}
+    assert by_to["col_cust_id"].from_column_id == "col_ref"
+    assert by_to["col_part_id"].from_column_id == "col_ref"
+    assert by_to["col_part_id"].created_by_user_id is None
+    partner_changes = store.list_join_changes(
+        from_column_id="col_ref",
+        to_column_id="col_part_id",
+    )
+    assert len(partner_changes) == 1
+    assert partner_changes[0].attester == "foreign_key"

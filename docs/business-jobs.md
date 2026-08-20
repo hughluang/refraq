@@ -11,7 +11,7 @@ Related boundaries:
 - Queue runtime: `docs/adr/0004-redis-queue-for-ingestion.md`, `docs/adr/0006-celery-platform-async-runtime.md`.
 - HTTP: `docs/api-contracts-jobs.md`.
 - **Scheduled Task** (the schedule that mints domain Jobs): `docs/business-scheduled-tasks.md`.
-- Metadata **structure** kind, Source facade, single-flight, and **Structure Diff**: `docs/business-metadata.md`.
+- Metadata **structure** / join-detection kinds, Source facade, **Kind execution lock**, and **Structure Diff**: `docs/business-metadata.md`.
 - Schedule-first minting: `docs/adr/0025-clock-first-structure-jobs.md`.
 - **Running Time Limit** (schedule definition, Job snapshot): `docs/adr/0027-running-time-limit-on-schedule.md`.
 
@@ -22,7 +22,7 @@ Platform durable asynchronous execution. Each product domain interprets `kind` a
 | Field | Notes |
 | --- | --- |
 | id | Job id |
-| kind | Discriminator; domains add values (`structure` \| `semantics_refresh` \| …) |
+| kind | Discriminator; domains add values (`structure` \| `join_detection` \| …) |
 | status | `queued` \| `running` \| `succeeded` \| `failed` \| `cancelled` |
 | input | Generic object; domain interprets per `kind` |
 | result | Nullable generic JSON; platform does not interpret. Written only on successful terminal. Other kinds stay `null` (not `{}`) |
@@ -37,12 +37,12 @@ Platform durable asynchronous execution. Each product domain interprets `kind` a
 Rules:
 
 - Job is **not** owned by Source. Do not treat `source_id` as a universal Job column — it lives in `input` when required.
-- Structure **Jobs** are minted only by a **Scheduled Task** (due tick or operator run-now). There is no Source HTTP enqueue and no MCP enqueue in this phase. Platform-wide observe uses `GET /jobs` and `GET /jobs/{id}` / `.../logs` / cancel. Related Jobs for a schedule: `GET /schedules/{id}/jobs`. There is no global `POST /jobs` create.
+- Structure and join-detection **Jobs** are minted only by a **Scheduled Task** (due tick or operator run-now). There is no Source HTTP enqueue and no MCP enqueue in this phase. Platform-wide observe uses `GET /jobs` and `GET /jobs/{id}` / `.../logs` / cancel. Related Jobs for a schedule: `GET /schedules/{id}/jobs`. There is no global `POST /jobs` create.
 - Entering execution requires a `queued → running` claim (CAS). Broker redelivery of a non-queued Job must not re-run domain work.
 - An unexpected runner abort (the Celery task raises) must terminalize the Job `failed` with `JOB_EXECUTION_FAILED`. Occupancy renews every still-`running` claim for a living worker identity; leaving the row `running` after the task is gone keeps a false `RUNNING` until that worker process dies.
 - **Occupancy** (Job primitive; shares Beat with schedules only because the platform has one periodic clock): the worker renews declarations on its running Jobs; a system Scheduled Task marks stale occupancy `JOB_WORKER_LOST`. The stale window is the `job_lost_detection_sec` **System Parameter** (seed 60). Widening is live; tightening waits one old renew interval (`max(5, previous/3)` s) before the reaper cutoff shrinks. Lost-detection SLA assumes Beat is alive: if Beat is down, occupancy reaping stops; bringing up the API alone does not clear a false `RUNNING`. On worker start, abandon leftover running claims for this worker identity immediately (no freshness filter) as `JOB_WORKER_LOST` — not a global reap; a same-identity restart must not treat the previous attempt as still running.
 - **Running Time Limit** is defined on the **Scheduled Task**, not as a Job or env primitive. Mint copies `running_timeout_sec` onto the Job. The same system reaper marks a still-occupied run `JOB_RUNNING_TIMEOUT` when that snapshot is not null and `started_at` is older than the snapshot. Null snapshot: skip. Cooperative CAS `running → failed`; not process kill. The structure runner treats a terminal Job (`cancelled` or `failed`) as stop and does not apply a catalog snapshot or persist a **Structure Diff** after that stamp. Collect already in flight may finish. PATCH of the schedule field does not rewrite in-flight Jobs.
-- Structure single-flight / Source usability are Metadata execution rules on structure Jobs, not Job-table ownership by Source and not schedule mint gates.
+- **Kind execution lock** / Source usability are Metadata execution rules on structure and join-detection Jobs, not Job-table ownership by Source and not schedule mint gates.
 - Jobs are durable records; queue transport is Redis-backed via Celery.
 - Observing Jobs uses public Job fields only. Kind-specific outcome fields stay inside **Job result** (and on domain records such as **Structure Diff**), not as public Job attributes.
 - Job lists do not include **Job result** as a column. Job detail may present it as the uninterpreted JSON document and does not unpack kind-specific keys into Job chrome.

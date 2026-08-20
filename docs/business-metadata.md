@@ -80,7 +80,7 @@ Rules:
 - Distinct environments or physical instances are **distinct Sources** (separate keys, catalogs, and reachability).
 - For `kind=database`, **business/catalog scope** and **live reachability/credentials** both live in Source `access` (ADR 0021) — there is no separate Connection entity or credential reuse across Sources, and no fixed top-level `database_name` / `schema_filter` columns.
 - Creating a database Source without `engine` and `access` is rejected (`SOURCE_ACCESS_REQUIRED`).
-- Creating a database Source also inserts one ordinary structure **Scheduled Task** (product default: daily `0 2 * * *`, **Schedule Timezone** UTC, enabled, default name `structure · {source_key}`). Create and seed succeed or fail together. The insert is authorized by `sources:write` and does not require `jobs:run`. Source HTTP responses do not include the seed. The seed is not a **Job**.
+- Creating a database Source also inserts two ordinary **Scheduled Task**s: one structure (product default: daily `0 2 * * *`, **Schedule Timezone** UTC, enabled, default name `structure · {source_key}`) and one join-detection (product default: daily `0 4 * * *`, **Schedule Timezone** UTC, enabled, default name `join_detection · {source_key}`). Create and both seeds succeed or fail together. The inserts are authorized by `sources:write` and do not require `jobs:run`. Source HTTP responses do not include the seeds. The seeds are not **Jobs**.
 - Endpoint or credential change updates the **same Source** (replace full `access`) — not a new Source row. Catalog Objects stay under that Source; the next structure Job uses the updated endpoint.
 - Prefer the authoritative / primary endpoint; do not register read replicas as alternate Sources for the same physical server.
 - Disabling a Source blocks new ingestion until re-enabled (existing catalog snapshots remain readable unless later retention rules say otherwise).
@@ -92,32 +92,34 @@ Rules:
 
 Platform **Job** and **Scheduled Task** rules live in `docs/business-jobs.md` and `docs/business-scheduled-tasks.md`. Those mechanisms are **not** Metadata objects and are **not** owned by Source.
 
-Metadata owns only the **facades** that use them for structure collection:
+Metadata owns the **facades** that use them for structure collection and SQL join detection:
 
 | Facade | Role |
 | --- | --- |
-| `POST/GET /sources/{id}/schedules` | Register / list structure schedules whose **target** is this Source (operator create path) |
-| Seed / ensure on Source create or mutating update | Insert the product-default structure schedule when needed (`sources:write`) |
+| `POST/GET /sources/{id}/schedules` | Register / list Source-targeted schedules (`work_kind=structure` or `join_detection`) |
+| Seed / ensure on Source create or mutating update | Insert each missing product-default schedule kind (`sources:write`). Presence is per kind; a schedule of one kind does not satisfy the other |
 | Hard-delete Source | **Withdraw** schedules by opaque `owner_ref` (same literal written at create). Scheduler does not know Source |
-| `POST /schedules/{id}/run`, Beat tick | Mint structure **Jobs** (always). Domain constraints run at Job execution |
+| `POST /schedules/{id}/run`, Beat tick | Mint the **Job** kind that matches the schedule (`structure` or `join_detection`). Domain constraints run at Job execution |
 
 Rules:
 
-- Structure **Jobs** are minted only by a **Scheduled Task** (run-now or Beat). Slice A database structure `input` is `{ "source_id": "…" }` only. There is no `POST /sources/{id}/jobs` and no MCP enqueue.
-- Enqueue writes `summary` (`structure · {source_key}`) and `trigger_kind=schedule` / `trigger_ref` = schedule id. Operator run-now also sets `created_by`. Minting does **not** enforce structure single-flight or Source usable status; those fail on the Job during execution (`JOB_ALREADY_ACTIVE` / `JOB_SOURCE_DISABLED`).
-- Creating a structure schedule via the facade requires `jobs:run` and a database Source with an access blob (registration gate). The schedule row still carries only opaque `owner_ref` (literal such as `metadata:source:{id}`) — not a Source FK. Product HTTP cannot set `owner_ref`.
+- Structure and join-detection **Jobs** are minted only by a **Scheduled Task** (run-now or Beat). Slice A database `input` is `{ "source_id": "…" }` only. There is no `POST /sources/{id}/jobs` and no MCP enqueue.
+- Enqueue writes `summary` (`structure · {source_key}` or `join_detection · {source_key}`) and `trigger_kind=schedule` / `trigger_ref` = schedule id. Operator run-now also sets `created_by`. Minting does **not** enforce the **Kind execution lock** or Source usable status; those fail on the Job during execution (`JOB_ALREADY_ACTIVE` / `JOB_SOURCE_DISABLED`).
+- Creating a Source-targeted schedule via the facade requires `jobs:run` and a database Source with an access blob (registration gate). The schedule row still carries only opaque `owner_ref` (literal such as `metadata:source:{id}`) — not a Source FK. Product HTTP cannot set `owner_ref`.
 - Workers load reachability from the Source identified in Job `input`; `input` does not carry endpoint material.
 - Successful structure Jobs write/refresh **Catalog Objects** on that Source and produce at most one **Structure Diff**. **Job result** envelope: `{ "schema": "structure.diff.v1", "class", "counts", "structure_diff_id" }`. Failed, cancelled, or fail-safe Jobs write neither result nor Diff. An unexpected runner abort (including catalog persist) ends the Job `failed` with `JOB_EXECUTION_FAILED` so occupancy does not keep a false `RUNNING`. The structure runner honors a cooperative terminal stamp (`cancelled`, `JOB_RUNNING_TIMEOUT`, `JOB_WORKER_LOST`) before applying a catalog snapshot.
+- Successful join-detection Jobs parse stored SQL definitions and insert missing join edges for that Source (first attester `sql_lineage` on **Join Change** when this Job inserts the row). **Job result** envelope: `{ "schema": "join_detection.v1", "objects_eligible", "objects_parsed", "objects_parse_failed", "joins_upserted", "joins_deleted_stale", "joins_skipped_unresolved", "joins_skipped_unresolved_alias", "joins_skipped_unresolved_external", "joins_skipped_unresolved_object", "joins_skipped_unresolved_column", "joins_skipped_protected", "joins_skipped_rejected" }`. `joins_upserted` is the number of join rows this Job actually inserted (equal to **Join Change** create events it appended), not the count of pairs planned after the join-graph baseline. `joins_deleted_stale` is always `0`. `joins_skipped_unresolved` equals the sum of the four attribution counters. Failed or cancelled Jobs write neither result nor join-graph mutation (success-only commit). Per-object tokenize/parse failures and unresolved endpoints are counters, not Job failure. Joins extracted from fragments that did parse are still committed. The Job run log records one WARN per such object with tokenize/parse type counts (no SQL fragments) and an info line of eligible / parsed / parse_failed / upserted / unresolved attribution counts when the Job succeeds. Catalog persist failure, an unusable Source, an unusable access secret (`JOB_SECRET_MISSING`), and errors other than tokenize/parse still fail the Job with no graph mutation. The runner honors the same cooperative terminal stamp before applying a join-detection plan.
 - Related Jobs hang on the **schedule** (`GET /schedules/{id}/jobs`), not on Source. Structure Diff browse is a Source-scoped Console page (`/console/sources/:id/structure-diffs`, `metadata:read`). Global Job observe is **Operations** `jobs`. Source related-schedules **workbench** is `/console/sources/:id/schedules` (facade create plus manage), not a Source Job list.
-- Facade create/list: first slice `work_kind=structure`; several schedules may target one Source. Default name `structure · {source_key}` (not unique); key `structure:{source_id}:{schedule_id}` (facade convention). Patch / delete / run-now are by schedule id on `/schedules/{id}` (mechanism HTTP).
-- Creating a database Source seeds one such schedule (product default cadence). Operators may add more, disable, or delete including the last one; zero schedules is allowed until the next mutating Source update, which inserts one product-default schedule when a database Source has none (disabled schedules count as present). That ensure writes `schedule.create` for the PATCH User; `PATCH /sources/{id}` includes the inserted `schedule` only when it actually inserted. Create and GET still omit it. It is not a process-start scan and not **Foundation Upgrade**.
+- Facade create/list: closed `work_kind` catalog is `structure` \| `join_detection`; several schedules of each kind may target one Source. Default names `structure · {source_key}` and `join_detection · {source_key}` (not unique); keys `structure:{source_id}:{schedule_id}` and `join_detection:{source_id}:{schedule_id}` (facade convention). Patch / delete / run-now are by schedule id on `/schedules/{id}` (mechanism HTTP). Run-now mints the Job kind stored on that schedule.
+- Creating a database Source seeds one schedule of each kind (product default cadences). Operators may add more, disable, or delete including the last one of a kind; zero schedules of a kind is allowed until the next mutating Source update, which inserts the product-default schedule for each missing kind (disabled schedules of that kind count as present). That ensure writes `schedule.create` for the PATCH User; `PATCH /sources/{id}` includes inserted rows as `schedules` only when it actually inserted. Create and GET still omit them. It is not a process-start scan and not **Foundation Upgrade**.
 - Create writes `last_run_at=now` and stores `next_run_at` as the next legal commitment (or null if created disabled). Run-now does not move those fields.
-- Breaking **Structure Diff** does not pause the schedule or block the next structure Job (§9).
-- **Structure single-flight** (at most one non-terminal structure Job per Source) is catalog-write serialization on the Source, enforced at Job **execution**, not a Scheduled Task mutex and not a schedule mint / HTTP conflict.
+- Breaking **Structure Diff** does not pause the schedule or block the next structure or join-detection Job (§9).
+- **Kind execution lock** (at most one executing `structure` Job and at most one executing `join_detection` Job per Source, on separate locks) is Metadata runner control, enforced after claim for the whole run, not a Scheduled Task mutex and not a schedule mint / HTTP conflict.
 
 ### 4.3 Catalog Object And Columns
 
-Collected structure includes object identity **under Source**, object type, name, columns (name, full type string with precision/length when available, **Normalized Type**, nullable, default value, native comment), primary key column list, foreign keys, unique constraints, indexes, object-level native comment, and DDL when available.
+Collected structure includes object identity **under Source**, object type (`table` \| `view` \| `materialized_view` \| `procedure` \| `function`), name, columns (name, full type string with precision/length when available, **Normalized Type**, nullable, default value, native comment), primary key column list, foreign keys, unique constraints, indexes, object-level native comment, and DDL when available.
+`procedure` and `function` are collected as DDL-only Catalog Objects (empty columns, no parameters, no PK/FK/indexes). Missing, encrypted, or privileged definitions store `ddl=null`. Oracle packages are out of scope. PostgreSQL overloaded routines disambiguate `name` with the identity argument list.
 Optional provenance may record collection timestamp; provenance is not part of identity.
 Semantics and join edges attach to these objects/columns (see §10).
 
@@ -191,7 +193,7 @@ Fixed catalog additions (exact strings are normative for Roles UI):
 | Permission | Meaning |
 | --- | --- |
 | `sources:read` | List/view Sources (projected `access`, Connector Spec) |
-| `sources:write` | Create/update/disable Sources; hard-delete disabled Sources; replace full `access`; fetch full access for edit; run Source reachability tests; creating a database Source, or a mutating update of one with zero structure schedules, also inserts the product-default structure **Scheduled Task** |
+| `sources:write` | Create/update/disable Sources; hard-delete disabled Sources; replace full `access`; fetch full access for edit; run Source reachability tests; creating a database Source, or a mutating update of one with a missing product-default schedule kind, also inserts the matching product-default **Scheduled Task** |
 | `metadata:read` | Browse Catalog Objects, columns, DDL, semantics, joins, and **Type Mapping** |
 | `metadata:write` | Write semantics and join edges; PATCH non-seed **Type Mapping** |
 | `query:run` | Execute controlled read-only SQL against a Source |
@@ -241,7 +243,7 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
 - Source facade validates and enqueues; worker processes execute connectors.
 - Slice A connectors: **PostgreSQL**, **MSSQL**, **Oracle**.
 - Structure collection persists, keyed by Source:
-  - objects: type (`table` \| `view` \| `materialized_view`), schema, name, native comment, DDL when obtainable
+  - objects: type (`table` \| `view` \| `materialized_view` \| `procedure` \| `function`), schema, name, native comment, DDL when obtainable
   - columns: name, full type string (precision/length when the engine exposes it), **Normalized Type** (snapshot from **Type Mapping** for that engine + canonical native type), nullable, default value, native comment, ordinal
   - primary key column names; foreign keys (name, from/to columns); unique constraints; indexes
 - A structure Job never writes Object Semantics or Column Semantics. Those fields belong to
@@ -282,15 +284,43 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
   Normalized Type). Columns with `unknown` stay visible (Console Badge; one Job `WARN`
   with count and up to 10 locators). Job result / Structure Diff do not grow unknown counters.
 - **Semantics preservation:** structure upserts whitelist structural columns only; never overwrite
-  semantics fields or non-`foreign_key` join edges.
-- **FK → join derivation:** each collected foreign key upserts a join edge with `origin=foreign_key`
-  and evidence naming the FK constraint. Re-collection updates or tombstones those edges; it must
-  not delete or overwrite edges with `origin=human` or `origin=mcp`.
-- **Structure single-flight:** at most one non-terminal `kind=structure` Job may run catalog writes per Source
-  (`JOB_ALREADY_ACTIVE` on the colliding Job). This is catalog-write serialization on the Source, not a **Scheduled Task**
-  mutex. Enforced when the structure Job **executes** (not when the schedule mints). Authority remains the Job table.
-  The schedule always mints; Beat does not swallow; run-now does not HTTP-409 for this reason.
-  Re-run = new Job after terminal status.
+  semantics fields. Structure never updates or deletes join rows.
+- **FK → join derivation:** each collected foreign key that has no join row for the directed
+  column pair inserts one (`evidence` names the FK constraint). First attester on **Join Change**
+  is `foreign_key`. Automatic Jobs never write `created_by_user_id`. If the pair already has a
+  row, structure skips it (does not change evidence, expression, or rejection). When a collected
+  FK disappears, structure updates Current catalog `foreign_keys` and Structure Diff
+  (`fk_removed`) only — it does not mutate `catalog_joins`. **Join Rejection** does not block FK
+  collection or Diff classification.
+- **SQL join detection:** a join-detection Job parses stored `ddl` on present `view`,
+  `materialized_view`, `procedure`, and `function` objects. It inserts an edge only when both
+  endpoints resolve to present columns in the same Source and the pair has no join row. Evidence
+  names the SQL-host Catalog Object. First attester on **Join Change** is `sql_lineage` only when
+  this Job inserts the row. The Job does not update existing rows and does not delete joins
+  (`joins_deleted_stale` is always `0`). An existing non-rejected row on the join-graph baseline is
+  counted (`joins_skipped_protected`). An existing rejected row on that baseline is counted
+  (`joins_skipped_rejected`) and not rewritten. `joins_upserted` is the number of rows this Job
+  actually inserted. If another writer inserts the same directed pair after the baseline and before
+  this Job's persist, this Job does not insert a row, does not append **Join Change**, and does not
+  count that pair in `joins_upserted` or in the baseline skip counters. Name similarity and
+  value-overlap probes are not detection. Parse failures and unresolved endpoints are counted, not
+  Job failure. Unresolved endpoints are attributed as alias (derived-table/CTE qualifier not
+  expanded, or an equi-join whose columns cannot be attributed to a base table), external
+  (catalog/database segment outside this Source), object (missing from catalog), or column (object
+  present, column missing). A same-column self-join is dropped and is not unresolved. A three-part
+  name whose catalog equals this Source's database is same-catalog and may resolve; a differing
+  catalog is not treated as a same-Source endpoint. If the Source access blob cannot be decrypted or
+  assembled, the Job fails with `JOB_SECRET_MISSING` and does not treat catalog-qualified names
+  as same-Source. If the endpoint has no database name, a catalog segment alone is not a miss. Views that face consumers with a complete result set often have no join edges; that
+  is expected and is not a detection gap. Listing joins for an object returns edges that touch
+  the object's own columns (a SQL host is not required to appear as an endpoint).
+- **Kind execution lock:** after claim, the runner try-acquires a lock keyed
+  `structure:{source_id}` or `join_detection:{source_id}` for the whole collect/parse/persist
+  run. Same-kind contention → this Job `failed` with `JOB_ALREADY_ACTIVE` and a log naming
+  kind and Source. Cross-kind may run together. Authority is the lock, not the Job table
+  and not a **Scheduled Task** mutex. The schedule always mints; Beat does not swallow;
+  run-now does not HTTP-409 for this reason. Re-run = new Job after the lock is free
+  (ADR 0032).
 - Collectors read **Source `engine` / decrypted `access`** (scope and credentials together). Introspection uses
   engine-native catalogs (`pg_catalog`, `sys.*`, `ALL_`/`DBA_`).
 - Oracle schema scope is `access.owner` (required; same role as `schema` on PostgreSQL/MSSQL).
@@ -389,19 +419,26 @@ Join edge fields:
 | `evidence` | Required non-empty text |
 | `join_kind` | Default `INNER` |
 | `join_expression` | Optional; when omitted, server generates equality on the column pair |
-| `origin` | `foreign_key` \| `human` \| `mcp` |
-| created_by / created_at | Provenance |
+| created_by / created_at | `created_by_user_id` is set for human/MCP create; automatic Jobs leave it null |
+| `rejected_at` / `rejected_by_user_id` | **Join Rejection**; empty means asserted |
+| `is_rejected` | Computed from `rejected_at` |
+
+**Join Origin** is not a live-row field. First attester lives on **Join Change** create (`foreign_key` \| `sql_lineage` \| `human` \| `mcp`). **Join Change** is persisted on create / human-or-MCP amend / reject / restore. Public join HTTP, **Join Path**, and MCP do not read it. There is no Join Change resource. Human/MCP writes still also write a **Management Audit Event**; automatic lineage writes do not.
 
 Rules:
 
+- A directed column pair has at most one join definition. Duplicate single create is `JOIN_ALREADY_DEFINED`; single create on a rejected pair is `JOIN_REJECTED`. Amend is `PATCH /joins/{id}` (evidence / kind / expression only). Restore is explicit.
 - Evidence required; name-similarity alone is insufficient (`JOIN_EVIDENCE_REQUIRED`).
 - Same-Source only (`JOIN_CROSS_SOURCE`); no self-loop (`JOIN_INVALID`).
-- Batch upsert limited to one Source per call; returns created / already_known counts.
+- Batch create limited to one Source per call. Asserted known pairs are skipped (`already_known_count`), not overwritten. Rejected pairs are reported (`rejected_count`), not overwritten and not restored; `items` include those rows (`is_rejected`, with `id`). Batch is not create-or-fail for rejection.
+- Object join lists include rejected rows by default (no filter in this slice). **Join Path** omits rejected rows. Path walks a join when endpoint columns are present and the pair is not rejected.
+- **Join Rejection** refuses single HTTP/MCP create and amend on the pair. Batch / MCP `upsert_joins` report rejected pairs without restoring. Automatic Jobs skip an existing row (including rejected). It does not affect FK collection, object `foreign_keys`, or Structure Diff `fk_added` / `fk_removed`. A later collected FK does not restore.
+- Console delete stays limited to non-rejected rows with `created_by_user_id` set. HTTP/MCP `DELETE` is unchanged.
 - **FK resolution during structure Jobs:** if a collected foreign key cannot be resolved
   (missing referenced object/columns), has unequal local/ref column counts, or matches
   ambiguous referenced targets, the structure Job **fails** and the prior successful catalog
   snapshot is left unchanged (same success-only commit as §9).
-- **Join path:** BFS over edges (max hops 1–5) from object or column locator; modes are
+- **Join path:** BFS over asserted (non-rejected) edges (max hops 1–5) from object or column locator; modes are
   explicit target locator or graph exploration. Returns path summary and per-hop join
   expressions; responses may include a `reason` when no usable path is available
   (e.g. unreachable target).
@@ -434,7 +471,7 @@ Rules:
 
 ## 11.1 Catalog Sample
 
-- First-class live peek for **one Catalog Object**: structured request (`filters`, optional `columns` / `order_by`, `offset` / `limit`), platform compiles dialect SQL (sqlglot), then runs through the same readonly guards / timeout / audit internals as Controlled Query.
+- **Catalog Sample** is for tabular Catalog Objects (`table`, `view`, `materialized_view`). `procedure` and `function` are rejected (`SAMPLE_OBJECT_TYPE_UNSUPPORTED`).
 - Permission: `catalog:sample` (distinct from `query:run`). Seeded `operator` does **not** receive it by default.
 - HTTP: `POST /objects/{id}/sample`. MCP does **not** expose a sample tool; agents use `run_sql` for ad-hoc peek.
 - v1 filter ops: `eq`, `neq`, `contains`, `is_null` (AND of filter list). Pagination: `offset` + `limit` with hard cap `offset + limit ≤ REFRAQ_QUERY_MAX_ROWS`; response echoes `offset` / `limit` and `has_more` (heuristic); no default `total_count` / `COUNT(*)`. `order_by` is optional; without it, pagination order is unstable.
@@ -462,18 +499,18 @@ Persist management-plane events for at least:
 - Scheduled Task create / patch / delete / run (`schedule.create` / `schedule.patch` / `schedule.delete` / `schedule.run`; no secrets)
 
 Each event: actor User id, timestamp, resource type/id, action, result (`success` / `failure`), optional detail payload without secrets.
-A mutating Source update that inserts a missing structure schedule writes `schedule.create` for the same User as `source.update`. Source create writes `source.create` and `schedule.create` for the same User.
+A mutating Source update that inserts a missing product-default schedule kind writes `schedule.create` for the same User as `source.update`. Source create writes `source.create` and `schedule.create` for each seed, attributed to the same User. Automatic lineage writes (FK sync and `sql_lineage` persist) produce no per-edge Management Audit Event; HTTP/MCP join writes still do.
 Full platform audit of every login/Settings/Users path is out of scope for this phase (Foundation login paths may remain hook-ready only).
 
 ## 14. Success Criteria (Phase)
 
-1. An authorized User can register database Sources (with embedded reachability) for PostgreSQL, MSSQL, and Oracle under Console group `metadata`; registration seeds a structure **Scheduled Task**; they can create additional structure **Scheduled Task**s and run-now **Jobs**, and browse Catalog Objects under each Source.
+1. An authorized User can register database Sources (with embedded reachability) for PostgreSQL, MSSQL, and Oracle under Console group `metadata`; registration seeds structure and join-detection **Scheduled Task**s; they can create additional Source-targeted **Scheduled Task**s and run-now **Jobs**, and browse Catalog Objects under each Source.
 2. MCP clients using a User PAT can exercise slice-appropriate tools; mutating calls are attributable to that User in audit.
 3. Source access blobs are never stored or logged in plaintext; long-running Jobs do not block the API process.
 4. Roles can grant read-only metadata access without granting Source write, query, or PAT management.
 5. Documentation under `docs/` matches behavior; refraq is the sole authoritative registry (no `dbmeta` dual-read).
 6. MCP addresses Sources/objects/columns by locator key; HTTP responses include `locator_key`.
-7. Structure Jobs collect PK/FK/indexes/comments/defaults (engine parity documented); FK-derived joins use `origin=foreign_key`.
+7. Structure Jobs collect PK/FK/indexes/comments/defaults (engine parity documented); FK-derived joins insert when the pair is missing.
 8. Object/column semantics persist across the admitted field set (including `open_questions`); every field passes the ADR 0015 admission criteria, column `semantic_type` is vocabulary-checked, and `semantic_source` records last-write provenance (field-level MCP protection deferred — ADR 0014).
 9. Cross-Source object/column search with pagination works; join path lookup returns reachable hop chains.
 

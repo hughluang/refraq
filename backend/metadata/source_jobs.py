@@ -1,4 +1,4 @@
-"""Domain facade for structure Jobs minted via Scheduled Task."""
+"""Domain facade for Source Jobs minted via Scheduled Task."""
 
 from __future__ import annotations
 
@@ -23,10 +23,14 @@ from backend.jobs.store import (
 )
 from backend.metadata.errors import (
     JobInputInvalid,
+    ScheduleKindInvalid,
 )
 from backend.metadata.source_schedules import (
+    JOIN_DETECTION_ENQUEUE_TASK_NAME,
+    SOURCE_WORK_KINDS,
     STRUCTURE_ENQUEUE_TASK_NAME,
     require_runnable_schedule,
+    work_kind_for_record,
 )
 from backend.metadata.sources.service import require_source
 from backend.metadata.sources.store import get_source_store
@@ -55,32 +59,32 @@ def dispatch_queued_job(job: JobRecord) -> str:
     return async_result.id
 
 
-def enqueue_structure_job(
+def enqueue_source_work_job(
     *,
+    kind: str,
     source_id: str,
     actor_user_id: str | None,
     trigger_ref: str,
     scheduled_for: datetime | None = None,
     running_timeout_sec: int | None = None,
 ) -> JobRecord:
-    """Create a schedule-triggered structure Job and dispatch the worker.
-
-    Does not enforce Source single-flight or Source usability — those are checked
-    when the structure Job executes.
-    """
+    """Create a schedule-triggered Source Job and dispatch the worker."""
+    spec = SOURCE_WORK_KINDS.get(kind)
+    if spec is None:
+        raise ScheduleKindInvalid()
     source = require_source(source_id)
     if source.kind != "database":
-        raise JobInputInvalid("structure jobs require a database Source")
+        raise JobInputInvalid(f"{kind} jobs require a database Source")
     if not source.engine or not source.access_ciphertext:
         raise JobInputInvalid("Source has no access configuration")
 
-    summary = f"structure · {source.key}"
+    summary = f"{spec.kind} · {source.key}"
     queued_line = format_job_log_line(
         level="info",
         message=f"queued for source {source.key}",
     )
     job = create_queued_job(
-        kind="structure",
+        kind=spec.kind,
         input={"source_id": source_id},
         created_by=actor_user_id,
         summary=summary,
@@ -94,7 +98,7 @@ def enqueue_structure_job(
     return get_job_store().get(job.id) or job
 
 
-def run_structure_schedule(
+def run_source_schedule(
     *,
     schedule_id: str,
     actor_user_id: str,
@@ -102,10 +106,14 @@ def run_structure_schedule(
 ) -> JobRecord:
     """Operator run-now: mint immediately without moving last_run_at / next_run_at."""
     record = require_runnable_schedule(schedule_id)
+    kind = work_kind_for_record(record)
+    if kind is None or kind not in SOURCE_WORK_KINDS:
+        raise JobInputInvalid("schedule work kind is not supported")
     raw = record.kwargs_json.get("source_id")
     if not isinstance(raw, str) or not raw:
-        raise JobInputInvalid("structure schedule is missing source_id")
-    job = enqueue_structure_job(
+        raise JobInputInvalid(f"{kind} schedule is missing source_id")
+    job = enqueue_source_work_job(
+        kind=kind,
         source_id=raw,
         actor_user_id=actor_user_id,
         trigger_ref=record.id,
@@ -119,13 +127,14 @@ def run_structure_schedule(
         resource_id=record.id,
         action="schedule.run",
         result="success",
-        detail={"kind": "structure", "source_id": raw, "job_id": job.id},
+        detail={"kind": kind, "source_id": raw, "job_id": job.id},
     )
     return job
 
 
 def _mint_on_session(
     *,
+    kind: str,
     schedule_id: str,
     source_id: str | None,
     scheduled_for: datetime,
@@ -134,6 +143,7 @@ def _mint_on_session(
     cadence: ScheduledTaskRecord | None,
     session: Any = None,
 ) -> dict[str, Any]:
+    spec = SOURCE_WORK_KINDS[kind]
     if source_id:
         source = get_source_store().get_source(source_id)
         source_key = source.key if source is not None else source_id
@@ -141,7 +151,7 @@ def _mint_on_session(
     else:
         source_key = "(missing target)"
         job_input = {}
-    summary = f"structure · {source_key}"
+    summary = f"{spec.kind} · {source_key}"
     queued_line = format_job_log_line(
         level="info",
         message=f"queued for source {source_key}",
@@ -151,7 +161,7 @@ def _mint_on_session(
     already = False
     try:
         job = create_queued_job(
-            kind="structure",
+            kind=spec.kind,
             input=job_input,
             created_by=None,
             summary=summary,
@@ -172,7 +182,6 @@ def _mint_on_session(
         if job is None:
             return {"status": "already_minted", "job_id": existing_id}
 
-    # UNIQUE collision still consumes the tick; use the existing Job's mint Instant.
     mint_at = job.created_at if already else now
     if cadence is not None:
         commit_due_mint(
@@ -193,8 +202,9 @@ def _mint_on_session(
     return {"status": "queued", "job_id": job.id, "job": job}
 
 
-def mint_structure_due_job(
+def mint_source_due_job(
     *,
+    kind: str,
     schedule_id: str,
     source_id: str | None,
     scheduled_for: datetime,
@@ -203,16 +213,13 @@ def mint_structure_due_job(
     cadence: ScheduledTaskRecord | None = None,
     session: Any = None,
 ) -> dict[str, Any]:
-    """Insert structure Job for a due tick (idempotent on scheduled_for).
-
-    INSERT Job and consume the due cursor in one transaction. UNIQUE collision
-    still advances next. A missing schedule row or missing target still inserts
-    then cancels. When ``session`` is provided, the caller owns the transaction.
-    """
+    if kind not in SOURCE_WORK_KINDS:
+        raise ScheduleKindInvalid()
     if cadence is None and session is None:
         cadence = get_schedule_store().get_by_id(schedule_id)
     if session is not None:
         return _mint_on_session(
+            kind=kind,
             schedule_id=schedule_id,
             source_id=source_id,
             scheduled_for=scheduled_for,
@@ -224,6 +231,7 @@ def mint_structure_due_job(
     settings = get_settings()
     if settings.store_backend == "memory":
         return _mint_on_session(
+            kind=kind,
             schedule_id=schedule_id,
             source_id=source_id,
             scheduled_for=scheduled_for,
@@ -234,6 +242,7 @@ def mint_structure_due_job(
         )
     with session_scope() as owned:
         return _mint_on_session(
+            kind=kind,
             schedule_id=schedule_id,
             source_id=source_id,
             scheduled_for=scheduled_for,
@@ -266,20 +275,18 @@ def _target_source_id(
     return raw if isinstance(raw, str) and raw else None
 
 
-@shared_task(name=STRUCTURE_ENQUEUE_TASK_NAME)
-def fire_scheduled_structure(
-    schedule_id: str | None = None,
-    source_id: str | None = None,
-    due_at: str | datetime | None = None,
+def _fire_scheduled_kind(
+    kind: str,
+    schedule_id: str | None,
+    source_id: str | None,
+    due_at: str | datetime | None,
 ) -> dict[str, str]:
-    """Beat tick: honor the delivered commitment Instant and mint a structure Job."""
     if not schedule_id:
-        logger.info("scheduled structure skipped: missing_schedule_id")
+        logger.info("scheduled %s skipped: missing_schedule_id", kind)
         return {"status": "skipped", "reason": "missing_schedule_id"}
 
     due = _resolve_due_at(due_at)
     if due is None:
-        # Domain deliveries must carry the Beat commitment Instant; no store fallback.
         return {"status": "missing_due_at"}
 
     def _decide_and_mint(session: Any) -> dict[str, Any]:
@@ -294,7 +301,8 @@ def fire_scheduled_structure(
         target_id = _target_source_id(source_id, record)
         cancel_immediately = bool(outcome.get("cancel_immediately")) or target_id is None
 
-        return mint_structure_due_job(
+        return mint_source_due_job(
+            kind=kind,
             schedule_id=schedule_id,
             source_id=target_id,
             scheduled_for=outcome["scheduled_for"],
@@ -316,7 +324,6 @@ def fire_scheduled_structure(
     if minted_status == "cancelled":
         return {"status": "cancelled", "job_id": str(minted["job_id"])}
     if minted_status == "already_minted":
-        # Repair: Job existed but may never have been dispatched.
         if isinstance(job, JobRecord) and job.status == "queued":
             fresh_after = get_schedule_store().get_by_id(schedule_id)
             if fresh_after is not None and fresh_after.enabled:
@@ -328,3 +335,23 @@ def fire_scheduled_structure(
         raise RuntimeError("due mint queued without a Job record")
     dispatch_queued_job(job)
     return {"status": "queued", "job_id": job.id}
+
+
+@shared_task(name=STRUCTURE_ENQUEUE_TASK_NAME)
+def fire_scheduled_structure(
+    schedule_id: str | None = None,
+    source_id: str | None = None,
+    due_at: str | datetime | None = None,
+) -> dict[str, str]:
+    """Beat tick: honor the delivered commitment Instant and mint a structure Job."""
+    return _fire_scheduled_kind("structure", schedule_id, source_id, due_at)
+
+
+@shared_task(name=JOIN_DETECTION_ENQUEUE_TASK_NAME)
+def fire_scheduled_join_detection(
+    schedule_id: str | None = None,
+    source_id: str | None = None,
+    due_at: str | datetime | None = None,
+) -> dict[str, str]:
+    """Beat tick: honor the delivered commitment Instant and mint a join-detection Job."""
+    return _fire_scheduled_kind("join_detection", schedule_id, source_id, due_at)

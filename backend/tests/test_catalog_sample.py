@@ -466,3 +466,46 @@ def test_permissions_catalog_includes_sample(client: TestClient) -> None:
     operator = get_role_store().get_by_key("operator")
     assert operator is not None
     assert "catalog:sample" not in operator.permissions
+
+
+def test_sample_rejects_routines(client: TestClient) -> None:
+    source = _make_source(client, key="routine-src")
+    now = utc_now()
+    record = CatalogObjectRecord(
+        id="obj_proc_1",
+        source_id=source["id"],
+        locator_key=f"obj/postgresql/{source['key']}/public/procedure/refresh_orders",
+        object_type="procedure",
+        schema_name="public",
+        name="refresh_orders",
+        ddl="CREATE PROCEDURE refresh_orders AS SELECT 1",
+        comment=None,
+        primary_key=None,
+        is_present=True,
+        business_name=None,
+        business_description=None,
+        object_category=None,
+        grain_description=None,
+        business_primary_key=None,
+        business_domain_id=None,
+        evidence_summary=None,
+        open_questions=None,
+        semantic_source=None,
+        business_semantics_ready=False,
+        semantics_updated_at=None,
+        last_structure_job_id="job_sample",
+        collected_at=now,
+        created_at=now,
+        updated_at=now,
+        columns=[],
+    )
+    apply_structure_snapshot(
+        source=require_source(source["id"]),
+        job_id="job_sample",
+        collected=[record],
+        schema_scope=None,
+        fail_safe_threshold=1.0,
+    )
+    resp = client.post(f"/objects/{record.id}/sample", json={"limit": 10})
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "SAMPLE_OBJECT_TYPE_UNSUPPORTED"

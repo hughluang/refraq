@@ -25,6 +25,7 @@ from backend.metadata.catalog import refs as catalog_refs
 from backend.metadata.catalog import semantics as catalog_semantics
 from backend.metadata.catalog import service as catalog_reads
 from backend.metadata.catalog import views as catalog_views
+from backend.metadata.catalog.join_origin import MCP_JOIN_ORIGIN
 from backend.metadata.query import service as query_service
 from backend.metadata.sources import service as source_service
 from backend.metadata.sources.store import get_source_store
@@ -499,13 +500,13 @@ def upsert_join(
     join_kind: str | None = "INNER",
     join_expression: str | None = None,
 ) -> str:
-    """Upsert a join edge (metadata:write, origin=mcp)."""
+    """Create a join edge (metadata:write, Join Change attester mcp). Duplicate pairs are refused."""
     try:
         user, token_id = _actor_from_token(authorization)
         _require(user, "metadata:write")
         from_col = catalog_refs.resolve_column_ref(from_column_locator_key)
         to_col = catalog_refs.resolve_column_ref(to_column_locator_key)
-        record = catalog_joins.upsert_join(
+        record = catalog_joins.create_join(
             from_column_id=from_col.id,
             to_column_id=to_col.id,
             evidence=evidence,
@@ -513,7 +514,61 @@ def upsert_join(
             actor_token_id=token_id,
             join_kind=join_kind or "INNER",
             join_expression=join_expression,
-            origin="mcp",
+            attester=MCP_JOIN_ORIGIN,
+        )
+        return _dumps({"join": _join_payload_from_record(record)})
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+@mcp.tool()
+def patch_join(
+    authorization: str,
+    join_id: str,
+    evidence: str,
+    join_kind: str | None = "INNER",
+    join_expression: str | None = None,
+) -> str:
+    """Amend a join edge (metadata:write). Does not change first attester."""
+    try:
+        user, token_id = _actor_from_token(authorization)
+        _require(user, "metadata:write")
+        record = catalog_joins.amend_join(
+            join_id=join_id,
+            evidence=evidence,
+            actor_user_id=user.id,
+            actor_token_id=token_id,
+            join_kind=join_kind or "INNER",
+            join_expression=join_expression,
+        )
+        return _dumps({"join": _join_payload_from_record(record)})
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+@mcp.tool()
+def reject_join(authorization: str, join_id: str) -> str:
+    """Reject a join pair (metadata:write). Blocks every writer until restore."""
+    try:
+        user, token_id = _actor_from_token(authorization)
+        _require(user, "metadata:write")
+        record = catalog_joins.reject_join(
+            join_id=join_id,
+            actor_user_id=user.id,
+            actor_token_id=token_id,
+        )
+        return _dumps({"join": _join_payload_from_record(record)})
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+@mcp.tool()
+def restore_join(authorization: str, join_id: str) -> str:
+    """Lift Join Rejection (metadata:write)."""
+    try:
+        user, token_id = _actor_from_token(authorization)
+        _require(user, "metadata:write")
+        record = catalog_joins.restore_join(
+            join_id=join_id,
+            actor_user_id=user.id,
+            actor_token_id=token_id,
         )
         return _dumps({"join": _join_payload_from_record(record)})
     except Exception as exc:  # noqa: BLE001
@@ -524,7 +579,12 @@ def upsert_joins(
     authorization: str,
     joins: list[dict[str, Any]],
 ) -> str:
-    """Batch upsert joins; all same Source (metadata:write, origin=mcp)."""
+    """Batch upsert joins; all same Source (metadata:write, Join Change attester mcp).
+
+    Asserted known pairs are skipped. Rejected pairs are reported (rejected_count /
+    items with is_rejected) and not restored. To re-assert, call restore_join; to
+    change evidence after restore, call patch_join.
+    """
     try:
         user, token_id = _actor_from_token(authorization)
         _require(user, "metadata:write")
@@ -564,21 +624,23 @@ def upsert_joins(
                     },
                     "created_count": 0,
                     "already_known_count": 0,
+                    "rejected_count": 0,
                     "skipped_count": len(skipped_joins),
                     "skipped_joins": skipped_joins,
                     "items": [],
                 }
             )
-        items, created, known = catalog_joins.upsert_joins_batch(
+        items, created, known, rejected = catalog_joins.upsert_joins_batch(
             joins=normalized,
             actor_user_id=user.id,
             actor_token_id=token_id,
-            origin="mcp",
+            attester=MCP_JOIN_ORIGIN,
         )
         return _dumps(
             {
                 "created_count": created,
                 "already_known_count": known,
+                "rejected_count": rejected,
                 "skipped_count": len(skipped_joins),
                 "skipped_joins": skipped_joins,
                 "items": [_join_payload_from_record(j) for j in items],

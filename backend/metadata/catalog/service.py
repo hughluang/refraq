@@ -150,7 +150,6 @@ def lookup_join_paths(
                 join_kind=hop.join.join_kind,
                 join_expression=hop.join.join_expression,
                 evidence=hop.join.evidence,
-                origin=hop.join.origin,
             )
             for hop in path.hops
         ]

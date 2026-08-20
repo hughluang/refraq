@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from contextlib import AbstractContextManager
+from datetime import datetime
 from functools import lru_cache
 from typing import Any, Protocol
 
@@ -22,12 +23,14 @@ from backend.metadata.catalog.records import (
     new_fk_id,
     new_index_id,
     new_join_id,
+    new_join_change_id,
     new_object_id,
 )
 from backend.metadata.catalog.store.memory import MemoryCatalogStore
 from backend.metadata.catalog.store.sql import SqlCatalogStore
 from backend.metadata.catalog.structure_merge import StructureRefreshPlan
 from backend.metadata.errors import CatalogObjectNotFound
+from backend.metadata.join_detection_jobs.reconcile import JoinDetectionPlan
 
 
 class StructureWrite(Protocol):
@@ -41,6 +44,8 @@ class StructureWrite(Protocol):
     ) -> tuple[list[CatalogObjectRecord], list[CatalogJoinRecord]]: ...
 
     def persist_plan(self, plan: StructureRefreshPlan) -> None: ...
+
+    def persist_join_detection_plan(self, plan: JoinDetectionPlan) -> int: ...
 
 
 class CatalogReadStore(Protocol):
@@ -143,14 +148,40 @@ class CatalogJoinStore(Protocol):
         created_by_user_id: str | None,
         join_kind: str = "INNER",
         join_expression: str | None = None,
-        origin: str = "human",
+        attester: str,
     ) -> CatalogJoinRecord: ...
+
+    def update_join(
+        self,
+        join_id: str,
+        *,
+        evidence: str,
+        join_kind: str,
+        join_expression: str | None,
+        actor_user_id: str | None,
+    ) -> CatalogJoinRecord | None: ...
+
+    def set_join_rejection(
+        self,
+        join_id: str,
+        *,
+        rejected_at: datetime | None,
+        rejected_by_user_id: str | None,
+        actor_user_id: str | None = None,
+    ) -> CatalogJoinRecord | None: ...
 
     def delete_join(self, join_id: str) -> bool: ...
 
+    def list_join_changes(
+        self,
+        *,
+        from_column_id: str,
+        to_column_id: str,
+    ) -> list[Any]: ...
+
 
 class CatalogStructureStore(Protocol):
-    def structure_write(
+    def catalog_write(
         self, source_id: str
     ) -> AbstractContextManager[StructureWrite]: ...
 
@@ -241,6 +272,7 @@ __all__ = [
     "new_object_id",
     "new_column_id",
     "new_join_id",
+    "new_join_change_id",
     "new_fk_id",
     "new_index_id",
 ]

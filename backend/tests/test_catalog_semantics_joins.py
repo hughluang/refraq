@@ -354,21 +354,21 @@ def test_join_upsert_list_delete_and_audit(client: TestClient) -> None:
     obj = _seed_object(source["id"])
     a, b = obj.columns[0].id, obj.columns[1].id
 
-    bad = client.put(
+    bad = client.post(
         "/joins",
         json={"from_column_id": a, "to_column_id": b, "evidence": "   "},
     )
     assert bad.status_code == 400
     assert bad.json()["code"] == "JOIN_EVIDENCE_REQUIRED"
 
-    self_loop = client.put(
+    self_loop = client.post(
         "/joins",
         json={"from_column_id": a, "to_column_id": a, "evidence": "same"},
     )
     assert self_loop.status_code == 400
     assert self_loop.json()["code"] == "JOIN_INVALID"
 
-    created = client.put(
+    created = client.post(
         "/joins",
         json={
             "from_column_id": a,
@@ -376,7 +376,7 @@ def test_join_upsert_list_delete_and_audit(client: TestClient) -> None:
             "evidence": "Verified FK in DDL",
         },
     )
-    assert created.status_code == 200, created.text
+    assert created.status_code == 201, created.text
     join = created.json()["join"]
     assert join["from_column_id"] == a
     assert join["to_column_id"] == b
@@ -384,7 +384,7 @@ def test_join_upsert_list_delete_and_audit(client: TestClient) -> None:
     assert join["id"].startswith("join_")
     join_id = join["id"]
 
-    again = client.put(
+    again = client.post(
         "/joins",
         json={
             "from_column_id": a,
@@ -392,9 +392,16 @@ def test_join_upsert_list_delete_and_audit(client: TestClient) -> None:
             "evidence": "Probe query succeeded",
         },
     )
-    assert again.status_code == 200
-    assert again.json()["join"]["id"] == join_id
-    assert again.json()["join"]["evidence"] == "Probe query succeeded"
+    assert again.status_code == 409
+    assert again.json()["code"] == "JOIN_ALREADY_DEFINED"
+
+    patched = client.patch(
+        f"/joins/{join_id}",
+        json={"evidence": "Probe query succeeded"},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["join"]["id"] == join_id
+    assert patched.json()["join"]["evidence"] == "Probe query succeeded"
 
     listed = client.get(f"/objects/{obj.id}/joins")
     assert listed.status_code == 200
@@ -406,8 +413,10 @@ def test_join_upsert_list_delete_and_audit(client: TestClient) -> None:
     assert len(items) == 1
     assert items[0]["id"] == join_id
 
-    events, _ = get_audit_store().list_events(action="join.upsert")
+    events, _ = get_audit_store().list_events(action="join.create")
     assert events
+    patch_events, _ = get_audit_store().list_events(action="join.patch")
+    assert patch_events
 
     deleted = client.delete(f"/joins/{join_id}")
     assert deleted.status_code == 204
@@ -428,11 +437,11 @@ def test_joins_http_pages(client: TestClient) -> None:
     source = _make_source(client, key="join-page")
     obj = _seed_object(source["id"], object_id="obj_page")
     a, b = obj.columns[0].id, obj.columns[1].id
-    first = client.put(
+    first = client.post(
         "/joins",
         json={"from_column_id": a, "to_column_id": b, "evidence": "first edge"},
     )
-    second = client.put(
+    second = client.post(
         "/joins",
         json={
             "from_column_id": a,
@@ -440,8 +449,8 @@ def test_joins_http_pages(client: TestClient) -> None:
             "evidence": "second edge",
         },
     )
-    assert first.status_code == 200, first.text
-    assert second.status_code == 200, second.text
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
     first_id = first.json()["join"]["id"]
     second_id = second.json()["join"]["id"]
 
@@ -462,7 +471,7 @@ def test_join_cross_source_rejected(client: TestClient) -> None:
     o1 = _seed_object(s1["id"], object_id="obj_1", col_a="col_1a", col_b="col_1b")
     o2 = _seed_object(s2["id"], object_id="obj_2", col_a="col_2a", col_b="col_2b")
 
-    resp = client.put(
+    resp = client.post(
         "/joins",
         json={
             "from_column_id": o1.columns[0].id,
@@ -477,7 +486,7 @@ def test_join_cross_source_rejected(client: TestClient) -> None:
 def test_join_missing_column(client: TestClient) -> None:
     source = _make_source(client)
     obj = _seed_object(source["id"])
-    resp = client.put(
+    resp = client.post(
         "/joins",
         json={
             "from_column_id": obj.columns[0].id,
@@ -493,11 +502,11 @@ def test_delete_source_clears_joins(client: TestClient) -> None:
     source = _make_source(client, key="del-joins")
     obj = _seed_object(source["id"])
     a, b = obj.columns[0].id, obj.columns[1].id
-    created = client.put(
+    created = client.post(
         "/joins",
         json={"from_column_id": a, "to_column_id": b, "evidence": "fk"},
     )
-    assert created.status_code == 200
+    assert created.status_code == 201
     join_id = created.json()["join"]["id"]
 
     client.patch(f"/sources/{source['id']}", json={"status": "disabled"})
@@ -598,7 +607,7 @@ def test_join_response_includes_depth_fields(client: TestClient) -> None:
     source = _make_source(client)
     obj = _seed_object(source["id"])
     a, b = obj.columns[0].id, obj.columns[1].id
-    created = client.put(
+    created = client.post(
         "/joins",
         json={
             "from_column_id": a,
@@ -607,10 +616,11 @@ def test_join_response_includes_depth_fields(client: TestClient) -> None:
             "join_kind": "LEFT",
         },
     )
-    assert created.status_code == 200, created.text
+    assert created.status_code == 201, created.text
     join = created.json()["join"]
     assert join["join_kind"] == "LEFT"
-    assert join["origin"] == "human"
+    assert "origin" not in join
+    assert join["created_by_user_id"] is not None
     assert join["join_expression"]
     assert join["from_column_locator_key"]
     assert join["to_column_locator_key"]

@@ -180,6 +180,22 @@ _OBJECT_SQL = text(
     LEFT JOIN all_tab_comments c
       ON c.owner = m.owner AND c.table_name = m.mview_name
     WHERE m.owner = :owner
+    UNION ALL
+    SELECT
+      o.owner AS schema_name,
+      o.object_name AS name,
+      'procedure' AS object_type,
+      CAST(NULL AS VARCHAR2(4000)) AS comment
+    FROM all_objects o
+    WHERE o.owner = :owner AND o.object_type = 'PROCEDURE'
+    UNION ALL
+    SELECT
+      o.owner AS schema_name,
+      o.object_name AS name,
+      'function' AS object_type,
+      CAST(NULL AS VARCHAR2(4000)) AS comment
+    FROM all_objects o
+    WHERE o.owner = :owner AND o.object_type = 'FUNCTION'
     ORDER BY 1, 2, 3
     """
 )
@@ -336,6 +352,22 @@ _DEFINITION_SQL = text(
       dbms_metadata.get_ddl('MATERIALIZED_VIEW', mview_name, owner) AS ddl
     FROM all_mviews
     WHERE owner = :owner
+    UNION ALL
+    SELECT
+      'procedure' AS object_type,
+      owner AS schema_name,
+      object_name AS object_name,
+      dbms_metadata.get_ddl('PROCEDURE', object_name, owner) AS ddl
+    FROM all_objects
+    WHERE owner = :owner AND object_type = 'PROCEDURE'
+    UNION ALL
+    SELECT
+      'function' AS object_type,
+      owner AS schema_name,
+      object_name AS object_name,
+      dbms_metadata.get_ddl('FUNCTION', object_name, owner) AS ddl
+    FROM all_objects
+    WHERE owner = :owner AND object_type = 'FUNCTION'
     """
 )
 
@@ -348,6 +380,24 @@ _DEFINITION_FALLBACK_SQL = text(
       text AS ddl
     FROM all_views
     WHERE owner = :owner
+    """
+)
+
+_ROUTINE_SOURCE_SQL = text(
+    """
+    SELECT
+      CASE type
+        WHEN 'PROCEDURE' THEN 'procedure'
+        ELSE 'function'
+      END AS object_type,
+      owner AS schema_name,
+      name AS object_name,
+      line AS line_no,
+      text AS text
+    FROM all_source
+    WHERE owner = :owner
+      AND type IN ('PROCEDURE', 'FUNCTION')
+    ORDER BY name, type, line
     """
 )
 
@@ -411,6 +461,7 @@ def _definition_rows(conn: object, params: dict[str, object]):
     except Exception:  # noqa: BLE001 — optional path
         pass
     try:
+        chunks: dict[str, list[str]] = {}
         for row in stream_mappings(conn, _DEFINITION_FALLBACK_SQL, params):
             if not row["ddl"]:
                 yield DefinitionRow(object_key=_row_object_key(row), ddl=None)
@@ -420,5 +471,11 @@ def _definition_rows(conn: object, params: dict[str, object]):
                 f"AS\n{row['ddl']}"
             )
             yield DefinitionRow(object_key=_row_object_key(row), ddl=ddl)
+        for row in stream_mappings(conn, _ROUTINE_SOURCE_SQL, params):
+            key = _row_object_key(row)
+            chunks.setdefault(key, []).append(str(row["text"] or ""))
+        for object_key, parts in chunks.items():
+            body = "".join(parts).strip()
+            yield DefinitionRow(object_key=object_key, ddl=body or None)
     except Exception:  # noqa: BLE001
         return

@@ -103,9 +103,14 @@ class CatalogJoinRecord:
     evidence: str
     join_kind: str
     join_expression: str | None
-    origin: str
     created_by_user_id: str | None
     created_at: datetime
+    rejected_at: datetime | None = None
+    rejected_by_user_id: str | None = None
+
+    @property
+    def is_rejected(self) -> bool:
+        return self.rejected_at is not None
 
 
 def new_object_id() -> str:
@@ -118,6 +123,10 @@ def new_column_id() -> str:
 
 def new_join_id() -> str:
     return f"join_{uuid.uuid4().hex[:12]}"
+
+
+def new_join_change_id() -> str:
+    return f"jch_{uuid.uuid4().hex[:12]}"
 
 
 def new_fk_id() -> str:

@@ -37,8 +37,8 @@ backend/
   jobs/                   # Job platform primitive
     models.py store.py …
     schemas/ routers/     # mechanism HTTP by Job id (get/cancel); no domain use-case HTTP
-  metadata/               # product domain: Source / Catalog / structure Job use cases
-    models.py errors.py sources/ catalog/ connectors/ structure_jobs/
+    metadata/               # product domain: Source / Catalog / structure and join-detection Job use cases
+    models.py errors.py sources/ catalog/ connectors/ structure_jobs/ join_detection_jobs/
     schemas/ routers/     # domain use-case HTTP
     mcp_server.py tasks.py
   worker/                 # runtime: Celery app, Beat, Scheduled Task, system tasks, discovery
@@ -94,8 +94,8 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Module | Published for |
 |--------|----------------|
 | `backend.metadata.errors` | Domain errors (subclass `AppError`, not `admin` concrete types) |
-| `backend.metadata.source_jobs` | Domain minting of structure **Jobs** via **Scheduled Task** (due / run-now); Beat Celery entry (`fire_scheduled_structure`). Does not enforce structure single-flight at mint — that is Job execution |
-| `backend.metadata.source_schedules` | Metadata facade onto platform schedules: operator projection (`public_schedule`: work_kind + target), opaque `owner_ref` register/withdraw, product-default seed on Source create / mutating Source update. Not schedule ownership by Source |
+| `backend.metadata.source_jobs` | Domain minting of structure and join-detection **Jobs** via **Scheduled Task** (due / run-now); Beat Celery entries (`fire_scheduled_structure`, `fire_scheduled_join_detection`). Does not enforce **Kind execution lock** at mint — that is Job execution |
+| `backend.metadata.source_schedules` | Metadata facade onto platform schedules: operator projection (`public_schedule`: work_kind + target), opaque `owner_ref` register/withdraw, per-kind product-default seed on Source create / mutating Source update. Closed work kinds: `structure`, `join_detection`. Not schedule ownership by Source |
 | `backend.metadata.type_mappings.seeds` | Product Type Mapping seed occupy (`ensure_product_type_mappings`) for Foundation Upgrade / Site Bootstrap |
 | `backend.metadata.mcp_server` | MCP tool host entry |
 | `backend.metadata.tasks` | Job kind handler dispatch (`run_job`); discovered by `worker` |
@@ -139,7 +139,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Domain async work units (`@shared_task` or equivalent) | Owning product domain; **discovered and registered by `worker`** |
 | Process probes (health/ready) | `core` (thin); not inside a product domain |
 
-**Use-case ownership:** follow the business language of the operation. Structure collection, Catalog, Source-scoped schedule facades and schedule run-now → `metadata`. User/Role/Session/PAT/Console foundation → `admin`. Job-id mechanism read/write → `jobs`. Scheduled Task mechanism HTTP → `worker` (not Console pages). Console nav may aggregate routes from multiple packages; that does **not** put all HTTP into `jobs`.
+**Use-case ownership:** follow the business language of the operation. Structure collection, SQL join detection, Catalog, Source-scoped schedule facades and schedule run-now → `metadata`. User/Role/Session/PAT/Console foundation → `admin`. Job-id mechanism read/write → `jobs`. Scheduled Task mechanism HTTP → `worker` (not Console pages). Console nav may aggregate routes from multiple packages; that does **not** put all HTTP into `jobs`.
 
 ## 5. Structure inside a package
 

@@ -20,6 +20,7 @@ from backend.metadata.errors import (
     QueryRowLimit,
     QueryTimeout,
     SampleFilterInvalid,
+    SampleObjectTypeUnsupported,
     SourceEngineUnsupported,
 )
 from backend.metadata.query.compile_sample import (
@@ -308,6 +309,10 @@ def run_catalog_sample(
             )
 
         obj = get_object(object_id)
+        if obj.object_type in {"procedure", "function"}:
+            raise SampleObjectTypeUnsupported(
+                f"Catalog Sample is not supported for {obj.object_type}"
+            )
         success_resource_id = obj.id
         source = require_source(obj.source_id)
         if not source.engine:

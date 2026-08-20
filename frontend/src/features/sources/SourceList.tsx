@@ -444,7 +444,7 @@ export function SourceList() {
                     type: "success",
                     message: t("sources.update.success"),
                   });
-                  if (updated.schedule) {
+                  if (updated.schedules && updated.schedules.length > 0) {
                     open?.({
                       type: "success",
                       message: t("schedules.seededOnSourceUpdate"),

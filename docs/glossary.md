@@ -192,7 +192,7 @@ Avoid free-form permission strings invented in the UI.
 ### Job
 
 A single durable asynchronous execution with an observable lifecycle (queued → running → terminal), discriminated by kind, carrying only a generic input payload that each domain interprets.
-Domains mint structure **Jobs** only via a **Scheduled Task** (due tick or run-now); the Job record is not owned by Source and is not a Metadata business object.
+Domains mint structure and join-detection **Jobs** only via a **Scheduled Task** (due tick or run-now); the Job record is not owned by Source and is not a Metadata business object.
 API (or a **Scheduled Task**) enqueues; a Celery worker executes; operator-visible status lives on the Postgres job record.
 Lifecycle stamps (`created_at`, `started_at`, `finished_at`, log line times) are **Instants**.
 Successful Jobs may carry a nullable generic **Job result**; failed/cancelled/fail-safe Jobs leave it null.
@@ -204,25 +204,31 @@ Avoid promoting domain foreign keys into universal Job fields.
 Avoid promoting kind-specific result fields (for example structure `class`) into universal Job fields.
 Avoid overloading enqueue **summary** with outcome, or writing `{}` to mean “no result”.
 Avoid treating a global env as the **Running Time Limit** definition, or conflating worker-lost with running-timeout.
+Avoid treating **Kind execution lock** or `JOB_ALREADY_ACTIVE` as a schedule mutex, Beat skip, or schedule HTTP error.
+
+### Kind execution lock
+
+Metadata control that serializes same-kind structure or join-detection **Job** execution per **Source**. After claim, the runner try-acquires a lock for `structure:{source_id}` or `join_detection:{source_id}` for the whole run (collect/parse through persist). Failure ends that Job `failed` with `JOB_ALREADY_ACTIVE`. Cross-kind may overlap. Authority is the lock, not the Job table. The **Scheduled Task** always mints.
+Avoid Source-wide cross-kind single-flight, Job-table collision scans, using the lock as a schedule mutex, or treating a stale Job row as still holding the lock after the worker connection is gone.
 
 ### Job result
 
-A nullable JSON outcome written when a Job reaches a successful terminal state. The platform does not interpret the document; each `kind` supplies its envelope (structure: `class`, `counts`, `structure_diff_id`).
-Avoid Celery result backend, **Management Audit Event** `result`, treating result as whether the Job succeeded, or treating structure `class` as a public Job attribute. Console Job detail may show the document uninterpreted; classification is read on **Structure Diff**.
+A nullable JSON outcome written when a Job reaches a successful terminal state. The platform does not interpret the document; each `kind` supplies its envelope (structure: `class`, `counts`, `structure_diff_id`; join detection: `join_detection.v1` counters).
+Avoid Celery result backend, **Management Audit Event** `result`, treating result as whether the Job succeeded, treating structure `class` as a public Job attribute, or treating join-detection `joins_upserted` as the count of pairs planned after the join-graph baseline (it is the count of rows this Job inserted). Console Job detail may show the document uninterpreted; classification is read on **Structure Diff**.
 
 ### Scheduled Task
 
 The platform **scheduling foundation**: a cadence intent stored in Postgres that commits a next-due Instant (`next_run_at`), consumes a due tick only by minting a domain **Job**, and can be paused or **withdrawn** by the calling domain via opaque **owner_ref**.
 Celery Beat reads these rows (single Beat replica). Distinct from any one **Job** instance.
 A platform mechanism like **Job**, not a product domain, not a Metadata business object, and **not owned by Source** (no Source FK; scheduler never parses Source).
-Operator-facing identity is a closed work kind plus target projected by a **domain facade** (first slice: Metadata structure + Source), not a Celery task name. Facades may register several structure schedules that *target* one Source; that target lives in facade/kwargs projection, not as schedule ownership.
+Operator-facing identity is a closed work kind plus target projected by a **domain facade** (`structure` and `join_detection` targeting a **Source**), not a Celery task name. Facades may register several schedules of each kind that *target* one Source; that target lives in facade/kwargs projection, not as schedule ownership.
 Cron wall clock uses **Schedule Timezone**; `last_run_at` is the consumed-due cursor Instant; `next_run_at` is the stored commitment (null when paused). An optional **Running Time Limit** on the definition is copied onto each minted **Job**. Operator run-now enqueues without moving those fields. Observation “last run” joins related **Jobs**.
 Console operator copy, docs that name the row, and identifiers whose referent is this entity use **schedule**, not clock.
 Avoid storing product schedules only in Redis Beat state or static code when operators need to change them.
 Avoid treating Celery `timezone` as the business schedule zone.
 Avoid treating a Scheduled Task as a Job, putting cron **on** a **Source**, or treating Source delete as an ORM cascade into schedules.
 Avoid scanning schedule kwargs for `source_id` as the withdraw key (use **owner_ref**).
-Avoid treating structure single-flight as a schedule mutex, Beat skip, or schedule HTTP conflict.
+Avoid treating **Kind execution lock** (or the retired phrases “Source catalog-write single-flight” / “structure single-flight”) as a schedule mutex, Beat skip, or schedule HTTP conflict.
 Avoid treating Scheduled Task **as** a DAG/workflow; dispatched work may later be those kinds.
 Avoid Clock as a product noun, Console label, or identifier for this entity. Avoid renaming Instant test `Clock` / `get_clock`, cron wall-clock English, or ADR file `0025-clock-first-structure-jobs.md`.
 Avoid treating stored `next_run_at` as a debt of missed ticks or computing it only on GET.
@@ -343,13 +349,24 @@ Avoid conflating with **Source** (data origin) or **Identity Source**.
 
 ### Join Origin
 
-Creation provenance of a join edge: `foreign_key`, `human`, or `mcp`.
-Structure refresh must not delete human/mcp edges.
+First attester of a directed column pair, recorded on the **Join Change** create event: `foreign_key`, `sql_lineage`, `human`, or `mcp`. Not a column on the live join row. Not a rank and not the current witness.
+`sql_lineage` is a discovered SQL attestation, not a claim that current DDL still contains the join.
+Avoid storing Join Origin on `catalog_joins`; treating origin as authority, precedence, last-writer, or “FK still present”; encoding **Join Rejection** as an origin value.
+
+### Join Change
+
+An append-only fact ledger on a directed column pair: create (includes first attester / **Join Origin**), human/MCP amend, **Join Rejection**, restore. Not a **Management Audit Event** and not a **Structure Diff**. List, **Join Path**, and public join HTTP do not read it. There is no PAT/MCP resource. A collected FK disappearing is recorded on **Structure Diff** (`fk_removed`) and Current catalog foreign keys; it does not append here and does not mutate the join row. Join detection does not append when the pair already has a row.
+Avoid appending “still seen” or SQL corroboration; writing automatic lineage into **Management Audit Event**; stuffing join lineage into **Structure Diff**; recording FK-gone as a join-row reclaim or delete; joining **Join Change** on catalog list or path reads.
+
+### Join Rejection
+
+A durable operator judgment that a directed column pair carries no relationship. Stored as `rejected_at` (and `rejected_by_user_id`) on the unique join row; evidence stays. Rejected pairs are omitted from **Join Path**. List endpoints include rejected rows by default. Single HTTP/MCP create or amend on a rejected pair is refused. Batch create / `upsert_joins` report rejected pairs without restoring. Automatic Jobs skip an existing row, including a rejected one. A later collected FK does not restore. FK collection and Structure Diff are unaffected.
+Avoid a second uniqueness table, implicit revive by upsert or by structure seeing a FK, treating rejection as a delete, or writing **Join Rejection** because a collected FK disappeared.
 
 ### Join Path
 
-A multi-hop chain of join edges discovered by graph search between objects or columns.
-Avoid guessing paths from column-name similarity alone.
+A multi-hop chain of join edges discovered by graph search between objects or columns. It walks a join when endpoint columns are present and the pair is not rejected.
+Avoid guessing paths from column-name similarity alone. Avoid walking rejected joins as relationships. Avoid gating the path on current FK, SQL discovery, User create, or **Join Origin**.
 
 ### Catalog Sample
 

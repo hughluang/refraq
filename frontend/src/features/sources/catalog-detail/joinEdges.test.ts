@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   columnLabel,
   columnOptionLabel,
-  isAutoDerivedJoin,
+  joinRowActions,
+  joinRowState,
   mergeSelectedOption,
   retainSelectedOption,
   validateJoinDraft,
@@ -29,11 +30,39 @@ describe("validateJoinDraft", () => {
   });
 });
 
-describe("isAutoDerivedJoin", () => {
-  it("is true only for foreign_key origin", () => {
-    expect(isAutoDerivedJoin("foreign_key")).toBe(true);
-    expect(isAutoDerivedJoin("human")).toBe(false);
-    expect(isAutoDerivedJoin(null)).toBe(false);
+describe("joinRowState", () => {
+  it("classifies rejected, automated, and manual rows", () => {
+    expect(
+      joinRowState({ created_by_user_id: null, is_rejected: true }),
+    ).toBe("rejected");
+    expect(joinRowState({ created_by_user_id: null })).toBe("automated");
+    expect(joinRowState({ created_by_user_id: "user_1" })).toBe("manual");
+  });
+});
+
+describe("joinRowActions", () => {
+  it("exposes restore only for rejected rows", () => {
+    expect(joinRowActions("rejected")).toEqual({
+      amend: false,
+      reject: false,
+      restore: true,
+      delete: false,
+    });
+  });
+
+  it("lets operators amend or reject any asserted row, and delete only manual ones", () => {
+    expect(joinRowActions("automated")).toEqual({
+      amend: true,
+      reject: true,
+      restore: false,
+      delete: false,
+    });
+    expect(joinRowActions("manual")).toEqual({
+      amend: true,
+      reject: true,
+      restore: false,
+      delete: true,
+    });
   });
 });
 

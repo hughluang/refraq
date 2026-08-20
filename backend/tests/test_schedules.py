@@ -31,7 +31,10 @@ from backend.core.time import (  # noqa: E402
 from backend.jobs.store import claim_queued, create_queued_job, get_job_store, reset_job_store  # noqa: E402
 from backend.main import app  # noqa: E402
 from backend.metadata import source_jobs as source_jobs_mod  # noqa: E402
-from backend.metadata.source_jobs import fire_scheduled_structure  # noqa: E402
+from backend.metadata.source_jobs import (  # noqa: E402
+    fire_scheduled_join_detection,
+    fire_scheduled_structure,
+)
 from backend.metadata.source_schedules import (  # noqa: E402
     STRUCTURE_ENQUEUE_TASK_NAME,
     public_schedule,
@@ -173,10 +176,10 @@ def test_post_inserts_multiple_structure_schedules(client: TestClient) -> None:
     listed = client.get("/schedules")
     assert listed.status_code == 200
     items = listed.json()["items"]
-    assert len(items) == 3
+    assert len(items) == 4
     related = client.get(f"/sources/{source['id']}/schedules")
     assert related.status_code == 200
-    assert len(related.json()["items"]) == 3
+    assert len(related.json()["items"]) == 4
     assert "task_name" not in related.json()["items"][0]
 
 
@@ -238,8 +241,9 @@ def test_patch_and_delete_domain_schedule(client: TestClient) -> None:
     related = client.get(f"/sources/{source['id']}/schedules")
     assert related.status_code == 200
     remaining = related.json()["items"]
-    assert len(remaining) == 1
+    assert len(remaining) == 2
     assert remaining[0]["id"] != schedule_id
+    assert remaining[1]["id"] != schedule_id
 
 
 def test_patch_empty_name_restores_default(client: TestClient) -> None:
@@ -269,6 +273,35 @@ def test_patch_empty_name_restores_default(client: TestClient) -> None:
     blank = client.patch(f"/schedules/{schedule_id}", json={"name": "   "})
     assert blank.status_code == 200
     assert blank.json()["schedule"]["name"] == "structure · mes-prod"
+
+
+def test_patch_empty_name_restores_join_detection_default(client: TestClient) -> None:
+    source = _make_source(client)
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "join_detection",
+            "cron": "0 4 * * *",
+            "schedule_timezone": "UTC",
+            "enabled": True,
+            "name": "custom detection",
+        },
+    )
+    assert created.status_code == 201, created.text
+    schedule_id = created.json()["schedule"]["id"]
+    assert created.json()["schedule"]["name"] == "custom detection"
+
+    emptied = client.patch(f"/schedules/{schedule_id}", json={"name": ""})
+    assert emptied.status_code == 200, emptied.text
+    assert emptied.json()["schedule"]["name"] == "join_detection · mes-prod"
+
+    renamed = client.patch(
+        f"/schedules/{schedule_id}", json={"name": "keep me"}
+    )
+    assert renamed.status_code == 200
+    blank = client.patch(f"/schedules/{schedule_id}", json={"name": "   "})
+    assert blank.status_code == 200
+    assert blank.json()["schedule"]["name"] == "join_detection · mes-prod"
 
 
 def test_create_does_not_fire_immediately(
@@ -907,26 +940,33 @@ def _insert_source_without_schedule(*, key: str, name: str | None = None):
     )
 
 
-def test_source_create_seeds_default_structure_schedule(client: TestClient) -> None:
+def test_source_create_seeds_default_source_schedules(client: TestClient) -> None:
     from backend.admin.audit_store import get_audit_store
-    from backend.metadata.source_schedules import DEFAULT_STRUCTURE_CRON
+    from backend.metadata.source_schedules import (
+        DEFAULT_JOIN_DETECTION_CRON,
+        DEFAULT_STRUCTURE_CRON,
+    )
 
     resp = client.post("/sources", json=_source_body("seed-src"))
     assert resp.status_code == 201, resp.text
     assert "schedule" not in resp.json()
+    assert "schedules" not in resp.json()
     source = resp.json()["source"]
     listed = client.get(f"/sources/{source['id']}/schedules")
     assert listed.status_code == 200
     items = listed.json()["items"]
-    assert len(items) == 1
-    seed = items[0]
-    assert seed["work_kind"] == "structure"
-    assert seed["cron"] == DEFAULT_STRUCTURE_CRON
-    assert seed["schedule_timezone"] == "UTC"
-    assert seed["enabled"] is True
-    assert seed["interval_seconds"] is None
-    assert seed["running_timeout_sec"] is None
-    assert seed["name"] == "structure · seed-src"
+    assert len(items) == 2
+    by_kind = {item["work_kind"]: item for item in items}
+    structure = by_kind["structure"]
+    join_detection = by_kind["join_detection"]
+    assert structure["cron"] == DEFAULT_STRUCTURE_CRON
+    assert join_detection["cron"] == DEFAULT_JOIN_DETECTION_CRON
+    assert structure["schedule_timezone"] == "UTC"
+    assert join_detection["schedule_timezone"] == "UTC"
+    assert structure["enabled"] is True
+    assert join_detection["enabled"] is True
+    assert structure["name"] == "structure · seed-src"
+    assert join_detection["name"] == "join_detection · seed-src"
     jobs = client.get("/jobs")
     assert jobs.status_code == 200
     assert jobs.json()["items"] == []
@@ -936,13 +976,15 @@ def test_source_create_seeds_default_structure_schedule(client: TestClient) -> N
     source_events, _ = get_audit_store().list_events(action="source.create")
     schedule_events, _ = get_audit_store().list_events(action="schedule.create")
     assert len(source_events) == 1
-    assert len(schedule_events) == 1
+    assert len(schedule_events) == 2
     assert source_events[0].actor_user_id == actor_id
-    assert schedule_events[0].actor_user_id == actor_id
-    assert schedule_events[0].detail == {
-        "kind": "structure",
-        "source_id": source["id"],
+    assert {event.detail["kind"] for event in schedule_events} == {
+        "structure",
+        "join_detection",
     }
+    for event in schedule_events:
+        assert event.actor_user_id == actor_id
+        assert event.detail["source_id"] == source["id"]
 
 
 def test_sources_write_without_jobs_run_still_seeds(client: TestClient) -> None:
@@ -980,7 +1022,7 @@ def test_sources_write_without_jobs_run_still_seeds(client: TestClient) -> None:
         for record in records
         if record.kwargs_json.get("source_id") == source_id
     ]
-    assert len(matches) == 1
+    assert len(matches) == 2
 
 
 def test_seed_failure_does_not_leave_source(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -992,7 +1034,7 @@ def test_seed_failure_does_not_leave_source(monkeypatch: pytest.MonkeyPatch) -> 
         raise RuntimeError("seed failed")
 
     monkeypatch.setattr(
-        "backend.metadata.sources.service.seed_default_structure_schedule",
+        "backend.metadata.sources.service.seed_default_source_schedules",
         boom,
     )
     with pytest.raises(RuntimeError, match="seed failed"):
@@ -1008,15 +1050,16 @@ def test_seed_failure_does_not_leave_source(monkeypatch: pytest.MonkeyPatch) -> 
     assert get_schedule_store().list(include_system=False) == ([], 0)
 
 
-def test_patch_inserts_when_zero_structure_schedules(client: TestClient) -> None:
+def test_patch_inserts_when_zero_source_schedules(client: TestClient) -> None:
     from backend.admin.audit_store import get_audit_store
     from backend.metadata.source_schedules import (
+        DEFAULT_JOIN_DETECTION_CRON,
         DEFAULT_STRUCTURE_CRON,
-        list_structure_schedules,
+        list_source_schedules,
     )
 
     source = _insert_source_without_schedule(key="ensure-src", name="Ensure")
-    assert list_structure_schedules(source.id) == ([], 0)
+    assert list_source_schedules(source.id) == ([], 0)
     me = client.get("/auth/me")
     assert me.status_code == 200
     actor_id = me.json()["user"]["id"]
@@ -1024,40 +1067,48 @@ def test_patch_inserts_when_zero_structure_schedules(client: TestClient) -> None
     assert patched.status_code == 200, patched.text
     body = patched.json()
     assert "source" in body
-    assert "schedule" in body
-    assert body["schedule"]["cron"] == DEFAULT_STRUCTURE_CRON
-    assert body["schedule"]["work_kind"] == "structure"
-    items, total = list_structure_schedules(source.id)
-    assert total == 1
-    assert len(items) == 1
-    assert items[0].id == body["schedule"]["id"]
+    assert "schedule" not in body
+    schedules = body["schedules"]
+    assert len(schedules) == 2
+    by_kind = {item["work_kind"]: item for item in schedules}
+    assert by_kind["structure"]["cron"] == DEFAULT_STRUCTURE_CRON
+    assert by_kind["join_detection"]["cron"] == DEFAULT_JOIN_DETECTION_CRON
+    items, total = list_source_schedules(source.id)
+    assert total == 2
+    assert len(items) == 2
     events, _ = get_audit_store().list_events(action="schedule.create")
-    assert len(events) == 1
-    assert events[0].actor_user_id == actor_id
-    assert events[0].detail == {"kind": "structure", "source_id": source.id}
+    assert len(events) == 2
+    assert {event.detail["kind"] for event in events} == {
+        "structure",
+        "join_detection",
+    }
+    for event in events:
+        assert event.actor_user_id == actor_id
+        assert event.detail["source_id"] == source.id
     again = client.patch(f"/sources/{source.id}", json={"name": "Ensure again"})
     assert again.status_code == 200
-    assert "schedule" not in again.json()
-    assert list_structure_schedules(source.id)[1] == 1
+    assert "schedules" not in again.json()
+    assert list_source_schedules(source.id)[1] == 2
 
 
 def test_patch_skips_when_disabled_schedule_present(client: TestClient) -> None:
     source = _make_source(client, key="disabled-seed")
     items = client.get(f"/sources/{source['id']}/schedules").json()["items"]
-    assert len(items) == 1
-    patched_sched = client.patch(
-        f"/schedules/{items[0]['id']}", json={"enabled": False}
-    )
-    assert patched_sched.status_code == 200
+    assert len(items) == 2
+    for item in items:
+        patched_sched = client.patch(
+            f"/schedules/{item['id']}", json={"enabled": False}
+        )
+        assert patched_sched.status_code == 200
     patched = client.patch(
         f"/sources/{source['id']}", json={"name": "disabled-seed-renamed"}
     )
     assert patched.status_code == 200
-    assert "schedule" not in patched.json()
+    assert "schedules" not in patched.json()
     after = client.get(f"/sources/{source['id']}/schedules").json()["items"]
-    assert len(after) == 1
-    assert after[0]["id"] == items[0]["id"]
-    assert after[0]["enabled"] is False
+    assert len(after) == 2
+    assert {item["id"] for item in after} == {item["id"] for item in items}
+    assert all(item["enabled"] is False for item in after)
 
 
 def test_delete_last_schedule_then_patch_reinserts(client: TestClient) -> None:
@@ -1065,9 +1116,10 @@ def test_delete_last_schedule_then_patch_reinserts(client: TestClient) -> None:
 
     source = _make_source(client, key="wipe-seed")
     items = client.get(f"/sources/{source['id']}/schedules").json()["items"]
-    assert len(items) == 1
-    deleted = client.delete(f"/schedules/{items[0]['id']}")
-    assert deleted.status_code == 204
+    assert len(items) == 2
+    for item in items:
+        deleted = client.delete(f"/schedules/{item['id']}")
+        assert deleted.status_code == 204
     empty = client.get(f"/sources/{source['id']}/schedules")
     assert empty.json()["items"] == []
     reset_audit_store()
@@ -1077,29 +1129,36 @@ def test_delete_last_schedule_then_patch_reinserts(client: TestClient) -> None:
         f"/sources/{source['id']}", json={"name": "wipe-seed-touched"}
     )
     assert patched.status_code == 200, patched.text
-    seeded = patched.json()["schedule"]
-    assert seeded["id"] != items[0]["id"]
+    seeded = patched.json()["schedules"]
+    assert len(seeded) == 2
+    seeded_ids = {item["id"] for item in seeded}
+    assert seeded_ids.isdisjoint({item["id"] for item in items})
     after = client.get(f"/sources/{source['id']}/schedules").json()["items"]
-    assert len(after) == 1
-    assert after[0]["id"] == seeded["id"]
+    assert {item["id"] for item in after} == seeded_ids
     events, _ = get_audit_store().list_events(action="schedule.create")
-    assert len(events) == 1
-    assert events[0].actor_user_id == actor_id
-    assert events[0].detail == {"kind": "structure", "source_id": source["id"]}
+    assert len(events) == 2
+    assert {event.detail["kind"] for event in events} == {
+        "structure",
+        "join_detection",
+    }
+    for event in events:
+        assert event.actor_user_id == actor_id
+        assert event.detail["source_id"] == source["id"]
 
 
 def test_patch_same_name_or_empty_body_does_not_seed(client: TestClient) -> None:
-    from backend.metadata.source_schedules import list_structure_schedules
+    from backend.metadata.source_schedules import list_source_schedules
 
     source = _insert_source_without_schedule(key="noop-seed", name="Noop")
     same = client.patch(f"/sources/{source.id}", json={"name": "Noop"})
     assert same.status_code == 200
-    assert "schedule" not in same.json()
-    assert list_structure_schedules(source.id) == ([], 0)
+    assert "schedules" not in same.json()
+    assert list_source_schedules(source.id) == ([], 0)
     empty = client.patch(f"/sources/{source.id}", json={})
     assert empty.status_code == 200
     assert "schedule" not in empty.json()
-    assert list_structure_schedules(source.id) == ([], 0)
+    assert "schedules" not in empty.json()
+    assert list_source_schedules(source.id) == ([], 0)
 
 
 def test_cron_current_slot_mints(
@@ -1389,6 +1448,32 @@ def test_owner_ref_written_and_withdraw_on_source_delete(
     assert stored.status == "cancelled"
 
 
+def test_hard_delete_withdraws_both_schedule_kinds(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "backend.metadata.source_jobs.run_job.apply_async",
+        lambda *a, **k: type("R", (), {"id": "eager-stub"})(),
+    )
+    source = _make_source(client, key="withdraw-kinds")
+    listed = client.get(f"/sources/{source['id']}/schedules")
+    assert listed.status_code == 200, listed.text
+    kinds = {item["work_kind"] for item in listed.json()["items"]}
+    assert kinds == {"structure", "join_detection"}
+    ids = {item["id"] for item in listed.json()["items"]}
+    assert client.patch(
+        f"/sources/{source['id']}", json={"status": "disabled"}
+    ).status_code == 200
+    assert client.delete(f"/sources/{source['id']}").status_code == 204
+    for schedule_id in ids:
+        assert get_schedule_store().get_by_id(schedule_id) is None
+    leftover, leftover_total = get_schedule_store().list_by_owner_ref(
+        f"metadata:source:{source['id']}"
+    )
+    assert leftover_total == 0
+    assert leftover == []
+
+
 def test_schedule_last_job_observation(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1494,6 +1579,55 @@ def test_unique_collision_still_advances_next(
         assert refreshed is not None
         assert refreshed.last_run_at == existing.created_at
         assert refreshed.next_run_at == parse_instant("2026-08-16T02:00:00Z")
+    finally:
+        reset_clock()
+
+
+def test_join_detection_unique_collision_already_minted(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    monkeypatch.setattr(
+        "backend.metadata.source_jobs.run_job.apply_async",
+        lambda *a, **k: type("R", (), {"id": "eager-stub"})(),
+    )
+    clock = FixedClock(parse_instant("2026-08-15T04:00:05Z"))
+    set_clock(clock)
+    try:
+        source = _make_source(client, key="uniq-join")
+        items = client.get(f"/sources/{source['id']}/schedules").json()["items"]
+        schedule = next(item for item in items if item["work_kind"] == "join_detection")
+        schedule_id = schedule["id"]
+        slot = parse_instant("2026-08-15T04:00:00Z")
+        record = get_schedule_store().get_by_id(schedule_id)
+        assert record is not None
+        get_schedule_store().upsert(
+            replace(
+                record,
+                next_run_at=slot,
+                last_run_at=parse_instant("2026-08-14T04:00:00Z"),
+            )
+        )
+        existing = create_queued_job(
+            kind="join_detection",
+            input={"source_id": source["id"]},
+            trigger_kind="schedule",
+            trigger_ref=schedule_id,
+            scheduled_for=slot,
+            created_at=clock.now(),
+        )
+        result = fire_scheduled_join_detection(
+            schedule_id=schedule_id, due_at=_due_at(schedule_id)
+        )
+        assert result["status"] == "already_minted"
+        assert result["job_id"] == existing.id
+        jobs, _ = get_job_store().list(kind="join_detection")
+        assert len(jobs) == 1
+        refreshed = get_schedule_store().get_by_id(schedule_id)
+        assert refreshed is not None
+        assert refreshed.last_run_at == existing.created_at
+        assert refreshed.next_run_at == parse_instant("2026-08-16T04:00:00Z")
     finally:
         reset_clock()
 
@@ -1674,4 +1808,50 @@ def test_interval_catchup_scheduled_for_and_next(
         assert refreshed.next_run_at == clock.now() + timedelta(seconds=3600)
     finally:
         reset_clock()
+
+
+def test_create_join_detection_schedule_and_run_now(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "backend.metadata.join_detection_jobs.service.run_join_detection_job",
+        lambda job_id: {"status": "succeeded"},
+    )
+    source = _make_source(client, key="join-sched")
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "join_detection",
+            "cron": "0 4 * * *",
+            "schedule_timezone": "UTC",
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()["schedule"]
+    assert body["work_kind"] == "join_detection"
+    assert body["key"] == f"join_detection:{source['id']}:{body['id']}"
+    ran = client.post(f"/schedules/{body['id']}/run")
+    assert ran.status_code == 202, ran.text
+    assert ran.json()["job"]["kind"] == "join_detection"
+    assert ran.json()["job"]["input"] == {"source_id": source["id"]}
+
+
+def test_patch_restores_missing_kind_only(client: TestClient) -> None:
+    source = _make_source(client, key="partial-seed")
+    items = client.get(f"/sources/{source['id']}/schedules").json()["items"]
+    by_kind = {item["work_kind"]: item for item in items}
+    deleted = client.delete(f"/schedules/{by_kind['join_detection']['id']}")
+    assert deleted.status_code == 204
+    patched = client.patch(
+        f"/sources/{source['id']}", json={"name": "partial-seed-touched"}
+    )
+    assert patched.status_code == 200, patched.text
+    seeded = patched.json()["schedules"]
+    assert len(seeded) == 1
+    assert seeded[0]["work_kind"] == "join_detection"
+    after = client.get(f"/sources/{source['id']}/schedules").json()["items"]
+    kinds = {item["work_kind"] for item in after}
+    assert kinds == {"structure", "join_detection"}
+    assert by_kind["structure"]["id"] in {item["id"] for item in after}
 

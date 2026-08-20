@@ -15,7 +15,7 @@ export function listObjectJoins(
   );
 }
 
-export function upsertJoin(body: {
+export function createJoin(body: {
   from_column_id: string;
   to_column_id: string;
   evidence: string;
@@ -23,9 +23,36 @@ export function upsertJoin(body: {
   join_expression?: string | null;
 }) {
   return apiClient<{ join: CatalogJoin }>("/joins", {
-    method: "PUT",
+    method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+  });
+}
+
+export function patchJoin(
+  joinId: string,
+  body: {
+    evidence: string;
+    join_kind?: string;
+    join_expression?: string | null;
+  },
+) {
+  return apiClient<{ join: CatalogJoin }>(`/joins/${joinId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function rejectJoin(joinId: string) {
+  return apiClient<{ join: CatalogJoin }>(`/joins/${joinId}/reject`, {
+    method: "POST",
+  });
+}
+
+export function restoreJoin(joinId: string) {
+  return apiClient<{ join: CatalogJoin }>(`/joins/${joinId}/restore`, {
+    method: "POST",
   });
 }
 
