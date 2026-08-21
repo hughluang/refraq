@@ -71,6 +71,7 @@ Self-deploy exposes the Management Console (web) to browsers.
 The browser calls same-origin `/api`; Next.js rewrites to the internal API service.
 `REFRAQ_API_UPSTREAM` is fixed at frontend image build time for deploy.
 Postgres and Redis are **Backing Services**; app processes stay share-nothing.
+The Session cookie's `Secure` flag follows browser-facing HTTPS stamped by the web `/api` rewrite (`REFRAQ_BROWSER_FACING_PROTO`, default `http`), not `REFRAQ_ENV` and not client-supplied `X-Forwarded-Proto`. HTTP self-deploy must keep the Session.
 
 ## 4. Auth Architecture
 

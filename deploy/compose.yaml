@@ -1,9 +1,11 @@
+name: refraq-prod
+
 services:
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: refraq
-      POSTGRES_PASSWORD: refraq
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: refraq
       TZ: UTC
     volumes:
@@ -34,13 +36,13 @@ services:
       REFRAQ_API_PORT: 8000
       REFRAQ_STORE_BACKEND: persistent
       TZ: UTC
-      DATABASE_URL: postgresql+psycopg://refraq:refraq@postgres:5432/refraq
+      DATABASE_URL: postgresql+psycopg://refraq:${POSTGRES_PASSWORD}@postgres:5432/refraq
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/2
-      REFRAQ_SECRETS_MASTER_KEY: change-me-secrets-master-key
-      ADMIN_SESSION_SECRET: change-me-in-production
-      INITIAL_ADMIN_ACCOUNT: root
-      INITIAL_ADMIN_PASSWORD: change-me
+      REFRAQ_SECRETS_MASTER_KEY: ${REFRAQ_SECRETS_MASTER_KEY}
+      ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET}
+      INITIAL_ADMIN_ACCOUNT: ${INITIAL_ADMIN_ACCOUNT:-root}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD}
     depends_on:
       postgres:
         condition: service_healthy
@@ -68,10 +70,10 @@ services:
       REFRAQ_ENV: prod
       REFRAQ_STORE_BACKEND: persistent
       TZ: UTC
-      DATABASE_URL: postgresql+psycopg://refraq:refraq@postgres:5432/refraq
+      DATABASE_URL: postgresql+psycopg://refraq:${POSTGRES_PASSWORD}@postgres:5432/refraq
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/2
-      REFRAQ_SECRETS_MASTER_KEY: change-me-secrets-master-key
+      REFRAQ_SECRETS_MASTER_KEY: ${REFRAQ_SECRETS_MASTER_KEY}
     depends_on:
       postgres:
         condition: service_healthy
@@ -90,7 +92,7 @@ services:
       REFRAQ_ENV: prod
       REFRAQ_STORE_BACKEND: persistent
       TZ: UTC
-      DATABASE_URL: postgresql+psycopg://refraq:refraq@postgres:5432/refraq
+      DATABASE_URL: postgresql+psycopg://refraq:${POSTGRES_PASSWORD}@postgres:5432/refraq
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/2
     depends_on:
@@ -110,9 +112,9 @@ services:
     environment:
       HOSTNAME: 0.0.0.0
       PORT: 3000
+      REFRAQ_BROWSER_FACING_PROTO: ${REFRAQ_BROWSER_FACING_PROTO:-http}
     ports:
-      # Remap the host side if 3000 is already in use locally.
-      - "3000:3000"
+      - "${REFRAQ_WEB_PORT:-3001}:3000"
     depends_on:
       api:
         condition: service_healthy

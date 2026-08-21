@@ -91,6 +91,7 @@ Recommended first-version session policy:
 - session duration: 8 hours
 - idle refresh is optional in v1
 - multiple simultaneous sessions are allowed unless later restricted
+- Session cookie `Secure` follows browser-facing HTTPS stamped by the Console `/api` rewrite (`REFRAQ_BROWSER_FACING_PROTO` → `X-Forwarded-Proto`, then the request URL scheme), not `REFRAQ_ENV` and not client-supplied forwarded headers. HTTP self-deploy must keep the Session; set `REFRAQ_BROWSER_FACING_PROTO=https` when TLS terminates in front of the Console.
 
 Frontend navigation around the session boundary:
 

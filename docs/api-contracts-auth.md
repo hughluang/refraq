@@ -228,7 +228,7 @@ The first version should aim for:
 - `SameSite=Lax`
 - `Path=/`
 
-Use `Secure` in environments where HTTPS is enabled.
+Use `Secure` when the browser-facing request is HTTPS (`X-Forwarded-Proto` stamped by the Management Console `/api` rewrite from `REFRAQ_BROWSER_FACING_PROTO`, default `http`, then the request URL scheme). The rewrite overwrites client-supplied `X-Forwarded-Proto`; `REFRAQ_ENV` does not control this. HTTP self-deploy must keep the Session.
 
 ## 9. Backend Test Minimum
 
