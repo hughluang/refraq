@@ -18,7 +18,7 @@ This repository is intentionally split into:
 
 The Management Foundation slice includes:
 
-- User login (people; `identity_source=local`)
+- User login (local password and OIDC federation; `identity_source=local|oidc`)
 - Current-user query
 - Logout
 - Configurable Role + fixed Permission catalog
@@ -31,7 +31,7 @@ The Management Foundation slice includes:
 
 - Customer-facing Data Product catalog / Entity / Serving / Access marketplace
 - Migration of legacy system code
-- SSO, OAuth, MFA, LDAP protocol integration, and third-party identity providers
+- SAML, CAS, LDAP synchronization, MFA, and non-OIDC federation protocols
 - Client / machine-token management APIs
 - Empty pre-created domain packages before real code arrives
 - Sliding session TTL and cross-origin browser access to the API
@@ -71,7 +71,7 @@ Self-deploy exposes the Management Console (web) to browsers.
 The browser calls same-origin `/api`; Next.js rewrites to the internal API service.
 `REFRAQ_API_UPSTREAM` is fixed at frontend image build time for deploy.
 Postgres and Redis are **Backing Services**; app processes stay share-nothing.
-The Session cookie's `Secure` flag follows browser-facing HTTPS stamped by the web `/api` rewrite (`REFRAQ_BROWSER_FACING_PROTO`, default `http`), not `REFRAQ_ENV` and not client-supplied `X-Forwarded-Proto`. HTTP self-deploy must keep the Session.
+The Session cookie's `Secure` flag follows browser-facing HTTPS stamped by the web `/api` rewrite (`REFRAQ_BROWSER_FACING_PROTO`, default `http`), not `REFRAQ_ENV` and not client-supplied `X-Forwarded-Proto`. HTTP self-deploy must keep the Session. OIDC callback origin uses the same rewrite for proto plus `REFRAQ_BROWSER_FACING_HOST` (or a loopback Host when unset); client-supplied public `Host` values are not used as `redirect_uri`.
 
 ## 4. Auth Architecture
 
@@ -151,7 +151,7 @@ Local convention: backend `127.0.0.1:8000`, browser same-origin `/api`, Next.js 
 - Auth truth lives in backend
 - UI protection is secondary to backend enforcement
 - `refraq` stays independent from the old system
-- Login, session, and permission belong to the Management Foundation, not the product identity
+- Login, federation, session, and permission belong to the Management Foundation, not the product identity
 - New features must fit the login/session/permission model (Session and/or User PAT) instead of inventing parallel auth flows
 - Shared state belongs in Backing Services; grow modules with real capabilities only
 - Metadata foundation precedes Data Product catalog work; do not dual-read external `dbmeta` as authority

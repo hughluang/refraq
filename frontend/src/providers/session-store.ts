@@ -15,7 +15,7 @@ export type CurrentUser = {
   role_key: string | null;
   role_name: string | null;
   permissions: string[];
-  identity_source: "local";
+  identity_source: "local" | "oidc";
 };
 
 /** Tab-scoped UX snapshot only — never includes permissions or PII beyond display. */

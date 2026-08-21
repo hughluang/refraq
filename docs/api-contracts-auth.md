@@ -9,13 +9,16 @@ These contracts serve the **Management Console** and its **Management Foundation
 These contracts are intentionally small:
 
 - `POST /auth/login`
+- `GET /auth/providers`
+- `GET /auth/sso/{provider_id}/start`
+- `GET /auth/sso/{provider_id}/callback`
 - `GET /auth/me`
 - `POST /auth/logout`
 
 ## 2. Transport Rules
 
 - Success content type: `application/json`
-- HTTP **failures**: `application/problem+json` (RFC 9457). Global rules: [`docs/conventions-errors.md`](conventions-errors.md), ADR [`0023`](adr/0023-api-problem-details.md)
+- HTTP **failures**: `application/problem+json` (RFC 9457). Global rules: [`docs/conventions-errors.md`](conventions-errors.md), ADR [`0023`](adr/0023-api-problem-details.md). The two browser-redirect SSO endpoints in §5 are the only exception
 - Every HTTP response (success and failure) echoes `X-Request-ID`
 - Authentication transport for Management Console: session cookie
 - Frontend must send requests with credentials included
@@ -53,6 +56,7 @@ These contracts are intentionally small:
 `role_id`, `role_key`, and `role_name` are `null` when the User has no Role. Console login never returns that state because login requires `console:access`.
 `email` may be `null`. `locale` is a supported Console locale code (`zh-CN`, `en-US`).
 `display_timezone` is an optional IANA zone for **Management Console** Instant formatting (`null` = follow browser); it does not change Instant JSON on HTTP or MCP (outbound remains UTC `Z`).
+`identity_source` is `local` or `oidc`; `oidc` means the User has no usable local password. Login and `GET /auth/me` return the same field for the authenticated User.
 
 ### Error Response
 
@@ -148,7 +152,36 @@ Additional behavior:
 }
 ```
 
-## 5. `GET /auth/me`
+## 5. Federated Login
+
+OIDC is the only implemented federation protocol. Binding and provisioning consume a normalized external assertion, not OIDC wire types. Business rules: `docs/business-identity-providers.md`.
+
+### `GET /auth/providers`
+
+Publicly lists enabled providers and display metadata only: `id`, `display_name`, and `protocol`. Secrets, discovery documents, group policy, and Role identifiers are never returned.
+
+### `GET /auth/sso/{provider_id}/start`
+
+Starts the OIDC authorization-code flow. The server validates same-origin `from`, creates a short-lived one-time handoff with state and PKCE material, and redirects to the provider. Use PKCE `S256`, an exact redirect URI, and a provider-specific callback. The callback URI is `{browser origin}/api/auth/sso/{provider_id}/callback` so the Session cookie is set on the Console origin. Browser origin uses `REFRAQ_BROWSER_FACING_PROTO` and `REFRAQ_BROWSER_FACING_HOST` (stamped by the Management Console `/api` rewrite). The rewrite overwrites client-supplied `X-Forwarded-Host`. When the host is unset, only a loopback Host is accepted; an untrusted Host does not become `redirect_uri`.
+
+### `GET /auth/sso/{provider_id}/callback`
+
+Consumes the handoff, exchanges the code, validates discovery issuer, authorization-response issuer, nonce, signature, audience, time claims, and required OIDC claims, then applies binding and admission rules. Success sets the refraq Session cookie and redirects to validated `from`; valid but unadmitted assertions redirect to `/login?error=AUTH_SSO_NOT_ADMITTED`. The callback path must remain `{browser origin}/api/auth/sso/{provider_id}/callback`, formed from the trusted browser-facing proto and host, not from a client-supplied `Host`.
+
+`start` and `callback` are browser navigations, so **every** failure below answers `302` to `/login?error=CODE` and clears the handoff cookie; none of them returns Problem JSON. The `Status` column is each code's canonical Problem status when the same condition surfaces on a JSON endpoint (`AUTH_CONSOLE_ACCESS_REQUIRED` on `POST /auth/login`, `AUTH_SSO_PROVIDER_UNAVAILABLE` on `POST /identity-providers/{id}/test`). Console copy keys off the code, not the status.
+
+| Code | Status | Condition |
+| --- | --- | --- |
+| `AUTH_SSO_PROVIDER_UNAVAILABLE` | `503` | Missing, disabled, or unreachable provider; or no trusted browser origin for `redirect_uri` |
+| `AUTH_SSO_HANDOFF_INVALID` | `400` | Missing, mismatched, expired, or consumed handoff |
+| `AUTH_SSO_ASSERTION_REJECTED` | `401` | Signature or OIDC claim validation failed |
+| `AUTH_SSO_NOT_ADMITTED` | `403` | Valid assertion queued or failed admission |
+| `AUTH_ACCOUNT_DISABLED` | `403` | Bound User is disabled |
+| `AUTH_CONSOLE_ACCESS_REQUIRED` | `403` | Bound User lacks `console:access`, or the auto-provisioning default Role does not grant it |
+
+Pending, group-not-allowed, missing-group, overflowed-group, and account-collision cases share `AUTH_SSO_NOT_ADMITTED`; detail remains in audit and pending records.
+
+## 6. `GET /auth/me`
 
 Purpose:
 
@@ -179,7 +212,7 @@ Same `user` shape as login success.
 
 (`detail` is a default English fallback; PAT failures may use `AUTH_PAT_INVALID` where that code is more specific.)
 
-## 6. `POST /auth/logout`
+## 7. `POST /auth/logout`
 
 Purpose:
 
@@ -204,7 +237,7 @@ Additional behavior:
 
 - backend clears session cookie
 
-## 7. Permission Error Shape
+## 8. Permission Error Shape
 
 When a logged-in user lacks permission:
 
@@ -220,7 +253,7 @@ Status: `403`
 }
 ```
 
-## 8. Cookie Expectations
+## 9. Cookie Expectations
 
 The first version should aim for:
 
@@ -230,7 +263,7 @@ The first version should aim for:
 
 Use `Secure` when the browser-facing request is HTTPS (`X-Forwarded-Proto` stamped by the Management Console `/api` rewrite from `REFRAQ_BROWSER_FACING_PROTO`, default `http`, then the request URL scheme). The rewrite overwrites client-supplied `X-Forwarded-Proto`; `REFRAQ_ENV` does not control this. HTTP self-deploy must keep the Session.
 
-## 9. Backend Test Minimum
+## 10. Backend Test Minimum
 
 The first implementation should include tests for:
 

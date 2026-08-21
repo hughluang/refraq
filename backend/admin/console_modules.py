@@ -69,6 +69,21 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         module_order=10,
     ),
     ConsoleModuleSeed(
+        id="identity-providers",
+        group_id="admin",
+        group_label_key="layout.navGroup.admin",
+        label_key="identityProviders.title",
+        routes=ModuleRoutes(list="/console/identity-providers"),
+        actions=ModuleActions(
+            list="identity_providers:read",
+            create="identity_providers:write",
+            edit="identity_providers:write",
+            delete="identity_providers:write",
+        ),
+        group_order=20,
+        module_order=15,
+    ),
+    ConsoleModuleSeed(
         id="roles",
         group_id="admin",
         group_label_key="layout.navGroup.admin",

@@ -26,6 +26,8 @@ Permission = Literal[
     "tokens:read",
     "tokens:write",
     "audit:read",
+    "identity_providers:read",
+    "identity_providers:write",
 ]
 
 ALL_PERMISSIONS: tuple[Permission, ...] = (
@@ -47,6 +49,8 @@ ALL_PERMISSIONS: tuple[Permission, ...] = (
     "tokens:read",
     "tokens:write",
     "audit:read",
+    "identity_providers:read",
+    "identity_providers:write",
 )
 
 PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
@@ -68,6 +72,8 @@ PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
     "tokens:read": "List own User PAT metadata",
     "tokens:write": "Create, deactivate, restore, and soft-delete (deactivated only) own User PATs",
     "audit:read": "Read management audit events",
+    "identity_providers:read": "View identity providers",
+    "identity_providers:write": "Create, update, test, and delete identity providers",
 }
 
 CATALOG_SET: frozenset[str] = frozenset(ALL_PERMISSIONS)
@@ -93,3 +99,5 @@ def normalize_permissions(permissions: list[str]) -> list[str]:
 
 def permissions_include(permissions: list[str] | tuple[str, ...], permission: str) -> bool:
     return permission in permissions
+
+GRANTING_PERMISSIONS: frozenset[str] = frozenset({"users:write", "roles:write", "identity_providers:write"})

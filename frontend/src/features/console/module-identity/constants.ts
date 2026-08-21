@@ -2,6 +2,7 @@
 export const ModuleId = {
   dashboard: "dashboard",
   users: "users",
+  identityProviders: "identity-providers",
   roles: "roles",
   tokens: "tokens",
   sources: "sources",

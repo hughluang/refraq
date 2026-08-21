@@ -90,7 +90,7 @@ Avoid using Plugin as a synonym for Console Module.
 
 ### User
 
-A person identity in the Management Foundation (local today; LDAP later).
+A person identity in the Management Foundation. A User may authenticate with a local password or an OIDC-backed Identity Provider; `identity_source=oidc` means no usable local password.
 A User may or may not hold a Role that grants Management Console access.
 Avoid using User for machine integration principals.
 
@@ -108,10 +108,24 @@ Avoid calling it a user id or employee id.
 
 ### Identity Source
 
-Where a User's credentials and directory attributes originate.
-The current slice uses `local` only; `ldap` is reserved for a later integration.
+Where a User's credentials and asserted directory attributes originate. `local` permits password authentication; `oidc` names an OIDC-backed origin. Non-OIDC protocols remain out of scope.
 Avoid treating identity source as a role or permission.
 Avoid conflating Identity Source with **Source** (registered data origins).
+
+### Identity Provider
+
+The external system that authenticates a person and asserts who they are, without owning that person's **Role**, **Permission**, **Session**, or **User PAT**.
+Avoid using SSO as the entity name, treating the provider as the authorization authority, or conflating it with **Source** or **Client**.
+
+### External Subject
+
+The **Identity Provider**'s stable identifier for a person (`sub` in OIDC). Together with issuer, it is the binding key from a federated login to exactly one **User**.
+Avoid using the `account` field, email, or an Identity Provider display name or username as the binding key.
+
+### Pending Identity
+
+An administrative handoff record for a validated external assertion that was not admitted as a **User**. It is not a User, has a single pending state, and expires at a fixed `expires_at`.
+Avoid treating a pending identity as a User, a denied state, or a silently attached local account.
 
 ### Client
 
@@ -123,7 +137,7 @@ Avoid conflating Client with **User PAT** (person-owned Bearer credentials) or S
 ### Session
 
 Server-managed authenticated state created after successful console login and carried through a cookie.
-The cookie's `Secure` flag follows browser-facing HTTPS stamped by the Console rewrite (`REFRAQ_BROWSER_FACING_PROTO`), not `REFRAQ_ENV` or client-supplied `X-Forwarded-Proto`; HTTP self-deploy must keep the Session.
+The cookie's `Secure` flag follows browser-facing HTTPS stamped by the Console rewrite (`REFRAQ_BROWSER_FACING_PROTO`), not `REFRAQ_ENV` or client-supplied `X-Forwarded-Proto`; HTTP self-deploy must keep the Session. OIDC `redirect_uri` uses the same trusted origin (`REFRAQ_BROWSER_FACING_HOST` or loopback), not a client-supplied `Host`.
 Avoid calling it a User PAT, a Bearer token, or a permanent login.
 
 ### User PAT

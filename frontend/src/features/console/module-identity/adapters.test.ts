@@ -24,6 +24,11 @@ describe("toRefineResources", () => {
         meta: { label: "users.title" },
       },
       {
+        name: "identity-providers",
+        list: "/console/identity-providers",
+        meta: { label: "identityProviders.title" },
+      },
+      {
         name: "roles",
         list: "/console/roles",
         create: "/console/roles/new",

@@ -2,6 +2,7 @@ import { createProxy } from "next-i18next/proxy";
 import { NextRequest, NextResponse } from "next/server";
 
 import i18nConfig from "../i18n.config";
+import { browserFacingHostFromEnv } from "./lib/browser-facing-host";
 import { browserFacingProtoFromEnv } from "./lib/browser-facing-proto";
 import { isProtectedPath } from "./lib/route-scope";
 
@@ -25,10 +26,19 @@ function copyCookies(from: NextResponse, to: NextResponse): void {
   }
 }
 
-/** Stamp browser-facing proto for the API rewrite; never pass client values. */
+/** Stamp browser-facing proto and host for the API rewrite; never pass client values. */
 function apiRewriteWithTrustedProto(request: NextRequest): NextResponse {
   const headers = new Headers(request.headers);
   headers.set("x-forwarded-proto", browserFacingProtoFromEnv());
+  const host = browserFacingHostFromEnv(
+    process.env,
+    request.headers.get("host"),
+  );
+  if (host) {
+    headers.set("x-forwarded-host", host);
+  } else {
+    headers.delete("x-forwarded-host");
+  }
   return NextResponse.next({
     request: { headers },
   });

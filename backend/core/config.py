@@ -6,8 +6,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from backend.core.browser_host import valid_browser_host
 
 StoreBackend = Literal["memory", "persistent"]
 
@@ -69,6 +71,24 @@ class Settings(BaseSettings):
         default=1000,
         validation_alias="REFRAQ_QUERY_MAX_ROWS",
     )
+    refraq_browser_facing_host: str | None = Field(
+        default=None,
+        validation_alias="REFRAQ_BROWSER_FACING_HOST",
+    )
+
+    @field_validator("refraq_browser_facing_host", mode="before")
+    @classmethod
+    def _normalize_browser_facing_host(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("REFRAQ_BROWSER_FACING_HOST must be a host or host:port")
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if not valid_browser_host(cleaned):
+            raise ValueError("REFRAQ_BROWSER_FACING_HOST must be a host or host:port")
+        return cleaned
 
     @model_validator(mode="after")
     def _require_backing_urls_when_persistent(self) -> Settings:

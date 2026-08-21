@@ -4,18 +4,26 @@ export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
   readonly detail: string;
+  readonly requestId: string | null;
 
-  constructor(status: number, code: string, detail: string) {
+  constructor(
+    status: number,
+    code: string,
+    detail: string,
+    requestId: string | null = null,
+  ) {
     super(`${code}: ${detail}`);
     this.status = status;
     this.code = code;
     this.detail = detail;
+    this.requestId = requestId;
   }
 }
 
 type ApiErrorBody = {
   code?: unknown;
   detail?: unknown;
+  request_id?: unknown;
 };
 
 function isApiErrorBody(value: unknown): value is ApiErrorBody {
@@ -39,7 +47,11 @@ async function parseError(response: Response): Promise<ApiError> {
       typeof body.detail === "string" && body.detail.length > 0
         ? body.detail
         : response.statusText;
-    return new ApiError(response.status, code, detail);
+    const requestId =
+      typeof body.request_id === "string" && body.request_id.length > 0
+        ? body.request_id
+        : null;
+    return new ApiError(response.status, code, detail, requestId);
   }
 
   return new ApiError(

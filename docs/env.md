@@ -58,6 +58,7 @@ Current `deploy/.env.example` (copy to `deploy/.env`, never commit) defines:
 - `POSTGRES_PASSWORD` (required; platform Postgres, internal Docker network only)
 - `REFRAQ_WEB_PORT=3001` (host port for the Management Console)
 - `REFRAQ_BROWSER_FACING_PROTO` (optional on web; default `http`; set `https` when TLS terminates in front of the Console)
+- `REFRAQ_BROWSER_FACING_HOST` (optional on web and API; host or `host:port` the browser uses for the Console, without scheme. Required for non-loopback Console URLs so OIDC `redirect_uri` is not taken from request `Host`)
 
 Compose project name is `refraq-prod` so volumes do not collide with the local Postgres/Redis Compose.
 
@@ -72,7 +73,7 @@ The Management Console talks to the backend through a Next.js rewrite so the ses
 
 Self-deploy Compose exposes only the web service to browsers; the API stays on the internal network. The host port defaults to `3001` (`REFRAQ_WEB_PORT`) so a local Console on `127.0.0.1:3000` can keep running. Bind local `next dev` to `127.0.0.1` so the office network cannot open the sandbox Console.
 
-Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for `/api` overwrites `X-Forwarded-Proto` from `REFRAQ_BROWSER_FACING_PROTO` (default `http`); it does not pass through client-supplied values. The API then reads that stamped header (then the request scheme). `REFRAQ_ENV=prod` does not force `Secure`. HTTP self-deploy must keep the Session; set `REFRAQ_BROWSER_FACING_PROTO=https` on web when TLS terminates in front of the Console.
+Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for `/api` overwrites `X-Forwarded-Proto` from `REFRAQ_BROWSER_FACING_PROTO` (default `http`) and `X-Forwarded-Host` from `REFRAQ_BROWSER_FACING_HOST` when set, otherwise from a loopback request Host; it does not pass through client-supplied public Hosts. The API then reads those stamped headers (then a loopback request Host). `REFRAQ_ENV=prod` does not force `Secure`. HTTP self-deploy must keep the Session; set `REFRAQ_BROWSER_FACING_PROTO=https` on web when TLS terminates in front of the Console. Set `REFRAQ_BROWSER_FACING_HOST` on web and API to the browser-facing Console host when it is not loopback.
 
 ## 4. Variable Ownership
 
@@ -90,6 +91,7 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - `INITIAL_ADMIN_PASSWORD`
 - `REFRAQ_SECRETS_MASTER_KEY` (required to store/read Source secrets)
 - `CELERY_BROKER_URL` (required when running Celery worker/beat; default same host Redis DB `2`)
+- `REFRAQ_BROWSER_FACING_HOST` (optional; host or `host:port`, no scheme) — canonical Console host for OIDC `redirect_uri`; when unset, only a loopback Host is used
 - `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD` (metadata candidate; not yet a System Parameter)
 - `REFRAQ_QUERY_TIMEOUT_SEC` (metadata candidate; not yet a System Parameter)
 - `REFRAQ_QUERY_MAX_ROWS` (metadata candidate; not yet a System Parameter)
@@ -103,12 +105,14 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - `REFRAQ_API_UPSTREAM` (server-side rewrite target; build-time for production images)
 - `NEXT_PUBLIC_DEFAULT_LOCALE`
 - `REFRAQ_BROWSER_FACING_PROTO` (`http` | `https`; default `http`) — stamped onto `/api` rewrite as `X-Forwarded-Proto` for Session `Secure`; set `https` when TLS terminates in front of the Console
+- `REFRAQ_BROWSER_FACING_HOST` (optional; host or `host:port`, no scheme) — stamped onto `/api` rewrite as `X-Forwarded-Host` for OIDC callback origin; when unset, only a loopback request Host is stamped
 
 ### Deploy-Owned Variables
 
 - `POSTGRES_PASSWORD` (platform Postgres password; Compose interpolation; not published to the host)
 - `REFRAQ_WEB_PORT` (host port for the web service; default `3001`)
 - `REFRAQ_BROWSER_FACING_PROTO` (optional; forwarded to web; default `http`)
+- `REFRAQ_BROWSER_FACING_HOST` (optional; forwarded to web and API; browser-facing Console host or `host:port`)
 
 ## 5. Process timezone (`TZ`)
 
@@ -149,3 +153,39 @@ Platform async runtime (`docs/adr/0006-celery-platform-async-runtime.md`):
 
 - Never commit real `REFRAQ_SECRETS_MASTER_KEY`, admin passwords, or Source database passwords
 - Rotating `REFRAQ_SECRETS_MASTER_KEY` requires a documented re-encrypt procedure before it is safe in production; until then treat the key as stable per environment
+
+## 10. Local Identity Provider (Keycloak)
+
+Root `compose.yaml` includes a development Keycloak. `deploy/compose.yaml` does not; production Identity Provider configuration is an operator concern.
+
+Start it with the rest of the local stack (`docker compose up`). Realm import is `dev/keycloak/refraq-realm.json`. The service publishes host port `8080`. When that port is already taken, remap the host side only (for example `18080:8080`) and use the new port in the issuer and discovery URLs below and in the Console provider configuration; the realm redirect URIs point at the Console on `3000` and do not change.
+
+| Item | Local value |
+| --- | --- |
+| Admin console | `http://127.0.0.1:8080` (`admin` / `admin`) |
+| Issuer | `http://127.0.0.1:8080/realms/refraq` |
+| Discovery | `http://127.0.0.1:8080/realms/refraq/.well-known/openid-configuration` |
+| Client id | `refraq` |
+| Client secret | `refraq-dev-secret` |
+| Redirect URIs | `http://127.0.0.1:3000/api/auth/sso/*`, `http://localhost:3000/api/auth/sso/*` |
+| Group claim | `groups` (full path) |
+| Fixture `alice` / `alice` | group `/dept/analytics` |
+| Fixture `bob` / `bob` | no groups |
+
+These fixture passwords are local-only. Do not reuse them outside development.
+
+Console configuration (Administration → Identity Providers):
+
+- Issuer and client values from the table
+- Scopes `openid`, `profile`, `email`
+- Group claim `groups`
+- For auto-provisioning: allowlist `/dept/analytics` and a default Role that is not `super_admin` and does not include `users:write`, `roles:write`, or `identity_providers:write`
+
+Walkthrough against that realm (Management Console on `http://127.0.0.1:3000`):
+
+1. Auto-provision: enable auto-provisioning, sign in as `alice`. A User `alice` is created with `identity_source=oidc`.
+2. Pending queue: sign in as `bob`. No Session is issued; `/login?error=AUTH_SSO_NOT_ADMITTED` and a pending identity appear for `users:write`. Copy exact group strings from that record when configuring an allowlist.
+3. Account collision: create a local User whose `account` matches a later IdP `preferred_username` (for example local `alice` before the first alice SSO). The assertion is queued, not silently bound. Claim it to the existing User or create a new account from the editable prefill.
+4. Unfederation: from the Users list, set a new local password. Later SSO follows unbound admission.
+5. Every-login group check: with auto-provisioning on, remove alice from `/dept/analytics` in Keycloak and sign in again. No new Session, User unchanged, no pending row.
+6. Disable or delete the provider: the confirmation shows bound-user count and may optionally disable those Users (clears Sessions; disabled status rejects PATs).

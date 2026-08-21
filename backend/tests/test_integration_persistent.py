@@ -145,6 +145,62 @@ def test_login_and_me_persistent(persistent_client: TestClient) -> None:
     assert me.json()["user"]["account"] == "root"
 
 
+def test_unfederate_rolls_back_all_changes_on_failure(
+    persistent_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.admin.federation.binding_store import get_binding_store
+    from backend.admin.federation.service import unfederate_user
+    from backend.admin.federation.spec import BindingRecord
+    from backend.admin.role_store import get_role_store
+    from backend.admin.user_store import get_user_store
+    from backend.core.time import utc_now
+
+    users = get_user_store()
+    roles = get_role_store()
+    bindings = get_binding_store()
+    operator = roles.get_by_key("operator")
+    assert operator is not None
+    user = users.create_user(
+        account=f"rollback-{uuid.uuid4().hex[:8]}",
+        display_name="Rollback User",
+        password_hash=None,
+        role_id=operator.id,
+        identity_source="oidc",
+    )
+    bindings.save(
+        BindingRecord(
+            id=f"binding_{uuid.uuid4().hex[:12]}",
+            issuer="https://idp.example",
+            subject=f"subject-{uuid.uuid4().hex[:8]}",
+            user_id=user.id,
+            linked_at=utc_now(),
+        )
+    )
+    original_delete = bindings.delete_for_user
+
+    def fail_after_delete(user_id: str, *, session=None) -> None:
+        original_delete(user_id, session=session)
+        raise RuntimeError("injected failure")
+
+    monkeypatch.setattr(bindings, "delete_for_user", fail_after_delete)
+
+    with pytest.raises(RuntimeError, match="injected failure"):
+        unfederate_user(
+            user_id=user.id,
+            password="new-local-password",
+            users=users,
+            bindings=bindings,
+            actor_user_id=None,
+            actor_token_id=None,
+        )
+
+    unchanged = users.get_by_id(user.id)
+    assert unchanged is not None
+    assert unchanged.password_hash is None
+    assert unchanged.identity_source == "oidc"
+    assert bindings.get_for_user(user.id) is not None
+
+
 def test_disable_user_revokes_sessions(persistent_client: TestClient) -> None:
     # Create operator user via API as root
     login = persistent_client.post(

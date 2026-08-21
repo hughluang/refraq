@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, Float, ForeignKey, String, Text
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -34,7 +34,7 @@ class UserRow(Base):
     email: Mapped[str | None] = mapped_column(String(256), nullable=True)
     locale: Mapped[str] = mapped_column(String(16), nullable=False, default="en-US")
     display_timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     role_id: Mapped[str | None] = mapped_column(
         String(64),
         ForeignKey("roles.id", ondelete="SET NULL"),
@@ -47,6 +47,65 @@ class UserRow(Base):
 
     role: Mapped[RoleRow | None] = relationship(back_populates="users")
     pats: Mapped[list[UserPatRow]] = relationship(back_populates="user")
+
+
+class IdentityProviderRow(Base):
+    __tablename__ = "identity_providers"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    protocol: Mapped[str] = mapped_column(String(32), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    issuer: Mapped[str] = mapped_column(String(512), unique=True, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    config_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
+class FederatedIdentityRow(Base):
+    __tablename__ = "user_external_identities"
+    __table_args__ = (
+        UniqueConstraint("issuer", "subject", name="uq_external_identity_issuer_subject"),
+        UniqueConstraint("user_id", name="uq_external_identity_user"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("identity_providers.id", ondelete="SET NULL"), nullable=True
+    )
+    issuer: Mapped[str] = mapped_column(String(512), nullable=False)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    email: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    linked_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    last_login_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+
+class PendingFederationRow(Base):
+    __tablename__ = "pending_federated_identities"
+    __table_args__ = (
+        UniqueConstraint("issuer", "subject", name="uq_pending_federation_issuer_subject"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("identity_providers.id", ondelete="SET NULL"), nullable=True
+    )
+    issuer: Mapped[str] = mapped_column(String(512), nullable=False)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    account_hint: Mapped[str] = mapped_column(String(128), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    groups: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    admission_reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    claims: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    first_seen_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    last_attempt_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
 
 class UserPatRow(Base):

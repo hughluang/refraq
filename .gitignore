@@ -19,6 +19,9 @@ next-env.d.ts
 .process/
 .trae/
 
+# transient execution plans; .cursor/rules/ stays committed
+.cursor
+
 # local clones of third-party reference projects; not part of the committed baseline
 external/
 

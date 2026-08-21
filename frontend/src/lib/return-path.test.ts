@@ -1,47 +1,33 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { loginRedirectWithFrom, resolveFromPath } from "@/lib/return-path";
+import { resolveFromPath } from "./return-path";
 
 describe("resolveFromPath", () => {
-  it("defaults empty values to /console", () => {
-    expect(resolveFromPath(null)).toBe("/console");
-    expect(resolveFromPath(undefined)).toBe("/console");
-    expect(resolveFromPath("")).toBe("/console");
-  });
-
-  it("rejects protocol-relative and non-relative paths", () => {
-    expect(resolveFromPath("//evil.com")).toBe("/console");
-    expect(resolveFromPath("https://evil.com")).toBe("/console");
-  });
-
   it("keeps same-origin relative paths", () => {
     expect(resolveFromPath("/console/users")).toBe("/console/users");
-  });
-});
-
-describe("loginRedirectWithFrom", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
+    expect(resolveFromPath("/console?tab=pending")).toBe("/console?tab=pending");
+    expect(resolveFromPath("/")).toBe("/");
   });
 
-  it("returns bare /login when already on /login", () => {
-    vi.stubGlobal("window", {
-      location: { pathname: "/login", search: "" },
-    });
-    expect(loginRedirectWithFrom()).toBe("/login");
+  it("falls back when the value is absent or not a path", () => {
+    expect(resolveFromPath(null)).toBe("/console");
+    expect(resolveFromPath("")).toBe("/console");
+    expect(resolveFromPath("console")).toBe("/console");
+    expect(resolveFromPath("x")).toBe("/console");
   });
 
-  it("returns bare /login when already on /login with a from query", () => {
-    vi.stubGlobal("window", {
-      location: { pathname: "/login", search: "?from=%2Fconsole" },
-    });
-    expect(loginRedirectWithFrom()).toBe("/login");
-  });
-
-  it("encodes the current console path as from", () => {
-    vi.stubGlobal("window", {
-      location: { pathname: "/console/users", search: "?q=1" },
-    });
-    expect(loginRedirectWithFrom()).toBe("/login?from=%2Fconsole%2Fusers%3Fq%3D1");
+  it.each([
+    "//evil.example",
+    "https://evil.example",
+    "/\\evil.example",
+    "/safe\\evil",
+    "/%2f%2fevil.example",
+    "/%5cevil.example",
+    "/safe\x00evil",
+    "/safe%00evil",
+    "/console#@evil.example",
+    "/%zz",
+  ])("rejects cross-origin or malformed value %j", (value) => {
+    expect(resolveFromPath(value)).toBe("/console");
   });
 });

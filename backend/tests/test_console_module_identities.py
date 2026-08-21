@@ -55,6 +55,23 @@ EXPECTED_IDENTITIES = {
             "sample": None,
         },
     },
+    "identity-providers": {
+        "label_key": "identityProviders.title",
+        "routes": {
+            "list": "/console/identity-providers",
+            "create": None,
+            "edit": None,
+            "show": None,
+        },
+        "actions": {
+            "list": "identity_providers:read",
+            "create": "identity_providers:write",
+            "edit": "identity_providers:write",
+            "delete": "identity_providers:write",
+            "show": None,
+            "sample": None,
+        },
+    },
     "roles": {
         "label_key": "roles.title",
         "routes": {

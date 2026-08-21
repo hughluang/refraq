@@ -12,6 +12,7 @@ from typing import Literal, Protocol
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from backend.admin.errors import UserAccountDuplicate
 from backend.admin.locales import DEFAULT_LOCALE
@@ -22,14 +23,14 @@ from backend.core.pagination import apply_offset_page, apply_sql_page
 
 
 UserStatus = Literal["active", "disabled"]
-IdentitySource = Literal["local"]
+IdentitySource = Literal["local", "oidc"]
 
 @dataclass
 class UserRecord:
     id: str
     account: str
     display_name: str
-    password_hash: str
+    password_hash: str | None
     role_id: str | None
     status: UserStatus
     identity_source: IdentitySource = "local"
@@ -49,21 +50,25 @@ class UserStore(Protocol):
     ) -> tuple[list[UserRecord], int]: ...
 
     def count_by_role_id(self, role_id: str) -> int: ...
+    def count_local_active_with_role(self, role_id: str) -> int: ...
     def create_user(
         self,
         *,
         account: str,
         display_name: str,
-        password_hash: str,
+        password_hash: str | None,
         role_id: str | None,
         status: UserStatus = "active",
         identity_source: IdentitySource = "local",
         email: str | None = None,
         locale: str = DEFAULT_LOCALE,
+        session: Session | None = None,
     ) -> UserRecord: ...
 
     def update_status(self, user_id: str, status: UserStatus) -> UserRecord | None: ...
-    def update_last_login(self, user_id: str, when: datetime) -> None: ...
+    def update_last_login(
+        self, user_id: str, when: datetime, *, session: Session | None = None
+    ) -> None: ...
 
     def update_profile(
         self,
@@ -77,7 +82,16 @@ class UserStore(Protocol):
         set_display_timezone: bool = False,
     ) -> UserRecord | None: ...
 
-    def update_password_hash(self, user_id: str, password_hash: str) -> UserRecord | None: ...
+    def update_password_hash(
+        self, user_id: str, password_hash: str | None, *, session: Session | None = None
+    ) -> UserRecord | None: ...
+    def update_identity_source(
+        self,
+        user_id: str,
+        identity_source: IdentitySource,
+        *,
+        session: Session | None = None,
+    ) -> UserRecord | None: ...
 
 class MemoryUserStore:
     def __init__(self) -> None:
@@ -114,18 +128,30 @@ class MemoryUserStore:
         with self._lock:
             return sum(1 for record in self._by_id.values() if record.role_id == role_id)
 
+    def count_local_active_with_role(self, role_id: str) -> int:
+        with self._lock:
+            return sum(
+                1
+                for record in self._by_id.values()
+                if record.role_id == role_id
+                and record.status == "active"
+                and record.identity_source == "local"
+            )
+
     def create_user(
         self,
         *,
         account: str,
         display_name: str,
-        password_hash: str,
+        password_hash: str | None,
         role_id: str | None,
         status: UserStatus = "active",
         identity_source: IdentitySource = "local",
         email: str | None = None,
         locale: str = DEFAULT_LOCALE,
+        session: Session | None = None,
     ) -> UserRecord:
+        del session
         with self._lock:
             if account in self._by_account:
 
@@ -154,7 +180,10 @@ class MemoryUserStore:
             record.status = status
             return record
 
-    def update_last_login(self, user_id: str, when: datetime) -> None:
+    def update_last_login(
+        self, user_id: str, when: datetime, *, session: Session | None = None
+    ) -> None:
+        del session
         with self._lock:
             record = self._by_id.get(user_id)
             if record is not None:
@@ -185,7 +214,28 @@ class MemoryUserStore:
                 record.display_timezone = display_timezone
             return record
 
-    def update_password_hash(self, user_id: str, password_hash: str) -> UserRecord | None:
+    def update_identity_source(
+        self,
+        user_id: str,
+        identity_source: IdentitySource,
+        *,
+        session: Session | None = None,
+    ) -> UserRecord | None:
+        del session
+        with self._lock:
+            record = self._by_id.get(user_id)
+            if record is None: return None
+            record.identity_source = identity_source
+            return record
+
+    def update_password_hash(
+        self,
+        user_id: str,
+        password_hash: str | None,
+        *,
+        session: Session | None = None,
+    ) -> UserRecord | None:
+        del session
         with self._lock:
             record = self._by_id.get(user_id)
             if record is None:
@@ -229,45 +279,103 @@ class SqlUserStore:
                 or 0
             )
 
+    def count_local_active_with_role(self, role_id: str) -> int:
+        with session_scope() as session:
+            return int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(UserRow)
+                    .where(
+                        UserRow.role_id == role_id,
+                        UserRow.status == "active",
+                        UserRow.identity_source == "local",
+                    )
+                )
+                or 0
+            )
+
     def create_user(
         self,
         *,
         account: str,
         display_name: str,
-        password_hash: str,
+        password_hash: str | None,
         role_id: str | None,
         status: UserStatus = "active",
         identity_source: IdentitySource = "local",
         email: str | None = None,
         locale: str = DEFAULT_LOCALE,
+        session: Session | None = None,
     ) -> UserRecord:
 
         user_id = f"user_{uuid.uuid4().hex[:12]}"
         created_at = utc_now()
         try:
-            with session_scope() as session:
-                existing = session.scalar(select(UserRow).where(UserRow.account == account))
-                if existing is not None:
-
-                    raise UserAccountDuplicate()
-                row = UserRow(
-                    id=user_id,
+            if session is not None:
+                return self._create_user_on(
+                    session,
+                    user_id=user_id,
                     account=account,
                     display_name=display_name,
-                    email=email,
-                    locale=locale,
                     password_hash=password_hash,
                     role_id=role_id,
                     status=status,
                     identity_source=identity_source,
+                    email=email,
+                    locale=locale,
                     created_at=created_at,
                 )
-                session.add(row)
-                session.flush()
-                return _row_to_user(row)
+            with session_scope() as owned:
+                return self._create_user_on(
+                    owned,
+                    user_id=user_id,
+                    account=account,
+                    display_name=display_name,
+                    password_hash=password_hash,
+                    role_id=role_id,
+                    status=status,
+                    identity_source=identity_source,
+                    email=email,
+                    locale=locale,
+                    created_at=created_at,
+                )
         except IntegrityError as exc:
 
             raise UserAccountDuplicate() from exc
+
+    def _create_user_on(
+        self,
+        session: Session,
+        *,
+        user_id: str,
+        account: str,
+        display_name: str,
+        password_hash: str | None,
+        role_id: str | None,
+        status: UserStatus,
+        identity_source: IdentitySource,
+        email: str | None,
+        locale: str,
+        created_at: datetime,
+    ) -> UserRecord:
+        existing = session.scalar(select(UserRow).where(UserRow.account == account))
+        if existing is not None:
+            raise UserAccountDuplicate()
+        row = UserRow(
+            id=user_id,
+            account=account,
+            display_name=display_name,
+            email=email,
+            locale=locale,
+            password_hash=password_hash,
+            role_id=role_id,
+            status=status,
+            identity_source=identity_source,
+            created_at=created_at,
+        )
+        session.add(row)
+        session.flush()
+        return _row_to_user(row)
 
     def update_status(self, user_id: str, status: UserStatus) -> UserRecord | None:
         with session_scope() as session:
@@ -278,11 +386,21 @@ class SqlUserStore:
             session.flush()
             return _row_to_user(row)
 
-    def update_last_login(self, user_id: str, when: datetime) -> None:
-        with session_scope() as session:
-            row = session.get(UserRow, user_id)
-            if row is not None:
-                row.last_login_at = when
+    def update_last_login(
+        self, user_id: str, when: datetime, *, session: Session | None = None
+    ) -> None:
+        if session is not None:
+            self._update_last_login_on(session, user_id, when)
+            return
+        with session_scope() as owned:
+            self._update_last_login_on(owned, user_id, when)
+
+    def _update_last_login_on(
+        self, session: Session, user_id: str, when: datetime
+    ) -> None:
+        row = session.get(UserRow, user_id)
+        if row is not None:
+            row.last_login_at = when
 
     def update_profile(
         self,
@@ -311,14 +429,49 @@ class SqlUserStore:
             session.flush()
             return _row_to_user(row)
 
-    def update_password_hash(self, user_id: str, password_hash: str) -> UserRecord | None:
-        with session_scope() as session:
-            row = session.get(UserRow, user_id)
-            if row is None:
-                return None
-            row.password_hash = password_hash
-            session.flush()
-            return _row_to_user(row)
+    def update_identity_source(
+        self,
+        user_id: str,
+        identity_source: IdentitySource,
+        *,
+        session: Session | None = None,
+    ) -> UserRecord | None:
+        if session is not None:
+            return self._update_identity_source_on(session, user_id, identity_source)
+        with session_scope() as owned:
+            return self._update_identity_source_on(owned, user_id, identity_source)
+
+    def _update_identity_source_on(
+        self, session: Session, user_id: str, identity_source: IdentitySource
+    ) -> UserRecord | None:
+        row = session.get(UserRow, user_id)
+        if row is None:
+            return None
+        row.identity_source = identity_source
+        session.flush()
+        return _row_to_user(row)
+
+    def update_password_hash(
+        self,
+        user_id: str,
+        password_hash: str | None,
+        *,
+        session: Session | None = None,
+    ) -> UserRecord | None:
+        if session is not None:
+            return self._update_password_hash_on(session, user_id, password_hash)
+        with session_scope() as owned:
+            return self._update_password_hash_on(owned, user_id, password_hash)
+
+    def _update_password_hash_on(
+        self, session: Session, user_id: str, password_hash: str | None
+    ) -> UserRecord | None:
+        row = session.get(UserRow, user_id)
+        if row is None:
+            return None
+        row.password_hash = password_hash
+        session.flush()
+        return _row_to_user(row)
 
 def _row_to_user(row: object) -> UserRecord:
     assert isinstance(row, UserRow)

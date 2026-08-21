@@ -43,6 +43,7 @@ services:
       ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET}
       INITIAL_ADMIN_ACCOUNT: ${INITIAL_ADMIN_ACCOUNT:-root}
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD}
+      REFRAQ_BROWSER_FACING_HOST: ${REFRAQ_BROWSER_FACING_HOST:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -113,6 +114,7 @@ services:
       HOSTNAME: 0.0.0.0
       PORT: 3000
       REFRAQ_BROWSER_FACING_PROTO: ${REFRAQ_BROWSER_FACING_PROTO:-http}
+      REFRAQ_BROWSER_FACING_HOST: ${REFRAQ_BROWSER_FACING_HOST:-}
     ports:
       - "${REFRAQ_WEB_PORT:-3001}:3000"
     depends_on:

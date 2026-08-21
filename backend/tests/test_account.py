@@ -232,6 +232,31 @@ def test_change_password_wrong_current(client: TestClient) -> None:
     assert response.json()["code"] == "ACCOUNT_PASSWORD_INVALID"
 
 
+def test_oidc_user_cannot_change_local_password(
+    client: TestClient, store_bundle
+) -> None:
+    user_store, role_store, session_store, _ = store_bundle
+    operator = role_store.get_by_key("operator")
+    assert operator is not None
+    user = user_store.create_user(
+        account="oidc-user",
+        display_name="OIDC User",
+        password_hash=None,
+        role_id=operator.id,
+        identity_source="oidc",
+    )
+    session_id = session_store.create(user.id, 3600)
+    client.cookies.set("refraq_sid", session_id)
+
+    response = client.post(
+        "/account/password",
+        json={"current_password": "unused", "new_password": "n3w-pass"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "ACCOUNT_PASSWORD_NOT_LOCAL"
+
+
 def test_change_password_requires_session_not_pat_only(
     client: TestClient, store_bundle
 ) -> None:

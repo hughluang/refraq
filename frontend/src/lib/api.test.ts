@@ -33,6 +33,7 @@ describe("apiClient Problem Details", () => {
         status: 401,
         code: "AUTH_UNAUTHENTICATED",
         detail: "Not signed in or session expired",
+        requestId: "abc123",
       }),
     );
     await expect(apiClient("/auth/me")).rejects.toBeInstanceOf(ApiError);

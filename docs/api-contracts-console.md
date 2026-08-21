@@ -49,6 +49,11 @@ Purpose: return grouped side-nav entries for the current session.
           "route": "/console/users"
         },
         {
+          "id": "identity-providers",
+          "label_key": "identityProviders.title",
+          "route": "/console/identity-providers"
+        },
+        {
           "id": "roles",
           "label_key": "roles.title",
           "route": "/console/roles"
@@ -212,6 +217,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
 | `dashboard` | `workbench` | `/console` | `dashboard:read` | — |
 | `users` | `admin` | `/console/users` | `users:read` | create/edit/delete → `users:write`; create route `/console/users/new` |
 | `roles` | `admin` | `/console/roles` | `roles:read` | create/edit/delete → `roles:write`; create `/console/roles/new`; edit `/console/roles/:id` |
+| `identity-providers` | `admin` | `/console/identity-providers` | `identity_providers:read` | create/edit/delete/test → `identity_providers:write` |
 | `tokens` | `admin` (identity only; **not** in navigation) | `null` (no Console page; UI in Account Center) | `tokens:read` | create/edit/delete → `tokens:write`; see `docs/business-account.md` |
 | `sources` | `metadata` | `/console/sources` | `sources:read` | create/edit/delete → `sources:write` |
 | `catalog` | `metadata` | `/console/catalog` | `metadata:read` | edit → `metadata:write`; show → `metadata:read`; sample → `catalog:sample` (no route); show route `/console/catalog/:id` |

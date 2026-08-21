@@ -11,7 +11,7 @@ Related boundaries:
 - **Management Foundation** (login, session, users, roles, permissions) is the enabling layer: `docs/business-login-auth.md`.
 - Console shell mounts modules by nav group. Metadata modules mount under `metadata` (`docs/business-metadata.md`); platform **Job** / **Scheduled Task** modules mount under `operations` (`docs/business-jobs.md`, `docs/business-scheduled-tasks.md`). Data Product catalog / Entity modules mount later and stay out of scope here.
 - Permission decisions are authoritative in the backend; frontend show/hide only improves UX: `docs/architecture.md`.
-- Navigation catalog decision: `docs/adr/0002-console-navigation-catalog.md`.
+- Navigation catalog decision: `docs/adr/0002-console-navigation-catalog.md`. Identity Provider business rules: `docs/business-identity-providers.md`; its API is `docs/api-contracts-identity-providers.md`.
 - Terminology follows `docs/glossary.md`: brand copy in the UI is `Refraq`; the technical identifier is `refraq`.
 
 ## 2. Principles
@@ -21,7 +21,7 @@ Related boundaries:
 3. **Navigation is generated from "module catalog × permission decisions"** on the backend. No permission means no entry; a deep-link visit without permission must get an explainable unauthorized state.
 4. **Frontend and backend share one permission language** (resource + action); UI filtering is not a security boundary.
 5. **Foundation modules are always present**; access differs only by Permission. They have no runtime enable/disable state, and the top-level catalog is code-seeded, not DB menu CRUD.
-6. **Management master data (users / roles / user tokens) and platform settings** stay in their own zones, separate from the `metadata` group, the `operations` group, and future Data Product primary nav.
+6. **Management master data (users / roles / Identity Providers / user tokens) and platform settings** stay in their own zones, separate from the `metadata` group, the `operations` group, and future Data Product primary nav.
 7. **A new module appears by extending the backend seed** (identity + nav) and adding frontend pages/adapters — without rewriting the top-bar / side-nav duty narrative.
 
 ## 3. Information Architecture
@@ -45,7 +45,7 @@ The side nav carries only module structural navigation and **renders exactly the
 | Group | Group id | Modules |
 | --- | --- | --- |
 | Workbench | `workbench` | Home (`dashboard`) |
-| Administration | `admin` | Users, Roles, User PAT (`tokens`) |
+| Administration | `admin` | Users, Roles, Identity Providers (`identity-providers`), User PAT (`tokens`) |
 | Metadata | `metadata` | Sources (`sources`), Catalog (`catalog`), Business Domains (`business-domains`), Type Mappings (`type-mappings`) |
 | Operations | `operations` | Jobs (`jobs`), Schedules (`schedules`) |
 | Platform settings | `settings` | System parameters (`settings`) |
@@ -76,7 +76,7 @@ flowchart TB
 
   subgraph SideNav["Side nav · structural navigation"]
     G1["Workbench"]
-    G2["Administration · users/roles/tokens"]
+    G2["Administration · users/roles/identity-providers/tokens"]
     G3["Metadata · sources/catalog/domains/type-mappings"]
     G4["Operations · jobs/schedules"]
     G5["Platform settings"]

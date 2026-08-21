@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Callable
 
 from backend.admin.errors import RoleInvalidKey, RoleKeyDuplicate, RoleLocked
 from backend.admin.permissions import ALL_PERMISSIONS, normalize_permissions
 from backend.admin.role_store import RoleRecord, RoleStore
+
+RoleUpdateValidator = Callable[[RoleRecord], None]
 
 ROLE_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 SUPER_ADMIN_KEY = "super_admin"
@@ -103,18 +106,25 @@ def update_role(
     *,
     name: str | None = None,
     permissions: list[str] | None = None,
+    validate: RoleUpdateValidator,
 ) -> RoleRecord | None:
     record = roles.get_by_id(role_id)
     if record is None:
         return None
     if record.locked:
         raise RoleLocked()
-    if name is not None:
-        record.name = name
+    candidate = RoleRecord(
+        id=record.id,
+        key=record.key,
+        name=name if name is not None else record.name,
+        permissions=list(record.permissions),
+        locked=record.locked,
+    )
     if permissions is not None:
-        record.permissions = normalize_permissions(permissions)
-    roles.save(record)
-    return record
+        candidate.permissions = normalize_permissions(permissions)
+    validate(candidate)
+    roles.save(candidate)
+    return candidate
 
 
 def delete_role(roles: RoleStore, role_id: str) -> RoleRecord | None:

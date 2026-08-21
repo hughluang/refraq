@@ -9,6 +9,8 @@ from backend.core.pagination import PageParams, page_params
 from backend.admin import roles as role_domain
 from backend.admin.deps import require_permission
 from backend.admin.errors import RoleInUse, RoleNotFound
+from backend.admin.federation.config import validate_role_not_default_for_providers
+from backend.admin.federation.provider_store import ProviderStore, get_provider_store
 from backend.admin.permissions import ALL_PERMISSIONS, PERMISSION_DESCRIPTIONS
 from backend.admin.roles import effective_permissions
 from backend.admin.role_store import RoleRecord, RoleStore, get_role_store
@@ -106,12 +108,18 @@ def update_role(
     _user: UserRecord = Depends(require_permission("roles:write")),
     roles: RoleStore = Depends(get_role_store),
     users: UserStore = Depends(get_user_store),
+    providers: ProviderStore = Depends(get_provider_store),
 ) -> RoleResponse:
+    def validate(role: RoleRecord) -> None:
+        records, _total = providers.list_providers(limit=None, offset=0)
+        validate_role_not_default_for_providers(role, records)
+
     record = role_domain.update_role(
         roles,
         role_id,
         name=payload.name,
         permissions=payload.permissions,
+        validate=validate,
     )
     if record is None:
         raise RoleNotFound()
