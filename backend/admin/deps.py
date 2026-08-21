@@ -11,7 +11,6 @@ from fastapi import Cookie, Depends, Header, Request
 from backend.admin.errors import AuthForbidden, AuthPatInvalid, AuthUnauthenticated
 from backend.admin.permissions import Permission, permissions_include
 from backend.admin.roles import effective_permissions
-from backend.core.config import Settings, get_settings
 from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.session_store import SessionStore, get_session_store
 from backend.admin.token_store import (
@@ -31,13 +30,29 @@ class SessionCookieAttrs(TypedDict):
     secure: bool
 
 
-def session_cookie_attrs(settings: Settings) -> SessionCookieAttrs:
+def browser_facing_https(request: Request) -> bool:
+    """Whether the Management Console request that carries this cookie was HTTPS.
+
+    Self-deploy rewrites `/api` through Next.js, so the API process often sees
+    HTTP to the internal service. Honor `X-Forwarded-Proto` stamped by the
+    Console proxy (first value), then the request URL scheme. The proxy
+    overwrites client-supplied values; `REFRAQ_ENV` does not decide this.
+    HTTP self-deploy must keep the Session.
+    """
+    forwarded = request.headers.get("x-forwarded-proto")
+    if forwarded is not None:
+        first = forwarded.split(",")[0].strip().lower()
+        return first == "https"
+    return request.url.scheme == "https"
+
+
+def session_cookie_attrs(request: Request) -> SessionCookieAttrs:
     """Shared cookie attributes for set_cookie and delete_cookie."""
     return {
         "path": "/",
         "httponly": True,
         "samesite": "lax",
-        "secure": settings.refraq_env != "dev",
+        "secure": browser_facing_https(request),
     }
 
 

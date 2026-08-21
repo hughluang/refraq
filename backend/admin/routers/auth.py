@@ -5,7 +5,7 @@ from __future__ import annotations
 from backend.core.time import utc_now
 from datetime import datetime
 
-from fastapi import APIRouter, Cookie, Depends, Response
+from fastapi import APIRouter, Cookie, Depends, Request, Response
 
 from backend.admin.deps import (
     SESSION_COOKIE_NAME,
@@ -21,7 +21,6 @@ from backend.admin.errors import (
 from backend.admin.security import verify_password
 from backend.admin.parameters import admin_session_ttl_hours
 from backend.admin.user_payload import build_current_user
-from backend.core.config import Settings, get_settings
 from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.session_store import SessionStore, get_session_store
 from backend.admin.user_store import UserRecord, UserStore, get_user_store
@@ -37,11 +36,11 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 @router.post("/login", response_model=LoginResponse)
 def login(
     payload: LoginRequest,
+    request: Request,
     response: Response,
     users: UserStore = Depends(get_user_store),
     roles: RoleStore = Depends(get_role_store),
     sessions: SessionStore = Depends(get_session_store),
-    settings: Settings = Depends(get_settings),
 ) -> LoginResponse:
     record = users.get_by_account(payload.account)
     if record is None or not verify_password(payload.password, record.password_hash):
@@ -55,7 +54,7 @@ def login(
 
     ttl_seconds = admin_session_ttl_hours() * 3600
     session_id = sessions.create(record.id, ttl_seconds)
-    cookie_attrs = session_cookie_attrs(settings)
+    cookie_attrs = session_cookie_attrs(request)
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=session_id,
@@ -77,12 +76,12 @@ def me(
 
 @router.post("/logout", response_model=LogoutResponse)
 def logout(
+    request: Request,
     response: Response,
     refraq_sid: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
     sessions: SessionStore = Depends(get_session_store),
-    settings: Settings = Depends(get_settings),
 ) -> LogoutResponse:
     if refraq_sid:
         sessions.delete(refraq_sid)
-    response.delete_cookie(SESSION_COOKIE_NAME, **session_cookie_attrs(settings))
+    response.delete_cookie(SESSION_COOKIE_NAME, **session_cookie_attrs(request))
     return LogoutResponse(success=True)

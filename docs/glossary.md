@@ -123,6 +123,7 @@ Avoid conflating Client with **User PAT** (person-owned Bearer credentials) or S
 ### Session
 
 Server-managed authenticated state created after successful console login and carried through a cookie.
+The cookie's `Secure` flag follows browser-facing HTTPS stamped by the Console rewrite (`REFRAQ_BROWSER_FACING_PROTO`), not `REFRAQ_ENV` or client-supplied `X-Forwarded-Proto`; HTTP self-deploy must keep the Session.
 Avoid calling it a User PAT, a Bearer token, or a permanent login.
 
 ### User PAT

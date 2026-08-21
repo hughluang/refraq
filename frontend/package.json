@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "dotenv -e .env -- next dev --turbopack -p ${PORT:-3000}",
+    "dev": "dotenv -e .env -- next dev --turbopack -H 127.0.0.1 -p ${PORT:-3000}",
     "build": "next build",
     "start": "next start",
     "test": "vitest run"

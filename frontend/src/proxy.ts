@@ -2,6 +2,7 @@ import { createProxy } from "next-i18next/proxy";
 import { NextRequest, NextResponse } from "next/server";
 
 import i18nConfig from "../i18n.config";
+import { browserFacingProtoFromEnv } from "./lib/browser-facing-proto";
 import { isProtectedPath } from "./lib/route-scope";
 
 const PUBLIC_PATHS = new Set(["/login", "/403"]);
@@ -24,7 +25,20 @@ function copyCookies(from: NextResponse, to: NextResponse): void {
   }
 }
 
+/** Stamp browser-facing proto for the API rewrite; never pass client values. */
+function apiRewriteWithTrustedProto(request: NextRequest): NextResponse {
+  const headers = new Headers(request.headers);
+  headers.set("x-forwarded-proto", browserFacingProtoFromEnv());
+  return NextResponse.next({
+    request: { headers },
+  });
+}
+
 export function proxy(request: NextRequest): NextResponse {
+  if (request.nextUrl.pathname.startsWith("/api")) {
+    return apiRewriteWithTrustedProto(request);
+  }
+
   const i18nResponse = i18nProxy(requestWithoutAcceptLanguage(request));
 
   const { pathname, search } = request.nextUrl;
@@ -47,7 +61,8 @@ export function proxy(request: NextRequest): NextResponse {
 }
 
 export const config = {
+  // Include `/api` so the rewrite hop can overwrite `X-Forwarded-Proto`.
   // Exclude all `/_next/*` (including webpack-hmr websocket) so Turbopack HMR
   // is not broken by this proxy; static/image alone is not enough.
-  matcher: ["/((?!api|_next/|favicon.ico).*)"],
+  matcher: ["/((?!_next/|favicon.ico).*)"],
 };

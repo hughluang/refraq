@@ -53,15 +53,16 @@ This document records the stable development conventions for contributors workin
 ### Frontend
 
 - Install dependencies: `npm install`
-- Run dev server: `npm run dev`
+- Run dev server: `npm run dev` (binds `127.0.0.1` so the sandbox Console is not reachable on the office network)
 - Run lint: `npm run lint`
 - Run build: `npm run build`
 - Management Console content width: `docs/ui-console-layout.md` (section containers full width; internal controls own their own width)
 
 ### Self-deploy example
 
-- Full stack: `docker compose -f deploy/compose.yaml up --build`
-- Browser reaches the web service on host port `3000` (remap in compose if needed); `/api` is rewritten to the internal API.
+- Copy `deploy/.env.example` to `deploy/.env` and set live secrets (`INITIAL_ADMIN_PASSWORD`, `ADMIN_SESSION_SECRET`, `REFRAQ_SECRETS_MASTER_KEY`, `POSTGRES_PASSWORD`). Do not commit `deploy/.env`.
+- Full stack: `docker compose -f deploy/compose.yaml up --build` (Compose project name `refraq-prod`; isolated volumes)
+- Browser reaches the web service on host port `3001` (`REFRAQ_WEB_PORT`); `/api` is rewritten to the internal API. Keep local `next dev` on `127.0.0.1:3000`.
 - Frontend image build expects `frontend/node_modules` present (`npm ci` / `npm install` on the build host) and bakes `REFRAQ_API_UPSTREAM` via build-arg (default `http://api:8000`).
 
 ## Suggested Reading Order

@@ -41,4 +41,6 @@ npm run dev
 npm run build
 ```
 
+`npm run dev` binds `127.0.0.1` so the sandbox Console is not reachable on the office network. Self-deploy Compose publishes a separate host port (`docs/development.md`).
+
 Default admin credentials come from backend `.env` (`INITIAL_ADMIN_ACCOUNT` / `INITIAL_ADMIN_PASSWORD`).

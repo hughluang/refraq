@@ -196,38 +196,60 @@ def test_me_with_expired_session_returns_unauthenticated(
     assert response.json()["code"] == "AUTH_UNAUTHENTICATED"
 
 
-def test_logout_delete_cookie_matches_secure_attrs(
-    store_bundle, client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from backend.core.config import Settings, get_settings
-
-    # Env wins over init for BaseSettings; force prod for Secure cookie attrs.
-    monkeypatch.setenv("REFRAQ_ENV", "prod")
-    secure_settings = Settings(
-        store_backend="memory",
-        admin_session_secret="test-secret",
-        initial_admin_account="root",
-        initial_admin_password="s3cret",
+def _refraq_sid_set_cookie(response) -> str:
+    header = next(
+        (h for h in response.headers.get_list("set-cookie") if h.startswith("refraq_sid=")),
+        None,
     )
-    monkeypatch.setattr(
-        "backend.admin.routers.auth.get_settings", lambda: secure_settings
-    )
-    app.dependency_overrides[get_settings] = lambda: secure_settings
+    assert header is not None
+    return header
 
-    login_response = client.post(
+
+def test_http_login_session_cookie_is_not_secure(client: TestClient) -> None:
+    response = client.post(
         "/auth/login", json={"account": "root", "password": "s3cret"}
+    )
+    assert response.status_code == 200
+    cookie = _refraq_sid_set_cookie(response)
+    assert "Secure" not in cookie
+    assert "HttpOnly" in cookie
+    assert "Path=/" in cookie
+
+
+def test_forwarded_https_login_session_cookie_is_secure(client: TestClient) -> None:
+    response = client.post(
+        "/auth/login",
+        json={"account": "root", "password": "s3cret"},
+        headers={"x-forwarded-proto": "https"},
+    )
+    assert response.status_code == 200
+    cookie = _refraq_sid_set_cookie(response)
+    assert "Secure" in cookie
+
+
+def test_prod_env_does_not_force_secure_on_http(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("REFRAQ_ENV", "prod")
+    response = client.post(
+        "/auth/login", json={"account": "root", "password": "s3cret"}
+    )
+    assert response.status_code == 200
+    assert "Secure" not in _refraq_sid_set_cookie(response)
+
+
+def test_logout_delete_cookie_matches_secure_attrs(client: TestClient) -> None:
+    login_response = client.post(
+        "/auth/login",
+        json={"account": "root", "password": "s3cret"},
+        headers={"x-forwarded-proto": "https"},
     )
     assert login_response.status_code == 200
 
-    response = client.post("/auth/logout")
+    response = client.post("/auth/logout", headers={"x-forwarded-proto": "https"})
     assert response.status_code == 200
 
-    set_cookie_headers = response.headers.get_list("set-cookie")
-    logout_cookie = next(
-        (h for h in set_cookie_headers if h.startswith("refraq_sid=")),
-        None,
-    )
-    assert logout_cookie is not None
+    logout_cookie = _refraq_sid_set_cookie(response)
     assert "Secure" in logout_cookie
     assert "HttpOnly" in logout_cookie
     assert "Path=/" in logout_cookie

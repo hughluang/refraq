@@ -47,6 +47,20 @@ Current `frontend/.env.example` defines:
 
 `REFRAQ_API_UPSTREAM` is read at **Next.js build time** for rewrites. Local `next dev` uses the env file; deploy images pass it as a Docker build-arg (typically `http://api:8000`).
 
+### Deploy
+
+Current `deploy/.env.example` (copy to `deploy/.env`, never commit) defines:
+
+- `INITIAL_ADMIN_ACCOUNT=root`
+- `INITIAL_ADMIN_PASSWORD` (required live secret)
+- `ADMIN_SESSION_SECRET` (required live secret)
+- `REFRAQ_SECRETS_MASTER_KEY` (required live secret; stable per site)
+- `POSTGRES_PASSWORD` (required; platform Postgres, internal Docker network only)
+- `REFRAQ_WEB_PORT=3001` (host port for the Management Console)
+- `REFRAQ_BROWSER_FACING_PROTO` (optional on web; default `http`; set `https` when TLS terminates in front of the Console)
+
+Compose project name is `refraq-prod` so volumes do not collide with the local Postgres/Redis Compose.
+
 ## 3. Local Convention (Unified)
 
 - backend host: `127.0.0.1`
@@ -56,7 +70,9 @@ Current `frontend/.env.example` defines:
 
 The Management Console talks to the backend through a Next.js rewrite so the session cookie is set on the frontend origin and `proxy.ts` can see `refraq_sid`.
 
-Self-deploy Compose exposes only the web service to browsers; the API stays on the internal network.
+Self-deploy Compose exposes only the web service to browsers; the API stays on the internal network. The host port defaults to `3001` (`REFRAQ_WEB_PORT`) so a local Console on `127.0.0.1:3000` can keep running. Bind local `next dev` to `127.0.0.1` so the office network cannot open the sandbox Console.
+
+Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for `/api` overwrites `X-Forwarded-Proto` from `REFRAQ_BROWSER_FACING_PROTO` (default `http`); it does not pass through client-supplied values. The API then reads that stamped header (then the request scheme). `REFRAQ_ENV=prod` does not force `Secure`. HTTP self-deploy must keep the Session; set `REFRAQ_BROWSER_FACING_PROTO=https` on web when TLS terminates in front of the Console.
 
 ## 4. Variable Ownership
 
@@ -86,6 +102,13 @@ Self-deploy Compose exposes only the web service to browsers; the API stays on t
 - `NEXT_PUBLIC_REFRAQ_API_BASE_URL` (browser-facing base; default `/api`)
 - `REFRAQ_API_UPSTREAM` (server-side rewrite target; build-time for production images)
 - `NEXT_PUBLIC_DEFAULT_LOCALE`
+- `REFRAQ_BROWSER_FACING_PROTO` (`http` | `https`; default `http`) — stamped onto `/api` rewrite as `X-Forwarded-Proto` for Session `Secure`; set `https` when TLS terminates in front of the Console
+
+### Deploy-Owned Variables
+
+- `POSTGRES_PASSWORD` (platform Postgres password; Compose interpolation; not published to the host)
+- `REFRAQ_WEB_PORT` (host port for the web service; default `3001`)
+- `REFRAQ_BROWSER_FACING_PROTO` (optional; forwarded to web; default `http`)
 
 ## 5. Process timezone (`TZ`)
 
@@ -101,7 +124,7 @@ Self-deploy Compose exposes only the web service to browsers; the API stays on t
 - Keep docs and env examples in sync
 - Do not commit real secrets
 - Do not change API port in code and forget to update frontend env
-- The initial admin password is meant for first-time local development only; rotate it before any non-local deployment
+- The initial admin password is meant for first-time local development only; rotate it before any non-local deployment. Self-deploy Compose reads `deploy/.env` (not committed); do not leave example secrets in a live stack.
 - Missing `DATABASE_URL` / `REDIS_URL` with `persistent` must fail fast; never silently fall back to memory
 - Settings dotenv load order: repo-root `.env` then `backend/.env` (later wins). Prefer `backend/.env` as the local canonical file
 - Integration tests must not reuse interactive `DATABASE_URL` / `REDIS_URL`; they use `REFRAQ_INTEGRATION_*` defaults so Compose live data stays intact
