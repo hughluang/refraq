@@ -31,6 +31,7 @@ backend/
   main.py                 # composition root: mount published routers; Site Bootstrap
   core/                   # shared kernel: config, DB/Redis, time (Instant/Clock), upgrade, AppError, probes
   admin/                  # platform kernel (Identity / RBAC / Console foundation)
+    federation/           # OIDC provider, binding, pending, and provisioning language unit
     # published modules listed in §3
     models.py *_store.py permissions.py …
     schemas/ routers/     # this package's HTTP shapes and adapters
@@ -72,6 +73,7 @@ Each **platform kernel / platform primitive / product domain** package has an ex
 | `backend.admin.session_store` | `SessionStore`, `get_session_store`, `reset_session_store` |
 | `backend.admin.token_store` | Token store ports used by deps/tokens HTTP |
 | `backend.admin.audit_store` | Audit store ports used by audit HTTP / writers |
+| `backend.admin.federation` | Identity Provider, OIDC authorization-code flow, External Subject binding, pending identity, and provisioning APIs |
 | `backend.admin.system_parameters` | System Parameter mechanism (registry, occupy, `read_stored_parameter` / `resolve_int`, store reset). Does not name domain knobs |
 | `backend.admin.parameters` | Admin-owned parameter specs and typed accessors |
 | `backend.admin.routers.*` | Foundation HTTP adapters (mounted by `main` only) |
@@ -118,7 +120,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 ### Cross-package errors
 
 - `backend.core.errors.AppError` carries `code` + `http_status` (+ message). HTTP mapping serializes RFC 9457 Problem Details (`code` is Problem Code; `message` becomes `detail`).
-- Foundation and domain errors subclass `AppError`.
+- Foundation and federation errors subclass `AppError`.
 - Product domains and platform primitives **must not** subclass concrete `admin.errors` types.
 - HTTP mapping in composition recognizes `AppError`, validation errors, Starlette `HTTPException`, and unhandled exceptions. Contract: [`docs/conventions-errors.md`](conventions-errors.md).
 

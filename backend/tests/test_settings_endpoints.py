@@ -34,11 +34,13 @@ from backend.admin.user_store import (  # noqa: E402
 
 REGISTERED_KEYS = {
     "admin_session_ttl_hours",
+    "sso_pending_ttl_days",
     "job_lost_detection_sec",
 }
 
 CATALOG_KEY_ORDER = [
     "admin_session_ttl_hours",
+    "sso_pending_ttl_days",
     "job_lost_detection_sec",
 ]
 

@@ -18,11 +18,8 @@ function messageOf(err: unknown): string {
   return err instanceof ApiError ? err.detail : String(err);
 }
 
-export function shouldApplyPagedListResult(
-  startedGeneration: number,
-  latestGeneration: number,
-): boolean {
-  return startedGeneration === latestGeneration;
+function requestIdOf(err: unknown): string | null {
+  return err instanceof ApiError ? err.requestId : null;
 }
 
 export function usePagedList<T>({
@@ -37,6 +34,7 @@ export function usePagedList<T>({
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [errorRequestId, setErrorRequestId] = useState<string | null>(null);
   const generationRef = useRef(0);
   const resetKey = JSON.stringify(resetDeps);
   const resetKeyRef = useRef(resetKey);
@@ -51,10 +49,11 @@ export function usePagedList<T>({
   const load = useCallback(async () => {
     const started = ++generationRef.current;
     if (!enabled) {
-      if (!shouldApplyPagedListResult(started, generationRef.current)) return;
+      if (started !== generationRef.current) return;
       setItems([]);
       setTotal(0);
       setError(null);
+      setErrorRequestId(null);
       setLoading(false);
       return;
     }
@@ -64,17 +63,19 @@ export function usePagedList<T>({
         limit: pageSize,
         offset: pageToOffset(fetchPage, pageSize),
       });
-      if (!shouldApplyPagedListResult(started, generationRef.current)) return;
+      if (started !== generationRef.current) return;
       setItems(data.items);
       setTotal(data.total);
       setError(null);
+      setErrorRequestId(null);
     } catch (err) {
-      if (!shouldApplyPagedListResult(started, generationRef.current)) return;
+      if (started !== generationRef.current) return;
       const message = messageOf(err);
       setError(message);
+      setErrorRequestId(requestIdOf(err));
       onError?.(message);
     } finally {
-      if (shouldApplyPagedListResult(started, generationRef.current)) {
+      if (started === generationRef.current) {
         setLoading(false);
       }
     }
@@ -91,6 +92,7 @@ export function usePagedList<T>({
     setPage,
     loading,
     error,
+    errorRequestId,
     reload: load,
     pageSize,
   };

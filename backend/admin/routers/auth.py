@@ -43,7 +43,12 @@ def login(
     sessions: SessionStore = Depends(get_session_store),
 ) -> LoginResponse:
     record = users.get_by_account(payload.account)
-    if record is None or not verify_password(payload.password, record.password_hash):
+    if (
+        record is None
+        or record.identity_source != "local"
+        or record.password_hash is None
+        or not verify_password(payload.password, record.password_hash)
+    ):
         raise AuthInvalidCredentials()
     if record.status != "active":
         raise AuthAccountDisabled()

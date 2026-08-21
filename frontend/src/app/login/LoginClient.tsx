@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  Alert,
   Anchor,
+  Divider,
   Button,
   Center,
   Paper,
@@ -13,7 +15,7 @@ import {
 } from "@mantine/core";
 import { useLogin, useTranslate } from "@refinedev/core";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState, type FormEvent } from "react";
+import { Suspense, useCallback, useEffect, useState, type FormEvent } from "react";
 
 import { PageError } from "@/components/feedback/PageError";
 import { LangSwitcher } from "@/components/LangSwitcher";
@@ -23,6 +25,8 @@ import {
   type LoginSessionProbe,
 } from "@/providers/auth-provider";
 import { useSessionStore } from "@/providers/session-store";
+import { ApiError, apiClient } from "@/lib/api";
+import type { PublicAuthProvider } from "@/features/identity-providers/types";
 
 function LoginForm() {
   const t = useTranslate();
@@ -33,6 +37,26 @@ function LoginForm() {
   }>();
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
+  const [providers, setProviders] = useState<PublicAuthProvider[]>([]);
+  const [providersError, setProvidersError] = useState<string | null>(null);
+
+  const loadProviders = useCallback(() => {
+    void apiClient<{ items: PublicAuthProvider[] }>("/auth/providers")
+      .then((data) => {
+        setProviders(data.items);
+        setProvidersError(null);
+      })
+      .catch((err: unknown) => {
+        setProviders([]);
+        setProvidersError(
+          err instanceof ApiError ? err.detail : t("common.error.loadFailed"),
+        );
+      });
+  }, [t]);
+
+  useEffect(() => {
+    loadProviders();
+  }, [loadProviders]);
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -71,6 +95,25 @@ function LoginForm() {
         <Button type="submit" loading={isPending} fullWidth>
           {t("auth.login.submit")}
         </Button>
+        {providersError ? (
+          <PageError message={providersError} onRetry={loadProviders} />
+        ) : providers.length ? (
+          <>
+            <Divider label={t("auth.login.ssoDivider")} />
+            <Stack gap="xs">
+              {providers.map((provider) => (
+                <Button
+                  key={provider.id}
+                  variant="light"
+                  component="a"
+                  href={`/api/auth/sso/${encodeURIComponent(provider.id)}/start?from=${encodeURIComponent(resolveFromPath(searchParams.get("from")))}`}
+                >
+                  {provider.display_name}
+                </Button>
+              ))}
+            </Stack>
+          </>
+        ) : null}
       </Stack>
     </form>
   );
@@ -105,6 +148,7 @@ function LoginGate() {
   const t = useTranslate();
   const searchParams = useSearchParams();
   const identityError = useSessionStore((s) => s.identityError);
+  const errorCode = searchParams.get("error");
   const [view, setView] = useState<LoginGateView>("probing");
   const fromPath = resolveFromPath(searchParams.get("from"));
 
@@ -150,7 +194,23 @@ function LoginGate() {
               }}
             />
           ) : (
-            <LoginForm />
+            <>
+              {errorCode === "AUTH_SSO_NOT_ADMITTED" ? (
+                <Alert
+                  color="yellow"
+                  title={t("auth.login.sso.pendingTitle")}
+                >
+                  {t("auth.login.error.AUTH_SSO_NOT_ADMITTED")}
+                </Alert>
+              ) : errorCode ? (
+                <PageError
+                  message={t(`auth.login.error.${errorCode}`, {
+                    defaultValue: t("auth.login.error.sso"),
+                  })}
+                />
+              ) : null}
+              <LoginForm />
+            </>
           )}
           <Anchor
             size="xs"

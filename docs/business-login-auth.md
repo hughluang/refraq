@@ -22,13 +22,15 @@ Recommended User fields:
 - `id`: unique identifier
 - `account`: unique login account, initially treated as a username
 - `display_name`: name shown in UI
-- `password_hash`: stored server-side only (local identity source)
+- `password_hash`: stored server-side only; nullable for federated identity
 - `role_id`: optional foreign key to a Role (`null` means no role)
 - `status`: `active` or `disabled`
-- `identity_source`: `local` in this slice (`ldap` reserved)
+- `identity_source`: `local` or `oidc`; `local` permits password login and `oidc` does not
 - `last_login_at`: latest successful login timestamp, nullable
 
 A User without a Role, or with a Role that lacks `console:access`, cannot obtain a Management Console session.
+
+A federated User is still a refraq User: the Identity Provider asserts identity, while refraq issues the Session and evaluates Role and Permission. One User may have at most one external identity binding; the binding key is `(issuer, subject)`, not `account` or email. See `docs/business-identity-providers.md`.
 
 ## 3. Login Identifier Rule
 
@@ -38,14 +40,14 @@ Reason:
 
 - Smaller contract
 - Easier backend and UI implementation
-- Leaves room to evolve to email, LDAP, or SSO later without blocking the slice
+- Keeps the internal account identifier independent from external federation and future login identifiers
 
 ## 4. Successful Login Rule
 
 Login succeeds only when all conditions are true:
 
 1. `account` exists
-2. password matches (for `identity_source=local`)
+2. password matches (for `identity_source=local`), or a validated OIDC assertion resolves to the User external identity
 3. User status is `active`
 4. User has a Role that includes `console:access`
 
@@ -92,6 +94,7 @@ Recommended first-version session policy:
 - idle refresh is optional in v1
 - multiple simultaneous sessions are allowed unless later restricted
 - Session cookie `Secure` follows browser-facing HTTPS stamped by the Console `/api` rewrite (`REFRAQ_BROWSER_FACING_PROTO` → `X-Forwarded-Proto`, then the request URL scheme), not `REFRAQ_ENV` and not client-supplied forwarded headers. HTTP self-deploy must keep the Session; set `REFRAQ_BROWSER_FACING_PROTO=https` when TLS terminates in front of the Console.
+- OIDC callback origin uses that proto plus `REFRAQ_BROWSER_FACING_HOST` (stamped as `X-Forwarded-Host`). When the host is unset, only a loopback Host is accepted so a client-supplied `Host` cannot become `redirect_uri`. Set the host on web and API for any non-loopback Console URL.
 
 Frontend navigation around the session boundary:
 
@@ -161,6 +164,7 @@ Fixed Permission catalog (Foundation + metadata foundation extensions):
 - `catalog:sample`
 - `tokens:read` / `tokens:write`
 - `audit:read`
+- `identity_providers:read` / `identity_providers:write`
 
 Rules:
 
@@ -168,6 +172,8 @@ Rules:
 - Free-form permission strings are rejected
 - Frontend checks are UX only; backend remains authoritative
 - Seeded `operator` keeps `console:access` + `dashboard:read` only (no `settings:*`, no metadata write/query/sample/token/audit by default)
+- `identity_providers:read` lists configured providers and the protocol spec; `identity_providers:write` creates, updates, tests, enables, disables, and deletes them. Neither permission grants Role or User permissions.
+- An auto-provisioned provider default Role must not effectively contain `users:write`, `roles:write`, or `identity_providers:write`; the locked `super_admin` Role is therefore never valid as an auto-provisioning default.
 - Metadata permission meanings: `docs/business-metadata.md` §6; User PAT: `docs/business-user-tokens.md`
 - Session TTL used at login is the **effective** value of the `admin_session_ttl_hours` **System Parameter** (stored value, seeded 8; no env fallback); changing TTL does not rewrite existing sessions — see `docs/business-system-parameters.md` and `docs/api-contracts-settings.md`
 
@@ -219,14 +225,29 @@ Management-plane audit for metadata, secrets, User PAT, and controlled query is 
 - Both resolve to the same **User** and Role **Permission** evaluation.
 - Do not treat Session id as a PAT; do not treat PAT as a **Client** credential.
 
-## 13. Business Non-Goals
+## 13. Federated Login Rules
+
+- The supported protocol is OIDC. The provider row stores `protocol=oidc`. Binding and provisioning consume a normalized external assertion, not OIDC wire types. This slice does not implement another protocol.
+- An enabled Identity Provider has a unique normalized `issuer`. Provider deletion or disablement does not silently change already-bound Users.
+- OIDC login supports provider-level auto-provisioning and a pending-identity queue. Auto-provisioning requires exact allowed-group matching and an available derived account; otherwise no Session is issued and the assertion is pending.
+- When auto-provisioning is enabled, an already-bound User is checked against the provider group allowlist on every login. Failed, missing, or overflowed groups do not issue a Session, modify the User, enqueue pending state, or revoke PATs. When disabled, bound Users skip that check.
+- Missing or overflowed groups are admission failures, not implicit allow. Group values use exact string comparison.
+- Pending identities are not Users. They have one `pending` state, expire at the fixed `expires_at` written on first sight, and later attempts do not extend TTL. The TTL is `sso_pending_ttl_days`.
+- Only `users:write` may list or claim pending identities. Existing-user claim changes only the binding; new-user claim requires a selected Role and leaves no usable local password.
+- A User already bound to another external identity must be unfederated first. Unfederation clears the binding, changes `identity_source` to `local`, and sets a new initial password; Account Center cannot perform it.
+- The last active local `super_admin` cannot be converted to an OIDC User.
+- Provider deletion or disablement confirms bound-user count and may optionally disable those Users through the existing path. Without that option, bound Users remain enabled but the provider cannot authenticate new sessions.
+
+## 14. Non-Goals
 
 The Foundation login/permission slice does not require:
 
 - password reset
 - email verification
 - MFA
-- SSO / LDAP protocol integration (field `identity_source` only)
+- SAML, CAS, LDAP synchronization, and other non-OIDC federation protocols
+- Continuous Role synchronization from an Identity Provider
+- RP-initiated or back-channel logout, SCIM provisioning, and multi-identity-per-User binding
 - Client / machine-token management APIs
 - multi-role assignment per User
 - free-form custom permissions outside the catalog

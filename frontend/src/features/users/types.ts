@@ -11,7 +11,7 @@ export type UserRow = {
   role_key: string | null;
   role_name: string | null;
   status: UserStatus;
-  identity_source: "local";
+  identity_source: "local" | "oidc";
   last_login_at: string | null;
 };
 

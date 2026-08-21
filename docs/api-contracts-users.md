@@ -35,7 +35,7 @@ The former `/admins` resource is retired; clients must use `/users`.
 }
 ```
 
-`role_id`, `role_key`, and `role_name` may be `null` when the User has no Role.
+`role_id`, `role_key`, and `role_name` may be `null` when the User has no Role. `identity_source=oidc` means the local password is unavailable.
 `last_login_at` may be `null` if the User has never signed in.
 `email` may be `null` (optional contact; not unique, not verified).
 `locale` is a supported Console locale code; new Users default to the platform default locale unless provided.
@@ -182,10 +182,36 @@ When `status` is set to `disabled`, the backend invalidates all sessions belongi
 
 `404 USER_NOT_FOUND` if the target User does not exist.
 
-## 6. Non-Goals for this slice
+## 8. Non-Goals
 
 - Hard delete of User records is intentionally not exposed.
 - Password reset / forgot-password flows remain out of scope (self-service password change for the current User is `docs/api-contracts-account.md`).
-- LDAP sync and **Client** (machine principal) credential management are out of scope.
+- LDAP sync, non-OIDC federation, and **Client** (machine principal) credential management are out of scope.
 - **User PAT** is specified separately in `docs/api-contracts-tokens.md` / `docs/business-user-tokens.md` (not a Client API).
 - Self-service profile, locale, and password for the current User are specified in `docs/api-contracts-account.md` / `docs/business-account.md`.
+
+## 6. Pending Federated Identities
+
+Pending identities are administrative handoff records, not Users or Identity Providers. Both endpoints require `users:write`; `users:read` does not expose external claims.
+
+### `GET /users/pending-federated-identities`
+
+Returns an offset page of unexpired pending records: `id`, `issuer`, `subject`, `provider_id`, `account_hint` (the derived account, used to prefill a new-User claim), `email`, `display_name`, `groups` (exact strings), `admission_reason`, `attempt_count`, `first_seen_at`, `last_attempt_at`, and the fixed `expires_at`.
+
+### `POST /users/pending-federated-identities/{id}/claim`
+
+Claim either an existing User or create one with a selected Role:
+
+```json
+{ "user_id": "user_002" }
+```
+
+```json
+{ "create_user": { "account": "alice", "display_name": "Alice", "email": "alice@example.com", "role_id": "role_operator" } }
+```
+
+Existing-user claim changes no Role. New-user claim sets `identity_source=oidc` and no usable local password. A User with another binding cannot be claimed. The last active local `super_admin` cannot be converted. Codes include `PENDING_IDENTITY_NOT_FOUND`, `PENDING_IDENTITY_EXPIRED`, `FEDERATION_ALREADY_BOUND`, `FEDERATION_LAST_LOCAL_SUPER_ADMIN`, and `USER_ACCOUNT_DUPLICATE`.
+
+## 7. `POST /users/{id}/unfederate`
+
+Requires `users:write`; clears the binding, changes `identity_source` to `local`, and sets a new initial password atomically. Account Center and the User cannot call it. A missing or empty `password` fails schema validation with `422 REQUEST_INVALID` before the domain rule runs; `FEDERATION_PASSWORD_REQUIRED` is the domain-boundary guard behind it and is not reachable over HTTP. The reachable code is `FEDERATION_NOT_BOUND`.

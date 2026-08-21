@@ -38,6 +38,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "admin.audit_store",
             "admin.system_parameters",
             "admin.parameters",
+            "admin.federation",
             "admin.routers",
         }
     ),

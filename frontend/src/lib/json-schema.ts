@@ -8,6 +8,7 @@ export type JsonSchemaProperty = {
   minLength?: number;
   maxLength?: number;
   pattern?: string;
+  items?: JsonSchemaProperty;
   "x-secret"?: boolean;
   additionalProperties?: JsonSchemaProperty | boolean;
   properties?: Record<string, JsonSchemaProperty>;

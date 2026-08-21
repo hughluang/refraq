@@ -124,6 +124,7 @@ The mechanism stores keys and values and never names an occupancy window, a Beat
 | --- | --- | --- | --- | --- | --- |
 | `job_lost_detection_sec` | `jobs` | 60 | 15–3600 | No | Widening is live; tightening waits one old renew interval (`max(5, previous/3)` s) before the reaper cutoff shrinks. The hidden system reaper **Scheduled Task** interval is derived from this same value, so the operator's one field is the whole of lost-detection latency |
 | `admin_session_ttl_hours` | `admin` | 8 | 1–168 | No | New **Session**s only; existing sessions keep their `expires_at` |
+| `sso_pending_ttl_days` | `admin` | 7 | 1–30 | No | Only new pending federated identities; existing `expires_at` values do not change |
 
 Ownership follows business language, not the file that reads the value: occupancy lost-detection is a **Job** primitive, so `jobs` owns it even though `worker` reaps.
 

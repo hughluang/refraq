@@ -74,6 +74,7 @@ Recommended modules:
 - `admin/security.py`
 - `admin/console_modules.py` (code-seeded Console Module catalog)
 - `admin/system_parameters/` (System Parameter mechanism: registry, store, resolver, occupy, HTTP)
+- `admin/federation/` (Identity Provider configuration, OIDC validation, binding, pending admission, claim, and unfederation)
 - `admin/parameters.py` (admin-owned System Parameter specs and typed accessors)
 - `admin/roles.py` (Role domain: System Role ensure, Site Bootstrap seed, write invariants)
 - `admin/audit.py` (audit write facade)

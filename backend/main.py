@@ -45,6 +45,7 @@ from backend.admin.routers.roles import router as roles_router
 from backend.admin.system_parameters.router import router as settings_router
 from backend.admin.routers.tokens import router as tokens_router
 from backend.admin.routers.users import router as users_router
+from backend.admin.federation.router import router as federation_router
 from backend.jobs.api import bind_schedule_name_store
 from backend.jobs.routers.jobs import router as jobs_mechanism_router
 from backend.worker.routers.schedules import router as schedules_mechanism_router
@@ -156,6 +157,7 @@ app.include_router(health_router)
 app.include_router(auth_router_instance)
 app.include_router(account_router)
 app.include_router(users_router)
+app.include_router(federation_router)
 app.include_router(roles_router)
 app.include_router(console_router)
 app.include_router(settings_router)

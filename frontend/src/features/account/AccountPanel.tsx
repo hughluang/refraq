@@ -160,7 +160,11 @@ export function AccountPanel() {
           />
           <DisplayField
             label={t("account.fields.identitySource")}
-            value={identity?.identity_source}
+            value={
+              identity?.identity_source
+                ? t(`identitySource.${identity.identity_source}`)
+                : undefined
+            }
           />
         </Stack>
 

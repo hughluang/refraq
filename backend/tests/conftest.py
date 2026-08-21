@@ -10,6 +10,8 @@ os.environ.pop("DATABASE_URL", None)
 os.environ.pop("REDIS_URL", None)
 # Explicit broker for Celery app construction in memory/eager tests (no invented default in core).
 os.environ.setdefault("CELERY_BROKER_URL", "memory://")
+# Canonical Console host so OIDC redirect_uri is not taken from request Host.
+os.environ.setdefault("REFRAQ_BROWSER_FACING_HOST", "127.0.0.1:3000")
 
 import pytest
 
@@ -23,6 +25,11 @@ from backend.admin.role_store import reset_role_store
 from backend.admin.session_store import reset_session_store
 from backend.admin.token_store import reset_token_store
 from backend.admin.user_store import reset_user_store
+from backend.admin.federation.binding_store import reset_binding_store
+from backend.admin.federation.handoff_store import reset_handoff_store
+from backend.admin.federation.pending_store import reset_pending_store
+from backend.admin.federation.provider_store import reset_provider_store
+from backend.admin.federation.protocols.oidc.jwks import reset_jwks_cache
 from backend.jobs.store import reset_job_store
 from backend.metadata.business_domains.store import reset_business_domain_store
 from backend.metadata.catalog.store import reset_catalog_store
@@ -50,6 +57,11 @@ def _reset_foundation_singletons() -> None:
     reset_system_parameters()
     reset_clock()
     reset_user_store()
+    reset_provider_store()
+    reset_binding_store()
+    reset_pending_store()
+    reset_handoff_store()
+    reset_jwks_cache()
     reset_role_store()
     reset_session_store()
     reset_token_store()
@@ -66,6 +78,11 @@ def _reset_foundation_singletons() -> None:
     reset_redis_singleton()
     yield
     reset_user_store()
+    reset_provider_store()
+    reset_binding_store()
+    reset_pending_store()
+    reset_handoff_store()
+    reset_jwks_cache()
     reset_role_store()
     reset_session_store()
     reset_token_store()

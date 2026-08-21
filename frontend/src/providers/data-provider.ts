@@ -10,6 +10,7 @@ const RESOURCE_BASE_URL: Record<string, string> = {
   users: "users",
   roles: "roles",
   permissions: "permissions",
+  "identity-providers": "identity-providers",
 };
 
 function resourceBaseUrl(resource: string): string {
