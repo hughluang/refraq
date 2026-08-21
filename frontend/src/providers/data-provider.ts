@@ -3,13 +3,12 @@ import type { DataProvider } from "@refinedev/core";
 import { apiClient, ApiError } from "@/lib/api";
 import { pageToOffset, type OffsetPage } from "@/lib/pagination";
 
-/** Documented Offset Page max for users / roles / tokens pickers (`mode: "off"`). */
+/** Documented Offset Page max for users / roles pickers (`mode: "off"`). */
 const FOUNDATION_LIST_MAX_LIMIT = 200;
 
 const RESOURCE_BASE_URL: Record<string, string> = {
   users: "users",
   roles: "roles",
-  permissions: "permissions",
   "identity-providers": "identity-providers",
 };
 
@@ -59,13 +58,6 @@ export const dataProvider: DataProvider = {
 
   async getList<T = Record<string, unknown>>(params: GetListParams): Promise<GetListResult<T>> {
     const base = resourceBaseUrl(params.resource);
-    if (params.resource === "permissions") {
-      const data = await apiClient<{ items: T[] }>(`/${base}`);
-      return {
-        data: data.items,
-        total: data.items.length,
-      };
-    }
     const pageSize = params.pagination?.pageSize ?? 50;
     const current = params.pagination?.currentPage ?? 1;
     const limit =

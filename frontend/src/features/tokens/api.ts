@@ -2,12 +2,16 @@ import { apiClient } from "@/lib/api";
 import type {
   CreateTokenRequest,
   CreateTokenResponse,
-  TokenListResponse,
   TokenMetadata,
 } from "@/features/tokens/types";
+import type { OffsetPage, PageQuery } from "@/lib/pagination";
 
-export function listTokens() {
-  return apiClient<TokenListResponse>("/tokens");
+export function listTokens(query: PageQuery) {
+  const qs = new URLSearchParams({
+    limit: String(query.limit),
+    offset: String(query.offset),
+  });
+  return apiClient<OffsetPage<TokenMetadata>>(`/tokens?${qs.toString()}`);
 }
 
 export function createToken(body: CreateTokenRequest) {

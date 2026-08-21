@@ -46,6 +46,7 @@ This document records the stable development conventions for contributors workin
   - Direct `uvicorn` runs **Site Bootstrap** only (empty stores). It does not run schema migrate or System Role identity ensure, and it does not start or reload Celery.
   - After schema changes, run `python -m backend.core.upgrade` (or use `entry`), then restart worker and Beat (`docs/env.md` §8). Super Admin effective permissions follow the Permission catalog by identity; adding a catalog key does not require Upgrade for Super Admin authz.
 - Run API tests (memory Store Backend via conftest): `pytest backend/tests -q`
+- Catalog store dual-adapter contract: `pytest backend/tests/test_catalog_store_conformance.py -q` (Memory always; SQL param runs when Compose Postgres is up, otherwise skips). Run this file when changing `backend/metadata/catalog/store/`.
 - Run integration tests (Compose must be up): `pytest backend/tests -q -m integration`
   - Uses isolated stores by default: Postgres DB `refraq_test` + Redis logical DB `1` (does not TRUNCATE/FLUSH interactive `refraq` / Redis `0`)
   - Override with `REFRAQ_INTEGRATION_DATABASE_URL` / `REFRAQ_INTEGRATION_REDIS_URL` if needed

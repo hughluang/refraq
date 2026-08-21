@@ -14,9 +14,21 @@ from backend.admin.deps import resolve_pat_bearer, resolve_user_permissions
 from backend.admin.errors import AuthForbidden, AuthUnauthenticated
 from backend.admin.permissions import permissions_include
 from backend.admin.role_store import get_role_store
-from backend.admin.user_store import UserRecord
+from backend.admin.user_store import UserRecord, get_user_store
 from backend.core.errors import AppError
+from backend.core.pagination import (
+    BUSINESS_DOMAIN_LIST,
+    CATALOG_OBJECT_LIST,
+    CATALOG_SEARCH,
+    JOIN_LIST,
+    SOURCE_SEARCH,
+)
 from backend.core.time import format_instant
+from backend.jobs.api import (
+    bind_schedule_name_store,
+    get_schedule_name_store,
+    present_jobs,
+)
 from backend.jobs.errors import JobNotFound
 from backend.jobs.store import get_job_store
 from backend.metadata.business_domains import service as domain_service
@@ -25,11 +37,20 @@ from backend.metadata.catalog import refs as catalog_refs
 from backend.metadata.catalog import semantics as catalog_semantics
 from backend.metadata.catalog import service as catalog_reads
 from backend.metadata.catalog import views as catalog_views
+from backend.metadata.catalog.present import (
+    ObjectPresentProfile,
+    present_column,
+    present_object,
+)
 from backend.metadata.catalog.join_origin import MCP_JOIN_ORIGIN
 from backend.metadata.query import service as query_service
 from backend.metadata.sources import service as source_service
-from backend.metadata.sources.store import get_source_store
+from backend.worker.schedules import get_schedule_store
 
+# The MCP tool host is its own process entry, so it binds the Scheduled Task
+# name adapter the way `main` does for HTTP. Without this, presenting a Job
+# raises "schedule name store is not bound".
+bind_schedule_name_store(get_schedule_store)
 
 mcp = MCPServer("refraq-metadata")
 
@@ -78,13 +99,19 @@ def _clamp(value: int | None, *, default: int, maximum: int) -> int:
         return default
     return max(1, min(maximum, int(value)))
 
+
 def _object_payload(
     view: catalog_views.ObjectView, *, include_columns: bool
 ) -> dict[str, Any]:
-    return catalog_views.object_view_as_dict(view, include_columns=include_columns)
+    profile = (
+        ObjectPresentProfile.MCP_DETAIL
+        if include_columns
+        else ObjectPresentProfile.MCP_SUMMARY
+    )
+    return present_object(view, profile=profile)
 
 def _join_payload_from_record(record: Any) -> dict[str, Any]:
-    return catalog_views.join_view_as_dict(catalog_views.join_view(record))
+    return asdict(catalog_views.join_view(record))
 
 @mcp.tool()
 def search_sources(
@@ -97,23 +124,14 @@ def search_sources(
     try:
         user, _token_id = _actor_from_token(authorization)
         _require(user, "sources:read")
-        items, _ = get_source_store().list_sources()
-        if query_text:
-            ql = query_text.lower()
-            items = [
-                s
-                for s in items
-                if ql in s.key.lower()
-                or ql in s.name.lower()
-                or ql in (s.locator_key or "").lower()
-            ]
-        total = len(items)
-        lim = _clamp(limit, default=50, maximum=200)
+        lim = SOURCE_SEARCH.clamp(limit)
         off = max(0, int(offset or 0))
-        page = items[off : off + lim]
+        items, total = source_service.list_sources_page(
+            query_text=query_text, limit=lim, offset=off
+        )
         return _dumps(
             {
-                "items": [source_service.public_view(s) for s in page],
+                "items": items,
                 "total": total,
                 "limit": lim,
                 "offset": off,
@@ -148,7 +166,7 @@ def list_objects(
         user, _token_id = _actor_from_token(authorization)
         _require(user, "metadata:read")
         source = catalog_refs.resolve_source_ref(source_locator_key)
-        lim = _clamp(limit, default=100, maximum=500)
+        lim = CATALOG_OBJECT_LIST.clamp(limit)
         off = max(0, int(offset or 0))
         items, total = catalog_reads.list_objects_for_source(
             source.id,
@@ -200,20 +218,13 @@ def get_job(authorization: str, job_id: str) -> str:
         _require(user, "jobs:run")
         record = get_job_store().get(job_id)
         if record is None:
-
             raise JobNotFound()
-        return _dumps(
-            {
-                "id": record.id,
-                "kind": record.kind,
-                "status": record.status,
-                "input": record.input,
-                "summary": record.summary,
-                "result": record.result,
-                "error_code": record.error_code,
-                "error_message": record.error_summary,
-            }
+        presented = present_jobs(
+            [record],
+            users=get_user_store(),
+            schedules=get_schedule_name_store(),
         )
+        return _dumps(presented[0].model_dump())
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
@@ -333,7 +344,7 @@ def list_business_domains(
         user, _token_id = _actor_from_token(authorization)
         _require(user, "metadata:read")
 
-        lim = _clamp(limit, default=100, maximum=500)
+        lim = BUSINESS_DOMAIN_LIST.clamp(limit)
         off = max(0, int(offset or 0))
         items, total = domain_service.list_domains(
             q=query_text, limit=lim, offset=off
@@ -409,7 +420,7 @@ def search_objects(
         source_id = None
         if source_locator_key:
             source_id = catalog_refs.resolve_source_ref(source_locator_key).id
-        lim = _clamp(limit, default=20, maximum=100)
+        lim = CATALOG_SEARCH.clamp(limit)
         off = max(0, int(offset or 0))
         items, total = catalog_reads.search_objects(
             query_text or "",
@@ -445,7 +456,7 @@ def search_columns(
         source_id = None
         if source_locator_key:
             source_id = catalog_refs.resolve_source_ref(source_locator_key).id
-        lim = _clamp(limit, default=20, maximum=100)
+        lim = CATALOG_SEARCH.clamp(limit)
         off = max(0, int(offset or 0))
         items, total = catalog_reads.search_columns(
             query_text or "",
@@ -456,7 +467,9 @@ def search_columns(
         )
         return _dumps(
             {
-                "items": [catalog_views.column_view_as_dict(c) for c in items],
+                "items": [
+                    present_column(c, include_normalized_type=False) for c in items
+                ],
                 "total": total,
                 "limit": lim,
                 "offset": off,
@@ -477,12 +490,12 @@ def list_joins(
         user, _token_id = _actor_from_token(authorization)
         _require(user, "metadata:read")
         o = catalog_refs.resolve_object_ref(object_locator_key)
-        lim = _clamp(limit, default=50, maximum=200)
+        lim = JOIN_LIST.clamp(limit)
         off = max(0, int(offset or 0))
         items, total = catalog_joins.list_joins(o.id, limit=lim, offset=off)
         return _dumps(
             {
-                "items": [catalog_views.join_view_as_dict(j) for j in items],
+                "items": [asdict(j) for j in items],
                 "total": total,
                 "limit": lim,
                 "offset": off,
@@ -694,9 +707,7 @@ def find_join_path(
                     }
                     for path in result.paths
                 ],
-                "direct_joins": [
-                    catalog_views.join_view_as_dict(j) for j in result.direct_joins
-                ],
+                "direct_joins": [asdict(j) for j in result.direct_joins],
                 "reason": result.reason,
             }
         )

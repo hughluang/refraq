@@ -18,7 +18,9 @@ import { CanAccess, useCan, useNotification, useTranslate } from "@refinedev/cor
 import Link from "next/link";
 import { useCallback, useState } from "react";
 
+import { CreateListAction } from "@/components/access/CreateListAction";
 import { ListTable } from "@/components/display/ListTable";
+import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
@@ -38,6 +40,7 @@ import type {
   Source,
   SourceAccess,
 } from "@/features/sources/types";
+import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { usePagedList } from "@/hooks/usePagedList";
 import { ApiError } from "@/lib/api";
 import { listPresentationOf } from "@/lib/list-state";
@@ -102,8 +105,8 @@ export function SourceList() {
   const [schema, setSchema] = useState<ConnectorSpec | null>(null);
   const [access, setAccess] = useState<SourceAccess>({});
 
-  const [enginePending, setEnginePending] = useState<Engine | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<Source | null>(null);
+  const engineConfirm = useConfirmAction<Engine>();
+  const deleteConfirm = useConfirmAction<Source>();
   const [deleting, setDeleting] = useState(false);
 
   const showActions = Boolean(
@@ -223,7 +226,7 @@ export function SourceList() {
       void applyEngine(next);
       return;
     }
-    setEnginePending(next);
+    engineConfirm.open(next);
   };
 
   const runProbe = async () => {
@@ -269,15 +272,16 @@ export function SourceList() {
   };
 
   const confirmDelete = async () => {
-    if (!pendingDelete) return;
+    const pending = deleteConfirm.pending;
+    if (!pending) return;
     setDeleting(true);
     try {
-      await deleteSource(pendingDelete.id);
+      await deleteSource(pending.id);
       open?.({
         type: "success",
         message: t("sources.delete.success"),
       });
-      setPendingDelete(null);
+      deleteConfirm.close();
       await reload();
     } catch (err) {
       open?.({
@@ -291,11 +295,12 @@ export function SourceList() {
   };
 
   const createAction = (
-    <CanAccess resource={ModuleId.sources} action={ModuleAction.create}>
-      <Button size="sm" onClick={() => void openCreate()}>
-        {t("sources.create")}
-      </Button>
-    </CanAccess>
+    <CreateListAction
+      resource={ModuleId.sources}
+      onClick={() => void openCreate()}
+    >
+      {t("sources.create")}
+    </CreateListAction>
   );
 
   return (
@@ -404,7 +409,7 @@ export function SourceList() {
                             disabled={
                               source.status !== "disabled" || deleting
                             }
-                            onClick={() => setPendingDelete(source)}
+                            onClick={() => deleteConfirm.open(source)}
                           >
                             {t("sources.delete")}
                           </Button>
@@ -550,63 +555,38 @@ export function SourceList() {
           </form>
         </Modal>
 
-        <Modal
+        <ConfirmActionModal
           stackId="engine-switch"
-          opened={enginePending !== null}
-          onClose={() => setEnginePending(null)}
+          opened={engineConfirm.opened}
+          onClose={engineConfirm.close}
           title={t("sources.engineSwitch.title")}
+          body={t("sources.engineSwitch.body")}
+          confirmLabel={t("sources.engineSwitch.confirm")}
           size="sm"
-        >
-          <Stack gap="md">
-            <Text size="sm">{t("sources.engineSwitch.body")}</Text>
-            <Group justify="flex-end">
-              <Button variant="default" onClick={() => setEnginePending(null)}>
-                {t("common.cancel")}
-              </Button>
-              <Button
-                onClick={() => {
-                  const next = enginePending;
-                  setEnginePending(null);
-                  if (next) void applyEngine(next);
-                }}
-              >
-                {t("sources.engineSwitch.confirm")}
-              </Button>
-            </Group>
-          </Stack>
-        </Modal>
+          onConfirm={() => {
+            const next = engineConfirm.pending;
+            engineConfirm.close();
+            if (next) void applyEngine(next);
+          }}
+        />
 
-        <Modal
+        <ConfirmActionModal
           stackId="source-delete"
-          opened={pendingDelete !== null}
-          onClose={() => setPendingDelete(null)}
+          opened={deleteConfirm.opened}
+          onClose={deleteConfirm.close}
           title={t("sources.delete.confirmTitle")}
+          body={
+            deleteConfirm.pending
+              ? t("sources.delete.confirmBody", {
+                  name: deleteConfirm.pending.name,
+                })
+              : null
+          }
+          confirmColor="red"
+          loading={deleting}
           size="sm"
-        >
-          <Stack gap="md">
-            <Text size="sm">
-              {pendingDelete
-                ? t("sources.delete.confirmBody", { name: pendingDelete.name })
-                : null}
-            </Text>
-            <Group justify="flex-end">
-              <Button
-                variant="default"
-                onClick={() => setPendingDelete(null)}
-                disabled={deleting}
-              >
-                {t("common.cancel")}
-              </Button>
-              <Button
-                color="red"
-                loading={deleting}
-                onClick={() => void confirmDelete()}
-              >
-                {t("common.confirm")}
-              </Button>
-            </Group>
-          </Stack>
-        </Modal>
+          onConfirm={() => void confirmDelete()}
+        />
       </Modal.Stack>
     </PageChrome>
   );

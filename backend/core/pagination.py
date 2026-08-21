@@ -22,6 +22,25 @@ class PageParams:
     offset: int
 
 
+@dataclass(frozen=True, slots=True)
+class PageBounds:
+    default_limit: int
+    max_limit: int
+
+    def clamp(self, value: int | None) -> int:
+        if value is None:
+            return self.default_limit
+        return max(1, min(self.max_limit, int(value)))
+
+
+CATALOG_OBJECT_LIST = PageBounds(default_limit=100, max_limit=500)
+CATALOG_SEARCH = PageBounds(default_limit=20, max_limit=100)
+JOIN_LIST = PageBounds(default_limit=50, max_limit=200)
+SOURCE_LIST = PageBounds(default_limit=100, max_limit=500)
+SOURCE_SEARCH = PageBounds(default_limit=50, max_limit=200)
+BUSINESS_DOMAIN_LIST = PageBounds(default_limit=100, max_limit=500)
+
+
 class OffsetPage(BaseModel, Generic[T]):
     items: list[T]
     total: int
@@ -30,12 +49,26 @@ class OffsetPage(BaseModel, Generic[T]):
 
 
 def page_params(
-    *, default_limit: int, max_limit: int
+    bounds: PageBounds | None = None,
+    *,
+    default_limit: int | None = None,
+    max_limit: int | None = None,
 ) -> Callable[..., PageParams]:
-    """FastAPI dependency factory for Offset Page `limit` / `offset`."""
+    """FastAPI dependency factory for Offset Page `limit` / `offset`.
+
+    Pass a named ``PageBounds`` or explicit ``default_limit`` / ``max_limit``.
+    """
+    if bounds is not None:
+        if default_limit is not None or max_limit is not None:
+            raise TypeError("pass PageBounds or default_limit/max_limit, not both")
+        lo, hi = bounds.default_limit, bounds.max_limit
+    elif default_limit is None or max_limit is None:
+        raise TypeError("page_params requires PageBounds or default_limit and max_limit")
+    else:
+        lo, hi = default_limit, max_limit
 
     def dependency(
-        limit: int = Query(default=default_limit, ge=1, le=max_limit),
+        limit: int = Query(default=lo, ge=1, le=hi),
         offset: int = Query(default=0, ge=0),
     ) -> PageParams:
         return PageParams(limit=limit, offset=offset)

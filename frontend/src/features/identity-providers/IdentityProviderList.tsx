@@ -19,7 +19,9 @@ import {
 } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
+import { CreateListAction } from "@/components/access/CreateListAction";
 import { ListTable } from "@/components/display/ListTable";
+import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
@@ -39,6 +41,7 @@ import type {
   IdentityProviderFormValues,
   IdentityProviderTestResult,
 } from "@/features/identity-providers/types";
+import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { usePagedList } from "@/hooks/usePagedList";
 import { ApiError } from "@/lib/api";
 import { listPresentationOf } from "@/lib/list-state";
@@ -60,12 +63,8 @@ export function IdentityProviderList() {
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResult, setTestResult] =
     useState<IdentityProviderTestResult | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<IdentityProvider | null>(
-    null,
-  );
-  const [pendingDisable, setPendingDisable] = useState<IdentityProvider | null>(
-    null,
-  );
+  const deleteConfirm = useConfirmAction<IdentityProvider>();
+  const disableConfirm = useConfirmAction<IdentityProvider>();
   const [disableBoundUsers, setDisableBoundUsers] = useState(false);
   const [cascadeOnDisable, setCascadeOnDisable] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -132,11 +131,11 @@ export function IdentityProviderList() {
 
   const toggleEnabled = async (row: IdentityProvider) => {
     if (row.enabled) {
-      setPendingDisable(row);
+      disableConfirm.open(row);
       setCascadeOnDisable(false);
       try {
         const { provider } = await getIdentityProvider(row.id);
-        setPendingDisable(provider);
+        disableConfirm.open(provider);
       } catch (err) {
         notifyError(err, t("common.error.loadFailed"));
       }
@@ -155,11 +154,12 @@ export function IdentityProviderList() {
   };
 
   const confirmDisable = async () => {
-    if (!pendingDisable) return;
+    const pending = disableConfirm.pending;
+    if (!pending) return;
     setDisabling(true);
     try {
       await patchIdentityProvider(
-        pendingDisable.id,
+        pending.id,
         { enabled: false },
         { disableBoundUsers: cascadeOnDisable },
       );
@@ -167,7 +167,7 @@ export function IdentityProviderList() {
         type: "success",
         message: t("identityProviders.disable.success"),
       });
-      setPendingDisable(null);
+      disableConfirm.close();
       await reload();
     } catch (err) {
       notifyError(err, t("common.error.loadFailed"));
@@ -189,26 +189,27 @@ export function IdentityProviderList() {
   };
 
   const openDelete = async (row: IdentityProvider) => {
-    setPendingDelete(row);
+    deleteConfirm.open(row);
     setDisableBoundUsers(false);
     try {
       const { provider } = await getIdentityProvider(row.id);
-      setPendingDelete(provider);
+      deleteConfirm.open(provider);
     } catch (err) {
       notifyError(err, t("common.error.loadFailed"));
     }
   };
 
   const confirmDelete = async () => {
-    if (!pendingDelete) return;
+    const pending = deleteConfirm.pending;
+    if (!pending) return;
     setDeleting(true);
     try {
-      await deleteIdentityProvider(pendingDelete.id, disableBoundUsers);
+      await deleteIdentityProvider(pending.id, disableBoundUsers);
       open?.({
         type: "success",
         message: t("identityProviders.delete.success"),
       });
-      setPendingDelete(null);
+      deleteConfirm.close();
       await reload();
     } catch (err) {
       notifyError(err, t("common.error.loadFailed"));
@@ -218,20 +219,15 @@ export function IdentityProviderList() {
   };
 
   const createAction = (
-    <CanAccess
+    <CreateListAction
       resource={ModuleId.identityProviders}
-      action={ModuleAction.create}
+      onClick={() => {
+        setEditing(undefined);
+        setFormOpen(true);
+      }}
     >
-      <Button
-        size="sm"
-        onClick={() => {
-          setEditing(undefined);
-          setFormOpen(true);
-        }}
-      >
-        {t("identityProviders.create")}
-      </Button>
-    </CanAccess>
+      {t("identityProviders.create")}
+    </CreateListAction>
   );
 
   return (
@@ -407,97 +403,67 @@ export function IdentityProviderList() {
           ) : null}
         </Modal>
 
-        <Modal
+        <ConfirmActionModal
           stackId="identity-provider-disable"
-          opened={pendingDisable !== null}
-          onClose={() => setPendingDisable(null)}
+          opened={disableConfirm.opened}
+          onClose={disableConfirm.close}
           title={t("identityProviders.disable.confirmTitle")}
+          body={
+            disableConfirm.pending
+              ? t("identityProviders.disable.confirmBody", {
+                  count: disableConfirm.pending.bound_user_count,
+                })
+              : null
+          }
+          confirmColor="red"
+          loading={disabling}
           size="md"
+          onConfirm={() => void confirmDisable()}
         >
-          <Stack gap="md">
-            <Text size="sm">
-              {pendingDisable
-                ? t("identityProviders.disable.confirmBody", {
-                    count: pendingDisable.bound_user_count,
-                  })
-                : null}
+          <Checkbox
+            label={t("identityProviders.disable.disableBound")}
+            checked={cascadeOnDisable}
+            onChange={(event) =>
+              setCascadeOnDisable(event.currentTarget.checked)
+            }
+          />
+          {cascadeOnDisable ? (
+            <Text size="sm" c="dimmed">
+              {t("identityProviders.disable.skipSelf")}
             </Text>
-            <Checkbox
-              label={t("identityProviders.disable.disableBound")}
-              checked={cascadeOnDisable}
-              onChange={(event) =>
-                setCascadeOnDisable(event.currentTarget.checked)
-              }
-            />
-            {cascadeOnDisable ? (
-              <Text size="sm" c="dimmed">
-                {t("identityProviders.disable.skipSelf")}
-              </Text>
-            ) : null}
-            <Group justify="flex-end">
-              <Button
-                variant="default"
-                onClick={() => setPendingDisable(null)}
-                disabled={disabling}
-              >
-                {t("common.cancel")}
-              </Button>
-              <Button
-                color="red"
-                loading={disabling}
-                onClick={() => void confirmDisable()}
-              >
-                {t("common.confirm")}
-              </Button>
-            </Group>
-          </Stack>
-        </Modal>
+          ) : null}
+        </ConfirmActionModal>
 
-        <Modal
+        <ConfirmActionModal
           stackId="identity-provider-delete"
-          opened={pendingDelete !== null}
-          onClose={() => setPendingDelete(null)}
+          opened={deleteConfirm.opened}
+          onClose={deleteConfirm.close}
           title={t("identityProviders.delete.confirmTitle")}
+          body={
+            deleteConfirm.pending
+              ? t("identityProviders.delete.confirmBody", {
+                  count: deleteConfirm.pending.bound_user_count,
+                })
+              : null
+          }
+          confirmColor="red"
+          loading={deleting}
           size="md"
+          onConfirm={() => void confirmDelete()}
         >
-          <Stack gap="md">
-            <Text size="sm">
-              {pendingDelete
-                ? t("identityProviders.delete.confirmBody", {
-                    count: pendingDelete.bound_user_count,
-                  })
-                : null}
+          <Checkbox
+            label={t("identityProviders.delete.disableBound")}
+            checked={disableBoundUsers}
+            onChange={(event) =>
+              setDisableBoundUsers(event.currentTarget.checked)
+            }
+          />
+          {disableBoundUsers ? (
+            <Text size="sm" c="dimmed">
+              {t("identityProviders.disable.skipSelf")}
             </Text>
-            <Checkbox
-              label={t("identityProviders.delete.disableBound")}
-              checked={disableBoundUsers}
-              onChange={(event) =>
-                setDisableBoundUsers(event.currentTarget.checked)
-              }
-            />
-            {disableBoundUsers ? (
-              <Text size="sm" c="dimmed">
-                {t("identityProviders.disable.skipSelf")}
-              </Text>
-            ) : null}
-            <Group justify="flex-end">
-              <Button
-                variant="default"
-                onClick={() => setPendingDelete(null)}
-                disabled={deleting}
-              >
-                {t("common.cancel")}
-              </Button>
-              <Button
-                color="red"
-                loading={deleting}
-                onClick={() => void confirmDelete()}
-              >
-                {t("common.confirm")}
-              </Button>
-            </Group>
-          </Stack>
-        </Modal>
+          ) : null}
+        </ConfirmActionModal>
       </Modal.Stack>
     </PageChrome>
   );

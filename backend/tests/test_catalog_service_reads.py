@@ -38,7 +38,16 @@ from backend.metadata.errors import (  # noqa: E402
     CatalogSearchQueryRequired,
     JoinPathUnavailable,
 )
-from backend.metadata.mcp_server import find_join_path, list_objects as mcp_list_objects  # noqa: E402
+from backend.metadata.mcp_server import (  # noqa: E402
+    find_join_path,
+    get_object as mcp_get_object,
+    get_object_ddl as mcp_get_object_ddl,
+    list_joins as mcp_list_joins,
+    list_objects as mcp_list_objects,
+    search_columns as mcp_search_columns,
+    search_objects as mcp_search_objects,
+    search_sources as mcp_search_sources,
+)
 from backend.metadata.sources.service import require_source  # noqa: E402
 from backend.metadata.sources.store import (  # noqa: E402
     SourceRecord,
@@ -339,6 +348,135 @@ def test_list_filters_http_and_mcp(client: TestClient) -> None:
     assert with_absent.json()["total"] == 2
     assert present_only.json()["total"] == 1
     assert with_absent.json()["total"] != present_only.json()["total"]
+
+
+_OBJECT_IDENTITY = (
+    "id",
+    "locator_key",
+    "source_id",
+    "name",
+    "schema_name",
+    "object_type",
+    "is_present",
+)
+_MCP_SUMMARY_OMIT = frozenset({"columns", "foreign_keys", "indexes", "ddl"})
+_MCP_DETAIL_OMIT = frozenset({"foreign_keys", "indexes"})
+
+
+def _pat_secret(client: TestClient) -> str:
+    expires = format_instant(utc_now() + timedelta(days=7))
+    tok = client.post("/tokens", json={"name": "parity-pat", "expires_at": expires})
+    assert tok.status_code == 201, tok.text
+    return tok.json()["secret"]
+
+
+def _pick(payload: dict, keys: tuple[str, ...]) -> dict:
+    return {k: payload[k] for k in keys}
+
+
+def test_catalog_http_mcp_projection_parity(client: TestClient) -> None:
+    _seed_source()
+    apply_structure_snapshot(
+        source=require_source("src_1"),
+        job_id="j1",
+        collected=[_table("obj_a", "orders", [("col_id", "id")])],
+        schema_scope=None,
+        fail_safe_threshold=1.0,
+    )
+    get_catalog_store().upsert_join(
+        from_column_id="col_id",
+        to_column_id="col_id",
+        evidence="self probe",
+        created_by_user_id=None,
+        attester="human",
+        join_expression="id = id",
+    )
+    secret = _pat_secret(client)
+    auth = f"Bearer {secret}"
+    locator = "obj/postgresql/mes/public/table/orders"
+
+    http_list = client.get("/sources/src_1/objects")
+    assert http_list.status_code == 200
+    mcp_list = json.loads(
+        mcp_list_objects(authorization=auth, source_locator_key="src/postgresql/mes")
+    )
+    assert "error" not in mcp_list, mcp_list
+    assert http_list.json()["total"] == mcp_list["total"] == 1
+    http_item = http_list.json()["items"][0]
+    mcp_item = mcp_list["items"][0]
+    assert _pick(http_item, _OBJECT_IDENTITY) == _pick(mcp_item, _OBJECT_IDENTITY)
+    assert http_item["columns"] == []
+    assert http_item["foreign_keys"] == []
+    assert _MCP_SUMMARY_OMIT.isdisjoint(mcp_item)
+
+    http_obj = client.get("/objects/obj_a")
+    assert http_obj.status_code == 200
+    mcp_obj = json.loads(mcp_get_object(authorization=auth, object_locator_key=locator))
+    assert "error" not in mcp_obj, mcp_obj
+    http_detail = http_obj.json()["object"]
+    assert _pick(http_detail, _OBJECT_IDENTITY) == _pick(mcp_obj, _OBJECT_IDENTITY)
+    assert "foreign_keys" in http_detail
+    assert "indexes" in http_detail
+    assert _MCP_DETAIL_OMIT.isdisjoint(mcp_obj)
+    assert "normalized_type" in http_detail["columns"][0]
+    assert "normalized_type" not in mcp_obj["columns"][0]
+
+    http_search = client.get("/catalog/objects/search?q=order")
+    mcp_search = json.loads(
+        mcp_search_objects(authorization=auth, query_text="order")
+    )
+    assert http_search.status_code == 200
+    assert "error" not in mcp_search, mcp_search
+    assert http_search.json()["total"] == mcp_search["total"]
+    assert _pick(http_search.json()["items"][0], _OBJECT_IDENTITY) == _pick(
+        mcp_search["items"][0], _OBJECT_IDENTITY
+    )
+    assert _MCP_SUMMARY_OMIT.isdisjoint(mcp_search["items"][0])
+
+    http_cols = client.get("/catalog/columns/search?q=id")
+    mcp_cols = json.loads(mcp_search_columns(authorization=auth, query_text="id"))
+    assert http_cols.status_code == 200
+    assert "error" not in mcp_cols, mcp_cols
+    assert http_cols.json()["total"] == mcp_cols["total"]
+    assert http_cols.json()["items"][0]["id"] == mcp_cols["items"][0]["id"]
+    assert "normalized_type" in http_cols.json()["items"][0]
+    assert "normalized_type" not in mcp_cols["items"][0]
+
+    http_joins = client.get("/objects/obj_a/joins")
+    mcp_joins = json.loads(mcp_list_joins(authorization=auth, object_locator_key=locator))
+    assert http_joins.status_code == 200
+    assert "error" not in mcp_joins, mcp_joins
+    assert http_joins.json()["total"] == mcp_joins["total"] == 1
+    assert http_joins.json()["items"][0]["id"] == mcp_joins["items"][0]["id"]
+
+    http_ddl = client.get("/objects/obj_a/ddl")
+    mcp_ddl = json.loads(mcp_get_object_ddl(authorization=auth, object_locator_key=locator))
+    assert http_ddl.status_code == 200
+    assert "error" not in mcp_ddl, mcp_ddl
+    assert http_ddl.json()["id"] == mcp_ddl["id"]
+    assert http_ddl.json()["ddl"] == mcp_ddl["ddl"]
+    assert "locator_key" not in http_ddl.json()
+    assert mcp_ddl["locator_key"] == locator
+
+    http_sources = client.get("/sources?limit=50")
+    mcp_sources = json.loads(mcp_search_sources(authorization=auth, limit=50))
+    assert http_sources.status_code == 200
+    assert "error" not in mcp_sources, mcp_sources
+    assert http_sources.json()["total"] == mcp_sources["total"]
+    http_src = http_sources.json()["items"][0]
+    mcp_src = mcp_sources["items"][0]
+    assert http_src["id"] == mcp_src["id"]
+    assert http_src["key"] == mcp_src["key"]
+    assert http_src["locator_key"] == mcp_src["locator_key"]
+
+    filtered = json.loads(
+        mcp_search_sources(authorization=auth, query_text="mes", limit=50)
+    )
+    assert filtered["total"] == 1
+    miss = json.loads(
+        mcp_search_sources(authorization=auth, query_text="zzz-no-such", limit=50)
+    )
+    assert miss["total"] == 0
 
 
 def test_service_lookup_join_paths() -> None:

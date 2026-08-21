@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from backend.core.config import get_settings
 from backend.core.db import session_scope
 from backend.metadata.errors import BusinessDomainCodeConflict, BusinessDomainNotFound
-from backend.metadata.models import BusinessDomainRow, CatalogObjectRow
+from backend.metadata.models import BusinessDomainRow
 
 
 __all__ = [
@@ -28,6 +28,7 @@ __all__ = [
     "reset_business_domain_store",
 ]
 
+
 @dataclass
 class BusinessDomainRecord:
     id: str
@@ -37,8 +38,10 @@ class BusinessDomainRecord:
     created_at: datetime
     updated_at: datetime
 
+
 def new_business_domain_id() -> str:
     return f"bd_{uuid.uuid4().hex[:12]}"
+
 
 class BusinessDomainStore(Protocol):
     def list_domains(
@@ -52,13 +55,12 @@ class BusinessDomainStore(Protocol):
     def save(self, record: BusinessDomainRecord) -> BusinessDomainRecord: ...
 
     def delete(self, domain_id: str) -> bool: ...
-    def count_object_refs(self, domain_id: str) -> int: ...
+
 
 class MemoryBusinessDomainStore:
     def __init__(self) -> None:
         self._domains: dict[str, BusinessDomainRecord] = {}
         self._by_code: dict[str, str] = {}
-        self._object_refs: dict[str, set[str]] = {}
         self._lock = threading.Lock()
 
     def list_domains(
@@ -113,21 +115,8 @@ class MemoryBusinessDomainStore:
                 return False
             if self._by_code.get(existing.code) == domain_id:
                 del self._by_code[existing.code]
-            self._object_refs.pop(domain_id, None)
             return True
 
-    def count_object_refs(self, domain_id: str) -> int:
-        with self._lock:
-            return len(self._object_refs.get(domain_id, set()))
-
-    def set_object_ref(self, object_id: str, domain_id: str | None) -> None:
-        """Memory-only helper so catalog store can track RESTRICT refs."""
-        with self._lock:
-            for refs in self._object_refs.values():
-                refs.discard(object_id)
-            if domain_id is None:
-                return
-            self._object_refs.setdefault(domain_id, set()).add(object_id)
 
 class SqlBusinessDomainStore:
     def list_domains(
@@ -210,15 +199,6 @@ class SqlBusinessDomainStore:
             session.flush()
             return True
 
-    def count_object_refs(self, domain_id: str) -> int:
-        with session_scope() as session:
-            return int(
-                session.execute(
-                    select(func.count())
-                    .select_from(CatalogObjectRow)
-                    .where(CatalogObjectRow.business_domain_id == domain_id)
-                ).scalar_one()
-            )
 
 def _row_to_record(row: object) -> BusinessDomainRecord:
     assert isinstance(row, BusinessDomainRow)
@@ -231,8 +211,10 @@ def _row_to_record(row: object) -> BusinessDomainRecord:
         updated_at=row.updated_at,
     )
 
+
 _memory_singleton: MemoryBusinessDomainStore | None = None
 _memory_lock = threading.Lock()
+
 
 @lru_cache
 def get_business_domain_store() -> MemoryBusinessDomainStore | SqlBusinessDomainStore:
@@ -244,6 +226,7 @@ def get_business_domain_store() -> MemoryBusinessDomainStore | SqlBusinessDomain
                 _memory_singleton = MemoryBusinessDomainStore()
             return _memory_singleton
     return SqlBusinessDomainStore()
+
 
 def reset_business_domain_store() -> None:
     global _memory_singleton

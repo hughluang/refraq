@@ -104,7 +104,7 @@ Pickers that need a closed option set (role Select, Source Select) fetch one pag
 
 ## 9. Implementation Entry
 
-- HTTP params and envelope: `backend.core.pagination` (`page_params`, `OffsetPage`).
+- HTTP params and envelope: `backend.core.pagination` (`page_params`, `PageBounds`, `OffsetPage`). Named catalog/source bounds live next to `page_params`; HTTP and MCP import the same names. MCP clamps out of range; HTTP rejects with `422`.
 - Console: `frontend/src/lib/pagination.ts`, `frontend/src/lib/list-state.ts`, `frontend/src/hooks/usePagedList.ts`, `frontend/src/components/display/ListTable.tsx` (composes `ListPager`).
 - See [`docs/modules.md`](modules.md) and [`docs/backend-layout.md`](backend-layout.md).
 

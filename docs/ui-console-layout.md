@@ -10,7 +10,7 @@ Related: `docs/business-management-console.md`, `docs/development.md`, `docs/con
 
 1. **Page title, description, and page-level actions render only through `PageChrome`** (`frontend/src/components/layout/PageChrome.tsx`). Pages must not hand-roll header rows or place page actions inside the content area.
 2. **`SectionHeader` is the single title/description/actions layout primitive** (`frontend/src/components/layout/SectionHeader.tsx`). `PageChrome` composes it at heading order 2; embedded page sections (for example User PAT inside Account Center) use it at heading order 4.
-3. **Header action buttons use `size="sm"`** so every page header reads the same height.
+3. **Header action buttons use `size="sm"`** so every page header reads the same height. Page-level create (navigate to `/new` or open a create modal) goes through `CreateListAction`. Destructive confirmations go through `ConfirmActionModal` (optional `children` for extra fields such as a cascade checkbox).
 4. **Content toolbars hold filter controls only** (source selectors, search inputs, a clear-filters control). Action buttons belong to the header `actions` slot, not to toolbars. A clear-filters control is a filter control: it belongs in the toolbar and is visible only when a filter is off its default.
 5. **Paged tables use `ListTable`** (`frontend/src/components/display/ListTable.tsx`), which composes `ListPager` (`frontend/src/components/display/ListPager.tsx`) as the footer. Count text always renders; page numbers render only when there is more than one page. Do not hand-roll prev/next buttons or a second pager for an **Offset Page**. Pages do not set `Table` appearance props on the list table.
 

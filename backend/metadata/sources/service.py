@@ -50,6 +50,18 @@ def require_source(source_id: str) -> SourceRecord:
     return record
 
 
+def list_sources_page(
+    *,
+    query_text: str | None = None,
+    limit: int,
+    offset: int,
+) -> tuple[list[dict[str, Any]], int]:
+    records, total = get_source_store().list_sources(
+        query_text=query_text, limit=limit, offset=offset
+    )
+    return [public_view(r) for r in records], total
+
+
 def public_view(record: SourceRecord) -> dict[str, Any]:
     access = None
     if record.engine and record.access_ciphertext:

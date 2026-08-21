@@ -102,10 +102,19 @@ def persistent_client(monkeypatch: pytest.MonkeyPatch):
 
     migrate_with_advisory_lock(INTEGRATION_DATABASE_URL)
 
-    # Truncate only the isolated test database
+    # Truncate only the isolated test database. Metadata tables are included
+    # because these tests write Sources and catalog snapshots with fixed ids —
+    # `structure_diffs.job_id` is unique, so leftovers make a rerun fail.
     engine = create_engine(INTEGRATION_DATABASE_URL)
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE TABLE users, roles RESTART IDENTITY CASCADE"))
+        conn.execute(
+            text(
+                "TRUNCATE TABLE users, roles, sources, catalog_objects,"
+                " catalog_columns, catalog_foreign_keys, catalog_indexes,"
+                " catalog_joins, catalog_join_changes, structure_diffs"
+                " RESTART IDENTITY CASCADE"
+            )
+        )
     engine.dispose()
 
     from redis import Redis

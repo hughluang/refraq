@@ -237,7 +237,8 @@ def test_stamp_missing_object_id_raises() -> None:
         ),
     )
     with pytest.raises(KeyError, match="missing"):
-        store._persist_structure_plan_unlocked(plan, now=now)
+        with store.catalog_write("src_1") as write:
+            write.persist_plan(plan)
 
 
 def test_apply_persists_structure_diff() -> None:

@@ -11,6 +11,7 @@ from backend.metadata.business_domains.store import (
     get_business_domain_store,
     new_business_domain_id,
 )
+from backend.metadata.catalog.store import get_catalog_store
 from backend.metadata.errors import (
     BusinessDomainInUse,
     BusinessDomainNotFound,
@@ -129,7 +130,7 @@ def delete_domain(
     actor_token_id: str | None,
 ) -> None:
     existing = require_domain(domain_id)
-    refs = get_business_domain_store().count_object_refs(domain_id)
+    refs = get_catalog_store().count_objects_for_domain(domain_id)
     if refs > 0:
         raise BusinessDomainInUse()
     deleted = get_business_domain_store().delete(domain_id)

@@ -11,14 +11,12 @@ import {
   Textarea,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
-import {
-  CanAccess,
-  useNotification,
-  useTranslate,
-} from "@refinedev/core";
+import { CanAccess, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
+import { CreateListAction } from "@/components/access/CreateListAction";
 import { ListTable } from "@/components/display/ListTable";
+import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { PageChrome } from "@/components/layout/PageChrome";
 import {
   createBusinessDomain,
@@ -28,6 +26,7 @@ import {
 } from "@/features/business-domains/api";
 import type { BusinessDomain } from "@/features/business-domains/types";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
+import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { usePagedList } from "@/hooks/usePagedList";
 import { ApiError } from "@/lib/api";
 import { listPresentationOf } from "@/lib/list-state";
@@ -53,7 +52,7 @@ export function BusinessDomainList() {
   const [q, setQ] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<BusinessDomain | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<BusinessDomain | null>(null);
+  const deleteConfirm = useConfirmAction<BusinessDomain>();
   const [busy, setBusy] = useState(false);
 
   const createForm = useForm<CreateForm>({
@@ -144,11 +143,12 @@ export function BusinessDomainList() {
   };
 
   const confirmDelete = async () => {
-    if (!deleteTarget) return;
+    const pending = deleteConfirm.pending;
+    if (!pending) return;
     setBusy(true);
     try {
-      await deleteBusinessDomain(deleteTarget.id);
-      setDeleteTarget(null);
+      await deleteBusinessDomain(pending.id);
+      deleteConfirm.close();
       open?.({
         type: "success",
         message: t("businessDomains.delete.success"),
@@ -165,14 +165,12 @@ export function BusinessDomainList() {
   };
 
   const createAction = (
-    <CanAccess
+    <CreateListAction
       resource={ModuleId.businessDomains}
-      action={ModuleAction.create}
+      onClick={() => setCreateOpen(true)}
     >
-      <Button size="sm" onClick={() => setCreateOpen(true)}>
-        {t("businessDomains.create")}
-      </Button>
-    </CanAccess>
+      {t("businessDomains.create")}
+    </CreateListAction>
   );
 
   return (
@@ -256,7 +254,7 @@ export function BusinessDomainList() {
                     size="xs"
                     color="red"
                     variant="light"
-                    onClick={() => setDeleteTarget(row)}
+                    onClick={() => deleteConfirm.open(row)}
                   >
                     {t("actions.delete")}
                   </Button>
@@ -325,27 +323,19 @@ export function BusinessDomainList() {
         </form>
       </Modal>
 
-      <Modal
-        opened={deleteTarget != null}
-        onClose={() => setDeleteTarget(null)}
+      <ConfirmActionModal
+        opened={deleteConfirm.opened}
+        onClose={deleteConfirm.close}
         title={t("businessDomains.delete.confirmTitle")}
-      >
-        <Stack>
-          <Text size="sm">
-            {t("businessDomains.delete.confirmBody", {
-              name: deleteTarget?.name ?? "",
-            })}
-          </Text>
-          <Group justify="flex-end">
-            <Button variant="default" onClick={() => setDeleteTarget(null)}>
-              {t("actions.cancel")}
-            </Button>
-            <Button color="red" loading={busy} onClick={() => void confirmDelete()}>
-              {t("actions.delete")}
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
+        body={t("businessDomains.delete.confirmBody", {
+          name: deleteConfirm.pending?.name ?? "",
+        })}
+        confirmColor="red"
+        loading={busy}
+        confirmLabel={t("actions.delete")}
+        cancelLabel={t("actions.cancel")}
+        onConfirm={() => void confirmDelete()}
+      />
     </PageChrome>
   );
 }

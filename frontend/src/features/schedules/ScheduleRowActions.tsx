@@ -1,14 +1,16 @@
 "use client";
 
-import { Button, Group, Modal, Text } from "@mantine/core";
+import { Button, Group } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
 import { useState } from "react";
 
+import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import {
   deleteSchedule,
   runSchedule,
 } from "@/features/schedules/api";
 import type { ScheduledTask } from "@/features/schedules/types";
+import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { ApiError } from "@/lib/api";
 
 type Props = {
@@ -28,7 +30,7 @@ export function ScheduleRowActions({
   const { open } = useNotification();
   const [running, setRunning] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  const deleteConfirm = useConfirmAction<ScheduledTask>();
 
   async function confirmDelete() {
     setDeleting(true);
@@ -38,7 +40,7 @@ export function ScheduleRowActions({
         type: "success",
         message: t("schedules.delete.success"),
       });
-      setConfirmOpen(false);
+      deleteConfirm.close();
       onChanged();
     } catch (err) {
       open?.({
@@ -88,33 +90,20 @@ export function ScheduleRowActions({
           size="xs"
           variant="light"
           color="red"
-          onClick={() => setConfirmOpen(true)}
+          onClick={() => deleteConfirm.open(task)}
         >
           {t("schedules.delete")}
         </Button>
       </Group>
-      <Modal
-        opened={confirmOpen}
-        onClose={() => setConfirmOpen(false)}
+      <ConfirmActionModal
+        opened={deleteConfirm.opened}
+        onClose={deleteConfirm.close}
         title={t("schedules.delete.confirmTitle")}
-        centered
-      >
-        <Text size="sm" mb="md">
-          {t("schedules.delete.confirmBody", { name: task.name })}
-        </Text>
-        <Group justify="flex-end">
-          <Button
-            variant="default"
-            onClick={() => setConfirmOpen(false)}
-            disabled={deleting}
-          >
-            {t("common.cancel")}
-          </Button>
-          <Button color="red" loading={deleting} onClick={() => void confirmDelete()}>
-            {t("common.confirm")}
-          </Button>
-        </Group>
-      </Modal>
+        body={t("schedules.delete.confirmBody", { name: task.name })}
+        confirmColor="red"
+        loading={deleting}
+        onConfirm={() => void confirmDelete()}
+      />
     </>
   );
 }

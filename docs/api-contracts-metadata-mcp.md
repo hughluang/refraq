@@ -24,12 +24,22 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 
 | Tool | Permission | Purpose |
 | --- | --- | --- |
-| `search_sources` | `sources:read` | Search/list Sources (`query_text`, `limit`, `offset`) |
+| `search_sources` | `sources:read` | Search/list Sources (`query_text`, `limit` default **50** max **200**, `offset`) |
 | `get_source` | `sources:read` | Source detail by `source_locator_key` (projected `access`) |
 | `list_objects` | `metadata:read` | Catalog Objects under a Source locator (`q`, `object_type`, `business_semantics_ready`, `limit`, `offset`) |
-| `get_object` | `metadata:read` | Object + columns by `object_locator_key` (includes semantics when present; columns omit `normalized_type`) |
-| `get_object_ddl` | `metadata:read` | DDL when present |
-| `get_job` | `jobs:run` | Job by id (status, input, summary, nullable `result`) |
+| `get_object` | `metadata:read` | Object + columns + ddl by `object_locator_key` (includes semantics when present; columns omit `normalized_type`; **no** `foreign_keys` / `indexes` — structure graph is HTTP detail or join tools) |
+| `get_object_ddl` | `metadata:read` | DDL when present (`id`, `locator_key`, `ddl`) |
+| `get_job` | `jobs:run` | Job by id (same projection as HTTP `GET /jobs/{id}`) |
+
+`get_job` returns the mechanism Job through the shared HTTP/MCP projection, so
+the field set matches HTTP `GET /jobs/{id}` exactly: identity and lifecycle
+(`id`, `kind`, `status`, `summary`, `input`, nullable `result`), trigger
+(`trigger_kind`, `trigger_ref`, resolved `trigger_actor_name` /
+`trigger_schedule_name`), scheduling (`scheduled_for`, `running_timeout_sec`),
+Instants (`created_at`, `started_at`, `finished_at`, `log_updated_at`), and
+failure (`error_code`, `error_message`). HTTP wraps it in a `job` envelope;
+MCP returns the object directly. Unlike the semantics tools, this payload is
+not stripped of empty values — absent fields are present and null.
 
 `list_objects` is the Per-Source object list (same summary projection as HTTP). Optional `q` is a literal substring of schema, technical name, or `business_name`. Optional `business_semantics_ready` is `true` | `false`. This tool has no `include_absent` argument; tombstones are included. Items omit columns, foreign keys, indexes, and DDL.
 
