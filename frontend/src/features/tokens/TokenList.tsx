@@ -12,21 +12,19 @@ import {
   TextInput,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
-import {
-  CanAccess,
-  useNotification,
-  useTable,
-  useTranslate,
-} from "@refinedev/core";
-import { useState } from "react";
+import { CanAccess, useNotification, useTranslate } from "@refinedev/core";
+import { useCallback, useState } from "react";
 
+import { CreateListAction } from "@/components/access/CreateListAction";
 import { ListTable } from "@/components/display/ListTable";
+import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { SectionHeader } from "@/components/layout/SectionHeader";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
   createToken,
   deactivateToken,
   deleteToken,
+  listTokens,
   restoreToken,
 } from "@/features/tokens/api";
 import {
@@ -35,9 +33,12 @@ import {
   tokenStatus,
 } from "@/features/tokens/status";
 import type { TokenMetadata, TokenStatus } from "@/features/tokens/types";
+import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { usePagedList } from "@/hooks/usePagedList";
 import { ApiError } from "@/lib/api";
 import { listPresentationOf } from "@/lib/list-state";
+import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
 
@@ -57,19 +58,33 @@ export function TokenList() {
   const t = useTranslate();
   const { open } = useNotification();
   const formatInstant = useFormatInstant();
-  const { tableQuery, currentPage, setCurrentPage } = useTable<TokenMetadata>({
-    resource: ModuleId.tokens,
-    pagination: { mode: "server", pageSize: PAGE_SIZE },
+  const onListError = useCallback(
+    (message: string) => {
+      open?.({ type: "error", message });
+    },
+    [open],
+  );
+  const fetchPage = useCallback((query: PageQuery) => listTokens(query), []);
+  const {
+    items: rows,
+    total,
+    page,
+    setPage,
+    loading,
+    error: errorMessage,
+    reload,
+    pageSize,
+  } = usePagedList<TokenMetadata>({
+    pageSize: PAGE_SIZE,
+    fetch: fetchPage,
+    onError: onListError,
   });
 
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [secret, setSecret] = useState<string | null>(null);
-  const [pendingDeactivate, setPendingDeactivate] =
-    useState<TokenMetadata | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<TokenMetadata | null>(
-    null,
-  );
+  const deactivateConfirm = useConfirmAction<TokenMetadata>();
+  const deleteConfirm = useConfirmAction<TokenMetadata>();
   const [actionBusy, setActionBusy] = useState(false);
 
   const form = useForm<CreateFormValues>({
@@ -93,16 +108,8 @@ export function TokenList() {
     },
   });
 
-  const rows = tableQuery.data?.data ?? [];
-  const total = tableQuery.data?.total ?? 0;
-  const errorMessage =
-    tableQuery.error == null
-      ? null
-      : tableQuery.error instanceof ApiError
-        ? tableQuery.error.detail
-        : t("common.error.loadFailed");
   const listPresentation = listPresentationOf({
-    loading: tableQuery.isFetching,
+    loading,
     error: errorMessage,
     total,
     itemCount: rows.length,
@@ -132,7 +139,7 @@ export function TokenList() {
         message: t("tokens.title"),
         description: t("tokens.create.success"),
       });
-      await tableQuery.refetch();
+      await reload();
     } catch (err) {
       open?.({
         type: "error",
@@ -146,17 +153,18 @@ export function TokenList() {
   }
 
   async function confirmDeactivate() {
-    if (!pendingDeactivate) return;
+    const pending = deactivateConfirm.pending;
+    if (!pending) return;
     setActionBusy(true);
     try {
-      await deactivateToken(pendingDeactivate.id);
+      await deactivateToken(pending.id);
       open?.({
         type: "success",
         message: t("tokens.title"),
         description: t("tokens.deactivate.success"),
       });
-      setPendingDeactivate(null);
-      await tableQuery.refetch();
+      deactivateConfirm.close();
+      await reload();
     } catch (err) {
       open?.({
         type: "error",
@@ -178,7 +186,7 @@ export function TokenList() {
         message: t("tokens.title"),
         description: t("tokens.restore.success"),
       });
-      await tableQuery.refetch();
+      await reload();
     } catch (err) {
       open?.({
         type: "error",
@@ -192,17 +200,18 @@ export function TokenList() {
   }
 
   async function confirmDelete() {
-    if (!pendingDelete) return;
+    const pending = deleteConfirm.pending;
+    if (!pending) return;
     setActionBusy(true);
     try {
-      await deleteToken(pendingDelete.id);
+      await deleteToken(pending.id);
       open?.({
         type: "success",
         message: t("tokens.title"),
         description: t("tokens.delete.success"),
       });
-      setPendingDelete(null);
-      await tableQuery.refetch();
+      deleteConfirm.close();
+      await reload();
     } catch (err) {
       open?.({
         type: "error",
@@ -234,11 +243,12 @@ export function TokenList() {
   }
 
   const createAction = (
-    <CanAccess resource={ModuleId.tokens} action={ModuleAction.create}>
-      <Button size="sm" onClick={openCreate}>
-        {t("tokens.create")}
-      </Button>
-    </CanAccess>
+    <CreateListAction
+      resource={ModuleId.tokens}
+      onClick={openCreate}
+    >
+      {t("tokens.create")}
+    </CreateListAction>
   );
 
   return (
@@ -255,7 +265,7 @@ export function TokenList() {
         columnCount={7}
         refreshing={listPresentation.refreshing}
         errorMessage={errorMessage}
-        onRetry={() => void tableQuery.refetch()}
+        onRetry={() => void reload()}
         head={
           <Table.Tr>
             <Table.Th>{t("tokens.fields.name")}</Table.Th>
@@ -267,10 +277,10 @@ export function TokenList() {
             <Table.Th>{t("tokens.fields.actions")}</Table.Th>
           </Table.Tr>
         }
-        page={currentPage}
-        pageSize={PAGE_SIZE}
+        page={page}
+        pageSize={pageSize}
         total={total}
-        onPageChange={setCurrentPage}
+        onPageChange={setPage}
       >
         {rows.map((row) => {
           const status = tokenStatus(row);
@@ -314,7 +324,7 @@ export function TokenList() {
                           variant="light"
                           color="red"
                           disabled={actionBusy}
-                          onClick={() => setPendingDelete(row)}
+                          onClick={() => deleteConfirm.open(row)}
                         >
                           {t("tokens.delete")}
                         </Button>
@@ -324,7 +334,7 @@ export function TokenList() {
                         size="xs"
                         variant="light"
                         disabled={actionBusy}
-                        onClick={() => setPendingDeactivate(row)}
+                        onClick={() => deactivateConfirm.open(row)}
                       >
                         {t("tokens.deactivate")}
                       </Button>
@@ -397,64 +407,34 @@ export function TokenList() {
         </Stack>
       </Modal>
 
-      <Modal
-        opened={pendingDeactivate !== null}
-        onClose={() => setPendingDeactivate(null)}
+      <ConfirmActionModal
+        opened={deactivateConfirm.opened}
+        onClose={deactivateConfirm.close}
         title={t("tokens.deactivate.confirmTitle")}
-        centered
-      >
-        <Text size="sm" mb="md">
-          {pendingDeactivate
+        body={
+          deactivateConfirm.pending
             ? t("tokens.deactivate.confirmBody", {
-                name: pendingDeactivate.name,
+                name: deactivateConfirm.pending.name,
               })
-            : null}
-        </Text>
-        <Group justify="flex-end">
-          <Button
-            variant="default"
-            onClick={() => setPendingDeactivate(null)}
-            disabled={actionBusy}
-          >
-            {t("common.cancel")}
-          </Button>
-          <Button
-            loading={actionBusy}
-            onClick={() => void confirmDeactivate()}
-          >
-            {t("common.confirm")}
-          </Button>
-        </Group>
-      </Modal>
+            : null
+        }
+        loading={actionBusy}
+        onConfirm={() => void confirmDeactivate()}
+      />
 
-      <Modal
-        opened={pendingDelete !== null}
-        onClose={() => setPendingDelete(null)}
+      <ConfirmActionModal
+        opened={deleteConfirm.opened}
+        onClose={deleteConfirm.close}
         title={t("tokens.delete.confirmTitle")}
-        centered
-      >
-        <Text size="sm" mb="md">
-          {pendingDelete
-            ? t("tokens.delete.confirmBody", { name: pendingDelete.name })
-            : null}
-        </Text>
-        <Group justify="flex-end">
-          <Button
-            variant="default"
-            onClick={() => setPendingDelete(null)}
-            disabled={actionBusy}
-          >
-            {t("common.cancel")}
-          </Button>
-          <Button
-            color="red"
-            loading={actionBusy}
-            onClick={() => void confirmDelete()}
-          >
-            {t("common.confirm")}
-          </Button>
-        </Group>
-      </Modal>
+        body={
+          deleteConfirm.pending
+            ? t("tokens.delete.confirmBody", { name: deleteConfirm.pending.name })
+            : null
+        }
+        confirmColor="red"
+        loading={actionBusy}
+        onConfirm={() => void confirmDelete()}
+      />
     </Stack>
   );
 }

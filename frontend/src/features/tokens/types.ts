@@ -8,10 +8,6 @@ export type TokenMetadata = {
   last_used_at: string | null;
 };
 
-export type TokenListResponse = {
-  items: TokenMetadata[];
-};
-
 export type CreateTokenRequest = {
   name: string;
   expires_at: string;

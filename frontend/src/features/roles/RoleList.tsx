@@ -1,48 +1,64 @@
 "use client";
 
-import { Badge, Button, Group, Modal, Table, Text } from "@mantine/core";
+import { Badge, Button, Group, Table, Text } from "@mantine/core";
 import {
   CanAccess,
   useCan,
   useDelete,
-  useTable,
+  useNotification,
   useTranslate,
 } from "@refinedev/core";
 import Link from "next/link";
-import { useState } from "react";
+import { useCallback } from "react";
 
+import { CreateListAction } from "@/components/access/CreateListAction";
 import { ListTable } from "@/components/display/ListTable";
+import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
+import { listRoles } from "@/features/roles/api";
 import type { RoleRow } from "@/features/roles/types";
+import { useConfirmAction } from "@/hooks/useConfirmAction";
+import { usePagedList } from "@/hooks/usePagedList";
 import { ApiError } from "@/lib/api";
 import { listPresentationOf } from "@/lib/list-state";
+import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
 
 export function RoleList() {
   const t = useTranslate();
+  const { open } = useNotification();
   const { data: canWrite } = useCan({
     resource: ModuleId.roles,
     action: ModuleAction.create,
   });
-  const { tableQuery, currentPage, setCurrentPage } = useTable<RoleRow>({
-    resource: ModuleId.roles,
-    pagination: { mode: "server", pageSize: PAGE_SIZE },
+  const onError = useCallback(
+    (message: string) => {
+      open?.({ type: "error", message });
+    },
+    [open],
+  );
+  const fetchPage = useCallback((query: PageQuery) => listRoles(query), []);
+  const {
+    items: rows,
+    total,
+    page,
+    setPage,
+    loading,
+    error: errorMessage,
+    reload,
+    pageSize,
+  } = usePagedList<RoleRow>({
+    pageSize: PAGE_SIZE,
+    fetch: fetchPage,
+    onError,
   });
   const { mutate: deleteRole, mutation } = useDelete();
-  const [pending, setPending] = useState<RoleRow | null>(null);
+  const deleteConfirm = useConfirmAction<RoleRow>();
 
-  const rows = tableQuery.data?.data ?? [];
-  const total = tableQuery.data?.total ?? 0;
-  const errorMessage =
-    tableQuery.error == null
-      ? null
-      : tableQuery.error instanceof ApiError
-        ? tableQuery.error.detail
-        : t("common.error.loadFailed");
   const listPresentation = listPresentationOf({
-    loading: tableQuery.isFetching,
+    loading,
     error: errorMessage,
     total,
     itemCount: rows.length,
@@ -50,6 +66,7 @@ export function RoleList() {
   });
 
   function confirmDelete() {
+    const pending = deleteConfirm.pending;
     if (!pending) return;
     deleteRole(
       {
@@ -69,16 +86,19 @@ export function RoleList() {
           type: "error",
         }),
       },
-      { onSettled: () => setPending(null) },
+      {
+        onSuccess: () => {
+          void reload();
+        },
+        onSettled: () => deleteConfirm.close(),
+      },
     );
   }
 
   const createAction = (
-    <CanAccess resource={ModuleId.roles} action={ModuleAction.create}>
-      <Button component={Link} href="/console/roles/new" size="sm">
-        {t("roles.create")}
-      </Button>
-    </CanAccess>
+    <CreateListAction resource={ModuleId.roles} href="/console/roles/new">
+      {t("roles.create")}
+    </CreateListAction>
   );
 
   return (
@@ -92,7 +112,7 @@ export function RoleList() {
         columnCount={5}
         refreshing={listPresentation.refreshing}
         errorMessage={errorMessage}
-        onRetry={() => void tableQuery.refetch()}
+        onRetry={() => void reload()}
         head={
           <Table.Tr>
             <Table.Th>{t("roles.fields.key")}</Table.Th>
@@ -102,10 +122,10 @@ export function RoleList() {
             <Table.Th>{t("roles.fields.actions")}</Table.Th>
           </Table.Tr>
         }
-        page={currentPage}
-        pageSize={PAGE_SIZE}
+        page={page}
+        pageSize={pageSize}
         total={total}
-        onPageChange={setCurrentPage}
+        onPageChange={setPage}
       >
         {rows.map((row) => {
           const canDelete =
@@ -154,7 +174,7 @@ export function RoleList() {
                       variant="light"
                       color="red"
                       disabled={!canDelete || mutation.isPending}
-                      onClick={() => setPending(row)}
+                      onClick={() => deleteConfirm.open(row)}
                     >
                       {t("roles.delete")}
                     </Button>
@@ -166,30 +186,19 @@ export function RoleList() {
         })}
       </ListTable>
 
-      <Modal
-        opened={pending !== null}
-        onClose={() => setPending(null)}
+      <ConfirmActionModal
+        opened={deleteConfirm.opened}
+        onClose={deleteConfirm.close}
         title={t("roles.delete.confirmTitle")}
-        centered
-      >
-        <Text size="sm" mb="md">
-          {pending
-            ? t("roles.delete.confirmBody", { name: pending.name })
-            : null}
-        </Text>
-        <Group justify="flex-end">
-          <Button variant="default" onClick={() => setPending(null)}>
-            {t("common.cancel")}
-          </Button>
-          <Button
-            color="red"
-            loading={mutation.isPending}
-            onClick={confirmDelete}
-          >
-            {t("common.confirm")}
-          </Button>
-        </Group>
-      </Modal>
+        body={
+          deleteConfirm.pending
+            ? t("roles.delete.confirmBody", { name: deleteConfirm.pending.name })
+            : null
+        }
+        confirmColor="red"
+        loading={mutation.isPending}
+        onConfirm={confirmDelete}
+      />
     </PageChrome>
   );
 }

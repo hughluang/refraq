@@ -15,26 +15,27 @@ import {
   TextInput,
 } from "@mantine/core";
 import {
-  CanAccess,
   useCan,
   useGetIdentity,
   useList,
   useNotification,
-  useTable,
   useTranslate,
   useUpdate,
 } from "@refinedev/core";
-import Link from "next/link";
 import { useCallback, useState } from "react";
 
+import { CreateListAction } from "@/components/access/CreateListAction";
 import { ListPager } from "@/components/display/ListPager";
 import { ListTable } from "@/components/display/ListTable";
+import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { PageError } from "@/components/feedback/PageError";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { UserRoleBadge } from "@/features/users/UserRoleBadge";
+import { listUsers } from "@/features/users/api";
 import type { RoleRow } from "@/features/roles/types";
 import type { UserRow, UserStatus } from "@/features/users/types";
+import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { usePagedList } from "@/hooks/usePagedList";
 import { ApiError } from "@/lib/api";
@@ -68,15 +69,9 @@ export function UserList() {
     pagination: { mode: "off" },
     queryOptions: { enabled: Boolean(canWrite?.can) },
   });
-  const { tableQuery, currentPage, setCurrentPage } = useTable<UserRow>({
-    resource: ModuleId.users,
-    pagination: { mode: "server", pageSize: PAGE_SIZE },
-  });
   const { mutate: updateStatus, mutation } = useUpdate<UserRow>();
-  const [pending, setPending] = useState<UserRow | null>(null);
-  const [unfederateTarget, setUnfederateTarget] = useState<UserRow | null>(
-    null,
-  );
+  const statusConfirm = useConfirmAction<UserRow>();
+  const unfederateConfirm = useConfirmAction<UserRow>();
   const [unfederatePassword, setUnfederatePassword] = useState("");
   const [unfederateBusy, setUnfederateBusy] = useState(false);
   const [claimTarget, setClaimTarget] = useState<PendingFederatedIdentity | null>(
@@ -88,6 +83,28 @@ export function UserList() {
   const [claimUserId, setClaimUserId] = useState<string | null>(null);
   const [claimRoleId, setClaimRoleId] = useState<string | null>(null);
   const [claimBusy, setClaimBusy] = useState(false);
+
+  const notifyListError = useCallback(
+    (message: string) => {
+      open?.({ type: "error", message });
+    },
+    [open],
+  );
+  const fetchUsers = useCallback((query: PageQuery) => listUsers(query), []);
+  const {
+    items: rows,
+    total,
+    page,
+    setPage,
+    loading,
+    error: errorMessage,
+    reload,
+    pageSize,
+  } = usePagedList<UserRow>({
+    pageSize: PAGE_SIZE,
+    fetch: fetchUsers,
+    onError: notifyListError,
+  });
 
   const fetchPending = useCallback(
     (query: PageQuery) => listPendingFederatedIdentities(query),
@@ -109,16 +126,8 @@ export function UserList() {
     enabled: Boolean(canWrite?.can),
   });
 
-  const rows = tableQuery.data?.data ?? [];
-  const total = tableQuery.data?.total ?? 0;
-  const errorMessage =
-    tableQuery.error == null
-      ? null
-      : tableQuery.error instanceof ApiError
-        ? tableQuery.error.detail
-        : t("common.error.loadFailed");
   const listPresentation = listPresentationOf({
-    loading: tableQuery.isFetching,
+    loading,
     error: errorMessage,
     total,
     itemCount: rows.length,
@@ -137,6 +146,7 @@ export function UserList() {
   };
 
   function confirmToggle() {
+    const pending = statusConfirm.pending;
     if (!pending) return;
     const next: UserStatus =
       pending.status === "active" ? "disabled" : "active";
@@ -161,17 +171,18 @@ export function UserList() {
         }),
       },
       {
-        onSettled: () => setPending(null),
+        onSuccess: () => {
+          void reload();
+        },
+        onSettled: () => statusConfirm.close(),
       },
     );
   }
 
   const createAction = (
-    <CanAccess resource={ModuleId.users} action={ModuleAction.create}>
-      <Button component={Link} href="/console/users/new" size="sm">
-        {t("users.create")}
-      </Button>
-    </CanAccess>
+    <CreateListAction resource={ModuleId.users} href="/console/users/new">
+      {t("users.create")}
+    </CreateListAction>
   );
 
   const roleOptions = (rolesQuery.result?.data ?? []).map((role) => ({
@@ -207,7 +218,7 @@ export function UserList() {
         });
         closeClaim();
         await reloadPendingList();
-        await tableQuery.refetch();
+        await reload();
       } catch (err) {
         notifyError(err, t("common.error.loadFailed"));
         setClaimBusy(false);
@@ -227,7 +238,7 @@ export function UserList() {
       });
       closeClaim();
       await reloadPendingList();
-      await tableQuery.refetch();
+      await reload();
     } catch (err) {
       notifyError(err, t("common.error.loadFailed"));
       setClaimBusy(false);
@@ -235,13 +246,13 @@ export function UserList() {
   }
 
   async function confirmUnfederate() {
-    if (!unfederateTarget || !unfederatePassword) return;
+    if (!unfederateConfirm.pending || !unfederatePassword) return;
     setUnfederateBusy(true);
     try {
-      await unfederateUser(unfederateTarget.id, unfederatePassword);
-      setUnfederateTarget(null);
+      await unfederateUser(unfederateConfirm.pending.id, unfederatePassword);
+      unfederateConfirm.close();
       setUnfederatePassword("");
-      await tableQuery.refetch();
+      await reload();
     } catch (err) {
       notifyError(err, t("common.error.loadFailed"));
     } finally {
@@ -332,7 +343,7 @@ export function UserList() {
         columnCount={6}
         refreshing={listPresentation.refreshing}
         errorMessage={errorMessage}
-        onRetry={() => void tableQuery.refetch()}
+        onRetry={() => void reload()}
         head={
           <Table.Tr>
             <Table.Th>{t("users.fields.account")}</Table.Th>
@@ -343,10 +354,10 @@ export function UserList() {
             <Table.Th>{t("users.fields.lastLoginAt")}</Table.Th>
           </Table.Tr>
         }
-        page={currentPage}
-        pageSize={PAGE_SIZE}
+        page={page}
+        pageSize={pageSize}
         total={total}
-        onPageChange={setCurrentPage}
+        onPageChange={setPage}
       >
         {rows.map((row) => {
           const isSelf = identity?.id === row.id;
@@ -363,7 +374,7 @@ export function UserList() {
               <Table.Td>
                 <Switch
                   checked={row.status === "active"}
-                  onChange={() => setPending(row)}
+                  onChange={() => statusConfirm.open(row)}
                   disabled={!canWrite?.can || mutation.isPending || isSelf}
                   size="sm"
                   aria-label={
@@ -383,7 +394,7 @@ export function UserList() {
                       size="compact-xs"
                       variant="subtle"
                       onClick={() => {
-                        setUnfederateTarget(row);
+                        unfederateConfirm.open(row);
                         setUnfederatePassword("");
                       }}
                     >
@@ -476,11 +487,17 @@ export function UserList() {
         </Stack>
       </Modal>
 
-      <Modal
-        opened={unfederateTarget !== null}
-        onClose={() => setUnfederateTarget(null)}
+      <ConfirmActionModal
+        opened={unfederateConfirm.opened}
+        onClose={() => {
+          unfederateConfirm.close();
+          setUnfederatePassword("");
+        }}
         title={t("users.federation.unfederate.title")}
-        centered
+        confirmLabel={t("users.federation.unfederate.confirm")}
+        loading={unfederateBusy}
+        confirmDisabled={!unfederatePassword}
+        onConfirm={() => void confirmUnfederate()}
       >
         <PasswordInput
           value={unfederatePassword}
@@ -490,39 +507,15 @@ export function UserList() {
           label={t("users.federation.unfederate.password")}
           required
         />
-        <Group justify="flex-end" mt="md">
-          <Button
-            onClick={() => setUnfederateTarget(null)}
-            variant="default"
-            disabled={unfederateBusy}
-          >
-            {t("common.cancel")}
-          </Button>
-          <Button
-            loading={unfederateBusy}
-            disabled={!unfederatePassword}
-            onClick={() => void confirmUnfederate()}
-          >
-            {t("users.federation.unfederate.confirm")}
-          </Button>
-        </Group>
-      </Modal>
+      </ConfirmActionModal>
 
-      <Modal
-        opened={pending !== null}
-        onClose={() => setPending(null)}
+      <ConfirmActionModal
+        opened={statusConfirm.opened}
+        onClose={statusConfirm.close}
         title={t("users.status.confirmTitle")}
-        centered
-      >
-        <Group justify="flex-end" mt="md">
-          <Button variant="default" onClick={() => setPending(null)}>
-            {t("common.cancel")}
-          </Button>
-          <Button loading={mutation.isPending} onClick={confirmToggle}>
-            {t("common.confirm")}
-          </Button>
-        </Group>
-      </Modal>
+        loading={mutation.isPending}
+        onConfirm={confirmToggle}
+      />
     </PageChrome>
   );
 }

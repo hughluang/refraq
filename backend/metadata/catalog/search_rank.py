@@ -1,8 +1,17 @@
-"""Portable catalog search ranking and pagination helpers."""
+"""Portable catalog search ranking and pagination helpers.
+
+Ranking and paging happen in Python for both adapters. Candidate narrowing
+(source_id, object_type, include_absent) stays with the adapter so SQL can
+push those predicates into WHERE. Do not move those filters here.
+"""
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable, Iterable
+from typing import Any, TypeVar
+
+T = TypeVar("T")
+
 
 def _search_rank(
     query: str,
@@ -33,12 +42,28 @@ def _search_rank(
     return None
 
 
-def _paginate(
-    items: list[Any], *, limit: int | None, offset: int
-) -> list[Any]:
+def _paginate(items: list[Any], *, limit: int | None, offset: int) -> list[Any]:
     start = max(0, offset)
     if limit is None:
         return items[start:]
     return items[start : start + max(0, limit)]
 
 
+def rank_and_page(
+    items: Iterable[T],
+    *,
+    rank_of: Callable[[T], int | None],
+    tiebreak: Callable[[T], tuple[Any, ...]],
+    limit: int,
+    offset: int,
+) -> tuple[list[T], int]:
+    ranked: list[tuple[int, T]] = []
+    for item in items:
+        rank = rank_of(item)
+        if rank is None:
+            continue
+        ranked.append((rank, item))
+    ranked.sort(key=lambda t: (t[0], *tiebreak(t[1])))
+    total = len(ranked)
+    page = [item for _, item in _paginate(ranked, limit=limit, offset=offset)]
+    return page, total

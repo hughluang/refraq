@@ -323,7 +323,8 @@ def test_direct_claim_without_hostname_matches_occupancy_renew(
 ) -> None:
     """No-task-context claim must write the same id occupancy renews."""
     from backend.jobs.store import UNKNOWN_WORKER_ID, occupancy_worker_id, touch_occupancy
-    from backend.metadata.structure_jobs.service import _claim_worker_id, run_structure_job
+    from backend.metadata.source_job_runner import _claim_worker_id
+    from backend.metadata.structure_jobs.service import run_structure_job
 
     monkeypatch.setattr(
         "celery.current_task",
@@ -348,7 +349,7 @@ def test_claim_worker_id_exception_uses_shared_unknown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.jobs.store import UNKNOWN_WORKER_ID
-    from backend.metadata.structure_jobs.service import _claim_worker_id
+    from backend.metadata.source_job_runner import _claim_worker_id
 
     class Boom:
         @property

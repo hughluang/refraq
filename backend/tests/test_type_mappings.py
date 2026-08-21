@@ -24,7 +24,8 @@ from backend.core.time import utc_now  # noqa: E402
 from backend.jobs.store import create_queued_job, get_job_store  # noqa: E402
 from backend.main import app  # noqa: E402
 from backend.metadata.catalog.normalized_type import canonicalize_native_type  # noqa: E402
-from backend.metadata.catalog.views import ColumnView, column_view_as_dict  # noqa: E402
+from backend.metadata.catalog.present import present_column  # noqa: E402
+from backend.metadata.catalog.views import ColumnView  # noqa: E402
 from backend.metadata.catalog.store import get_catalog_store  # noqa: E402
 from backend.metadata.connectors.base import (  # noqa: E402
     CollectedColumn,
@@ -271,7 +272,7 @@ def test_homonym_seeds() -> None:
 
 
 def test_mcp_column_payload_omits_normalized_type() -> None:
-    payload = column_view_as_dict(
+    payload = present_column(
         ColumnView(
             id="c1",
             locator_key="col/postgresql/s/public/table/t/column/id",
@@ -289,7 +290,8 @@ def test_mcp_column_payload_omits_normalized_type() -> None:
             field_kind="column",
             ordinal=1,
             is_present=True,
-        )
+        ),
+        include_normalized_type=False,
     )
     assert "normalized_type" not in payload
     assert payload["data_type"] == "integer"

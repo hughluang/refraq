@@ -93,6 +93,8 @@ class CatalogReadStore(Protocol):
 
     def list_present_for_source(self, source_id: str) -> list[CatalogObjectRecord]: ...
 
+    def count_objects_for_domain(self, domain_id: str) -> int: ...
+
 
 class CatalogSemanticsStore(Protocol):
     def patch_object_semantics(

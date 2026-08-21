@@ -16,6 +16,7 @@ from typing import Literal
 from sqlalchemy import text
 
 from backend.core.config import get_settings
+from backend.core.db import get_engine
 
 KindLockKind = Literal["structure", "join_detection"]
 
@@ -88,8 +89,6 @@ def try_acquire_kind_execution_lock(
                 return None
             _memory_held.add(name)
         return KindExecutionLock(_name=name, _mode="memory")
-
-    from backend.core.db import get_engine
 
     keys = _advisory_keys(name)
     conn = get_engine().connect()

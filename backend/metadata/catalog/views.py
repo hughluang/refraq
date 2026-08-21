@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -265,48 +265,3 @@ def join_view(record: CatalogJoinRecord) -> JoinView:
         rejected_at=record.rejected_at,
         rejected_by_user_id=record.rejected_by_user_id,
     )
-
-
-def object_view_as_dict(view: ObjectView, *, include_columns: bool) -> dict[str, Any]:
-    """MCP-shaped object payload (no foreign_keys/indexes; columns/ddl when detailed)."""
-    payload: dict[str, Any] = {
-        "id": view.id,
-        "locator_key": view.locator_key,
-        "source_id": view.source_id,
-        "object_type": view.object_type,
-        "schema_name": view.schema_name,
-        "name": view.name,
-        "comment": view.comment,
-        "primary_key": view.primary_key,
-        "business_name": view.business_name,
-        "business_description": view.business_description,
-        "object_category": view.object_category,
-        "grain_description": view.grain_description,
-        "business_primary_key": view.business_primary_key,
-        "business_domain": asdict(view.business_domain) if view.business_domain else None,
-        "evidence_summary": view.evidence_summary,
-        "open_questions": view.open_questions,
-        "semantic_source": view.semantic_source,
-        "business_semantics_ready": view.business_semantics_ready,
-        "semantics_updated_at": view.semantics_updated_at,
-        "is_present": view.is_present,
-        "collected_at": view.collected_at,
-    }
-    if include_columns:
-        payload["ddl"] = view.ddl
-        payload["columns"] = [_mcp_column_dict(c) for c in view.columns]
-    return payload
-
-
-def column_view_as_dict(view: ColumnView) -> dict[str, Any]:
-    return _mcp_column_dict(view)
-
-
-def _mcp_column_dict(view: ColumnView) -> dict[str, Any]:
-    payload = asdict(view)
-    payload.pop("normalized_type", None)
-    return payload
-
-
-def join_view_as_dict(view: JoinView) -> dict[str, Any]:
-    return asdict(view)

@@ -9,33 +9,34 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Any, Iterator
 
-from backend.metadata.business_domains.store import (
-    MemoryBusinessDomainStore,
-    get_business_domain_store,
-)
 from backend.core.pagination import apply_offset_page
-from backend.metadata.catalog.identity import _recompute_column_locator, _recompute_object_locator
+from backend.metadata.catalog.identity import (
+    _recompute_column_locator,
+    _recompute_object_locator,
+)
 from backend.metadata.catalog.records import (
     CatalogColumnRecord,
     CatalogJoinRecord,
     CatalogObjectRecord,
     UNSET,
-    new_join_id,
 )
 from backend.metadata.catalog.join_changes import (
     CatalogJoinChangeRecord,
-    JOIN_CHANGE_AMEND,
-    JOIN_CHANGE_CREATE,
-    JOIN_CHANGE_REJECT,
-    JOIN_CHANGE_RESTORE,
-    new_join_change,
+    join_change_for_amend,
+    join_change_for_rejection_toggle,
 )
-from backend.metadata.catalog.join_origin import (
-    STRUCTURE_JOIN_ORIGIN,
-    SQL_LINEAGE_JOIN_ORIGIN,
+from backend.metadata.catalog.list_query import (
+    list_object_projection,
+    list_object_sort_key,
+    object_matches_list_filters,
 )
-from backend.metadata.catalog.search_rank import _paginate, _search_rank
+from backend.metadata.catalog.search_rank import _paginate, _search_rank, rank_and_page
 from backend.metadata.catalog.structure_merge import StructureRefreshPlan
+from backend.metadata.catalog.structure_persist import (
+    apply_join_detection_plan,
+    apply_structure_plan,
+    apply_upsert_join,
+)
 from backend.metadata.join_detection_jobs.reconcile import JoinDetectionPlan
 
 
@@ -52,9 +53,7 @@ class _MemoryStructureWrite:
         self,
     ) -> tuple[list[CatalogObjectRecord], list[CatalogJoinRecord]]:
         existing = [
-            o
-            for o in self._store._objects.values()
-            if o.source_id == self._source_id
+            o for o in self._store._objects.values() if o.source_id == self._source_id
         ]
         col_ids = {c.id for o in existing for c in o.columns}
         existing_joins = [
@@ -65,10 +64,48 @@ class _MemoryStructureWrite:
         return existing, existing_joins
 
     def persist_plan(self, plan: StructureRefreshPlan) -> None:
-        self._store._persist_structure_plan_unlocked(plan, now=utc_now())
+        apply_structure_plan(_MemoryPersistPort(self._store), plan, now=utc_now())
 
     def persist_join_detection_plan(self, plan: JoinDetectionPlan) -> int:
-        return self._store._persist_join_detection_plan_unlocked(plan, now=utc_now())
+        return apply_join_detection_plan(
+            _MemoryPersistPort(self._store), plan, now=utc_now()
+        )
+
+
+class _MemoryPersistPort:
+    def __init__(self, store: MemoryCatalogStore) -> None:
+        self._store = store
+
+    def get_join_by_pair(
+        self, from_column_id: str, to_column_id: str
+    ) -> CatalogJoinRecord | None:
+        join_id = self._store._join_by_pair.get((from_column_id, to_column_id))
+        if join_id is None:
+            return None
+        return self._store._joins[join_id]
+
+    def insert_join(self, record: CatalogJoinRecord) -> CatalogJoinRecord | None:
+        pair = (record.from_column_id, record.to_column_id)
+        if pair in self._store._join_by_pair:
+            return None
+        self._store._joins[record.id] = record
+        self._store._join_by_pair[pair] = record.id
+        return record
+
+    def append_join_change(self, change: CatalogJoinChangeRecord) -> None:
+        self._store._join_changes.append(change)
+
+    def put_object(self, obj: CatalogObjectRecord) -> None:
+        self._store._objects[obj.id] = obj
+
+    def stamp_objects(self, plan: StructureRefreshPlan) -> None:
+        for oid in plan.stamp_object_ids:
+            obj = self._store._objects[oid]
+            self._store._objects[oid] = replace(
+                obj,
+                collected_at=plan.collected_at,
+                last_structure_job_id=plan.last_structure_job_id,
+            )
 
 
 class MemoryCatalogStore:
@@ -91,24 +128,22 @@ class MemoryCatalogStore:
         offset: int = 0,
     ) -> tuple[list[CatalogObjectRecord], int]:
         with self._lock:
-            items = [o for o in self._objects.values() if o.source_id == source_id]
-            if not include_absent:
-                items = [o for o in items if o.is_present]
-            if object_type is not None:
-                items = [o for o in items if o.object_type == object_type]
-            if business_semantics_ready is not None:
-                items = [
-                    o
-                    for o in items
-                    if o.business_semantics_ready is business_semantics_ready
-                ]
-            needle = (name_search or "").strip().lower()
-            if needle:
-                items = [o for o in items if _matches_list_q(o, needle)]
-            items = sorted(items, key=lambda o: (o.schema_name, o.name, o.object_type))
+            items = [
+                o
+                for o in self._objects.values()
+                if object_matches_list_filters(
+                    o,
+                    source_id=source_id,
+                    name_search=name_search,
+                    include_absent=include_absent,
+                    object_type=object_type,
+                    business_semantics_ready=business_semantics_ready,
+                )
+            ]
+            items.sort(key=list_object_sort_key)
             total = len(items)
             page = _paginate(items, limit=limit, offset=offset)
-            return [_list_projection(o) for o in page], total
+            return [list_object_projection(o) for o in page], total
 
     def search_objects(
         self,
@@ -121,29 +156,27 @@ class MemoryCatalogStore:
         offset: int = 0,
     ) -> tuple[list[CatalogObjectRecord], int]:
         with self._lock:
-            ranked: list[tuple[int, CatalogObjectRecord]] = []
-            for obj in self._objects.values():
-                if source_id is not None and obj.source_id != source_id:
-                    continue
-                if object_type is not None and obj.object_type != object_type:
-                    continue
-                if not include_absent and not obj.is_present:
-                    continue
-                rank = _search_rank(
+            candidates = [
+                obj
+                for obj in self._objects.values()
+                if (source_id is None or obj.source_id == source_id)
+                and (object_type is None or obj.object_type == object_type)
+                and (include_absent or obj.is_present)
+            ]
+            return rank_and_page(
+                candidates,
+                rank_of=lambda o: _search_rank(
                     query,
-                    locator_key=obj.locator_key,
-                    name=obj.name,
-                    schema_name=obj.schema_name,
-                    business_name=obj.business_name,
-                    business_description=obj.business_description,
-                )
-                if rank is None:
-                    continue
-                ranked.append((rank, obj))
-            ranked.sort(key=lambda t: (t[0], t[1].schema_name, t[1].name, t[1].id))
-            total = len(ranked)
-            page = [o for _, o in _paginate(ranked, limit=limit, offset=offset)]
-            return page, total
+                    locator_key=o.locator_key,
+                    name=o.name,
+                    schema_name=o.schema_name,
+                    business_name=o.business_name,
+                    business_description=o.business_description,
+                ),
+                tiebreak=lambda o: (o.schema_name, o.name, o.id),
+                limit=limit,
+                offset=offset,
+            )
 
     def search_columns(
         self,
@@ -156,29 +189,28 @@ class MemoryCatalogStore:
         offset: int = 0,
     ) -> tuple[list[CatalogColumnRecord], int]:
         with self._lock:
-            ranked: list[tuple[int, CatalogColumnRecord]] = []
+            candidates: list[CatalogColumnRecord] = []
             for obj in self._objects.values():
                 if source_id is not None and obj.source_id != source_id:
                     continue
                 if object_type is not None and obj.object_type != object_type:
                     continue
                 for col in obj.columns:
-                    if not include_absent and not col.is_present:
-                        continue
-                    rank = _search_rank(
-                        query,
-                        locator_key=col.locator_key,
-                        name=col.name,
-                        business_name=col.business_name,
-                        business_description=col.business_description,
-                    )
-                    if rank is None:
-                        continue
-                    ranked.append((rank, col))
-            ranked.sort(key=lambda t: (t[0], t[1].name, t[1].id))
-            total = len(ranked)
-            page = [c for _, c in _paginate(ranked, limit=limit, offset=offset)]
-            return page, total
+                    if include_absent or col.is_present:
+                        candidates.append(col)
+            return rank_and_page(
+                candidates,
+                rank_of=lambda c: _search_rank(
+                    query,
+                    locator_key=c.locator_key,
+                    name=c.name,
+                    business_name=c.business_name,
+                    business_description=c.business_description,
+                ),
+                tiebreak=lambda c: (c.name, c.id),
+                limit=limit,
+                offset=offset,
+            )
 
     def get_object(self, object_id: str) -> CatalogObjectRecord | None:
         with self._lock:
@@ -214,8 +246,12 @@ class MemoryCatalogStore:
                 for o in self._objects.values()
                 if o.source_id == source_id and o.is_present
             ]
-            return sorted(
-                items, key=lambda o: (o.schema_name, o.name, o.object_type)
+            return sorted(items, key=list_object_sort_key)
+
+    def count_objects_for_domain(self, domain_id: str) -> int:
+        with self._lock:
+            return sum(
+                1 for o in self._objects.values() if o.business_domain_id == domain_id
             )
 
     @contextmanager
@@ -239,82 +275,6 @@ class MemoryCatalogStore:
                 self._join_by_pair = join_by_pair_backup
                 self._join_changes = join_changes_backup
                 raise
-
-    def _persist_structure_plan_unlocked(
-        self,
-        plan: StructureRefreshPlan,
-        *,
-        now: datetime,
-    ) -> None:
-        for obj in plan.objects:
-            self._objects[obj.id] = obj
-        for oid in plan.stamp_object_ids:
-            obj = self._objects[oid]
-            self._objects[oid] = replace(
-                obj,
-                collected_at=plan.collected_at,
-                last_structure_job_id=plan.last_structure_job_id,
-            )
-        for upsert in plan.upsert_joins:
-            pair = (upsert.from_column_id, upsert.to_column_id)
-            if pair in self._join_by_pair:
-                continue
-            record = CatalogJoinRecord(
-                id=new_join_id(),
-                from_column_id=upsert.from_column_id,
-                to_column_id=upsert.to_column_id,
-                evidence=upsert.evidence,
-                join_kind=upsert.join_kind,
-                join_expression=upsert.join_expression,
-                created_by_user_id=None,
-                created_at=now,
-            )
-            self._joins[record.id] = record
-            self._join_by_pair[pair] = record.id
-            self._join_changes.append(
-                new_join_change(
-                    from_column_id=upsert.from_column_id,
-                    to_column_id=upsert.to_column_id,
-                    kind=JOIN_CHANGE_CREATE,
-                    created_at=now,
-                    attester=STRUCTURE_JOIN_ORIGIN,
-                )
-            )
-
-    def _persist_join_detection_plan_unlocked(
-        self,
-        plan: JoinDetectionPlan,
-        *,
-        now: datetime,
-    ) -> int:
-        inserted = 0
-        for upsert in plan.upsert_joins:
-            pair = (upsert.from_column_id, upsert.to_column_id)
-            if pair in self._join_by_pair:
-                continue
-            record = CatalogJoinRecord(
-                id=new_join_id(),
-                from_column_id=upsert.from_column_id,
-                to_column_id=upsert.to_column_id,
-                evidence=upsert.evidence,
-                join_kind=upsert.join_kind,
-                join_expression=upsert.join_expression,
-                created_by_user_id=None,
-                created_at=now,
-            )
-            self._joins[record.id] = record
-            self._join_by_pair[pair] = record.id
-            self._join_changes.append(
-                new_join_change(
-                    from_column_id=upsert.from_column_id,
-                    to_column_id=upsert.to_column_id,
-                    kind=JOIN_CHANGE_CREATE,
-                    created_at=now,
-                    attester=SQL_LINEAGE_JOIN_ORIGIN,
-                )
-            )
-            inserted += 1
-        return inserted
 
     def recompute_locators_for_source(
         self,
@@ -364,53 +324,11 @@ class MemoryCatalogStore:
                     )
         return changed
 
-    def _upsert_join_unlocked(
-        self,
-        *,
-        from_column_id: str,
-        to_column_id: str,
-        evidence: str,
-        created_by_user_id: str | None,
-        join_kind: str = "INNER",
-        join_expression: str | None = None,
-        attester: str,
-    ) -> CatalogJoinRecord:
-        pair = (from_column_id, to_column_id)
-        existing_id = self._join_by_pair.get(pair)
-        if existing_id is not None:
-            return self._joins[existing_id]
-        now = utc_now()
-        record = CatalogJoinRecord(
-            id=new_join_id(),
-            from_column_id=from_column_id,
-            to_column_id=to_column_id,
-            evidence=evidence,
-            join_kind=join_kind,
-            join_expression=join_expression,
-            created_by_user_id=created_by_user_id,
-            created_at=now,
-        )
-        self._joins[record.id] = record
-        self._join_by_pair[pair] = record.id
-        self._join_changes.append(
-            new_join_change(
-                from_column_id=from_column_id,
-                to_column_id=to_column_id,
-                kind=JOIN_CHANGE_CREATE,
-                created_at=now,
-                attester=attester,
-                actor_user_id=created_by_user_id,
-            )
-        )
-        return record
-
     def delete_objects_for_source(self, source_id: str) -> None:
         with self._lock:
             col_ids: set[str] = set()
             to_drop = [
-                oid
-                for oid, obj in self._objects.items()
-                if obj.source_id == source_id
+                oid for oid, obj in self._objects.items() if obj.source_id == source_id
             ]
             for oid in to_drop:
                 for col in self._objects[oid].columns:
@@ -423,9 +341,7 @@ class MemoryCatalogStore:
             ]
             for jid in stale_joins:
                 join = self._joins.pop(jid)
-                self._join_by_pair.pop(
-                    (join.from_column_id, join.to_column_id), None
-                )
+                self._join_by_pair.pop((join.from_column_id, join.to_column_id), None)
 
     def patch_object_semantics(
         self,
@@ -472,11 +388,6 @@ class MemoryCatalogStore:
                 kwargs.pop("semantics_updated_at", None)
             updated = replace(obj, **kwargs)
             self._objects[object_id] = updated
-            if business_domain_id is not UNSET:
-
-                store = get_business_domain_store()
-                if isinstance(store, MemoryBusinessDomainStore):
-                    store.set_object_ref(object_id, updated.business_domain_id)
             return updated
 
     def patch_column_semantics(
@@ -574,7 +485,8 @@ class MemoryCatalogStore:
         attester: str,
     ) -> CatalogJoinRecord:
         with self._lock:
-            return self._upsert_join_unlocked(
+            return apply_upsert_join(
+                _MemoryPersistPort(self),
                 from_column_id=from_column_id,
                 to_column_id=to_column_id,
                 evidence=evidence,
@@ -582,6 +494,7 @@ class MemoryCatalogStore:
                 join_kind=join_kind,
                 join_expression=join_expression,
                 attester=attester,
+                now=utc_now(),
             )
 
     def update_join(
@@ -605,10 +518,9 @@ class MemoryCatalogStore:
             )
             self._joins[join_id] = updated
             self._join_changes.append(
-                new_join_change(
+                join_change_for_amend(
                     from_column_id=updated.from_column_id,
                     to_column_id=updated.to_column_id,
-                    kind=JOIN_CHANGE_AMEND,
                     created_at=utc_now(),
                     actor_user_id=actor_user_id,
                 )
@@ -633,18 +545,14 @@ class MemoryCatalogStore:
                 rejected_by_user_id=rejected_by_user_id,
             )
             self._joins[join_id] = updated
-            kind = (
-                JOIN_CHANGE_RESTORE if rejected_at is None else JOIN_CHANGE_REJECT
-            )
             self._join_changes.append(
-                new_join_change(
+                join_change_for_rejection_toggle(
                     from_column_id=updated.from_column_id,
                     to_column_id=updated.to_column_id,
-                    kind=kind,
                     created_at=utc_now(),
-                    actor_user_id=actor_user_id
-                    if actor_user_id is not None
-                    else rejected_by_user_id,
+                    rejected_at=rejected_at,
+                    actor_user_id=actor_user_id,
+                    rejected_by_user_id=rejected_by_user_id,
                 )
             )
             return updated
@@ -670,16 +578,3 @@ class MemoryCatalogStore:
                 return False
             self._join_by_pair.pop((join.from_column_id, join.to_column_id), None)
             return True
-
-
-def _matches_list_q(obj: CatalogObjectRecord, needle: str) -> bool:
-    if needle in obj.name.lower() or needle in obj.schema_name.lower():
-        return True
-    if obj.business_name and needle in obj.business_name.lower():
-        return True
-    return False
-
-
-def _list_projection(obj: CatalogObjectRecord) -> CatalogObjectRecord:
-    return replace(obj, columns=[], foreign_keys=[], indexes=[], ddl=None)
-

@@ -2,28 +2,38 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
-from backend.core.pagination import PageParams, page_params
+from backend.core.pagination import (
+    CATALOG_OBJECT_LIST,
+    CATALOG_SEARCH,
+    JOIN_LIST,
+    PageParams,
+    page_params,
+)
 from backend.metadata.catalog import join_writes as catalog_joins
 from backend.metadata.catalog import semantics as catalog_semantics
 from backend.metadata.catalog import service as catalog_reads
 from backend.metadata.catalog import views as catalog_views
+from backend.metadata.catalog.present import (
+    ObjectPresentProfile,
+    present_column,
+    present_object,
+)
 from backend.metadata.catalog.join_origin import HUMAN_JOIN_ORIGIN
 from backend.metadata.query import service as query_service
 from backend.metadata.query.compile_sample import SampleFilterSpec, SampleOrderSpec
 from backend.metadata.schemas.catalog import (
-    BusinessDomainRef,
     CatalogColumnOut,
     CatalogColumnResponse,
     CatalogColumnSearchResponse,
     CatalogColumnsSemanticsBatchRequest,
     CatalogColumnsSemanticsBatchResponse,
     CatalogDdlResponse,
-    CatalogForeignKeyOut,
-    CatalogIndexOut,
     CatalogObjectListResponse,
     CatalogObjectOut,
     CatalogObjectResponse,
@@ -47,102 +57,29 @@ from backend.metadata.schemas.query import SampleRequest, SampleResponse
 router = APIRouter(tags=["catalog"])
 
 def _column_out(view: catalog_views.ColumnView) -> CatalogColumnOut:
-    return CatalogColumnOut(
-        id=view.id,
-        locator_key=view.locator_key,
-        name=view.name,
-        data_type=view.data_type,
-        nullable=view.nullable,
-        default_value=view.default_value,
-        comment=view.comment,
-        business_name=view.business_name,
-        business_description=view.business_description,
-        column_semantics=view.column_semantics,
-        enum_catalog=view.enum_catalog,
-        semantic_source=view.semantic_source,
-        field_kind=view.field_kind,
-        ordinal=view.ordinal,
-        is_present=view.is_present,
-        normalized_type=view.normalized_type,
+    return CatalogColumnOut.model_validate(
+        present_column(view, include_normalized_type=True)
     )
 
-def _object_out(view: catalog_views.ObjectView) -> CatalogObjectOut:
 
-    domain = None
-    if view.business_domain is not None:
-        domain = BusinessDomainRef(
-            id=view.business_domain.id,
-            code=view.business_domain.code,
-            name=view.business_domain.name,
-        )
-    return CatalogObjectOut(
-        id=view.id,
-        locator_key=view.locator_key,
-        source_id=view.source_id,
-        object_type=view.object_type,
-        schema_name=view.schema_name,
-        name=view.name,
-        comment=view.comment,
-        primary_key=view.primary_key,
-        business_name=view.business_name,
-        business_description=view.business_description,
-        object_category=view.object_category,
-        grain_description=view.grain_description,
-        business_primary_key=view.business_primary_key,
-        business_domain=domain,
-        evidence_summary=view.evidence_summary,
-        open_questions=view.open_questions,
-        semantic_source=view.semantic_source,
-        business_semantics_ready=view.business_semantics_ready,
-        semantics_updated_at=view.semantics_updated_at,
-        columns=[_column_out(c) for c in view.columns],
-        foreign_keys=[
-            CatalogForeignKeyOut(
-                name=fk.name,
-                columns=list(fk.columns),
-                ref_schema=fk.ref_schema,
-                ref_table=fk.ref_table,
-                ref_columns=list(fk.ref_columns),
-                is_present=fk.is_present,
-            )
-            for fk in view.foreign_keys
-        ],
-        indexes=[
-            CatalogIndexOut(
-                name=idx.name,
-                columns=list(idx.columns),
-                is_unique=idx.is_unique,
-                is_present=idx.is_present,
-            )
-            for idx in view.indexes
-        ],
-        ddl=view.ddl,
-        is_present=view.is_present,
-        collected_at=view.collected_at,
+def _object_out(
+    view: catalog_views.ObjectView, *, detail: bool = False
+) -> CatalogObjectOut:
+    profile = (
+        ObjectPresentProfile.HTTP_DETAIL
+        if detail
+        else ObjectPresentProfile.HTTP_SUMMARY
     )
+    return CatalogObjectOut.model_validate(present_object(view, profile=profile))
+
 
 def _join_out(view: catalog_views.JoinView) -> JoinOut:
-    return JoinOut(
-        id=view.id,
-        from_column_id=view.from_column_id,
-        to_column_id=view.to_column_id,
-        from_column_locator_key=view.from_column_locator_key,
-        to_column_locator_key=view.to_column_locator_key,
-        evidence=view.evidence,
-        join_kind=view.join_kind,
-        join_expression=view.join_expression,
-        created_by_user_id=view.created_by_user_id,
-        created_at=view.created_at,
-        is_rejected=view.is_rejected,
-        rejected_at=view.rejected_at,
-        rejected_by_user_id=view.rejected_by_user_id,
-    )
+    return JoinOut.model_validate(asdict(view))
 
-def _object_out_from_record(record, *, include_columns: bool) -> CatalogObjectOut:
-    return _object_out(catalog_views.object_view(record, include_columns=include_columns))
 
 def _join_out_from_record(record) -> JoinOut:
     return _join_out(catalog_views.join_view(record))
+
 
 @router.get("/sources/{source_id}/objects", response_model=CatalogObjectListResponse)
 def list_objects(
@@ -151,7 +88,7 @@ def list_objects(
     object_type: str | None = None,
     include_absent: bool = True,
     business_semantics_ready: bool | None = Query(default=None),
-    page: PageParams = Depends(page_params(default_limit=100, max_limit=500)),
+    page: PageParams = Depends(page_params(CATALOG_OBJECT_LIST)),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectListResponse:
     items, total = catalog_reads.list_objects_for_source(
@@ -175,7 +112,7 @@ def search_objects(
     q: str = Query(..., min_length=1),
     source_id: str | None = None,
     object_type: str | None = None,
-    page: PageParams = Depends(page_params(default_limit=20, max_limit=100)),
+    page: PageParams = Depends(page_params(CATALOG_SEARCH)),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectSearchResponse:
     items, total = catalog_reads.search_objects(
@@ -197,7 +134,7 @@ def search_columns(
     q: str = Query(..., min_length=1),
     source_id: str | None = None,
     object_type: str | None = None,
-    page: PageParams = Depends(page_params(default_limit=20, max_limit=100)),
+    page: PageParams = Depends(page_params(CATALOG_SEARCH)),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogColumnSearchResponse:
     items, total = catalog_reads.search_columns(
@@ -219,7 +156,9 @@ def get_object(
     object_id: str,
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectResponse:
-    return CatalogObjectResponse(object=_object_out(catalog_reads.get_object(object_id)))
+    return CatalogObjectResponse(
+        object=_object_out(catalog_reads.get_object(object_id), detail=True)
+    )
 
 @router.get("/objects/{object_id}/ddl", response_model=CatalogDdlResponse)
 def get_object_ddl(
@@ -280,7 +219,10 @@ def patch_object_semantics(
         semantic_source="user_input",
     )
     return CatalogObjectResponse(
-        object=_object_out_from_record(record, include_columns=True)
+        object=_object_out(
+            catalog_views.object_view(record, include_columns=True),
+            detail=True,
+        )
     )
 
 @router.patch("/columns/{column_id}/semantics", response_model=CatalogColumnResponse)
@@ -318,7 +260,7 @@ def patch_columns_semantics_batch(
         semantic_source="user_input",
     )
     return CatalogColumnsSemanticsBatchResponse(
-        object=_object_out(catalog_reads.get_object(object_id)),
+        object=_object_out(catalog_reads.get_object(object_id), detail=True),
         updated_count=result["updated_count"],
         requested_count=result["requested_count"],
         skipped_columns=result["skipped_columns"],
@@ -328,7 +270,7 @@ def patch_columns_semantics_batch(
 def list_object_joins(
     object_id: str,
     _: UserRecord = Depends(require_permission("metadata:read")),
-    page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
+    page: PageParams = Depends(page_params(JOIN_LIST)),
 ) -> JoinListResponse:
     items, total = catalog_joins.list_joins(
         object_id, limit=page.limit, offset=page.offset

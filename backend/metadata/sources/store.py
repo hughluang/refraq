@@ -9,7 +9,7 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Protocol
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -56,7 +56,11 @@ def ensure_source_locator(record: SourceRecord) -> SourceRecord:
 
 class SourceStore(Protocol):
     def list_sources(
-        self, *, limit: int | None = None, offset: int = 0
+        self,
+        *,
+        query_text: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> tuple[list[SourceRecord], int]: ...
     def get_source(self, source_id: str) -> SourceRecord | None: ...
 
@@ -68,6 +72,32 @@ class SourceStore(Protocol):
 
     def delete_source(self, source_id: str) -> bool: ...
 
+def _escape_like_literal(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def source_matches_query(record: SourceRecord, query_text: str | None) -> bool:
+    needle = (query_text or "").strip().lower()
+    if not needle:
+        return True
+    locator = (record.locator_key or "").lower()
+    return needle in record.key.lower() or needle in record.name.lower() or needle in locator
+
+
+def _source_query_sql_filters(query_text: str | None) -> list:
+    needle = (query_text or "").strip()
+    if not needle:
+        return []
+    pattern = f"%{_escape_like_literal(needle)}%"
+    return [
+        or_(
+            SourceRow.key.ilike(pattern, escape="\\"),
+            SourceRow.name.ilike(pattern, escape="\\"),
+            SourceRow.locator_key.ilike(pattern, escape="\\"),
+        )
+    ]
+
+
 class MemorySourceStore:
     def __init__(self) -> None:
         self._sources: dict[str, SourceRecord] = {}
@@ -76,11 +106,15 @@ class MemorySourceStore:
         self._lock = threading.Lock()
 
     def list_sources(
-        self, *, limit: int | None = None, offset: int = 0
+        self,
+        *,
+        query_text: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> tuple[list[SourceRecord], int]:
         with self._lock:
             items = sorted(
-                self._sources.values(),
+                (r for r in self._sources.values() if source_matches_query(r, query_text)),
                 key=lambda r: (r.key, r.id),
             )
             return apply_offset_page(items, limit=limit, offset=offset)
@@ -146,15 +180,22 @@ class MemorySourceStore:
 
 class SqlSourceStore:
     def list_sources(
-        self, *, limit: int | None = None, offset: int = 0
+        self,
+        *,
+        query_text: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> tuple[list[SourceRecord], int]:
         with session_scope() as session:
-            total = int(session.scalar(select(func.count()).select_from(SourceRow)) or 0)
-            stmt = apply_sql_page(
-                select(SourceRow).order_by(SourceRow.key, SourceRow.id),
-                limit=limit,
-                offset=offset,
-            )
+            filters = _source_query_sql_filters(query_text)
+            count_stmt = select(func.count()).select_from(SourceRow)
+            if filters:
+                count_stmt = count_stmt.where(*filters)
+            total = int(session.scalar(count_stmt) or 0)
+            list_stmt = select(SourceRow).order_by(SourceRow.key, SourceRow.id)
+            if filters:
+                list_stmt = list_stmt.where(*filters)
+            stmt = apply_sql_page(list_stmt, limit=limit, offset=offset)
             return [_row_to_source(r) for r in session.scalars(stmt).all()], total
 
     def get_source(self, source_id: str) -> SourceRecord | None:
