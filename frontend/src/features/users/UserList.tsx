@@ -1,8 +1,8 @@
 "use client";
 
 import {
+  Badge,
   Button,
-  Paper,
   Select,
   Stack,
   Text,
@@ -12,6 +12,7 @@ import {
   SegmentedControl,
   Switch,
   Table,
+  Tabs,
   TextInput,
 } from "@mantine/core";
 import {
@@ -25,12 +26,12 @@ import {
 import { useCallback, useState } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
-import { ListPager } from "@/components/display/ListPager";
 import { ListTable } from "@/components/display/ListTable";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
-import { PageError } from "@/components/feedback/PageError";
+import { FillColumn } from "@/components/layout/FillColumn";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
+import { PendingFederatedIdentityTable } from "@/features/users/PendingFederatedIdentityTable";
 import { UserRoleBadge } from "@/features/users/UserRoleBadge";
 import { listUsers } from "@/features/users/api";
 import type { RoleRow } from "@/features/roles/types";
@@ -83,6 +84,7 @@ export function UserList() {
   const [claimUserId, setClaimUserId] = useState<string | null>(null);
   const [claimRoleId, setClaimRoleId] = useState<string | null>(null);
   const [claimBusy, setClaimBusy] = useState(false);
+  const [activeTab, setActiveTab] = useState<string | null>("users");
 
   const notifyListError = useCallback(
     (message: string) => {
@@ -124,6 +126,7 @@ export function UserList() {
     pageSize: PAGE_SIZE,
     fetch: fetchPending,
     enabled: Boolean(canWrite?.can),
+    onError: notifyListError,
   });
 
   const listPresentation = listPresentationOf({
@@ -260,154 +263,144 @@ export function UserList() {
     }
   }
 
+  const userTable = (
+    <ListTable
+      state={listPresentation.state}
+      columnCount={6}
+      refreshing={listPresentation.refreshing}
+      errorMessage={errorMessage}
+      onRetry={() => void reload()}
+      head={
+        <Table.Tr>
+          <Table.Th>{t("users.fields.account")}</Table.Th>
+          <Table.Th>{t("users.fields.displayName")}</Table.Th>
+          <Table.Th>{t("users.fields.role")}</Table.Th>
+          <Table.Th>{t("users.fields.status")}</Table.Th>
+          <Table.Th>{t("users.fields.identity")}</Table.Th>
+          <Table.Th>{t("users.fields.lastLoginAt")}</Table.Th>
+        </Table.Tr>
+      }
+      page={page}
+      pageSize={pageSize}
+      total={total}
+      onPageChange={setPage}
+    >
+      {rows.map((row) => {
+        const isSelf = identity?.id === row.id;
+        return (
+          <Table.Tr key={row.id}>
+            <Table.Td>{row.account}</Table.Td>
+            <Table.Td>{row.display_name}</Table.Td>
+            <Table.Td>
+              <UserRoleBadge
+                roleName={row.role_name}
+                roleKey={row.role_key}
+              />
+            </Table.Td>
+            <Table.Td>
+              <Switch
+                checked={row.status === "active"}
+                onChange={() => statusConfirm.open(row)}
+                disabled={!canWrite?.can || mutation.isPending || isSelf}
+                size="sm"
+                aria-label={
+                  row.status === "active"
+                    ? t("users.status.active")
+                    : t("users.status.disabled")
+                }
+              />
+            </Table.Td>
+            <Table.Td>
+              <Group gap="xs">
+                <Text size="sm">
+                  {t(`identitySource.${row.identity_source}`)}
+                </Text>
+                {row.identity_source === "oidc" && canWrite?.can ? (
+                  <Button
+                    size="compact-xs"
+                    variant="subtle"
+                    onClick={() => {
+                      unfederateConfirm.open(row);
+                      setUnfederatePassword("");
+                    }}
+                  >
+                    {t("users.federation.unfederate.title")}
+                  </Button>
+                ) : null}
+              </Group>
+            </Table.Td>
+            <Table.Td>{formatInstant(row.last_login_at)}</Table.Td>
+          </Table.Tr>
+        );
+      })}
+    </ListTable>
+  );
+
+  const pendingBadge =
+    pendingTotal > 0 ? (
+      <Badge size="xs" variant="light">
+        {pendingTotal}
+      </Badge>
+    ) : undefined;
+
+  const content = canWrite?.can ? (
+    <FillColumn>
+      <Tabs
+        value={activeTab}
+        onChange={setActiveTab}
+        keepMounted
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+        }}
+        styles={{
+          panel: {
+            flex: 1,
+            minHeight: 0,
+            overflow: "auto",
+            display: "flex",
+            flexDirection: "column",
+          },
+        }}
+      >
+        <Tabs.List>
+          <Tabs.Tab value="users">{t("users.tabs.users")}</Tabs.Tab>
+          <Tabs.Tab value="pending" rightSection={pendingBadge}>
+            {t("users.pending.title")}
+          </Tabs.Tab>
+        </Tabs.List>
+        <Tabs.Panel value="users" pt="md" style={{ overflow: "hidden" }}>
+          {userTable}
+        </Tabs.Panel>
+        <Tabs.Panel value="pending" pt="md" style={{ overflow: "hidden" }}>
+          <PendingFederatedIdentityTable
+            items={pendingIdentities}
+            total={pendingTotal}
+            page={pendingPage}
+            pageSize={pendingPageSize}
+            loading={pendingLoading}
+            error={pendingError}
+            errorRequestId={pendingRequestId}
+            onPageChange={setPendingPage}
+            onRetry={() => void reloadPending()}
+            onClaim={openClaim}
+          />
+        </Tabs.Panel>
+      </Tabs>
+    </FillColumn>
+  ) : (
+    userTable
+  );
+
   return (
     <PageChrome
       title={t("users.title")}
       description={t("users.description")}
       actions={createAction}
     >
-      {canWrite?.can ? (
-        <Stack gap="xs" mb="md">
-          <Text fw={600}>{t("users.pending.title")}</Text>
-          {pendingError ? (
-            <PageError
-              message={pendingError}
-              requestId={pendingRequestId}
-              onRetry={() => void reloadPending()}
-            />
-          ) : pendingLoading && pendingIdentities.length === 0 ? (
-            <Text size="sm" c="dimmed">
-              {t("common.loading")}
-            </Text>
-          ) : pendingIdentities.length === 0 ? (
-            <Text size="sm" c="dimmed">
-              {t("users.pending.empty")}
-            </Text>
-          ) : (
-            <>
-              {pendingIdentities.map((item) => (
-              <Paper key={item.id} withBorder p="sm">
-                <Group justify="space-between" align="flex-start" wrap="wrap">
-                  <Stack gap={4}>
-                    <Text fw={500}>
-                      {item.display_name ?? item.account_hint}
-                    </Text>
-                    <Text size="xs" c="dimmed">
-                      {item.account_hint}
-                      {item.email ? ` · ${item.email}` : ""}
-                      {` · ${item.issuer}`}
-                    </Text>
-                    <Text size="xs">
-                      {t("users.pending.reason")}:{" "}
-                      {t(`users.pending.reason.${item.admission_reason}`, {
-                        defaultValue: item.admission_reason,
-                      })}
-                    </Text>
-                    <Text size="xs">
-                      {t("users.pending.groups")}:{" "}
-                      {item.groups.length
-                        ? item.groups.join(", ")
-                        : t("identityProviders.fields.notConfigured")}
-                    </Text>
-                    <Text size="xs">
-                      {t("users.pending.expires")}:{" "}
-                      {formatInstant(item.expires_at)}
-                    </Text>
-                    <Text size="xs">
-                      {t("users.pending.attempts")}: {item.attempt_count}
-                    </Text>
-                  </Stack>
-                  <Button
-                    size="xs"
-                    onClick={() => openClaim(item)}
-                  >
-                    {t("users.pending.claim")}
-                  </Button>
-                </Group>
-              </Paper>
-              ))}
-              <ListPager
-                page={pendingPage}
-                pageSize={pendingPageSize}
-                total={pendingTotal}
-                onChange={setPendingPage}
-                disabled={pendingLoading}
-              />
-            </>
-          )}
-        </Stack>
-      ) : null}
-
-      <ListTable
-        state={listPresentation.state}
-        columnCount={6}
-        refreshing={listPresentation.refreshing}
-        errorMessage={errorMessage}
-        onRetry={() => void reload()}
-        head={
-          <Table.Tr>
-            <Table.Th>{t("users.fields.account")}</Table.Th>
-            <Table.Th>{t("users.fields.displayName")}</Table.Th>
-            <Table.Th>{t("users.fields.role")}</Table.Th>
-            <Table.Th>{t("users.fields.status")}</Table.Th>
-            <Table.Th>{t("users.fields.identity")}</Table.Th>
-            <Table.Th>{t("users.fields.lastLoginAt")}</Table.Th>
-          </Table.Tr>
-        }
-        page={page}
-        pageSize={pageSize}
-        total={total}
-        onPageChange={setPage}
-      >
-        {rows.map((row) => {
-          const isSelf = identity?.id === row.id;
-          return (
-            <Table.Tr key={row.id}>
-              <Table.Td>{row.account}</Table.Td>
-              <Table.Td>{row.display_name}</Table.Td>
-              <Table.Td>
-                <UserRoleBadge
-                  roleName={row.role_name}
-                  roleKey={row.role_key}
-                />
-              </Table.Td>
-              <Table.Td>
-                <Switch
-                  checked={row.status === "active"}
-                  onChange={() => statusConfirm.open(row)}
-                  disabled={!canWrite?.can || mutation.isPending || isSelf}
-                  size="sm"
-                  aria-label={
-                    row.status === "active"
-                      ? t("users.status.active")
-                      : t("users.status.disabled")
-                  }
-                />
-              </Table.Td>
-              <Table.Td>
-                <Group gap="xs">
-                  <Text size="sm">
-                    {t(`identitySource.${row.identity_source}`)}
-                  </Text>
-                  {row.identity_source === "oidc" && canWrite?.can ? (
-                    <Button
-                      size="compact-xs"
-                      variant="subtle"
-                      onClick={() => {
-                        unfederateConfirm.open(row);
-                        setUnfederatePassword("");
-                      }}
-                    >
-                      {t("users.federation.unfederate.title")}
-                    </Button>
-                  ) : null}
-                </Group>
-              </Table.Td>
-              <Table.Td>{formatInstant(row.last_login_at)}</Table.Td>
-            </Table.Tr>
-          );
-        })}
-      </ListTable>
+      {content}
 
       <Modal
         opened={claimTarget !== null}

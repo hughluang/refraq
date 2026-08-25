@@ -18,6 +18,7 @@ type ListTableProps = {
   minWidth?: number;
   refreshing?: boolean;
   errorMessage?: string | null;
+  errorRequestId?: string | null;
   onRetry?: () => void;
   emptyMessage?: string;
   noMatchMessage?: string;
@@ -61,6 +62,7 @@ export function ListTable({
   minWidth = DEFAULT_MIN_WIDTH,
   refreshing = false,
   errorMessage,
+  errorRequestId,
   onRetry,
   emptyMessage,
   noMatchMessage,
@@ -81,7 +83,11 @@ export function ListTable({
     case "error":
       body = (
         <StatusRow columnCount={columnCount}>
-          <PageError message={errorMessage ?? ""} onRetry={onRetry} />
+          <PageError
+            message={errorMessage ?? ""}
+            requestId={errorRequestId}
+            onRetry={onRetry}
+          />
         </StatusRow>
       );
       break;

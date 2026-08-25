@@ -583,6 +583,8 @@
   "auth.login.error.AUTH_ACCOUNT_DISABLED": "账号已被禁用",
   "auth.login.error.AUTH_CONSOLE_ACCESS_REQUIRED": "该账号无权登录管理台",
   "users.fields.identity": "身份",
+  "users.fields.actions": "操作",
+  "users.tabs.users": "用户",
   "users.pending.title": "待认领联邦身份",
   "users.pending.empty": "当前没有待认领身份。认证成功但未准入的登录会出现在这里。",
   "users.pending.claim": "认领",

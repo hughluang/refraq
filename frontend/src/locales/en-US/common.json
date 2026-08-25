@@ -583,6 +583,8 @@
   "auth.login.error.AUTH_ACCOUNT_DISABLED": "This account is disabled",
   "auth.login.error.AUTH_CONSOLE_ACCESS_REQUIRED": "This account cannot sign in to the console",
   "users.fields.identity": "Identity",
+  "users.fields.actions": "Actions",
+  "users.tabs.users": "Users",
   "users.pending.title": "Pending federated identities",
   "users.pending.empty": "No pending identities. Valid sign-ins that are not admitted appear here.",
   "users.pending.claim": "Claim",
