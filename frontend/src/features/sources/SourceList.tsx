@@ -41,9 +41,8 @@ import type {
   SourceAccess,
 } from "@/features/sources/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
-import { usePagedList } from "@/hooks/usePagedList";
+import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { ApiError } from "@/lib/api";
-import { listPresentationOf } from "@/lib/list-state";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 100;
@@ -113,29 +112,15 @@ export function SourceList() {
     canWrite?.can || canRunJobs?.can || canReadDiffs?.can,
   );
 
-  const onError = useCallback(
-    (message: string) => {
-      open?.({ type: "error", message });
-    },
-    [open],
-  );
   const fetchPage = useCallback(
     (query: PageQuery) => listSources(query),
     [],
   );
-  const { items, total, page, setPage, loading, error, reload, pageSize } =
-    usePagedList({
-      pageSize: PAGE_SIZE,
-      fetch: fetchPage,
-      onError,
-    });
-  const listPresentation = listPresentationOf({
-    loading,
-    error,
-    total,
-    itemCount: items.length,
-    filtered: false,
+  const list = useConsolePagedList({
+    pageSize: PAGE_SIZE,
+    fetch: fetchPage,
   });
+  const { items, reload } = list;
 
   const form = useForm<IdentityForm>({
     initialValues: emptyIdentity(),
@@ -310,11 +295,8 @@ export function SourceList() {
       actions={createAction}
     >
       <ListTable
-        state={listPresentation.state}
+        list={list}
         columnCount={showActions ? 8 : 7}
-        refreshing={listPresentation.refreshing}
-        errorMessage={error}
-        onRetry={() => void reload()}
         emptyMessage={t("sources.empty")}
         head={
           <Table.Tr>
@@ -330,10 +312,6 @@ export function SourceList() {
             ) : null}
           </Table.Tr>
         }
-        page={page}
-        pageSize={pageSize}
-        total={total}
-        onPageChange={setPage}
       >
         {items.map((source) => (
           <Table.Tr key={source.id}>

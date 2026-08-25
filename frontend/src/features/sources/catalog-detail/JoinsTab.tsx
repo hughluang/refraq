@@ -40,10 +40,9 @@ import {
   validateJoinDraft,
 } from "@/features/sources/catalog-detail/joinEdges";
 import type { CatalogObject, JoinPathResult } from "@/features/sources/types";
-import { usePagedList } from "@/hooks/usePagedList";
+import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useSearchDebounce } from "@/hooks/useSearchDebounce";
 import { ApiError } from "@/lib/api";
-import { listPresentationOf } from "@/lib/list-state";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
@@ -79,39 +78,17 @@ export function JoinsTab({
   const [pathResult, setPathResult] = useState<JoinPathResult | null>(null);
   const [pathDrawerOpen, setPathDrawerOpen] = useState(false);
 
-  const onError = useCallback(
-    (message: string) => {
-      open?.({ type: "error", message });
-    },
-    [open],
-  );
   const fetchPage = useCallback(
     (query: PageQuery) => listObjectJoins(object.id, query),
     [object.id],
   );
-  const {
-    items: joins,
-    total,
-    page,
-    setPage,
-    pageSize,
-    reload,
-    loading,
-    error,
-  } = usePagedList({
+  const list = useConsolePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
     resetDeps: [object.id],
     enabled: listEnabled,
-    onError,
   });
-  const listPresentation = listPresentationOf({
-    loading,
-    error,
-    total,
-    itemCount: joins.length,
-    filtered: false,
-  });
+  const { items: joins, reload } = list;
 
   useEffect(() => {
     setJoinFromId(object.columns[0]?.id ?? null);
@@ -369,11 +346,8 @@ export function JoinsTab({
       </div>
 
       <ListTable
-        state={listPresentation.state}
+        list={list}
         columnCount={writable ? 8 : 7}
-        refreshing={listPresentation.refreshing}
-        errorMessage={error}
-        onRetry={() => void reload()}
         emptyMessage={t("catalog.joins.empty")}
         head={
           <Table.Tr>
@@ -387,10 +361,6 @@ export function JoinsTab({
             {writable ? <Table.Th /> : null}
           </Table.Tr>
         }
-        page={page}
-        pageSize={pageSize}
-        total={total}
-        onPageChange={setPage}
       >
         {joins.map((join) => {
           const state = joinRowState(join);

@@ -161,6 +161,8 @@
   "catalog.columns.filterPk": "Primary key",
   "catalog.columns.filterFk": "Foreign key",
   "catalog.columns.filterAbsent": "Absent",
+  "catalog.columns.empty": "No columns on this object",
+  "catalog.columns.noMatch": "No columns match these filters",
   "catalog.columns.saveDirty": "Save {{count}} changes",
   "catalog.columns.dirtyHint": "{{count}} columns have unsaved changes",
   "catalog.columns.expand": "Expand",

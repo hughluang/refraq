@@ -161,6 +161,8 @@
   "catalog.columns.filterPk": "主键",
   "catalog.columns.filterFk": "外键",
   "catalog.columns.filterAbsent": "已下线",
+  "catalog.columns.empty": "此对象没有字段",
+  "catalog.columns.noMatch": "没有符合筛选的字段",
   "catalog.columns.saveDirty": "保存 {{count}} 项改动",
   "catalog.columns.dirtyHint": "{{count}} 个字段有未保存改动",
   "catalog.columns.expand": "展开",

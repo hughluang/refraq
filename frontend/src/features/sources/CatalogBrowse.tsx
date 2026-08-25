@@ -14,7 +14,7 @@ import {
   TextInput,
   Tooltip,
 } from "@mantine/core";
-import { useNotification, useTranslate } from "@refinedev/core";
+import { useTranslate } from "@refinedev/core";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
@@ -30,10 +30,9 @@ import {
   catalogSemanticsReady,
 } from "@/features/sources/catalog-detail/catalogStatus";
 import type { Source } from "@/features/sources/types";
-import { usePagedList } from "@/hooks/usePagedList";
+import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useSearchDebounce } from "@/hooks/useSearchDebounce";
 import { ApiError } from "@/lib/api";
-import { listPresentationOf } from "@/lib/list-state";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 100;
@@ -43,7 +42,6 @@ type SemanticsReadyFilter = "all" | "ready" | "not_ready";
 
 export function CatalogBrowse() {
   const t = useTranslate();
-  const { open } = useNotification();
 
   const [sources, setSources] = useState<Source[]>([]);
   const [sourceId, setSourceId] = useState<string | null>(null);
@@ -54,13 +52,6 @@ export function CatalogBrowse() {
   const [semanticsReady, setSemanticsReady] =
     useState<SemanticsReadyFilter>("all");
   const [includeAbsent, setIncludeAbsent] = useState(true);
-
-  const onError = useCallback(
-    (message: string) => {
-      open?.({ type: "error", message });
-    },
-    [open],
-  );
 
   const fetchPage = useCallback(
     (query: PageQuery) =>
@@ -73,22 +64,16 @@ export function CatalogBrowse() {
     [sourceId, debouncedQ, includeAbsent, semanticsReady],
   );
 
-  const {
-    items,
-    total,
-    page,
-    setPage,
-    loading: listLoading,
-    error: listError,
-    reload,
-    pageSize,
-  } = usePagedList({
+  const filtered =
+    Boolean(debouncedQ) || semanticsReady !== "all" || !includeAbsent;
+  const list = useConsolePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
     resetDeps: [sourceId, debouncedQ, includeAbsent, semanticsReady],
     enabled: Boolean(sourceId),
-    onError,
+    filtered,
   });
+  const { items, reload, loading: listLoading } = list;
 
   const loadSources = useCallback(async () => {
     setLoading(true);
@@ -108,16 +93,6 @@ export function CatalogBrowse() {
   useEffect(() => {
     void loadSources();
   }, [loadSources]);
-
-  const filtered =
-    Boolean(debouncedQ) || semanticsReady !== "all" || !includeAbsent;
-  const listPresentation = listPresentationOf({
-    loading: listLoading,
-    error: listError,
-    total,
-    itemCount: items.length,
-    filtered,
-  });
 
   function clearFilters() {
     setQ("");
@@ -224,11 +199,8 @@ export function CatalogBrowse() {
           </Group>
 
           <ListTable
-            state={listPresentation.state}
+            list={list}
             columnCount={COLUMN_COUNT}
-            refreshing={listPresentation.refreshing}
-            errorMessage={listError}
-            onRetry={() => void reload()}
             emptyMessage={t("catalog.empty")}
             noMatchMessage={t("catalog.list.noMatch")}
             head={
@@ -242,10 +214,6 @@ export function CatalogBrowse() {
                 <Table.Th>{t("catalog.fields.present")}</Table.Th>
               </Table.Tr>
             }
-            page={page}
-            pageSize={pageSize}
-            total={total}
-            onPageChange={setPage}
           >
             {items.map((obj) => {
               const ready = catalogSemanticsReady(

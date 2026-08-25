@@ -35,9 +35,8 @@ import {
 import type { TokenMetadata, TokenStatus } from "@/features/tokens/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
-import { usePagedList } from "@/hooks/usePagedList";
+import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { ApiError } from "@/lib/api";
-import { listPresentationOf } from "@/lib/list-state";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
@@ -58,27 +57,12 @@ export function TokenList() {
   const t = useTranslate();
   const { open } = useNotification();
   const formatInstant = useFormatInstant();
-  const onListError = useCallback(
-    (message: string) => {
-      open?.({ type: "error", message });
-    },
-    [open],
-  );
   const fetchPage = useCallback((query: PageQuery) => listTokens(query), []);
-  const {
-    items: rows,
-    total,
-    page,
-    setPage,
-    loading,
-    error: errorMessage,
-    reload,
-    pageSize,
-  } = usePagedList<TokenMetadata>({
+  const list = useConsolePagedList<TokenMetadata>({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
-    onError: onListError,
   });
+  const { items: rows, reload } = list;
 
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -106,14 +90,6 @@ export function TokenList() {
         return null;
       },
     },
-  });
-
-  const listPresentation = listPresentationOf({
-    loading,
-    error: errorMessage,
-    total,
-    itemCount: rows.length,
-    filtered: false,
   });
 
   function openCreate() {
@@ -261,11 +237,8 @@ export function TokenList() {
       />
 
       <ListTable
-        state={listPresentation.state}
+        list={list}
         columnCount={7}
-        refreshing={listPresentation.refreshing}
-        errorMessage={errorMessage}
-        onRetry={() => void reload()}
         head={
           <Table.Tr>
             <Table.Th>{t("tokens.fields.name")}</Table.Th>
@@ -277,10 +250,6 @@ export function TokenList() {
             <Table.Th>{t("tokens.fields.actions")}</Table.Th>
           </Table.Tr>
         }
-        page={page}
-        pageSize={pageSize}
-        total={total}
-        onPageChange={setPage}
       >
         {rows.map((row) => {
           const status = tokenStatus(row);

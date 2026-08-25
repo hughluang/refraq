@@ -5,52 +5,25 @@ import { useTranslate } from "@refinedev/core";
 
 import { ListTable } from "@/components/display/ListTable";
 import type { PendingFederatedIdentity } from "@/features/identity-providers/types";
+import type { UsePagedListResult } from "@/hooks/usePagedList";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
-import { listPresentationOf } from "@/lib/list-state";
 
 type PendingFederatedIdentityTableProps = {
-  items: PendingFederatedIdentity[];
-  total: number;
-  page: number;
-  pageSize: number;
-  loading: boolean;
-  error: string | null;
-  errorRequestId: string | null;
-  onPageChange: (page: number) => void;
-  onRetry: () => void;
+  list: UsePagedListResult<PendingFederatedIdentity>;
   onClaim: (item: PendingFederatedIdentity) => void;
 };
 
 export function PendingFederatedIdentityTable({
-  items,
-  total,
-  page,
-  pageSize,
-  loading,
-  error,
-  errorRequestId,
-  onPageChange,
-  onRetry,
+  list,
   onClaim,
 }: PendingFederatedIdentityTableProps) {
   const t = useTranslate();
   const formatInstant = useFormatInstant();
-  const presentation = listPresentationOf({
-    loading,
-    error,
-    total,
-    itemCount: items.length,
-    filtered: false,
-  });
 
   return (
     <ListTable
-      state={presentation.state}
+      list={list}
       columnCount={7}
-      refreshing={presentation.refreshing}
-      errorMessage={error}
-      errorRequestId={errorRequestId}
-      onRetry={onRetry}
       emptyMessage={t("users.pending.empty")}
       head={
         <Table.Tr>
@@ -63,12 +36,8 @@ export function PendingFederatedIdentityTable({
           <Table.Th>{t("users.fields.actions")}</Table.Th>
         </Table.Tr>
       }
-      page={page}
-      pageSize={pageSize}
-      total={total}
-      onPageChange={onPageChange}
     >
-      {items.map((item) => (
+      {list.items.map((item) => (
         <Table.Tr key={item.id}>
           <Table.Td>
             <Stack gap={2}>

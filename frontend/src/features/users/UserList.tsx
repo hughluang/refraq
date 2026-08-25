@@ -38,7 +38,7 @@ import type { RoleRow } from "@/features/roles/types";
 import type { UserRow, UserStatus } from "@/features/users/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
-import { usePagedList } from "@/hooks/usePagedList";
+import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { ApiError } from "@/lib/api";
 import {
   claimPendingFederatedIdentity,
@@ -46,7 +46,6 @@ import {
   unfederateUser,
 } from "@/features/identity-providers/api";
 import type { PendingFederatedIdentity } from "@/features/identity-providers/types";
-import { listPresentationOf } from "@/lib/list-state";
 import type { PageQuery } from "@/lib/pagination";
 import type { CurrentUser } from "@/providers/session-store";
 
@@ -86,55 +85,21 @@ export function UserList() {
   const [claimBusy, setClaimBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<string | null>("users");
 
-  const notifyListError = useCallback(
-    (message: string) => {
-      open?.({ type: "error", message });
-    },
-    [open],
-  );
   const fetchUsers = useCallback((query: PageQuery) => listUsers(query), []);
-  const {
-    items: rows,
-    total,
-    page,
-    setPage,
-    loading,
-    error: errorMessage,
-    reload,
-    pageSize,
-  } = usePagedList<UserRow>({
+  const users = useConsolePagedList<UserRow>({
     pageSize: PAGE_SIZE,
     fetch: fetchUsers,
-    onError: notifyListError,
   });
+  const { items: rows, reload } = users;
 
   const fetchPending = useCallback(
     (query: PageQuery) => listPendingFederatedIdentities(query),
     [],
   );
-  const {
-    items: pendingIdentities,
-    total: pendingTotal,
-    page: pendingPage,
-    setPage: setPendingPage,
-    loading: pendingLoading,
-    error: pendingError,
-    errorRequestId: pendingRequestId,
-    reload: reloadPending,
-    pageSize: pendingPageSize,
-  } = usePagedList({
+  const pendingList = useConsolePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPending,
     enabled: Boolean(canWrite?.can),
-    onError: notifyListError,
-  });
-
-  const listPresentation = listPresentationOf({
-    loading,
-    error: errorMessage,
-    total,
-    itemCount: rows.length,
-    filtered: false,
   });
 
   const notifyError = (err: unknown, fallback: string) => {
@@ -145,7 +110,7 @@ export function UserList() {
   };
 
   const reloadPendingList = async () => {
-    await reloadPending();
+    await pendingList.reload();
   };
 
   function confirmToggle() {
@@ -265,11 +230,8 @@ export function UserList() {
 
   const userTable = (
     <ListTable
-      state={listPresentation.state}
+      list={users}
       columnCount={6}
-      refreshing={listPresentation.refreshing}
-      errorMessage={errorMessage}
-      onRetry={() => void reload()}
       head={
         <Table.Tr>
           <Table.Th>{t("users.fields.account")}</Table.Th>
@@ -280,10 +242,6 @@ export function UserList() {
           <Table.Th>{t("users.fields.lastLoginAt")}</Table.Th>
         </Table.Tr>
       }
-      page={page}
-      pageSize={pageSize}
-      total={total}
-      onPageChange={setPage}
     >
       {rows.map((row) => {
         const isSelf = identity?.id === row.id;
@@ -337,9 +295,9 @@ export function UserList() {
   );
 
   const pendingBadge =
-    pendingTotal > 0 ? (
+    pendingList.total > 0 ? (
       <Badge size="xs" variant="light">
-        {pendingTotal}
+        {pendingList.total}
       </Badge>
     ) : undefined;
 
@@ -376,15 +334,7 @@ export function UserList() {
         </Tabs.Panel>
         <Tabs.Panel value="pending" pt="md" style={{ overflow: "hidden" }}>
           <PendingFederatedIdentityTable
-            items={pendingIdentities}
-            total={pendingTotal}
-            page={pendingPage}
-            pageSize={pendingPageSize}
-            loading={pendingLoading}
-            error={pendingError}
-            errorRequestId={pendingRequestId}
-            onPageChange={setPendingPage}
-            onRetry={() => void reloadPending()}
+            list={pendingList}
             onClaim={openClaim}
           />
         </Tabs.Panel>

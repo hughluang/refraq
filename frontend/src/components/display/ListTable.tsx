@@ -7,27 +7,31 @@ import type { ReactNode } from "react";
 import { ListPager } from "@/components/display/ListPager";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
-import type { ListState } from "@/lib/list-state";
+import type { ListPresentation } from "@/lib/list-state";
 
 const DEFAULT_MIN_WIDTH = 1080;
 const SKELETON_ROWS = 8;
 
+/** Session fields `ListTable` binds to status, retry, and the pager. */
+export type ListTableList = {
+  presentation: ListPresentation;
+  error: string | null;
+  errorRequestId: string | null;
+  reload: () => void | Promise<void>;
+  page: number;
+  setPage: (page: number) => void;
+  pageSize: number;
+  total: number;
+};
+
 type ListTableProps = {
-  state: ListState;
+  list: ListTableList;
   columnCount: number;
   minWidth?: number;
-  refreshing?: boolean;
-  errorMessage?: string | null;
-  errorRequestId?: string | null;
-  onRetry?: () => void;
   emptyMessage?: string;
   noMatchMessage?: string;
   head: ReactNode;
   children?: ReactNode;
-  page: number;
-  pageSize: number;
-  total: number;
-  onPageChange: (page: number) => void;
 };
 
 function StatusRow({
@@ -57,23 +61,16 @@ function SkeletonRows({ columnCount }: { columnCount: number }) {
 }
 
 export function ListTable({
-  state,
+  list,
   columnCount,
   minWidth = DEFAULT_MIN_WIDTH,
-  refreshing = false,
-  errorMessage,
-  errorRequestId,
-  onRetry,
   emptyMessage,
   noMatchMessage,
   head,
   children,
-  page,
-  pageSize,
-  total,
-  onPageChange,
 }: ListTableProps) {
   const t = useTranslate();
+  const { state, refreshing } = list.presentation;
   const busy = state === "loading" || refreshing;
   let body: ReactNode;
   switch (state) {
@@ -84,9 +81,9 @@ export function ListTable({
       body = (
         <StatusRow columnCount={columnCount}>
           <PageError
-            message={errorMessage ?? ""}
-            requestId={errorRequestId}
-            onRetry={onRetry}
+            message={list.error ?? ""}
+            requestId={list.errorRequestId}
+            onRetry={() => void list.reload()}
           />
         </StatusRow>
       );
@@ -136,10 +133,10 @@ export function ListTable({
         </Table>
       </Table.ScrollContainer>
       <ListPager
-        page={page}
-        pageSize={pageSize}
-        total={total}
-        onChange={onPageChange}
+        page={list.page}
+        pageSize={list.pageSize}
+        total={list.total}
+        onChange={list.setPage}
         disabled={busy}
       />
     </Stack>

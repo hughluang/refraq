@@ -1,7 +1,7 @@
 "use client";
 
 import { Button, Group, Table, Text } from "@mantine/core";
-import { useCan, useNotification, useTranslate } from "@refinedev/core";
+import { useCan, useTranslate } from "@refinedev/core";
 import Link from "next/link";
 import { useCallback } from "react";
 
@@ -13,8 +13,7 @@ import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { listStructureDiffs } from "@/features/sources/api/structure-diffs";
 import { StructureDiffClassBadge } from "@/features/sources/structure-diffs/StructureDiffClassBadge";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
-import { usePagedList } from "@/hooks/usePagedList";
-import { listPresentationOf } from "@/lib/list-state";
+import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
@@ -33,38 +32,23 @@ function nonzeroCounts(counts: Record<string, number> | undefined): string {
 
 export function StructureDiffList({ sourceId }: Props) {
   const t = useTranslate();
-  const { open } = useNotification();
   const formatInstant = useFormatInstant();
   const { data: canShow, isLoading: canLoading } = useCan({
     resource: ModuleId.sources,
     action: ModuleAction.show,
   });
 
-  const onError = useCallback(
-    (message: string) => {
-      open?.({ type: "error", message });
-    },
-    [open],
-  );
   const fetchPage = useCallback(
     (query: PageQuery) => listStructureDiffs(sourceId, query),
     [sourceId],
   );
 
-  const { items, total, page, setPage, loading, error, reload, pageSize } =
-    usePagedList({
-      pageSize: PAGE_SIZE,
-      fetch: fetchPage,
-      resetDeps: [sourceId],
-      onError,
-    });
-  const listPresentation = listPresentationOf({
-    loading,
-    error,
-    total,
-    itemCount: items.length,
-    filtered: false,
+  const list = useConsolePagedList({
+    pageSize: PAGE_SIZE,
+    fetch: fetchPage,
+    resetDeps: [sourceId],
   });
+  const { items, loading, reload } = list;
 
   const aclPending = canLoading || canShow === undefined;
 
@@ -104,11 +88,8 @@ export function StructureDiffList({ sourceId }: Props) {
         <PageBodySkeleton />
       ) : (
         <ListTable
-          state={listPresentation.state}
+          list={list}
           columnCount={5}
-          refreshing={listPresentation.refreshing}
-          errorMessage={error}
-          onRetry={() => void reload()}
           emptyMessage={t("structureDiffs.empty")}
           head={
             <Table.Tr>
@@ -119,10 +100,6 @@ export function StructureDiffList({ sourceId }: Props) {
               <Table.Th />
             </Table.Tr>
           }
-          page={page}
-          pageSize={pageSize}
-          total={total}
-          onPageChange={setPage}
         >
           {items.map((diff) => (
             <Table.Tr key={diff.id}>

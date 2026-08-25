@@ -260,7 +260,7 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
               onSaved={(next) => setObject(next)}
             />
           </Tabs.Panel>
-          <Tabs.Panel value="columns" pt="md">
+          <Tabs.Panel value="columns" pt="md" style={{ overflow: "hidden" }}>
             <ColumnsTab
               object={object}
               writable={writable}

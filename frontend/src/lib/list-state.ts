@@ -17,7 +17,7 @@ export type ListPresentation = {
  * Decide which status a paged list should render.
  *
  * Error only wins when there are no rows (rows present stay on screen;
- * `usePagedList` `onError` or the Refine list notification still toasts).
+ * a later failure toasts only if the caller passed `usePagedList` `onError`).
  * The empty gate reads `total`, not `itemCount`, so a past-end page is not
  * an empty list. `filtered` splits a vacant collection from a vacant filter
  * result.

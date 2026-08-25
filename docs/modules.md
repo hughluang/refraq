@@ -252,7 +252,7 @@ Responsibilities:
 
 - Shared API helpers
 - Small framework-agnostic utility code
-- Offset Page types and page-math helpers (`lib/pagination.ts`); paged-list fetch state lives in `hooks/usePagedList.ts`; list status decisions live in `lib/list-state.ts` (`listPresentationOf` returns `{ state, refreshing }`); the list table is `components/display/ListTable.tsx` (composes `ListPager`)
+- Offset Page types and page-math helpers (`lib/pagination.ts`); paged-list generation / reset / load results live in `lib/paged-list-session.ts`; list status decisions live in `lib/list-state.ts` (`listPresentationOf` returns `{ state, refreshing }`); Console Offset Page fetch state is `hooks/usePagedList.ts`; HTTP Console lists use `hooks/useConsolePagedList.ts`; `components/display/ListTable.tsx` binds the session and composes `ListPager`
 
 Must not contain:
 

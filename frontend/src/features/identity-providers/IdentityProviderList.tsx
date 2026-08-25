@@ -42,9 +42,8 @@ import type {
   IdentityProviderTestResult,
 } from "@/features/identity-providers/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
-import { usePagedList } from "@/hooks/usePagedList";
+import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { ApiError } from "@/lib/api";
-import { listPresentationOf } from "@/lib/list-state";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
@@ -70,29 +69,15 @@ export function IdentityProviderList() {
   const [deleting, setDeleting] = useState(false);
   const [disabling, setDisabling] = useState(false);
 
-  const onError = useCallback(
-    (message: string) => {
-      open?.({ type: "error", message });
-    },
-    [open],
-  );
   const fetchPage = useCallback(
     (query: PageQuery) => listIdentityProviders(query),
     [],
   );
-  const { items, total, page, setPage, loading, error, reload, pageSize } =
-    usePagedList({
-      pageSize: PAGE_SIZE,
-      fetch: fetchPage,
-      onError,
-    });
-  const listPresentation = listPresentationOf({
-    loading,
-    error,
-    total,
-    itemCount: items.length,
-    filtered: false,
+  const list = useConsolePagedList({
+    pageSize: PAGE_SIZE,
+    fetch: fetchPage,
   });
+  const { items, reload } = list;
   const showActions = Boolean(canWrite?.can);
 
   const notifyError = (err: unknown, fallback: string) => {
@@ -237,11 +222,8 @@ export function IdentityProviderList() {
       actions={createAction}
     >
       <ListTable
-        state={listPresentation.state}
+        list={list}
         columnCount={showActions ? 8 : 7}
-        refreshing={listPresentation.refreshing}
-        errorMessage={error}
-        onRetry={() => void reload()}
         emptyMessage={t("identityProviders.empty")}
         head={
           <Table.Tr>
@@ -259,10 +241,6 @@ export function IdentityProviderList() {
             ) : null}
           </Table.Tr>
         }
-        page={page}
-        pageSize={pageSize}
-        total={total}
-        onPageChange={setPage}
       >
         {items.map((row) => (
           <Table.Tr key={row.id}>

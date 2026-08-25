@@ -7,9 +7,8 @@ import { useCallback, useState } from "react";
 import { ListTable } from "@/components/display/ListTable";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
-import { usePagedList } from "@/hooks/usePagedList";
+import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { ApiError } from "@/lib/api";
-import { listPresentationOf } from "@/lib/list-state";
 import type { PageQuery } from "@/lib/pagination";
 
 import { listTypeMappings, patchTypeMapping } from "./api";
@@ -44,12 +43,6 @@ export function TypeMappingList() {
   const [onlyGaps, setOnlyGaps] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  const onError = useCallback(
-    (message: string) => {
-      open?.({ type: "error", message });
-    },
-    [open],
-  );
   const fetchPage = useCallback(
     (query: PageQuery) =>
       listTypeMappings({
@@ -61,21 +54,13 @@ export function TypeMappingList() {
     [q, engine, onlyGaps],
   );
 
-  const { items, total, page, setPage, loading, error, reload, pageSize } =
-    usePagedList({
-      pageSize: PAGE_SIZE,
-      fetch: fetchPage,
-      resetDeps: [q, engine, onlyGaps],
-      onError,
-    });
-  const filtered = q.trim() !== "" || Boolean(engine) || onlyGaps;
-  const listPresentation = listPresentationOf({
-    loading,
-    error,
-    total,
-    itemCount: items.length,
-    filtered,
+  const list = useConsolePagedList({
+    pageSize: PAGE_SIZE,
+    fetch: fetchPage,
+    resetDeps: [q, engine, onlyGaps],
+    filtered: q.trim() !== "" || Boolean(engine) || onlyGaps,
   });
+  const { items, reload } = list;
 
   const onPatch = async (row: TypeMapping, value: string | null) => {
     if (!value || value === row.normalized_type) return;
@@ -133,11 +118,8 @@ export function TypeMappingList() {
         />
       </Group>
       <ListTable
-        state={listPresentation.state}
+        list={list}
         columnCount={4}
-        refreshing={listPresentation.refreshing}
-        errorMessage={error}
-        onRetry={() => void reload()}
         noMatchMessage={t("typeMappings.list.noMatch")}
         head={
           <Table.Tr>
@@ -147,10 +129,6 @@ export function TypeMappingList() {
             <Table.Th>{t("typeMappings.fields.origin")}</Table.Th>
           </Table.Tr>
         }
-        page={page}
-        pageSize={pageSize}
-        total={total}
-        onPageChange={setPage}
       >
         {items.map((row) => {
           const isSeed = row.origin === "product";

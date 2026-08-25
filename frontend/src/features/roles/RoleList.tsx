@@ -5,7 +5,6 @@ import {
   CanAccess,
   useCan,
   useDelete,
-  useNotification,
   useTranslate,
 } from "@refinedev/core";
 import Link from "next/link";
@@ -19,51 +18,26 @@ import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { listRoles } from "@/features/roles/api";
 import type { RoleRow } from "@/features/roles/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
-import { usePagedList } from "@/hooks/usePagedList";
+import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { ApiError } from "@/lib/api";
-import { listPresentationOf } from "@/lib/list-state";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
 
 export function RoleList() {
   const t = useTranslate();
-  const { open } = useNotification();
   const { data: canWrite } = useCan({
     resource: ModuleId.roles,
     action: ModuleAction.create,
   });
-  const onError = useCallback(
-    (message: string) => {
-      open?.({ type: "error", message });
-    },
-    [open],
-  );
   const fetchPage = useCallback((query: PageQuery) => listRoles(query), []);
-  const {
-    items: rows,
-    total,
-    page,
-    setPage,
-    loading,
-    error: errorMessage,
-    reload,
-    pageSize,
-  } = usePagedList<RoleRow>({
+  const list = useConsolePagedList<RoleRow>({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
-    onError,
   });
+  const { items: rows, reload } = list;
   const { mutate: deleteRole, mutation } = useDelete();
   const deleteConfirm = useConfirmAction<RoleRow>();
-
-  const listPresentation = listPresentationOf({
-    loading,
-    error: errorMessage,
-    total,
-    itemCount: rows.length,
-    filtered: false,
-  });
 
   function confirmDelete() {
     const pending = deleteConfirm.pending;
@@ -108,11 +82,8 @@ export function RoleList() {
       actions={createAction}
     >
       <ListTable
-        state={listPresentation.state}
+        list={list}
         columnCount={5}
-        refreshing={listPresentation.refreshing}
-        errorMessage={errorMessage}
-        onRetry={() => void reload()}
         head={
           <Table.Tr>
             <Table.Th>{t("roles.fields.key")}</Table.Th>
@@ -122,10 +93,6 @@ export function RoleList() {
             <Table.Th>{t("roles.fields.actions")}</Table.Th>
           </Table.Tr>
         }
-        page={page}
-        pageSize={pageSize}
-        total={total}
-        onPageChange={setPage}
       >
         {rows.map((row) => {
           const canDelete =

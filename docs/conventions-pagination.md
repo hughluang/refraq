@@ -87,7 +87,7 @@ Catalog Sample and Controlled Query are row peeks, not collection lists. They ke
 
 ## 7. Console
 
-Paged Management Console tables use one footer: `ListPager` (`frontend/src/components/display/ListPager.tsx`), composed by `ListTable` (`docs/ui-console-layout.md`). Count text always renders; page numbers render only when there is more than one page. `ListTable` disables paging while the first page is loading or existing rows are refreshing. Filter controls stay in the content toolbar. Do not hand-roll prev/next buttons for an Offset Page. Client-side slices that are not Offset Page lists (Catalog Columns) may compose `ListPager` without `ListTable`.
+Paged Management Console tables use one footer: `ListPager` (`frontend/src/components/display/ListPager.tsx`), composed by `ListTable` (`docs/ui-console-layout.md`). Count text always renders; page numbers render only when there is more than one page. `ListTable` disables paging while the first page is loading or existing rows are refreshing. Filter controls stay in the content toolbar. Do not hand-roll prev/next buttons for an Offset Page. Catalog Columns uses the same Console module through an in-memory Offset Page adapter over the object payload; it is not an HTTP Offset Page.
 
 Pickers that need a closed option set (role Select, Source Select) fetch one page at that list's documented max `limit`. They are not a second envelope.
 
@@ -105,7 +105,7 @@ Pickers that need a closed option set (role Select, Source Select) fetch one pag
 ## 9. Implementation Entry
 
 - HTTP params and envelope: `backend.core.pagination` (`page_params`, `PageBounds`, `OffsetPage`). Named catalog/source bounds live next to `page_params`; HTTP and MCP import the same names. MCP clamps out of range; HTTP rejects with `422`.
-- Console: `frontend/src/lib/pagination.ts`, `frontend/src/lib/list-state.ts`, `frontend/src/hooks/usePagedList.ts`, `frontend/src/components/display/ListTable.tsx` (composes `ListPager`).
+- Console: `frontend/src/lib/pagination.ts`, `frontend/src/lib/paged-list-session.ts`, `frontend/src/lib/list-state.ts`, `frontend/src/hooks/usePagedList.ts`, `frontend/src/hooks/useConsolePagedList.ts` (HTTP lists; binds Refine notification through `onError`), `frontend/src/components/display/ListTable.tsx` (binds the session; composes `ListPager`). A `resetDeps` change reloads from page 1 even when the session is already on page 1 (a local adapter with a stable `fetch` relies on that).
 - See [`docs/modules.md`](modules.md) and [`docs/backend-layout.md`](backend-layout.md).
 
 ## 10. Non-Goals

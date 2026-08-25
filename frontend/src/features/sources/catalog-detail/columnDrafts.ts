@@ -127,6 +127,10 @@ export function batchItemsFromDirty(
   });
 }
 
+/**
+ * Filter columns by query and facet. `drafts` should be the saved baseline
+ * (not the live edit buffer) so typing into a row does not remove it mid-edit.
+ */
 export function filterColumns(
   columns: ReadonlyArray<CatalogColumn>,
   drafts: Record<string, ColumnDraft>,

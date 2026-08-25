@@ -20,9 +20,8 @@ import { ScheduleRowActions } from "@/features/schedules/ScheduleRowActions";
 import type { ScheduledTask } from "@/features/schedules/types";
 import { getSource } from "@/features/sources/api/sources";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
-import { usePagedList } from "@/hooks/usePagedList";
+import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { ApiError } from "@/lib/api";
-import { listPresentationOf } from "@/lib/list-state";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
@@ -55,31 +54,17 @@ export function SourceSchedulesPage({ sourceId }: Props) {
   const [editing, setEditing] = useState<ScheduledTask | null>(null);
   const [jobsTask, setJobsTask] = useState<ScheduledTask | null>(null);
 
-  const onError = useCallback(
-    (message: string) => {
-      open?.({ type: "error", message });
-    },
-    [open],
-  );
   const fetchPage = useCallback(
     (query: PageQuery) => listSourceSchedules(sourceId, query),
     [sourceId],
   );
-  const { items, total, page, setPage, loading, error, reload, pageSize } =
-    usePagedList({
-      pageSize: PAGE_SIZE,
-      fetch: fetchPage,
-      resetDeps: [sourceId],
-      enabled: Boolean(canRun?.can),
-      onError,
-    });
-  const listPresentation = listPresentationOf({
-    loading,
-    error,
-    total,
-    itemCount: items.length,
-    filtered: false,
+  const list = useConsolePagedList({
+    pageSize: PAGE_SIZE,
+    fetch: fetchPage,
+    resetDeps: [sourceId],
+    enabled: Boolean(canRun?.can),
   });
+  const { items, loading, reload } = list;
 
   useEffect(() => {
     if (!canRun?.can) return;
@@ -138,11 +123,8 @@ export function SourceSchedulesPage({ sourceId }: Props) {
           <PageBodySkeleton />
         ) : (
           <ListTable
-            state={listPresentation.state}
+            list={list}
             columnCount={8}
-            refreshing={listPresentation.refreshing}
-            errorMessage={error}
-            onRetry={() => void reload()}
             emptyMessage={t("schedules.related.empty")}
             head={
               <Table.Tr>
@@ -156,10 +138,6 @@ export function SourceSchedulesPage({ sourceId }: Props) {
                 <Table.Th />
               </Table.Tr>
             }
-            page={page}
-            pageSize={pageSize}
-            total={total}
-            onPageChange={setPage}
           >
             {items.map((task) => (
               <Table.Tr key={task.id}>

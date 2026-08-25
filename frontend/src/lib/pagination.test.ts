@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { pageCountOf, pageToOffset, showingRange } from "@/lib/pagination";
+import {
+  offsetPageFromItems,
+  pageCountOf,
+  pageToOffset,
+  showingRange,
+} from "@/lib/pagination";
 
 describe("pageToOffset", () => {
   it("maps 1-based pages", () => {
@@ -39,5 +44,25 @@ describe("showingRange", () => {
 
   it("covers a short first page for the count text", () => {
     expect(showingRange(12, 1, 50)).toEqual({ from: 1, to: 12 });
+  });
+});
+
+describe("offsetPageFromItems", () => {
+  it("slices the in-memory collection and echoes the query", () => {
+    expect(offsetPageFromItems(["a", "b", "c", "d"], { limit: 2, offset: 2 })).toEqual({
+      items: ["c", "d"],
+      total: 4,
+      limit: 2,
+      offset: 2,
+    });
+  });
+
+  it("returns an empty page when offset is past the end", () => {
+    expect(offsetPageFromItems(["a"], { limit: 50, offset: 50 })).toEqual({
+      items: [],
+      total: 1,
+      limit: 50,
+      offset: 50,
+    });
   });
 });

@@ -11,10 +11,9 @@ import { formatJobTrigger } from "@/features/jobs/formatJobTrigger";
 import { JobDetailModal } from "@/features/jobs/JobDetailModal";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
-import { usePagedList } from "@/hooks/usePagedList";
+import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { ApiError } from "@/lib/api";
 import { formatJobDuration } from "@/lib/datetime";
-import { listPresentationOf } from "@/lib/list-state";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
@@ -25,39 +24,16 @@ export function JobList() {
   const formatInstant = useFormatInstant();
   const [detailId, setDetailId] = useState<string | null>(null);
 
-  const onError = useCallback(
-    (message: string) => {
-      open?.({ type: "error", message });
-    },
-    [open],
-  );
-
   const fetchPage = useCallback(
     (query: PageQuery) => listJobs(query),
     [],
   );
 
-  const {
-    items,
-    total,
-    page,
-    setPage,
-    loading,
-    error,
-    reload,
-    pageSize,
-  } = usePagedList({
+  const list = useConsolePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
-    onError,
   });
-  const listPresentation = listPresentationOf({
-    loading,
-    error,
-    total,
-    itemCount: items.length,
-    filtered: false,
-  });
+  const { items, reload } = list;
 
   return (
     <PageChrome
@@ -70,11 +46,8 @@ export function JobList() {
       }
     >
       <ListTable
-        state={listPresentation.state}
+        list={list}
         columnCount={7}
-        refreshing={listPresentation.refreshing}
-        errorMessage={error}
-        onRetry={() => void reload()}
         emptyMessage={t("jobs.empty")}
         head={
           <Table.Tr>
@@ -87,10 +60,6 @@ export function JobList() {
             <Table.Th />
           </Table.Tr>
         }
-        page={page}
-        pageSize={pageSize}
-        total={total}
-        onPageChange={setPage}
       >
         {items.map((job) => (
           <Table.Tr key={job.id}>

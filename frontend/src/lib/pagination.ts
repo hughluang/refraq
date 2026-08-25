@@ -10,6 +10,21 @@ export type PageQuery = {
   offset: number;
 };
 
+/** Build an Offset Page envelope from an in-memory collection. */
+export function offsetPageFromItems<T>(
+  items: readonly T[],
+  query: PageQuery,
+): OffsetPage<T> {
+  const offset = Math.max(0, query.offset);
+  const limit = Math.max(0, query.limit);
+  return {
+    items: items.slice(offset, offset + limit),
+    total: items.length,
+    limit: query.limit,
+    offset: query.offset,
+  };
+}
+
 export function pageToOffset(page: number, pageSize: number): number {
   return Math.max(0, (Math.max(1, page) - 1) * pageSize);
 }

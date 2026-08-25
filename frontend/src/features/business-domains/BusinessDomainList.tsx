@@ -27,9 +27,8 @@ import {
 import type { BusinessDomain } from "@/features/business-domains/types";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
-import { usePagedList } from "@/hooks/usePagedList";
+import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { ApiError } from "@/lib/api";
-import { listPresentationOf } from "@/lib/list-state";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 100;
@@ -62,12 +61,6 @@ export function BusinessDomainList() {
     initialValues: { name: "", description: "" },
   });
 
-  const onError = useCallback(
-    (message: string) => {
-      open?.({ type: "error", message });
-    },
-    [open],
-  );
   const fetchPage = useCallback(
     (query: PageQuery) =>
       listBusinessDomains({
@@ -77,21 +70,13 @@ export function BusinessDomainList() {
     [q],
   );
 
-  const { items, total, page, setPage, loading, error, reload, pageSize } =
-    usePagedList({
-      pageSize: PAGE_SIZE,
-      fetch: fetchPage,
-      resetDeps: [q],
-      onError,
-    });
-  const filtered = q.trim() !== "";
-  const listPresentation = listPresentationOf({
-    loading,
-    error,
-    total,
-    itemCount: items.length,
-    filtered,
+  const list = useConsolePagedList({
+    pageSize: PAGE_SIZE,
+    fetch: fetchPage,
+    resetDeps: [q],
+    filtered: q.trim() !== "",
   });
+  const { items, reload } = list;
 
   const submitCreate = async (values: CreateForm) => {
     setBusy(true);
@@ -188,11 +173,8 @@ export function BusinessDomainList() {
         />
       </Group>
       <ListTable
-        state={listPresentation.state}
+        list={list}
         columnCount={5}
-        refreshing={listPresentation.refreshing}
-        errorMessage={error}
-        onRetry={() => void reload()}
         noMatchMessage={t("businessDomains.list.noMatch")}
         head={
           <Table.Tr>
@@ -203,10 +185,6 @@ export function BusinessDomainList() {
             <Table.Th />
           </Table.Tr>
         }
-        page={page}
-        pageSize={pageSize}
-        total={total}
-        onPageChange={setPage}
       >
         {items.map((row) => (
           <Table.Tr key={row.id}>

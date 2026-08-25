@@ -12,9 +12,10 @@ import {
   Textarea,
 } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import { useEffect, useMemo, useRef, useState, Fragment } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback, Fragment } from "react";
 
-import { ListPager } from "@/components/display/ListPager";
+import { ListTable } from "@/components/display/ListTable";
+import { FillColumn } from "@/components/layout/FillColumn";
 import { patchColumnSemanticsBatch } from "@/features/sources/api/semantics";
 import {
   type ColumnDraft,
@@ -30,6 +31,8 @@ import {
 } from "@/features/sources/catalog-detail/columnDrafts";
 import { useSemanticsSave } from "@/features/sources/catalog-detail/useSemanticsSave";
 import type { CatalogObject } from "@/features/sources/types";
+import { usePagedList } from "@/hooks/usePagedList";
+import { offsetPageFromItems, type PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
 
@@ -52,7 +55,6 @@ export function ColumnsTab({
   const [baseline, setBaseline] = useState<Record<string, ColumnDraft>>({});
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<ColumnFilter>("all");
-  const [page, setPage] = useState(1);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const draftScopeRef = useRef<{
     objectId?: string;
@@ -73,7 +75,6 @@ export function ColumnsTab({
     setDrafts(next);
     setBaseline(next);
     setExpanded({});
-    setPage(1);
   }, [object.id, object.columns, reloadEpoch]);
 
   const pkSet = useMemo(
@@ -90,22 +91,32 @@ export function ColumnsTab({
     [object.columns, drafts, baseline],
   );
 
+  // Filter against saved baseline so in-progress draft edits do not reshuffle rows.
   const filtered = useMemo(
     () =>
-      filterColumns(object.columns, drafts, {
+      filterColumns(object.columns, baseline, {
         query: q,
         filter,
         pkNames: pkSet,
         fkNames: fkSet,
       }),
-    [object.columns, drafts, q, filter, pkSet, fkSet],
+    [object.columns, baseline, q, filter, pkSet, fkSet],
   );
-
-  useEffect(() => {
-    setPage(1);
-  }, [q, filter]);
-
-  const pageItems = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const isFiltered = q.trim() !== "" || filter !== "all";
+  const filteredIds = filtered.map((col) => col.id).join(",");
+  const filteredRef = useRef(filtered);
+  filteredRef.current = filtered;
+  const fetchPage = useCallback(
+    (query: PageQuery) => offsetPageFromItems(filteredRef.current, query),
+    [],
+  );
+  const list = usePagedList({
+    pageSize: PAGE_SIZE,
+    fetch: fetchPage,
+    resetDeps: [q, filter, object.id, reloadEpoch, filteredIds],
+    filtered: isFiltered,
+    initialLoading: false,
+  });
 
   const updateDraft = (columnId: string, patch: Partial<ColumnDraft>) => {
     setDrafts((prev) => ({
@@ -133,8 +144,8 @@ export function ColumnsTab({
   };
 
   return (
-    <Stack gap="sm">
-      <Group align="flex-end" wrap="wrap">
+    <FillColumn gap="sm">
+      <Group align="flex-end" wrap="wrap" style={{ flexShrink: 0 }}>
         <TextInput
           label={t("catalog.columns.search")}
           value={q}
@@ -168,8 +179,12 @@ export function ColumnsTab({
         ) : null}
       </Group>
 
-      <Table striped highlightOnHover>
-        <Table.Thead>
+      <ListTable
+        list={list}
+        columnCount={7}
+        emptyMessage={t("catalog.columns.empty")}
+        noMatchMessage={t("catalog.columns.noMatch")}
+        head={
           <Table.Tr>
             <Table.Th>#</Table.Th>
             <Table.Th>{t("catalog.fields.column")}</Table.Th>
@@ -179,9 +194,9 @@ export function ColumnsTab({
             <Table.Th>{t("catalog.semantics.businessDescription")}</Table.Th>
             <Table.Th />
           </Table.Tr>
-        </Table.Thead>
-        <Table.Tbody>
-          {pageItems.map((col) => {
+        }
+      >
+        {list.items.map((col) => {
             const draft = drafts[col.id] ?? draftFromColumn(col);
             const isDirty = dirtyIds.includes(col.id);
             const isOpen = Boolean(expanded[col.id]);
@@ -432,15 +447,7 @@ export function ColumnsTab({
               </Fragment>
             );
           })}
-        </Table.Tbody>
-      </Table>
-
-      <ListPager
-        page={page}
-        pageSize={PAGE_SIZE}
-        total={filtered.length}
-        onChange={setPage}
-      />
-    </Stack>
+      </ListTable>
+    </FillColumn>
   );
 }
