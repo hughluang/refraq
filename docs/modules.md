@@ -73,6 +73,7 @@ Recommended modules:
 - `admin/deps.py`
 - `admin/security.py`
 - `admin/console_modules.py` (code-seeded Console Module catalog)
+- `admin/branding/` (Site Branding language unit: singleton configuration, packaged seed files, operator overlays, resolution-independent presentation, validation, caching, and HTTP)
 - `admin/system_parameters/` (System Parameter mechanism: registry, store, resolver, occupy, HTTP)
 - `admin/federation/` (Identity Provider configuration, OIDC validation, binding, pending admission, claim, and unfederation)
 - `admin/parameters.py` (admin-owned System Parameter specs and typed accessors)
@@ -322,6 +323,9 @@ For the login/permission slice, each concern should land here:
 - Console navigation API: `backend/admin/routers/console.py` + `admin/console_modules.py`
 - Platform settings API: `backend/admin/system_parameters/` (mechanism HTTP) + `<package>/parameters.py` declarations
 - Settings UI: `frontend/src/features/settings/`
+- Site Branding API: `backend/admin/branding/`
+- Site Branding resolution, management page, and preview: `frontend/src/features/branding/`
+- Site Branding framework consumption and theme bridge: `frontend/src/providers/`; server-rendered public branding fetch: `frontend/src/features/branding/server.ts`
 
 ## 7. Metadata / Operations Console Ownership
 

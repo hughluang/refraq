@@ -16,6 +16,8 @@ os.environ.setdefault("REFRAQ_BROWSER_FACING_HOST", "127.0.0.1:3000")
 import pytest
 
 from backend.admin.system_parameters import reset_system_parameters
+from backend.admin.branding.service import reset_branding_cache
+from backend.admin.branding.store import reset_branding_store
 from backend.core.config import reset_settings_cache
 from backend.core.db import reset_db_singletons
 from backend.core.redis_client import reset_redis_singleton
@@ -57,6 +59,8 @@ def _reset_foundation_singletons() -> None:
     reset_system_parameters()
     reset_clock()
     reset_user_store()
+    reset_branding_store()
+    reset_branding_cache()
     reset_provider_store()
     reset_binding_store()
     reset_pending_store()
@@ -78,6 +82,8 @@ def _reset_foundation_singletons() -> None:
     reset_redis_singleton()
     yield
     reset_user_store()
+    reset_branding_store()
+    reset_branding_cache()
     reset_provider_store()
     reset_binding_store()
     reset_pending_store()

@@ -12,6 +12,7 @@ export const ModuleId = {
   jobs: "jobs",
   schedules: "schedules",
   settings: "settings",
+  branding: "branding",
 } as const;
 
 export type ModuleIdName = (typeof ModuleId)[keyof typeof ModuleId];

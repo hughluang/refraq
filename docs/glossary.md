@@ -4,8 +4,8 @@
 
 ### Refraq
 
-The human-facing brand name of the product.
-Avoid lowercase `refraq` in user-visible strings; avoid a Other translation of the brand.
+The default human-facing brand name of the product. **Site Branding** may replace the site's primary product mark, but **Brand Attribution** always names `Refraq`.
+Avoid lowercase `refraq` in user-visible strings; avoid translating the brand; avoid treating the default product mark as an attribution override.
 
 ### refraq
 
@@ -42,6 +42,19 @@ Avoid treating it as the core product identity or the differentiating business c
 The operator-facing UI surface of Refraq, not the product identity.
 This is a docs/domain term, not user-visible UI copy.
 Avoid treating it as the product definition, a standalone admin project, or a synonym for Refraq itself.
+
+### Site Branding
+
+The single site-wide operator configuration that may replace the primary product mark with localized brand names and taglines, one shared logo, one favicon, one primary color palette, and independent display choices for the logo and the brand name.
+Logo and favicon defaults come from packaged seed files in the Site Branding language unit. Storage holds only operator overlays. Clearing an overlay or resetting the resource deletes the overlay; subsequent reads use the current seed files. Origin is `user` on a stored overlay and `seed` at read time when no overlay exists.
+It is distinct from the immutable **Brand Attribution**, **System Parameter**s, and per-User presentation preferences.
+Avoid treating it as per-User skinning, a per-tenant theme, a theme workshop, or a System Parameter.
+
+### Brand Attribution
+
+The non-overridable statement that identifies Refraq as the technology provider even when **Site Branding** replaces the primary product mark.
+It is constant frontend product identity, not a Site Branding field or a permission-filtered Console Module.
+Avoid making it configurable, returning it from the branding API, hiding it behind a Permission, or translating the brand name `Refraq`.
 
 ### Console Module
 

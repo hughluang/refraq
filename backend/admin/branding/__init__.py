@@ -1,0 +1,1 @@
+"""Site branding language unit."""

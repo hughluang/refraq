@@ -80,6 +80,11 @@ describe("toRefineResources", () => {
         list: "/console/settings",
         meta: { label: "settings.title" },
       },
+      {
+        name: "branding",
+        list: "/console/branding",
+        meta: { label: "branding.title" },
+      },
     ]);
   });
 });

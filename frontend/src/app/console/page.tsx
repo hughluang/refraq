@@ -5,6 +5,7 @@ import { useGetIdentity, useTranslate } from "@refinedev/core";
 
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageChrome } from "@/components/layout/PageChrome";
+import { useBranding } from "@/features/branding/BrandingProvider";
 import {
   useSessionStore,
   type CurrentUser,
@@ -12,12 +13,13 @@ import {
 
 export default function ConsoleHomePage() {
   const t = useTranslate();
+  const branding = useBranding();
   const { data: identity, isLoading } = useGetIdentity<CurrentUser>();
   const sessionUser = useSessionStore((s) => s.user);
   const user = identity ?? sessionUser;
 
   return (
-    <PageChrome title={t("app.title")} description={t("dashboard.description")}>
+    <PageChrome title={branding.brandName} description={t("dashboard.description")}>
       {isLoading && !user ? (
         <PageBodySkeleton rows={3} />
       ) : user ? (

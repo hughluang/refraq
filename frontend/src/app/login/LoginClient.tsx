@@ -6,6 +6,7 @@ import {
   Divider,
   Button,
   Center,
+  Image,
   Paper,
   PasswordInput,
   Stack,
@@ -19,6 +20,7 @@ import { Suspense, useCallback, useEffect, useState, type FormEvent } from "reac
 
 import { PageError } from "@/components/feedback/PageError";
 import { LangSwitcher } from "@/components/LangSwitcher";
+import { useBranding } from "@/features/branding/BrandingProvider";
 import { resolveFromPath } from "@/lib/return-path";
 import {
   probeLoginSession,
@@ -146,6 +148,7 @@ function applyLoginProbe(
 
 function LoginGate() {
   const t = useTranslate();
+  const branding = useBranding();
   const searchParams = useSearchParams();
   const identityError = useSessionStore((s) => s.identityError);
   const errorCode = searchParams.get("error");
@@ -175,10 +178,25 @@ function LoginGate() {
         <Stack gap="md">
           <GroupHeader />
           <Stack gap={0}>
-            <Title order={3}>{t("app.title")}</Title>
-            <Text size="sm" c="dimmed">
-              {t("app.description")}
-            </Text>
+            {branding.logoUrl ? (
+              <Image
+                src={branding.logoUrl}
+                alt={branding.brandName}
+                h={64}
+                w="auto"
+                maw="100%"
+                fit="contain"
+                mb="sm"
+              />
+            ) : null}
+            {branding.raw.show_brand_name_with_logo ? (
+              <Title order={3}>{branding.brandName}</Title>
+            ) : null}
+            {branding.tagline ? (
+              <Text size="sm" c="dimmed">
+                {branding.tagline}
+              </Text>
+            ) : null}
           </Stack>
           {view === "load_error" ? (
             <PageError
@@ -213,11 +231,18 @@ function LoginGate() {
             </>
           )}
           <Anchor
-            size="xs"
+            fz={10}
+            lh={1.3}
+            c="dimmed"
+            underline="hover"
+            display="block"
+            ta="center"
+            opacity={0.7}
             href="https://github.com/hughluang/refraq"
             target="_blank"
+            rel="noreferrer"
           >
-            refraq
+            {t("branding.attribution", { brand: "Refraq" })}
           </Anchor>
         </Stack>
       </Paper>

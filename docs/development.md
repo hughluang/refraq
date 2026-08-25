@@ -54,7 +54,7 @@ This document records the stable development conventions for contributors workin
 ### Frontend
 
 - Install dependencies: `npm install`
-- Run dev server: `npm run dev` (binds `127.0.0.1` so the sandbox Console is not reachable on the office network)
+- Run dev server: `npm run dev` (binds `127.0.0.1` so the sandbox Console is not reachable on the office network).
 - Run lint: `npm run lint`
 - Run build: `npm run build`
 - Management Console content width: `docs/ui-console-layout.md` (section containers full width; internal controls own their own width)
@@ -64,7 +64,7 @@ This document records the stable development conventions for contributors workin
 - Copy `deploy/.env.example` to `deploy/.env` and set live secrets (`INITIAL_ADMIN_PASSWORD`, `ADMIN_SESSION_SECRET`, `REFRAQ_SECRETS_MASTER_KEY`, `POSTGRES_PASSWORD`). Do not commit `deploy/.env`.
 - Full stack: `docker compose -f deploy/compose.yaml up --build` (Compose project name `refraq-prod`; isolated volumes)
 - Browser reaches the web service on host port `3001` (`REFRAQ_WEB_PORT`); `/api` is rewritten to the internal API. Keep local `next dev` on `127.0.0.1:3000`.
-- Frontend image build expects `frontend/node_modules` present (`npm ci` / `npm install` on the build host) and bakes `REFRAQ_API_UPSTREAM` via build-arg (default `http://api:8000`).
+- Frontend image build expects `frontend/node_modules` present (`npm ci` / `npm install` on the build host). It receives `REFRAQ_API_UPSTREAM` as a build argument for `/api` rewrites, and the running web container receives the same value as an environment variable for direct server-rendering API calls such as Site Branding (default `http://api:8000`).
 
 ## Suggested Reading Order
 
@@ -99,4 +99,6 @@ Treat `docs/product-core/*` as **long-horizon** reference only (files are marked
 13. `docs/api-contracts-console.md`
 14. `docs/business-system-parameters.md`, `docs/adr/0028-system-parameters.md`
 15. `docs/api-contracts-settings.md`
-16. `docs/env.md`
+16. `docs/business-branding.md`, `docs/adr/0034-site-branding-overrides-product-mark.md`
+17. `docs/api-contracts-branding.md`
+18. `docs/env.md`

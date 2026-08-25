@@ -45,7 +45,7 @@ Current `frontend/.env.example` defines:
 - `REFRAQ_API_UPSTREAM=http://127.0.0.1:8000`
 - `NEXT_PUBLIC_DEFAULT_LOCALE=en-US`
 
-`REFRAQ_API_UPSTREAM` is read at **Next.js build time** for rewrites. Local `next dev` uses the env file; deploy images pass it as a Docker build-arg (typically `http://api:8000`).
+`REFRAQ_API_UPSTREAM` has matching build-time and runtime duties. Next.js reads it at build time to compile browser `/api` rewrites. Server-only frontend code reads it at runtime for direct SSR calls such as public Site Branding. Local `next dev` uses the env file. Deploy images pass it as a Docker build argument and the web container receives the same runtime environment value (typically `http://api:8000`).
 
 ### Deploy
 
@@ -68,8 +68,9 @@ Compose project name is `refraq-prod` so volumes do not collide with the local P
 - backend port: `8000`
 - browser API base URL: `/api` (same-origin)
 - Next.js rewrite upstream: `http://127.0.0.1:8000` (dev)
+- Next.js server-rendering API upstream: `http://127.0.0.1:8000` (dev)
 
-The Management Console talks to the backend through a Next.js rewrite so the session cookie is set on the frontend origin and `proxy.ts` can see `refraq_sid`.
+The browser talks to the backend through a Next.js rewrite so the session cookie is set on the frontend origin and `proxy.ts` can see `refraq_sid`. Server-only rendering code calls the same upstream directly through `REFRAQ_API_UPSTREAM`; it does not make a loopback request to the Next.js server. URLs emitted into HTML remain browser-facing same-origin paths and never expose this internal upstream.
 
 Self-deploy Compose exposes only the web service to browsers; the API stays on the internal network. The host port defaults to `3001` (`REFRAQ_WEB_PORT`) so a local Console on `127.0.0.1:3000` can keep running. Bind local `next dev` to `127.0.0.1` so the office network cannot open the sandbox Console.
 
@@ -102,7 +103,7 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 ### Frontend-Owned Variables
 
 - `NEXT_PUBLIC_REFRAQ_API_BASE_URL` (browser-facing base; default `/api`)
-- `REFRAQ_API_UPSTREAM` (server-side rewrite target; build-time for production images)
+- `REFRAQ_API_UPSTREAM` (internal backend origin; build-time rewrite target and runtime server-rendering target; never exposed to browser code)
 - `NEXT_PUBLIC_DEFAULT_LOCALE`
 - `REFRAQ_BROWSER_FACING_PROTO` (`http` | `https`; default `http`) — stamped onto `/api` rewrite as `X-Forwarded-Proto` for Session `Secure`; set `https` when TLS terminates in front of the Console
 - `REFRAQ_BROWSER_FACING_HOST` (optional; host or `host:port`, no scheme) — stamped onto `/api` rewrite as `X-Forwarded-Host` for OIDC callback origin; when unset, only a loopback request Host is stamped
@@ -113,6 +114,7 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - `REFRAQ_WEB_PORT` (host port for the web service; default `3001`)
 - `REFRAQ_BROWSER_FACING_PROTO` (optional; forwarded to web; default `http`)
 - `REFRAQ_BROWSER_FACING_HOST` (optional; forwarded to web and API; browser-facing Console host or `host:port`)
+- `REFRAQ_API_UPSTREAM` (web build argument and web runtime environment; both use the internal API origin)
 
 ## 5. Process timezone (`TZ`)
 

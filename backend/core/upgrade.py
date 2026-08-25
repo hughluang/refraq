@@ -1,4 +1,4 @@
-"""Foundation Upgrade: advisory-locked schema migrate, then System Role ensure."""
+"""Foundation Upgrade: advisory-locked schema migrate, then System Role ensure and product seeds."""
 
 from __future__ import annotations
 

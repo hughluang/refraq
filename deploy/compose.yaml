@@ -113,6 +113,7 @@ services:
     environment:
       HOSTNAME: 0.0.0.0
       PORT: 3000
+      REFRAQ_API_UPSTREAM: http://api:8000
       REFRAQ_BROWSER_FACING_PROTO: ${REFRAQ_BROWSER_FACING_PROTO:-http}
       REFRAQ_BROWSER_FACING_HOST: ${REFRAQ_BROWSER_FACING_HOST:-}
     ports:

@@ -117,6 +117,8 @@ def test_list_roles_expands_system_role_permissions(
     by_key = {item["key"]: item for item in response.json()["items"]}
     assert by_key["super_admin"]["permissions"] == list(ALL_PERMISSIONS)
     assert "catalog:sample" in by_key["super_admin"]["permissions"]
+    assert "branding:read" in by_key["super_admin"]["permissions"]
+    assert "branding:write" in by_key["super_admin"]["permissions"]
 
 
 def test_create_and_update_role(client: TestClient) -> None:

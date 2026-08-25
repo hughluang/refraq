@@ -31,6 +31,8 @@ def test_effective_permissions_expands_system_role_ignoring_store() -> None:
     )
     assert effective_permissions(role) == list(ALL_PERMISSIONS)
     assert "catalog:sample" in effective_permissions(role)
+    assert "branding:read" in effective_permissions(role)
+    assert "branding:write" in effective_permissions(role)
 
 
 def test_effective_permissions_uses_store_for_ordinary_roles() -> None:

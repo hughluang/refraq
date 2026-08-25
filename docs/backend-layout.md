@@ -32,6 +32,7 @@ backend/
   core/                   # shared kernel: config, DB/Redis, time (Instant/Clock), upgrade, AppError, probes
   admin/                  # platform kernel (Identity / RBAC / Console foundation)
     federation/           # OIDC provider, binding, pending, and provisioning language unit
+    branding/             # Site Branding configuration and asset language unit
     # published modules listed in §3
     models.py *_store.py permissions.py …
     schemas/ routers/     # this package's HTTP shapes and adapters
@@ -136,6 +137,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Domain use-case HTTP (Source, Catalog, Source schedule facade, schedule run-now / related Jobs) | product domain (`metadata`) |
 | Outbound adapter families | Owning product domain (e.g. `metadata/connectors`: engine adapters + `runtime` invocation shell that binds an already-interpreted `SourceEndpoint`) |
 | Domain error types | That product domain (base in `core`) |
+| Site Branding singleton, assets, validation, cache policy, and HTTP | `admin/branding` language unit |
 | Config, engine, secrets crypto, Instant/Clock (`core.time`), Offset Page (`core.pagination`), upgrade orchestration, `AppError` / Problem Details, request-id helpers, process probes | `core` (upgrade may call platform-kernel published API); time contract in [`docs/conventions-time.md`](conventions-time.md); errors in [`docs/conventions-errors.md`](conventions-errors.md); pagination in [`docs/conventions-pagination.md`](conventions-pagination.md) |
 | Celery app, Beat, **Scheduled Task**, system tasks, task registration | `worker` |
 | Domain async work units (`@shared_task` or equivalent) | Owning product domain; **discovered and registered by `worker`** |
@@ -156,6 +158,11 @@ Rules:
 
 - A language unit lives in a subpackage named after that language; inside it,
   modules are named by role (`service.py`, `store.py`, replaceable adapter families).
+- `admin/branding/` is the Site Branding language unit. Persistence adapters stay
+  inside the unit. Composition mounts `backend.admin.branding.router` the same
+  way it mounts other language-unit adapters such as federation. Packaged seed
+  files are read at presentation time when no operator overlay row exists;
+  composition does not occupy seed bytes into storage.
 - Cross-cutting modules stay at the package root.
 - All language units in a package take the same shape, whatever their size.
   Elevate by language boundary, not by file count.

@@ -167,4 +167,15 @@ export const MODULE_IDENTITY_FIXTURE: ModuleIdentity[] = [
       delete: null,
     },
   },
+  {
+    id: "branding",
+    label_key: "branding.title",
+    routes: { list: "/console/branding", create: null, edit: null },
+    actions: {
+      list: "branding:read",
+      create: null,
+      edit: "branding:write",
+      delete: null,
+    },
+  },
 ];

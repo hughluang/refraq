@@ -105,7 +105,10 @@ def test_super_admin_sees_all_seed_modules(client: TestClient) -> None:
         "operations",
         "settings",
     ]
-    assert [m["id"] for m in groups["settings"]["modules"]] == ["settings"]
+    assert [m["id"] for m in groups["settings"]["modules"]] == [
+        "settings",
+        "branding",
+    ]
     assert groups["settings"]["modules"][0]["label_key"] == "settings.title"
     assert groups["settings"]["modules"][0]["route"] == "/console/settings"
 

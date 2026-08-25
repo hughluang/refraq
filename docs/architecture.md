@@ -64,12 +64,13 @@ The frontend owns:
 - Protected page routing
 - Fetching current user state
 - Hiding or disabling actions based on permissions returned by backend
+- Resolving locale-specific Site Branding from the backend's unresolved public maps and falling back to Refraq defaults when that read fails
 
 ### Deploy Shape
 
 Self-deploy exposes the Management Console (web) to browsers.
 The browser calls same-origin `/api`; Next.js rewrites to the internal API service.
-`REFRAQ_API_UPSTREAM` is fixed at frontend image build time for deploy.
+`REFRAQ_API_UPSTREAM` identifies that internal API origin. The frontend image reads it at build time for rewrites, and the running Next.js server reads the same value for direct server-rendering calls such as Site Branding. Browser-visible URLs remain same-origin and never contain the internal upstream.
 Postgres and Redis are **Backing Services**; app processes stay share-nothing.
 The Session cookie's `Secure` flag follows browser-facing HTTPS stamped by the web `/api` rewrite (`REFRAQ_BROWSER_FACING_PROTO`, default `http`), not `REFRAQ_ENV` and not client-supplied `X-Forwarded-Proto`. HTTP self-deploy must keep the Session. OIDC callback origin uses the same rewrite for proto plus `REFRAQ_BROWSER_FACING_HOST` (or a loopback Host when unset); client-supplied public `Host` values are not used as `redirect_uri`.
 
@@ -102,7 +103,7 @@ Session expiry is absolute (set at creation; lookup does not renew TTL).
 The first version uses RBAC with **Role** as a first-class entity.
 
 - People are **User** records; each User has at most one Role (nullable).
-- Permissions are chosen from a fixed catalog (`console:access`, `dashboard:read`, `users:*`, `roles:*`, `settings:*`, plus `sources:*`, `metadata:*`, platform-mechanism `jobs:run`, `query:run`, `catalog:sample`, `tokens:*`, `audit:read`).
+- Permissions are chosen from a fixed catalog (`console:access`, `dashboard:read`, `users:*`, `roles:*`, `settings:*`, `branding:*`, plus `sources:*`, `metadata:*`, platform-mechanism `jobs:run`, `query:run`, `catalog:sample`, `tokens:*`, `audit:read`).
 - Console side navigation is served from a backend-seeded module catalog (`GET /console/navigation`); Console Module Identity for SPA wiring/ACL is `GET /console/module-identities`. See `docs/adr/0002-console-navigation-catalog.md`.
 - Seeded roles: locked `super_admin` (effective permissions = full catalog by identity) and editable `operator` (`console:access` + `dashboard:read` by default; metadata write/query/sample/token permissions are not implied).
 - Machine principals are reserved as **Client** and remain out of scope; person-owned **User PAT** is in scope for metadata foundation.

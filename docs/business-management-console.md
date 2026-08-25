@@ -12,7 +12,8 @@ Related boundaries:
 - Console shell mounts modules by nav group. Metadata modules mount under `metadata` (`docs/business-metadata.md`); platform **Job** / **Scheduled Task** modules mount under `operations` (`docs/business-jobs.md`, `docs/business-scheduled-tasks.md`). Data Product catalog / Entity modules mount later and stay out of scope here.
 - Permission decisions are authoritative in the backend; frontend show/hide only improves UX: `docs/architecture.md`.
 - Navigation catalog decision: `docs/adr/0002-console-navigation-catalog.md`. Identity Provider business rules: `docs/business-identity-providers.md`; its API is `docs/api-contracts-identity-providers.md`.
-- Terminology follows `docs/glossary.md`: brand copy in the UI is `Refraq`; the technical identifier is `refraq`.
+- Site Branding and Brand Attribution: `docs/business-branding.md`; HTTP: `docs/api-contracts-branding.md`.
+- Terminology follows `docs/glossary.md`: default brand copy in the UI is `Refraq`; **Site Branding** may replace the primary product mark; the technical identifier is `refraq`.
 
 ## 2. Principles
 
@@ -30,7 +31,7 @@ Related boundaries:
 
 | Element | Notes |
 | --- | --- |
-| Product mark / environment | Brand `Refraq`; optional environment distinction |
+| Product mark / environment | Primary product mark resolved from **Site Branding**; defaults to `Refraq`; optional environment distinction |
 | Current user and role summary | Account or display name + role name |
 | Logout | Invalidate session and leave Console |
 | Language / personal preferences | Stay in the top bar; never move to the side nav |
@@ -48,9 +49,10 @@ The side nav carries only module structural navigation and **renders exactly the
 | Administration | `admin` | Users, Roles, Identity Providers (`identity-providers`), User PAT (`tokens`) |
 | Metadata | `metadata` | Sources (`sources`), Catalog (`catalog`), Business Domains (`business-domains`), Type Mappings (`type-mappings`) |
 | Operations | `operations` | Jobs (`jobs`), Schedules (`schedules`) |
-| Platform settings | `settings` | System parameters (`settings`) |
+| Platform settings | `settings` | System parameters (`settings`), Site branding (`branding`) |
 
 - The `operations` group sits after `metadata` and before `settings`. Module field details: `docs/business-metadata.md`, `docs/business-user-tokens.md`, `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`.
+- About is a top-bar user-menu utility, not structural navigation. It carries **Brand Attribution**, is not a Console Module, and is never permission-filtered.
 - Data products and Governance groups (and any persona composer) are reserved for later and not implemented. The hide-vs-empty policy for empty future groups is deferred.
 
 **Forbidden**: putting account, logout, or language in the side nav; organizing first-level nav by internal service names; treating Foundation modules as enable/disable toggles; mounting Sources under Administration.
@@ -139,7 +141,7 @@ Console rules:
 
 1. Packing first-level business capabilities into the top bar.
 2. Mixing users / roles with business modules without Administration / Settings zones.
-3. Shipping persona composers, widget marketplaces, or theme workshops as part of the shell.
+3. Shipping persona composers, widget marketplaces, per-User skinning, per-tenant themes, or theme workshops as part of the shell. The bounded, operator-managed, site-wide **Site Branding** resource is not a theme workshop.
 4. Treating frontend-only menu hiding as the security model.
 5. Organizing navigation by internal service names.
 6. Passing off a full data-catalog IA as the console home.
@@ -153,6 +155,8 @@ Console rules:
 
 - `docs/api-contracts-console.md`
 - `docs/api-contracts-settings.md`
+- `docs/api-contracts-branding.md`
+- `docs/business-branding.md`
 - `docs/business-system-parameters.md`
 - `docs/adr/0028-system-parameters.md`
 - `docs/business-metadata.md`

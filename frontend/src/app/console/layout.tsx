@@ -1,6 +1,6 @@
 "use client";
 
-import { useGo, useIsAuthenticated } from "@refinedev/core";
+import { useIsAuthenticated } from "@refinedev/core";
 import { useEffect, type ReactNode } from "react";
 
 import { PageCanAccess } from "@/components/access/PageCanAccess";
@@ -14,14 +14,13 @@ import { ModuleIdentityGate } from "@/features/console/module-identity";
  */
 export default function ConsoleLayout({ children }: { children: ReactNode }) {
   const { data, isFetching } = useIsAuthenticated();
-  const go = useGo();
 
   const denied = !isFetching && data !== undefined && !data.authenticated;
 
   useEffect(() => {
     if (!denied) return;
-    go({ to: data.redirectTo ?? "/login", type: "replace" });
-  }, [data, denied, go]);
+    window.location.assign(data.redirectTo ?? "/login");
+  }, [data, denied]);
 
   if (denied) {
     return null;

@@ -215,6 +215,23 @@ EXPECTED_IDENTITIES = {
             "sample": None,
         },
     },
+    "branding": {
+        "label_key": "branding.title",
+        "routes": {
+            "list": "/console/branding",
+            "create": None,
+            "edit": None,
+            "show": None,
+        },
+        "actions": {
+            "list": "branding:read",
+            "create": None,
+            "edit": "branding:write",
+            "delete": None,
+            "show": None,
+            "sample": None,
+        },
+    },
 }
 
 

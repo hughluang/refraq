@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@mantine/colors-generator": "^9.5.1",
     "@mantine/core": "^9.5.0",
     "@mantine/form": "^9.5.0",
     "@mantine/hooks": "^9.5.0",

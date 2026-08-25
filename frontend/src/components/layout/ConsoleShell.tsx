@@ -2,10 +2,13 @@
 
 import {
   AppShell,
+  Anchor,
   Burger,
   Button,
   Group,
+  Image,
   Menu,
+  Modal,
   Skeleton,
   Stack,
   Text,
@@ -29,6 +32,7 @@ import { ConsoleNavLink } from "@/components/layout/ConsoleNavLink";
 import { LangSwitcher } from "@/components/LangSwitcher";
 import { fetchConsoleNavigation } from "@/features/console/api";
 import type { NavigationGroup } from "@/features/console/types";
+import { useBranding } from "@/features/branding/BrandingProvider";
 import { ApiError } from "@/lib/api";
 import { reloadIdentity } from "@/providers/auth-provider";
 import {
@@ -62,6 +66,8 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [opened, { toggle }] = useDisclosure();
+  const [aboutOpened, { open: openAbout, close: closeAbout }] = useDisclosure();
+  const branding = useBranding();
   const { data: identity } = useGetIdentity<CurrentUser>();
   const sessionUser = useSessionStore((s) => s.user);
   const identityError = useSessionStore((s) => s.identityError);
@@ -150,7 +156,18 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
         <Group h="100%" px="md" justify="space-between">
           <Group gap="sm">
             <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
-            <Title order={4}>{t("layout.consoleTitle")}</Title>
+            {branding.logoUrl ? (
+              <Image
+                src={branding.logoUrl}
+                alt={branding.brandName}
+                h={28}
+                w="auto"
+                fit="contain"
+              />
+            ) : null}
+            {branding.raw.show_brand_name_with_logo ? (
+              <Title order={4}>{branding.brandName}</Title>
+            ) : null}
           </Group>
           <Group gap="sm">
             <LangSwitcher />
@@ -165,6 +182,9 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
                 <Menu.Dropdown>
                   <Menu.Item onClick={() => router.push("/console/account")}>
                     {t("account.title")}
+                  </Menu.Item>
+                  <Menu.Item onClick={openAbout}>
+                    {t("branding.about")}
                   </Menu.Item>
                   <Menu.Divider />
                   <Menu.Item
@@ -234,6 +254,24 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
       >
         {mainContent}
       </AppShell.Main>
+      <Modal
+        opened={aboutOpened}
+        onClose={closeAbout}
+        title={t("branding.about")}
+        centered
+      >
+        <Text size="sm">
+          {t("branding.attribution", { brand: "Refraq" })}
+        </Text>
+        <Anchor
+          href="https://github.com/hughluang/refraq"
+          target="_blank"
+          rel="noreferrer"
+          size="sm"
+        >
+          github.com/hughluang/refraq
+        </Anchor>
+      </Modal>
     </AppShell>
   );
 }
