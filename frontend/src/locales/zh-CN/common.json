@@ -11,6 +11,8 @@
   "auth.login.error.network": "无法连接到服务，请稍后重试",
   "auth.logout": "退出登录",
   "layout.language": "语言",
+  "locale.label.en-US": "英语",
+  "locale.label.zh-CN": "中文",
   "layout.nav.home": "首页",
   "layout.nav.error": "导航加载失败",
   "layout.navGroup.workbench": "工作台",

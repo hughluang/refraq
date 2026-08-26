@@ -44,6 +44,8 @@ The public branding representation carries `brand_names` and `taglines` as unres
 
 Map keys are supported Console UI locale codes and correspond to the consumer's locale catalog. Values are trimmed, non-empty plain text. Brand names are at most 80 characters and taglines are at most 160 characters. Markdown and HTML are not supported.
 
+On the Site Branding Console page, locale tabs that edit `brand_names` and `taglines` label each configuration slot with the current UI language's `locale.label.<code>` i18n key. They do not use the catalog native label (endonym) used by the language switcher.
+
 ### 3.2 Brand Name Fallback
 
 For current locale `L`, a consumer resolves the brand name in this order:

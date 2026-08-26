@@ -11,6 +11,8 @@
   "auth.login.error.network": "Cannot reach the service, please try again",
   "auth.logout": "Log out",
   "layout.language": "Language",
+  "locale.label.en-US": "English",
+  "locale.label.zh-CN": "Chinese",
   "layout.nav.home": "Home",
   "layout.nav.error": "Failed to load navigation",
   "layout.navGroup.workbench": "Workbench",

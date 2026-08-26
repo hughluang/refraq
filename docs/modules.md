@@ -266,13 +266,15 @@ Responsibilities:
 - Language resources
 - Stable translation keys
 
-Locale set is open-ended and owned by `frontend/src/providers/locale-catalog.ts` (code + native label). That catalog feeds i18next `supportedLngs` and the language switcher (catalog-driven Menu).
+Locale set is open-ended and owned by `frontend/src/providers/locale-catalog.ts` (code + native label). That catalog feeds i18next `supportedLngs`. The catalog **native label** is for **language identity** only: the top-bar language switcher and Account Center UI-language select. It is not reused for configuration-slot chrome.
+
+When a Console surface labels a **catalog locale as a configuration slot** (for example, Site Branding tabs over `brand_names` / `taglines`), the label follows the **current UI language** via i18n keys `locale.label.<code>` in each `locales/<lng>/common.json`. Do not use the catalog native label there.
 
 Preference persistence uses a **cookie** `refraq.locale` (via `next-i18next` `createProxy` + `useChangeLanguage`). Detection order is **cookie → `NEXT_PUBLIC_DEFAULT_LOCALE` (fallback)**; do **not** use navigator, Accept-Language, query, or localStorage for negotiation. `localStorage` is no longer read after migration; a one-time client bridge may copy a legacy `localStorage` value into the cookie on first load, then clear it.
 
 Integration: `frontend/i18n.config.ts` + `next-i18next` (`createProxy`, `getT` / `getResources`) wrapped by `frontend/src/providers/app-i18n-provider.tsx`. SSR hydrates only the current language via `getResources`; the client injects a custom `I18nProvider` `use` backend (`i18next-resources-to-backend` + dynamic `import` of `locales/<lng>/<ns>.json`, same source as `resourceLoader`) so other locales load on demand when switching. The Refine i18n adapter is still created inside a client subscriber (`RefineRoot`); do not remount the tree with a locale `key` to refresh UI. Locale switching must go through `useChangeLanguage` (cookie + server re-render), not a bare `i18n.changeLanguage`.
 
-To add a locale: add `locales/<code>/common.json`, register it in `i18n.config.ts` `resourceLoader` / `supportedLngs` (via `LOCALE_CATALOG`), and append one row to `LOCALE_CATALOG`.
+To add a locale: add `locales/<code>/common.json`, register it in `i18n.config.ts` `resourceLoader` / `supportedLngs` (via `LOCALE_CATALOG`), append one row to `LOCALE_CATALOG`, and add `locale.label.<code>` to **every** existing `locales/<lng>/common.json` (configuration-slot chrome in each UI language).
 
 ## 4. Allowed Dependencies
 

@@ -59,7 +59,6 @@ import {
 import { ApiError } from "@/lib/api";
 import {
   getDefaultLocale,
-  getLocaleNativeLabel,
   LOCALE_CATALOG,
   SUPPORTED_LOCALES,
   type Locale,
@@ -323,7 +322,7 @@ export function BrandingPanel() {
                 <Tabs.List>
                   {LOCALE_CATALOG.map(({ code }) => (
                     <Tabs.Tab key={code} value={code}>
-                      {getLocaleNativeLabel(code)}
+                      {t(`locale.label.${code}`)}
                     </Tabs.Tab>
                   ))}
                 </Tabs.List>
