@@ -69,10 +69,10 @@ Response: `{ updated_count, requested_count, skipped_columns }`.
 | `list_joins` | `metadata:read` | Joins for an object locator (`limit`, `offset`; **Offset Page**) |
 | `upsert_join` | `metadata:write` | Create a single edge (**Join Change** attester `mcp`); duplicate pair refused |
 | `upsert_joins` | `metadata:write` | Batch create; asserted known pairs skipped; rejected pairs reported; all same Source; evidence required |
-| `patch_join` | `metadata:write` | Amend evidence/kind/expression; does not change first attester |
+| `patch_join` | `metadata:write` | Amend evidence/kind/expression; does not change first attester or `created_by_user_id` (delete eligibility unchanged) |
 | `reject_join` | `metadata:write` | **Join Rejection** by join id |
 | `restore_join` | `metadata:write` | Lift **Join Rejection** |
-| `delete_join` | `metadata:write` | Remove a human-created, non-rejected edge by join id; automatic → `JOIN_DELETE_AUTOMATIC`, rejected human → `JOIN_REJECTED`; does not stop automatic re-detection (use `reject_join`) |
+| `delete_join` | `metadata:write` | Remove a human-created, non-rejected edge by join id; automatic (including rejected automatic) → `JOIN_DELETE_AUTOMATIC` first, then rejected human → `JOIN_REJECTED`; does not stop automatic re-detection (use `reject_join`) |
 | `find_join_path` | `metadata:read` | Path lookup from start locator |
 
 `list_joins` args: object locator plus `limit` (default **50**, max **200**) and `offset` (default **0**). Result is the same **Offset Page** as HTTP `GET /objects/{id}/joins`: `{ "items", "total", "limit", "offset" }`. Order: `created_at ASC`, `id ASC`. Rejected rows are included.

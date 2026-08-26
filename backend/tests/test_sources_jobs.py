@@ -322,7 +322,7 @@ def test_structure_job_single_flight_at_execution(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Run-now always mints; second Job fails with JOB_ALREADY_ACTIVE when executed."""
-    from backend.metadata.catalog.kind_locks import try_acquire_kind_execution_lock
+    from backend.metadata.source_job_runner import try_acquire_kind_execution_lock
     from backend.metadata.structure_jobs.service import run_structure_job
 
     source = _make_source(client, key="s1", database="db")

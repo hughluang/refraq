@@ -35,7 +35,7 @@ from backend.admin.federation.protocols.oidc.jwks import reset_jwks_cache
 from backend.jobs.store import reset_job_store
 from backend.metadata.business_domains.store import reset_business_domain_store
 from backend.metadata.catalog.store import reset_catalog_store
-from backend.metadata.catalog.kind_locks import reset_kind_execution_locks_for_tests
+from backend.metadata.source_job_runner import reset_kind_execution_locks_for_tests
 from backend.metadata.sources.store import reset_source_store
 from backend.metadata.structure_diffs.store import reset_structure_diff_store
 from backend.metadata.type_mappings.store import reset_type_mapping_store

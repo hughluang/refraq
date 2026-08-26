@@ -24,8 +24,22 @@ from backend.jobs.store import (
     mark_failed,
     occupancy_worker_id,
 )
-from backend.metadata.catalog.kind_locks import hold_kind_execution_lock
+from backend.metadata.source_job_runner.kind_locks import (
+    hold_kind_execution_lock,
+    reset_kind_execution_locks_for_tests,
+    try_acquire_kind_execution_lock,
+)
 from backend.metadata.sources.store import SourceRecord, get_source_store
+
+__all__ = [
+    "JobBody",
+    "fail_job",
+    "hold_kind_execution_lock",
+    "reset_kind_execution_locks_for_tests",
+    "run_source_work_job",
+    "stopped_result",
+    "try_acquire_kind_execution_lock",
+]
 
 JobBody = Callable[[str, SourceRecord], dict[str, str]]
 

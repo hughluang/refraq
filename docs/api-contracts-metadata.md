@@ -213,7 +213,7 @@ PATCH body: `{ "normalized_type": "<one of 11 buckets>" }` — any closed Normal
 | `GET` | `/objects/{id}/joins` | `metadata:read` | List joins touching object, including rejected rows (**Offset Page**) |
 | `POST` | `/joins` | `metadata:write` | Create a single edge (Console/User; **Join Change** attester `human`); duplicate pair refused |
 | `POST` | `/joins:batch` | `metadata:write` | Batch create; asserted known pairs skipped; rejected pairs reported (`rejected_count`), not overwritten or restored |
-| `PATCH` | `/joins/{id}` | `metadata:write` | Amend evidence/kind/expression only |
+| `PATCH` | `/joins/{id}` | `metadata:write` | Amend evidence/kind/expression only; does not change `created_by_user_id` |
 | `POST` | `/joins/{id}/reject` | `metadata:write` | **Join Rejection** |
 | `POST` | `/joins/{id}/restore` | `metadata:write` | Lift **Join Rejection** |
 | `DELETE` | `/joins/{id}` | `metadata:write` | Remove a human-created, non-rejected edge |

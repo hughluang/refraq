@@ -419,7 +419,7 @@ Join edge fields:
 | `evidence` | Required non-empty text |
 | `join_kind` | Default `INNER` |
 | `join_expression` | Optional; when omitted, server generates equality on the column pair |
-| created_by / created_at | `created_by_user_id` is set for human/MCP create; automatic Jobs leave it null |
+| created_by / created_at | `created_by_user_id` is set for human/MCP **create** only; automatic Jobs leave it null; amend does not write it |
 | `rejected_at` / `rejected_by_user_id` | **Join Rejection**; empty means asserted |
 | `is_rejected` | Computed from `rejected_at` |
 
@@ -427,7 +427,7 @@ Join edge fields:
 
 Rules:
 
-- A directed column pair has at most one join definition. Duplicate single create is `JOIN_ALREADY_DEFINED`; single create on a rejected pair is `JOIN_REJECTED`. Amend is `PATCH /joins/{id}` (evidence / kind / expression only). Restore is explicit.
+- A directed column pair has at most one join definition. Duplicate single create is `JOIN_ALREADY_DEFINED`; single create on a rejected pair is `JOIN_REJECTED`. Amend is `PATCH /joins/{id}` (evidence / kind / expression only) and does not write `created_by_user_id`. An automatic edge stays automatic after amend; keeping the directed pair out still requires **Join Rejection**. Restore is explicit.
 - Evidence required; name-similarity alone is insufficient (`JOIN_EVIDENCE_REQUIRED`).
 - Same-Source only (`JOIN_CROSS_SOURCE`); no self-loop (`JOIN_INVALID`).
 - Batch create limited to one Source per call. Asserted known pairs are skipped (`already_known_count`), not overwritten. Rejected pairs are reported (`rejected_count`), not overwritten and not restored; `items` include those rows (`is_rejected`, with `id`). Batch is not create-or-fail for rejection.

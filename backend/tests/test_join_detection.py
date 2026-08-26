@@ -746,7 +746,7 @@ def test_join_detection_job_disabled_source(client: TestClient) -> None:
 
 
 def test_join_detection_same_kind_lock_blocks(client: TestClient) -> None:
-    from backend.metadata.catalog.kind_locks import try_acquire_kind_execution_lock
+    from backend.metadata.source_job_runner import try_acquire_kind_execution_lock
 
     source = _source()
     held = try_acquire_kind_execution_lock("join_detection", source.id)
@@ -764,7 +764,7 @@ def test_join_detection_same_kind_lock_blocks(client: TestClient) -> None:
 
 
 def test_join_detection_runs_while_structure_lock_held(client: TestClient) -> None:
-    from backend.metadata.catalog.kind_locks import try_acquire_kind_execution_lock
+    from backend.metadata.source_job_runner import try_acquire_kind_execution_lock
 
     source = _source()
     _seed_join_catalog(source)
@@ -780,7 +780,7 @@ def test_join_detection_runs_while_structure_lock_held(client: TestClient) -> No
 
 
 def test_structure_runs_while_join_detection_lock_held(client: TestClient) -> None:
-    from backend.metadata.catalog.kind_locks import try_acquire_kind_execution_lock
+    from backend.metadata.source_job_runner import try_acquire_kind_execution_lock
     from backend.metadata.structure_jobs.service import run_structure_job
 
     source = _source()

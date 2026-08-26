@@ -363,6 +363,9 @@ def test_amend_keeps_created_by_and_appends_join_change(client: TestClient) -> N
     assert [c.kind for c in changes] == ["create", "amend"]
     assert changes[0].attester == SQL_LINEAGE_JOIN_ORIGIN
     assert changes[1].attester is None
+    refused = client.delete(f"/joins/{auto.id}")
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["code"] == "JOIN_DELETE_AUTOMATIC"
 
 
 def test_join_detection_counts_skipped_rejected(client: TestClient) -> None:
