@@ -8,6 +8,14 @@ from backend.admin.permissions import Permission, permissions_include
 
 
 @dataclass(frozen=True, slots=True)
+class RouteAlias:
+    """Exact path match for a Refine action when primary route slots are full."""
+
+    path: str
+    action: str
+
+
+@dataclass(frozen=True, slots=True)
 class ModuleRoutes:
     """Page routes for a module. `list` may be None for identity-only modules (no Console page)."""
 
@@ -15,6 +23,7 @@ class ModuleRoutes:
     create: str | None = None
     edit: str | None = None
     show: str | None = None
+    aliases: tuple[RouteAlias, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +134,12 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         routes=ModuleRoutes(
             list="/console/sources",
             show="/console/sources/:id/structure-diffs",
+            aliases=(
+                RouteAlias(
+                    path="/console/sources/:id/structure-diffs/:diffId",
+                    action="show",
+                ),
+            ),
         ),
         actions=ModuleActions(
             list="sources:read",
@@ -207,11 +222,13 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         routes=ModuleRoutes(
             list="/console/schedules",
             edit="/console/schedules",
+            show="/console/sources/:id/schedules",
         ),
         actions=ModuleActions(
             list="jobs:run",
             edit="jobs:run",
             delete="jobs:run",
+            show="jobs:run",
         ),
         group_order=27,
         module_order=20,
@@ -240,6 +257,22 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
             edit="branding:write",
         ),
         group_order=30,
+        module_order=20,
+    ),
+    ConsoleModuleSeed(
+        id="account",
+        group_id="workbench",
+        group_label_key="layout.navGroup.workbench",
+        label_key="account.title",
+        routes=ModuleRoutes(
+            list=None,
+            show="/console/account",
+        ),
+        actions=ModuleActions(
+            list="console:access",
+            show="console:access",
+        ),
+        group_order=10,
         module_order=20,
     ),
 )

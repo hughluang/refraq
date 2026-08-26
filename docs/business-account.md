@@ -16,8 +16,8 @@ Platform system parameters remain under Console Module `settings` (`docs/api-con
 ## 2. Decision
 
 - Account Center is a Console page at `/console/account`, entered from the header username menu.
-- It is **not** a Console Module and does **not** appear in the sidebar navigation tree.
-- Any authenticated User with Console access may open Account Center; no extra permission is required for the shell, profile, password, locale, or Display Timezone self-service.
+- It is registered in Console Module Identity as identity-only (`routes.list` null, `routes.show` `/console/account`) and does **not** appear in the sidebar navigation tree.
+- Any authenticated User with Console access may open Account Center; no extra permission is required for the shell, profile, password, locale, or Display Timezone self-service (`actions.show` → `console:access`).
 - **User PAT** create/list/deactivate/restore/soft-delete remains gated by `tokens:read` / `tokens:write` and is embedded as a section inside Account Center (not a sidebar nav item; module `routes.list` is null).
 - Self-service mutates **only the caller’s** User; admin `/users` APIs continue to manage other Users via `users:*`.
 

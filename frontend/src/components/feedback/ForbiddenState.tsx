@@ -12,13 +12,22 @@ type ForbiddenStateProps = {
 
 export function ForbiddenState({ reason }: ForbiddenStateProps) {
   const t = useTranslate();
+  const unregistered = reason === "unregistered_route";
   const requiredPermission =
     reason && PERMISSION_KEY.test(reason) ? reason : undefined;
 
   return (
     <Stack gap="md" maw={480} py="md">
-      <Title order={2}>{t("forbidden.title")}</Title>
-      <Text c="dimmed">{t("forbidden.description")}</Text>
+      <Title order={2}>
+        {t(unregistered ? "forbidden.unregistered.title" : "forbidden.title")}
+      </Title>
+      <Text c="dimmed">
+        {t(
+          unregistered
+            ? "forbidden.unregistered.description"
+            : "forbidden.description",
+        )}
+      </Text>
       {requiredPermission ? (
         <Text size="sm">
           {t("forbidden.requiredPermission", {

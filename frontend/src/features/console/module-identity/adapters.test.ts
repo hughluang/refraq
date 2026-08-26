@@ -6,153 +6,91 @@ import {
   matchPath,
   toRefineResources,
 } from "@/features/console/module-identity/adapters";
-import { MODULE_IDENTITY_FIXTURE } from "@/features/console/module-identity/fixtures";
+import { GENERATED_MODULE_CATALOG } from "@/features/console/module-identity/generated-catalog";
+
+const CATALOG = GENERATED_MODULE_CATALOG;
 
 describe("toRefineResources", () => {
   it("maps list/create/edit/show routes and label keys", () => {
-    const resources = toRefineResources(MODULE_IDENTITY_FIXTURE);
-    expect(resources).toEqual([
-      {
-        name: "dashboard",
-        list: "/console",
-        meta: { label: "layout.nav.home" },
-      },
-      {
-        name: "users",
-        list: "/console/users",
-        create: "/console/users/new",
-        meta: { label: "users.title" },
-      },
-      {
-        name: "identity-providers",
-        list: "/console/identity-providers",
-        meta: { label: "identityProviders.title" },
-      },
-      {
-        name: "roles",
-        list: "/console/roles",
-        create: "/console/roles/new",
-        edit: "/console/roles/:id",
-        meta: { label: "roles.title" },
-      },
-      {
-        name: "tokens",
-        meta: { label: "tokens.title" },
-      },
-      {
-        name: "sources",
-        list: "/console/sources",
-        show: "/console/sources/:id/structure-diffs",
-        meta: { label: "sources.title" },
-      },
-      {
-        name: "catalog",
-        list: "/console/catalog",
-        show: "/console/catalog/:id",
-        meta: { label: "catalog.title" },
-      },
-      {
-        name: "business-domains",
-        list: "/console/business-domains",
-        create: "/console/business-domains",
-        edit: "/console/business-domains",
-        meta: { label: "businessDomains.title" },
-      },
-      {
-        name: "type-mappings",
-        list: "/console/type-mappings",
-        edit: "/console/type-mappings",
-        meta: { label: "typeMappings.title" },
-      },
-      {
-        name: "jobs",
-        list: "/console/jobs",
-        meta: { label: "jobs.title" },
-      },
-      {
-        name: "schedules",
-        list: "/console/schedules",
-        edit: "/console/schedules",
-        meta: { label: "schedules.title" },
-      },
-      {
-        name: "settings",
-        list: "/console/settings",
-        meta: { label: "settings.title" },
-      },
-      {
-        name: "branding",
-        list: "/console/branding",
-        meta: { label: "branding.title" },
-      },
-    ]);
+    const resources = toRefineResources(CATALOG);
+    expect(resources.find((item) => item.name === "schedules")).toEqual({
+      name: "schedules",
+      list: "/console/schedules",
+      edit: "/console/schedules",
+      show: "/console/sources/:id/schedules",
+      meta: { label: "schedules.title" },
+    });
+    expect(resources.find((item) => item.name === "account")).toEqual({
+      name: "account",
+      show: "/console/account",
+      meta: { label: "account.title" },
+    });
+    expect(resources.find((item) => item.name === "sources")).toEqual({
+      name: "sources",
+      list: "/console/sources",
+      show: "/console/sources/:id/structure-diffs",
+      meta: { label: "sources.title" },
+    });
   });
 });
 
 describe("evaluateCan", () => {
   it("grants list when permission present", () => {
-    expect(
-      evaluateCan(MODULE_IDENTITY_FIXTURE, ["users:read"], "users", "list"),
-    ).toEqual({ can: true });
+    expect(evaluateCan(CATALOG, ["users:read"], "users", "list")).toEqual({
+      can: true,
+    });
   });
 
   it("denies with required permission reason", () => {
-    expect(
-      evaluateCan(MODULE_IDENTITY_FIXTURE, ["users:read"], "users", "create"),
-    ).toEqual({ can: false, reason: "users:write" });
+    expect(evaluateCan(CATALOG, ["users:read"], "users", "create")).toEqual({
+      can: false,
+      reason: "users:write",
+    });
   });
 
   it("grants catalog show with metadata:read", () => {
     expect(
-      evaluateCan(
-        MODULE_IDENTITY_FIXTURE,
-        ["metadata:read"],
-        "catalog",
-        "show",
-      ),
+      evaluateCan(CATALOG, ["metadata:read"], "catalog", "show"),
     ).toEqual({ can: true });
   });
 
   it("grants sources show with metadata:read", () => {
     expect(
-      evaluateCan(
-        MODULE_IDENTITY_FIXTURE,
-        ["metadata:read"],
-        "sources",
-        "show",
-      ),
+      evaluateCan(CATALOG, ["metadata:read"], "sources", "show"),
+    ).toEqual({ can: true });
+  });
+
+  it("grants schedules show with jobs:run", () => {
+    expect(
+      evaluateCan(CATALOG, ["jobs:run"], "schedules", "show"),
+    ).toEqual({ can: true });
+  });
+
+  it("grants account show with console:access", () => {
+    expect(
+      evaluateCan(CATALOG, ["console:access"], "account", "show"),
     ).toEqual({ can: true });
   });
 
   it("grants catalog sample with catalog:sample", () => {
     expect(
-      evaluateCan(
-        MODULE_IDENTITY_FIXTURE,
-        ["catalog:sample"],
-        "catalog",
-        "sample",
-      ),
+      evaluateCan(CATALOG, ["catalog:sample"], "catalog", "sample"),
     ).toEqual({ can: true });
   });
 
   it("denies catalog sample when only metadata:write is present", () => {
     expect(
-      evaluateCan(
-        MODULE_IDENTITY_FIXTURE,
-        ["metadata:write"],
-        "catalog",
-        "sample",
-      ),
+      evaluateCan(CATALOG, ["metadata:write"], "catalog", "sample"),
     ).toEqual({ can: false, reason: "catalog:sample" });
   });
 
   it("rejects unknown resource and unsupported action", () => {
-    expect(evaluateCan(MODULE_IDENTITY_FIXTURE, [], "nope", "list")).toEqual({
+    expect(evaluateCan(CATALOG, [], "nope", "list")).toEqual({
       can: false,
       reason: "unknown_resource",
     });
     expect(
-      evaluateCan(MODULE_IDENTITY_FIXTURE, ["settings:read"], "settings", "create"),
+      evaluateCan(CATALOG, ["settings:read"], "settings", "create"),
     ).toEqual({ can: false, reason: "unsupported_action" });
   });
 });
@@ -191,65 +129,75 @@ describe("isAccessEvaluationPending", () => {
 
 describe("matchPath", () => {
   it("matches list create and edit routes", () => {
-    expect(matchPath("/console/users", MODULE_IDENTITY_FIXTURE)).toEqual({
+    expect(matchPath("/console/users", CATALOG)).toEqual({
       resource: "users",
       action: "list",
     });
-    expect(matchPath("/console/users/new", MODULE_IDENTITY_FIXTURE)).toEqual({
+    expect(matchPath("/console/users/new", CATALOG)).toEqual({
       resource: "users",
       action: "create",
     });
-    expect(matchPath("/console/roles/abc", MODULE_IDENTITY_FIXTURE)).toEqual({
+    expect(matchPath("/console/roles/abc", CATALOG)).toEqual({
       resource: "roles",
       action: "edit",
     });
   });
 
   it("does not match removed /console/tokens path", () => {
-    expect(matchPath("/console/tokens", MODULE_IDENTITY_FIXTURE)).toBeNull();
+    expect(matchPath("/console/tokens", CATALOG)).toBeNull();
   });
 
   it("matches metadata module routes including catalog show", () => {
-    expect(matchPath("/console/sources", MODULE_IDENTITY_FIXTURE)).toEqual({
+    expect(matchPath("/console/sources", CATALOG)).toEqual({
       resource: "sources",
       action: "list",
     });
-    expect(matchPath("/console/catalog", MODULE_IDENTITY_FIXTURE)).toEqual({
+    expect(matchPath("/console/catalog", CATALOG)).toEqual({
       resource: "catalog",
       action: "list",
     });
-    expect(matchPath("/console/catalog/obj_1", MODULE_IDENTITY_FIXTURE)).toEqual(
-      {
-        resource: "catalog",
-        action: "show",
-      },
-    );
-    expect(matchPath("/console/jobs", MODULE_IDENTITY_FIXTURE)).toEqual({
+    expect(matchPath("/console/catalog/obj_1", CATALOG)).toEqual({
+      resource: "catalog",
+      action: "show",
+    });
+    expect(matchPath("/console/jobs", CATALOG)).toEqual({
       resource: "jobs",
       action: "list",
     });
-    expect(matchPath("/console/schedules", MODULE_IDENTITY_FIXTURE)).toEqual({
+    expect(matchPath("/console/schedules", CATALOG)).toEqual({
       resource: "schedules",
       action: "list",
     });
     expect(
-      matchPath("/console/sources/src_1/structure-diffs", MODULE_IDENTITY_FIXTURE),
+      matchPath("/console/sources/src_1/structure-diffs", CATALOG),
     ).toEqual({
       resource: "sources",
       action: "show",
     });
+  });
+
+  it("matches alias and primary show routes for source subpages", () => {
     expect(
       matchPath(
         "/console/sources/src_1/structure-diffs/sdiff_1",
-        MODULE_IDENTITY_FIXTURE,
+        CATALOG,
       ),
-    ).toBeNull();
-    expect(
-      matchPath("/console/sources/src_1/schedules", MODULE_IDENTITY_FIXTURE),
-    ).toBeNull();
+    ).toEqual({
+      resource: "sources",
+      action: "show",
+    });
+    expect(matchPath("/console/sources/src_1/schedules", CATALOG)).toEqual({
+      resource: "schedules",
+      action: "show",
+    });
+    expect(matchPath("/console/account", CATALOG)).toEqual({
+      resource: "account",
+      action: "show",
+    });
   });
 
   it("returns null for unregistered paths", () => {
-    expect(matchPath("/console/unknown", MODULE_IDENTITY_FIXTURE)).toBeNull();
+    expect(matchPath("/console/unknown", CATALOG)).toBeNull();
+    expect(matchPath("/console/sources/src_1/not-a-page", CATALOG)).toBeNull();
   });
 });

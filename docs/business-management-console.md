@@ -22,7 +22,7 @@ Related boundaries:
 3. **Navigation is generated from "module catalog × permission decisions"** on the backend. No permission means no entry; a deep-link visit without permission must get an explainable unauthorized state.
 4. **Frontend and backend share one permission language** (resource + action); UI filtering is not a security boundary.
 5. **Foundation modules are always present**; access differs only by Permission. They have no runtime enable/disable state, and the top-level catalog is code-seeded, not DB menu CRUD.
-6. **Management master data (users / roles / Identity Providers / user tokens) and platform settings** stay in their own zones, separate from the `metadata` group, the `operations` group, and future Data Product primary nav.
+6. **Management master data (users / roles / Identity Providers) and platform settings** stay in their own zones, separate from the `metadata` group, the `operations` group, and future Data Product primary nav. **User PAT** is managed inside **Account Center** (identity-only module `tokens`; not a sidebar entry).
 7. **A new module appears by extending the backend seed** (identity + nav) and adding frontend pages/adapters — without rewriting the top-bar / side-nav duty narrative.
 
 ## 3. Information Architecture
@@ -46,7 +46,7 @@ The side nav carries only module structural navigation and **renders exactly the
 | Group | Group id | Modules |
 | --- | --- | --- |
 | Workbench | `workbench` | Home (`dashboard`) |
-| Administration | `admin` | Users, Roles, Identity Providers (`identity-providers`), User PAT (`tokens`) |
+| Administration | `admin` | Users, Roles, Identity Providers (`identity-providers`) |
 | Metadata | `metadata` | Sources (`sources`), Catalog (`catalog`), Business Domains (`business-domains`), Type Mappings (`type-mappings`) |
 | Operations | `operations` | Jobs (`jobs`), Schedules (`schedules`) |
 | Platform settings | `settings` | System parameters (`settings`), Site branding (`branding`) |
@@ -78,7 +78,7 @@ flowchart TB
 
   subgraph SideNav["Side nav · structural navigation"]
     G1["Workbench"]
-    G2["Administration · users/roles/identity-providers/tokens"]
+    G2["Administration · users/roles/identity-providers"]
     G3["Metadata · sources/catalog/domains/type-mappings"]
     G4["Operations · jobs/schedules"]
     G5["Platform settings"]
@@ -110,7 +110,7 @@ Each Console Module declaration includes at least:
 | --- | --- |
 | Module id | Stable technical name (e.g. `users`, `roles`, `settings`) |
 | Nav group | `workbench` / `admin` / `settings` / `metadata` / `operations` / … |
-| Routes | List (nav entry) plus optional create/edit paths for SPA wiring |
+| Routes | List (nav entry) plus optional create/edit/show paths for SPA wiring; optional `route_aliases` for extra deep-link paths when primary slots are full |
 | Actions | Refine action → Permission; `list` is also the nav visibility permission |
 | Label key | i18n key for the module label |
 | Group label key | i18n key for the group label |
@@ -119,7 +119,9 @@ Rules:
 
 - The shell builds the side nav from navigation API results (catalog × current-user permissions).
 - Foundation modules have no enabled/disabled state; visibility is permission-only.
-- SPA Refine resources and UX ACL adapt from `GET /console/module-identities` (unfiltered Console Module Identity); the frontend does not hand-maintain a parallel catalog.
+- SPA Refine resources and UX ACL adapt from `GET /console/module-identities` (unfiltered Console Module Identity); the frontend does not hand-maintain a parallel catalog. Typed module ids are generated from the seed (`scripts/gen_console_module_catalog.py`).
+- Identity-only pages (for example **Account Center**, User PAT module `tokens`) register with `routes.list` null so they stay out of Console Navigation but remain in module-identities for `PageCanAccess`.
+- Authenticated visits under `/console/*` always enter the Console shell. When the path matches a catalog route, the shell applies the mapped Permission; when it does not, the shell shows an unregistered-route state (not a bare framework 404). Identity-only modules without a registered page route (for example `tokens`) do not claim a URL; legacy paths such as `/console/tokens` are treated as unregistered, not redirected to Account Center.
 - Adding a metadata or later Data Product module means extending the backend seed and adding pages — not rewriting the shell duty narrative.
 
 ## 5. Platform Settings (System Parameters)

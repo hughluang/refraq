@@ -1,15 +1,12 @@
 "use client";
 
 import { Button, Group, Modal, Switch, Table, Text } from "@mantine/core";
-import { useCan, useNotification, useTranslate } from "@refinedev/core";
+import { useNotification, useTranslate } from "@refinedev/core";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
-import { ForbiddenState } from "@/components/feedback/ForbiddenState";
-import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageChrome } from "@/components/layout/PageChrome";
-import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
   listSourceSchedules,
   patchSchedule,
@@ -44,10 +41,6 @@ export function SourceSchedulesPage({ sourceId }: Props) {
   const t = useTranslate();
   const { open } = useNotification();
   const formatInstant = useFormatInstant();
-  const { data: canRun, isLoading: canLoading } = useCan({
-    resource: ModuleId.jobs,
-    action: ModuleAction.list,
-  });
 
   const [sourceLabel, setSourceLabel] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -62,24 +55,16 @@ export function SourceSchedulesPage({ sourceId }: Props) {
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
     resetDeps: [sourceId],
-    enabled: Boolean(canRun?.can),
   });
   const { items, loading, reload } = list;
 
   useEffect(() => {
-    if (!canRun?.can) return;
     void getSource(sourceId)
       .then((res) => {
         setSourceLabel(`${res.source.key} — ${res.source.name}`);
       })
       .catch(() => setSourceLabel(null));
-  }, [sourceId, canRun?.can]);
-
-  const aclPending = canLoading || canRun === undefined;
-
-  if (!aclPending && canRun && !canRun.can) {
-    return <ForbiddenState reason={canRun.reason} />;
-  }
+  }, [sourceId]);
 
   const title = sourceLabel
     ? `${t("schedules.related.title")} · ${sourceLabel}`
@@ -104,25 +89,17 @@ export function SourceSchedulesPage({ sourceId }: Props) {
               size="sm"
               variant="light"
               loading={loading}
-              disabled={aclPending || !canRun?.can}
               onClick={() => void reload()}
             >
               {t("schedules.refresh")}
             </Button>
-            <Button
-              size="sm"
-              disabled={aclPending || !canRun?.can}
-              onClick={() => setCreating(true)}
-            >
+            <Button size="sm" onClick={() => setCreating(true)}>
               {t("schedules.create")}
             </Button>
           </Group>
         }
       >
-        {aclPending ? (
-          <PageBodySkeleton />
-        ) : (
-          <ListTable
+        <ListTable
             list={list}
             columnCount={8}
             emptyMessage={t("schedules.related.empty")}
@@ -222,7 +199,6 @@ export function SourceSchedulesPage({ sourceId }: Props) {
               </Table.Tr>
             ))}
           </ListTable>
-        )}
       </PageChrome>
       <Modal.Stack>
         <ScheduleFormModal

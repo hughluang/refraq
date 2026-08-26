@@ -453,6 +453,8 @@
   "common.showing": "Showing {{from}}–{{to}} of {{total}}",
   "forbidden.title": "Forbidden",
   "forbidden.description": "Your account does not have permission to access this resource",
+  "forbidden.unregistered.title": "Page not found",
+  "forbidden.unregistered.description": "This Console path is not registered in the module catalog.",
   "forbidden.requiredPermission": "Required permission: {{permission}}",
   "forbidden.back": "Back to home",
   "sources.title": "Sources",

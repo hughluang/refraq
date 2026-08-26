@@ -12,7 +12,7 @@ Related business rules: `docs/business-management-console.md`.
 
 - **Console Module catalog**: fixed seed in backend code (ids, groups, routes, actions → permissions, i18n keys). Not writable at runtime.
 - **Console Navigation**: catalog entries the current User may see, grouped, already filtered by `actions.list` Permission.
-- **Console Module Identity**: unfiltered UX identity for every seeded module including Foundation, metadata-group, and operations-group modules (routes + action → permission). Used by the SPA for Refine wiring and page/feature ACL; not a second registration surface.
+- **Console Module Identity**: unfiltered UX identity for every seeded module including Foundation, metadata-group, and operations-group modules (primary routes + optional `route_aliases` + action → permission). Used by the SPA for Refine wiring and page/feature ACL; not a second registration surface.
 - Labels are **i18n keys**; the frontend translates them.
 - Nav visibility permission is `actions.list` (no separate `nav_permission` field).
 
@@ -80,9 +80,9 @@ Rules:
 - Groups with zero visible modules are omitted
 - Module order and group order follow the seed catalog
 - Each module `route` is `routes.list` from the seed
-- Modules with `routes.list` null (for example `tokens`, identity-only / embedded in Account Center) are omitted from navigation even when the caller has `actions.list`; they remain in module-identities for ACL
+- Modules with `routes.list` null (for example `tokens`, `account`, identity-only / embedded surfaces) are omitted from navigation even when the caller has `actions.list`; they remain in module-identities for ACL
 - `/auth/me` does not include the navigation tree
-- Account Center (`/console/account`) is not a Console Module; see `docs/business-account.md`
+- **Account Center** (`/console/account`) is identity-only in module-identities (`account`); see `docs/business-account.md`
 
 ### Errors
 
@@ -99,6 +99,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
 - **Not** filtered by per-module permissions (contrast with navigation)
 - Does **not** include group or sort fields (those remain navigation-only)
 - `actions.sample` is a non-route UX action (Catalog Sample). Only `catalog` maps it to `catalog:sample`; other modules return `null`.
+- Each module `routes` object includes primary slots (`list`, `create`, `edit`, `show`) and an `aliases` array (empty when none). Each alias is `{ "path": "...", "action": "..." }` for exact deep-link matching when primary slots are full.
 
 ### Response: `200`
 
@@ -108,7 +109,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
     {
       "id": "dashboard",
       "label_key": "layout.nav.home",
-      "routes": { "list": "/console", "create": null, "edit": null, "show": null },
+      "routes": { "list": "/console", "create": null, "edit": null, "show": null, "aliases": [] },
       "actions": {
         "list": "dashboard:read",
         "create": null,
@@ -125,7 +126,8 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
         "list": "/console/users",
         "create": "/console/users/new",
         "edit": null,
-        "show": null
+        "show": null,
+        "aliases": []
       },
       "actions": {
         "list": "users:read",
@@ -142,7 +144,8 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
         "list": "/console/roles",
         "create": "/console/roles/new",
         "edit": "/console/roles/:id",
-        "show": null
+        "show": null,
+        "aliases": []
       },
       "actions": {
         "list": "roles:read",
@@ -177,7 +180,8 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
         "list": "/console/business-domains",
         "create": "/console/business-domains",
         "edit": "/console/business-domains",
-        "show": null
+        "show": null,
+        "aliases": []
       },
       "actions": {
         "list": "metadata:read",
@@ -212,17 +216,19 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
 
 ## 5. Seed Catalog (this slice)
 
-| Module id | Group | `routes.list` | `actions.list` (nav) | Other actions |
+| Module id | Group | `routes.list` | `actions.list` (nav) | Other routes / actions |
 | --- | --- | --- | --- | --- |
 | `dashboard` | `workbench` | `/console` | `dashboard:read` | — |
 | `users` | `admin` | `/console/users` | `users:read` | create/edit/delete → `users:write`; create route `/console/users/new` |
 | `roles` | `admin` | `/console/roles` | `roles:read` | create/edit/delete → `roles:write`; create `/console/roles/new`; edit `/console/roles/:id` |
 | `identity-providers` | `admin` | `/console/identity-providers` | `identity_providers:read` | create/edit/delete/test → `identity_providers:write` |
-| `tokens` | `admin` (identity only; **not** in navigation) | `null` (no Console page; UI in Account Center) | `tokens:read` | create/edit/delete → `tokens:write`; see `docs/business-account.md` |
-| `sources` | `metadata` | `/console/sources` | `sources:read` | create/edit/delete → `sources:write` |
+| `tokens` | `admin` (identity only; **not** in navigation) | `null` (UI in Account Center) | `tokens:read` | create/edit/delete → `tokens:write`; see `docs/business-account.md` |
+| `account` | `workbench` (identity only; **not** in navigation) | `null` | `console:access` | show `/console/account` → `console:access`; see `docs/business-account.md` |
+| `sources` | `metadata` | `/console/sources` | `sources:read` | create/edit/delete → `sources:write`; show `/console/sources/:id/structure-diffs` → `metadata:read`; alias show `/console/sources/:id/structure-diffs/:diffId` |
 | `catalog` | `metadata` | `/console/catalog` | `metadata:read` | edit → `metadata:write`; show → `metadata:read`; sample → `catalog:sample` (no route); show route `/console/catalog/:id` |
 | `business-domains` | `metadata` | `/console/business-domains` | `metadata:read` | create/edit/delete → `metadata:write` |
 | `type-mappings` | `metadata` | `/console/type-mappings` | `metadata:read` | edit → `metadata:write` (no create/delete) |
 | `jobs` | `operations` | `/console/jobs` | `jobs:run` | — |
-| `schedules` | `operations` | `/console/schedules` | `jobs:run` | edit/delete → `jobs:run` |
+| `schedules` | `operations` | `/console/schedules` | `jobs:run` | edit/delete → `jobs:run`; show `/console/sources/:id/schedules` → `jobs:run` |
 | `settings` | `settings` | `/console/settings` | `settings:read` | edit → `settings:write` |
+| `branding` | `settings` | `/console/branding` | `branding:read` | edit → `branding:write` |

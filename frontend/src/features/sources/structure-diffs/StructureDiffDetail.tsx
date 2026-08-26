@@ -8,15 +8,13 @@ import {
   Table,
   Text,
 } from "@mantine/core";
-import { useCan, useTranslate } from "@refinedev/core";
+import { useTranslate } from "@refinedev/core";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { ForbiddenState } from "@/components/feedback/ForbiddenState";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageError } from "@/components/feedback/PageError";
 import { PageChrome } from "@/components/layout/PageChrome";
-import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { JobDetailModal } from "@/features/jobs/JobDetailModal";
 import { getStructureDiff } from "@/features/sources/api/structure-diffs";
 import { StructureDiffClassBadge } from "@/features/sources/structure-diffs/StructureDiffClassBadge";
@@ -53,10 +51,6 @@ function formatValue(value: unknown): string {
 export function StructureDiffDetail({ sourceId, diffId }: Props) {
   const t = useTranslate();
   const formatInstant = useFormatInstant();
-  const { data: canShow, isLoading: canLoading } = useCan({
-    resource: ModuleId.sources,
-    action: ModuleAction.show,
-  });
 
   const [diff, setDiff] = useState<StructureDiff | null>(null);
   const [loading, setLoading] = useState(true);
@@ -88,15 +82,9 @@ export function StructureDiffDetail({ sourceId, diffId }: Props) {
 
   const groups = useMemo(() => groupChanges(diff?.changes), [diff?.changes]);
 
-  const aclPending = canLoading || canShow === undefined;
-
-  if (!aclPending && canShow && !canShow.can) {
-    return <ForbiddenState reason={canShow.reason} />;
-  }
-
   const title = `${t("structureDiffs.detailTitle")} · ${sourceId}`;
 
-  if (aclPending || loading) {
+  if (loading) {
     return (
       <PageChrome
         title={title}

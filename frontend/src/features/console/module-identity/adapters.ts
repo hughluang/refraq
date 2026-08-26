@@ -87,8 +87,37 @@ export function matchPath(
 ): MatchedModuleAction | null {
   const resources = toRefineResources(modules);
   const matched = matchResourceFromRoute(pathname, resources);
-  if (!matched.found || !matched.resource?.name || !matched.action) {
-    return null;
+  if (matched.found && matched.resource?.name && matched.action) {
+    return { resource: matched.resource.name, action: matched.action };
   }
-  return { resource: matched.resource.name, action: matched.action };
+  return matchAliasPath(pathname, modules);
+}
+
+function segmentsMatch(pathname: string, pattern: string): boolean {
+  const pathSegments = pathname.split("/").filter(Boolean);
+  const patternSegments = pattern.split("/").filter(Boolean);
+  if (pathSegments.length !== patternSegments.length) {
+    return false;
+  }
+  return patternSegments.every((segment, index) => {
+    if (segment.startsWith(":")) {
+      return true;
+    }
+    return segment === pathSegments[index];
+  });
+}
+
+export function matchAliasPath(
+  pathname: string,
+  modules: ModuleIdentity[],
+): MatchedModuleAction | null {
+  for (const module of modules) {
+    const aliases = module.routes.aliases ?? [];
+    for (const alias of aliases) {
+      if (segmentsMatch(pathname, alias.path)) {
+        return { resource: module.id, action: alias.action };
+      }
+    }
+  }
+  return null;
 }

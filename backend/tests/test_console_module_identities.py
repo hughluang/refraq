@@ -28,7 +28,7 @@ from backend.admin.user_store import (  # noqa: E402
 EXPECTED_IDENTITIES = {
     "dashboard": {
         "label_key": "layout.nav.home",
-        "routes": {"list": "/console", "create": None, "edit": None, "show": None},
+        "routes": {"list": "/console", "create": None, "edit": None, "show": None, "aliases": []},
         "actions": {
             "list": "dashboard:read",
             "create": None,
@@ -45,6 +45,7 @@ EXPECTED_IDENTITIES = {
             "create": "/console/users/new",
             "edit": None,
             "show": None,
+            "aliases": [],
         },
         "actions": {
             "list": "users:read",
@@ -62,6 +63,7 @@ EXPECTED_IDENTITIES = {
             "create": None,
             "edit": None,
             "show": None,
+            "aliases": [],
         },
         "actions": {
             "list": "identity_providers:read",
@@ -79,6 +81,7 @@ EXPECTED_IDENTITIES = {
             "create": "/console/roles/new",
             "edit": "/console/roles/:id",
             "show": None,
+            "aliases": [],
         },
         "actions": {
             "list": "roles:read",
@@ -91,7 +94,7 @@ EXPECTED_IDENTITIES = {
     },
     "tokens": {
         "label_key": "tokens.title",
-        "routes": {"list": None, "create": None, "edit": None, "show": None},
+        "routes": {"list": None, "create": None, "edit": None, "show": None, "aliases": []},
         "actions": {
             "list": "tokens:read",
             "create": "tokens:write",
@@ -108,6 +111,12 @@ EXPECTED_IDENTITIES = {
             "create": None,
             "edit": None,
             "show": "/console/sources/:id/structure-diffs",
+            "aliases": [
+                {
+                    "path": "/console/sources/:id/structure-diffs/:diffId",
+                    "action": "show",
+                },
+            ],
         },
         "actions": {
             "list": "sources:read",
@@ -125,6 +134,7 @@ EXPECTED_IDENTITIES = {
             "create": None,
             "edit": None,
             "show": "/console/catalog/:id",
+            "aliases": [],
         },
         "actions": {
             "list": "metadata:read",
@@ -142,6 +152,7 @@ EXPECTED_IDENTITIES = {
             "create": "/console/business-domains",
             "edit": "/console/business-domains",
             "show": None,
+            "aliases": [],
         },
         "actions": {
             "list": "metadata:read",
@@ -159,6 +170,7 @@ EXPECTED_IDENTITIES = {
             "create": None,
             "edit": "/console/type-mappings",
             "show": None,
+            "aliases": [],
         },
         "actions": {
             "list": "metadata:read",
@@ -171,7 +183,7 @@ EXPECTED_IDENTITIES = {
     },
     "jobs": {
         "label_key": "jobs.title",
-        "routes": {"list": "/console/jobs", "create": None, "edit": None, "show": None},
+        "routes": {"list": "/console/jobs", "create": None, "edit": None, "show": None, "aliases": []},
         "actions": {
             "list": "jobs:run",
             "create": None,
@@ -187,14 +199,15 @@ EXPECTED_IDENTITIES = {
             "list": "/console/schedules",
             "create": None,
             "edit": "/console/schedules",
-            "show": None,
+            "show": "/console/sources/:id/schedules",
+            "aliases": [],
         },
         "actions": {
             "list": "jobs:run",
             "create": None,
             "edit": "jobs:run",
             "delete": "jobs:run",
-            "show": None,
+            "show": "jobs:run",
             "sample": None,
         },
     },
@@ -205,6 +218,7 @@ EXPECTED_IDENTITIES = {
             "create": None,
             "edit": None,
             "show": None,
+            "aliases": [],
         },
         "actions": {
             "list": "settings:read",
@@ -222,6 +236,7 @@ EXPECTED_IDENTITIES = {
             "create": None,
             "edit": None,
             "show": None,
+            "aliases": [],
         },
         "actions": {
             "list": "branding:read",
@@ -229,6 +244,24 @@ EXPECTED_IDENTITIES = {
             "edit": "branding:write",
             "delete": None,
             "show": None,
+            "sample": None,
+        },
+    },
+    "account": {
+        "label_key": "account.title",
+        "routes": {
+            "list": None,
+            "create": None,
+            "edit": None,
+            "show": "/console/account",
+            "aliases": [],
+        },
+        "actions": {
+            "list": "console:access",
+            "create": None,
+            "edit": None,
+            "delete": None,
+            "show": "console:access",
             "sample": None,
         },
     },
@@ -319,3 +352,24 @@ def test_operator_receives_full_unfiltered_identities(client: TestClient) -> Non
         for module in group["modules"]
     }
     assert nav_ids == {"dashboard"}
+    assert "account" not in nav_ids
+
+
+def test_account_not_in_navigation(client: TestClient) -> None:
+    assert (
+        client.post("/auth/login", json={"account": "root", "password": "s3cret"}).status_code
+        == 200
+    )
+    navigation = client.get("/console/navigation")
+    assert navigation.status_code == 200
+    nav_ids = {
+        module["id"]
+        for group in navigation.json()["groups"]
+        for module in group["modules"]
+    }
+    assert "account" not in nav_ids
+    identities = client.get("/console/module-identities")
+    assert identities.status_code == 200
+    account = next(m for m in identities.json()["modules"] if m["id"] == "account")
+    assert account["routes"]["list"] is None
+    assert account["routes"]["show"] == "/console/account"

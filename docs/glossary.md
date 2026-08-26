@@ -70,8 +70,9 @@ Avoid building side-nav truth only from frontend static menus.
 
 ### Console Module Identity
 
-The UX identity of a Console Module: stable id, label key, list/create/edit routes, and Refine action → Permission map.
+The UX identity of a Console Module or identity-only Console page: stable id, label key, primary list/create/edit/show routes, optional exact `route_aliases`, and Refine action → Permission map.
 Authored only in the backend Console Module catalog seed; bootstrapped to the SPA unfiltered (separate from Console Navigation).
+May include identity-only entries that do not appear in Console Navigation (for example **Account Center**, User PAT module `tokens`).
 Avoid treating it as a second frontend catalog, as navigation grouping, or as the security authority for API calls.
 
 ### Platform Settings
@@ -167,6 +168,7 @@ Avoid Schedule Timezone, worker process timezone, or treating the preference as 
 ### Account Center
 
 The current User’s self-service Console surface for profile, local password change, UI locale, **Display Timezone**, and User PAT management.
+Registered in Console Module Identity as identity-only (`routes.list` null; `routes.show` `/console/account`); not a structural Console Module in the side nav.
 Avoid conflating with **Platform Settings** / **System Parameter**, or treating User PAT as a sidebar Administration module.
 
 ### Backing Service

@@ -1,15 +1,12 @@
 "use client";
 
 import { Button, Group, Table, Text } from "@mantine/core";
-import { useCan, useTranslate } from "@refinedev/core";
+import { useTranslate } from "@refinedev/core";
 import Link from "next/link";
 import { useCallback } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
-import { ForbiddenState } from "@/components/feedback/ForbiddenState";
-import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageChrome } from "@/components/layout/PageChrome";
-import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { listStructureDiffs } from "@/features/sources/api/structure-diffs";
 import { StructureDiffClassBadge } from "@/features/sources/structure-diffs/StructureDiffClassBadge";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
@@ -33,10 +30,6 @@ function nonzeroCounts(counts: Record<string, number> | undefined): string {
 export function StructureDiffList({ sourceId }: Props) {
   const t = useTranslate();
   const formatInstant = useFormatInstant();
-  const { data: canShow, isLoading: canLoading } = useCan({
-    resource: ModuleId.sources,
-    action: ModuleAction.show,
-  });
 
   const fetchPage = useCallback(
     (query: PageQuery) => listStructureDiffs(sourceId, query),
@@ -49,12 +42,6 @@ export function StructureDiffList({ sourceId }: Props) {
     resetDeps: [sourceId],
   });
   const { items, loading, reload } = list;
-
-  const aclPending = canLoading || canShow === undefined;
-
-  if (!aclPending && canShow && !canShow.can) {
-    return <ForbiddenState reason={canShow.reason} />;
-  }
 
   const title = `${t("structureDiffs.title")} · ${sourceId}`;
 
@@ -76,7 +63,6 @@ export function StructureDiffList({ sourceId }: Props) {
             size="sm"
             variant="light"
             loading={loading}
-            disabled={aclPending}
             onClick={() => void reload()}
           >
             {t("jobs.refresh")}
@@ -84,10 +70,7 @@ export function StructureDiffList({ sourceId }: Props) {
         </Group>
       }
     >
-      {aclPending ? (
-        <PageBodySkeleton />
-      ) : (
-        <ListTable
+      <ListTable
           list={list}
           columnCount={5}
           emptyMessage={t("structureDiffs.empty")}
@@ -133,7 +116,6 @@ export function StructureDiffList({ sourceId }: Props) {
             </Table.Tr>
           ))}
         </ListTable>
-      )}
     </PageChrome>
   );
 }

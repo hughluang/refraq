@@ -229,7 +229,7 @@ The catalog object detail page is the Console semantics maintenance surface: it 
 
 Sources keep a **related schedules** workbench at `/console/sources/:id/schedules` (toolbar create plus the same row actions as Operations `schedules`; `jobs:run`; not a sidebar module and not `sources.show`). Global Job observe and domain **Scheduled Task** lists live under **Operations** (`docs/business-jobs.md`, `docs/business-scheduled-tasks.md`), not this group.
 
-User PAT management is **not** in this group; see `docs/business-user-tokens.md` (Administration module `tokens`).
+User PAT management is **not** in this group; see `docs/business-user-tokens.md` and **Account Center** (`docs/business-account.md`) — module `tokens` is identity-only and not a sidebar entry.
 
 ## 8. Access Blob Storage
 

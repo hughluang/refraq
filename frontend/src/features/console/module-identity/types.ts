@@ -1,9 +1,15 @@
+export type RouteAlias = {
+  path: string;
+  action: string;
+};
+
 export type ModuleRoutes = {
   /** Null for identity-only modules with no Console page (e.g. tokens in Account Center). */
   list: string | null;
   create?: string | null;
   edit?: string | null;
   show?: string | null;
+  aliases?: RouteAlias[];
 };
 
 export type ModuleActions = {

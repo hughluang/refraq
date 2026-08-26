@@ -16,6 +16,7 @@ from backend.admin.schemas.console import (
     NavigationGroupResponse,
     NavigationModuleResponse,
     NavigationResponse,
+    RouteAliasResponse,
 )
 
 router = APIRouter(prefix="/console", tags=["console"])
@@ -62,6 +63,10 @@ def get_module_identities(
                     create=module.routes.create,
                     edit=module.routes.edit,
                     show=module.routes.show,
+                    aliases=[
+                        RouteAliasResponse(path=alias.path, action=alias.action)
+                        for alias in module.routes.aliases
+                    ],
                 ),
                 actions=ModuleActionsResponse(
                     list=module.actions.list,

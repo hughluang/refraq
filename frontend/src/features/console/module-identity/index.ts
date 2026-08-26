@@ -1,8 +1,7 @@
-export { ModuleAction, ModuleId } from "@/features/console/module-identity/constants";
-export type {
-  ModuleActionName,
-  ModuleIdName,
-} from "@/features/console/module-identity/constants";
+export { ModuleAction } from "@/features/console/module-identity/constants";
+export type { ModuleActionName } from "@/features/console/module-identity/constants";
+export { ModuleId } from "@/features/console/module-identity/generated-ids";
+export type { ModuleIdName } from "@/features/console/module-identity/generated-ids";
 export {
   ACCESS_NOT_READY_REASONS,
   evaluateCan,

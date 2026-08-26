@@ -321,6 +321,8 @@ For the login/permission slice, each concern should land here:
 - User resource UI: `frontend/src/features/users/`
 - Role resource UI: `frontend/src/features/roles/`
 - Console navigation API: `backend/admin/routers/console.py` + `admin/console_modules.py`
+- Console Module Identity codegen: `scripts/gen_console_module_catalog.py` → `frontend/src/features/console/module-identity/generated-ids.ts`, `generated-catalog.ts`
+- Console route ACL: `frontend/src/components/access/PageCanAccess.tsx` + `frontend/src/features/console/module-identity/adapters.ts` (`matchPath`)
 - Platform settings API: `backend/admin/system_parameters/` (mechanism HTTP) + `<package>/parameters.py` declarations
 - Settings UI: `frontend/src/features/settings/`
 - Site Branding API: `backend/admin/branding/`

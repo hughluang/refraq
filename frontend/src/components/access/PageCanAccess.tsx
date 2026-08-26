@@ -35,7 +35,7 @@ export function PageCanAccess({ children }: PageCanAccessProps) {
   }
 
   if (!matched) {
-    return children;
+    return <ForbiddenState reason="unregistered_route" />;
   }
 
   if (isLoading || data === undefined) {

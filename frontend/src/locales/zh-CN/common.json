@@ -453,6 +453,8 @@
   "common.showing": "显示第 {{from}}–{{to}} 条，共 {{total}} 条",
   "forbidden.title": "无权限",
   "forbidden.description": "当前账号没有访问该资源的权限",
+  "forbidden.unregistered.title": "页面不存在",
+  "forbidden.unregistered.description": "该 Console 路径未在模块目录中注册。",
   "forbidden.requiredPermission": "需要权限：{{permission}}",
   "forbidden.back": "返回首页",
   "sources.title": "数据源",

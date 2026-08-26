@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import List
+
 from pydantic import BaseModel, Field
 
 
@@ -21,11 +23,17 @@ class NavigationResponse(BaseModel):
     groups: list[NavigationGroupResponse] = Field(default_factory=list)
 
 
+class RouteAliasResponse(BaseModel):
+    path: str
+    action: str
+
+
 class ModuleRoutesResponse(BaseModel):
     list: str | None = None
     create: str | None = None
     edit: str | None = None
     show: str | None = None
+    aliases: List[RouteAliasResponse] = Field(default_factory=list)
 
 
 class ModuleActionsResponse(BaseModel):
