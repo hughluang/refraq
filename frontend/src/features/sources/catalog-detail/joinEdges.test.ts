@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   columnLabel,
   columnOptionLabel,
+  joinDeleteErrorKey,
   joinRowActions,
   joinRowState,
   mergeSelectedOption,
@@ -63,6 +64,22 @@ describe("joinRowActions", () => {
       restore: false,
       delete: true,
     });
+  });
+});
+
+describe("joinDeleteErrorKey", () => {
+  it("maps known delete refusal codes to locale keys", () => {
+    expect(joinDeleteErrorKey("JOIN_DELETE_AUTOMATIC")).toBe(
+      "catalog.joins.error.deleteAutomatic",
+    );
+    expect(joinDeleteErrorKey("JOIN_REJECTED")).toBe(
+      "catalog.joins.error.deleteRejected",
+    );
+  });
+
+  it("returns null for unrelated codes", () => {
+    expect(joinDeleteErrorKey("JOIN_ALREADY_DEFINED")).toBeNull();
+    expect(joinDeleteErrorKey("CATALOG_JOIN_NOT_FOUND")).toBeNull();
   });
 });
 

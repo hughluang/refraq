@@ -664,7 +664,7 @@ def upsert_joins(
 
 @mcp.tool()
 def delete_join(authorization: str, join_id: str) -> str:
-    """Remove a join edge by id (metadata:write)."""
+    """Remove a human-created, non-rejected edge by id (metadata:write). Delete does not stop automatic re-detection; use reject_join to keep a pair out."""
     try:
         user, token_id = _actor_from_token(authorization)
         _require(user, "metadata:write")

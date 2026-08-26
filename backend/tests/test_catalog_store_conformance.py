@@ -390,13 +390,13 @@ def test_join_lifecycle_and_change_log_agree(catalog_store) -> None:
     _seed_catalog()
     from_id, to_id = _column_ids(catalog_store)
 
-    join = catalog_store.upsert_join(
+    join = catalog_store.write_insert_join(
         from_column_id=from_id,
         to_column_id=to_id,
         evidence="probe query",
         created_by_user_id="user_1",
         attester=HUMAN_JOIN_ORIGIN,
-    )
+    ).record
     assert join.is_rejected is False
 
     found = catalog_store.get_join_by_pair(from_id, to_id)

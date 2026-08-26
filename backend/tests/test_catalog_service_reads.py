@@ -383,7 +383,7 @@ def test_catalog_http_mcp_projection_parity(client: TestClient) -> None:
         schema_scope=None,
         fail_safe_threshold=1.0,
     )
-    get_catalog_store().upsert_join(
+    get_catalog_store().write_insert_join(
         from_column_id="col_id",
         to_column_id="col_id",
         evidence="self probe",
@@ -491,7 +491,7 @@ def test_service_lookup_join_paths() -> None:
         schema_scope=None,
         fail_safe_threshold=1.0,
     )
-    store.upsert_join(
+    store.write_insert_join(
         from_column_id="col_a_b",
         to_column_id="col_b_id",
         evidence="fk",

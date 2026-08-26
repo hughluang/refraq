@@ -217,13 +217,13 @@ def test_apply_preserves_human_join_via_store() -> None:
         schema_scope=None,
         fail_safe_threshold=1.0,
     )
-    human = store.upsert_join(
+    human = store.write_insert_join(
         from_column_id="col_cust_fk",
         to_column_id="col_cust_id",
         evidence="analyst confirmed",
         created_by_user_id="u1",
         attester=HUMAN_JOIN_ORIGIN,
-    )
+    ).record
 
     apply_structure_snapshot(
         source=require_source("src_origin"),
@@ -286,20 +286,20 @@ def test_apply_does_not_take_over_sql_lineage_join() -> None:
     lineage_evidence = (
         "SQL join in obj/postgresql/demo/public/view/v_orders: customer_id = id"
     )
-    lineage = store.upsert_join(
+    lineage = store.write_insert_join(
         from_column_id="col_cust_fk",
         to_column_id="col_cust_id",
         evidence=lineage_evidence,
         created_by_user_id=None,
         attester=SQL_LINEAGE_JOIN_ORIGIN,
-    )
-    other = store.upsert_join(
+    ).record
+    other = store.write_insert_join(
         from_column_id="col_alt",
         to_column_id="col_cust_id",
         evidence="SQL join in obj/postgresql/demo/public/view/v_alt: alt_id = id",
         created_by_user_id=None,
         attester=SQL_LINEAGE_JOIN_ORIGIN,
-    )
+    ).record
 
     apply_structure_snapshot(
         source=require_source("src_origin"),
@@ -421,3 +421,113 @@ def test_service_duplicate_create_is_refused() -> None:
         raise AssertionError("expected JoinAlreadyDefined")
     except JoinAlreadyDefined as exc:
         assert exc.join_id == human.id
+
+
+def test_create_join_occupied_race_refuses_defined(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.metadata.catalog import join_writes as catalog_joins
+    from backend.metadata.catalog.join_pair import Occupied
+    from backend.metadata.errors import JoinAlreadyDefined
+
+    now = utc_now()
+    customers = _table(
+        object_id="obj_customers",
+        name="customers",
+        columns=[("col_cust_id", "id")],
+        now=now,
+    )
+    orders = _table(
+        object_id="obj_orders",
+        name="orders",
+        columns=[("col_ord_id", "id"), ("col_cust_fk", "customer_id")],
+        now=now,
+    )
+    apply_structure_snapshot(
+        source=require_source("src_origin"),
+        job_id="job_seed",
+        collected=[customers, orders],
+        schema_scope=None,
+        fail_safe_threshold=1.0,
+    )
+    store = get_catalog_store()
+    planted = store.write_insert_join(
+        from_column_id="col_cust_fk",
+        to_column_id="col_cust_id",
+        evidence="planted",
+        created_by_user_id="u1",
+        attester=HUMAN_JOIN_ORIGIN,
+    ).record
+    monkeypatch.setattr(store, "get_join_by_pair", lambda *a, **k: None)
+    monkeypatch.setattr(
+        store, "write_insert_join", lambda **kwargs: Occupied(record=planted)
+    )
+    try:
+        catalog_joins.create_join(
+            from_column_id="col_cust_fk",
+            to_column_id="col_cust_id",
+            evidence="race create",
+            actor_user_id="u2",
+            actor_token_id=None,
+            attester=HUMAN_JOIN_ORIGIN,
+        )
+        raise AssertionError("expected JoinAlreadyDefined")
+    except JoinAlreadyDefined as exc:
+        assert exc.join_id == planted.id
+
+
+def test_create_join_occupied_race_refuses_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.metadata.catalog import join_writes as catalog_joins
+    from backend.metadata.catalog.join_pair import Occupied
+    from backend.metadata.errors import JoinRejected
+
+    now = utc_now()
+    customers = _table(
+        object_id="obj_customers",
+        name="customers",
+        columns=[("col_cust_id", "id")],
+        now=now,
+    )
+    orders = _table(
+        object_id="obj_orders",
+        name="orders",
+        columns=[("col_ord_id", "id"), ("col_cust_fk", "customer_id")],
+        now=now,
+    )
+    apply_structure_snapshot(
+        source=require_source("src_origin"),
+        job_id="job_seed",
+        collected=[customers, orders],
+        schema_scope=None,
+        fail_safe_threshold=1.0,
+    )
+    store = get_catalog_store()
+    planted = store.write_insert_join(
+        from_column_id="col_cust_fk",
+        to_column_id="col_cust_id",
+        evidence="planted",
+        created_by_user_id="u1",
+        attester=HUMAN_JOIN_ORIGIN,
+    ).record
+    rejected = store.set_join_rejection(
+        planted.id,
+        rejected_at=utc_now(),
+        rejected_by_user_id="u1",
+    )
+    assert rejected is not None and rejected.is_rejected
+    monkeypatch.setattr(store, "get_join_by_pair", lambda *a, **k: None)
+    monkeypatch.setattr(
+        store, "write_insert_join", lambda **kwargs: Occupied(record=rejected)
+    )
+    try:
+        catalog_joins.create_join(
+            from_column_id="col_cust_fk",
+            to_column_id="col_cust_id",
+            evidence="race create",
+            actor_user_id="u2",
+            actor_token_id=None,
+            attester=HUMAN_JOIN_ORIGIN,
+        )
+        raise AssertionError("expected JoinRejected")
+    except JoinRejected as exc:
+        assert exc.join_id == rejected.id

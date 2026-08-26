@@ -433,7 +433,7 @@ Rules:
 - Batch create limited to one Source per call. Asserted known pairs are skipped (`already_known_count`), not overwritten. Rejected pairs are reported (`rejected_count`), not overwritten and not restored; `items` include those rows (`is_rejected`, with `id`). Batch is not create-or-fail for rejection.
 - Object join lists include rejected rows by default (no filter in this slice). **Join Path** omits rejected rows. Path walks a join when endpoint columns are present and the pair is not rejected.
 - **Join Rejection** refuses single HTTP/MCP create and amend on the pair. Batch / MCP `upsert_joins` report rejected pairs without restoring. Automatic Jobs skip an existing row (including rejected). It does not affect FK collection, object `foreign_keys`, or Structure Diff `fk_added` / `fk_removed`. A later collected FK does not restore.
-- Console delete stays limited to non-rejected rows with `created_by_user_id` set. HTTP/MCP `DELETE` is unchanged.
+- Console, HTTP, and MCP delete are limited to non-rejected rows with `created_by_user_id` set. Automatic edges (`created_by_user_id` null) refuse delete with `JOIN_DELETE_AUTOMATIC` (reject instead), checked before rejection so a rejected automatic row still returns `JOIN_DELETE_AUTOMATIC`. Rejected human-created rows refuse delete with `JOIN_REJECTED` (restore first). Delete removes the edge only; it does not stop a later automatic Job from inserting the same directed pair again.
 - **FK resolution during structure Jobs:** if a collected foreign key cannot be resolved
   (missing referenced object/columns), has unequal local/ref column counts, or matches
   ambiguous referenced targets, the structure Job **fails** and the prior successful catalog

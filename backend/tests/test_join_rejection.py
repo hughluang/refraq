@@ -343,13 +343,13 @@ def test_amend_keeps_created_by_and_appends_join_change(client: TestClient) -> N
     obj = _seed_object(source["id"])
     store = get_catalog_store()
     a, b = obj.columns[0].id, obj.columns[1].id
-    auto = store.upsert_join(
+    auto = store.write_insert_join(
         from_column_id=a,
         to_column_id=b,
         evidence="SQL join in v",
         created_by_user_id=None,
         attester=SQL_LINEAGE_JOIN_ORIGIN,
-    )
+    ).record
     patched = client.patch(
         f"/joins/{auto.id}",
         json={"evidence": "operator confirmed", "join_kind": "INNER"},
@@ -474,13 +474,13 @@ def test_join_detection_counts_skipped_rejected(client: TestClient) -> None:
         fail_safe_threshold=1.0,
     )
     store = get_catalog_store()
-    planted = store.upsert_join(
+    planted = store.write_insert_join(
         from_column_id="col_obj_orders_customer_id",
         to_column_id="col_obj_customers_id",
         evidence="SQL join in v_open",
         created_by_user_id=None,
         attester=SQL_LINEAGE_JOIN_ORIGIN,
-    )
+    ).record
     store.set_join_rejection(
         planted.id, rejected_at=utc_now(), rejected_by_user_id="u1"
     )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from backend.metadata.catalog.join_origin import decide_automatic_insert
+from backend.metadata.catalog.join_pair import decide_pair_write, pair_state
 from backend.metadata.catalog.records import CatalogJoinRecord
 from backend.metadata.join_detection_jobs.resolver import ResolvedJoin
 
@@ -66,12 +66,15 @@ def build_join_detection_plan(
     skipped_rejected = 0
     for pair, upsert in expected.items():
         existing = existing_by_pair.get(pair)
-        existing_rejected = None if existing is None else existing.is_rejected
-        decision = decide_automatic_insert(existing_rejected=existing_rejected)
-        if decision == "skip_rejected":
+        decision = decide_pair_write(
+            pair_state(existing),
+            writer="automatic",
+            existing_id=None if existing is None else existing.id,
+        )
+        if decision.action == "skip_rejected":
             skipped_rejected += 1
             continue
-        if decision == "skip_protected":
+        if decision.action == "skip_protected":
             skipped_protected += 1
             continue
         upserts.append(upsert)

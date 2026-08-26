@@ -19,6 +19,7 @@ __all__ = [
     "JoinAlreadyDefined",
     "JoinAlreadyRejected",
     "JoinCrossSource",
+    "JoinDeleteAutomatic",
     "JoinEvidenceRequired",
     "JoinInvalid",
     "JoinNotRejected",
@@ -242,6 +243,17 @@ class JoinRejected(AppError):
     def __init__(self, join_id: str) -> None:
         self.join_id = join_id
         super().__init__(f"Join pair is rejected: {join_id}")
+
+
+class JoinDeleteAutomatic(AppError):
+    code = "JOIN_DELETE_AUTOMATIC"
+    http_status = 409
+
+    def __init__(self, join_id: str) -> None:
+        self.join_id = join_id
+        super().__init__(
+            f"Automatic join cannot be deleted; reject instead: {join_id}"
+        )
 
 
 class JoinAlreadyRejected(AppError):

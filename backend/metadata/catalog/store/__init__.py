@@ -11,6 +11,7 @@ from typing import Any, Protocol
 from sqlalchemy.orm import Session
 
 from backend.core.config import get_settings
+from backend.metadata.catalog.join_pair import Inserted, Occupied
 from backend.metadata.catalog.records import (
     UNSET,
     CatalogColumnRecord,
@@ -141,7 +142,7 @@ class CatalogJoinStore(Protocol):
 
     def list_all_joins_for_source(self, source_id: str) -> list[CatalogJoinRecord]: ...
 
-    def upsert_join(
+    def write_insert_join(
         self,
         *,
         from_column_id: str,
@@ -151,7 +152,7 @@ class CatalogJoinStore(Protocol):
         join_kind: str = "INNER",
         join_expression: str | None = None,
         attester: str,
-    ) -> CatalogJoinRecord: ...
+    ) -> Inserted | Occupied: ...
 
     def update_join(
         self,

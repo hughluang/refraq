@@ -433,6 +433,43 @@ def test_join_upsert_list_delete_and_audit(client: TestClient) -> None:
     assert del_events
 
 
+def test_delete_automatic_join_http_refused(client: TestClient) -> None:
+    from backend.metadata.catalog.join_origin import SQL_LINEAGE_JOIN_ORIGIN
+
+    source = _make_source(client, key="del-auto")
+    obj = _seed_object(source["id"], object_id="obj_del_auto")
+    a, b = obj.columns[0].id, obj.columns[1].id
+    auto = get_catalog_store().write_insert_join(
+        from_column_id=a,
+        to_column_id=b,
+        evidence="SQL join in v",
+        created_by_user_id=None,
+        attester=SQL_LINEAGE_JOIN_ORIGIN,
+    ).record
+    refused = client.delete(f"/joins/{auto.id}")
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "JOIN_DELETE_AUTOMATIC"
+    assert get_catalog_store().get_join(auto.id) is not None
+
+
+def test_delete_rejected_manual_join_http_refused(client: TestClient) -> None:
+    source = _make_source(client, key="del-rej")
+    obj = _seed_object(source["id"], object_id="obj_del_rej")
+    a, b = obj.columns[0].id, obj.columns[1].id
+    created = client.post(
+        "/joins",
+        json={"from_column_id": a, "to_column_id": b, "evidence": "manual"},
+    )
+    assert created.status_code == 201
+    join_id = created.json()["join"]["id"]
+    rejected = client.post(f"/joins/{join_id}/reject")
+    assert rejected.status_code == 200
+    refused = client.delete(f"/joins/{join_id}")
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "JOIN_REJECTED"
+    assert get_catalog_store().get_join(join_id) is not None
+
+
 def test_joins_http_pages(client: TestClient) -> None:
     source = _make_source(client, key="join-page")
     obj = _seed_object(source["id"], object_id="obj_page")

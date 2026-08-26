@@ -7,6 +7,12 @@ from typing import Any
 from backend.admin.audit import persist_audit_event
 from backend.core.time import utc_now
 from backend.metadata.catalog.join_origin import HUMAN_JOIN_ORIGIN
+from backend.metadata.catalog.join_pair import (
+    Inserted,
+    PairWriteDecision,
+    decide_pair_write,
+    pair_state,
+)
 from backend.metadata.catalog.refs import require_column, require_join
 from backend.metadata.catalog.store import (
     CatalogJoinRecord,
@@ -19,6 +25,7 @@ from backend.metadata.errors import (
     JoinAlreadyDefined,
     JoinAlreadyRejected,
     JoinCrossSource,
+    JoinDeleteAutomatic,
     JoinEvidenceRequired,
     JoinInvalid,
     JoinNotRejected,
@@ -64,6 +71,38 @@ def _validated_pair(
     return cleaned, kind, expression
 
 
+def _audit_join_create(
+    *,
+    record: CatalogJoinRecord,
+    evidence: str,
+    attester: str,
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+) -> None:
+    persist_audit_event(
+        actor_user_id=actor_user_id,
+        actor_token_id=actor_token_id,
+        resource_type="catalog_join",
+        resource_id=record.id,
+        action="join.create",
+        result="success",
+        detail={
+            "from_column_id": record.from_column_id,
+            "to_column_id": record.to_column_id,
+            "evidence": evidence[:_EVIDENCE_AUDIT_MAX],
+            "join_kind": record.join_kind,
+            "attester": attester,
+        },
+    )
+
+
+def _raise_human_single_refuse(decision: PairWriteDecision) -> None:
+    if decision.action == "refuse_defined":
+        raise JoinAlreadyDefined(decision.existing_id or "")
+    if decision.action == "refuse_rejected":
+        raise JoinRejected(decision.existing_id or "")
+
+
 def create_join(
     *,
     from_column_id: str,
@@ -84,11 +123,14 @@ def create_join(
     )
     store = get_catalog_store()
     existing = store.get_join_by_pair(from_column_id, to_column_id)
-    if existing is not None:
-        if existing.is_rejected:
-            raise JoinRejected(existing.id)
-        raise JoinAlreadyDefined(existing.id)
-    record = store.upsert_join(
+    _raise_human_single_refuse(
+        decide_pair_write(
+            pair_state(existing),
+            writer="human_single",
+            existing_id=None if existing is None else existing.id,
+        )
+    )
+    result = store.write_insert_join(
         from_column_id=from_column_id,
         to_column_id=to_column_id,
         evidence=cleaned,
@@ -97,22 +139,18 @@ def create_join(
         join_expression=expression,
         attester=attester,
     )
-    persist_audit_event(
-        actor_user_id=actor_user_id,
-        actor_token_id=actor_token_id,
-        resource_type="catalog_join",
-        resource_id=record.id,
-        action="join.create",
-        result="success",
-        detail={
-            "from_column_id": from_column_id,
-            "to_column_id": to_column_id,
-            "evidence": cleaned[:_EVIDENCE_AUDIT_MAX],
-            "join_kind": kind,
-            "attester": attester,
-        },
-    )
-    return record
+    if isinstance(result, Inserted):
+        _audit_join_create(
+            record=result.record,
+            evidence=cleaned,
+            attester=attester,
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+        )
+        return result.record
+    if result.record.is_rejected:
+        raise JoinRejected(result.record.id)
+    raise JoinAlreadyDefined(result.record.id)
 
 
 def amend_join(
@@ -257,25 +295,52 @@ def upsert_joins_batch(
         elif from_obj.source_id != source_id:
             raise JoinCrossSource()
         existing = store.get_join_by_pair(from_id, to_id)
-        if existing is not None:
-            if existing.is_rejected:
-                rejected += 1
-            else:
-                known += 1
+        decision = decide_pair_write(
+            pair_state(existing),
+            writer="human_batch",
+            existing_id=None if existing is None else existing.id,
+        )
+        if decision.action == "skip_protected":
+            assert existing is not None
+            known += 1
             items.append(existing)
             continue
-        record = create_join(
+        if decision.action == "skip_rejected":
+            assert existing is not None
+            rejected += 1
+            items.append(existing)
+            continue
+        cleaned, kind, expression = _validated_pair(
             from_column_id=from_id,
             to_column_id=to_id,
             evidence=str(item.get("evidence") or ""),
-            actor_user_id=actor_user_id,
-            actor_token_id=actor_token_id,
             join_kind=str(item.get("join_kind") or "INNER"),
             join_expression=item.get("join_expression"),
+        )
+        result = store.write_insert_join(
+            from_column_id=from_id,
+            to_column_id=to_id,
+            evidence=cleaned,
+            created_by_user_id=actor_user_id,
+            join_kind=kind,
+            join_expression=expression,
             attester=attester,
         )
-        created += 1
-        items.append(record)
+        if isinstance(result, Inserted):
+            created += 1
+            _audit_join_create(
+                record=result.record,
+                evidence=cleaned,
+                attester=attester,
+                actor_user_id=actor_user_id,
+                actor_token_id=actor_token_id,
+            )
+        else:
+            if result.record.is_rejected:
+                rejected += 1
+            else:
+                known += 1
+        items.append(result.record)
     return items, created, known, rejected
 
 
@@ -286,6 +351,10 @@ def delete_join(
     actor_token_id: str | None,
 ) -> None:
     existing = require_join(join_id)
+    if existing.created_by_user_id is None:
+        raise JoinDeleteAutomatic(existing.id)
+    if existing.is_rejected:
+        raise JoinRejected(existing.id)
     deleted = get_catalog_store().delete_join(join_id)
     if not deleted:
         raise CatalogJoinNotFound()

@@ -206,7 +206,7 @@ PATCH body: `{ "normalized_type": "<one of 11 buckets>" }` — any closed Normal
 }
 ```
 
-`is_rejected` is computed from `rejected_at`. Console treats rows with null `created_by_user_id` as automated (no Console delete). HTTP/MCP `DELETE` is unchanged. There is no join `origin` field and no **Join Change** HTTP resource.
+`is_rejected` is computed from `rejected_at`. Console, HTTP, and MCP delete are limited to human-created, non-rejected rows (`created_by_user_id` set). There is no join `origin` field and no **Join Change** HTTP resource.
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
@@ -216,7 +216,7 @@ PATCH body: `{ "normalized_type": "<one of 11 buckets>" }` — any closed Normal
 | `PATCH` | `/joins/{id}` | `metadata:write` | Amend evidence/kind/expression only |
 | `POST` | `/joins/{id}/reject` | `metadata:write` | **Join Rejection** |
 | `POST` | `/joins/{id}/restore` | `metadata:write` | Lift **Join Rejection** |
-| `DELETE` | `/joins/{id}` | `metadata:write` | Remove edge |
+| `DELETE` | `/joins/{id}` | `metadata:write` | Remove a human-created, non-rejected edge |
 | `GET` | `/joins/path` | `metadata:read` | Join path lookup (omits rejected rows) |
 
 **Offset Page** response for `GET /objects/{id}/joins`: `{ "items": […], "total": N, "limit": L, "offset": O }`. `limit` default 50, max 200. Order: `created_at ASC`, `id ASC`. `total` is joins that touch this object, including rejected rows. No filter parameter in this slice (same default-include as **Current catalog** tombstones).
@@ -244,7 +244,7 @@ Path query params: `start` (object or column id or locator_key), optional `targe
 Path response: `{ "paths_found": N, "paths": […], "direct_joins": […], "reason": null | "…" }`.
 `reason` may be set when no usable path is returned (e.g. `TARGET_UNREACHABLE`).
 
-Reject joins that lack evidence with `JOIN_EVIDENCE_REQUIRED`. Cross-Source edges → `JOIN_CROSS_SOURCE`. Self-loop → `JOIN_INVALID`. Duplicate create on an asserted pair → `JOIN_ALREADY_DEFINED` (message includes join id). Single `POST /joins` create or `PATCH` amend on a rejected pair → `JOIN_REJECTED` (batch reports via `rejected_count` instead). Reject of an already-rejected row → `JOIN_ALREADY_REJECTED`. Restore of an asserted row → `JOIN_NOT_REJECTED`. Create is `201`.
+Reject joins that lack evidence with `JOIN_EVIDENCE_REQUIRED`. Cross-Source edges → `JOIN_CROSS_SOURCE`. Self-loop → `JOIN_INVALID`. Duplicate create on an asserted pair → `JOIN_ALREADY_DEFINED` (message includes join id). Single `POST /joins` create or `PATCH` amend on a rejected pair → `JOIN_REJECTED` (batch reports via `rejected_count` instead). Reject of an already-rejected row → `JOIN_ALREADY_REJECTED`. Restore of an asserted row → `JOIN_NOT_REJECTED`. `DELETE` of an automatic edge (`created_by_user_id` null) → `JOIN_DELETE_AUTOMATIC` (including when the row is also rejected; automatic is checked first). `DELETE` of a rejected human-created row → `JOIN_REJECTED`. Create is `201`.
 
 ## 6. Search Endpoints (Depth)
 

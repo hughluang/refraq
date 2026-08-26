@@ -29,10 +29,10 @@ from backend.metadata.catalog.records import (
 from backend.metadata.catalog.list_query import list_object_sql_filters
 from backend.metadata.catalog.search_rank import _search_rank, rank_and_page
 from backend.metadata.catalog.structure_merge import StructureRefreshPlan
+from backend.metadata.catalog.join_pair import Inserted, Occupied, apply_insert_join
 from backend.metadata.catalog.structure_persist import (
     apply_join_detection_plan,
     apply_structure_plan,
-    apply_upsert_join,
 )
 from backend.metadata.catalog.join_changes import (
     CatalogJoinChangeRecord,
@@ -555,7 +555,7 @@ class SqlCatalogStore:
             )
             return [_row_to_join(r) for r in rows]
 
-    def upsert_join(
+    def write_insert_join(
         self,
         *,
         from_column_id: str,
@@ -565,11 +565,10 @@ class SqlCatalogStore:
         join_kind: str = "INNER",
         join_expression: str | None = None,
         attester: str,
-    ) -> CatalogJoinRecord:
-
+    ) -> Inserted | Occupied:
         now = utc_now()
         with session_scope() as session:
-            return apply_upsert_join(
+            return apply_insert_join(
                 _SqlPersistPort(session, now=now),
                 from_column_id=from_column_id,
                 to_column_id=to_column_id,

@@ -14,7 +14,7 @@ from backend.metadata.catalog.fk_join_sync import (
     merge_fk_snapshot,
     merge_index_snapshot,
 )
-from backend.metadata.catalog.join_origin import decide_automatic_insert
+from backend.metadata.catalog.join_pair import decide_pair_write, pair_state
 from backend.metadata.catalog.identity import (
     _incoming_covers_existing,
     _match_existing_for_incoming,
@@ -306,10 +306,12 @@ def build_structure_refresh_plan(
     upserts: list[StructureJoinUpsert] = []
     for (from_id, to_id), (evidence, expression) in expected.items():
         existing = joins_by_pair.get((from_id, to_id))
-        existing_rejected = (
-            None if existing is None else existing.is_rejected
+        decision = decide_pair_write(
+            pair_state(existing),
+            writer="automatic",
+            existing_id=None if existing is None else existing.id,
         )
-        if decide_automatic_insert(existing_rejected=existing_rejected) != "insert":
+        if decision.action != "insert":
             continue
         upserts.append(
             StructureJoinUpsert(

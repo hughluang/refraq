@@ -17,6 +17,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
+import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { FillColumn } from "@/components/layout/FillColumn";
 import { SectionHeader } from "@/components/layout/SectionHeader";
 import { searchCatalogColumns } from "@/features/sources/api/catalog";
@@ -33,6 +34,7 @@ import {
   type JoinSelectOption,
   columnLabel,
   columnOptionLabel,
+  joinDeleteErrorKey,
   joinRowActions,
   joinRowState,
   mergeSelectedOption,
@@ -40,6 +42,7 @@ import {
   validateJoinDraft,
 } from "@/features/sources/catalog-detail/joinEdges";
 import type { CatalogObject, JoinPathResult } from "@/features/sources/types";
+import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useSearchDebounce } from "@/hooks/useSearchDebounce";
 import { ApiError } from "@/lib/api";
@@ -77,6 +80,7 @@ export function JoinsTab({
   const [pathLoading, setPathLoading] = useState(false);
   const [pathResult, setPathResult] = useState<JoinPathResult | null>(null);
   const [pathDrawerOpen, setPathDrawerOpen] = useState(false);
+  const deleteConfirm = useConfirmAction<string>();
 
   const fetchPage = useCallback(
     (query: PageQuery) => listObjectJoins(object.id, query),
@@ -177,12 +181,20 @@ export function JoinsTab({
     setSaving(true);
     try {
       await deleteJoin(joinId);
+      deleteConfirm.close();
       await reload();
       open?.({ type: "success", message: t("catalog.joins.deleted") });
     } catch (err) {
+      const messageKey =
+        err instanceof ApiError ? joinDeleteErrorKey(err.code) : null;
       open?.({
         type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
+        message:
+          messageKey != null
+            ? t(messageKey)
+            : err instanceof ApiError
+              ? err.detail
+              : String(err),
       });
     } finally {
       setSaving(false);
@@ -462,7 +474,7 @@ export function JoinsTab({
                             variant="subtle"
                             color="red"
                             loading={saving}
-                            onClick={() => void removeJoinEdge(join.id)}
+                            onClick={() => deleteConfirm.open(join.id)}
                           >
                             {t("catalog.joins.delete")}
                           </Button>
@@ -525,6 +537,20 @@ export function JoinsTab({
           </Stack>
         )}
       </Drawer>
+      <ConfirmActionModal
+        opened={deleteConfirm.opened}
+        onClose={deleteConfirm.close}
+        title={t("catalog.joins.deleteConfirm.title")}
+        body={t("catalog.joins.deleteConfirm.body")}
+        confirmColor="red"
+        loading={saving}
+        confirmLabel={t("catalog.joins.delete")}
+        onConfirm={() => {
+          if (deleteConfirm.pending != null) {
+            void removeJoinEdge(deleteConfirm.pending);
+          }
+        }}
+      />
     </FillColumn>
   );
 }

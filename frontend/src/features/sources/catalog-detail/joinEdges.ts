@@ -51,6 +51,16 @@ export function joinRowActions(state: JoinRowState): {
   };
 }
 
+export function joinDeleteErrorKey(code: string): string | null {
+  if (code === "JOIN_DELETE_AUTOMATIC") {
+    return "catalog.joins.error.deleteAutomatic";
+  }
+  if (code === "JOIN_REJECTED") {
+    return "catalog.joins.error.deleteRejected";
+  }
+  return null;
+}
+
 export function columnOptionLabel(name: string, locatorKey: string): string {
   return `${name} · ${locatorKey}`;
 }

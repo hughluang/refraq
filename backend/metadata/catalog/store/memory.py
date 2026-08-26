@@ -32,10 +32,10 @@ from backend.metadata.catalog.list_query import (
 )
 from backend.metadata.catalog.search_rank import _paginate, _search_rank, rank_and_page
 from backend.metadata.catalog.structure_merge import StructureRefreshPlan
+from backend.metadata.catalog.join_pair import Inserted, Occupied, apply_insert_join
 from backend.metadata.catalog.structure_persist import (
     apply_join_detection_plan,
     apply_structure_plan,
-    apply_upsert_join,
 )
 from backend.metadata.join_detection_jobs.reconcile import JoinDetectionPlan
 
@@ -473,7 +473,7 @@ class MemoryCatalogStore:
             ]
             return sorted(items, key=lambda j: j.created_at)
 
-    def upsert_join(
+    def write_insert_join(
         self,
         *,
         from_column_id: str,
@@ -483,9 +483,9 @@ class MemoryCatalogStore:
         join_kind: str = "INNER",
         join_expression: str | None = None,
         attester: str,
-    ) -> CatalogJoinRecord:
+    ) -> Inserted | Occupied:
         with self._lock:
-            return apply_upsert_join(
+            return apply_insert_join(
                 _MemoryPersistPort(self),
                 from_column_id=from_column_id,
                 to_column_id=to_column_id,

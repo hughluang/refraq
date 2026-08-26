@@ -125,7 +125,7 @@ def test_two_hop_join_path() -> None:
         schema_scope=None,
         fail_safe_threshold=1.0,
     )
-    store.upsert_join(
+    store.write_insert_join(
         from_column_id="col_a_b",
         to_column_id="col_b_id",
         evidence="fk_ab",
@@ -133,7 +133,7 @@ def test_two_hop_join_path() -> None:
         attester="human",
         join_expression="a.b_id = b.id",
     )
-    store.upsert_join(
+    store.write_insert_join(
         from_column_id="col_b_c",
         to_column_id="col_c_id",
         evidence="fk_bc",
@@ -167,7 +167,7 @@ def test_direct_joins_for_column_start() -> None:
         schema_scope=None,
         fail_safe_threshold=1.0,
     )
-    store.upsert_join(
+    store.write_insert_join(
         from_column_id="col_a_b",
         to_column_id="col_b_id",
         evidence="fk",
@@ -195,13 +195,13 @@ def test_rejected_join_is_omitted_from_paths() -> None:
         schema_scope=None,
         fail_safe_threshold=1.0,
     )
-    join = store.upsert_join(
+    join = store.write_insert_join(
         from_column_id="col_a_b",
         to_column_id="col_b_id",
         evidence="fk",
         created_by_user_id=None,
         attester="sql_lineage",
-    )
+    ).record
     store.set_join_rejection(
         join.id,
         rejected_at=utc_now(),
