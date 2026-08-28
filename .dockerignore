@@ -5,6 +5,7 @@
 .process/
 external/
 frontend/.next/
+frontend/node_modules/
 **/.turbo/
 **/coverage/
 backend/.env

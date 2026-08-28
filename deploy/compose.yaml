@@ -1,5 +1,9 @@
 name: refraq-prod
 
+# Site template. Copy this file and deploy/.env.example to a directory
+# outside the git tree. Images are linux/amd64 only.
+# Pin the version with REFRAQ_VERSION (no v prefix). Do not use latest.
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -27,9 +31,7 @@ services:
       retries: 10
 
   api:
-    build:
-      context: ..
-      dockerfile: backend/Dockerfile
+    image: ghcr.io/hughluang/refraq-api:${REFRAQ_VERSION}
     environment:
       REFRAQ_ENV: prod
       REFRAQ_API_HOST: 0.0.0.0
@@ -63,9 +65,7 @@ services:
       start_period: 20s
 
   worker:
-    build:
-      context: ..
-      dockerfile: backend/Dockerfile
+    image: ghcr.io/hughluang/refraq-api:${REFRAQ_VERSION}
     command: ["celery", "-A", "backend.worker.app", "worker"]
     environment:
       REFRAQ_ENV: prod
@@ -85,9 +85,7 @@ services:
 
   # Run exactly one Beat replica (Postgres Scheduled Task SSOT; do not scale).
   beat:
-    build:
-      context: ..
-      dockerfile: backend/Dockerfile
+    image: ghcr.io/hughluang/refraq-api:${REFRAQ_VERSION}
     command: ["celery", "-A", "backend.worker.app", "beat"]
     environment:
       REFRAQ_ENV: prod
@@ -105,11 +103,7 @@ services:
         condition: service_healthy
 
   web:
-    build:
-      context: ..
-      dockerfile: frontend/Dockerfile
-      args:
-        REFRAQ_API_UPSTREAM: http://api:8000
+    image: ghcr.io/hughluang/refraq-web:${REFRAQ_VERSION}
     environment:
       HOSTNAME: 0.0.0.0
       PORT: 3000

@@ -25,7 +25,7 @@ The Management Foundation slice includes:
 - Permission-based route and action control
 - Persistent User/Role storage (Postgres) and shared Session storage (Redis)
 - Official Foundation Upgrade (migrate under advisory lock, ensure System Role) and entrypoint (upgrade then serve)
-- Dev dependency Compose and a self-deploy Compose example (web + api + backing services)
+- Dev dependency Compose and a published site Compose template (web + api + backing services; images from a version tag)
 
 ### Out of Scope For Foundation Phase (still true)
 
@@ -68,11 +68,11 @@ The frontend owns:
 
 ### Deploy Shape
 
-Self-deploy exposes the Management Console (web) to browsers.
+A site exposes the Management Console (web) to browsers and pulls published **linux/amd64** images pinned by `REFRAQ_VERSION`. It does not build from a source tree. The site API service must be named `api`.
 The browser calls same-origin `/api`; Next.js rewrites to the internal API service.
-`REFRAQ_API_UPSTREAM` identifies that internal API origin. The frontend image reads it at build time for rewrites, and the running Next.js server reads the same value for direct server-rendering calls such as Site Branding. Browser-visible URLs remain same-origin and never contain the internal upstream.
+`REFRAQ_API_UPSTREAM` identifies that internal API origin. The frontend image reads it at build time for rewrites, and the running Next.js server reads the same value for direct server-rendering calls such as Site Branding. Site compose sets both. Browser-visible URLs remain same-origin and never contain the internal upstream.
 Postgres and Redis are **Backing Services**; app processes stay share-nothing.
-The Session cookie's `Secure` flag follows browser-facing HTTPS stamped by the web `/api` rewrite (`REFRAQ_BROWSER_FACING_PROTO`, default `http`), not `REFRAQ_ENV` and not client-supplied `X-Forwarded-Proto`. HTTP self-deploy must keep the Session. OIDC callback origin uses the same rewrite for proto plus `REFRAQ_BROWSER_FACING_HOST` (or a loopback Host when unset); client-supplied public `Host` values are not used as `redirect_uri`.
+The Session cookie's `Secure` flag follows browser-facing HTTPS stamped by the web `/api` rewrite (`REFRAQ_BROWSER_FACING_PROTO`, default `http`), not `REFRAQ_ENV` and not client-supplied `X-Forwarded-Proto`. HTTP sites must keep the Session. OIDC callback origin uses the same rewrite for proto plus `REFRAQ_BROWSER_FACING_HOST` (or a loopback Host when unset); client-supplied public `Host` values are not used as `redirect_uri`.
 
 ## 4. Auth Architecture
 

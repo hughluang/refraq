@@ -1,0 +1,70 @@
+name: Release images
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        id: version
+        run: echo "tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/refraq-api:${{ steps.version.outputs.tag }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            REFRAQ_API_UPSTREAM=http://api:8000
+          tags: ghcr.io/${{ github.repository_owner }}/refraq-web:${{ steps.version.outputs.tag }}
+
+      - name: Make packages public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          for package in refraq-api refraq-web; do
+            gh api --method POST \
+              "/users/${OWNER}/packages/container/${package}/visibility" \
+              -f visibility=public
+          done
+
+      - name: Stage site files
+        run: |
+          cp deploy/compose.yaml docker-compose.yaml
+          cp deploy/.env.example .env.example
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            docker-compose.yaml
+            .env.example
+          generate_release_notes: true

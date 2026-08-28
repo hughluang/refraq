@@ -59,12 +59,14 @@ This document records the stable development conventions for contributors workin
 - Run build: `npm run build`
 - Management Console content width: `docs/ui-console-layout.md` (section containers full width; internal controls own their own width)
 
-### Self-deploy example
+### Release and site install
 
-- Copy `deploy/.env.example` to `deploy/.env` and set live secrets (`INITIAL_ADMIN_PASSWORD`, `ADMIN_SESSION_SECRET`, `REFRAQ_SECRETS_MASTER_KEY`, `POSTGRES_PASSWORD`). Do not commit `deploy/.env`.
-- Full stack: `docker compose -f deploy/compose.yaml up --build` (Compose project name `refraq-prod`; isolated volumes)
-- Browser reaches the web service on host port `3001` (`REFRAQ_WEB_PORT`); `/api` is rewritten to the internal API. Keep local `next dev` on `127.0.0.1:3000`.
-- Frontend image build expects `frontend/node_modules` present (`npm ci` / `npm install` on the build host). It receives `REFRAQ_API_UPSTREAM` as a build argument for `/api` rewrites, and the running web container receives the same value as an environment variable for direct server-rendering API calls such as Site Branding (default `http://api:8000`).
+- A version is a git tag `v*` (for example `v0.1.0`). Tagging is the only image publish trigger. Ordinary commits do not build images.
+- GitHub Actions builds **linux/amd64** images and pushes `ghcr.io/hughluang/refraq-api:<version>` and `ghcr.io/hughluang/refraq-web:<version>` (tag without the `v`). The same tag creates a GitHub Release that attaches `docker-compose.yaml` and `.env.example`. Other architectures are not published.
+- A site directory lives outside the git tree. Copy the two Release files (or the templates under `deploy/`), set live secrets, and set `REFRAQ_VERSION` to that version. Do not keep the live `.env` in the repository. Compose project name is `refraq-prod` (`deploy/compose.yaml`).
+- Start: `docker compose pull && docker compose up -d`. Upgrade or roll back by changing `REFRAQ_VERSION` and repeating. Do not `docker compose down -v` unless the site data should be destroyed. Worker and Beat must use the same version as the API.
+- Browser reaches the web service on host port `3001` (`REFRAQ_WEB_PORT`); `/api` is rewritten to the internal API service named `api`. Keep local `next dev` on `127.0.0.1:3000`.
+- Published web images bake `REFRAQ_API_UPSTREAM=http://api:8000` at build time. The site compose also sets the same value at runtime for server-rendering (Site Branding).
 
 ## Suggested Reading Order
 

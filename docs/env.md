@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document records the current environment variables and the expected local-development and self-deploy conventions.
+This document records the current environment variables and the expected local-development and site-install conventions.
 
 These conventions serve the **Management Console**, **Management Foundation**, and the **metadata foundation** phase (secrets master key, Celery worker/beat). Data Product catalog capabilities may add further variables later.
 
@@ -45,12 +45,15 @@ Current `frontend/.env.example` defines:
 - `REFRAQ_API_UPSTREAM=http://127.0.0.1:8000`
 - `NEXT_PUBLIC_DEFAULT_LOCALE=en-US`
 
-`REFRAQ_API_UPSTREAM` has matching build-time and runtime duties. Next.js reads it at build time to compile browser `/api` rewrites. Server-only frontend code reads it at runtime for direct SSR calls such as public Site Branding. Local `next dev` uses the env file. Deploy images pass it as a Docker build argument and the web container receives the same runtime environment value (typically `http://api:8000`).
+`REFRAQ_API_UPSTREAM` has matching build-time and runtime duties. Next.js reads it at build time to compile browser `/api` rewrites. Server-only frontend code reads it at runtime for direct SSR calls such as public Site Branding. Local `next dev` uses the env file. Published web images bake `http://api:8000` as a Docker build argument; the site compose also sets the same runtime value.
 
 ### Deploy
 
-Current `deploy/.env.example` (copy to `deploy/.env`, never commit) defines:
+`deploy/` is a site template, not a live site directory. Copy `deploy/compose.yaml` and `deploy/.env.example` (or the GitHub Release attachments) into a directory outside the git tree. Never commit the live `.env`.
 
+Current `deploy/.env.example` defines:
+
+- `REFRAQ_VERSION` (required; image tag without the `v`, for example `0.1.0`. Do not use `latest`. Change this value to upgrade or roll back.)
 - `INITIAL_ADMIN_ACCOUNT=root`
 - `INITIAL_ADMIN_PASSWORD` (required live secret)
 - `ADMIN_SESSION_SECRET` (required live secret)
@@ -60,7 +63,7 @@ Current `deploy/.env.example` (copy to `deploy/.env`, never commit) defines:
 - `REFRAQ_BROWSER_FACING_PROTO` (optional on web; default `http`; set `https` when TLS terminates in front of the Console)
 - `REFRAQ_BROWSER_FACING_HOST` (optional on web and API; host or `host:port` the browser uses for the Console, without scheme. Required for non-loopback Console URLs so OIDC `redirect_uri` is not taken from request `Host`)
 
-Compose project name is `refraq-prod` so volumes do not collide with the local Postgres/Redis Compose.
+Published images are **linux/amd64** only (`ghcr.io/hughluang/refraq-api:<version>` and `ghcr.io/hughluang/refraq-web:<version>`). Compose project name is `refraq-prod` so volumes do not collide with the local Postgres/Redis Compose and stay attached when the site directory moves.
 
 ## 3. Local Convention (Unified)
 
@@ -72,9 +75,9 @@ Compose project name is `refraq-prod` so volumes do not collide with the local P
 
 The browser talks to the backend through a Next.js rewrite so the session cookie is set on the frontend origin and `proxy.ts` can see `refraq_sid`. Server-only rendering code calls the same upstream directly through `REFRAQ_API_UPSTREAM`; it does not make a loopback request to the Next.js server. URLs emitted into HTML remain browser-facing same-origin paths and never expose this internal upstream.
 
-Self-deploy Compose exposes only the web service to browsers; the API stays on the internal network. The host port defaults to `3001` (`REFRAQ_WEB_PORT`) so a local Console on `127.0.0.1:3000` can keep running. Bind local `next dev` to `127.0.0.1` so the office network cannot open the sandbox Console.
+Site compose exposes only the web service to browsers; the API stays on the internal network and must be named `api`. The host port defaults to `3001` (`REFRAQ_WEB_PORT`) so a local Console on `127.0.0.1:3000` can keep running. Bind local `next dev` to `127.0.0.1` so the office network cannot open the sandbox Console.
 
-Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for `/api` overwrites `X-Forwarded-Proto` from `REFRAQ_BROWSER_FACING_PROTO` (default `http`) and `X-Forwarded-Host` from `REFRAQ_BROWSER_FACING_HOST` when set, otherwise from a loopback request Host; it does not pass through client-supplied public Hosts. The API then reads those stamped headers (then a loopback request Host). `REFRAQ_ENV=prod` does not force `Secure`. HTTP self-deploy must keep the Session; set `REFRAQ_BROWSER_FACING_PROTO=https` on web when TLS terminates in front of the Console. Set `REFRAQ_BROWSER_FACING_HOST` on web and API to the browser-facing Console host when it is not loopback.
+Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for `/api` overwrites `X-Forwarded-Proto` from `REFRAQ_BROWSER_FACING_PROTO` (default `http`) and `X-Forwarded-Host` from `REFRAQ_BROWSER_FACING_HOST` when set, otherwise from a loopback request Host; it does not pass through client-supplied public Hosts. The API then reads those stamped headers (then a loopback request Host). `REFRAQ_ENV=prod` does not force `Secure`. HTTP sites must keep the Session; set `REFRAQ_BROWSER_FACING_PROTO=https` on web when TLS terminates in front of the Console. Set `REFRAQ_BROWSER_FACING_HOST` on web and API to the browser-facing Console host when it is not loopback.
 
 ## 4. Variable Ownership
 
@@ -110,15 +113,16 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 
 ### Deploy-Owned Variables
 
+- `REFRAQ_VERSION` (site image tag without the `v`; required to pull published images)
 - `POSTGRES_PASSWORD` (platform Postgres password; Compose interpolation; not published to the host)
 - `REFRAQ_WEB_PORT` (host port for the web service; default `3001`)
 - `REFRAQ_BROWSER_FACING_PROTO` (optional; forwarded to web; default `http`)
 - `REFRAQ_BROWSER_FACING_HOST` (optional; forwarded to web and API; browser-facing Console host or `host:port`)
-- `REFRAQ_API_UPSTREAM` (web build argument and web runtime environment; both use the internal API origin)
+- `REFRAQ_API_UPSTREAM` (web build argument and web runtime environment; both use the internal API origin `http://api:8000` on a site)
 
 ## 5. Process timezone (`TZ`)
 
-- Deploy default is process `TZ=UTC` (backend Dockerfile `ENV`, Compose service environment, `.env.example`).
+- Site and image default is process `TZ=UTC` (backend Dockerfile `ENV`, Compose service environment, `.env.example`).
 - Override only via the standard `TZ` environment variable; do **not** invent `APP_TIMEZONE`.
 - Production must run UTC. Instant semantics do not depend on process TZ, but default UTC avoids accidental local interpretation in libraries that read `TZ`.
 - IANA zone data: declare Python package `tzdata` so Schedule Timezone / `zoneinfo` works without host OS zoneinfo.
@@ -130,7 +134,7 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - Keep docs and env examples in sync
 - Do not commit real secrets
 - Do not change API port in code and forget to update frontend env
-- The initial admin password is meant for first-time local development only; rotate it before any non-local deployment. Self-deploy Compose reads `deploy/.env` (not committed); do not leave example secrets in a live stack.
+- The initial admin password is meant for first-time local development only; rotate it before any non-local site. Site compose reads a live `.env` outside the git tree; do not leave example secrets in a live stack.
 - Missing `DATABASE_URL` / `REDIS_URL` with `persistent` must fail fast; never silently fall back to memory
 - Settings dotenv load order: repo-root `.env` then `backend/.env` (later wins). Prefer `backend/.env` as the local canonical file
 - Integration tests must not reuse interactive `DATABASE_URL` / `REDIS_URL`; they use `REFRAQ_INTEGRATION_*` defaults so Compose live data stays intact
