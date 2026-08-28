@@ -33,7 +33,10 @@ jobs:
           file: backend/Dockerfile
           platforms: linux/amd64
           push: true
+          provenance: false
           tags: ghcr.io/${{ github.repository_owner }}/refraq-api:${{ steps.version.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
       - uses: docker/build-push-action@v6
         with:
@@ -41,21 +44,12 @@ jobs:
           file: frontend/Dockerfile
           platforms: linux/amd64
           push: true
+          provenance: false
           build-args: |
             REFRAQ_API_UPSTREAM=http://api:8000
           tags: ghcr.io/${{ github.repository_owner }}/refraq-web:${{ steps.version.outputs.tag }}
-
-      - name: Make packages public
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OWNER: ${{ github.repository_owner }}
-        run: |
-          set -euo pipefail
-          for package in refraq-api refraq-web; do
-            gh api --method POST \
-              "/users/${OWNER}/packages/container/${package}/visibility" \
-              -f visibility=public
-          done
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
       - name: Stage site files
         run: |
