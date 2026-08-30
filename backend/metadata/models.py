@@ -87,12 +87,10 @@ class CatalogObjectRow(Base):
         nullable=False,
         index=True,
     )
-    locator_key: Mapped[str] = mapped_column(
-        String(1024), unique=True, nullable=False, index=True
-    )
+    locator_key: Mapped[str] = mapped_column(Text, unique=True, nullable=False, index=True)
     object_type: Mapped[str] = mapped_column(String(64), nullable=False)
     schema_name: Mapped[str] = mapped_column(String(256), nullable=False)
-    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
     ddl: Mapped[str | None] = mapped_column(Text, nullable=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     primary_key_json: Mapped[str | None] = mapped_column(Text, nullable=True)

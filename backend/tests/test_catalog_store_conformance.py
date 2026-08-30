@@ -689,3 +689,82 @@ def test_recompute_locators_for_source_agrees(catalog_store) -> None:
         )
         is None
     )
+
+
+# PostgreSQL routine identity (proname + identity args). Longer than the old
+# varchar(256) identifier width; persist must store the full string.
+_LONG_ROUTINE_NAME = (
+    "pg_stat_statements(OUT userid oid, OUT dbid oid, OUT query text, "
+    "OUT calls bigint, OUT total_time double precision, OUT rows bigint, "
+    "OUT shared_blks_hit bigint, OUT shared_blks_read bigint, "
+    "OUT shared_blks_dirtied bigint, OUT shared_blks_written bigint, "
+    "OUT local_blks_hit bigint, OUT local_blks_read bigint, "
+    "OUT local_blks_dirtied bigint, OUT local_blks_written bigint, "
+    "OUT temp_blks_read bigint, OUT temp_blks_written bigint, "
+    "OUT blk_read_time double precision, OUT blk_write_time double precision)"
+)
+
+
+def test_persist_stores_full_routine_identity_name(catalog_store) -> None:
+    from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
+    from backend.metadata.catalog.store import CatalogObjectRecord, new_object_id
+    from backend.metadata.locators import format_object_locator
+    from backend.metadata.sources.service import require_source
+
+    assert len(_LONG_ROUTINE_NAME) > 256
+    _seed_source()
+    now = utc_now()
+    object_id = new_object_id()
+    locator = format_object_locator(
+        engine="postgresql",
+        kind="database",
+        source_key=SOURCE_KEY,
+        schema_name="tyadmin",
+        object_type="function",
+        name=_LONG_ROUTINE_NAME,
+    )
+    collected = [
+        CatalogObjectRecord(
+            id=object_id,
+            source_id=SOURCE_ID,
+            locator_key=locator,
+            object_type="function",
+            schema_name="tyadmin",
+            name=_LONG_ROUTINE_NAME,
+            ddl=None,
+            comment=None,
+            primary_key=None,
+            is_present=True,
+            business_name=None,
+            business_description=None,
+            object_category=None,
+            grain_description=None,
+            business_primary_key=None,
+            business_domain_id=None,
+            evidence_summary=None,
+            open_questions=None,
+            semantic_source=None,
+            business_semantics_ready=False,
+            semantics_updated_at=None,
+            last_structure_job_id=None,
+            collected_at=now,
+            created_at=now,
+            updated_at=now,
+            columns=[],
+            foreign_keys=[],
+            indexes=[],
+        )
+    ]
+    apply_structure_snapshot(
+        source=require_source(SOURCE_ID),
+        job_id=f"job_{uuid.uuid4().hex[:12]}",
+        collected=collected,
+        schema_scope=None,
+        fail_safe_threshold=1.0,
+    )
+
+    stored = catalog_store.get_object_by_locator(locator)
+    assert stored is not None
+    assert stored.name == _LONG_ROUTINE_NAME
+    assert stored.locator_key == locator
+    assert stored.object_type == "function"

@@ -120,6 +120,7 @@ Rules:
 
 Collected structure includes object identity **under Source**, object type (`table` \| `view` \| `materialized_view` \| `procedure` \| `function`), name, columns (name, full type string with precision/length when available, **Normalized Type**, nullable, default value, native comment), primary key column list, foreign keys, unique constraints, indexes, object-level native comment, and DDL when available.
 `procedure` and `function` are collected as DDL-only Catalog Objects (empty columns, no parameters, no PK/FK/indexes). Missing, encrypted, or privileged definitions store `ddl=null`. Oracle packages are out of scope. PostgreSQL overloaded routines disambiguate `name` with the identity argument list.
+Object `name` is the identity string (PostgreSQL may include the identity argument list) and is stored in full; `locator_key` is derived from that string and is stored in full.
 Optional provenance may record collection timestamp; provenance is not part of identity.
 Semantics and join edges attach to these objects/columns (see §10).
 
