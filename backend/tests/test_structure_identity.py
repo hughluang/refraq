@@ -31,6 +31,7 @@ from backend.metadata.catalog.store import (  # noqa: E402
 )
 from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
 from backend.metadata.locators import format_object_locator  # noqa: E402
+from backend.metadata.mcp_actor import mcp_authorization  # noqa: E402
 from backend.metadata.mcp_server import upsert_joins  # noqa: E402
 from backend.metadata.sources.service import require_source  # noqa: E402
 from backend.metadata.sources.store import reset_source_store  # noqa: E402
@@ -269,10 +270,8 @@ def test_mcp_upsert_joins_reports_missing_endpoints(client: TestClient) -> None:
     assert tok.status_code == 201, tok.text
     secret = tok.json()["secret"]
 
-    payload = upsert_joins(
-        authorization=f"Bearer {secret}",
-        joins=[{"evidence": "no endpoints"}],
-    )
+    with mcp_authorization(f"Bearer {secret}"):
+        payload = upsert_joins(joins=[{"evidence": "no endpoints"}])
     body = json.loads(payload)
     assert body["error"]["code"] == "JOIN_BATCH_EMPTY"
     assert body["skipped_count"] == 1

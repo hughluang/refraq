@@ -26,6 +26,7 @@ from backend.core.config import reset_settings_cache  # noqa: E402
 from backend.core.time import format_instant, utc_now  # noqa: E402
 from backend.jobs.store import create_queued_job, reset_job_store  # noqa: E402
 from backend.main import app  # noqa: E402
+from backend.metadata.mcp_actor import mcp_authorization  # noqa: E402
 from backend.metadata.mcp_server import get_job as mcp_get_job  # noqa: E402
 
 
@@ -73,7 +74,8 @@ def test_get_job_field_parity_between_http_and_mcp(client: TestClient) -> None:
     assert http_body.status_code == 200, http_body.text
     http_job = http_body.json()["job"]
 
-    mcp_job = json.loads(mcp_get_job(authorization=f"Bearer {secret}", job_id=job.id))
+    with mcp_authorization(f"Bearer {secret}"):
+        mcp_job = json.loads(mcp_get_job(job_id=job.id))
     assert "error" not in mcp_job, mcp_job
 
     assert mcp_job.keys() == http_job.keys()
@@ -88,9 +90,8 @@ def test_get_job_field_parity_between_http_and_mcp(client: TestClient) -> None:
 
 def test_get_job_missing_reports_error(client: TestClient) -> None:
     secret = _pat_secret(client)
-    payload = json.loads(
-        mcp_get_job(authorization=f"Bearer {secret}", job_id="job_missing")
-    )
+    with mcp_authorization(f"Bearer {secret}"):
+        payload = json.loads(mcp_get_job(job_id="job_missing"))
     assert payload["error"]["code"] == "JOB_NOT_FOUND"
 
 

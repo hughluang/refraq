@@ -63,7 +63,8 @@ Rules:
 
 - Protected endpoints accept **either** valid Session cookie **or** valid User PAT Bearer.
 - Exactly one principal resolution path per request; do not mix partial credentials in conflicting ways.
-- MCP tools use the same resolution and Permission checks.
+- HTTP MCP (`/mcp`) accepts **only** User PAT Bearer. A Session cookie is ignored and does not authenticate. Missing or invalid PAT is HTTP 401 before any protocol method.
+- MCP tools use the same Permission catalog as HTTP after the PAT is resolved.
 - Audit events for PAT create/deactivate/restore/delete and for actions performed via PAT record the User id (and token id where relevant, never plaintext).
 
 ## 6. Non-Goals

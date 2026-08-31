@@ -24,6 +24,7 @@ import { PageChrome } from "@/components/layout/PageChrome";
 import { patchAccountProfile } from "@/features/account/api";
 import { PasswordSection } from "@/features/account/PasswordSection";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
+import { McpSection } from "@/features/account/McpSection";
 import { TokenList } from "@/features/tokens/TokenList";
 import { ApiError } from "@/lib/api";
 import {
@@ -217,6 +218,10 @@ export function AccountPanel() {
         <CanAccess resource={ModuleId.tokens} action={ModuleAction.list}>
           <TokenList />
         </CanAccess>
+
+        <Divider />
+
+        <McpSection />
       </Stack>
     </PageChrome>
   );

@@ -71,6 +71,7 @@ The frontend owns:
 A site exposes the Management Console (web) to browsers and pulls published **linux/amd64** images pinned by `REFRAQ_VERSION`. It does not build from a source tree. The site API service must be named `api`.
 The browser calls same-origin `/api`; Next.js rewrites to the internal API service.
 `REFRAQ_API_UPSTREAM` identifies that internal API origin. The frontend image reads it at build time for rewrites, and the running Next.js server reads the same value for direct server-rendering calls such as Site Branding. Site compose sets both. Browser-visible URLs remain same-origin and never contain the internal upstream.
+Same-origin `/mcp` is streamed by the web process to an internal MCP service (`REFRAQ_MCP_UPSTREAM`). Compose does not publish the MCP listen port. Process `readyz` stays on the MCP container network.
 Postgres and Redis are **Backing Services**; app processes stay share-nothing.
 The Session cookie's `Secure` flag follows browser-facing HTTPS stamped by the web `/api` rewrite (`REFRAQ_BROWSER_FACING_PROTO`, default `http`), not `REFRAQ_ENV` and not client-supplied `X-Forwarded-Proto`. HTTP sites must keep the Session. OIDC callback origin uses the same rewrite for proto plus `REFRAQ_BROWSER_FACING_HOST` (or a loopback Host when unset); client-supplied public `Host` values are not used as `redirect_uri`.
 
@@ -84,7 +85,7 @@ Reason:
 - This matches a same-site Management Console better than exposing bearer token handling in the browser
 - It keeps browser auth small
 
-Metadata foundation adds **User PAT** Bearer authentication for MCP and non-browser clients (`docs/business-user-tokens.md`). Session and PAT both resolve to a User and the same Permission catalog. Client machine principals remain deferred.
+Metadata foundation adds **User PAT** Bearer authentication for MCP and non-browser clients (`docs/business-user-tokens.md`). Session and PAT both resolve to a User and the same Permission catalog on HTTP APIs. HTTP MCP accepts PAT only. Client machine principals remain deferred.
 
 ### Session Flow
 
@@ -114,8 +115,8 @@ Frontend checks are only for UX and must never be treated as the final enforceme
 
 ## 6. Request Path
 
-1. Frontend page, MCP client, or provider calls backend API
-2. Backend resolves current User from Session cookie or User PAT
+1. Frontend page, MCP client, or provider calls the Console origin (`/api` to the API process; `/mcp` streamed to the MCP process)
+2. API process resolves current User from Session cookie or User PAT; HTTP MCP resolves User PAT from `Authorization` only
 3. Backend loads user role and permissions
 4. Backend checks permission against requested resource/action
 5. Backend returns:

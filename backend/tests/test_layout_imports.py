@@ -58,7 +58,9 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "metadata.source_jobs",
             "metadata.source_schedules",
             "metadata.type_mappings.seeds",
+            "metadata.mcp_catalog",
             "metadata.mcp_server",
+            "metadata.mcp_http",
             "metadata.tasks",
             "metadata.routers",
         }
@@ -159,6 +161,14 @@ def test_layout_imports(path: Path) -> None:
             continue
         if target_pkg == importer_pkg:
             continue
+
+        # docs/backend-layout.md §8: admin may import core and own modules only.
+        if importer_pkg == "admin" and target_pkg in {"jobs", "metadata", "worker"}:
+            if not _allowlisted(importer, imported):
+                raise AssertionError(
+                    f"{importer} must not import {imported} "
+                    "(admin may import core and own modules only)"
+                )
 
         # docs/backend-layout.md §8 from-column: jobs may not import worker.
         if importer_pkg == "jobs" and target_pkg not in {"core", "admin"}:

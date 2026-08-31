@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     refraq_env: str = Field(default="dev", validation_alias="REFRAQ_ENV")
     refraq_api_host: str = Field(default="127.0.0.1", validation_alias="REFRAQ_API_HOST")
     refraq_api_port: int = Field(default=8000, validation_alias="REFRAQ_API_PORT")
+    refraq_mcp_host: str = Field(default="127.0.0.1", validation_alias="REFRAQ_MCP_HOST")
+    refraq_mcp_port: int = Field(default=8001, validation_alias="REFRAQ_MCP_PORT")
     store_backend: StoreBackend = Field(
         default="persistent",
         validation_alias="REFRAQ_STORE_BACKEND",

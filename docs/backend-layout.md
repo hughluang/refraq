@@ -39,10 +39,10 @@ backend/
   jobs/                   # Job platform primitive
     models.py store.py …
     schemas/ routers/     # mechanism HTTP by Job id (get/cancel); no domain use-case HTTP
-    metadata/               # product domain: Source / Catalog / structure and join-detection Job use cases
+  metadata/               # product domain: Source / Catalog / structure and join-detection Job use cases
     models.py errors.py sources/ catalog/ connectors/ structure_jobs/ join_detection_jobs/
     schemas/ routers/     # domain use-case HTTP
-    mcp_server.py tasks.py
+    mcp_catalog.py mcp_actor.py mcp_server.py mcp_http.py tasks.py
   worker/                 # runtime: Celery app, Beat, Scheduled Task, system tasks, discovery
     models.py schedules.py scheduler.py …
     schemas/ routers/     # mechanism Scheduled Task HTTP (list/get/patch/delete); no Console pages
@@ -100,7 +100,9 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | `backend.metadata.source_jobs` | Domain minting of structure and join-detection **Jobs** via **Scheduled Task** (due / run-now); Beat Celery entries (`fire_scheduled_structure`, `fire_scheduled_join_detection`). Does not enforce **Kind execution lock** at mint — that is Job execution |
 | `backend.metadata.source_schedules` | Metadata facade onto platform schedules: operator projection (`public_schedule`: work_kind + target), opaque `owner_ref` register/withdraw, per-kind product-default seed on Source create / mutating Source update. Closed work kinds: `structure`, `join_detection`. Not schedule ownership by Source |
 | `backend.metadata.type_mappings.seeds` | Product Type Mapping seed occupy (`ensure_product_type_mappings`) for Foundation Upgrade / Site Bootstrap |
-| `backend.metadata.mcp_server` | MCP tool host entry |
+| `backend.metadata.mcp_catalog` | MCP tool catalog (name / Permission / description) shared by HTTP and `tools/list` |
+| `backend.metadata.mcp_server` | MCP tool host (stdio / in-process handlers) |
+| `backend.metadata.mcp_http` | Product Streamable HTTP process entry |
 | `backend.metadata.tasks` | Job kind handler dispatch (`run_job`); discovered by `worker` |
 | `backend.metadata.routers.*` | Domain use-case HTTP; mounted by `main` |
 

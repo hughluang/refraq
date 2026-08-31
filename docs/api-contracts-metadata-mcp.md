@@ -4,16 +4,20 @@
 
 Defines the MCP tool face for the metadata foundation. Tools call the same domain services and **Permission** checks as HTTP APIs.
 
-Auth: **User PAT** Bearer (primary for agents); Session only where the MCP transport supports cookie forwarding.
+The product port is MCP revision **2026-07-28 Streamable HTTP** at the Console-origin path `/mcp`. Auth is **User PAT** in the HTTP `Authorization: Bearer` header only. Tool arguments do not include `authorization`. Session cookies are not MCP credentials. There is no OAuth discovery document and no well-known metadata.
+
+`GET /mcp/catalog` on the API process (Session or PAT) is the Account Center read of the same cropped tool list.
+
 Business rules: `docs/business-metadata.md`. Locator addressing: `docs/adr/0012-locator-addressing.md`.
 
-Legacy external `dbmeta` tool names are **reference only**; refraq owns normative names below. Tool arguments that identify Sources, objects, or columns use **locator keys** (not surrogate ids).
+Legacy external `dbmeta` tool names are **reference only**; refraq owns normative names below. Tool arguments that identify Sources, objects, or columns use **locator keys** (not surrogate ids). Clients that still require a 2025-era `initialize` / `Mcp-Session-Id` handshake are out of scope.
 
 ## 2. Cross-Cutting Rules
 
 - Tool failures are **not** HTTP Problem Details. Shape: `{ "error": { "code": "<Problem Code>", "message": "..." } }`. Human text stays `message` (not `detail`). JSON-RPC protocol `error.code` is an integer and is not a Problem Code. Shared identity with HTTP: [`docs/conventions-errors.md`](conventions-errors.md)
-- Missing/invalid auth → tool error mapped from `401`
-- Authenticated but lacking permission → mapped from `403` with required permission named when practical
+- Missing, invalid, or cookie-only credentials on `/mcp` → **HTTP 401** (`AUTH_UNAUTHENTICATED`). The request does not enter `server/discover`, `tools/list`, or `tools/call`
+- Authenticated but lacking permission on a tool that was still invoked → tool error mapped from `403` with required permission named when practical
+- `tools/list` (and `GET /mcp/catalog`) return only tools the caller's Role can invoke, in catalog order, with `ttlMs` / `cacheScope: "private"` on the protocol list. Input schemas do not contain `authorization`
 - Mutations write management audit events
 - No tool returns Source plaintext secrets or PAT secrets
 - Locator formats: `src/{engine|kind}/{source_key}`, `obj/…/{schema}/{object_type}/{name}`, `col/…/column/{column_name}`
@@ -101,7 +105,30 @@ Guards match `docs/api-contracts-metadata.md` §7 (same defaults/caps/timeouts a
 
 There is **no** MCP Catalog Sample tool; agents peek via `run_sql`. HTTP Catalog Sample remains `POST /objects/{id}/sample` (`catalog:sample`).
 
-## 8. Out Of Scope Tools
+## 8. HTTP Catalog (`GET /mcp/catalog`)
+
+Purpose: Account Center (and any authenticated caller) reads the cropped tool list and the public path.
+
+Auth: Session cookie **or** User PAT, same as other protected APIs. No extra Permission beyond authentication.
+
+Success `200`:
+
+```json
+{
+  "public_path": "/mcp",
+  "tools": [
+    {
+      "name": "search_sources",
+      "permission": "sources:read",
+      "description": "Search/list Sources (sources:read)."
+    }
+  ]
+}
+```
+
+`public_path` is the Console-origin path the operator copies. The browser builds `{origin}{public_path}`. An empty `tools` array is valid.
+
+## 9. Out Of Scope Tools
 
 - Arbitrary shell / file tools
 - Client credential management

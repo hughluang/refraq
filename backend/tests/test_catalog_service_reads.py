@@ -38,6 +38,7 @@ from backend.metadata.errors import (  # noqa: E402
     CatalogSearchQueryRequired,
     JoinPathUnavailable,
 )
+from backend.metadata.mcp_actor import mcp_authorization  # noqa: E402
 from backend.metadata.mcp_server import (  # noqa: E402
     find_join_path,
     get_object as mcp_get_object,
@@ -323,13 +324,13 @@ def test_list_filters_http_and_mcp(client: TestClient) -> None:
     tok = client.post("/tokens", json={"name": "list-pat", "expires_at": expires})
     assert tok.status_code == 201, tok.text
     secret = tok.json()["secret"]
-    payload = json.loads(
-        mcp_list_objects(
-            authorization=f"Bearer {secret}",
-            source_locator_key="src/postgresql/mes",
-            business_semantics_ready=False,
+    with mcp_authorization(f"Bearer {secret}"):
+        payload = json.loads(
+            mcp_list_objects(
+                source_locator_key="src/postgresql/mes",
+                business_semantics_ready=False,
+            )
         )
-    )
     assert payload["total"] == 1
     assert payload["items"][0]["name"] == "payments"
     assert "columns" not in payload["items"][0]
@@ -397,9 +398,10 @@ def test_catalog_http_mcp_projection_parity(client: TestClient) -> None:
 
     http_list = client.get("/sources/src_1/objects")
     assert http_list.status_code == 200
-    mcp_list = json.loads(
-        mcp_list_objects(authorization=auth, source_locator_key="src/postgresql/mes")
-    )
+    with mcp_authorization(auth):
+        mcp_list = json.loads(
+            mcp_list_objects(source_locator_key="src/postgresql/mes")
+        )
     assert "error" not in mcp_list, mcp_list
     assert http_list.json()["total"] == mcp_list["total"] == 1
     http_item = http_list.json()["items"][0]
@@ -411,7 +413,8 @@ def test_catalog_http_mcp_projection_parity(client: TestClient) -> None:
 
     http_obj = client.get("/objects/obj_a")
     assert http_obj.status_code == 200
-    mcp_obj = json.loads(mcp_get_object(authorization=auth, object_locator_key=locator))
+    with mcp_authorization(auth):
+        mcp_obj = json.loads(mcp_get_object(object_locator_key=locator))
     assert "error" not in mcp_obj, mcp_obj
     http_detail = http_obj.json()["object"]
     assert _pick(http_detail, _OBJECT_IDENTITY) == _pick(mcp_obj, _OBJECT_IDENTITY)
@@ -422,9 +425,8 @@ def test_catalog_http_mcp_projection_parity(client: TestClient) -> None:
     assert "normalized_type" not in mcp_obj["columns"][0]
 
     http_search = client.get("/catalog/objects/search?q=order")
-    mcp_search = json.loads(
-        mcp_search_objects(authorization=auth, query_text="order")
-    )
+    with mcp_authorization(auth):
+        mcp_search = json.loads(mcp_search_objects(query_text="order"))
     assert http_search.status_code == 200
     assert "error" not in mcp_search, mcp_search
     assert http_search.json()["total"] == mcp_search["total"]
@@ -434,7 +436,8 @@ def test_catalog_http_mcp_projection_parity(client: TestClient) -> None:
     assert _MCP_SUMMARY_OMIT.isdisjoint(mcp_search["items"][0])
 
     http_cols = client.get("/catalog/columns/search?q=id")
-    mcp_cols = json.loads(mcp_search_columns(authorization=auth, query_text="id"))
+    with mcp_authorization(auth):
+        mcp_cols = json.loads(mcp_search_columns(query_text="id"))
     assert http_cols.status_code == 200
     assert "error" not in mcp_cols, mcp_cols
     assert http_cols.json()["total"] == mcp_cols["total"]
@@ -443,14 +446,16 @@ def test_catalog_http_mcp_projection_parity(client: TestClient) -> None:
     assert "normalized_type" not in mcp_cols["items"][0]
 
     http_joins = client.get("/objects/obj_a/joins")
-    mcp_joins = json.loads(mcp_list_joins(authorization=auth, object_locator_key=locator))
+    with mcp_authorization(auth):
+        mcp_joins = json.loads(mcp_list_joins(object_locator_key=locator))
     assert http_joins.status_code == 200
     assert "error" not in mcp_joins, mcp_joins
     assert http_joins.json()["total"] == mcp_joins["total"] == 1
     assert http_joins.json()["items"][0]["id"] == mcp_joins["items"][0]["id"]
 
     http_ddl = client.get("/objects/obj_a/ddl")
-    mcp_ddl = json.loads(mcp_get_object_ddl(authorization=auth, object_locator_key=locator))
+    with mcp_authorization(auth):
+        mcp_ddl = json.loads(mcp_get_object_ddl(object_locator_key=locator))
     assert http_ddl.status_code == 200
     assert "error" not in mcp_ddl, mcp_ddl
     assert http_ddl.json()["id"] == mcp_ddl["id"]
@@ -459,7 +464,8 @@ def test_catalog_http_mcp_projection_parity(client: TestClient) -> None:
     assert mcp_ddl["locator_key"] == locator
 
     http_sources = client.get("/sources?limit=50")
-    mcp_sources = json.loads(mcp_search_sources(authorization=auth, limit=50))
+    with mcp_authorization(auth):
+        mcp_sources = json.loads(mcp_search_sources(limit=50))
     assert http_sources.status_code == 200
     assert "error" not in mcp_sources, mcp_sources
     assert http_sources.json()["total"] == mcp_sources["total"]
@@ -469,13 +475,14 @@ def test_catalog_http_mcp_projection_parity(client: TestClient) -> None:
     assert http_src["key"] == mcp_src["key"]
     assert http_src["locator_key"] == mcp_src["locator_key"]
 
-    filtered = json.loads(
-        mcp_search_sources(authorization=auth, query_text="mes", limit=50)
-    )
+    with mcp_authorization(auth):
+        filtered = json.loads(
+            mcp_search_sources(query_text="mes", limit=50)
+        )
+        miss = json.loads(
+            mcp_search_sources(query_text="zzz-no-such", limit=50)
+        )
     assert filtered["total"] == 1
-    miss = json.loads(
-        mcp_search_sources(authorization=auth, query_text="zzz-no-such", limit=50)
-    )
     assert miss["total"] == 0
 
 
@@ -693,11 +700,11 @@ def test_mcp_find_join_path_smoke(client: TestClient) -> None:
     tok = client.post("/tokens", json={"name": "path-pat", "expires_at": expires})
     assert tok.status_code == 201, tok.text
     secret = tok.json()["secret"]
-    payload = find_join_path(
-        authorization=f"Bearer {secret}",
-        start_locator_key=a.locator_key,
-        max_hops=1,
-    )
+    with mcp_authorization(f"Bearer {secret}"):
+        payload = find_join_path(
+            start_locator_key=a.locator_key,
+            max_hops=1,
+        )
     body = json.loads(payload)
     assert "error" not in body
     assert "paths_found" in body

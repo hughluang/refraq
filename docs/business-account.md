@@ -2,7 +2,7 @@
 
 ## 1. Scope
 
-This document defines **Account Center** rules: the current User’s self-service Console surface for profile, local password change, UI locale, **Display Timezone**, and **User PAT** management.
+This document defines **Account Center** rules: the current User’s self-service Console surface for profile, local password change, UI locale, **Display Timezone**, **User PAT** management, and the current User’s Metadata MCP connection.
 
 Related:
 
@@ -19,6 +19,7 @@ Platform system parameters remain under Console Module `settings` (`docs/api-con
 - It is registered in Console Module Identity as identity-only (`routes.list` null, `routes.show` `/console/account`) and does **not** appear in the sidebar navigation tree.
 - Any authenticated User with Console access may open Account Center; no extra permission is required for the shell, profile, password, locale, or Display Timezone self-service (`actions.show` → `console:access`).
 - **User PAT** create/list/deactivate/restore/soft-delete remains gated by `tokens:read` / `tokens:write` and is embedded as a section inside Account Center (not a sidebar nav item; module `routes.list` is null).
+- A Metadata MCP section follows User PAT on the same page. Any User who can open Account Center (`console:access`) sees the same-origin client configuration (URL plus a PAT placeholder) and the tools their Role can call (`GET /mcp/catalog`). The primary action copies that configuration; the page never fills a live token. URL-only copy is not sufficient.
 - Self-service mutates **only the caller’s** User; admin `/users` APIs continue to manage other Users via `users:*`.
 
 ## 3. Profile, Locale, And Display Timezone

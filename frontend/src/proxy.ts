@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import i18nConfig from "../i18n.config";
 import { browserFacingHostFromEnv } from "./lib/browser-facing-host";
 import { browserFacingProtoFromEnv } from "./lib/browser-facing-proto";
+import { isMcpPassthroughPath } from "./lib/mcp-proxy";
 import { isProtectedPath } from "./lib/route-scope";
 
 const PUBLIC_PATHS = new Set(["/login", "/403"]);
@@ -47,6 +48,10 @@ function apiRewriteWithTrustedProto(request: NextRequest): NextResponse {
 export function proxy(request: NextRequest): NextResponse {
   if (request.nextUrl.pathname.startsWith("/api")) {
     return apiRewriteWithTrustedProto(request);
+  }
+
+  if (isMcpPassthroughPath(request.nextUrl.pathname)) {
+    return NextResponse.next();
   }
 
   const i18nResponse = i18nProxy(requestWithoutAcceptLanguage(request));

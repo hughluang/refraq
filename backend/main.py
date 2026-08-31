@@ -51,6 +51,7 @@ from backend.jobs.api import bind_schedule_name_store
 from backend.jobs.routers.jobs import router as jobs_mechanism_router
 from backend.worker.routers.schedules import router as schedules_mechanism_router
 from backend.worker.schedules import get_schedule_store
+from backend.metadata.routers.mcp import router as metadata_mcp_router
 from backend.metadata.routers.business_domains import router as business_domains_router
 from backend.metadata.routers.catalog import router as metadata_catalog_router
 from backend.metadata.routers.query import router as metadata_query_router
@@ -172,6 +173,7 @@ app.include_router(type_mappings_router)
 app.include_router(metadata_schedules_router)
 app.include_router(structure_diffs_router)
 app.include_router(metadata_query_router)
+app.include_router(metadata_mcp_router)
 app.include_router(jobs_mechanism_router)
 app.include_router(schedules_mechanism_router)
 

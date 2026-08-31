@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict
 from datetime import datetime
 from typing import Any
 
-from mcp.server import MCPServer
+from mcp.server import CacheHint, MCPServer
+from mcp.types import Tool as MCPTool
 from mcp.types import ToolAnnotations
 
-from backend.admin.deps import resolve_pat_bearer, resolve_user_permissions
-from backend.admin.errors import AuthForbidden, AuthUnauthenticated
+from backend.admin.deps import resolve_user_permissions
+from backend.admin.errors import AuthForbidden
 from backend.admin.permissions import permissions_include
 from backend.admin.role_store import get_role_store
 from backend.admin.user_store import UserRecord, get_user_store
+from backend.metadata.mcp_actor import current_actor, mcp_authorization
+from backend.metadata.mcp_catalog import TOOLS_LIST_TTL_MS, tools_for_permissions
 from backend.core.errors import AppError
 from backend.core.pagination import (
     BUSINESS_DOMAIN_LIST,
@@ -52,13 +56,22 @@ from backend.worker.schedules import get_schedule_store
 # raises "schedule name store is not bound".
 bind_schedule_name_store(get_schedule_store)
 
-mcp = MCPServer("refraq-metadata")
 
-def _actor_from_token(authorization: str | None) -> tuple[UserRecord, str]:
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise AuthUnauthenticated()
-    token = authorization.split(" ", 1)[1].strip()
-    return resolve_pat_bearer(token)
+class RefraqMetadataMcp(MCPServer):
+    """Metadata MCP host: tools/list is cropped to the current PAT's Role."""
+
+    async def list_tools(self) -> list[MCPTool]:
+        tools = {tool.name: tool for tool in await super().list_tools()}
+        user, _token_id = current_actor()
+        perms = resolve_user_permissions(user, get_role_store())
+        return [tools[spec.name] for spec in tools_for_permissions(perms)]
+
+
+mcp = RefraqMetadataMcp(
+    "refraq-metadata",
+    cache_hints={"tools/list": CacheHint(ttl_ms=TOOLS_LIST_TTL_MS, scope="private")},
+)
+
 
 def _mcp_strip_empty(data: dict[str, Any]) -> dict[str, Any]:
     """Drop null / blank / empty collections so MCP stays additive (no clear)."""
@@ -115,14 +128,13 @@ def _join_payload_from_record(record: Any) -> dict[str, Any]:
 
 @mcp.tool()
 def search_sources(
-    authorization: str,
     query_text: str | None = None,
     limit: int | None = None,
     offset: int | None = None,
 ) -> str:
     """Search/list Sources (sources:read)."""
     try:
-        user, _token_id = _actor_from_token(authorization)
+        user, _token_id = current_actor()
         _require(user, "sources:read")
         lim = SOURCE_SEARCH.clamp(limit)
         off = max(0, int(offset or 0))
@@ -141,10 +153,10 @@ def search_sources(
         return _err(exc)
 
 @mcp.tool()
-def get_source(authorization: str, source_locator_key: str) -> str:
+def get_source(source_locator_key: str) -> str:
     """Get Source detail by locator (sources:read)."""
     try:
-        user, _token_id = _actor_from_token(authorization)
+        user, _token_id = current_actor()
         _require(user, "sources:read")
         s = catalog_refs.resolve_source_ref(source_locator_key)
         return _dumps(source_service.public_view(s))
@@ -153,7 +165,6 @@ def get_source(authorization: str, source_locator_key: str) -> str:
 
 @mcp.tool()
 def list_objects(
-    authorization: str,
     source_locator_key: str,
     q: str | None = None,
     object_type: str | None = None,
@@ -163,7 +174,7 @@ def list_objects(
 ) -> str:
     """List Catalog Objects under a Source locator (metadata:read)."""
     try:
-        user, _token_id = _actor_from_token(authorization)
+        user, _token_id = current_actor()
         _require(user, "metadata:read")
         source = catalog_refs.resolve_source_ref(source_locator_key)
         lim = CATALOG_OBJECT_LIST.clamp(limit)
@@ -188,10 +199,10 @@ def list_objects(
         return _err(exc)
 
 @mcp.tool()
-def get_object(authorization: str, object_locator_key: str) -> str:
+def get_object(object_locator_key: str) -> str:
     """Get Catalog Object with columns by locator (metadata:read)."""
     try:
-        user, _token_id = _actor_from_token(authorization)
+        user, _token_id = current_actor()
         _require(user, "metadata:read")
         view = catalog_reads.get_object(object_locator_key)
         return _dumps(_object_payload(view, include_columns=True))
@@ -199,10 +210,10 @@ def get_object(authorization: str, object_locator_key: str) -> str:
         return _err(exc)
 
 @mcp.tool()
-def get_object_ddl(authorization: str, object_locator_key: str) -> str:
+def get_object_ddl(object_locator_key: str) -> str:
     """Get stored DDL for a Catalog Object (metadata:read)."""
     try:
-        user, _token_id = _actor_from_token(authorization)
+        user, _token_id = current_actor()
         _require(user, "metadata:read")
         ddl = catalog_reads.get_object_ddl(object_locator_key)
         return _dumps({"id": ddl.id, "locator_key": ddl.locator_key, "ddl": ddl.ddl})
@@ -211,10 +222,10 @@ def get_object_ddl(authorization: str, object_locator_key: str) -> str:
 
 
 @mcp.tool()
-def get_job(authorization: str, job_id: str) -> str:
+def get_job(job_id: str) -> str:
     """Get Job status (jobs:run)."""
     try:
-        user, _token_id = _actor_from_token(authorization)
+        user, _token_id = current_actor()
         _require(user, "jobs:run")
         record = get_job_store().get(job_id)
         if record is None:
@@ -229,10 +240,10 @@ def get_job(authorization: str, job_id: str) -> str:
         return _err(exc)
 
 @mcp.tool()
-def get_object_semantics(authorization: str, object_locator_key: str) -> str:
+def get_object_semantics(object_locator_key: str) -> str:
     """Compact object semantics by locator (metadata:read)."""
     try:
-        user, _token_id = _actor_from_token(authorization)
+        user, _token_id = current_actor()
         _require(user, "metadata:read")
         view = catalog_semantics.get_object_semantics(object_locator_key)
         return _dumps(
@@ -257,7 +268,6 @@ def get_object_semantics(authorization: str, object_locator_key: str) -> str:
 
 @mcp.tool()
 def set_object_semantics(
-    authorization: str,
     object_locator_key: str,
     business_name: str | None = None,
     business_description: str | None = None,
@@ -270,7 +280,7 @@ def set_object_semantics(
 ) -> str:
     """Incremental object semantics write (metadata:write, semantic_source=mcp)."""
     try:
-        user, token_id = _actor_from_token(authorization)
+        user, token_id = current_actor()
         _require(user, "metadata:write")
         o = catalog_refs.resolve_object_ref(object_locator_key)
         data = _mcp_strip_empty(
@@ -305,13 +315,12 @@ def set_object_semantics(
 
 @mcp.tool()
 def set_column_semantics(
-    authorization: str,
     object_locator_key: str,
     columns: list[dict[str, Any]],
 ) -> str:
     """Batch column semantics under one object locator (metadata:write)."""
     try:
-        user, token_id = _actor_from_token(authorization)
+        user, token_id = current_actor()
         _require(user, "metadata:write")
         o = catalog_refs.resolve_object_ref(object_locator_key)
         stripped_columns: list[dict[str, Any]] = []
@@ -334,14 +343,13 @@ def set_column_semantics(
 
 @mcp.tool()
 def list_business_domains(
-    authorization: str,
     query_text: str | None = None,
     limit: int | None = None,
     offset: int | None = None,
 ) -> str:
     """List Business Domains (metadata:read)."""
     try:
-        user, _token_id = _actor_from_token(authorization)
+        user, _token_id = current_actor()
         _require(user, "metadata:read")
 
         lim = BUSINESS_DOMAIN_LIST.clamp(limit)
@@ -372,14 +380,13 @@ def list_business_domains(
 
 @mcp.tool()
 def create_business_domain(
-    authorization: str,
     code: str,
     name: str,
     description: str | None = None,
 ) -> str:
     """Create a Business Domain (metadata:write)."""
     try:
-        user, token_id = _actor_from_token(authorization)
+        user, token_id = current_actor()
         _require(user, "metadata:write")
 
         record = domain_service.create_domain(
@@ -406,7 +413,6 @@ def create_business_domain(
 
 @mcp.tool()
 def search_objects(
-    authorization: str,
     query_text: str | None = None,
     source_locator_key: str | None = None,
     object_type: str | None = None,
@@ -415,7 +421,7 @@ def search_objects(
 ) -> str:
     """Cross-Source object search (metadata:read)."""
     try:
-        user, _token_id = _actor_from_token(authorization)
+        user, _token_id = current_actor()
         _require(user, "metadata:read")
         source_id = None
         if source_locator_key:
@@ -442,7 +448,6 @@ def search_objects(
 
 @mcp.tool()
 def search_columns(
-    authorization: str,
     query_text: str,
     source_locator_key: str | None = None,
     object_type: str | None = None,
@@ -451,7 +456,7 @@ def search_columns(
 ) -> str:
     """Cross-Source column search (metadata:read)."""
     try:
-        user, _token_id = _actor_from_token(authorization)
+        user, _token_id = current_actor()
         _require(user, "metadata:read")
         source_id = None
         if source_locator_key:
@@ -480,14 +485,13 @@ def search_columns(
 
 @mcp.tool()
 def list_joins(
-    authorization: str,
     object_locator_key: str,
     limit: int | None = None,
     offset: int | None = None,
 ) -> str:
     """List joins for an object locator (metadata:read)."""
     try:
-        user, _token_id = _actor_from_token(authorization)
+        user, _token_id = current_actor()
         _require(user, "metadata:read")
         o = catalog_refs.resolve_object_ref(object_locator_key)
         lim = JOIN_LIST.clamp(limit)
@@ -506,7 +510,6 @@ def list_joins(
 
 @mcp.tool()
 def upsert_join(
-    authorization: str,
     from_column_locator_key: str,
     to_column_locator_key: str,
     evidence: str,
@@ -515,7 +518,7 @@ def upsert_join(
 ) -> str:
     """Create a join edge (metadata:write, Join Change attester mcp). Duplicate pairs are refused."""
     try:
-        user, token_id = _actor_from_token(authorization)
+        user, token_id = current_actor()
         _require(user, "metadata:write")
         from_col = catalog_refs.resolve_column_ref(from_column_locator_key)
         to_col = catalog_refs.resolve_column_ref(to_column_locator_key)
@@ -535,7 +538,6 @@ def upsert_join(
 
 @mcp.tool()
 def patch_join(
-    authorization: str,
     join_id: str,
     evidence: str,
     join_kind: str | None = "INNER",
@@ -543,7 +545,7 @@ def patch_join(
 ) -> str:
     """Amend a join edge (metadata:write). Does not change first attester."""
     try:
-        user, token_id = _actor_from_token(authorization)
+        user, token_id = current_actor()
         _require(user, "metadata:write")
         record = catalog_joins.amend_join(
             join_id=join_id,
@@ -558,10 +560,10 @@ def patch_join(
         return _err(exc)
 
 @mcp.tool()
-def reject_join(authorization: str, join_id: str) -> str:
+def reject_join(join_id: str) -> str:
     """Reject a join pair (metadata:write). Blocks every writer until restore."""
     try:
-        user, token_id = _actor_from_token(authorization)
+        user, token_id = current_actor()
         _require(user, "metadata:write")
         record = catalog_joins.reject_join(
             join_id=join_id,
@@ -573,10 +575,10 @@ def reject_join(authorization: str, join_id: str) -> str:
         return _err(exc)
 
 @mcp.tool()
-def restore_join(authorization: str, join_id: str) -> str:
+def restore_join(join_id: str) -> str:
     """Lift Join Rejection (metadata:write)."""
     try:
-        user, token_id = _actor_from_token(authorization)
+        user, token_id = current_actor()
         _require(user, "metadata:write")
         record = catalog_joins.restore_join(
             join_id=join_id,
@@ -589,7 +591,6 @@ def restore_join(authorization: str, join_id: str) -> str:
 
 @mcp.tool()
 def upsert_joins(
-    authorization: str,
     joins: list[dict[str, Any]],
 ) -> str:
     """Batch upsert joins; all same Source (metadata:write, Join Change attester mcp).
@@ -599,7 +600,7 @@ def upsert_joins(
     change evidence after restore, call patch_join.
     """
     try:
-        user, token_id = _actor_from_token(authorization)
+        user, token_id = current_actor()
         _require(user, "metadata:write")
         normalized: list[dict[str, Any]] = []
         skipped_joins: list[dict[str, Any]] = []
@@ -663,10 +664,10 @@ def upsert_joins(
         return _err(exc)
 
 @mcp.tool()
-def delete_join(authorization: str, join_id: str) -> str:
+def delete_join(join_id: str) -> str:
     """Remove a human-created, non-rejected edge by id (metadata:write). Delete does not stop automatic re-detection; use reject_join to keep a pair out."""
     try:
-        user, token_id = _actor_from_token(authorization)
+        user, token_id = current_actor()
         _require(user, "metadata:write")
         catalog_joins.delete_join(
             join_id=join_id,
@@ -679,7 +680,6 @@ def delete_join(authorization: str, join_id: str) -> str:
 
 @mcp.tool()
 def find_join_path(
-    authorization: str,
     start_locator_key: str,
     target_locator_key: str | None = None,
     max_hops: int | None = None,
@@ -687,7 +687,7 @@ def find_join_path(
 ) -> str:
     """Join path lookup from start locator (metadata:read)."""
     try:
-        user, _token_id = _actor_from_token(authorization)
+        user, _token_id = current_actor()
         _require(user, "metadata:read")
         result = catalog_reads.lookup_join_paths(
             start_locator_key,
@@ -718,14 +718,13 @@ def find_join_path(
     annotations=ToolAnnotations(read_only_hint=True),
 )
 def run_sql(
-    authorization: str,
     source_locator_key: str,
     sql: str,
     max_rows: int | None = None,
 ) -> str:
     """Run a single read-only SELECT against a Source (query:run)."""
     try:
-        user, token_id = _actor_from_token(authorization)
+        user, token_id = current_actor()
         _require(user, "query:run")
         source = catalog_refs.resolve_source_ref(source_locator_key)
         outcome = query_service.run_controlled_query(
@@ -747,7 +746,13 @@ def run_sql(
         return _err(exc)
 
 def main() -> None:
-    mcp.run()
+    """stdio entry for local/tests. Product port is HTTP (`mcp_http`)."""
+    secret = os.environ.get("REFRAQ_MCP_PAT", "").strip()
+    if not secret:
+        mcp.run()
+        return
+    with mcp_authorization(f"Bearer {secret}"):
+        mcp.run()
 
 if __name__ == "__main__":
     main()

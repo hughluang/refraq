@@ -158,6 +158,7 @@ Avoid calling it a User PAT, a Bearer token, or a permanent login.
 
 A personal access token owned by a User for non-browser API and MCP access (`Authorization: Bearer`); may be deactivated (restorable) or soft-deleted.
 Coexists with Console Session cookies; authenticates the same User and Role permissions.
+Console operator copy uses **personal access token**. Do not show PAT or User PAT on screen.
 Avoid calling it a Client token, a Session id reused as Bearer, or a machine principal.
 
 ### Display Timezone
@@ -167,9 +168,14 @@ Avoid Schedule Timezone, worker process timezone, or treating the preference as 
 
 ### Account Center
 
-The current User’s self-service Console surface for profile, local password change, UI locale, **Display Timezone**, and User PAT management.
+The current User’s self-service Console surface for profile, local password change, UI locale, **Display Timezone**, User PAT management, and the current User’s Metadata MCP connection.
 Registered in Console Module Identity as identity-only (`routes.list` null; `routes.show` `/console/account`); not a structural Console Module in the side nav.
 Avoid conflating with **Platform Settings** / **System Parameter**, or treating User PAT as a sidebar Administration module.
+
+### MCP endpoint
+
+The product Metadata MCP port: Console-origin path `/mcp`, User PAT in the HTTP `Authorization` header, Streamable HTTP (2026-07-28). One shared host, not a per-User listen port. Process `readyz` is not this URL.
+Avoid treating it as a second public origin, a Session-authenticated Console API, or a tool argument named `authorization`.
 
 ### Backing Service
 

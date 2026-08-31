@@ -42,6 +42,7 @@ This document records the stable development conventions for contributors workin
 - Copy env: `cp backend/.env.example backend/.env` (and point URLs at Compose)
 - Foundation Upgrade (schema + System Role identity ensure, no serve): `python -m backend.core.upgrade`
 - Official start (upgrade then serve): `python -m backend.core.entry`
+- MCP HTTP (same env as API; local bind `127.0.0.1:8001`): `python -m backend.metadata.mcp_http`
 - Dev reload after schema is current: `uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000`
   - Direct `uvicorn` runs **Site Bootstrap** only (empty stores). It does not run schema migrate or System Role identity ensure, and it does not start or reload Celery.
   - After schema changes, run `python -m backend.core.upgrade` (or use `entry`), then restart worker and Beat (`docs/env.md` §8). Super Admin effective permissions follow the Permission catalog by identity; adding a catalog key does not require Upgrade for Super Admin authz.
@@ -65,8 +66,8 @@ This document records the stable development conventions for contributors workin
 - GitHub Actions builds **linux/amd64** images and pushes `ghcr.io/hughluang/refraq-api:<version>` and `ghcr.io/hughluang/refraq-web:<version>` (tag without the `v`). The same tag creates a GitHub Release that attaches `docker-compose.yaml` and `.env.example`. Other architectures are not published.
 - A site directory lives outside the git tree. Copy the two Release files (or the templates under `deploy/`), set live secrets, and set `REFRAQ_VERSION` to that version. Do not keep the live `.env` in the repository. Compose project name is `refraq-prod` (`deploy/compose.yaml`).
 - Start: `docker compose pull && docker compose up -d`. Upgrade or roll back by changing `REFRAQ_VERSION` and repeating. Do not `docker compose down -v` unless the site data should be destroyed. Worker and Beat must use the same version as the API.
-- Browser reaches the web service on host port `3001` (`REFRAQ_WEB_PORT`); `/api` is rewritten to the internal API service named `api`. Keep local `next dev` on `127.0.0.1:3000`.
-- Published web images bake `REFRAQ_API_UPSTREAM=http://api:8000` at build time. The site compose also sets the same value at runtime for server-rendering (Site Branding).
+- Browser reaches the web service on host port `3001` (`REFRAQ_WEB_PORT`); `/api` is rewritten to the internal API service named `api`; `/mcp` is streamed to the internal MCP service named `mcp` (`REFRAQ_MCP_UPSTREAM`). Keep local `next dev` on `127.0.0.1:3000` and run `python -m backend.metadata.mcp_http` so Account Center's copied `{origin}/mcp` works.
+- Published web images bake `REFRAQ_API_UPSTREAM=http://api:8000` at build time. The site compose also sets the same value at runtime for server-rendering (Site Branding) and sets `REFRAQ_MCP_UPSTREAM=http://mcp:8001`. Compose does not publish the MCP port.
 
 ## Suggested Reading Order
 

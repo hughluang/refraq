@@ -15,6 +15,8 @@ Current `backend/.env.example` defines:
 - `REFRAQ_ENV=dev`
 - `REFRAQ_API_HOST=127.0.0.1`
 - `REFRAQ_API_PORT=8000`
+- `REFRAQ_MCP_HOST=127.0.0.1` (MCP process bind; local default localhost)
+- `REFRAQ_MCP_PORT=8001`
 - `REFRAQ_STORE_BACKEND=persistent`
 - `TZ=UTC` (process timezone default; override via standard `TZ` only)
 - `DATABASE_URL=postgresql+psycopg://refraq:refraq@127.0.0.1:5432/refraq`
@@ -43,6 +45,8 @@ Current `frontend/.env.example` defines:
 
 - `NEXT_PUBLIC_REFRAQ_API_BASE_URL=/api`
 - `REFRAQ_API_UPSTREAM=http://127.0.0.1:8000`
+- `REFRAQ_MCP_UPSTREAM=http://127.0.0.1:8001` (web Route Handler streams `/mcp` here; never expose `readyz`)
+- `REFRAQ_QUERY_TIMEOUT_SEC=30` (web `/mcp` wait is this value plus margin; must match backend query timeout)
 - `NEXT_PUBLIC_DEFAULT_LOCALE=en-US`
 
 `REFRAQ_API_UPSTREAM` has matching build-time and runtime duties. Next.js reads it at build time to compile browser `/api` rewrites. Server-only frontend code reads it at runtime for direct SSR calls such as public Site Branding. Local `next dev` uses the env file. Published web images bake `http://api:8000` as a Docker build argument; the site compose also sets the same runtime value.
@@ -69,13 +73,16 @@ Published images are **linux/amd64** only (`ghcr.io/hughluang/refraq-api:<versio
 
 - backend host: `127.0.0.1`
 - backend port: `8000`
+- MCP process: `127.0.0.1:8001` (`python -m backend.metadata.mcp_http`)
 - browser API base URL: `/api` (same-origin)
+- browser MCP URL: `{origin}/mcp` (same-origin; Account Center copies this)
 - Next.js rewrite upstream: `http://127.0.0.1:8000` (dev)
+- Next.js `/mcp` stream upstream: `http://127.0.0.1:8001` (`REFRAQ_MCP_UPSTREAM`)
 - Next.js server-rendering API upstream: `http://127.0.0.1:8000` (dev)
 
 The browser talks to the backend through a Next.js rewrite so the session cookie is set on the frontend origin and `proxy.ts` can see `refraq_sid`. Server-only rendering code calls the same upstream directly through `REFRAQ_API_UPSTREAM`; it does not make a loopback request to the Next.js server. URLs emitted into HTML remain browser-facing same-origin paths and never expose this internal upstream.
 
-Site compose exposes only the web service to browsers; the API stays on the internal network and must be named `api`. The host port defaults to `3001` (`REFRAQ_WEB_PORT`) so a local Console on `127.0.0.1:3000` can keep running. Bind local `next dev` to `127.0.0.1` so the office network cannot open the sandbox Console.
+Site compose exposes only the web service to browsers; the API stays on the internal network and must be named `api`. The MCP process is the same api image with `python -m backend.metadata.mcp_http`; compose names it `mcp` and does **not** publish its port. Web streams `{origin}/mcp` to `REFRAQ_MCP_UPSTREAM` (`http://mcp:8001` on site). Process `readyz` is compose-internal only. The copied Account Center URL is the Console origin plus `/mcp`; there is no second public MCP hostname. The host port defaults to `3001` (`REFRAQ_WEB_PORT`) so a local Console on `127.0.0.1:3000` can keep running. Bind local `next dev` to `127.0.0.1` so the office network cannot open the sandbox Console.
 
 Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for `/api` overwrites `X-Forwarded-Proto` from `REFRAQ_BROWSER_FACING_PROTO` (default `http`) and `X-Forwarded-Host` from `REFRAQ_BROWSER_FACING_HOST` when set, otherwise from a loopback request Host; it does not pass through client-supplied public Hosts. The API then reads those stamped headers (then a loopback request Host). `REFRAQ_ENV=prod` does not force `Secure`. HTTP sites must keep the Session; set `REFRAQ_BROWSER_FACING_PROTO=https` on web when TLS terminates in front of the Console. Set `REFRAQ_BROWSER_FACING_HOST` on web and API to the browser-facing Console host when it is not loopback.
 
@@ -86,6 +93,8 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - `REFRAQ_ENV`
 - `REFRAQ_API_HOST`
 - `REFRAQ_API_PORT`
+- `REFRAQ_MCP_HOST` (MCP process bind; local default `127.0.0.1`)
+- `REFRAQ_MCP_PORT` (MCP process port; default `8001`)
 - `REFRAQ_STORE_BACKEND` (`persistent` default; `memory` tests only)
 - `TZ` (process timezone; default UTC in examples/images; not `APP_TIMEZONE`)
 - `DATABASE_URL` (required when `persistent`)
@@ -107,6 +116,8 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 
 - `NEXT_PUBLIC_REFRAQ_API_BASE_URL` (browser-facing base; default `/api`)
 - `REFRAQ_API_UPSTREAM` (internal backend origin; build-time rewrite target and runtime server-rendering target; never exposed to browser code)
+- `REFRAQ_MCP_UPSTREAM` (internal MCP origin; runtime stream target for `/mcp` only; never `readyz`)
+- `REFRAQ_QUERY_TIMEOUT_SEC` (web `/mcp` wait floor plus margin; keep aligned with backend)
 - `NEXT_PUBLIC_DEFAULT_LOCALE`
 - `REFRAQ_BROWSER_FACING_PROTO` (`http` | `https`; default `http`) — stamped onto `/api` rewrite as `X-Forwarded-Proto` for Session `Secure`; set `https` when TLS terminates in front of the Console
 - `REFRAQ_BROWSER_FACING_HOST` (optional; host or `host:port`, no scheme) — stamped onto `/api` rewrite as `X-Forwarded-Host` for OIDC callback origin; when unset, only a loopback request Host is stamped
@@ -119,6 +130,7 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - `REFRAQ_BROWSER_FACING_PROTO` (optional; forwarded to web; default `http`)
 - `REFRAQ_BROWSER_FACING_HOST` (optional; forwarded to web and API; browser-facing Console host or `host:port`)
 - `REFRAQ_API_UPSTREAM` (web build argument and web runtime environment; both use the internal API origin `http://api:8000` on a site)
+- `REFRAQ_MCP_UPSTREAM` (web runtime; site value `http://mcp:8001`; not a public origin)
 
 ## 5. Process timezone (`TZ`)
 

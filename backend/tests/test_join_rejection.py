@@ -38,6 +38,7 @@ from backend.metadata.catalog.structure_refresh import apply_structure_snapshot 
 from backend.metadata.join_detection_jobs.reconcile import build_join_detection_plan  # noqa: E402
 from backend.metadata.join_detection_jobs.resolver import ResolvedJoin  # noqa: E402
 from backend.metadata.join_detection_jobs.service import run_join_detection_job  # noqa: E402
+from backend.metadata.mcp_actor import mcp_authorization  # noqa: E402
 from backend.metadata.mcp_server import patch_join as mcp_patch_join  # noqa: E402
 from backend.metadata.mcp_server import reject_join as mcp_reject_join  # noqa: E402
 from backend.metadata.mcp_server import restore_join as mcp_restore_join  # noqa: E402
@@ -525,13 +526,10 @@ def test_mcp_reject_and_restore(client: TestClient) -> None:
     tok = client.post("/tokens", json={"name": "rej-pat", "expires_at": expires})
     assert tok.status_code == 201, tok.text
     secret = tok.json()["secret"]
-    rejected = json.loads(
-        mcp_reject_join(authorization=f"Bearer {secret}", join_id=join_id)
-    )
+    with mcp_authorization(f"Bearer {secret}"):
+        rejected = json.loads(mcp_reject_join(join_id=join_id))
+        restored = json.loads(mcp_restore_join(join_id=join_id))
     assert rejected["join"]["is_rejected"] is True
-    restored = json.loads(
-        mcp_restore_join(authorization=f"Bearer {secret}", join_id=join_id)
-    )
     assert restored["join"]["is_rejected"] is False
 
 
@@ -620,18 +618,18 @@ def test_mcp_upsert_joins_reports_rejected_then_restore_patch(
     secret = tok.json()["secret"]
     auth = f"Bearer {secret}"
 
-    reported = json.loads(
-        mcp_upsert_joins(
-            authorization=auth,
-            joins=[
-                {
-                    "from_column_id": a,
-                    "to_column_id": b,
-                    "evidence": "agent-still-thinks-valid",
-                }
-            ],
+    with mcp_authorization(auth):
+        reported = json.loads(
+            mcp_upsert_joins(
+                joins=[
+                    {
+                        "from_column_id": a,
+                        "to_column_id": b,
+                        "evidence": "agent-still-thinks-valid",
+                    }
+                ],
+            )
         )
-    )
     assert reported["created_count"] == 0
     assert reported["already_known_count"] == 0
     assert reported["rejected_count"] == 1
@@ -639,40 +637,41 @@ def test_mcp_upsert_joins_reports_rejected_then_restore_patch(
     assert reported["items"][0]["is_rejected"] is True
     assert reported["items"][0]["evidence"] == "guess"
 
-    blocked = json.loads(
-        mcp_patch_join(
-            authorization=auth,
-            join_id=join_id,
-            evidence="too-soon",
+    with mcp_authorization(auth):
+        blocked = json.loads(
+            mcp_patch_join(
+                join_id=join_id,
+                evidence="too-soon",
+            )
         )
-    )
     assert blocked["error"]["code"] == "JOIN_REJECTED"
 
-    restored = json.loads(mcp_restore_join(authorization=auth, join_id=join_id))
+    with mcp_authorization(auth):
+        restored = json.loads(mcp_restore_join(join_id=join_id))
     assert restored["join"]["is_rejected"] is False
 
-    patched = json.loads(
-        mcp_patch_join(
-            authorization=auth,
-            join_id=join_id,
-            evidence="agent-confirmed",
+    with mcp_authorization(auth):
+        patched = json.loads(
+            mcp_patch_join(
+                join_id=join_id,
+                evidence="agent-confirmed",
+            )
         )
-    )
     assert patched["join"]["evidence"] == "agent-confirmed"
     assert patched["join"]["is_rejected"] is False
 
-    known = json.loads(
-        mcp_upsert_joins(
-            authorization=auth,
-            joins=[
-                {
-                    "from_column_id": a,
-                    "to_column_id": b,
-                    "evidence": "will-not-overwrite",
-                }
-            ],
+    with mcp_authorization(auth):
+        known = json.loads(
+            mcp_upsert_joins(
+                joins=[
+                    {
+                        "from_column_id": a,
+                        "to_column_id": b,
+                        "evidence": "will-not-overwrite",
+                    }
+                ],
+            )
         )
-    )
     assert known["already_known_count"] == 1
     assert known["rejected_count"] == 0
     assert known["items"][0]["evidence"] == "agent-confirmed"

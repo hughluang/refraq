@@ -122,7 +122,9 @@ Responsibilities:
 - Business Domain registry (global flat entity referenced by catalog objects)
 - Type Mapping registry (global engine + native type → Normalized Type; product seeds via Upgrade)
 - Domain use-case HTTP under `metadata/routers/` and shapes under `metadata/schemas/` (adapters only: auth + transport)
+- MCP tool catalog (`mcp_catalog.py`) shared by `GET /mcp/catalog` and `tools/list`
 - MCP tool handlers (`backend/metadata/mcp_server.py`) that delegate to the same services
+- Product MCP HTTP process (`python -m backend.metadata.mcp_http`): Streamable HTTP at `/mcp`, PAT header only, intranet `GET /readyz`
 
 Must not contain:
 
@@ -343,3 +345,4 @@ For the login/permission slice, each concern should land here:
 - Catalog Sample HTTP: `frontend/src/features/sources/api/sample.ts`; Console ACL is identity action `sample` (`catalog:sample`)
 - Structure Diff HTTP: `frontend/src/features/sources/api/structure-diffs.ts`
 - Catalog Object Console logic: `frontend/src/features/sources/catalog-detail/` (`sampleFilters`, `columnDrafts`, `joinEdges`, `catalogStatus`)
+- Account Center MCP section: `frontend/src/features/account/McpSection.tsx` (catalog HTTP + copied `{origin}/mcp` config); same-origin `/mcp` stream: `frontend/src/app/mcp/route.ts`

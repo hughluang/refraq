@@ -400,12 +400,14 @@ def test_mcp_run_sql_success_and_forbidden(
     assert tok.status_code == 201, tok.text
     secret = tok.json()["secret"]
 
-    raw = run_sql(
-        authorization=f"Bearer {secret}",
-        source_locator_key=source["locator_key"],
-        sql="SELECT 1 AS c",
-        max_rows=10,
-    )
+    from backend.metadata.mcp_actor import mcp_authorization
+
+    with mcp_authorization(f"Bearer {secret}"):
+        raw = run_sql(
+            source_locator_key=source["locator_key"],
+            sql="SELECT 1 AS c",
+            max_rows=10,
+        )
     payload = json.loads(raw)
     assert payload["columns"] == ["c"]
     assert payload["rows"] == [["ok"]]
@@ -421,12 +423,11 @@ def test_mcp_run_sql_success_and_forbidden(
         status="active",
     )
 
-    def _fake_actor(_authorization: str | None) -> tuple[UserRecord, str]:
+    def _fake_actor() -> tuple[UserRecord, str]:
         return op_user, "tok_fake"
 
-    monkeypatch.setattr(mcp_mod, "_actor_from_token", _fake_actor)
+    monkeypatch.setattr(mcp_mod, "current_actor", _fake_actor)
     forbidden = run_sql(
-        authorization="Bearer unused",
         source_locator_key=source["locator_key"],
         sql="SELECT 1",
     )

@@ -24,6 +24,24 @@
       "preLaunchTask": "free-port-12000"
     },
     {
+      "name": "MCP: HTTP (streamable)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "module": "backend.metadata.mcp_http",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/backend/.env",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
+        "VIRTUAL_ENV": "${workspaceFolder}/.venv",
+        "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}",
+        "REFRAQ_MCP_HOST": "127.0.0.1",
+        "REFRAQ_MCP_PORT": "8001"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
       "name": "Celery: Worker",
       "type": "debugpy",
       "request": "launch",
@@ -121,11 +139,12 @@
       "stopAll": true
     },
     {
-      "name": "API + Worker + Beat",
+      "name": "API + Worker + Beat + MCP",
       "configurations": [
         "FastAPI: Run Server (uvicorn)",
         "Celery: Worker",
-        "Celery: Beat"
+        "Celery: Beat",
+        "MCP: HTTP (streamable)"
       ],
       "stopAll": true
     }

@@ -102,18 +102,54 @@ services:
       api:
         condition: service_healthy
 
+  mcp:
+    image: ghcr.io/hughluang/refraq-api:${REFRAQ_VERSION}
+    command: ["python", "-m", "backend.metadata.mcp_http"]
+    environment:
+      REFRAQ_ENV: prod
+      REFRAQ_STORE_BACKEND: persistent
+      REFRAQ_MCP_HOST: 0.0.0.0
+      REFRAQ_MCP_PORT: 8001
+      TZ: UTC
+      DATABASE_URL: postgresql+psycopg://refraq:${POSTGRES_PASSWORD}@postgres:5432/refraq
+      REDIS_URL: redis://redis:6379/0
+      REFRAQ_SECRETS_MASTER_KEY: ${REFRAQ_SECRETS_MASTER_KEY}
+      REFRAQ_QUERY_TIMEOUT_SEC: ${REFRAQ_QUERY_TIMEOUT_SEC:-30}
+      REFRAQ_QUERY_MAX_ROWS: ${REFRAQ_QUERY_MAX_ROWS:-1000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/readyz')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
   web:
     image: ghcr.io/hughluang/refraq-web:${REFRAQ_VERSION}
     environment:
       HOSTNAME: 0.0.0.0
       PORT: 3000
       REFRAQ_API_UPSTREAM: http://api:8000
+      REFRAQ_MCP_UPSTREAM: http://mcp:8001
+      REFRAQ_QUERY_TIMEOUT_SEC: ${REFRAQ_QUERY_TIMEOUT_SEC:-30}
       REFRAQ_BROWSER_FACING_PROTO: ${REFRAQ_BROWSER_FACING_PROTO:-http}
       REFRAQ_BROWSER_FACING_HOST: ${REFRAQ_BROWSER_FACING_HOST:-}
     ports:
       - "${REFRAQ_WEB_PORT:-3001}:3000"
     depends_on:
       api:
+        condition: service_healthy
+      mcp:
         condition: service_healthy
 
 volumes:

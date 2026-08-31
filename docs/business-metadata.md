@@ -48,7 +48,7 @@ Foundation P0 delivered people, permissions, and Console mount contract. Product
 3. **Long work never blocks the API process** — enqueue **Jobs**; workers execute.
 4. **Credentials are secrets** — the whole access document is encrypted at rest in Postgres; read APIs strip `x-secret` fields; write/edit APIs may return the full decrypted tree; never written to a **System Parameter** or logs.
 5. **Backend Permission catalog is authoritative** for Console, REST, and MCP.
-6. **MCP authenticates a User** (Session or User PAT), not an anonymous service key and not a Client in this phase.
+6. **HTTP MCP authenticates a User via User PAT only**, not a Session cookie, not an anonymous service key, and not a Client in this phase. Account Center catalog HTTP still accepts Session or PAT.
 7. **Write honesty** for semantics and joins — evidence-backed join edges; incomplete understanding stays incomplete (open questions allowed); do not invent business meaning.
 8. **Controlled query is read-only** with platform guards, not a general SQL console.
 9. **Kind extensibility** — slice A implements Source `kind=database` only; other Source kinds are planned extension points, not delivered in this phase.
@@ -482,9 +482,9 @@ Rules:
 ## 12. MCP
 
 - MCP tools are a first-class product surface backed by the same domain services and Permissions as HTTP APIs.
-- Authentication: User Session (where applicable) or **User PAT** Bearer.
-- Tool availability follows slices (structure read in A; semantics write in B; joins in C; query in D).
-- Contract detail: `docs/api-contracts-metadata-mcp.md`.
+- The product port is Console-origin `/mcp` (independent MCP process). HTTP MCP authenticates a **User PAT** in the `Authorization` header only. Session is not an MCP caller.
+- Account Center and Agent `tools/list` show the same Permission-cropped catalog. `GET /mcp/catalog` is the HTTP read.
+- Contract detail: `docs/api-contracts-metadata-mcp.md`. Topology: `docs/architecture.md`, `docs/env.md`.
 
 ## 13. Management Audit
 
