@@ -22,6 +22,7 @@
   "layout.navGroup.settings": "Platform settings",
   "account.title": "Account",
   "account.description": "Manage your profile, UI language, local password, personal access tokens, and MCP access.",
+  "account.jump.nav": "On this page",
   "account.section.identity": "Identity",
   "account.section.profile": "Profile, language, and time",
   "account.section.password": "Change password",

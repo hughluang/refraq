@@ -4,13 +4,13 @@ import { Anchor, Breadcrumbs, Text } from "@mantine/core";
 import { useBreadcrumb, useTranslate } from "@refinedev/core";
 import Link from "next/link";
 
-const MIN_ITEMS = 2;
+import { shouldRenderBreadcrumbTrail } from "@/components/layout/breadcrumb-trail";
 
 export function PageBreadcrumb() {
   const t = useTranslate();
   const { breadcrumbs } = useBreadcrumb();
 
-  if (breadcrumbs.length < MIN_ITEMS) {
+  if (!shouldRenderBreadcrumbTrail(breadcrumbs)) {
     return null;
   }
 
@@ -19,8 +19,7 @@ export function PageBreadcrumb() {
       <Breadcrumbs>
         {breadcrumbs.map((item, index) => {
           const isLast = index === breadcrumbs.length - 1;
-          // Resource crumbs keep meta.label as i18n keys; action crumbs are already translated.
-          const label = item.href ? t(item.label) : item.label;
+          const label = t(item.label);
 
           if (isLast || !item.href) {
             return (

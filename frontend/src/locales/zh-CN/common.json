@@ -22,6 +22,7 @@
   "layout.navGroup.settings": "平台设置",
   "account.title": "个人中心",
   "account.description": "管理个人资料、界面语言、本地密码、个人访问令牌与 MCP 接入。",
+  "account.jump.nav": "本页",
   "account.section.identity": "身份",
   "account.section.profile": "资料、语言与时间",
   "account.section.password": "修改密码",

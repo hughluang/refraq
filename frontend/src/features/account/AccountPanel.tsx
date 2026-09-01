@@ -21,6 +21,8 @@ import { useEffect, useMemo, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
 import { PageChrome } from "@/components/layout/PageChrome";
+import { AccountSectionNav } from "@/features/account/AccountSectionNav";
+import { ACCOUNT_SECTION } from "@/features/account/account-sections";
 import { patchAccountProfile } from "@/features/account/api";
 import { PasswordSection } from "@/features/account/PasswordSection";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
@@ -148,81 +150,90 @@ export function AccountPanel() {
       title={t("account.title")}
       description={t("account.description")}
     >
-      <Stack gap="xl">
-        <Stack gap="sm">
-          <Title order={4}>{t("account.section.identity")}</Title>
-          <DisplayField
-            label={t("account.fields.account")}
-            value={identity?.account}
-          />
-          <DisplayField
-            label={t("account.fields.role")}
-            value={identity?.role_name ?? t("users.roles.none")}
-          />
-          <DisplayField
-            label={t("account.fields.identitySource")}
-            value={
-              identity?.identity_source
-                ? t(`identitySource.${identity.identity_source}`)
-                : undefined
-            }
-          />
-        </Stack>
+      <Group align="flex-start" wrap="nowrap" gap="xl">
+        <Stack gap="xl" style={{ flex: 1, minWidth: 0 }}>
+          <Stack id={ACCOUNT_SECTION.profile} gap="xl">
+            <Stack gap="sm">
+              <Title order={4}>{t("account.section.identity")}</Title>
+              <DisplayField
+                label={t("account.fields.account")}
+                value={identity?.account}
+              />
+              <DisplayField
+                label={t("account.fields.role")}
+                value={identity?.role_name ?? t("users.roles.none")}
+              />
+              <DisplayField
+                label={t("account.fields.identitySource")}
+                value={
+                  identity?.identity_source
+                    ? t(`identitySource.${identity.identity_source}`)
+                    : undefined
+                }
+              />
+            </Stack>
 
-        <Divider />
-
-        <form onSubmit={profileForm.onSubmit(onSaveProfile)}>
-          <Stack gap="sm">
-            <Title order={4}>{t("account.section.profile")}</Title>
-            <TextInput
-              label={t("account.fields.displayName")}
-              withAsterisk
-              {...profileForm.getInputProps("display_name")}
-            />
-            <TextInput
-              label={t("account.fields.email")}
-              description={t("account.fields.email.hint")}
-              {...profileForm.getInputProps("email")}
-            />
-            <Select
-              label={t("account.fields.locale")}
-              data={LOCALE_SELECT_DATA}
-              allowDeselect={false}
-              {...profileForm.getInputProps("locale")}
-            />
-            <Select
-              label={t("account.fields.displayTimezone")}
-              description={t("account.fields.displayTimezone.hint")}
-              data={timezoneSelectData}
-              searchable
-              allowDeselect={false}
-              {...profileForm.getInputProps("display_timezone")}
-            />
-            <Group justify="flex-end">
-              <Button type="submit" loading={savingProfile}>
-                {t("account.profile.save")}
-              </Button>
-            </Group>
-          </Stack>
-        </form>
-
-        {isLocal ? (
-          <>
             <Divider />
-            <PasswordSection />
-          </>
-        ) : null}
 
-        <Divider />
+            <form onSubmit={profileForm.onSubmit(onSaveProfile)}>
+              <Stack gap="sm">
+                <Title order={4}>{t("account.section.profile")}</Title>
+                <TextInput
+                  label={t("account.fields.displayName")}
+                  withAsterisk
+                  {...profileForm.getInputProps("display_name")}
+                />
+                <TextInput
+                  label={t("account.fields.email")}
+                  description={t("account.fields.email.hint")}
+                  {...profileForm.getInputProps("email")}
+                />
+                <Select
+                  label={t("account.fields.locale")}
+                  data={LOCALE_SELECT_DATA}
+                  allowDeselect={false}
+                  {...profileForm.getInputProps("locale")}
+                />
+                <Select
+                  label={t("account.fields.displayTimezone")}
+                  description={t("account.fields.displayTimezone.hint")}
+                  data={timezoneSelectData}
+                  searchable
+                  allowDeselect={false}
+                  {...profileForm.getInputProps("display_timezone")}
+                />
+                <Group justify="flex-end">
+                  <Button type="submit" loading={savingProfile}>
+                    {t("account.profile.save")}
+                  </Button>
+                </Group>
+              </Stack>
+            </form>
 
-        <CanAccess resource={ModuleId.tokens} action={ModuleAction.list}>
-          <TokenList />
-        </CanAccess>
+            {isLocal ? (
+              <>
+                <Divider />
+                <PasswordSection />
+              </>
+            ) : null}
+          </Stack>
 
-        <Divider />
+          <Divider />
 
-        <McpSection />
-      </Stack>
+          <CanAccess resource={ModuleId.tokens} action={ModuleAction.list}>
+            <div id={ACCOUNT_SECTION.tokens}>
+              <TokenList />
+            </div>
+          </CanAccess>
+
+          <Divider />
+
+          <div id={ACCOUNT_SECTION.mcp}>
+            <McpSection />
+          </div>
+        </Stack>
+        <AccountSectionNav />
+      </Group>
     </PageChrome>
   );
 }

@@ -13,6 +13,8 @@ Related: `docs/business-management-console.md`, `docs/development.md`, `docs/con
 3. **Header action buttons use `size="sm"`** so every page header reads the same height. Page-level create (navigate to `/new` or open a create modal) goes through `CreateListAction`. Destructive confirmations go through `ConfirmActionModal` (optional `children` for extra fields such as a cascade checkbox).
 4. **Content toolbars hold filter controls only** (source selectors, search inputs, a clear-filters control). Action buttons belong to the header `actions` slot, not to toolbars. A clear-filters control is a filter control: it belongs in the toolbar and is visible only when a filter is off its default.
 5. **Paged Offset Page tables use `ListTable`** (`frontend/src/components/display/ListTable.tsx`), which binds a paged-list session to status, retry, and `ListPager` (`frontend/src/components/display/ListPager.tsx`). Count text always renders; page numbers render only when there is more than one page. Do not hand-roll prev/next buttons or a second pager for an **Offset Page**. Pages do not set `Table` appearance props on the list table.
+6. **Breadcrumb labels from module `label_key` (Refine `meta.label`) are i18n keys and are translated at display** (`frontend/src/components/layout/PageBreadcrumb.tsx`). `href` is a navigation affordance only; it does not decide whether a label is translated. Catalog identity keeps keys; the display layer resolves them.
+7. **A breadcrumb trail renders only when it has at least two items and a navigable ancestor** (an item whose `href` comes from a list route). Identity-only pages with no `routes.list` (Account Center) and list pages with a single resource crumb do not show a trail.
 
 ## List Tables
 
@@ -24,7 +26,7 @@ Paged **Offset Page** tables render through `ListTable`. `ListTable` owns one vi
 4. **`ListPager` is composed by `ListTable`.** Count text always renders; page numbers render only when there is more than one page (`docs/conventions-pagination.md`).
 5. **Parents own available block size; `ListTable` owns scrolling and pager placement.** Console surfaces are a few stable frames: AppShell header plus a main frame that receives remaining viewport space; `PageChrome` keeps breadcrumb/title/toolbar at intrinsic height and passes leftover space to content; `ListTable` is a flex column whose `Table.ScrollContainer` consumes that leftover and whose pager stays outside the scroll region. Remaining-space frames that wrap a list in `FillColumn` (`frontend/src/components/layout/FillColumn.tsx`) so the table fills the region after intrinsic siblings are: full-page Offset Page lists, the catalog Joins tab, the catalog Columns tab, and the schedule-jobs modal body (already a remaining-space column; it does not wrap again). Horizontal `minWidth` is independent of this vertical contract; the schedule-jobs modal passes a narrower value.
 
-**Form surfaces vs remaining-space frames.** Account Center and Platform Settings are form pages: intrinsic sections stack under `PageChrome`, and `PageChrome` `overflow: auto` is the page scroller when content exceeds the viewport. User PAT inside Account Center stays an Offset Page table (`ListTable`) but is a section of that form page — it does not consume leftover viewport height and must not wrap the whole Account page (or the PAT section alone) in `FillColumn`. Do not judge Account success by “pager pinned in the first viewport.”
+**Form surfaces vs remaining-space frames.** Account Center and Platform Settings are form pages: intrinsic sections stack under `PageChrome`, and `PageChrome` `overflow: auto` is the page scroller when content exceeds the viewport. User PAT inside Account Center stays an Offset Page table (`ListTable`) but is a section of that form page — it does not consume leftover viewport height and must not wrap the whole Account page (or the PAT section alone) in `FillColumn`. Do not judge Account success by “pager pinned in the first viewport.” Account Center may reserve a narrow in-page table of contents column beside the form stack. That column sticks inside the `PageChrome` scroller, highlights the job in view, and calls `scrollIntoView` without writing a URL hash or History entry. It is not `PageChrome` `actions` and is not Console Navigation.
 
 `usePagedList` owns fetch generation, reset-to-page-1, and `listPresentationOf` (`frontend/src/lib/list-state.ts`). HTTP Console lists call `useConsolePagedList`, which binds Refine notification through `onError`. Pages keep writing their own header and body cells; `ListTable` is not a column DSL. Feature mutation errors stay in the feature.
 
@@ -53,6 +55,7 @@ Paged **Offset Page** tables render through `ListTable`. `ListTable` owns one vi
 - Bounded vertical scroll on paged tables via `Table.ScrollContainer`, so the header sticks and `ListPager` stays in view
 - `ListPager` as the table footer for Offset Page lists, composed by `ListTable`
 - `FillColumn` as the remaining-space wrapper for embedded lists (`gap` and an optional `minHeight` floor; not a Flex alias)
+- An in-page Account table of contents that sticks inside `PageChrome`, highlights the job in view, and calls `scrollIntoView` without writing a hash (not `PageChrome` `actions`, not Console Navigation)
 
 ## Forbidden
 
@@ -66,6 +69,7 @@ Paged **Offset Page** tables render through `ListTable`. `ListTable` owns one vi
 8. Per-caller `calc(100vh - N)` / `calc(100dvh - N)` **table** heights, named height presets (`page` / `embedded` / `modal`), or a public `maxHeight` escape hatch on `ListTable` (modal **content frame** calc in Principle 4 is allowed)
 9. Treating `FillColumn` as a Flex alias (appearance, `direction`, or `flex` overrides)
 10. Wrapping an entire Account / Settings form page (or form sections + embedded PAT together) in `FillColumn`
+11. Putting Account Center sections (profile, User PAT, Metadata MCP) on the Console navbar, or writing a URL hash / History entry for Account sections
 
 ## Implementation Notes
 
