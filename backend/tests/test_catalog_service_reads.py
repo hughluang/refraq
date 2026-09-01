@@ -26,7 +26,6 @@ from backend.core.config import reset_settings_cache  # noqa: E402
 from backend.jobs.store import reset_job_store  # noqa: E402
 from backend.main import app  # noqa: E402
 from backend.metadata.catalog import service as catalog_service  # noqa: E402
-from backend.metadata.catalog import semantics as catalog_semantics  # noqa: E402
 from backend.metadata.catalog.store import (  # noqa: E402
     CatalogColumnRecord,
     CatalogObjectRecord,
@@ -42,7 +41,6 @@ from backend.metadata.mcp_actor import mcp_authorization  # noqa: E402
 from backend.metadata.mcp_server import (  # noqa: E402
     find_join_path,
     get_object as mcp_get_object,
-    get_object_ddl as mcp_get_object_ddl,
     list_joins as mcp_list_joins,
     list_objects as mcp_list_objects,
     search_columns as mcp_search_columns,
@@ -195,10 +193,8 @@ def test_service_read_model_and_semantics() -> None:
     assert detail.ddl is not None
     assert len(detail.columns) == 1
     assert detail.columns[0].name == "id"
-
-    sem = catalog_semantics.get_object_semantics(a.locator_key)
-    assert sem.business_name == "Biz orders"
-    assert sem.business_semantics_ready is True
+    assert detail.business_name == "Biz orders"
+    assert detail.business_semantics_ready is True
 
 
 def test_list_q_and_readiness_filters_and_present_keeps_columns() -> None:
@@ -454,14 +450,10 @@ def test_catalog_http_mcp_projection_parity(client: TestClient) -> None:
     assert http_joins.json()["items"][0]["id"] == mcp_joins["items"][0]["id"]
 
     http_ddl = client.get("/objects/obj_a/ddl")
-    with mcp_authorization(auth):
-        mcp_ddl = json.loads(mcp_get_object_ddl(object_locator_key=locator))
     assert http_ddl.status_code == 200
-    assert "error" not in mcp_ddl, mcp_ddl
-    assert http_ddl.json()["id"] == mcp_ddl["id"]
-    assert http_ddl.json()["ddl"] == mcp_ddl["ddl"]
     assert "locator_key" not in http_ddl.json()
-    assert mcp_ddl["locator_key"] == locator
+    assert mcp_obj["ddl"] == http_ddl.json()["ddl"]
+    assert mcp_obj["id"] == http_ddl.json()["id"]
 
     http_sources = client.get("/sources?limit=50")
     with mcp_authorization(auth):

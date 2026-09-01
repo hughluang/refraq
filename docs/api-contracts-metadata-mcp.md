@@ -23,6 +23,7 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 - Locator formats: `src/{engine|kind}/{source_key}`, `obj/…/{schema}/{object_type}/{name}`, `col/…/column/{column_name}`
 - Catalog column payloads omit `normalized_type`. There is no Type Mapping tool. Agents use native `data_type` (ADR 0024).
 - **Instants** in tool JSON match HTTP: outbound UTC `Z` via `format_instant`. Actor **Display Timezone** is not applied to MCP Instant strings (Console-only formatting). Agents may read `display_timezone` from Current User / Account profile and format locally if needed.
+- Admission for new tools: Metadata MCP is the agent data-maintenance face (catalog, semantics, joins, controlled query). Do not add (1) operations, Job, or Scheduled Task observe/mutate tools, (2) a read-only tool the agent cannot start from locators already on this face, or (3) a read-only tool whose payload is already returned by another published tool.
 
 ## 3. Structure (read)
 
@@ -31,19 +32,7 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 | `search_sources` | `sources:read` | Search/list Sources (`query_text`, `limit` default **50** max **200**, `offset`) |
 | `get_source` | `sources:read` | Source detail by `source_locator_key` (projected `access`) |
 | `list_objects` | `metadata:read` | Catalog Objects under a Source locator (`q`, `object_type`, `business_semantics_ready`, `limit`, `offset`) |
-| `get_object` | `metadata:read` | Object + columns + ddl by `object_locator_key` (includes semantics when present; columns omit `normalized_type`; **no** `foreign_keys` / `indexes` — structure graph is HTTP detail or join tools) |
-| `get_object_ddl` | `metadata:read` | DDL when present (`id`, `locator_key`, `ddl`) |
-| `get_job` | `jobs:run` | Job by id (same projection as HTTP `GET /jobs/{id}`) |
-
-`get_job` returns the mechanism Job through the shared HTTP/MCP projection, so
-the field set matches HTTP `GET /jobs/{id}` exactly: identity and lifecycle
-(`id`, `kind`, `status`, `summary`, `input`, nullable `result`), trigger
-(`trigger_kind`, `trigger_ref`, resolved `trigger_actor_name` /
-`trigger_schedule_name`), scheduling (`scheduled_for`, `running_timeout_sec`),
-Instants (`created_at`, `started_at`, `finished_at`, `log_updated_at`), and
-failure (`error_code`, `error_message`). HTTP wraps it in a `job` envelope;
-MCP returns the object directly. Unlike the semantics tools, this payload is
-not stripped of empty values — absent fields are present and null.
+| `get_object` | `metadata:read` | Object + columns + DDL + object semantics by `object_locator_key` (columns omit `normalized_type`; **no** `foreign_keys` / `indexes` — structure graph is HTTP detail or join tools). There is no separate DDL or object-semantics read tool |
 
 `list_objects` is the Per-Source object list (same summary projection as HTTP). Optional `q` is a literal substring of schema, technical name, or `business_name`. Optional `business_semantics_ready` is `true` | `false`. This tool has no `include_absent` argument; tombstones are included. Items omit columns, foreign keys, indexes, and DDL.
 
@@ -51,13 +40,12 @@ not stripped of empty values — absent fields are present and null.
 
 | Tool | Permission | Purpose |
 | --- | --- | --- |
-| `get_object_semantics` | `metadata:read` | Compact object semantics by locator |
 | `set_object_semantics` | `metadata:write` | Incremental object semantics write (`semantic_source=mcp`) |
 | `set_column_semantics` | `metadata:write` | Batch column semantics under one object locator |
 | `list_business_domains` | `metadata:read` | List Business Domains |
 | `create_business_domain` | `metadata:write` | Create a Business Domain (`code`, `name`, `description?`) |
 
-Write discipline: fill gaps; do not invent; persist `open_questions` when evidence is weak. `semantic_source` is set to `mcp`. Field-level protection is deferred (ADR 0014). MCP adapters strip `null`, blank strings, and empty collections before calling the shared write service — agents cannot clear existing semantics via MCP in this phase (ADR 0018; HTTP Console/API use present-null to clear). Column batch responses include `skipped_columns` for `invalid_column_name` / `no_changes`. Writable fields match HTTP semantics PATCH (no `field_kind`; no `model_routing_hint` — not delivered this phase; none of the fields removed by ADR 0015).
+Object semantics read is `get_object` (not a compact semantics tool). Write discipline: fill gaps; do not invent; persist `open_questions` when evidence is weak. `semantic_source` is set to `mcp`. Field-level protection is deferred (ADR 0014). MCP adapters strip `null`, blank strings, and empty collections before calling the shared write service — agents cannot clear existing semantics via MCP in this phase (ADR 0018; HTTP Console/API use present-null to clear). Column batch responses include `skipped_columns` for `invalid_column_name` / `no_changes`. Writable fields match HTTP semantics PATCH (no `field_kind`; no `model_routing_hint` — not delivered this phase; none of the fields removed by ADR 0015).
 
 `set_object_semantics` does **not** accept `time_semantics`, `status_semantics`, `relation_summary`, or `confidence`. Agents record time/status meaning on each relevant column via `business_description` (and optional free-text `column_semantics.semantic_type` / `enum_catalog` — closed vocabulary deferred, ADR 0016) instead of electing one primary time or status column, and record object relationships as join edges with evidence. `business_primary_key` names that do not exist on the object are rejected with `SEMANTIC_COLUMN_UNKNOWN`. Object writes accept `business_domain_code`; unknown codes → `BUSINESS_DOMAIN_UNKNOWN`.
 
@@ -134,3 +122,4 @@ Success `200`:
 - Client credential management
 - Data Product catalog tools
 - Dual-read fallback into external `dbmeta`
+- Job / Scheduled Task observe or mutate (`get_job`, list, logs, cancel, enqueue)

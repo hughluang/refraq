@@ -16,7 +16,7 @@ from backend.admin.deps import resolve_user_permissions
 from backend.admin.errors import AuthForbidden
 from backend.admin.permissions import permissions_include
 from backend.admin.role_store import get_role_store
-from backend.admin.user_store import UserRecord, get_user_store
+from backend.admin.user_store import UserRecord
 from backend.metadata.mcp_actor import current_actor, mcp_authorization
 from backend.metadata.mcp_catalog import TOOLS_LIST_TTL_MS, tools_for_permissions
 from backend.core.errors import AppError
@@ -28,13 +28,6 @@ from backend.core.pagination import (
     SOURCE_SEARCH,
 )
 from backend.core.time import format_instant
-from backend.jobs.api import (
-    bind_schedule_name_store,
-    get_schedule_name_store,
-    present_jobs,
-)
-from backend.jobs.errors import JobNotFound
-from backend.jobs.store import get_job_store
 from backend.metadata.business_domains import service as domain_service
 from backend.metadata.catalog import join_writes as catalog_joins
 from backend.metadata.catalog import refs as catalog_refs
@@ -49,12 +42,6 @@ from backend.metadata.catalog.present import (
 from backend.metadata.catalog.join_origin import MCP_JOIN_ORIGIN
 from backend.metadata.query import service as query_service
 from backend.metadata.sources import service as source_service
-from backend.worker.schedules import get_schedule_store
-
-# The MCP tool host is its own process entry, so it binds the Scheduled Task
-# name adapter the way `main` does for HTTP. Without this, presenting a Job
-# raises "schedule name store is not bound".
-bind_schedule_name_store(get_schedule_store)
 
 
 class RefraqMetadataMcp(MCPServer):
@@ -200,69 +187,12 @@ def list_objects(
 
 @mcp.tool()
 def get_object(object_locator_key: str) -> str:
-    """Get Catalog Object with columns by locator (metadata:read)."""
+    """Get Catalog Object with columns, DDL, and object semantics by locator (metadata:read)."""
     try:
         user, _token_id = current_actor()
         _require(user, "metadata:read")
         view = catalog_reads.get_object(object_locator_key)
         return _dumps(_object_payload(view, include_columns=True))
-    except Exception as exc:  # noqa: BLE001
-        return _err(exc)
-
-@mcp.tool()
-def get_object_ddl(object_locator_key: str) -> str:
-    """Get stored DDL for a Catalog Object (metadata:read)."""
-    try:
-        user, _token_id = current_actor()
-        _require(user, "metadata:read")
-        ddl = catalog_reads.get_object_ddl(object_locator_key)
-        return _dumps({"id": ddl.id, "locator_key": ddl.locator_key, "ddl": ddl.ddl})
-    except Exception as exc:  # noqa: BLE001
-        return _err(exc)
-
-
-@mcp.tool()
-def get_job(job_id: str) -> str:
-    """Get Job status (jobs:run)."""
-    try:
-        user, _token_id = current_actor()
-        _require(user, "jobs:run")
-        record = get_job_store().get(job_id)
-        if record is None:
-            raise JobNotFound()
-        presented = present_jobs(
-            [record],
-            users=get_user_store(),
-            schedules=get_schedule_name_store(),
-        )
-        return _dumps(presented[0].model_dump())
-    except Exception as exc:  # noqa: BLE001
-        return _err(exc)
-
-@mcp.tool()
-def get_object_semantics(object_locator_key: str) -> str:
-    """Compact object semantics by locator (metadata:read)."""
-    try:
-        user, _token_id = current_actor()
-        _require(user, "metadata:read")
-        view = catalog_semantics.get_object_semantics(object_locator_key)
-        return _dumps(
-            {
-                "locator_key": view.locator_key,
-                "business_name": view.business_name,
-                "business_description": view.business_description,
-                "object_category": view.object_category,
-                "grain_description": view.grain_description,
-                "business_primary_key": view.business_primary_key,
-                "business_domain": (
-                    asdict(view.business_domain) if view.business_domain else None
-                ),
-                "evidence_summary": view.evidence_summary,
-                "open_questions": view.open_questions,
-                "semantic_source": view.semantic_source,
-                "business_semantics_ready": view.business_semantics_ready,
-            }
-        )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 

@@ -36,22 +36,7 @@ MCP_TOOLS: tuple[McpToolSpec, ...] = (
     McpToolSpec(
         "get_object",
         "metadata:read",
-        "Get Catalog Object with columns by locator (metadata:read).",
-    ),
-    McpToolSpec(
-        "get_object_ddl",
-        "metadata:read",
-        "Get stored DDL for a Catalog Object (metadata:read).",
-    ),
-    McpToolSpec(
-        "get_job",
-        "jobs:run",
-        "Get Job status (jobs:run).",
-    ),
-    McpToolSpec(
-        "get_object_semantics",
-        "metadata:read",
-        "Compact object semantics by locator (metadata:read).",
+        "Get Catalog Object with columns, DDL, and object semantics by locator (metadata:read).",
     ),
     McpToolSpec(
         "set_object_semantics",

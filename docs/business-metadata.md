@@ -482,6 +482,8 @@ Rules:
 ## 12. MCP
 
 - MCP tools are a first-class product surface backed by the same domain services and Permissions as HTTP APIs.
+- Metadata MCP is the agent **data-maintenance** face (catalog, semantics, joins, controlled query). It is not a system-operations face: Job and Scheduled Task observe/mutate stay Console / HTTP.
+- Object semantics and stored DDL are read through `get_object`. There is no compact semantics tool and no DDL-only tool.
 - The product port is Console-origin `/mcp` (independent MCP process). HTTP MCP authenticates a **User PAT** in the `Authorization` header only. Session is not an MCP caller.
 - Account Center and Agent `tools/list` show the same Permission-cropped catalog. `GET /mcp/catalog` is the HTTP read.
 - Contract detail: `docs/api-contracts-metadata-mcp.md`. Topology: `docs/architecture.md`, `docs/env.md`.

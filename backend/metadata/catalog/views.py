@@ -90,21 +90,6 @@ class ObjectView:
 
 
 @dataclass(frozen=True)
-class ObjectSemanticsView:
-    locator_key: str
-    business_name: str | None
-    business_description: str | None
-    object_category: str | None
-    grain_description: str | None
-    business_primary_key: list[str] | None
-    business_domain: DomainRefView | None
-    evidence_summary: list[str] | None
-    open_questions: list[str] | None
-    semantic_source: str | None
-    business_semantics_ready: bool
-
-
-@dataclass(frozen=True)
 class ObjectDdlView:
     id: str
     locator_key: str

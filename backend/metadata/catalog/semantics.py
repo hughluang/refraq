@@ -1,4 +1,4 @@
-"""Object Semantics reads and writes (HTTP + MCP)."""
+"""Object Semantics writes (HTTP + MCP)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from typing import Any
 
 from backend.admin.audit import persist_audit_event
 from backend.metadata.business_domains.service import require_domain_by_code
-from backend.metadata.catalog.refs import require_column, resolve_object_ref
+from backend.metadata.catalog.refs import require_column
 from backend.metadata.catalog.store import (
     CatalogColumnRecord,
     CatalogObjectRecord,
@@ -14,7 +14,6 @@ from backend.metadata.catalog.store import (
     get_catalog_store,
     require_object,
 )
-from backend.metadata.catalog.views import ObjectSemanticsView, domain_ref_view
 from backend.metadata.errors import SemanticColumnUnknown
 
 _OBJECT_SEMANTIC_FIELDS = (
@@ -98,23 +97,6 @@ def _validate_business_primary_key(
         raise SemanticColumnUnknown(
             f"Unknown column(s) in business_primary_key: {', '.join(unknown)}"
         )
-
-
-def get_object_semantics(object_ref: str) -> ObjectSemanticsView:
-    record = resolve_object_ref(object_ref)
-    return ObjectSemanticsView(
-        locator_key=record.locator_key,
-        business_name=record.business_name,
-        business_description=record.business_description,
-        object_category=record.object_category,
-        grain_description=record.grain_description,
-        business_primary_key=record.business_primary_key,
-        business_domain=domain_ref_view(record.business_domain_id),
-        evidence_summary=record.evidence_summary,
-        open_questions=record.open_questions,
-        semantic_source=record.semantic_source,
-        business_semantics_ready=record.business_semantics_ready,
-    )
 
 
 def patch_object_semantics(
