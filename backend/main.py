@@ -108,7 +108,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="refraq Backend",
-    version="0.1.1",
+    version="0.1.2",
     lifespan=lifespan,
 )
 
