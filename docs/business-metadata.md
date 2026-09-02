@@ -391,6 +391,8 @@ is no elected primary axis at object level.
   blank string (after trim), or empty list/object **clears** the field (ADR 0018).
 - **MCP** adapters strip `null`, blank strings, and empty collections before writing — agents
   cannot clear via MCP in this phase (fill gaps only).
+- An applied object or column semantics write appends **Semantics Change** (field, old value,
+  new value, actor, `semantic_source`). Last write still wins; the ledger does not skip or lock.
 - Incomplete understanding stays incomplete — record `open_questions`, do not invent meaning.
 - Column-name references in semantics payloads (`business_primary_key`) must resolve to columns on
   the object; unknown names are rejected with `SEMANTIC_COLUMN_UNKNOWN`.
@@ -440,17 +442,31 @@ Rules:
   ambiguous referenced targets, the structure Job **fails** and the prior successful catalog
   snapshot is left unchanged (same success-only commit as §9).
 - **Join path:** BFS over asserted (non-rejected) edges (max hops 1–5) from object or column locator; modes are
-  explicit target locator or graph exploration. Returns path summary and per-hop join
+  explicit target locator, **query text** (Catalog Search picks targets, then BFS), or graph
+  exploration. Returns path summary and per-hop join
   expressions; responses may include a `reason` when no usable path is available
-  (e.g. unreachable target).
+  (e.g. unreachable target). A start that cannot expand (`NO_START_COLUMNS`) is
+  `JOIN_PATH_UNAVAILABLE` in every mode, including query text. HTTP `q` and MCP
+  `query_text` are the same mode. When start is a column and `max_hops=1`,
+  `direct_joins` is the start's asserted neighbors (query text does not omit them).
 
 ## 10.5 Catalog search
 
 - Cross-Source object and column search by **non-empty** query text (locator, name, schema,
   business_name, business_description) with optional `source_id` / `object_type` filters and
-  `limit`/`offset`. Empty or omitted query is rejected for both object and column search.
-- Ranking tiers (portable lexical, identical in memory and SQL stores): exact locator/name →
-  prefix → name substring → business name/description substring.
+  `limit`/`offset`. Empty, omitted, or whitespace-only query is rejected for both object
+  and column search with `CATALOG_SEARCH_QUERY_REQUIRED` (HTTP and MCP share that code).
+- Ranking is one authority per deployment (ADR 0037), shared by HTTP Catalog Search, Console
+  callers of those endpoints, and MCP `search_objects` / `search_columns`. Portable lexical
+  tiers (identical in memory and SQL stores): exact locator/name → prefix → name substring →
+  business name/description substring. When an embedding **Model Service** is in use, the
+  purpose is not closed, and the purpose ready bit is true, those lexical hits fuse with
+  embedding nearest-neighbors (reciprocal-rank fusion). Otherwise ranking is lexical only.
+  If the query embedding call fails, that request uses the same lexical store page.
+  `total` is the lexical filtered-set count on every path. Hybrid ranks a bounded
+  fusion window (lexical pool 500, semantic 50) and may inject semantic-only hits
+  into `items`; `offset` past that window may be empty while `total` stays lexical.
+  Per-Source list `q` is not this ranking. Model Service rules: `docs/business-model-services.md`.
 - Per-Source object list pages **Current catalog** under one Source. Pagination uses
   `limit`/`offset`. Filters: `include_absent` (default include tombstones), `object_type`,
   optional `business_semantics_ready` (`true` | `false`; omit for no readiness filter).
@@ -482,11 +498,12 @@ Rules:
 ## 12. MCP
 
 - MCP tools are a first-class product surface backed by the same domain services and Permissions as HTTP APIs.
-- Metadata MCP is the agent **data-maintenance** face (catalog, semantics, joins, controlled query). It is not a system-operations face: Job and Scheduled Task observe/mutate stay Console / HTTP.
-- Object semantics and stored DDL are read through `get_object`. There is no compact semantics tool and no DDL-only tool.
+- Metadata MCP is the agent **inquiry and living-registry** face (catalog, admitted semantics, joins, controlled query). Server `instructions` and scene `prompts` are product surface. It is not a system-operations face: Job and Scheduled Task observe/mutate stay Console / HTTP.
+- `get_object` is the aggregate read (columns + DDL + object semantics). Cheaper projections `get_object_semantics`, `get_object_columns`, and `get_object_ddl` are admitted (ADR 0036). HTTP object detail stays one page.
+- Last-write-wins on semantics (ADR 0014). Each applied object or column semantics write appends **Semantics Change** (old/new values) visible on the Catalog Object (ADR 0038). Agents cannot clear via MCP; HTTP present-null still clears and still appends.
 - The product port is Console-origin `/mcp` (independent MCP process). HTTP MCP authenticates a **User PAT** in the `Authorization` header only. Session is not an MCP caller.
-- Account Center and Agent `tools/list` show the same Permission-cropped catalog. `GET /mcp/catalog` is the HTTP read.
-- Contract detail: `docs/api-contracts-metadata-mcp.md`. Topology: `docs/architecture.md`, `docs/env.md`.
+- Account Center and Agent `tools/list` show the same Permission-cropped catalog. `GET /mcp/catalog` is the HTTP read of that tool list.
+- Contract detail: `docs/api-contracts-metadata-mcp.md`. Topology: `docs/architecture.md`, `docs/env.md`. Workplace and split reads: `docs/adr/0036-mcp-workplace-and-split-reads.md`.
 
 ## 13. Management Audit
 
@@ -535,7 +552,7 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - Delivering non-database Source kinds (CSV/file import, Attachment APIs, etc.) in this phase — foresight only in §4.4
 - Source soft delete / versioned credential history / audit-per-rotation (hard-delete of disabled Sources is delivered)
 - Query result type normalization / continuation tokens / data masking (deferred past depth)
-- Full-text search engines or PG-only FTS as the ranking authority
+- Full-text search engines or PG-only FTS as the ranking authority (optional embedding hybrid is ADR 0037)
 - Catchup / backfill / RRule
 - Treating **Job** or **Scheduled Task** as Metadata domain entities (platform rules: `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`)
 
@@ -552,6 +569,9 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - `docs/adr/0013-semantics-provenance-and-protected-sources.md`
 - `docs/adr/0014-defer-semantic-field-protection.md`
 - `docs/adr/0015-semantic-field-admission.md`
+- `docs/adr/0036-mcp-workplace-and-split-reads.md`
+- `docs/adr/0037-catalog-search-hybrid-ranking.md`
+- `docs/adr/0038-semantics-change-ledger.md`
 - `docs/adr/0024-normalized-type-mapping.md`
 - `docs/business-user-tokens.md`
 - `docs/business-jobs.md`

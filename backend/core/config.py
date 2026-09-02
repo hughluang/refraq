@@ -77,7 +77,6 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="REFRAQ_BROWSER_FACING_HOST",
     )
-
     @field_validator("refraq_browser_facing_host", mode="before")
     @classmethod
     def _normalize_browser_facing_host(cls, value: object) -> str | None:

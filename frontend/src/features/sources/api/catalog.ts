@@ -2,6 +2,7 @@ import { apiClient } from "@/lib/api";
 import type {
   CatalogColumn,
   CatalogObject,
+  SemanticsChange,
 } from "@/features/sources/types";
 
 export function listCatalogObjects(
@@ -61,4 +62,20 @@ export function searchCatalogColumns(params: {
 
 export function getCatalogObject(objectId: string) {
   return apiClient<{ object: CatalogObject }>(`/objects/${objectId}`);
+}
+
+export function listSemanticsChanges(
+  objectId: string,
+  params?: { limit?: number; offset?: number },
+) {
+  const qs = new URLSearchParams();
+  if (params?.limit != null) qs.set("limit", String(params.limit));
+  if (params?.offset != null) qs.set("offset", String(params.offset));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return apiClient<{
+    items: SemanticsChange[];
+    total: number;
+    limit: number;
+    offset: number;
+  }>(`/objects/${objectId}/semantics-changes${suffix}`);
 }

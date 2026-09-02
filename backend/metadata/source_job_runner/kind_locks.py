@@ -77,11 +77,8 @@ class KindExecutionLock:
             self._conn = None
 
 
-def try_acquire_kind_execution_lock(
-    kind: KindLockKind, source_id: str
-) -> KindExecutionLock | None:
-    """Non-blocking try. Returns a handle when acquired; ``None`` when contested."""
-    name = lock_name(kind, source_id)
+def try_acquire_named_execution_lock(name: str) -> KindExecutionLock | None:
+    """Non-blocking try on an arbitrary lock name (site-wide or per-Source)."""
     if not _use_postgres_advisory():
         with _memory_guard:
             lock = _memory_locks.setdefault(name, threading.Lock())
@@ -105,6 +102,13 @@ def try_acquire_kind_execution_lock(
     except Exception:
         conn.close()
         raise
+
+
+def try_acquire_kind_execution_lock(
+    kind: KindLockKind, source_id: str
+) -> KindExecutionLock | None:
+    """Non-blocking try. Returns a handle when acquired; ``None`` when contested."""
+    return try_acquire_named_execution_lock(lock_name(kind, source_id))
 
 
 @contextmanager

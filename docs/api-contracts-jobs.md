@@ -87,8 +87,8 @@ Rules:
 ```
 
 `joins_upserted` is the number of join rows this Job actually inserted (equal to **Join Change** create events this Job appended). It may be less than the count of directed pairs that were absent from the join-graph baseline after load when another writer inserted the same pair before this Job's persist; those no-op persists are not counted in `joins_skipped_protected` or `joins_skipped_rejected`. `joins_skipped_protected` / `joins_skipped_rejected` count only pairs that already had a row on that baseline. `joins_skipped_unresolved` is the sum of the four attribution counters (`alias` = derived-table/CTE qualifier not expanded, or an equi-join whose columns cannot be attributed to a base table; `external` = catalog/database segment outside this Source; `object` = table/view not in catalog; `column` = object present but column missing). A same-column self-join is not an edge and is not counted as unresolved.
-Other kinds keep `result` null.
-- **`trigger_kind`** / **`trigger_ref`** describe how the Job was started (`user` | `schedule` | `mcp` | `system`, plus optional id). Structure and join-detection minting in this phase is `schedule` with `trigger_ref` = Scheduled Task id. Historical `user` / `mcp` rows may remain. Coexist with **`created_by_user_id`** (operator run-now sets created_by; Beat leaves it null).
+`catalog_embed` success envelope: `{ "schema": "catalog_embed.v1", "objects", "columns", "objects_written", "columns_written", "objects_failed", "columns_failed", "objects_skipped", "columns_skipped", "objects_attempted", "columns_attempted", "generation", "failure_reasons" }`. `objects` / `columns` equal the written counts. `failure_reasons` is `{ "message", "count" }` per distinct embed error (empty when none). Other kinds keep `result` null.
+- **`trigger_kind`** / **`trigger_ref`** describe how the Job was started (`user` | `schedule` | `mcp` | `system`, plus optional id). Structure and join-detection minting is `schedule` with `trigger_ref` = Scheduled Task id. `catalog_embed` minting is `user` with `trigger_ref` = acting User id (`docs/api-contracts-model-services.md`). Coexist with **`created_by_user_id`**.
 - **`scheduled_for`** is the due-slot Instant consumed for an automatic fire; null for operator run-now. Due mint is idempotent on `(trigger_ref, scheduled_for)` when `scheduled_for` is not null.
 - **`running_timeout_sec`** is the minted **Running Time Limit** snapshot (nullable positive seconds). Null = the reaper does not mark `JOB_RUNNING_TIMEOUT`. Copied from the **Scheduled Task** at mint; not a live read. Job lists do not add a column; Job detail may show it when non-null.
 - **`trigger_actor_name`** is presentation-only: when `trigger_kind` is `user` and `trigger_ref` resolves to a known User, it is that User's `display_name`; otherwise `null`.
@@ -133,7 +133,7 @@ Returns `{ "job_id", "body", "updated_at" }` where `body` is the full multiline 
 | `JOB_SECRET_MISSING` | No usable Source secret when required (structure collect, or join-detection same-catalog defense) |
 | `JOB_INPUT_INVALID` | Kind/input failed domain validation (including missing Source `engine`/`access`) |
 | `JOB_NOT_CANCELLABLE` | Job already terminal |
-| `JOB_ALREADY_ACTIVE` | Structure or join-detection Job execution could not take the **Kind execution lock** for that kind and Source (another same-kind run already holds it). Not a schedule mint / HTTP conflict; not cross-kind |
+| `JOB_ALREADY_ACTIVE` | Runner could not take the **Kind execution lock** (`structure:{source_id}`, `join_detection:{source_id}`, or site-wide `catalog_embed`). Not a schedule mint / HTTP conflict |
 | `JOB_WORKER_LOST` | Occupancy stale; worker gone |
 | `JOB_RUNNING_TIMEOUT` | Job snapshot `running_timeout_sec` is set and elapsed while still occupied |
 | `JOB_FAIL_SAFE` | Absent ratio exceeded fail-safe threshold; catalog unchanged |
@@ -152,6 +152,7 @@ After claim, a structure or join-detection Job tries a Metadata **Kind execution
 ## 5. Slice Notes
 
 - Slice A: `kind=structure` and `kind=join_detection`, minted by Source-targeted schedules for database Sources.
+- `kind=catalog_embed` is minted by Model Service HTTP, not by a schedule.
 - Later slices/domains may add kinds; unknown kind → `400` with stable code.
 - Console: module id `jobs` is the global observe surface under the **Operations** nav group. Permission `jobs:run`. Job lists omit a `result` column. Job detail may show **Job result** as uninterpreted JSON and does not unpack `class` or link to **Structure Diff**. Triggered-by is one column.
 

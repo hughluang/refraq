@@ -15,7 +15,7 @@ export function PageBreadcrumb() {
   }
 
   return (
-    <nav aria-label={t("chrome.breadcrumb")}>
+    <nav aria-label={t("layout.breadcrumb")}>
       <Breadcrumbs>
         {breadcrumbs.map((item, index) => {
           const isLast = index === breadcrumbs.length - 1;

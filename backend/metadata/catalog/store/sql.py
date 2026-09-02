@@ -8,12 +8,12 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Iterator
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, defer, noload, selectinload
 
 from backend.core.db import get_session_factory, session_scope
-from backend.core.pagination import apply_sql_page
+from backend.core.pagination import apply_offset_page, apply_sql_page
 from backend.metadata.catalog.identity import (
     _recompute_column_locator,
     _recompute_object_locator,
@@ -40,13 +40,18 @@ from backend.metadata.catalog.join_changes import (
     join_change_for_rejection_toggle,
 )
 from backend.metadata.join_detection_jobs.reconcile import JoinDetectionPlan
+from backend.metadata.catalog.embedding import CatalogEmbeddingRecord
+from backend.metadata.catalog.records import new_embedding_id
+from backend.metadata.catalog.semantics_changes import CatalogSemanticsChangeRecord
 from backend.metadata.models import (
     CatalogColumnRow,
+    CatalogEmbeddingRow,
     CatalogForeignKeyRow,
     CatalogIndexRow,
     CatalogJoinChangeRow,
     CatalogJoinRow,
     CatalogObjectRow,
+    CatalogSemanticsChangeRow,
 )
 
 
@@ -657,6 +662,99 @@ class SqlCatalogStore:
             )
             return [_row_to_join_change(r) for r in rows]
 
+    def append_semantics_change(self, change: CatalogSemanticsChangeRecord) -> None:
+        with session_scope() as session:
+            session.add(
+                CatalogSemanticsChangeRow(
+                    id=change.id,
+                    object_id=change.object_id,
+                    column_id=change.column_id,
+                    field_name=change.field_name,
+                    old_value=change.old_value,
+                    new_value=change.new_value,
+                    semantic_source=change.semantic_source,
+                    actor_user_id=change.actor_user_id,
+                    created_at=change.created_at,
+                )
+            )
+            session.flush()
+
+    def list_semantics_changes(
+        self,
+        object_id: str,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[CatalogSemanticsChangeRecord], int]:
+        with session_scope() as session:
+            rows = list(
+                session.scalars(
+                    select(CatalogSemanticsChangeRow)
+                    .where(CatalogSemanticsChangeRow.object_id == object_id)
+                    .order_by(
+                        CatalogSemanticsChangeRow.created_at.desc(),
+                        CatalogSemanticsChangeRow.id.desc(),
+                    )
+                ).all()
+            )
+            items = [_row_to_semantics_change(r) for r in rows]
+            return apply_offset_page(items, limit=limit, offset=offset)
+
+    def upsert_embedding(self, record: CatalogEmbeddingRecord) -> None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(CatalogEmbeddingRow).where(
+                    CatalogEmbeddingRow.kind == record.kind,
+                    CatalogEmbeddingRow.target_id == record.target_id,
+                )
+            )
+            if row is None:
+                session.add(
+                    CatalogEmbeddingRow(
+                        id=record.id or new_embedding_id(),
+                        kind=record.kind,
+                        target_id=record.target_id,
+                        locator_key=record.locator_key,
+                        content_hash=record.content_hash,
+                        embedding=record.embedding,
+                        indexed_at=record.indexed_at,
+                        generation=record.generation,
+                    )
+                )
+            else:
+                row.locator_key = record.locator_key
+                row.content_hash = record.content_hash
+                row.embedding = record.embedding
+                row.indexed_at = record.indexed_at
+                row.generation = record.generation
+            session.flush()
+
+    def get_embedding(
+        self, *, kind: str, target_id: str
+    ) -> CatalogEmbeddingRecord | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(CatalogEmbeddingRow).where(
+                    CatalogEmbeddingRow.kind == kind,
+                    CatalogEmbeddingRow.target_id == target_id,
+                )
+            )
+            return _row_to_embedding(row) if row is not None else None
+
+    def list_embeddings(self, *, kind: str) -> list[CatalogEmbeddingRecord]:
+        with session_scope() as session:
+            rows = list(
+                session.scalars(
+                    select(CatalogEmbeddingRow).where(CatalogEmbeddingRow.kind == kind)
+                ).all()
+            )
+            return [_row_to_embedding(r) for r in rows]
+
+    def delete_embeddings(self) -> None:
+        with session_scope() as session:
+            session.execute(delete(CatalogEmbeddingRow))
+            session.flush()
+
     def delete_join(self, join_id: str) -> bool:
         with session_scope() as session:
             row = session.get(CatalogJoinRow, join_id)
@@ -971,6 +1069,33 @@ def _row_to_join_change(row: object) -> CatalogJoinChangeRecord:
         attester=row.attester,
         actor_user_id=row.actor_user_id,
         created_at=row.created_at,
+    )
+
+
+def _row_to_semantics_change(row: CatalogSemanticsChangeRow) -> CatalogSemanticsChangeRecord:
+    return CatalogSemanticsChangeRecord(
+        id=row.id,
+        object_id=row.object_id,
+        column_id=row.column_id,
+        field_name=row.field_name,
+        old_value=row.old_value,
+        new_value=row.new_value,
+        semantic_source=row.semantic_source,
+        actor_user_id=row.actor_user_id,
+        created_at=row.created_at,
+    )
+
+
+def _row_to_embedding(row: CatalogEmbeddingRow) -> CatalogEmbeddingRecord:
+    return CatalogEmbeddingRecord(
+        id=row.id,
+        kind=row.kind,
+        target_id=row.target_id,
+        locator_key=row.locator_key,
+        content_hash=row.content_hash,
+        embedding=list(row.embedding or []),
+        indexed_at=row.indexed_at,
+        generation=row.generation,
     )
 
 

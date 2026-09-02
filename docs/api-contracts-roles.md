@@ -59,6 +59,8 @@ Purpose: return the fixed Permission catalog for Role editing UIs.
     { "key": "roles:write", "description": "Create, update, and delete roles" },
     { "key": "settings:read", "description": "View platform system parameters" },
     { "key": "settings:write", "description": "Change platform system parameters" },
+    { "key": "model_services:read", "description": "View Model Services and embedding purpose state" },
+    { "key": "model_services:write", "description": "Create, update, test, activate, close, open, clean, rebuild, and delete Model Services" },
     { "key": "sources:read", "description": "List and view Sources (non-secret fields)" },
     { "key": "sources:write", "description": "Create, update, and hard-delete (disabled only) Sources; set secrets; run reachability tests; creating a database Source, or a mutating update of one with a missing product-default schedule kind, also inserts the product-default Scheduled Task for each missing kind (`structure`, `join_detection`)" },
     { "key": "metadata:read", "description": "Browse catalog objects, semantics, and joins" },

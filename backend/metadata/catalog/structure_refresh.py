@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.core.time import utc_now
+from backend.metadata.catalog.index_embeddings import refresh_source_embeddings
 from backend.metadata.catalog.records import CatalogObjectRecord
 from backend.metadata.catalog.store import get_catalog_store
 from backend.metadata.catalog.structure_diff import StructureDiffFacts
@@ -68,9 +69,11 @@ def apply_structure_snapshot(
                 changes=plan.diff.changes_document(),
                 session=write.session,
             )
-        return StructureRefreshCommit(
+        commit = StructureRefreshCommit(
             facts=plan.diff, structure_diff_id=record.id
         )
+        refresh_source_embeddings(source.id)
+        return commit
     except Exception:
         # Memory Diff store is a separate dict; undo any Diff that landed for
         # this Job when the write unit rolls back catalog. SQL Diff rows share

@@ -260,6 +260,25 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         module_order=20,
     ),
     ConsoleModuleSeed(
+        id="model-services",
+        group_id="settings",
+        group_label_key="layout.navGroup.settings",
+        label_key="modelServices.title",
+        routes=ModuleRoutes(
+            list="/console/model-services",
+            create="/console/model-services",
+            edit="/console/model-services",
+        ),
+        actions=ModuleActions(
+            list="model_services:read",
+            create="model_services:write",
+            edit="model_services:write",
+            delete="model_services:write",
+        ),
+        group_order=30,
+        module_order=30,
+    ),
+    ConsoleModuleSeed(
         id="account",
         group_id="workbench",
         group_label_key="layout.navGroup.workbench",

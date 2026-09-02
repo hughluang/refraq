@@ -30,6 +30,8 @@ Permission = Literal[
     "audit:read",
     "identity_providers:read",
     "identity_providers:write",
+    "model_services:read",
+    "model_services:write",
 ]
 
 ALL_PERMISSIONS: tuple[Permission, ...] = (
@@ -55,6 +57,8 @@ ALL_PERMISSIONS: tuple[Permission, ...] = (
     "audit:read",
     "identity_providers:read",
     "identity_providers:write",
+    "model_services:read",
+    "model_services:write",
 )
 
 PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
@@ -80,6 +84,8 @@ PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
     "audit:read": "Read management audit events",
     "identity_providers:read": "View identity providers",
     "identity_providers:write": "Create, update, test, and delete identity providers",
+    "model_services:read": "View Model Services and embedding purpose state",
+    "model_services:write": "Create, update, test, activate, close, open, clean, rebuild, and delete Model Services",
 }
 
 CATALOG_SET: frozenset[str] = frozenset(ALL_PERMISSIONS)

@@ -256,6 +256,25 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
     }
   },
   {
+    "id": "model-services",
+    "label_key": "modelServices.title",
+    "routes": {
+      "list": "/console/model-services",
+      "create": "/console/model-services",
+      "edit": "/console/model-services",
+      "show": null,
+      "aliases": []
+    },
+    "actions": {
+      "list": "model_services:read",
+      "create": "model_services:write",
+      "edit": "model_services:write",
+      "delete": "model_services:write",
+      "show": null,
+      "sample": null
+    }
+  },
+  {
     "id": "account",
     "label_key": "account.title",
     "routes": {

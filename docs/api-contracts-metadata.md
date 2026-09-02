@@ -103,6 +103,7 @@ Identity is `source_id` (+ object coordinates). `collected_at` is optional prove
 | `GET` | `/sources/{id}/objects` | `metadata:read` | List objects (query: `q`, `object_type`, `include_absent`, `business_semantics_ready`, `limit`, `offset`) |
 | `GET` | `/objects/{id}` | `metadata:read` | Object detail including columns |
 | `GET` | `/objects/{id}/ddl` | `metadata:read` | DDL text when stored |
+| `GET` | `/objects/{id}/semantics-changes` | `metadata:read` | **Semantics Change** Offset Page (§6) |
 | `POST` | `/objects/{id}/sample` | `catalog:sample` | Catalog Sample live peek (§8) |
 
 **Offset Page** response: `{ "items": […], "total": N, "limit": L, "offset": O }`. `limit` default 100, max 500. `total` is the filtered set. Order: `schema_name`, `name`, `object_type`.
@@ -239,10 +240,10 @@ Batch request:
 
 Batch response: `{ "created_count": 1, "already_known_count": 0, "rejected_count": 0, "items": [Join] }`. Asserted known pairs increment `already_known_count`. Rejected pairs increment `rejected_count` and appear in `items` with `is_rejected`; evidence is not overwritten and the row is not restored.
 
-Path query params: `start` (object or column id or locator_key), optional `target`, `max_hops` (1–5, default 1), `top_targets` (default 3).
+Path query params: `start` (object or column id or locator_key), optional `target`, optional `q` (Catalog Search query; same rank as `/catalog/*/search`; picks targets then BFS), `max_hops` (1–5, default 1), `top_targets` (default 3). `target` and `q` may be combined; an explicit `target` still walks that pair.
 
 Path response: `{ "paths_found": N, "paths": […], "direct_joins": […], "reason": null | "…" }`.
-`reason` may be set when no usable path is returned (e.g. `TARGET_UNREACHABLE`).
+`reason` may be set when no usable path is returned (e.g. `TARGET_UNREACHABLE`). A start that cannot expand is `JOIN_PATH_UNAVAILABLE` (including when `q` is set). `direct_joins` is filled when start is a column and `max_hops=1`, including the `q` mode.
 
 Reject joins that lack evidence with `JOIN_EVIDENCE_REQUIRED`. Cross-Source edges → `JOIN_CROSS_SOURCE`. Self-loop → `JOIN_INVALID`. Duplicate create on an asserted pair → `JOIN_ALREADY_DEFINED` (message includes join id). Single `POST /joins` create or `PATCH` amend on a rejected pair → `JOIN_REJECTED` (batch reports via `rejected_count` instead). Reject of an already-rejected row → `JOIN_ALREADY_REJECTED`. Restore of an asserted row → `JOIN_NOT_REJECTED`. `DELETE` of an automatic edge (`created_by_user_id` null) → `JOIN_DELETE_AUTOMATIC` (including when the row is also rejected; automatic is checked first). `DELETE` of a rejected human-created row → `JOIN_REJECTED`. Create is `201`.
 
@@ -253,9 +254,15 @@ Reject joins that lack evidence with `JOIN_EVIDENCE_REQUIRED`. Cross-Source edge
 | `GET` | `/catalog/objects/search` | `metadata:read` | Cross-Source object search |
 | `GET` | `/catalog/columns/search` | `metadata:read` | Cross-Source column search |
 
-Query params: `q` (**required**, non-empty for both objects and columns), `source_id`, `object_type`, `limit` (default 20, max 100), `offset`.
+Query params: `q` (**required**, non-empty after strip for both objects and columns), `source_id`, `object_type`, `limit` (default 20, max 100), `offset`. Missing, empty, or whitespace-only `q` is `400 CATALOG_SEARCH_QUERY_REQUIRED` (domain-owned; HTTP does not emit `422 REQUEST_INVALID` for emptiness). MCP `search_objects` / `search_columns` use the same code in the tool-error envelope.
 
-**Offset Page** response: `{ "items": […], "total": N, "limit": L, "offset": O }`. Ranking: exact locator/name → prefix → name substring → business name/description substring, then a locator/`id` tiebreaker.
+**Offset Page** response: `{ "items": […], "total": N, "limit": L, "offset": O }`. `total` is always the lexical filtered-set count, including when hybrid is on and when the query embedding call fails. Ranking (ADR 0037): exact locator/name → prefix → name substring → business name/description substring, then a locator/`id` tiebreaker. When an embedding **Model Service** is in use, the purpose is not closed, and ready is true, those lexical hits fuse with embedding nearest-neighbors (RRF) inside a bounded candidate window (lexical pool 500, semantic 50). Hybrid changes `items` order and may inject semantic-only hits; it does not change `total`. An `offset` past that window may return empty `items` while `total` stays the lexical count. A semantic-only hit may appear in `items` when `total` is 0. Otherwise ranking is lexical only. If the query embedding call fails, that request pages the lexical store the same way. HTTP, Console callers of these endpoints, and MCP share this rank. Per-Source list `q` is not this ranking.
+
+### `GET /objects/{id}/semantics-changes`
+
+Permission: `metadata:read`. **Offset Page** of **Semantics Change** events for that Catalog Object (object-level and column-level patches), newest first: `{ "items", "total", "limit", "offset" }`. `limit` default **50**, max **200**.
+
+Item: `{ "id", "object_id", "column_id", "field_name", "old_value", "new_value", "semantic_source", "actor_user_id", "created_at" }`. `column_id` is null for object-level fields. Last write still wins; this list does not restore.
 
 ## 7. Controlled Query (D)
 

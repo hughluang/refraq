@@ -29,6 +29,7 @@ import {
 } from "@/features/sources/catalog-detail/catalogStatus";
 import { ColumnsTab } from "@/features/sources/catalog-detail/ColumnsTab";
 import { DdlTab } from "@/features/sources/catalog-detail/DdlTab";
+import { HistoryTab } from "@/features/sources/catalog-detail/HistoryTab";
 import { JoinsTab } from "@/features/sources/catalog-detail/JoinsTab";
 import { OverviewTab } from "@/features/sources/catalog-detail/OverviewTab";
 import { isSampleEligible } from "@/features/sources/catalog-detail/catalogObjectKind";
@@ -63,6 +64,7 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
   const [activeTab, setActiveTab] = useState<string | null>("overview");
   const [reloadEpoch, setReloadEpoch] = useState(0);
   const [joinsVisited, setJoinsVisited] = useState(false);
+  const [historyVisited, setHistoryVisited] = useState(false);
   const sampleEligible = object
     ? isSampleEligible(object.object_type)
     : true;
@@ -97,6 +99,7 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
   useEffect(() => {
     setReloadEpoch(0);
     setJoinsVisited(false);
+    setHistoryVisited(false);
     setActiveTab("overview");
     void load();
   }, [load]);
@@ -104,6 +107,9 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
   useEffect(() => {
     if (activeTab === "joins") {
       setJoinsVisited(true);
+    }
+    if (activeTab === "history") {
+      setHistoryVisited(true);
     }
   }, [activeTab]);
 
@@ -251,6 +257,7 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
             ) : null}
             <Tabs.Tab value="joins">{t("catalog.tabs.joins")}</Tabs.Tab>
             <Tabs.Tab value="ddl">{t("catalog.tabs.ddl")}</Tabs.Tab>
+            <Tabs.Tab value="history">{t("catalog.tabs.history")}</Tabs.Tab>
           </Tabs.List>
 
           <Tabs.Panel value="overview" pt="md">
@@ -282,6 +289,9 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
           </Tabs.Panel>
           <Tabs.Panel value="ddl" pt="md">
             <DdlTab ddl={object.ddl} />
+          </Tabs.Panel>
+          <Tabs.Panel value="history" pt="md" style={{ overflow: "hidden" }}>
+            <HistoryTab objectId={object.id} listEnabled={historyVisited} />
           </Tabs.Panel>
         </Tabs>
       </FillColumn>

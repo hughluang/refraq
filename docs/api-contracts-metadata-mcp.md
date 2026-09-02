@@ -23,7 +23,8 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 - Locator formats: `src/{engine|kind}/{source_key}`, `obj/…/{schema}/{object_type}/{name}`, `col/…/column/{column_name}`
 - Catalog column payloads omit `normalized_type`. There is no Type Mapping tool. Agents use native `data_type` (ADR 0024).
 - **Instants** in tool JSON match HTTP: outbound UTC `Z` via `format_instant`. Actor **Display Timezone** is not applied to MCP Instant strings (Console-only formatting). Agents may read `display_timezone` from Current User / Account profile and format locally if needed.
-- Admission for new tools: Metadata MCP is the agent data-maintenance face (catalog, semantics, joins, controlled query). Do not add (1) operations, Job, or Scheduled Task observe/mutate tools, (2) a read-only tool the agent cannot start from locators already on this face, or (3) a read-only tool whose payload is already returned by another published tool.
+- Admission for new tools (ADR 0036): Metadata MCP is the agent inquiry and living-registry face. Do not add (1) operations, Job, or Scheduled Task observe/mutate tools, (2) a read-only tool the agent cannot start from locators already on this face, (3) a second aggregate that only renames `get_object`, or (4) tools that write ADR 0015-removed fields. Cheaper projections of `get_object` are admitted.
+- Server `instructions` ship on initialize / `server/discover`. Scene `prompts` (`lookup_business`, `analyze_object`, `explore_join_path`, `enrich_semantics`) activate reasoning and do not prescribe tool order. Prompt bodies follow the admitted field set (ADR 0015).
 
 ## 3. Structure (read)
 
@@ -32,7 +33,10 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 | `search_sources` | `sources:read` | Search/list Sources (`query_text`, `limit` default **50** max **200**, `offset`) |
 | `get_source` | `sources:read` | Source detail by `source_locator_key` (projected `access`) |
 | `list_objects` | `metadata:read` | Catalog Objects under a Source locator (`q`, `object_type`, `business_semantics_ready`, `limit`, `offset`) |
-| `get_object` | `metadata:read` | Object + columns + DDL + object semantics by `object_locator_key` (columns omit `normalized_type`; **no** `foreign_keys` / `indexes` — structure graph is HTTP detail or join tools). There is no separate DDL or object-semantics read tool |
+| `get_object` | `metadata:read` | Aggregate: object + columns + DDL + object semantics by `object_locator_key` (columns omit `normalized_type`; **no** `foreign_keys` / `indexes` — structure graph is HTTP detail or join tools) |
+| `get_object_semantics` | `metadata:read` | Object-level admitted semantics only (no columns, no DDL) |
+| `get_object_columns` | `metadata:read` | Columns + column semantics (no DDL; omit `normalized_type`) |
+| `get_object_ddl` | `metadata:read` | Stored `ddl` and `has_definition` |
 
 `list_objects` is the Per-Source object list (same summary projection as HTTP). Optional `q` is a literal substring of schema, technical name, or `business_name`. Optional `business_semantics_ready` is `true` | `false`. This tool has no `include_absent` argument; tombstones are included. Items omit columns, foreign keys, indexes, and DDL.
 
@@ -44,8 +48,9 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 | `set_column_semantics` | `metadata:write` | Batch column semantics under one object locator |
 | `list_business_domains` | `metadata:read` | List Business Domains |
 | `create_business_domain` | `metadata:write` | Create a Business Domain (`code`, `name`, `description?`) |
+| `list_semantics_changes` | `metadata:read` | **Semantics Change** Offset Page for an object locator |
 
-Object semantics read is `get_object` (not a compact semantics tool). Write discipline: fill gaps; do not invent; persist `open_questions` when evidence is weak. `semantic_source` is set to `mcp`. Field-level protection is deferred (ADR 0014). MCP adapters strip `null`, blank strings, and empty collections before calling the shared write service — agents cannot clear existing semantics via MCP in this phase (ADR 0018; HTTP Console/API use present-null to clear). Column batch responses include `skipped_columns` for `invalid_column_name` / `no_changes`. Writable fields match HTTP semantics PATCH (no `field_kind`; no `model_routing_hint` — not delivered this phase; none of the fields removed by ADR 0015).
+Object semantics read is `get_object` or `get_object_semantics`. Write discipline: fill gaps; do not invent; persist `open_questions` when evidence is weak. Applied writes append **Semantics Change**. `list_semantics_changes` pages that ledger for an object locator. `semantic_source` is set to `mcp`. Field-level protection is deferred (ADR 0014). MCP adapters strip `null`, blank strings, and empty collections before calling the shared write service — agents cannot clear existing semantics via MCP in this phase (ADR 0018; HTTP Console/API use present-null to clear). Column batch responses include `skipped_columns` for `invalid_column_name` / `no_changes`. Writable fields match HTTP semantics PATCH (no `field_kind`; no `model_routing_hint` — not delivered this phase; none of the fields removed by ADR 0015).
 
 `set_object_semantics` does **not** accept `time_semantics`, `status_semantics`, `relation_summary`, or `confidence`. Agents record time/status meaning on each relevant column via `business_description` (and optional free-text `column_semantics.semantic_type` / `enum_catalog` — closed vocabulary deferred, ADR 0016) instead of electing one primary time or status column, and record object relationships as join edges with evidence. `business_primary_key` names that do not exist on the object are rejected with `SEMANTIC_COLUMN_UNKNOWN`. Object writes accept `business_domain_code`; unknown codes → `BUSINESS_DOMAIN_UNKNOWN`.
 
@@ -65,12 +70,13 @@ Response: `{ updated_count, requested_count, skipped_columns }`.
 | `reject_join` | `metadata:write` | **Join Rejection** by join id |
 | `restore_join` | `metadata:write` | Lift **Join Rejection** |
 | `delete_join` | `metadata:write` | Remove a human-created, non-rejected edge by join id; automatic (including rejected automatic) → `JOIN_DELETE_AUTOMATIC` first, then rejected human → `JOIN_REJECTED`; does not stop automatic re-detection (use `reject_join`) |
-| `find_join_path` | `metadata:read` | Path lookup from start locator |
+| `find_join_path` | `metadata:read` | Path lookup from start locator (optional `target_locator_key` or `query_text`) |
 
 `list_joins` args: object locator plus `limit` (default **50**, max **200**) and `offset` (default **0**). Result is the same **Offset Page** as HTTP `GET /objects/{id}/joins`: `{ "items", "total", "limit", "offset" }`. Order: `created_at ASC`, `id ASC`. Rejected rows are included.
 
-`find_join_path` args: `start_locator_key` (required), optional `target_locator_key`, `max_hops` (1–5), `top_targets`.
-Returns `paths_found`, per-target `path_summary` / `hops`, `direct_joins` when start is a column and `max_hops=1`, and optional `reason` when no usable path is available (e.g. `TARGET_UNREACHABLE`). Rejected rows are omitted.
+`find_join_path` args: `start_locator_key` (required), optional `target_locator_key`, optional `query_text`, `max_hops` (1–5), `top_targets`.
+`query_text` uses Catalog Search (same rank as `search_objects` / `search_columns`) to pick targets, then BFS. Explicit `target_locator_key` still walks the shortest path. Both omitted → graph exploration.
+Returns `paths_found`, per-target `path_summary` / `hops`, `direct_joins` when start is a column and `max_hops=1` (including `query_text` mode), and optional `reason` when no usable path is available (e.g. `TARGET_UNREACHABLE`). A start that cannot expand is `JOIN_PATH_UNAVAILABLE` in every mode. Rejected rows are omitted.
 
 `upsert_joins` returns `created_count`, `already_known_count`, `rejected_count`, `skipped_count`, `skipped_joins` (missing endpoints), and `items`. Asserted known pairs are skipped, not overwritten. Rejected pairs increment `rejected_count` and appear in `items` with `is_rejected` (including `id`); they are not overwritten and not restored. To re-assert, call `restore_join`; to change evidence after restore, call `patch_join`. Single `upsert_join` on a rejected pair still returns `JOIN_REJECTED`.
 
@@ -81,7 +87,7 @@ Returns `paths_found`, per-target `path_summary` / `hops`, `direct_joins` when s
 | `search_objects` | `metadata:read` | Cross-Source object search |
 | `search_columns` | `metadata:read` | Cross-Source column search |
 
-Args align with HTTP search: `query_text` **required and non-empty** for both object and column search; optional source/object filters, `limit`/`offset`.
+Args align with HTTP search: `query_text` **required and non-empty** after strip for both object and column search; optional source/object filters, `limit`/`offset`. Missing, empty, or whitespace-only `query_text` is `CATALOG_SEARCH_QUERY_REQUIRED` (same Problem Code as HTTP `400`). Ranking is the Catalog Search authority (lexical; optional embedding hybrid when an embedding **Model Service** is in use, open, and ready — ADR 0037 / 0039). If the query embedding call fails, that request pages the lexical store the same way as when hybrid is off. `total` is always the lexical filtered-set count (ADR 0037), including when hybrid ranks a bounded fusion window.
 
 ## 7. Controlled Query
 

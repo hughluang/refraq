@@ -74,10 +74,14 @@ def _pat(client: TestClient, name: str = "mcp-pat") -> str:
 def test_catalog_names_match_registered_tools() -> None:
     registered = {tool.name for tool in asyncio.run(MCPServer.list_tools(mcp))}
     assert registered == {spec.name for spec in MCP_TOOLS}
-    assert len(MCP_TOOLS) == 19
-    assert {"get_job", "get_object_ddl", "get_object_semantics"}.isdisjoint(
-        registered
-    )
+    assert len(MCP_TOOLS) == 23
+    assert {"get_job"}.isdisjoint(registered)
+    assert {
+        "get_object_ddl",
+        "get_object_semantics",
+        "get_object_columns",
+        "list_semantics_changes",
+    }.issubset(registered)
 
 
 def test_catalog_requires_auth(client: TestClient) -> None:

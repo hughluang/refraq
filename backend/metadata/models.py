@@ -260,6 +260,41 @@ class CatalogJoinChangeRow(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
 
+class CatalogSemanticsChangeRow(Base):
+    __tablename__ = "catalog_semantics_changes"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    object_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("catalog_objects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    column_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    field_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    old_value: Mapped[object | None] = mapped_column(JSONB, nullable=True)
+    new_value: Mapped[object | None] = mapped_column(JSONB, nullable=True)
+    semantic_source: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
+class CatalogEmbeddingRow(Base):
+    __tablename__ = "catalog_embeddings"
+    __table_args__ = (
+        UniqueConstraint("kind", "target_id", name="uq_catalog_embeddings_kind_target"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    locator_key: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    embedding: Mapped[list] = mapped_column(JSONB, nullable=False)
+    indexed_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class StructureDiffRow(Base):
     __tablename__ = "structure_diffs"
     __table_args__ = (

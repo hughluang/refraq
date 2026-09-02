@@ -33,6 +33,7 @@ backend/
   admin/                  # platform kernel (Identity / RBAC / Console foundation)
     federation/           # OIDC provider, binding, pending, and provisioning language unit
     branding/             # Site Branding configuration and asset language unit
+    model_services/       # Model Service registry, purpose state, connectivity test
     # published modules listed in §3
     models.py *_store.py permissions.py …
     schemas/ routers/     # this package's HTTP shapes and adapters
@@ -75,6 +76,7 @@ Each **platform kernel / platform primitive / product domain** package has an ex
 | `backend.admin.token_store` | Token store ports used by deps/tokens HTTP |
 | `backend.admin.audit_store` | Audit store ports used by audit HTTP / writers |
 | `backend.admin.federation` | Identity Provider, OIDC authorization-code flow, External Subject binding, pending identity, and provisioning APIs |
+| `backend.admin.model_services` | Model Service registry snapshot and purpose state for Catalog Search (`get_embedding_runtime`, `mark_embedding_ready`, bind of catalog-embed job port) |
 | `backend.admin.system_parameters` | System Parameter mechanism (registry, occupy, `read_stored_parameter` / `resolve_int`, store reset). Does not name domain knobs |
 | `backend.admin.parameters` | Admin-owned parameter specs and typed accessors |
 | `backend.admin.routers.*` | Foundation HTTP adapters (mounted by `main` only) |
@@ -98,6 +100,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 |--------|----------------|
 | `backend.metadata.errors` | Domain errors (subclass `AppError`, not `admin` concrete types) |
 | `backend.metadata.source_jobs` | Domain minting of structure and join-detection **Jobs** via **Scheduled Task** (due / run-now); Beat Celery entries (`fire_scheduled_structure`, `fire_scheduled_join_detection`). Does not enforce **Kind execution lock** at mint — that is Job execution |
+| `backend.metadata.catalog_embed_jobs` | `catalog_embed` mint / cancel / index cleanup / latest-job view bound into admin; Job runner |
 | `backend.metadata.source_schedules` | Metadata facade onto platform schedules: operator projection (`public_schedule`: work_kind + target), opaque `owner_ref` register/withdraw, per-kind product-default seed on Source create / mutating Source update. Closed work kinds: `structure`, `join_detection`. Not schedule ownership by Source |
 | `backend.metadata.type_mappings.seeds` | Product Type Mapping seed occupy (`ensure_product_type_mappings`) for Foundation Upgrade / Site Bootstrap |
 | `backend.metadata.mcp_catalog` | MCP tool catalog (name / Permission / description) shared by HTTP and `tools/list` |
@@ -216,7 +219,7 @@ Concrete edges:
 |------|------------|
 | `main` (composition) | `core`, published `admin` / `jobs` / `metadata` / `worker` (including their `routers.*` for mount), Site Bootstrap helpers |
 | `core` | stdlib, third parties, Alembic; `admin.roles` published symbols from `upgrade` only; `worker.api` / `worker.parameters` from `upgrade` only; `metadata.type_mappings.seeds` from `upgrade` only |
-| `admin` | `core`; own stores/schemas/routers / `system_parameters` / `parameters` |
+| `admin` | `core`; own stores/schemas/routers / `system_parameters` / `parameters` / `model_services` |
 | `jobs` | `core`; own store/schemas/routers / `parameters`; published `admin` (audit, System Parameter resolver) |
 | `metadata` | `core`; published `admin`; published `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; own modules |
 | `worker` | `core`; published `admin` / `jobs` / `metadata` for assembly and system tasks |

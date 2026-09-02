@@ -35,6 +35,24 @@ def assemble_system_parameters() -> None:
     )
     occupy_registered_parameters()
     _warn_leftover_env_names()
+    _warn_dead_embedding_env()
+
+
+_DEAD_EMBEDDING_ENV = (
+    "REFRAQ_EMBEDDING_API_URL",
+    "REFRAQ_EMBEDDING_MODEL",
+    "REFRAQ_EMBEDDING_TIMEOUT_SEC",
+)
+
+
+def _warn_dead_embedding_env() -> None:
+    for name in _DEAD_EMBEDDING_ENV:
+        if name in os.environ:
+            logger.warning(
+                "environment variable %s is ignored; Catalog Search hybrid is "
+                "an in-use Model Service",
+                name,
+            )
 
 
 def _warn_leftover_env_names() -> None:

@@ -52,6 +52,11 @@ def _dispatch_job(job_id: str) -> dict[str, str]:
         return run_structure_job(job_id)
     if current.kind == "join_detection":
         return run_join_detection_job(job_id)
+    if current.kind == "catalog_embed":
+        # Lazy import: catalog_embed_jobs.__init__ → jobs → source_jobs → tasks.
+        from backend.metadata.catalog_embed_jobs.runner import run_catalog_embed_job
+
+        return run_catalog_embed_job(job_id)
     mark_failed(
         job_id,
         error_code="JOB_INPUT_INVALID",

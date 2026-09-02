@@ -2,7 +2,7 @@
 
 ## 1. Scope
 
-This document defines the platform **Scheduled Task** mechanism: the scheduling foundation that turns a cadence intent into observable, withdrawable **Job** attempts. Distinct from any **Job** instance. Not a product domain, not a Metadata business object, and not a field of **Source**. It is the only Console/HTTP/MCP path that mints domain **Jobs**.
+This document defines the platform **Scheduled Task** mechanism: the scheduling foundation that turns a cadence intent into observable, withdrawable **Job** attempts. Distinct from any **Job** instance. Not a product domain, not a Metadata business object, and not a field of **Source**. Structure and join-detection **Jobs** are minted only this way. `catalog_embed` is minted by **Model Service** HTTP (`docs/business-model-services.md`).
 
 Related boundaries:
 

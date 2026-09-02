@@ -172,6 +172,22 @@ def test_service_empty_search_raises() -> None:
         catalog_service.search_columns("")
 
 
+def test_mcp_empty_search_returns_query_required(client: TestClient) -> None:
+    secret = _pat_secret(client)
+    auth = f"Bearer {secret}"
+    calls = (
+        lambda: mcp_search_objects(),
+        lambda: mcp_search_objects(query_text=""),
+        lambda: mcp_search_objects(query_text="   "),
+        lambda: mcp_search_columns(query_text=""),
+        lambda: mcp_search_columns(query_text="   "),
+    )
+    with mcp_authorization(auth):
+        for call in calls:
+            payload = json.loads(call())
+            assert payload["error"]["code"] == "CATALOG_SEARCH_QUERY_REQUIRED", payload
+
+
 def test_service_read_model_and_semantics() -> None:
     _seed_source()
     store = get_catalog_store()

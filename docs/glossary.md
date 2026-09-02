@@ -78,7 +78,7 @@ Avoid treating it as a second frontend catalog, as navigation grouping, or as th
 ### Platform Settings
 
 The Console Module that presents **System Parameter**s.
-Distinct from Administration master data (Users / Roles) and from **Account Center**.
+Distinct from Administration master data (Users / Roles), **Model Service**, and **Account Center**.
 Avoid treating the module as the parameter itself, or conflating it with user preferences or Data Product governance.
 
 ### System Parameter
@@ -388,6 +388,22 @@ Avoid conflating with **Source** (data origin) or **Identity Source**.
 First attester of a directed column pair, recorded on the **Join Change** create event: `foreign_key`, `sql_lineage`, `human`, or `mcp`. Not a column on the live join row. Not a rank and not the current witness.
 `sql_lineage` is a discovered SQL attestation, not a claim that current DDL still contains the join.
 Avoid storing Join Origin on `catalog_joins`; treating origin as authority, precedence, last-writer, or “FK still present”; encoding **Join Rejection** as an origin value.
+
+### Model Service
+
+A site-wide operator-managed external model endpoint (purpose + protocol). The first purpose is Catalog Search embedding. Not a **System Parameter**, not a **Source**, and not an **Identity Provider**.
+Console operator copy labels set-in-use **Enable**. Status remains **In use**. Enable is not open.
+Avoid env as the embeddings home; treating the URL as a System Parameter; a second object type for LLM; treating Enable as open.
+
+### Catalog Search
+
+Cross-Source object and column search by required non-empty query. Empty or whitespace-only query is `CATALOG_SEARCH_QUERY_REQUIRED` on HTTP and MCP. One ranking authority per deployment: portable lexical ladder, plus optional embedding hybrid when an embedding **Model Service** is in use, the purpose is not closed, and ready is true (ADR 0037 / 0039). If the query embedding call fails, that request uses the lexical store page. `total` is the lexical filtered-set count on every path. HTTP, Console callers of those endpoints, and MCP share that rank.
+Avoid treating Per-Source list `q` as Catalog Search; avoid FTS as the ranking authority; avoid a second MCP-only rank.
+
+### Semantics Change
+
+An append-only ledger of applied object or column semantics writes on a Catalog Object: field name, old value, new value, `semantic_source`, actor, Instant (ADR 0038). Visible on catalog object detail, `GET /objects/{id}/semantics-changes`, and MCP `list_semantics_changes`. Last write still wins; the ledger does not lock or restore.
+Avoid **Join Change**; avoid **Management Audit Event** as the object-side history; avoid field-level overwrite protection.
 
 ### Join Change
 

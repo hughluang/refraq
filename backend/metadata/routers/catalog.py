@@ -12,6 +12,7 @@ from backend.core.pagination import (
     CATALOG_OBJECT_LIST,
     CATALOG_SEARCH,
     JOIN_LIST,
+    SEMANTICS_CHANGE_LIST,
     PageParams,
     page_params,
 )
@@ -50,6 +51,8 @@ from backend.metadata.schemas.catalog import (
     JoinResponse,
     JoinUpsertRequest,
     ObjectSemanticsPatchRequest,
+    SemanticsChangeListResponse,
+    SemanticsChangeOut,
 )
 from backend.metadata.schemas.query import SampleRequest, SampleResponse
 
@@ -109,14 +112,14 @@ def list_objects(
 
 @router.get("/catalog/objects/search", response_model=CatalogObjectSearchResponse)
 def search_objects(
-    q: str = Query(..., min_length=1),
+    q: str | None = None,
     source_id: str | None = None,
     object_type: str | None = None,
     page: PageParams = Depends(page_params(CATALOG_SEARCH)),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectSearchResponse:
     items, total = catalog_reads.search_objects(
-        q,
+        q or "",
         source_id=source_id,
         object_type=object_type,
         limit=page.limit,
@@ -131,14 +134,14 @@ def search_objects(
 
 @router.get("/catalog/columns/search", response_model=CatalogColumnSearchResponse)
 def search_columns(
-    q: str = Query(..., min_length=1),
+    q: str | None = None,
     source_id: str | None = None,
     object_type: str | None = None,
     page: PageParams = Depends(page_params(CATALOG_SEARCH)),
     _: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogColumnSearchResponse:
     items, total = catalog_reads.search_columns(
-        q,
+        q or "",
         source_id=source_id,
         object_type=object_type,
         limit=page.limit,
@@ -167,6 +170,38 @@ def get_object_ddl(
 ) -> CatalogDdlResponse:
     ddl = catalog_reads.get_object_ddl(object_id)
     return CatalogDdlResponse(id=ddl.id, ddl=ddl.ddl)
+
+@router.get(
+    "/objects/{object_id}/semantics-changes",
+    response_model=SemanticsChangeListResponse,
+)
+def list_object_semantics_changes(
+    object_id: str,
+    page: PageParams = Depends(page_params(SEMANTICS_CHANGE_LIST)),
+    _: UserRecord = Depends(require_permission("metadata:read")),
+) -> SemanticsChangeListResponse:
+    items, total = catalog_reads.list_semantics_changes(
+        object_id, limit=page.limit, offset=page.offset
+    )
+    return SemanticsChangeListResponse(
+        items=[
+            SemanticsChangeOut(
+                id=c.id,
+                object_id=c.object_id,
+                column_id=c.column_id,
+                field_name=c.field_name,
+                old_value=c.old_value,
+                new_value=c.new_value,
+                semantic_source=c.semantic_source,
+                actor_user_id=c.actor_user_id,
+                created_at=c.created_at,
+            )
+            for c in items
+        ],
+        total=total,
+        limit=page.limit,
+        offset=page.offset,
+    )
 
 @router.post("/objects/{object_id}/sample", response_model=SampleResponse)
 def run_object_sample(
@@ -323,6 +358,7 @@ def create_joins_batch(
 def get_join_path(
     start: str = Query(...),
     target: str | None = None,
+    q: str | None = None,
     max_hops: int = Query(default=1, ge=1, le=5),
     top_targets: int = Query(default=3, ge=1, le=20),
     _: UserRecord = Depends(require_permission("metadata:read")),
@@ -330,6 +366,7 @@ def get_join_path(
     result = catalog_reads.lookup_join_paths(
         start,
         target,
+        query_text=q,
         max_hops=max_hops,
         top_targets=top_targets,
     )

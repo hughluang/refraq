@@ -19,12 +19,21 @@ from backend.admin.role_store import get_role_store
 from backend.admin.user_store import UserRecord
 from backend.metadata.mcp_actor import current_actor, mcp_authorization
 from backend.metadata.mcp_catalog import TOOLS_LIST_TTL_MS, tools_for_permissions
+from backend.metadata.mcp_guidance import (
+    ANALYZE_OBJECT_BODY,
+    ENRICH_SEMANTICS_BODY,
+    EXPLORE_JOIN_PATH_BODY,
+    LOOKUP_BUSINESS_BODY,
+    SERVER_INSTRUCTIONS,
+    TOOL_DESCRIPTIONS,
+)
 from backend.core.errors import AppError
 from backend.core.pagination import (
     BUSINESS_DOMAIN_LIST,
     CATALOG_OBJECT_LIST,
     CATALOG_SEARCH,
     JOIN_LIST,
+    SEMANTICS_CHANGE_LIST,
     SOURCE_SEARCH,
 )
 from backend.core.time import format_instant
@@ -56,7 +65,11 @@ class RefraqMetadataMcp(MCPServer):
 
 mcp = RefraqMetadataMcp(
     "refraq-metadata",
-    cache_hints={"tools/list": CacheHint(ttl_ms=TOOLS_LIST_TTL_MS, scope="private")},
+    instructions=SERVER_INSTRUCTIONS,
+    cache_hints={
+        "tools/list": CacheHint(ttl_ms=TOOLS_LIST_TTL_MS, scope="private"),
+        "prompts/list": CacheHint(ttl_ms=TOOLS_LIST_TTL_MS, scope="private"),
+    },
 )
 
 
@@ -113,7 +126,59 @@ def _object_payload(
 def _join_payload_from_record(record: Any) -> dict[str, Any]:
     return asdict(catalog_views.join_view(record))
 
-@mcp.tool()
+
+@mcp.prompt()
+def lookup_business() -> str:
+    return LOOKUP_BUSINESS_BODY
+
+
+@mcp.prompt()
+def analyze_object(object_locator_key: str = "") -> str:
+    header = (
+        f"Analyze object: {object_locator_key}\n\n"
+        if object_locator_key
+        else "Analyze object: determine from the user.\n\n"
+    )
+    return header + ANALYZE_OBJECT_BODY
+
+
+@mcp.prompt()
+def explore_join_path() -> str:
+    return EXPLORE_JOIN_PATH_BODY
+
+
+@mcp.prompt()
+def enrich_semantics(object_locator_key: str) -> str:
+    header = f"Enrich object: {object_locator_key}\n\n"
+    gaps = ""
+    try:
+        view = catalog_reads.get_object(object_locator_key)
+        missing: list[str] = []
+        if not view.business_name:
+            missing.append("business_name")
+        if not view.business_description:
+            missing.append("business_description")
+        if not view.business_semantics_ready:
+            missing.append("business_semantics_ready=false")
+        if view.open_questions:
+            missing.append(f"open_questions={view.open_questions}")
+        col_gaps = [
+            c.name
+            for c in view.columns
+            if not c.business_name or not c.business_description
+        ]
+        gaps = (
+            "Current gaps: "
+            + (", ".join(missing) if missing else "object name/description present")
+            + ". Columns missing name or description: "
+            + (", ".join(col_gaps[:20]) if col_gaps else "none")
+            + ".\n\n"
+        )
+    except Exception as exc:  # noqa: BLE001
+        gaps = f"Could not preload object ({exc}).\n\n"
+    return header + gaps + ENRICH_SEMANTICS_BODY
+
+@mcp.tool(description=TOOL_DESCRIPTIONS["search_sources"])
 def search_sources(
     query_text: str | None = None,
     limit: int | None = None,
@@ -139,7 +204,7 @@ def search_sources(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["get_source"])
 def get_source(source_locator_key: str) -> str:
     """Get Source detail by locator (sources:read)."""
     try:
@@ -150,7 +215,7 @@ def get_source(source_locator_key: str) -> str:
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["list_objects"])
 def list_objects(
     source_locator_key: str,
     q: str | None = None,
@@ -185,7 +250,7 @@ def list_objects(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["get_object"])
 def get_object(object_locator_key: str) -> str:
     """Get Catalog Object with columns, DDL, and object semantics by locator (metadata:read)."""
     try:
@@ -196,7 +261,41 @@ def get_object(object_locator_key: str) -> str:
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["get_object_semantics"])
+def get_object_semantics(object_locator_key: str) -> str:
+    try:
+        user, _token_id = current_actor()
+        _require(user, "metadata:read")
+        view = catalog_reads.get_object(object_locator_key)
+        return _dumps(
+            present_object(view, profile=ObjectPresentProfile.MCP_SUMMARY)
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+@mcp.tool(description=TOOL_DESCRIPTIONS["get_object_columns"])
+def get_object_columns(object_locator_key: str) -> str:
+    try:
+        user, _token_id = current_actor()
+        _require(user, "metadata:read")
+        view = catalog_reads.get_object(object_locator_key)
+        return _dumps(
+            present_object(view, profile=ObjectPresentProfile.MCP_COLUMNS)
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+@mcp.tool(description=TOOL_DESCRIPTIONS["get_object_ddl"])
+def get_object_ddl(object_locator_key: str) -> str:
+    try:
+        user, _token_id = current_actor()
+        _require(user, "metadata:read")
+        view = catalog_reads.get_object(object_locator_key)
+        return _dumps(present_object(view, profile=ObjectPresentProfile.MCP_DDL))
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+@mcp.tool(description=TOOL_DESCRIPTIONS["set_object_semantics"])
 def set_object_semantics(
     object_locator_key: str,
     business_name: str | None = None,
@@ -243,7 +342,7 @@ def set_object_semantics(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["set_column_semantics"])
 def set_column_semantics(
     object_locator_key: str,
     columns: list[dict[str, Any]],
@@ -271,7 +370,7 @@ def set_column_semantics(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["list_business_domains"])
 def list_business_domains(
     query_text: str | None = None,
     limit: int | None = None,
@@ -308,7 +407,7 @@ def list_business_domains(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["create_business_domain"])
 def create_business_domain(
     code: str,
     name: str,
@@ -341,7 +440,45 @@ def create_business_domain(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["list_semantics_changes"])
+def list_semantics_changes(
+    object_locator_key: str,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> str:
+    try:
+        user, _token_id = current_actor()
+        _require(user, "metadata:read")
+        lim = SEMANTICS_CHANGE_LIST.clamp(limit)
+        off = max(0, int(offset or 0))
+        items, total = catalog_reads.list_semantics_changes(
+            object_locator_key, limit=lim, offset=off
+        )
+        return _dumps(
+            {
+                "items": [
+                    {
+                        "id": c.id,
+                        "object_id": c.object_id,
+                        "column_id": c.column_id,
+                        "field_name": c.field_name,
+                        "old_value": c.old_value,
+                        "new_value": c.new_value,
+                        "semantic_source": c.semantic_source,
+                        "actor_user_id": c.actor_user_id,
+                        "created_at": c.created_at,
+                    }
+                    for c in items
+                ],
+                "total": total,
+                "limit": lim,
+                "offset": off,
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _err(exc)
+
+@mcp.tool(description=TOOL_DESCRIPTIONS["search_objects"])
 def search_objects(
     query_text: str | None = None,
     source_locator_key: str | None = None,
@@ -376,7 +513,7 @@ def search_objects(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["search_columns"])
 def search_columns(
     query_text: str,
     source_locator_key: str | None = None,
@@ -413,7 +550,7 @@ def search_columns(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["list_joins"])
 def list_joins(
     object_locator_key: str,
     limit: int | None = None,
@@ -438,7 +575,7 @@ def list_joins(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["upsert_join"])
 def upsert_join(
     from_column_locator_key: str,
     to_column_locator_key: str,
@@ -466,7 +603,7 @@ def upsert_join(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["patch_join"])
 def patch_join(
     join_id: str,
     evidence: str,
@@ -489,7 +626,7 @@ def patch_join(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["reject_join"])
 def reject_join(join_id: str) -> str:
     """Reject a join pair (metadata:write). Blocks every writer until restore."""
     try:
@@ -504,7 +641,7 @@ def reject_join(join_id: str) -> str:
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["restore_join"])
 def restore_join(join_id: str) -> str:
     """Lift Join Rejection (metadata:write)."""
     try:
@@ -519,7 +656,7 @@ def restore_join(join_id: str) -> str:
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["upsert_joins"])
 def upsert_joins(
     joins: list[dict[str, Any]],
 ) -> str:
@@ -593,7 +730,7 @@ def upsert_joins(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["delete_join"])
 def delete_join(join_id: str) -> str:
     """Remove a human-created, non-rejected edge by id (metadata:write). Delete does not stop automatic re-detection; use reject_join to keep a pair out."""
     try:
@@ -608,10 +745,11 @@ def delete_join(join_id: str) -> str:
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["find_join_path"])
 def find_join_path(
     start_locator_key: str,
     target_locator_key: str | None = None,
+    query_text: str | None = None,
     max_hops: int | None = None,
     top_targets: int | None = None,
 ) -> str:
@@ -622,6 +760,7 @@ def find_join_path(
         result = catalog_reads.lookup_join_paths(
             start_locator_key,
             target_locator_key,
+            query_text=query_text,
             max_hops=_clamp(max_hops, default=1, maximum=5),
             top_targets=_clamp(top_targets, default=3, maximum=20),
         )
@@ -645,6 +784,7 @@ def find_join_path(
         return _err(exc)
 
 @mcp.tool(
+    description=TOOL_DESCRIPTIONS["run_sql"],
     annotations=ToolAnnotations(read_only_hint=True),
 )
 def run_sql(

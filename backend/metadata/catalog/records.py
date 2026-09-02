@@ -129,6 +129,14 @@ def new_join_change_id() -> str:
     return f"jch_{uuid.uuid4().hex[:12]}"
 
 
+def new_semantics_change_id() -> str:
+    return f"sch_{uuid.uuid4().hex[:12]}"
+
+
+def new_embedding_id() -> str:
+    return f"emb_{uuid.uuid4().hex[:12]}"
+
+
 def new_fk_id() -> str:
     return f"fk_{uuid.uuid4().hex[:12]}"
 

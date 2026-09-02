@@ -233,3 +233,15 @@ export type StructureDiff = {
   changes?: StructureDiffChange[];
 };
 
+export type SemanticsChange = {
+  id: string;
+  object_id: string;
+  column_id: string | null;
+  field_name: string;
+  old_value: unknown;
+  new_value: unknown;
+  semantic_source: string;
+  actor_user_id: string | null;
+  created_at: string;
+};
+

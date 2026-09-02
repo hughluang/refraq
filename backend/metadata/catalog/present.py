@@ -19,6 +19,8 @@ class ObjectPresentProfile(str, Enum):
     HTTP_DETAIL = "http_detail"
     MCP_SUMMARY = "mcp_summary"
     MCP_DETAIL = "mcp_detail"
+    MCP_COLUMNS = "mcp_columns"
+    MCP_DDL = "mcp_ddl"
 
 
 def present_column(view: ColumnView, *, include_normalized_type: bool) -> dict[str, Any]:
@@ -53,6 +55,17 @@ def present_object(view: ObjectView, *, profile: ObjectPresentProfile) -> dict[s
         "collected_at": view.collected_at,
     }
     if profile is ObjectPresentProfile.MCP_SUMMARY:
+        return payload
+    if profile is ObjectPresentProfile.MCP_DDL:
+        return {
+            "locator_key": view.locator_key,
+            "ddl": view.ddl,
+            "has_definition": bool(view.ddl),
+        }
+    if profile is ObjectPresentProfile.MCP_COLUMNS:
+        payload["columns"] = [
+            present_column(c, include_normalized_type=False) for c in view.columns
+        ]
         return payload
     if profile is ObjectPresentProfile.HTTP_SUMMARY:
         payload["columns"] = []

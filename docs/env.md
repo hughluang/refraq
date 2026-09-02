@@ -29,6 +29,7 @@ Current `backend/.env.example` defines:
 - `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD=0.75` (abort structure catalog write when absent ratio exceeds this; **System Parameter** candidate owned by `metadata` — `docs/business-system-parameters.md` §5.1)
 - `REFRAQ_QUERY_TIMEOUT_SEC=30` (controlled query dual timeout: application + engine statement/command timeout; **System Parameter** candidate — §5.1)
 - `REFRAQ_QUERY_MAX_ROWS=1000` (platform cap for controlled query `max_rows`; request default is 100; **System Parameter** candidate — §5.1)
+- `REFRAQ_EMBEDDING_API_URL`, `REFRAQ_EMBEDDING_MODEL`, `REFRAQ_EMBEDDING_TIMEOUT_SEC` (retired. Catalog Search hybrid is an in-use **Model Service**. These names are ignored and reported at startup as dead. They are not **System Parameter**s and are not imported into rows)
 
 Session TTL and occupancy lost-detection are **System Parameter**s (`docs/business-system-parameters.md` §5). They are not environment variables. A leftover name matching a registered key (`ADMIN_SESSION_TTL_HOURS`, `REFRAQ_JOB_LOST_DETECTION_SEC`, or the key itself in uppercase) is ignored and reported at startup as dead. The stored row is the only home.
 
@@ -108,6 +109,7 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD` (metadata candidate; not yet a System Parameter)
 - `REFRAQ_QUERY_TIMEOUT_SEC` (metadata candidate; not yet a System Parameter)
 - `REFRAQ_QUERY_MAX_ROWS` (metadata candidate; not yet a System Parameter)
+- `REFRAQ_EMBEDDING_API_URL`, `REFRAQ_EMBEDDING_MODEL`, `REFRAQ_EMBEDDING_TIMEOUT_SEC` (retired; ignored and reported at startup)
 - `REFRAQ_INTEGRATION_DATABASE_URL` (pytest `@pytest.mark.integration` only; default `…/refraq_test`)
 - `REFRAQ_INTEGRATION_REDIS_URL` (integration only; default `redis://127.0.0.1:6379/1`)
 - `REFRAQ_INTEGRATION_CELERY_BROKER_URL` (integration only; default `redis://127.0.0.1:6379/3`)

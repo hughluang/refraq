@@ -283,6 +283,48 @@ def test_patch_object_semantics_omit_unchanged_present_null_clears(
     assert "business_name" in (events[0].detail or {}).get("cleared", [])
 
 
+def test_same_value_semantics_patch_is_noop(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _make_source(client)
+    obj = _seed_object(source["id"])
+    col_id = obj.columns[0].id
+    embed_calls = {"n": 0}
+
+    def boom(*_args, **_kwargs):
+        embed_calls["n"] += 1
+        raise AssertionError("same-value patch must not refresh embeddings")
+
+    monkeypatch.setattr(
+        "backend.metadata.catalog.semantics.refresh_object_embedding", boom
+    )
+    monkeypatch.setattr(
+        "backend.metadata.catalog.semantics.refresh_column_embedding", boom
+    )
+
+    before_changes = client.get(f"/objects/{obj.id}/semantics-changes")
+    assert before_changes.status_code == 200
+    change_total = before_changes.json()["total"]
+    audits_before, _ = get_audit_store().list_events()
+
+    same_object = client.patch(
+        f"/objects/{obj.id}/semantics",
+        json={"business_name": obj.business_name},
+    )
+    assert same_object.status_code == 200
+    same_column = client.patch(
+        f"/columns/{col_id}/semantics",
+        json={"business_name": obj.columns[0].business_name},
+    )
+    assert same_column.status_code == 200
+
+    after_changes = client.get(f"/objects/{obj.id}/semantics-changes")
+    assert after_changes.json()["total"] == change_total
+    audits_after, _ = get_audit_store().list_events()
+    assert len(audits_after) == len(audits_before)
+    assert embed_calls["n"] == 0
+
+
 def test_patch_column_semantics(client: TestClient) -> None:
     source = _make_source(client)
     obj = _seed_object(source["id"])

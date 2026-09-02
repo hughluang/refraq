@@ -5,8 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 from backend.admin.audit import persist_audit_event
+from backend.core.time import utc_now
 from backend.metadata.business_domains.service import require_domain_by_code
+from backend.metadata.catalog.index_embeddings import (
+    refresh_column_embedding,
+    refresh_object_embedding,
+)
 from backend.metadata.catalog.refs import require_column
+from backend.metadata.catalog.semantics_changes import semantics_change_for_field
 from backend.metadata.catalog.store import (
     CatalogColumnRecord,
     CatalogObjectRecord,
@@ -120,6 +126,10 @@ def patch_object_semantics(
     kwargs = _build_semantic_kwargs(data=resolved, fields=_OBJECT_SEMANTIC_FIELDS)
     if not kwargs:
         return existing
+    applied = {key: value for key, value in kwargs.items() if getattr(existing, key) != value}
+    if not applied:
+        return existing
+    kwargs = applied
     if "business_primary_key" in kwargs and kwargs["business_primary_key"] is not None:
         names = kwargs["business_primary_key"]
         if not isinstance(names, list):
@@ -142,6 +152,13 @@ def patch_object_semantics(
     store_kwargs["business_semantics_ready"] = ready
     updated = get_catalog_store().patch_object_semantics(object_id, **store_kwargs)
     assert updated is not None
+    _append_object_semantics_changes(
+        existing=existing,
+        kwargs=kwargs,
+        semantic_source=semantic_source,
+        actor_user_id=actor_user_id,
+    )
+    refresh_object_embedding(updated)
     persist_audit_event(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -171,11 +188,25 @@ def patch_column_semantics(
     kwargs = _build_semantic_kwargs(data=data, fields=_COLUMN_SEMANTIC_FIELDS)
     if not kwargs:
         return existing, False
+    applied = {key: value for key, value in kwargs.items() if getattr(existing, key) != value}
+    if not applied:
+        return existing, False
+    kwargs = applied
     store_kwargs: dict[str, Any] = {k: UNSET for k in _COLUMN_SEMANTIC_FIELDS}
     store_kwargs.update(kwargs)
     store_kwargs["semantic_source"] = semantic_source
     updated = get_catalog_store().patch_column_semantics(column_id, **store_kwargs)
     assert updated is not None
+    _append_column_semantics_changes(
+        existing=existing,
+        kwargs=kwargs,
+        semantic_source=semantic_source,
+        actor_user_id=actor_user_id,
+    )
+    parent = get_catalog_store().get_object(updated.object_id)
+    refresh_column_embedding(
+        updated, object_name=parent.name if parent is not None else None
+    )
     persist_audit_event(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -238,3 +269,56 @@ def set_column_semantics_batch(
         "requested_count": len(columns),
         "skipped_columns": skipped_columns,
     }
+
+
+def _append_object_semantics_changes(
+    *,
+    existing: CatalogObjectRecord,
+    kwargs: dict[str, Any],
+    semantic_source: str,
+    actor_user_id: str | None,
+) -> None:
+    now = utc_now()
+    store = get_catalog_store()
+    for key, new_value in kwargs.items():
+        old_value = getattr(existing, key)
+        if old_value == new_value:
+            continue
+        store.append_semantics_change(
+            semantics_change_for_field(
+                object_id=existing.id,
+                field_name=key,
+                old_value=old_value,
+                new_value=new_value,
+                semantic_source=semantic_source,
+                created_at=now,
+                actor_user_id=actor_user_id,
+            )
+        )
+
+
+def _append_column_semantics_changes(
+    *,
+    existing: CatalogColumnRecord,
+    kwargs: dict[str, Any],
+    semantic_source: str,
+    actor_user_id: str | None,
+) -> None:
+    now = utc_now()
+    store = get_catalog_store()
+    for key, new_value in kwargs.items():
+        old_value = getattr(existing, key)
+        if old_value == new_value:
+            continue
+        store.append_semantics_change(
+            semantics_change_for_field(
+                object_id=existing.object_id,
+                column_id=existing.id,
+                field_name=key,
+                old_value=old_value,
+                new_value=new_value,
+                semantic_source=semantic_source,
+                created_at=now,
+                actor_user_id=actor_user_id,
+            )
+        )

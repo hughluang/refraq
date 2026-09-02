@@ -39,6 +39,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "admin.system_parameters",
             "admin.parameters",
             "admin.federation",
+            "admin.model_services",
             "admin.routers",
         }
     ),
@@ -56,6 +57,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
         {
             "metadata.errors",
             "metadata.source_jobs",
+            "metadata.catalog_embed_jobs",
             "metadata.source_schedules",
             "metadata.type_mappings.seeds",
             "metadata.mcp_catalog",

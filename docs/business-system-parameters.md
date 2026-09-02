@@ -63,6 +63,7 @@ Applying the test to `docs/env.md` gives a fixed classification. This is the ref
 | `ADMIN_SESSION_TTL_HOURS`, `REFRAQ_JOB_LOST_DETECTION_SEC` | **System Parameter** — registered (§5); the variables leave `.env` |
 | `REFRAQ_JOB_WORKER_CONCURRENCY` | Neither. Worker pool size is owned by the deployment and set on the worker command line (§5.2); the variable is retired |
 | `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD`, `REFRAQ_QUERY_TIMEOUT_SEC`, `REFRAQ_QUERY_MAX_ROWS` | **System Parameter** candidates owned by `metadata`; not registered yet (§5.1) |
+| `REFRAQ_EMBEDDING_API_URL`, `REFRAQ_EMBEDDING_MODEL`, `REFRAQ_EMBEDDING_TIMEOUT_SEC` | Neither. Retired. Catalog Search hybrid is an in-use **Model Service** (`docs/business-model-services.md`); leftover names are ignored and reported at startup |
 
 ## 3. Admission Rules
 

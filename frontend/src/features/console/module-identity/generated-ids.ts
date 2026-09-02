@@ -14,6 +14,7 @@ export const ModuleId = {
   schedules: "schedules",
   settings: "settings",
   branding: "branding",
+  modelServices: "model-services",
   account: "account",
 } as const;
 

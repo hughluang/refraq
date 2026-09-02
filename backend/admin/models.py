@@ -153,3 +153,31 @@ class SystemParameterRow(Base):
     source: Mapped[str] = mapped_column(String(16), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     updated_by_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class ModelServiceRow(Base):
+    __tablename__ = "model_services"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    protocol: Mapped[str] = mapped_column(String(32), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(String(256), nullable=False)
+    secret_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
+class ModelServicePurposeRow(Base):
+    __tablename__ = "model_service_purposes"
+
+    purpose: Mapped[str] = mapped_column(String(32), primary_key=True)
+    in_use_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("model_services.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    closed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    ready: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

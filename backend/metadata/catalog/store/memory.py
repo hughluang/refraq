@@ -114,6 +114,8 @@ class MemoryCatalogStore:
         self._joins: dict[str, CatalogJoinRecord] = {}
         self._join_by_pair: dict[tuple[str, str], str] = {}
         self._join_changes: list[CatalogJoinChangeRecord] = []
+        self._semantics_changes: list[Any] = []
+        self._embeddings: dict[tuple[str, str], Any] = {}
         self._lock = threading.Lock()
 
     def list_objects(
@@ -266,6 +268,8 @@ class MemoryCatalogStore:
             joins_backup = dict(self._joins)
             join_by_pair_backup = dict(self._join_by_pair)
             join_changes_backup = list(self._join_changes)
+            semantics_changes_backup = list(self._semantics_changes)
+            embeddings_backup = dict(self._embeddings)
             write = _MemoryStructureWrite(self, source_id)
             try:
                 yield write
@@ -274,6 +278,8 @@ class MemoryCatalogStore:
                 self._joins = joins_backup
                 self._join_by_pair = join_by_pair_backup
                 self._join_changes = join_changes_backup
+                self._semantics_changes = semantics_changes_backup
+                self._embeddings = embeddings_backup
                 raise
 
     def recompute_locators_for_source(
@@ -578,3 +584,37 @@ class MemoryCatalogStore:
                 return False
             self._join_by_pair.pop((join.from_column_id, join.to_column_id), None)
             return True
+
+    def append_semantics_change(self, change: Any) -> None:
+        with self._lock:
+            self._semantics_changes.append(change)
+
+    def list_semantics_changes(
+        self,
+        object_id: str,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[list[Any], int]:
+        with self._lock:
+            items = [
+                c for c in self._semantics_changes if c.object_id == object_id
+            ]
+            items.sort(key=lambda c: (c.created_at, c.id), reverse=True)
+            return apply_offset_page(items, limit=limit, offset=offset)
+
+    def upsert_embedding(self, record: Any) -> None:
+        with self._lock:
+            self._embeddings[(record.kind, record.target_id)] = record
+
+    def get_embedding(self, *, kind: str, target_id: str) -> Any | None:
+        with self._lock:
+            return self._embeddings.get((kind, target_id))
+
+    def list_embeddings(self, *, kind: str) -> list[Any]:
+        with self._lock:
+            return [r for (k, _tid), r in self._embeddings.items() if k == kind]
+
+    def delete_embeddings(self) -> None:
+        with self._lock:
+            self._embeddings.clear()

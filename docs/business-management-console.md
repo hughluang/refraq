@@ -49,7 +49,7 @@ The side nav carries only module structural navigation and **renders exactly the
 | Administration | `admin` | Users, Roles, Identity Providers (`identity-providers`) |
 | Metadata | `metadata` | Sources (`sources`), Catalog (`catalog`), Business Domains (`business-domains`), Type Mappings (`type-mappings`) |
 | Operations | `operations` | Jobs (`jobs`), Schedules (`schedules`) |
-| Platform settings | `settings` | System parameters (`settings`), Site branding (`branding`) |
+| Platform settings | `settings` | System parameters (`settings`), Site branding (`branding`), Model Services (`model-services`) |
 
 - The `operations` group sits after `metadata` and before `settings`. Module field details: `docs/business-metadata.md`, `docs/business-user-tokens.md`, `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`.
 - About is a top-bar user-menu utility, not structural navigation. It carries **Brand Attribution**, is not a Console Module, and is never permission-filtered.

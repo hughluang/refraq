@@ -38,6 +38,8 @@ __all__ = [
     "JoinUpsertRequest",
     "ObjectCategory",
     "ObjectSemanticsPatchRequest",
+    "SemanticsChangeListResponse",
+    "SemanticsChangeOut",
     "SemanticSource",
 ]
 
@@ -266,3 +268,19 @@ class JoinPathResponse(BaseModel):
     paths: list[JoinPathOut]
     direct_joins: list[JoinOut] = Field(default_factory=list)
     reason: str | None = None
+
+
+class SemanticsChangeOut(BaseModel):
+    id: str
+    object_id: str
+    column_id: str | None = None
+    field_name: str
+    old_value: object | None = None
+    new_value: object | None = None
+    semantic_source: str
+    actor_user_id: str | None = None
+    created_at: Instant
+
+
+class SemanticsChangeListResponse(OffsetPage[SemanticsChangeOut]):
+    pass

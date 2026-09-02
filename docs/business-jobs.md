@@ -22,7 +22,7 @@ Platform durable asynchronous execution. Each product domain interprets `kind` a
 | Field | Notes |
 | --- | --- |
 | id | Job id |
-| kind | Discriminator; domains add values (`structure` \| `join_detection` \| …) |
+| kind | Discriminator; domains add values (`structure` \| `join_detection` \| `catalog_embed` \| …) |
 | status | `queued` \| `running` \| `succeeded` \| `failed` \| `cancelled` |
 | input | Generic object; domain interprets per `kind` |
 | result | Nullable generic JSON; platform does not interpret. Written only on successful terminal. Other kinds stay `null` (not `{}`) |
@@ -38,6 +38,7 @@ Rules:
 
 - Job is **not** owned by Source. Do not treat `source_id` as a universal Job column — it lives in `input` when required.
 - Structure and join-detection **Jobs** are minted only by a **Scheduled Task** (due tick or operator run-now). There is no Source HTTP enqueue and no MCP enqueue in this phase. This phase also has no MCP Job observe (`get_job`, list, logs, or cancel). Platform-wide observe uses `GET /jobs` and `GET /jobs/{id}` / `.../logs` / cancel. Related Jobs for a schedule: `GET /schedules/{id}/jobs`. There is no global `POST /jobs` create.
+- `catalog_embed` **Jobs** are minted by **Model Service** HTTP (`trigger_kind=user`), not by a **Scheduled Task**. Rules: `docs/business-model-services.md`.
 - Entering execution requires a `queued → running` claim (CAS). Broker redelivery of a non-queued Job must not re-run domain work.
 - An unexpected runner abort (the Celery task raises) must terminalize the Job `failed` with `JOB_EXECUTION_FAILED`. Occupancy renews every still-`running` claim for a living worker identity; leaving the row `running` after the task is gone keeps a false `RUNNING` until that worker process dies.
 - **Occupancy** (Job primitive; shares Beat with schedules only because the platform has one periodic clock): the worker renews declarations on its running Jobs; a system Scheduled Task marks stale occupancy `JOB_WORKER_LOST`. The stale window is the `job_lost_detection_sec` **System Parameter** (seed 60). Widening is live; tightening waits one old renew interval (`max(5, previous/3)` s) before the reaper cutoff shrinks. Lost-detection SLA assumes Beat is alive: if Beat is down, occupancy reaping stops; bringing up the API alone does not clear a false `RUNNING`. On worker start, abandon leftover running claims for this worker identity immediately (no freshness filter) as `JOB_WORKER_LOST` — not a global reap; a same-identity restart must not treat the previous attempt as still running.

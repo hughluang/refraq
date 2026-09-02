@@ -251,11 +251,10 @@ def test_semantic_source_excludes_system_specific_vocab() -> None:
 
 def test_blank_search_query_rejected(client: TestClient) -> None:
     for path in ("/catalog/objects/search", "/catalog/columns/search"):
-        missing = client.get(path)
-        assert missing.status_code == 422
-        blank = client.get(path, params={"q": "   "})
-        assert blank.status_code == 400
-        assert blank.json()["code"] == "CATALOG_SEARCH_QUERY_REQUIRED"
+        for params in (None, {"q": ""}, {"q": "   "}):
+            resp = client.get(path) if params is None else client.get(path, params=params)
+            assert resp.status_code == 400
+            assert resp.json()["code"] == "CATALOG_SEARCH_QUERY_REQUIRED"
 
 
 def test_illegal_semantics_and_field_kind_not_writable(client: TestClient) -> None:

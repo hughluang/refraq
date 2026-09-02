@@ -63,12 +63,14 @@ export function deleteJoin(joinId: string) {
 export function getJoinPath(params: {
   start: string;
   target?: string;
+  q?: string;
   max_hops?: number;
   top_targets?: number;
 }) {
   const qs = new URLSearchParams();
   qs.set("start", params.start);
   if (params.target) qs.set("target", params.target);
+  if (params.q) qs.set("q", params.q);
   if (params.max_hops != null) qs.set("max_hops", String(params.max_hops));
   if (params.top_targets != null) {
     qs.set("top_targets", String(params.top_targets));

@@ -41,6 +41,8 @@ from backend.admin.routers.account import router as account_router
 from backend.admin.routers.audit import router as audit_router
 from backend.admin.routers.auth import router as auth_router_instance
 from backend.admin.branding.router import router as branding_router
+from backend.admin.model_services import bind_catalog_embed_jobs
+from backend.admin.model_services.router import router as model_services_router
 from backend.admin.routers.console import router as console_router
 from backend.admin.routers.roles import router as roles_router
 from backend.admin.system_parameters.router import router as settings_router
@@ -49,6 +51,7 @@ from backend.admin.routers.users import router as users_router
 from backend.admin.federation.router import router as federation_router
 from backend.jobs.api import bind_schedule_name_store
 from backend.jobs.routers.jobs import router as jobs_mechanism_router
+from backend.metadata.catalog_embed_jobs import CatalogEmbedJobs
 from backend.worker.routers.schedules import router as schedules_mechanism_router
 from backend.worker.schedules import get_schedule_store
 from backend.metadata.routers.mcp import router as metadata_mcp_router
@@ -65,6 +68,7 @@ from backend.worker.parameters import assemble_system_parameters
 
 # Composition injects the Scheduled Task name adapter so jobs never imports worker.
 bind_schedule_name_store(get_schedule_store)
+bind_catalog_embed_jobs(CatalogEmbedJobs())
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -104,7 +108,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="refraq Backend",
-    version="0.1.0",
+    version="0.1.1",
     lifespan=lifespan,
 )
 
@@ -164,6 +168,7 @@ app.include_router(roles_router)
 app.include_router(console_router)
 app.include_router(settings_router)
 app.include_router(branding_router)
+app.include_router(model_services_router)
 app.include_router(tokens_router)
 app.include_router(audit_router)
 app.include_router(sources_router)

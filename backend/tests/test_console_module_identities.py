@@ -247,6 +247,24 @@ EXPECTED_IDENTITIES = {
             "sample": None,
         },
     },
+    "model-services": {
+        "label_key": "modelServices.title",
+        "routes": {
+            "list": "/console/model-services",
+            "create": "/console/model-services",
+            "edit": "/console/model-services",
+            "show": None,
+            "aliases": [],
+        },
+        "actions": {
+            "list": "model_services:read",
+            "create": "model_services:write",
+            "edit": "model_services:write",
+            "delete": "model_services:write",
+            "show": None,
+            "sample": None,
+        },
+    },
     "account": {
         "label_key": "account.title",
         "routes": {
