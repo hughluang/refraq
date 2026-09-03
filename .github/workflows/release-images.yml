@@ -51,9 +51,19 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
-      - name: Stage site files
+      - name: Confirm image manifests
         run: |
-          cp deploy/compose.yaml docker-compose.yaml
+          docker buildx imagetools inspect \
+            "ghcr.io/${{ github.repository_owner }}/refraq-api:${{ steps.version.outputs.tag }}"
+          docker buildx imagetools inspect \
+            "ghcr.io/${{ github.repository_owner }}/refraq-web:${{ steps.version.outputs.tag }}"
+
+      - name: Stamp site files
+        run: |
+          python3 .github/scripts/stamp_site_compose.py \
+            --version "${{ steps.version.outputs.tag }}" \
+            --input deploy/compose.yaml \
+            --output docker-compose.yaml
           cp deploy/.env.example .env.example
 
       - uses: softprops/action-gh-release@v2

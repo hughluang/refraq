@@ -1,8 +1,9 @@
 name: refraq-prod
 
-# Site template. Copy this file and deploy/.env.example to a directory
-# outside the git tree. Images are linux/amd64 only.
-# Pin the version with REFRAQ_VERSION (no v prefix). Do not use latest.
+# Site compose template. Not a live site file. Do not start a site from
+# deploy/. Runnable compose is a GitHub Release attachment after publish
+# stamps the image-tag sentinel with the version (no v prefix).
+# Images are linux/amd64 only.
 
 services:
   postgres:
@@ -31,7 +32,7 @@ services:
       retries: 10
 
   api:
-    image: ghcr.io/hughluang/refraq-api:${REFRAQ_VERSION}
+    image: ghcr.io/hughluang/refraq-api:__REFRAQ_RELEASE_TAG__
     environment:
       REFRAQ_ENV: prod
       REFRAQ_API_HOST: 0.0.0.0
@@ -65,7 +66,7 @@ services:
       start_period: 20s
 
   worker:
-    image: ghcr.io/hughluang/refraq-api:${REFRAQ_VERSION}
+    image: ghcr.io/hughluang/refraq-api:__REFRAQ_RELEASE_TAG__
     command: ["celery", "-A", "backend.worker.app", "worker"]
     environment:
       REFRAQ_ENV: prod
@@ -85,7 +86,7 @@ services:
 
   # Run exactly one Beat replica (Postgres Scheduled Task SSOT; do not scale).
   beat:
-    image: ghcr.io/hughluang/refraq-api:${REFRAQ_VERSION}
+    image: ghcr.io/hughluang/refraq-api:__REFRAQ_RELEASE_TAG__
     command: ["celery", "-A", "backend.worker.app", "beat"]
     environment:
       REFRAQ_ENV: prod
@@ -103,7 +104,7 @@ services:
         condition: service_healthy
 
   mcp:
-    image: ghcr.io/hughluang/refraq-api:${REFRAQ_VERSION}
+    image: ghcr.io/hughluang/refraq-api:__REFRAQ_RELEASE_TAG__
     command: ["python", "-m", "backend.metadata.mcp_http"]
     environment:
       REFRAQ_ENV: prod
@@ -135,7 +136,7 @@ services:
       start_period: 20s
 
   web:
-    image: ghcr.io/hughluang/refraq-web:${REFRAQ_VERSION}
+    image: ghcr.io/hughluang/refraq-web:__REFRAQ_RELEASE_TAG__
     environment:
       HOSTNAME: 0.0.0.0
       PORT: 3000

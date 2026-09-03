@@ -54,11 +54,10 @@ Current `frontend/.env.example` defines:
 
 ### Deploy
 
-`deploy/` is a site template, not a live site directory. Copy `deploy/compose.yaml` and `deploy/.env.example` (or the GitHub Release attachments) into a directory outside the git tree. Never commit the live `.env`.
+`deploy/` holds the site compose template and the secrets example. It is not a live site directory and is not an install source. Download the runnable compose and `.env.example` from the GitHub Release (`https://github.com/hughluang/refraq/releases/latest/download/docker-compose.yaml` and `…/download/.env.example`). Never commit the live `.env`.
 
-Current `deploy/.env.example` defines:
+Current Release / `deploy/.env.example` defines:
 
-- `REFRAQ_VERSION` (required; image tag without the `v`, for example `0.1.0`. Do not use `latest`. Change this value to upgrade or roll back.)
 - `INITIAL_ADMIN_ACCOUNT=root`
 - `INITIAL_ADMIN_PASSWORD` (required live secret)
 - `ADMIN_SESSION_SECRET` (required live secret)
@@ -68,7 +67,7 @@ Current `deploy/.env.example` defines:
 - `REFRAQ_BROWSER_FACING_PROTO` (optional on web; default `http`; set `https` when TLS terminates in front of the Console)
 - `REFRAQ_BROWSER_FACING_HOST` (optional on web and API; host or `host:port` the browser uses for the Console, without scheme. Required for non-loopback Console URLs so OIDC `redirect_uri` is not taken from request `Host`)
 
-Published images are **linux/amd64** only (`ghcr.io/hughluang/refraq-api:<version>` and `ghcr.io/hughluang/refraq-web:<version>`). Compose project name is `refraq-prod` so volumes do not collide with the local Postgres/Redis Compose and stay attached when the site directory moves.
+Image tags live in the stamped Release compose, not in `.env`. A leftover `REFRAQ_VERSION` in an older site `.env` has no effect after the compose attachment replaces the interpolated template. Published images are **linux/amd64** only (`ghcr.io/hughluang/refraq-api:<version>` and `ghcr.io/hughluang/refraq-web:<version>`). Compose project name is `refraq-prod` so volumes do not collide with the local Postgres/Redis Compose and stay attached when the site directory moves.
 
 ## 3. Local Convention (Unified)
 
@@ -126,7 +125,6 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 
 ### Deploy-Owned Variables
 
-- `REFRAQ_VERSION` (site image tag without the `v`; required to pull published images)
 - `POSTGRES_PASSWORD` (platform Postgres password; Compose interpolation; not published to the host)
 - `REFRAQ_WEB_PORT` (host port for the web service; default `3001`)
 - `REFRAQ_BROWSER_FACING_PROTO` (optional; forwarded to web; default `http`)

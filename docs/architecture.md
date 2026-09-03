@@ -68,7 +68,7 @@ The frontend owns:
 
 ### Deploy Shape
 
-A site exposes the Management Console (web) to browsers and pulls published **linux/amd64** images pinned by `REFRAQ_VERSION`. It does not build from a source tree. The site API service must be named `api`.
+A site exposes the Management Console (web) to browsers and pulls published **linux/amd64** images pinned by the image tags in the GitHub Release compose attachment. It does not build from a source tree. The site API service must be named `api`.
 The browser calls same-origin `/api`; Next.js rewrites to the internal API service.
 `REFRAQ_API_UPSTREAM` identifies that internal API origin. The frontend image reads it at build time for rewrites, and the running Next.js server reads the same value for direct server-rendering calls such as Site Branding. Site compose sets both. Browser-visible URLs remain same-origin and never contain the internal upstream.
 Same-origin `/mcp` is streamed by the web process to an internal MCP service (`REFRAQ_MCP_UPSTREAM`). Compose does not publish the MCP listen port. Process `readyz` stays on the MCP container network.
