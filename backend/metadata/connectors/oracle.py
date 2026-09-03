@@ -155,7 +155,7 @@ _OBJECT_SQL = text(
       t.owner AS schema_name,
       t.table_name AS name,
       'table' AS object_type,
-      c.comments AS comment
+      c.comments AS "comment"
     FROM all_tables t
     LEFT JOIN all_tab_comments c
       ON c.owner = t.owner AND c.table_name = t.table_name
@@ -165,7 +165,7 @@ _OBJECT_SQL = text(
       v.owner AS schema_name,
       v.view_name AS name,
       'view' AS object_type,
-      c.comments AS comment
+      c.comments AS "comment"
     FROM all_views v
     LEFT JOIN all_tab_comments c
       ON c.owner = v.owner AND c.table_name = v.view_name
@@ -175,7 +175,7 @@ _OBJECT_SQL = text(
       m.owner AS schema_name,
       m.mview_name AS name,
       'materialized_view' AS object_type,
-      c.comments AS comment
+      c.comments AS "comment"
     FROM all_mviews m
     LEFT JOIN all_tab_comments c
       ON c.owner = m.owner AND c.table_name = m.mview_name
@@ -185,7 +185,7 @@ _OBJECT_SQL = text(
       o.owner AS schema_name,
       o.object_name AS name,
       'procedure' AS object_type,
-      CAST(NULL AS VARCHAR2(4000)) AS comment
+      CAST(NULL AS VARCHAR2(4000)) AS "comment"
     FROM all_objects o
     WHERE o.owner = :owner AND o.object_type = 'PROCEDURE'
     UNION ALL
@@ -193,7 +193,7 @@ _OBJECT_SQL = text(
       o.owner AS schema_name,
       o.object_name AS name,
       'function' AS object_type,
-      CAST(NULL AS VARCHAR2(4000)) AS comment
+      CAST(NULL AS VARCHAR2(4000)) AS "comment"
     FROM all_objects o
     WHERE o.owner = :owner AND o.object_type = 'FUNCTION'
     ORDER BY 1, 2, 3
@@ -238,7 +238,7 @@ _COLUMN_SQL = text(
       END AS data_type,
       CASE c.nullable WHEN 'Y' THEN 1 ELSE 0 END AS nullable,
       c.data_default AS default_value,
-      cc.comments AS comment
+      cc.comments AS "comment"
     FROM all_tab_columns c
     JOIN (
       {_OBJECT_IDENTITY}
