@@ -64,6 +64,10 @@ describe("McpSection", () => {
     expect(screen.queryByText("account.mcp.urlHint")).toBeNull();
 
     const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window, "isSecureContext", {
+      configurable: true,
+      value: true,
+    });
     Object.assign(navigator, { clipboard: { writeText } });
     copy.click();
     await waitFor(() => {

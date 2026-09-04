@@ -3,6 +3,8 @@
 import { Button, Code, Group, Stack, Text } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
 
+import { copyText } from "@/lib/copy-text";
+
 type DdlTabProps = {
   ddl: string | null;
 };
@@ -21,12 +23,12 @@ export function DdlTab({ ddl }: DdlTabProps) {
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(ddl);
-      open?.({ type: "success", message: t("catalog.copied") });
-    } catch (err) {
+      await copyText(ddl);
+      open?.({ type: "success", message: t("common.copy.success") });
+    } catch {
       open?.({
         type: "error",
-        message: err instanceof Error ? err.message : String(err),
+        message: t("common.copy.failed"),
       });
     }
   };

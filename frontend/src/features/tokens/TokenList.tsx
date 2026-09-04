@@ -37,6 +37,7 @@ import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { ApiError } from "@/lib/api";
+import { copyText } from "@/lib/copy-text";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
@@ -203,17 +204,15 @@ export function TokenList() {
   async function copySecret() {
     if (!secret) return;
     try {
-      await navigator.clipboard.writeText(secret);
+      await copyText(secret);
       open?.({
         type: "success",
-        message: t("tokens.title"),
-        description: t("tokens.secret.copied"),
+        message: t("common.copy.success"),
       });
     } catch {
       open?.({
         type: "error",
-        message: t("tokens.title"),
-        description: t("tokens.secret.copyFailed"),
+        message: t("common.copy.failed"),
       });
     }
   }

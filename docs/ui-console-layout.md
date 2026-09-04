@@ -34,6 +34,10 @@ Paged **Offset Page** tables render through `ListTable`. `ListTable` owns one vi
 
 **Not Offset Page collection lists** (do not migrate to `ListTable`): Catalog Sample (row peek), Structure Diff detail (static tables).
 
+## Click Copy
+
+Click-to-copy is a Console platform capability. Surfaces write through `copyText` (`frontend/src/lib/copy-text.ts`). Success and failure toasts use only `common.copy.success` / `common.copy.failed` as the `message` — no surface title, no description, no exception text. Failure means the current environment cannot write to the clipboard; the operator copies the already-visible content by hand. New click-to-copy must not call `navigator.clipboard.writeText` directly and must not invent its own success or failure copy.
+
 ## Principles
 
 1. **Section / page content containers are full width** of the main area (`width: 100%` of available content). Do **not** put a section-level or page-level form `max-width` on outer stacks, forms, or settings shells.
@@ -56,6 +60,7 @@ Paged **Offset Page** tables render through `ListTable`. `ListTable` owns one vi
 - `ListPager` as the table footer for Offset Page lists, composed by `ListTable`
 - `FillColumn` as the remaining-space wrapper for embedded lists (`gap` and an optional `minHeight` floor; not a Flex alias)
 - An in-page Account table of contents that sticks inside `PageChrome`, highlights the job in view, and calls `scrollIntoView` without writing a hash (not `PageChrome` `actions`, not Console Navigation)
+- Click-to-copy through `copyText` with `common.copy.success` / `common.copy.failed` as the toast `message`
 
 ## Forbidden
 
@@ -70,6 +75,7 @@ Paged **Offset Page** tables render through `ListTable`. `ListTable` owns one vi
 9. Treating `FillColumn` as a Flex alias (appearance, `direction`, or `flex` overrides)
 10. Wrapping an entire Account / Settings form page (or form sections + embedded PAT together) in `FillColumn`
 11. Putting Account Center sections (profile, User PAT, Metadata MCP) on the Console navbar, or writing a URL hash / History entry for Account sections
+12. Calling `navigator.clipboard.writeText` from a click-to-copy control, or inventing surface-specific copy success/failure strings
 
 ## Implementation Notes
 

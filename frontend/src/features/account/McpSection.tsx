@@ -10,6 +10,7 @@ import {
   type McpCatalog,
 } from "@/features/account/mcp-api";
 import { apiClient, ApiError } from "@/lib/api";
+import { copyText } from "@/lib/copy-text";
 
 export function McpSection() {
   const t = useTranslate();
@@ -47,17 +48,15 @@ export function McpSection() {
 
   async function copyConfig() {
     try {
-      await navigator.clipboard.writeText(configText);
+      await copyText(configText);
       open?.({
         type: "success",
-        message: t("account.mcp.title"),
-        description: t("account.mcp.copy.success"),
+        message: t("common.copy.success"),
       });
     } catch {
       open?.({
         type: "error",
-        message: t("account.mcp.title"),
-        description: t("account.mcp.copy.error"),
+        message: t("common.copy.failed"),
       });
     }
   }

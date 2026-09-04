@@ -36,6 +36,7 @@ import { isSampleEligible } from "@/features/sources/catalog-detail/catalogObjec
 import { SampleTab } from "@/features/sources/catalog-detail/SampleTab";
 import type { CatalogObject } from "@/features/sources/types";
 import { ApiError } from "@/lib/api";
+import { copyText } from "@/lib/copy-text";
 
 type CatalogObjectDetailProps = {
   objectId: string;
@@ -127,12 +128,12 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
   const copyLocator = async () => {
     if (!object) return;
     try {
-      await navigator.clipboard.writeText(object.locator_key);
-      open?.({ type: "success", message: t("catalog.copied") });
-    } catch (err) {
+      await copyText(object.locator_key);
+      open?.({ type: "success", message: t("common.copy.success") });
+    } catch {
       open?.({
         type: "error",
-        message: err instanceof Error ? err.message : String(err),
+        message: t("common.copy.failed"),
       });
     }
   };
