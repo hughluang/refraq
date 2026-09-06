@@ -112,7 +112,7 @@ List `q` is optional. When set, it matches a literal case-insensitive substring 
 
 ## 3.1 Structure Diff
 
-A **Structure Diff** belongs to a **Source** and was produced by one successful structure **Job**. It is not a Job sub-resource. Viewing: `metadata:read`. Failed/fail-safe Jobs have no Diff.
+A **Structure Diff** belongs to a **Source** and was produced by one successful structure **Job**. It is not a Job sub-resource. Viewing: `metadata:read`. Failed or cancelled Jobs have no Diff.
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
@@ -301,7 +301,7 @@ Errors:
 
 Every attempt writes a management audit event (statement summary or hash, never Source secret).
 
-Envelope notes: request `max_rows` defaults to **100** when omitted; values above platform cap `REFRAQ_QUERY_MAX_ROWS` (default **1000**) are rejected with `QUERY_ROW_LIMIT` before connect. Platform timeout is `REFRAQ_QUERY_TIMEOUT_SEC` (default **30**), enforced both at the application boundary and via engine statement/command timeout. L4 SQL guards parse a single statement with a dialect-aware AST (sqlglot) for the Source engine and fail closed on write nodes, `INTO`, row locks, blocked functions, or unparseable SQL. Prefer a read-only database account on the Source as defense in depth; platform SQL guards remain mandatory.
+Envelope notes: request `max_rows` defaults to **100** when omitted; values above the `query_max_rows` **System Parameter** (seed **1000**, range 100–10000) are rejected with `QUERY_ROW_LIMIT` before connect. Platform timeout is `query_timeout_sec` (seed **30**, range 5–3600), enforced both at the application boundary and via engine statement/command timeout. L4 SQL guards parse a single statement with a dialect-aware AST (sqlglot) for the Source engine and fail closed on write nodes, `INTO`, row locks, blocked functions, or unparseable SQL. Prefer a read-only database account on the Source as defense in depth; platform SQL guards remain mandatory.
 
 ## 8. Catalog Sample
 
@@ -333,7 +333,7 @@ Request:
 | `limit` | Default **50**; must be ≥ 1 |
 | `include_sql` | Default **false**; when true, response includes compiled `sql` |
 
-Hard cap: `offset + limit` must be ≤ `REFRAQ_QUERY_MAX_ROWS` (default **1000**); otherwise `QUERY_ROW_LIMIT` before connect. Platform timeout matches Controlled Query.
+Hard cap: `offset + limit` must be ≤ `query_max_rows` (seed **1000**); otherwise `QUERY_ROW_LIMIT` before connect. Platform timeout matches Controlled Query (`query_timeout_sec`).
 
 Response `200`:
 

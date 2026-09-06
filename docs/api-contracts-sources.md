@@ -180,8 +180,8 @@ Rules:
 - Draft requires a full valid `access` including secrets and required dialect scope keys.
 - Stored test uses body `access` when present; otherwise decrypts the stored access blob (`SOURCE_SECRET_REQUIRED` / access errors if none or decrypt fails).
 - Optional `engine` on the stored endpoint overrides the row for this probe only. Missing engine (body and row) is `SOURCE_ACCESS_REQUIRED`; invalid `access` uses the same codes as create/patch.
-- Success response: `{ "ok": true }`.
-- Completed probe failure (unreachable, auth rejected, timeout ~10s): HTTP 200 with `{ "ok": false, "code": "SOURCE_TEST_FAILED" | "SOURCE_TEST_TIMEOUT", "message": "..." }` — never row data beyond the result envelope; audit detail must not include passwords. Draft uses `resource_id` `"draft"`.
+- Success response: `{ "ok": true }`. Success proves the live endpoint **and** that the dialect catalog scope object (`schema` / `owner` from the same `access` document) exists. A reachable host with a missing scope is not success.
+- Completed probe failure (unreachable, auth rejected, declared scope missing, timeout ~10s): HTTP 200 with `{ "ok": false, "code": "SOURCE_TEST_FAILED" | "SOURCE_TEST_TIMEOUT", "message": "..." }` — never row data beyond the result envelope; audit detail must not include passwords. Draft uses `resource_id` `"draft"`.
 - Validation / missing Source: 400 / 404 with stable codes as elsewhere.
 - Probe does not block save; results are not persisted on the Source.
 

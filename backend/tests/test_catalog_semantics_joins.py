@@ -239,7 +239,6 @@ def _seed_object(
         job_id="job_1",
         collected=[line, record],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     # restore semantics wiped by structure insert of brand-new object — seed via store after
     store = get_catalog_store()
@@ -732,7 +731,6 @@ def test_object_detail_exposes_structure_facts(client: TestClient) -> None:
         job_id="job_2",
         collected=[line, with_fk],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
 
     detail = client.get(f"/objects/{obj.id}")

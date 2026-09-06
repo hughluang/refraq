@@ -122,10 +122,11 @@ Responsibilities:
 - Catalog object / semantics / join / controlled query / Catalog Sample services (`catalog/service` owns Current catalog reads + Join Path; Object Semantics in `catalog/semantics`; join list/writes in `catalog/join_writes` (human/MCP adapter: validation, audit, contract errors); directed join-pair admission and insert-if-missing persist in `catalog/join_pair` (`pair_state`, writer mapping, `apply_insert_join`); Join Origin attester constants in `catalog/join_origin`; views/refs internal; HTTP/MCP object projection in `catalog/present`; sample compile+run lives under `query/`; structure refresh orchestration in `catalog/structure_refresh` commits Current catalog and Structure Diff via catalog `catalog_write` primitives + Diff persist; plan merge in `catalog/structure_merge`; Join Change records in `catalog/join_changes` (adapters persist); Semantics Change in `catalog/semantics_changes`; optional Catalog Search hybrid in `catalog/embedding` / `catalog/search_hybrid` / `catalog/index_embeddings`; persist-plan walk in `catalog/structure_persist` (`apply_structure_plan` / `apply_join_detection_plan`; join step calls `join_pair`; adapters translate records); list predicates in `catalog/list_query` (Memory applies the spec in Python; SQL asks the same module for WHERE via a column protocol); search rank/page in `catalog/search_rank`; catalog store exposes narrow Protocols — `CatalogReadStore` / `CatalogSemanticsStore` / `CatalogJoinStore` / `CatalogStructureStore` (+ `CatalogGraphStore` for Join Path BFS) — while memory/SQL adapters remain one class each)
 - Business Domain registry (global flat entity referenced by catalog objects)
 - Type Mapping registry (global engine + native type → Normalized Type; product seeds via Upgrade)
+- `metadata/parameters.py` (Metadata-owned System Parameter specs and typed accessors: `query_timeout_sec`, `query_max_rows`)
 - Domain use-case HTTP under `metadata/routers/` and shapes under `metadata/schemas/` (adapters only: auth + transport)
 - MCP tool catalog (`mcp_catalog.py`) shared by `GET /mcp/catalog` and `tools/list`
-- MCP tool handlers (`backend/metadata/mcp_server.py`) that delegate to the same services
-- Product MCP HTTP process (`python -m backend.metadata.mcp_http`): Streamable HTTP at `/mcp`, PAT header only, intranet `GET /readyz`
+- MCP tool handlers (`backend/metadata/mcp_server.py`) that delegate to the same services; the stdio process entry assembles System Parameters
+- Product MCP HTTP process (`python -m backend.metadata.mcp_http`): Streamable HTTP at `/mcp`, PAT header only, intranet `GET /readyz`; assembles System Parameters
 
 Must not contain:
 
@@ -288,7 +289,7 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 - `core` → no business packages except `upgrade` → published `admin` / `worker.api` / `worker.parameters`
 - `admin` → `core` (+ own modules)
 - `jobs` → `core`; published `admin` (including System Parameter resolver) when needed
-- `metadata` → `core`; published `admin` / `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`
+- `metadata` → `core`; published `admin` / `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; process entries `mcp_http` / `mcp_server` may import `worker.parameters`
 - `worker` → `core`; published surfaces for assembly
 - `main` → `core` + package routers / bootstrap via published surfaces
 - `alembic` → `core` Base + every package `models` module

@@ -35,22 +35,8 @@ describe("mcp proxy helpers", () => {
     expect(nextConfig).not.toMatch(/source:\s*["']\/mcp/);
   });
 
-  it("waits at least the query timeout plus margin", () => {
-    expect(mcpProxyTimeoutMs({ REFRAQ_QUERY_TIMEOUT_SEC: "30" })).toBe(35_000);
-    expect(mcpProxyTimeoutMs({ REFRAQ_QUERY_TIMEOUT_SEC: "45" })).toBe(50_000);
-    expect(mcpProxyTimeoutMs({})).toBe(35_000);
-  });
-
-  it("rejects a non-positive or non-numeric query timeout", () => {
-    expect(() => mcpProxyTimeoutMs({ REFRAQ_QUERY_TIMEOUT_SEC: "foo" })).toThrow(
-      /REFRAQ_QUERY_TIMEOUT_SEC/,
-    );
-    expect(() => mcpProxyTimeoutMs({ REFRAQ_QUERY_TIMEOUT_SEC: "0" })).toThrow(
-      /REFRAQ_QUERY_TIMEOUT_SEC/,
-    );
-    expect(() => mcpProxyTimeoutMs({ REFRAQ_QUERY_TIMEOUT_SEC: "-1" })).toThrow(
-      /REFRAQ_QUERY_TIMEOUT_SEC/,
-    );
+  it("waits the query timeout ceiling plus margin", () => {
+    expect(mcpProxyTimeoutMs()).toBe(3_605_000);
   });
 
   it("targets the MCP process /mcp, never readyz", () => {

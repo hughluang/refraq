@@ -155,7 +155,6 @@ def _seed_object(source_id: str) -> CatalogObjectRecord:
         job_id="seed",
         collected=[record],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     stored = store.get_object(record.id)
     assert stored is not None

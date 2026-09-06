@@ -18,7 +18,7 @@ from backend.admin.role_store import get_role_store, reset_role_store  # noqa: E
 from backend.admin.roles import seed_roles  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import get_user_store, reset_user_store  # noqa: E402
-from backend.core.config import get_settings, reset_settings_cache  # noqa: E402
+from backend.core.config import reset_settings_cache  # noqa: E402
 from backend.core.time import utc_now  # noqa: E402
 from backend.jobs.store import (  # noqa: E402
     ERROR_RUNNING_TIMEOUT,
@@ -117,7 +117,6 @@ def _seed_tables(source: SourceRecord, names: list[str]) -> None:
         job_id="job_old",
         collected=collected,
         schema_scope="public",
-        fail_safe_threshold=1.0,
     )
 
 
@@ -309,12 +308,11 @@ def test_unexpected_snapshot_error_marks_job_failed(
     assert diffs == []
 
 
-def test_fail_safe_runner_writes_no_result_or_diff(
+def test_mass_absent_runner_writes_result_and_diff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = _source()
     _seed_tables(source, ["t0", "t1", "t2", "t3"])
-    monkeypatch.setattr(get_settings(), "refraq_catalog_fail_safe_threshold", 0.5)
     monkeypatch.setattr(
         "backend.metadata.connectors.runtime.get_connector",
         lambda engine: _FakeConnector(["t0"]),
@@ -324,16 +322,17 @@ def test_fail_safe_runner_writes_no_result_or_diff(
         input={"source_id": source.id},
     )
     out = run_structure_job(job.id)
-    assert out["status"] == "failed"
+    assert out["status"] == "succeeded"
     stored = get_job_store().get(job.id)
     assert stored is not None
-    assert stored.error_code == "JOB_FAIL_SAFE"
-    assert stored.result is None
+    assert stored.result is not None
+    assert stored.result["schema"] == "structure.diff.v1"
+    assert stored.result["class"] == "breaking"
     diffs, _total = get_structure_diff_store().list_for_source(source.id)
-    assert all(d.job_id != job.id for d in diffs)
+    assert any(d.job_id == job.id for d in diffs)
     assert any(d.job_id == "job_old" for d in diffs)
     present = get_catalog_store().list_present_for_source(source.id)
-    assert len(present) == 4
+    assert [o.name for o in present] == ["t0"]
 
 
 def test_running_timeout_during_collect_does_not_write_catalog(

@@ -182,7 +182,6 @@ def test_view_to_materialized_view_preserves_identity(client: TestClient) -> Non
         job_id="job_1",
         collected=[seed],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     before = store.get_object("obj_mv")
     assert before is not None
@@ -202,7 +201,6 @@ def test_view_to_materialized_view_preserves_identity(client: TestClient) -> Non
         job_id="job_2",
         collected=[incoming],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     after = store.get_object("obj_mv")
     assert after is not None
@@ -229,7 +227,6 @@ def test_engine_change_recomputes_catalog_locators(client: TestClient) -> None:
         job_id="job_1",
         collected=[seed],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     before = store.get_object("obj_wo")
     assert before is not None
@@ -321,7 +318,6 @@ def test_list_objects_pagination_defaults(client: TestClient) -> None:
         job_id="job_page",
         collected=objects,
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     first = client.get(f"/sources/{source['id']}/objects")
     assert first.status_code == 200

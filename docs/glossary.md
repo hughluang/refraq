@@ -231,7 +231,7 @@ A single durable asynchronous execution with an observable lifecycle (queued →
 Domains mint structure and join-detection **Jobs** only via a **Scheduled Task** (due tick or run-now); the Job record is not owned by Source and is not a Metadata business object.
 API (or a **Scheduled Task**) enqueues; a Celery worker executes; operator-visible status lives on the Postgres job record.
 Lifecycle stamps (`created_at`, `started_at`, `finished_at`, log line times) are **Instants**.
-Successful Jobs may carry a nullable generic **Job result**; failed/cancelled/fail-safe Jobs leave it null.
+Successful Jobs may carry a nullable generic **Job result**; failed or cancelled Jobs leave it null.
 Occupancy lost-detection is a **System Parameter** (seed 60s → `JOB_WORKER_LOST`) and assumes Beat is alive; if Beat is down, reaping stops — API alone does not clear a false `RUNNING`. Widening the window is live; tightening waits one old renew interval before the reaper uses the new cutoff.
 A minted **Running Time Limit** snapshot may end the Job `failed` with `JOB_RUNNING_TIMEOUT`; a null snapshot is not limited this way. That stamp is cooperative: the worker process is not killed; the structure runner stops before catalog write.
 Avoid calling it an Ingestion Job. Avoid running long work inside the Management Console API request.

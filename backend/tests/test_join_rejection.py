@@ -278,7 +278,6 @@ def test_structure_refresh_does_not_delete_or_overwrite_rejected_fk() -> None:
         existing_joins=[rejected],
         incoming=[customers, orders],
         schema_scope=None,
-        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="demo",
@@ -475,7 +474,6 @@ def test_join_detection_counts_skipped_rejected(client: TestClient) -> None:
             ),
         ],
         schema_scope="public",
-        fail_safe_threshold=1.0,
     )
     store = get_catalog_store()
     planted = store.write_insert_join(

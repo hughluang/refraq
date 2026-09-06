@@ -298,7 +298,6 @@ def _seed_pair_for_delete() -> tuple[str, str]:
             )
         ],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     return "col_del_a", "col_del_b"
 

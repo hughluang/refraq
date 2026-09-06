@@ -45,7 +45,7 @@ Rules:
 - **Job** is a durable asynchronous execution record. It is not owned by Source.
 - Public Job fields are lifecycle + `kind` + generic **`input`** + observation fields **`summary`**, **`trigger_kind`**, **`trigger_ref`**, and nullable generic **`result`**.
 - **`summary`** is a human-readable snapshot written at enqueue (structure: `structure · {source_key}`; join detection: `join_detection · {source_key}`). It is not a Source foreign key and must not be confused with the **Source** entity. Do not overwrite it with outcome.
-- **`result`** is kind-interpreted structured outcome, written only when the Job reaches **succeeded**. Failed, cancelled, and fail-safe Jobs leave `result` `null` (never `{}`). Platform list/get do not interpret the document. Structure envelope:
+- **`result`** is kind-interpreted structured outcome, written only when the Job reaches **succeeded**. Failed and cancelled Jobs leave `result` `null` (never `{}`). Platform list/get do not interpret the document. Structure envelope:
 
 ```json
 {
@@ -136,9 +136,8 @@ Returns `{ "job_id", "body", "updated_at" }` where `body` is the full multiline 
 | `JOB_ALREADY_ACTIVE` | Runner could not take the **Kind execution lock** (`structure:{source_id}`, `join_detection:{source_id}`, or site-wide `catalog_embed`). Not a schedule mint / HTTP conflict |
 | `JOB_WORKER_LOST` | Occupancy stale; worker gone |
 | `JOB_RUNNING_TIMEOUT` | Job snapshot `running_timeout_sec` is set and elapsed while still occupied |
-| `JOB_FAIL_SAFE` | Absent ratio exceeded fail-safe threshold; catalog unchanged |
 | `JOB_COLLECT_FAILED` | Connector collect aborted; catalog unchanged |
-| `JOB_ENDPOINT_FAILED` | Connector could not open the live endpoint |
+| `JOB_ENDPOINT_FAILED` | Connector could not open the live endpoint, or the declared catalog scope (`schema` / `owner`) does not exist on that endpoint |
 | `JOB_EXECUTION_FAILED` | Runner aborted unexpectedly (including catalog persist). Job is terminalized so occupancy does not keep a false `RUNNING` |
 | `SCHEDULE_NOT_FOUND` | `GET /schedules/{id}/jobs` or run-now on a missing schedule |
 | `SCHEDULE_SYSTEM_IMMUTABLE` | run-now on a system schedule |

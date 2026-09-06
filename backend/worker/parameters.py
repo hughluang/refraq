@@ -8,6 +8,7 @@ import os
 from backend.admin.parameters import ADMIN_PARAMETER_SPECS
 from backend.admin.system_parameters import list_registered_specs, occupy_registered_parameters, register_parameters
 from backend.jobs.parameters import JOBS_PARAMETER_SPECS
+from backend.metadata.parameters import METADATA_PARAMETER_SPECS
 
 __all__ = [
     "BEAT_MAX_INTERVAL_SEC",
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 BEAT_SYNC_EVERY_SEC = 30
 BEAT_MAX_INTERVAL_SEC = 5
 
-_GROUP_ORDER = ("session", "jobs")
+_GROUP_ORDER = ("session", "jobs", "query")
 
 
 def assemble_system_parameters() -> None:
@@ -30,29 +31,39 @@ def assemble_system_parameters() -> None:
         (
             *ADMIN_PARAMETER_SPECS,
             *JOBS_PARAMETER_SPECS,
+            *METADATA_PARAMETER_SPECS,
         ),
         group_order=_GROUP_ORDER,
     )
     occupy_registered_parameters()
     _warn_leftover_env_names()
-    _warn_dead_embedding_env()
+    _warn_dead_env()
 
 
-_DEAD_EMBEDDING_ENV = (
-    "REFRAQ_EMBEDDING_API_URL",
-    "REFRAQ_EMBEDDING_MODEL",
-    "REFRAQ_EMBEDDING_TIMEOUT_SEC",
+_DEAD_ENV: tuple[tuple[str, str], ...] = (
+    (
+        "REFRAQ_EMBEDDING_API_URL",
+        "Catalog Search hybrid is an in-use Model Service",
+    ),
+    (
+        "REFRAQ_EMBEDDING_MODEL",
+        "Catalog Search hybrid is an in-use Model Service",
+    ),
+    (
+        "REFRAQ_EMBEDDING_TIMEOUT_SEC",
+        "Catalog Search hybrid is an in-use Model Service",
+    ),
+    (
+        "REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD",
+        "catalog fail-safe is retired; a complete successful collect always commits",
+    ),
 )
 
 
-def _warn_dead_embedding_env() -> None:
-    for name in _DEAD_EMBEDDING_ENV:
+def _warn_dead_env() -> None:
+    for name, reason in _DEAD_ENV:
         if name in os.environ:
-            logger.warning(
-                "environment variable %s is ignored; Catalog Search hybrid is "
-                "an in-use Model Service",
-                name,
-            )
+            logger.warning("environment variable %s is ignored; %s", name, reason)
 
 
 def _warn_leftover_env_names() -> None:

@@ -24,6 +24,7 @@ from backend.admin.roles import seed_roles  # noqa: E402
 from backend.admin.role_store import get_role_store, reset_role_store  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import get_user_store, reset_user_store  # noqa: E402
+from backend.admin.system_parameters import set_parameter  # noqa: E402
 from backend.core.config import reset_settings_cache  # noqa: E402
 from backend.jobs.store import reset_job_store  # noqa: E402
 from backend.main import app  # noqa: E402
@@ -370,10 +371,9 @@ def test_query_guard_http_errors(
 def test_query_application_timeout(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("REFRAQ_QUERY_TIMEOUT_SEC", "1")
-    reset_settings_cache()
+    set_parameter("query_timeout_sec", 5, actor_user_id=None)
     source = _make_source(client, key="timeout-src")
-    connector = _RecordingConnector(sleep_sec=3)
+    connector = _RecordingConnector(sleep_sec=7)
     monkeypatch.setattr("backend.metadata.connectors.runtime.get_connector", lambda engine: connector)
     resp = client.post(
         f"/sources/{source['id']}/query",

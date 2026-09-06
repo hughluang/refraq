@@ -60,6 +60,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "metadata.catalog_embed_jobs",
             "metadata.source_schedules",
             "metadata.type_mappings.seeds",
+            "metadata.parameters",
             "metadata.mcp_catalog",
             "metadata.mcp_server",
             "metadata.mcp_http",
@@ -170,6 +171,16 @@ def test_layout_imports(path: Path) -> None:
                 raise AssertionError(
                     f"{importer} must not import {imported} "
                     "(admin may import core and own modules only)"
+                )
+
+        # docs/backend-layout.md §8: only MCP process entries assemble.
+        if importer_pkg == "metadata" and (
+            imported == "worker.parameters" or imported.startswith("worker.parameters.")
+        ):
+            if importer not in {"metadata.mcp_http", "metadata.mcp_server"}:
+                raise AssertionError(
+                    f"{importer} must not import {imported} "
+                    "(only MCP process entries assemble System Parameters)"
                 )
 
         # docs/backend-layout.md §8 from-column: jobs may not import worker.

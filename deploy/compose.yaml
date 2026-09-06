@@ -115,8 +115,6 @@ services:
       DATABASE_URL: postgresql+psycopg://refraq:${POSTGRES_PASSWORD}@postgres:5432/refraq
       REDIS_URL: redis://redis:6379/0
       REFRAQ_SECRETS_MASTER_KEY: ${REFRAQ_SECRETS_MASTER_KEY}
-      REFRAQ_QUERY_TIMEOUT_SEC: ${REFRAQ_QUERY_TIMEOUT_SEC:-30}
-      REFRAQ_QUERY_MAX_ROWS: ${REFRAQ_QUERY_MAX_ROWS:-1000}
     depends_on:
       postgres:
         condition: service_healthy
@@ -142,7 +140,6 @@ services:
       PORT: 3000
       REFRAQ_API_UPSTREAM: http://api:8000
       REFRAQ_MCP_UPSTREAM: http://mcp:8001
-      REFRAQ_QUERY_TIMEOUT_SEC: ${REFRAQ_QUERY_TIMEOUT_SEC:-30}
       REFRAQ_BROWSER_FACING_PROTO: ${REFRAQ_BROWSER_FACING_PROTO:-http}
       REFRAQ_BROWSER_FACING_HOST: ${REFRAQ_BROWSER_FACING_HOST:-}
     ports:

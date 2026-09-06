@@ -461,7 +461,6 @@ def _seed_join_catalog(source) -> None:
         job_id="job_seed",
         collected=[orders, customers, view],
         schema_scope="public",
-        fail_safe_threshold=1.0,
     )
 
 
@@ -534,7 +533,6 @@ def test_join_detection_warns_on_unresolved_endpoints(client: TestClient) -> Non
             ),
         ],
         schema_scope="public",
-        fail_safe_threshold=1.0,
     )
     job = create_queued_job(kind="join_detection", input={"source_id": source.id})
     out = run_join_detection_job(job.id)
@@ -593,7 +591,6 @@ def test_join_detection_token_error_does_not_fail_job(client: TestClient) -> Non
             ),
         ],
         schema_scope="public",
-        fail_safe_threshold=1.0,
     )
     job = create_queued_job(kind="join_detection", input={"source_id": source.id})
     out = run_join_detection_job(job.id)
@@ -666,7 +663,6 @@ def test_join_detection_skips_empty_ddl(client: TestClient) -> None:
             ),
         ],
         schema_scope="public",
-        fail_safe_threshold=1.0,
     )
     job = create_queued_job(kind="join_detection", input={"source_id": source.id})
     out = run_join_detection_job(job.id)
@@ -713,7 +709,6 @@ def test_tombstoned_host_does_not_delete_sql_lineage_join(client: TestClient) ->
             ),
         ],
         schema_scope="public",
-        fail_safe_threshold=1.0,
     )
     listed, _ = get_catalog_store().list_objects(source.id, include_absent=True)
     host = next(obj for obj in listed if obj.name == "v_open")
@@ -1233,7 +1228,6 @@ def test_join_detection_result_attributes_unresolved(client: TestClient) -> None
             ),
         ],
         schema_scope="dbo",
-        fail_safe_threshold=1.0,
     )
     job = create_queued_job(kind="join_detection", input={"source_id": source.id})
     out = run_join_detection_job(job.id)
@@ -1277,7 +1271,6 @@ def test_join_detection_same_column_self_join_is_not_unresolved(
             ),
         ],
         schema_scope="public",
-        fail_safe_threshold=1.0,
     )
     job = create_queued_job(kind="join_detection", input={"source_id": source.id})
     out = run_join_detection_job(job.id)

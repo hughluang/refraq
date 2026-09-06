@@ -211,7 +211,6 @@ def _seed_catalog() -> None:
         job_id=f"job_{uuid.uuid4().hex[:12]}",
         collected=collected,
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
 
 
@@ -760,7 +759,6 @@ def test_persist_stores_full_routine_identity_name(catalog_store) -> None:
         job_id=f"job_{uuid.uuid4().hex[:12]}",
         collected=collected,
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
 
     stored = catalog_store.get_object_by_locator(locator)

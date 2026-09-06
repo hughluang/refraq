@@ -60,9 +60,9 @@ Applying the test to `docs/env.md` gives a fixed classification. This is the ref
 | --- | --- |
 | `DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`, `REFRAQ_STORE_BACKEND`, `REFRAQ_API_HOST`, `REFRAQ_API_PORT`, `REFRAQ_ENV`, `TZ`, `REFRAQ_INTEGRATION_*` | Environment variable |
 | `ADMIN_SESSION_SECRET`, `INITIAL_ADMIN_ACCOUNT`, `INITIAL_ADMIN_PASSWORD`, `REFRAQ_SECRETS_MASTER_KEY` | Environment variable (secret; never a System Parameter) |
-| `ADMIN_SESSION_TTL_HOURS`, `REFRAQ_JOB_LOST_DETECTION_SEC` | **System Parameter** — registered (§5); the variables leave `.env` |
+| `ADMIN_SESSION_TTL_HOURS`, `REFRAQ_JOB_LOST_DETECTION_SEC`, `REFRAQ_QUERY_TIMEOUT_SEC`, `REFRAQ_QUERY_MAX_ROWS` | **System Parameter** — registered (§5); the variables leave `.env` |
 | `REFRAQ_JOB_WORKER_CONCURRENCY` | Neither. Worker pool size is owned by the deployment and set on the worker command line (§5.2); the variable is retired |
-| `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD`, `REFRAQ_QUERY_TIMEOUT_SEC`, `REFRAQ_QUERY_MAX_ROWS` | **System Parameter** candidates owned by `metadata`; not registered yet (§5.1) |
+| `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD` | Neither. Retired (§5.2). A complete successful structure collect always commits; leftover name is ignored and reported at startup |
 | `REFRAQ_EMBEDDING_API_URL`, `REFRAQ_EMBEDDING_MODEL`, `REFRAQ_EMBEDDING_TIMEOUT_SEC` | Neither. Retired. Catalog Search hybrid is an in-use **Model Service** (`docs/business-model-services.md`); leftover names are ignored and reported at startup |
 
 ## 3. Admission Rules
@@ -101,7 +101,7 @@ The mechanism stores keys and values and never names an occupancy window, a Beat
 
 - Each owning package declares its specs in `<package>/parameters.py` and publishes both the spec list and its **typed accessors**. The mechanism publishes only a generic resolver, so no function inside `admin` is named after another package's concept.
 - Composition assembles the registry from those published spec lists and then runs seed occupy, reusing the existing product-seed path (`ensure_product_type_mappings`); no new pattern is introduced.
-- The API process and the worker / Beat process both assemble and occupy. Occupy is insert-if-missing and safe to run concurrently.
+- The API process, the worker / Beat process, and the MCP process (HTTP `mcp_http` and stdio `mcp_server`) all assemble and occupy. Occupy is insert-if-missing and safe to run concurrently.
 - The assembled registry is frozen after composition. Reading an unregistered key is an error, so a process that forgets a declaration fails at boot rather than silently falling back.
 - Product seed occupy has the same meaning as for **Type Mapping** seeds: write only when the row is missing, never overwrite an operator value, and reset restores the seed.
 
@@ -126,22 +126,25 @@ The mechanism stores keys and values and never names an occupancy window, a Beat
 | `job_lost_detection_sec` | `jobs` | 60 | 15–3600 | No | Widening is live; tightening waits one old renew interval (`max(5, previous/3)` s) before the reaper cutoff shrinks. The hidden system reaper **Scheduled Task** interval is derived from this same value, so the operator's one field is the whole of lost-detection latency |
 | `admin_session_ttl_hours` | `admin` | 8 | 1–168 | No | New **Session**s only; existing sessions keep their `expires_at` |
 | `sso_pending_ttl_days` | `admin` | 7 | 1–30 | No | Only new pending federated identities; existing `expires_at` values do not change |
+| `query_timeout_sec` | `metadata` | 30 | 5–3600 | No | Next Controlled Query, Catalog Sample, and MCP `run_sql`. An in-flight peek keeps the value it started with. Console `/mcp` stream wait is the constraint maximum plus a 5s margin, not a second policy |
+| `query_max_rows` | `metadata` | 1000 | 100–10000 | No | Next Controlled Query / `run_sql` `max_rows` and Catalog Sample `offset + limit`. Request default 100 and Sample page size stay product constants |
 
 Ownership follows business language, not the file that reads the value: occupancy lost-detection is a **Job** primitive, so `jobs` owns it even though `worker` reaps.
 
 ### 5.1 Known Candidates Not Yet Registered
 
-`REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD`, `REFRAQ_QUERY_TIMEOUT_SEC`, and `REFRAQ_QUERY_MAX_ROWS` pass §2 and §3 and are owned by `metadata`. They stay environment variables until that slice is delivered. They are listed so their membership is not re-argued, and because they are why the registry must not live inside one package's catalog. A small registered set is the expected shape of this page; it grows when values that are genuinely the operator's arrive.
+None in this release. A small registered set is the expected shape of this page; it grows when values that are genuinely the operator's arrive.
 
 ### 5.2 Retired
 
-Admission was reopened to let more in, so the original six were re-tested rather than grandfathered. Four fail the intent test. They are recorded as verdicts, not precedent.
+Admission was reopened to let more in, so the original six were re-tested rather than grandfathered. Later keys that fail the intent test are recorded here as verdicts, not precedent.
 
 | Key(s) | Owner / seed | Intent failure | Home |
 | --- | --- | --- | --- |
 | `job_worker_concurrency` | `worker` / 1 (range 1–32) | Deployed capacity is `replicas × concurrency`; a site-wide value owns one factor of a quantity whose other factor belongs to the deployment (clause 4, rule 1). The Console shows a value the worker read once at start (rule 8); "restart the worker" routes the operator to the deployment where the flag would have been set (rule 5) | Worker command line, owned by the deployment. Compose sets no flag, so Celery's default (CPU count) applies. Retired seed was 1, so this is a deliberate change in deployed behaviour |
 | `beat_sync_every_sec`, `beat_max_interval_sec` | `worker` / 30, 5 | No operator has a business reason to prefer one Beat loop interval over another; they would change either value only after an engineer read a graph (clauses 1–3) | In-code constants `BEAT_SYNC_EVERY_SEC = 30`, `BEAT_MAX_INTERVAL_SEC = 5`, changed by a release (§2 question 4) |
 | `reaper_interval_sec` | `worker` / 60 | Effective detection latency ≈ `job_lost_detection_sec` + reaper interval — half a control (clause 4) | Derived in code from `job_lost_detection_sec`; Beat copies the derived value onto the hidden reaper row's `interval_seconds` without recomputing `next_run_at`. Operators never PATCH that row |
+| `catalog_fail_safe_threshold` (env `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD`) | `metadata` / 0.75 | Guessed that a complete successful collect which would absent most of **Current catalog** was untrustworthy (clauses 1–3). A broken collect should fail the collect; a real mass drop should write. Tuning the ratio is not a business policy, and raising it to “do not block” for a cleanup is a kill switch (question 6) | Retired. A complete successful structure collect always commits. Leftover env is ignored and reported at startup |
 
 ## 6. Value Lifecycle
 

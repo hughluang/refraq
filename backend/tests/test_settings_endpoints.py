@@ -36,12 +36,16 @@ REGISTERED_KEYS = {
     "admin_session_ttl_hours",
     "sso_pending_ttl_days",
     "job_lost_detection_sec",
+    "query_max_rows",
+    "query_timeout_sec",
 }
 
 CATALOG_KEY_ORDER = [
     "admin_session_ttl_hours",
     "sso_pending_ttl_days",
     "job_lost_detection_sec",
+    "query_max_rows",
+    "query_timeout_sec",
 ]
 
 

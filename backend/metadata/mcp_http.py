@@ -23,6 +23,7 @@ from backend.metadata.mcp_actor import (
 )
 from backend.metadata.mcp_catalog import MCP_PUBLIC_PATH
 from backend.metadata.mcp_server import mcp
+from backend.worker.parameters import assemble_system_parameters
 
 
 class PatOnlyGate:
@@ -78,6 +79,7 @@ def _transport_security() -> TransportSecuritySettings | None:
 
 
 def create_mcp_http_app() -> Starlette:
+    assemble_system_parameters()
     settings = get_settings()
     inner = mcp.streamable_http_app(
         streamable_http_path=MCP_PUBLIC_PATH,
@@ -96,6 +98,7 @@ def create_mcp_http_app() -> Starlette:
 
 
 def main() -> None:
+    assemble_system_parameters()
     settings = get_settings()
     uvicorn.run(
         create_mcp_http_app(),

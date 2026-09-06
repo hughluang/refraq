@@ -609,7 +609,6 @@ def _seed_embed_target(
         job_id="job_embed_seed",
         collected=collected,
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
 
 

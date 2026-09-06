@@ -103,9 +103,10 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | `backend.metadata.catalog_embed_jobs` | `catalog_embed` mint / cancel / index cleanup / latest-job view bound into admin; Job runner |
 | `backend.metadata.source_schedules` | Metadata facade onto platform schedules: operator projection (`public_schedule`: work_kind + target), opaque `owner_ref` register/withdraw, per-kind product-default seed on Source create / mutating Source update. Closed work kinds: `structure`, `join_detection`. Not schedule ownership by Source |
 | `backend.metadata.type_mappings.seeds` | Product Type Mapping seed occupy (`ensure_product_type_mappings`) for Foundation Upgrade / Site Bootstrap |
+| `backend.metadata.parameters` | Metadata-owned parameter specs and typed accessors (`query_timeout_sec`, `query_max_rows`) |
 | `backend.metadata.mcp_catalog` | MCP tool catalog (name / Permission / description) shared by HTTP and `tools/list` |
-| `backend.metadata.mcp_server` | MCP tool host (stdio / in-process handlers) |
-| `backend.metadata.mcp_http` | Product Streamable HTTP process entry |
+| `backend.metadata.mcp_server` | MCP tool host (stdio / in-process handlers). The stdio process entry assembles System Parameters |
+| `backend.metadata.mcp_http` | Product Streamable HTTP process entry; assembles System Parameters |
 | `backend.metadata.tasks` | Job kind handler dispatch (`run_job`); discovered by `worker` |
 | `backend.metadata.routers.*` | Domain use-case HTTP; mounted by `main` |
 
@@ -221,7 +222,7 @@ Concrete edges:
 | `core` | stdlib, third parties, Alembic; `admin.roles` published symbols from `upgrade` only; `worker.api` / `worker.parameters` from `upgrade` only; `metadata.type_mappings.seeds` from `upgrade` only |
 | `admin` | `core`; own stores/schemas/routers / `system_parameters` / `parameters` / `model_services` |
 | `jobs` | `core`; own store/schemas/routers / `parameters`; published `admin` (audit, System Parameter resolver) |
-| `metadata` | `core`; published `admin`; published `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; own modules |
+| `metadata` | `core`; published `admin`; published `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; process entries `mcp_http` / `mcp_server` may import `worker.parameters`; own modules |
 | `worker` | `core`; published `admin` / `jobs` / `metadata` for assembly and system tasks |
 | `alembic` | `core` Base + every package `models` module |
 | `tests` | any backend module (enforcement tests assert production edges) |

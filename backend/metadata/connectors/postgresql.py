@@ -26,6 +26,7 @@ from backend.metadata.connectors.structure_rows import (
     ObjectRow,
     StructureRows,
     assemble,
+    require_catalog_scope,
     stream_mappings,
 )
 from backend.metadata.connectors.tls import postgres_connect_args, tls_temp_files
@@ -62,7 +63,14 @@ class PostgresqlConnector:
         eng = self._engine(endpoint)
         try:
             with eng.connect() as conn:
-                conn.execute(text("SELECT 1"))
+                require_catalog_scope(
+                    conn,
+                    _SCOPE_SQL,
+                    {"schema_filter": endpoint.schema_filter},
+                    scope=endpoint.schema_filter,
+                )
+        except ConnectorError:
+            raise
         except Exception as exc:  # noqa: BLE001 — map driver errors
             raise ConnectorError("JOB_ENDPOINT_FAILED", str(exc)) from exc
         finally:
@@ -93,14 +101,20 @@ class PostgresqlConnector:
         endpoint: SourceEndpoint,
         progress: CollectProgress | None = None,
     ) -> CollectedStructure:
-        if progress is not None:
-            progress.listing_objects(endpoint.schema_filter)
         eng = self._engine(endpoint)
         try:
             with eng.connect() as conn:
                 params: dict[str, object] = {
                     "schema_filter": endpoint.schema_filter,
                 }
+                require_catalog_scope(
+                    conn,
+                    _SCOPE_SQL,
+                    params,
+                    scope=endpoint.schema_filter,
+                )
+                if progress is not None:
+                    progress.listing_objects(endpoint.schema_filter)
                 objects = [
                     ObjectRow(
                         object_key=str(int(row["oid"])),
@@ -169,6 +183,14 @@ class PostgresqlConnector:
         eng.dispose = dispose  # type: ignore[method-assign]
         return eng
 
+
+_SCOPE_SQL = text(
+    """
+    SELECT n.nspname
+    FROM pg_catalog.pg_namespace n
+    WHERE n.nspname = :schema_filter
+    """
+)
 
 _SCHEMA_SCOPE = """
   AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')

@@ -37,6 +37,7 @@ from backend.core.pagination import (
     SOURCE_SEARCH,
 )
 from backend.core.time import format_instant
+from backend.worker.parameters import assemble_system_parameters
 from backend.metadata.business_domains import service as domain_service
 from backend.metadata.catalog import join_writes as catalog_joins
 from backend.metadata.catalog import refs as catalog_refs
@@ -817,6 +818,7 @@ def run_sql(
 
 def main() -> None:
     """stdio entry for local/tests. Product port is HTTP (`mcp_http`)."""
+    assemble_system_parameters()
     secret = os.environ.get("REFRAQ_MCP_PAT", "").strip()
     if not secret:
         mcp.run()

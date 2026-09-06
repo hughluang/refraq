@@ -24,6 +24,7 @@ from backend.metadata.connectors.structure_rows import (
     ObjectRow,
     StructureRows,
     assemble,
+    require_catalog_scope,
     stream_mappings,
 )
 
@@ -37,7 +38,14 @@ class MssqlConnector:
         eng = self._engine(endpoint)
         try:
             with eng.connect() as conn:
-                conn.execute(text("SELECT 1"))
+                require_catalog_scope(
+                    conn,
+                    _SCOPE_SQL,
+                    {"schema_filter": endpoint.schema_filter},
+                    scope=endpoint.schema_filter,
+                )
+        except ConnectorError:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise ConnectorError("JOB_ENDPOINT_FAILED", str(exc)) from exc
         finally:
@@ -66,14 +74,20 @@ class MssqlConnector:
         endpoint: SourceEndpoint,
         progress: CollectProgress | None = None,
     ) -> CollectedStructure:
-        if progress is not None:
-            progress.listing_objects(endpoint.schema_filter)
         eng = self._engine(endpoint)
         try:
             with eng.connect() as conn:
                 params: dict[str, object] = {
                     "schema_filter": endpoint.schema_filter,
                 }
+                require_catalog_scope(
+                    conn,
+                    _SCOPE_SQL,
+                    params,
+                    scope=endpoint.schema_filter,
+                )
+                if progress is not None:
+                    progress.listing_objects(endpoint.schema_filter)
                 objects = [
                     ObjectRow(
                         object_key=str(int(row["object_id"])),
@@ -126,6 +140,14 @@ class MssqlConnector:
             connect_args["timeout"] = max(1, int(timeout_sec))
         return create_engine(url, pool_pre_ping=True, connect_args=connect_args)
 
+
+_SCOPE_SQL = text(
+    """
+    SELECT s.name
+    FROM sys.schemas s
+    WHERE s.name = :schema_filter
+    """
+)
 
 _OBJECT_SQL = text(
     """

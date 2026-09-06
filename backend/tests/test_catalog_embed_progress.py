@@ -187,7 +187,6 @@ def _seed_source(*, object_count: int, columns_per_object: int) -> str:
         job_id="job_embed_seed",
         collected=collected,
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     return source_id
 

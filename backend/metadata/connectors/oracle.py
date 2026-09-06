@@ -27,6 +27,7 @@ from backend.metadata.connectors.structure_rows import (
     ObjectRow,
     StructureRows,
     assemble,
+    require_catalog_scope,
     stream_mappings,
 )
 
@@ -38,7 +39,14 @@ class OracleConnector:
         eng = self._engine(endpoint)
         try:
             with eng.connect() as conn:
-                conn.execute(text("SELECT 1 FROM DUAL"))
+                require_catalog_scope(
+                    conn,
+                    _SCOPE_SQL,
+                    {"owner": endpoint.schema_filter.upper()},
+                    scope=endpoint.schema_filter.upper(),
+                )
+        except ConnectorError:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise ConnectorError("JOB_ENDPOINT_FAILED", str(exc)) from exc
         finally:
@@ -68,12 +76,18 @@ class OracleConnector:
         progress: CollectProgress | None = None,
     ) -> CollectedStructure:
         owner_filter = endpoint.schema_filter.upper()
-        if progress is not None:
-            progress.listing_objects(owner_filter)
         eng = self._engine(endpoint)
         try:
             with eng.connect() as conn:
                 params: dict[str, object] = {"owner": owner_filter}
+                require_catalog_scope(
+                    conn,
+                    _SCOPE_SQL,
+                    params,
+                    scope=owner_filter,
+                )
+                if progress is not None:
+                    progress.listing_objects(owner_filter)
                 objects = [
                     ObjectRow(
                         object_key=_object_key(
@@ -148,6 +162,14 @@ def _object_key(owner: str, name: str, object_type: str) -> str:
 def _row_object_key(row: Any) -> str:
     return _object_key(row["schema_name"], row["object_name"], row["object_type"])
 
+
+_SCOPE_SQL = text(
+    """
+    SELECT u.username
+    FROM all_users u
+    WHERE u.username = :owner
+    """
+)
 
 _OBJECT_SQL = text(
     """

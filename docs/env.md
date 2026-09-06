@@ -26,16 +26,14 @@ Current `backend/.env.example` defines:
 - `INITIAL_ADMIN_PASSWORD=change-me`
 - `REFRAQ_SECRETS_MASTER_KEY=change-me-secrets-master-key` (metadata foundation: encrypt Source secrets at rest)
 - `CELERY_BROKER_URL=redis://127.0.0.1:6379/2` (Celery broker; prefer a logical DB separate from Session `REDIS_URL`). If unset, broker is derived from `REDIS_URL` (`…/2`); if both unset, resolution fails (no localhost invent).
-- `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD=0.75` (abort structure catalog write when absent ratio exceeds this; **System Parameter** candidate owned by `metadata` — `docs/business-system-parameters.md` §5.1)
-- `REFRAQ_QUERY_TIMEOUT_SEC=30` (controlled query dual timeout: application + engine statement/command timeout; **System Parameter** candidate — §5.1)
-- `REFRAQ_QUERY_MAX_ROWS=1000` (platform cap for controlled query `max_rows`; request default is 100; **System Parameter** candidate — §5.1)
 - `REFRAQ_EMBEDDING_API_URL`, `REFRAQ_EMBEDDING_MODEL`, `REFRAQ_EMBEDDING_TIMEOUT_SEC` (retired. Catalog Search hybrid is an in-use **Model Service**. These names are ignored and reported at startup as dead. They are not **System Parameter**s and are not imported into rows)
+- `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD` (retired. A complete successful structure collect always commits. Leftover name is ignored and reported at startup)
 
-Session TTL and occupancy lost-detection are **System Parameter**s (`docs/business-system-parameters.md` §5). They are not environment variables. A leftover name matching a registered key (`ADMIN_SESSION_TTL_HOURS`, `REFRAQ_JOB_LOST_DETECTION_SEC`, or the key itself in uppercase) is ignored and reported at startup as dead. The stored row is the only home.
+Session TTL, occupancy lost-detection, live-peek timeout, and live-peek row cap are **System Parameter**s (`docs/business-system-parameters.md` §5). They are not environment variables. A leftover name matching a registered key (`ADMIN_SESSION_TTL_HOURS`, `REFRAQ_JOB_LOST_DETECTION_SEC`, `REFRAQ_QUERY_TIMEOUT_SEC`, `REFRAQ_QUERY_MAX_ROWS`, or the key itself in uppercase) is ignored and reported at startup as dead. The stored row is the only home.
 
 Worker concurrency is neither. It is owned by the deployment and set on the worker command line (§8); `REFRAQ_JOB_WORKER_CONCURRENCY` is retired and reading it is not implemented anywhere. Beat loop / reload intervals and the reaper poll interval are in-code constants or derived from lost-detection (`docs/business-system-parameters.md` §5.2), not environment variables and not System Parameters.
 
-Remove `ADMIN_SESSION_TTL_HOURS` and `REFRAQ_JOB_LOST_DETECTION_SEC` from live `.env` files. Changing them and restarting has no effect. Tune session TTL and lost-detection in Platform Settings. Set concurrency where the worker is launched.
+Remove `ADMIN_SESSION_TTL_HOURS`, `REFRAQ_JOB_LOST_DETECTION_SEC`, `REFRAQ_QUERY_TIMEOUT_SEC`, and `REFRAQ_QUERY_MAX_ROWS` from live `.env` files. Changing them and restarting has no effect. Tune those values in Platform Settings. Set concurrency where the worker is launched.
 
 `REFRAQ_STORE_BACKEND=memory` is for automated tests only. Do not use it in production examples.
 Metadata foundation variables are required when running ingestion/secret features; Foundation-only local login may still boot without them until those code paths are exercised.
@@ -47,7 +45,6 @@ Current `frontend/.env.example` defines:
 - `NEXT_PUBLIC_REFRAQ_API_BASE_URL=/api`
 - `REFRAQ_API_UPSTREAM=http://127.0.0.1:8000`
 - `REFRAQ_MCP_UPSTREAM=http://127.0.0.1:8001` (web Route Handler streams `/mcp` here; never expose `readyz`)
-- `REFRAQ_QUERY_TIMEOUT_SEC=30` (web `/mcp` wait is this value plus margin; must match backend query timeout)
 - `NEXT_PUBLIC_DEFAULT_LOCALE=en-US`
 
 `REFRAQ_API_UPSTREAM` has matching build-time and runtime duties. Next.js reads it at build time to compile browser `/api` rewrites. Server-only frontend code reads it at runtime for direct SSR calls such as public Site Branding. Local `next dev` uses the env file. Published web images bake `http://api:8000` as a Docker build argument; the site compose also sets the same runtime value.
@@ -105,9 +102,7 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - `REFRAQ_SECRETS_MASTER_KEY` (required to store/read Source secrets)
 - `CELERY_BROKER_URL` (required when running Celery worker/beat; default same host Redis DB `2`)
 - `REFRAQ_BROWSER_FACING_HOST` (optional; host or `host:port`, no scheme) — canonical Console host for OIDC `redirect_uri`; when unset, only a loopback Host is used
-- `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD` (metadata candidate; not yet a System Parameter)
-- `REFRAQ_QUERY_TIMEOUT_SEC` (metadata candidate; not yet a System Parameter)
-- `REFRAQ_QUERY_MAX_ROWS` (metadata candidate; not yet a System Parameter)
+- `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD` (retired; ignored and reported at startup)
 - `REFRAQ_EMBEDDING_API_URL`, `REFRAQ_EMBEDDING_MODEL`, `REFRAQ_EMBEDDING_TIMEOUT_SEC` (retired; ignored and reported at startup)
 - `REFRAQ_INTEGRATION_DATABASE_URL` (pytest `@pytest.mark.integration` only; default `…/refraq_test`)
 - `REFRAQ_INTEGRATION_REDIS_URL` (integration only; default `redis://127.0.0.1:6379/1`)
@@ -118,7 +113,6 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - `NEXT_PUBLIC_REFRAQ_API_BASE_URL` (browser-facing base; default `/api`)
 - `REFRAQ_API_UPSTREAM` (internal backend origin; build-time rewrite target and runtime server-rendering target; never exposed to browser code)
 - `REFRAQ_MCP_UPSTREAM` (internal MCP origin; runtime stream target for `/mcp` only; never `readyz`)
-- `REFRAQ_QUERY_TIMEOUT_SEC` (web `/mcp` wait floor plus margin; keep aligned with backend)
 - `NEXT_PUBLIC_DEFAULT_LOCALE`
 - `REFRAQ_BROWSER_FACING_PROTO` (`http` | `https`; default `http`) — stamped onto `/api` rewrite as `X-Forwarded-Proto` for Session `Secure`; set `https` when TLS terminates in front of the Console
 - `REFRAQ_BROWSER_FACING_HOST` (optional; host or `host:port`, no scheme) — stamped onto `/api` rewrite as `X-Forwarded-Host` for OIDC callback origin; when unset, only a loopback request Host is stamped

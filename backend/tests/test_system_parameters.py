@@ -10,6 +10,7 @@ import pytest
 from pydantic.fields import FieldInfo
 
 from backend.admin.parameters import ADMIN_PARAMETER_SPECS
+from backend.metadata.parameters import METADATA_PARAMETER_SPECS
 from backend.admin.system_parameters import (
     JSON_SCHEMA_PROFILE_KEYWORDS,
     IntConstraint,
@@ -187,15 +188,22 @@ def test_constraint_fragment_uses_only_profile_keywords() -> None:
 def test_registry_parity_across_composition() -> None:
     assemble_system_parameters()
     declared = {
-        spec.key for spec in (*ADMIN_PARAMETER_SPECS, *JOBS_PARAMETER_SPECS)
+        spec.key
+        for spec in (*ADMIN_PARAMETER_SPECS, *JOBS_PARAMETER_SPECS, *METADATA_PARAMETER_SPECS)
     }
     assert {spec.key for spec in list_registered_specs()} == declared
     main_src = (BACKEND_ROOT / "main.py").read_text(encoding="utf-8")
     app_src = (BACKEND_ROOT / "worker" / "app.py").read_text(encoding="utf-8")
     upgrade_src = (BACKEND_ROOT / "core" / "upgrade.py").read_text(encoding="utf-8")
+    mcp_http_src = (BACKEND_ROOT / "metadata" / "mcp_http.py").read_text(encoding="utf-8")
+    mcp_stdio_src = (BACKEND_ROOT / "metadata" / "mcp_server.py").read_text(
+        encoding="utf-8"
+    )
     assert "assemble_system_parameters" in main_src
     assert "assemble_system_parameters" in app_src
     assert "assemble_system_parameters" in upgrade_src
+    assert "assemble_system_parameters" in mcp_http_src
+    assert "assemble_system_parameters" in mcp_stdio_src
 
 
 def test_retired_keys_are_not_registered() -> None:
@@ -205,6 +213,7 @@ def test_retired_keys_are_not_registered() -> None:
     assert "beat_sync_every_sec" not in keys
     assert "beat_max_interval_sec" not in keys
     assert "reaper_interval_sec" not in keys
+    assert "catalog_fail_safe_threshold" not in keys
     app_src = (BACKEND_ROOT / "worker" / "app.py").read_text(encoding="utf-8")
     assert "worker_concurrency" not in app_src
     for key in (
@@ -244,6 +253,30 @@ def test_leftover_env_name_is_logged(monkeypatch: pytest.MonkeyPatch, caplog: py
     assert "ADMIN_SESSION_TTL_HOURS" in caplog.text
     assert "admin_session_ttl_hours" in caplog.text
     assert "REFRAQ_JOB_WORKER_CONCURRENCY" not in caplog.text
+
+
+def test_leftover_query_env_is_logged(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    assemble_system_parameters()
+    monkeypatch.setenv("REFRAQ_QUERY_TIMEOUT_SEC", "45")
+    monkeypatch.setenv("REFRAQ_QUERY_MAX_ROWS", "500")
+    with caplog.at_level(logging.WARNING, logger="backend.worker.parameters"):
+        assemble_system_parameters()
+    assert "REFRAQ_QUERY_TIMEOUT_SEC" in caplog.text
+    assert "query_timeout_sec" in caplog.text
+    assert "REFRAQ_QUERY_MAX_ROWS" in caplog.text
+    assert "query_max_rows" in caplog.text
+
+
+def test_dead_fail_safe_env_is_logged(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD", "0.75")
+    with caplog.at_level(logging.WARNING, logger="backend.worker.parameters"):
+        assemble_system_parameters()
+    assert "REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD" in caplog.text
+    assert "retired" in caplog.text
 
 
 def _alias_strings(field: FieldInfo) -> set[str]:

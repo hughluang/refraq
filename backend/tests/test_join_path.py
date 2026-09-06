@@ -123,7 +123,6 @@ def test_two_hop_join_path() -> None:
         job_id="j1",
         collected=[a, b, c],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     store.write_insert_join(
         from_column_id="col_a_b",
@@ -165,7 +164,6 @@ def test_direct_joins_for_column_start() -> None:
         job_id="j1",
         collected=[a, b],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     store.write_insert_join(
         from_column_id="col_a_b",
@@ -193,7 +191,6 @@ def test_rejected_join_is_omitted_from_paths() -> None:
         job_id="j1",
         collected=[a, b],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     join = store.write_insert_join(
         from_column_id="col_a_b",

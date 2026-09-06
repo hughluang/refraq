@@ -61,18 +61,6 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="CELERY_BROKER_URL",
     )
-    refraq_catalog_fail_safe_threshold: float = Field(
-        default=0.75,
-        validation_alias="REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD",
-    )
-    refraq_query_timeout_sec: int = Field(
-        default=30,
-        validation_alias="REFRAQ_QUERY_TIMEOUT_SEC",
-    )
-    refraq_query_max_rows: int = Field(
-        default=1000,
-        validation_alias="REFRAQ_QUERY_MAX_ROWS",
-    )
     refraq_browser_facing_host: str | None = Field(
         default=None,
         validation_alias="REFRAQ_BROWSER_FACING_HOST",

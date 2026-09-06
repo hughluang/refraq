@@ -94,14 +94,18 @@ class EngineConnector(Protocol):
     engine: str
 
     def test_connection(self, endpoint: SourceEndpoint) -> None:
-        """Raise on failure; return None on success."""
+        """Prove the live endpoint and declared catalog scope exist, or raise."""
 
     def collect_structure(
         self,
         endpoint: SourceEndpoint,
         progress: CollectProgress | None = None,
     ) -> CollectedStructure:
-        """Return complete structure for the Source scope, or raise."""
+        """Prove catalog scope, then return complete structure for it, or raise.
+
+        A missing schema/owner is ``JOB_ENDPOINT_FAILED`` before object listing.
+        A proven empty scope is a complete collect (zero objects), not a failure.
+        """
 
     def run_readonly(
         self,

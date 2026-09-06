@@ -33,13 +33,11 @@ def apply_structure_snapshot(
     job_id: str,
     collected: list[CatalogObjectRecord],
     schema_scope: str | None,
-    fail_safe_threshold: float,
 ) -> StructureRefreshCommit:
     """Commit Current catalog and Structure Diff after a complete collect.
 
-    Identity (engine / kind / key) is taken from ``source``; the fail-safe
-    threshold is supplied by the caller. Fail-safe, identity match, FK/index
-    merge, Join Origin, and Object Semantics survival live in
+    Identity (engine / kind / key) is taken from ``source``. Identity match,
+    FK/index merge, Join Origin, and Object Semantics survival live in
     ``structure_merge``. This module loads one baseline under a catalog write
     unit, builds the plan, persists the delta and Structure Diff facts from
     that same baseline, then returns the commit outcome.
@@ -54,7 +52,6 @@ def apply_structure_snapshot(
                 existing_joins=existing_joins,
                 incoming=collected,
                 schema_scope=schema_scope,
-                fail_safe_threshold=fail_safe_threshold,
                 engine=source.engine,
                 kind=source.kind,
                 source_key=source.key,

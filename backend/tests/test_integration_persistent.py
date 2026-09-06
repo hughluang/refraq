@@ -385,7 +385,6 @@ def test_sql_list_objects_is_constant_queries(persistent_client: TestClient) -> 
         job_id="job_list",
         collected=collected,
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
 
     store = get_catalog_store()
@@ -445,7 +444,6 @@ def test_sql_list_objects_is_constant_queries(persistent_client: TestClient) -> 
         job_id="job_tomb",
         collected=collected[:-1],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     _with_absent, with_absent_total = store.list_objects(
         source_id, include_absent=True, limit=5
@@ -562,7 +560,6 @@ def test_sql_refresh_keeps_patched_semantics(persistent_client: TestClient) -> N
         job_id="job_seed",
         collected=[incoming],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     store = get_catalog_store()
     store.patch_object_semantics(
@@ -590,7 +587,6 @@ def test_sql_refresh_keeps_patched_semantics(persistent_client: TestClient) -> N
         job_id="job_refresh",
         collected=[changed],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     obj = store.get_object(object_id)
     assert obj is not None

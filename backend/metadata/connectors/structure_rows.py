@@ -13,6 +13,7 @@ from backend.metadata.connectors.base import (
     CollectedObject,
     CollectedStructure,
     CollectProgress,
+    ConnectorError,
 )
 
 
@@ -89,6 +90,21 @@ def stream_mappings(
     """Iterate a SQLAlchemy result as mapping rows without materializing it."""
     result = conn.execution_options(yield_per=yield_per).execute(sql, params)  # type: ignore[attr-defined]
     yield from result.mappings()
+
+
+def require_catalog_scope(
+    conn: object,
+    sql: object,
+    params: dict[str, object],
+    *,
+    scope: str,
+) -> None:
+    """Prove the catalog container exists. Missing scope is not an empty listing."""
+    if next(stream_mappings(conn, sql, params), None) is None:
+        raise ConnectorError(
+            "JOB_ENDPOINT_FAILED",
+            f"catalog scope {scope!r} does not exist",
+        )
 
 
 def assemble(

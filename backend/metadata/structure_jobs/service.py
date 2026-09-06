@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 
-from backend.core.config import get_settings
 from backend.core.time import utc_now
 
 from backend.jobs.store import append_job_log, mark_succeeded
@@ -136,7 +135,6 @@ def _collect_and_apply_structure(
             job_id=job_id,
             collected=records,
             schema_scope=bound.endpoint.schema_filter,
-            fail_safe_threshold=get_settings().refraq_catalog_fail_safe_threshold,
         )
     except CatalogWriteAborted as exc:
         return fail_job(job_id, error_code=exc.code, error_summary=exc.message)

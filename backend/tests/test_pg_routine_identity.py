@@ -9,6 +9,7 @@ from backend.metadata.connectors.postgresql import (
     PostgresqlConnector,
     _ROUTINE_DEFINITION_SQL,
     _ROUTINE_OBJECT_SQL,
+    _SCOPE_SQL,
 )
 
 
@@ -24,6 +25,11 @@ def _endpoint() -> SourceEndpoint:
     )
 
 
+class _FakeResult:
+    def mappings(self):
+        return iter([{"nspname": "public"}])
+
+
 class _FakeEngine:
     def connect(self):
         return self
@@ -37,12 +43,20 @@ class _FakeEngine:
     def dispose(self) -> None:
         return None
 
+    def execution_options(self, **_kwargs: object):
+        return self
+
+    def execute(self, _sql: object, _params: dict[str, object] | None = None):
+        return _FakeResult()
+
 
 def test_collect_structure_keeps_overload_identity_signatures() -> None:
     assert "pg_get_function_identity_arguments" in str(_ROUTINE_OBJECT_SQL)
     assert "pg_get_functiondef" in str(_ROUTINE_DEFINITION_SQL)
 
     def _stream(_conn: object, sql: object, _params: dict[str, object], **_kw: object):
+        if sql is _SCOPE_SQL:
+            return iter([{"nspname": "public"}])
         if sql is _ROUTINE_OBJECT_SQL:
             return iter(
                 [

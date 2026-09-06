@@ -179,7 +179,6 @@ def test_plan_skips_existing_human_join() -> None:
         existing_joins=[human_join],
         incoming=[customers, orders],
         schema_scope=None,
-        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="demo",
@@ -215,7 +214,6 @@ def test_apply_preserves_human_join_via_store() -> None:
         job_id="job_seed",
         collected=[customers, bare_orders],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     human = store.write_insert_join(
         from_column_id="col_cust_fk",
@@ -230,7 +228,6 @@ def test_apply_preserves_human_join_via_store() -> None:
         job_id="job_refresh",
         collected=[customers, orders],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     joins, _ = store.list_joins_for_object("obj_orders")
     assert len(joins) == 1
@@ -281,7 +278,6 @@ def test_apply_does_not_take_over_sql_lineage_join() -> None:
         job_id="job_seed",
         collected=[customers, bare_orders],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     lineage_evidence = (
         "SQL join in obj/postgresql/demo/public/view/v_orders: customer_id = id"
@@ -306,7 +302,6 @@ def test_apply_does_not_take_over_sql_lineage_join() -> None:
         job_id="job_refresh",
         collected=[customers, orders],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     joins, total = store.list_joins_for_object("obj_orders")
     assert total == 2
@@ -349,7 +344,6 @@ def test_fk_removed_does_not_delete_join() -> None:
         job_id="job_seed",
         collected=[customers, orders_with_fk],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     joins, total = store.list_joins_for_object("obj_orders")
     assert total == 1
@@ -367,7 +361,6 @@ def test_fk_removed_does_not_delete_join() -> None:
         job_id="job_drop_fk",
         collected=[customers, orders_without_fk],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     joins_after, total_after = store.list_joins_for_object("obj_orders")
     assert total_after == 1
@@ -399,7 +392,6 @@ def test_service_duplicate_create_is_refused() -> None:
         job_id="job_seed",
         collected=[customers, orders],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     human = catalog_joins.create_join(
         from_column_id="col_cust_fk",
@@ -446,7 +438,6 @@ def test_create_join_occupied_race_refuses_defined(monkeypatch: pytest.MonkeyPat
         job_id="job_seed",
         collected=[customers, orders],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     store = get_catalog_store()
     planted = store.write_insert_join(
@@ -499,7 +490,6 @@ def test_create_join_occupied_race_refuses_rejected(
         job_id="job_seed",
         collected=[customers, orders],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     store = get_catalog_store()
     planted = store.write_insert_join(

@@ -107,7 +107,7 @@ Rules:
 - Enqueue writes `summary` (`structure · {source_key}` or `join_detection · {source_key}`) and `trigger_kind=schedule` / `trigger_ref` = schedule id. Operator run-now also sets `created_by`. Minting does **not** enforce the **Kind execution lock** or Source usable status; those fail on the Job during execution (`JOB_ALREADY_ACTIVE` / `JOB_SOURCE_DISABLED`).
 - Creating a Source-targeted schedule via the facade requires `jobs:run` and a database Source with an access blob (registration gate). The schedule row still carries only opaque `owner_ref` (literal such as `metadata:source:{id}`) — not a Source FK. Product HTTP cannot set `owner_ref`.
 - Workers load reachability from the Source identified in Job `input`; `input` does not carry endpoint material.
-- Successful structure Jobs write/refresh **Catalog Objects** on that Source and produce at most one **Structure Diff**. **Job result** envelope: `{ "schema": "structure.diff.v1", "class", "counts", "structure_diff_id" }`. Failed, cancelled, or fail-safe Jobs write neither result nor Diff. An unexpected runner abort (including catalog persist) ends the Job `failed` with `JOB_EXECUTION_FAILED` so occupancy does not keep a false `RUNNING`. The structure runner honors a cooperative terminal stamp (`cancelled`, `JOB_RUNNING_TIMEOUT`, `JOB_WORKER_LOST`) before applying a catalog snapshot.
+- Successful structure Jobs write/refresh **Catalog Objects** on that Source and produce at most one **Structure Diff**. **Job result** envelope: `{ "schema": "structure.diff.v1", "class", "counts", "structure_diff_id" }`. Failed or cancelled Jobs write neither result nor Diff. An unexpected runner abort (including catalog persist) ends the Job `failed` with `JOB_EXECUTION_FAILED` so occupancy does not keep a false `RUNNING`. The structure runner honors a cooperative terminal stamp (`cancelled`, `JOB_RUNNING_TIMEOUT`, `JOB_WORKER_LOST`) before applying a catalog snapshot.
 - Successful join-detection Jobs parse stored SQL definitions and insert missing join edges for that Source (first attester `sql_lineage` on **Join Change** when this Job inserts the row). **Job result** envelope: `{ "schema": "join_detection.v1", "objects_eligible", "objects_parsed", "objects_parse_failed", "joins_upserted", "joins_deleted_stale", "joins_skipped_unresolved", "joins_skipped_unresolved_alias", "joins_skipped_unresolved_external", "joins_skipped_unresolved_object", "joins_skipped_unresolved_column", "joins_skipped_protected", "joins_skipped_rejected" }`. `joins_upserted` is the number of join rows this Job actually inserted (equal to **Join Change** create events it appended), not the count of pairs planned after the join-graph baseline. `joins_deleted_stale` is always `0`. `joins_skipped_unresolved` equals the sum of the four attribution counters. Failed or cancelled Jobs write neither result nor join-graph mutation (success-only commit). Per-object tokenize/parse failures and unresolved endpoints are counters, not Job failure. Joins extracted from fragments that did parse are still committed. The Job run log records one WARN per such object with tokenize/parse type counts (no SQL fragments) and an info line of eligible / parsed / parse_failed / upserted / unresolved attribution counts when the Job succeeds. Catalog persist failure, an unusable Source, an unusable access secret (`JOB_SECRET_MISSING`), and errors other than tokenize/parse still fail the Job with no graph mutation. The runner honors the same cooperative terminal stamp before applying a join-detection plan.
 - Related Jobs hang on the **schedule** (`GET /schedules/{id}/jobs`), not on Source. Structure Diff browse is a Source-scoped Console page (`/console/sources/:id/structure-diffs`, `metadata:read`). Global Job observe is **Operations** `jobs`. Source related-schedules **workbench** is `/console/sources/:id/schedules` (facade create plus manage), not a Source Job list.
 - Facade create/list: closed `work_kind` catalog is `structure` \| `join_detection`; several schedules of each kind may target one Source. Default names `structure · {source_key}` and `join_detection · {source_key}` (not unique); keys `structure:{source_id}:{schedule_id}` and `join_detection:{source_id}:{schedule_id}` (facade convention). Patch / delete / run-now are by schedule id on `/schedules/{id}` (mechanism HTTP). Run-now mints the Job kind stored on that schedule.
@@ -253,14 +253,14 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
   `(source_id, schema_name, name, object_type)`. Surrogate ids are preserved across successful refreshes.
 - **Success-only commit:** only a Job that reaches a complete successful collect may mutate catalog.
   Failed, cancelled, or aborted collects leave the prior successful catalog unchanged (no absent marks).
+  A complete collect first proves that the declared catalog scope (`access.schema` / `access.owner`)
+  exists on the live endpoint, then lists objects in that scope. A missing scope is an incomplete
+  collect (`JOB_ENDPOINT_FAILED`), not an empty catalog. A proven scope with zero objects is a
+  complete collect and commits (including in-scope absent marks).
 - **In-scope absent:** after a complete collect, objects previously present within the Job's schema
   scope (`access.schema` / `access.owner`; resolved at runtime) that are missing from the collect are marked `is_present=false`
   (tombstone). Out-of-scope objects are not bulk-absent when the filter shrinks. Same tombstone rules
   apply to columns, foreign keys, and indexes under present objects.
-- **Fail-safe:** if the fraction of in-scope present objects that would become absent exceeds
-  `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD` (default `0.75`), the Job fails with `JOB_FAIL_SAFE` and
-  writes nothing (no catalog mutation, no **Job result**, no **Structure Diff**). Fail-safe answers
-  “was this collect untrustworthy?”; it is not drift detection.
 - **Structure Diff (detect, do not act):** a successful structure refresh commits
   **Current catalog** and a **Structure Diff** computed from that same baseline
   (same identity and `schema_scope` as merge; do not reverse-engineer the touched-object
@@ -491,7 +491,7 @@ Rules:
 - **Catalog Sample** is for tabular Catalog Objects (`table`, `view`, `materialized_view`). `procedure` and `function` are rejected (`SAMPLE_OBJECT_TYPE_UNSUPPORTED`).
 - Permission: `catalog:sample` (distinct from `query:run`). Seeded `operator` does **not** receive it by default.
 - HTTP: `POST /objects/{id}/sample`. MCP does **not** expose a sample tool; agents use `run_sql` for ad-hoc peek.
-- v1 filter ops: `eq`, `neq`, `contains`, `is_null` (AND of filter list). Pagination: `offset` + `limit` with hard cap `offset + limit ≤ REFRAQ_QUERY_MAX_ROWS`; response echoes `offset` / `limit` and `has_more` (heuristic); no default `total_count` / `COUNT(*)`. `order_by` is optional; without it, pagination order is unstable.
+- v1 filter ops: `eq`, `neq`, `contains`, `is_null` (AND of filter list). Pagination: `offset` + `limit` with hard cap `offset + limit ≤` the `query_max_rows` **System Parameter** (seed **1000**, range 100–10000); response echoes `offset` / `limit` and `has_more` (heuristic); no default `total_count` / `COUNT(*)`. `order_by` is optional; without it, pagination order is unstable. Platform timeout is `query_timeout_sec` (seed **30**, range 5–3600).
 - Optional `include_sql` returns the compiled statement for transparency; default responses omit SQL.
 - Mid-term (versioned): may add single-table ops such as comparisons / `in` / `is_not_null` and richer `order_by` UX. Never joins, aggregates, or arbitrary expressions. Never default `COUNT(*)`.
 
@@ -542,7 +542,6 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - Access request and contract approval workflows
 - Client / machine-token management APIs
 - Console P1: scope switcher implementation, global search implementation, theme workshops, notification center
-- Registering `metadata` **System Parameter**s (catalog fail-safe threshold, query timeout / max rows) — candidates listed in `docs/business-system-parameters.md` §5.1, delivered after the first slice
 - Object-level ACL
 - Write SQL / unrestricted SQL consoles
 - Migrating or dual-reading legacy `dbmeta` datasets

@@ -24,7 +24,6 @@ from backend.main import app  # noqa: E402
 from backend.metadata.catalog.store import (  # noqa: E402
     CatalogColumnRecord,
     CatalogObjectRecord,
-    CatalogWriteAborted,
     get_catalog_store,
     reset_catalog_store,
 )
@@ -294,7 +293,6 @@ def test_delete_disabled_source_and_catalog(client: TestClient) -> None:
             )
         ],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     assert get_catalog_store().list_present_for_source(source["id"])
 
@@ -630,7 +628,7 @@ def test_source_probe_forbidden_without_write(client: TestClient) -> None:
     assert resp.status_code == 403
 
 
-def test_fail_safe_aborts_without_absent() -> None:
+def test_mass_absent_commits_and_keeps_semantics() -> None:
     reset_catalog_store()
     reset_source_store()
     now = utc_now()
@@ -710,20 +708,21 @@ def test_fail_safe_aborts_without_absent() -> None:
         job_id="job_old",
         collected=seeded,
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
-    with pytest.raises(CatalogWriteAborted) as exc:
-        apply_structure_snapshot(
-            source=source,
-            job_id="job_new",
-            collected=[seeded[0]],
-            schema_scope=None,
-            fail_safe_threshold=0.5,
-        )
-    assert exc.value.code == "JOB_FAIL_SAFE"
+    apply_structure_snapshot(
+        source=source,
+        job_id="job_new",
+        collected=[seeded[0]],
+        schema_scope=None,
+    )
     present = store.list_present_for_source("src_1")
-    assert len(present) == 4
-    assert all(o.business_name == "keep" for o in present)
+    assert [o.name for o in present] == ["t0"]
+    assert present[0].business_name == "keep"
+    objects, _ = store.list_objects("src_1")
+    assert len(objects) == 4
+    assert all(o.business_name == "keep" for o in objects)
+    absent = [o for o in objects if not o.is_present]
+    assert {o.name for o in absent} == {"t1", "t2", "t3"}
 
 
 def test_collect_failure_does_not_absent(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -782,7 +781,6 @@ def test_collect_failure_does_not_absent(monkeypatch: pytest.MonkeyPatch) -> Non
             )
         ],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
 
     class Boom:

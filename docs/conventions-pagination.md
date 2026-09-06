@@ -111,6 +111,6 @@ Pickers that need a closed option set (role Select, Source Select) fetch one pag
 ## 10. Non-Goals
 
 - Job or log retention / pruning.
-- Catalog Sample and Controlled Query row peeks (`has_more`, `REFRAQ_QUERY_MAX_ROWS`).
+- Catalog Sample and Controlled Query row peeks (`has_more`, `query_max_rows` **System Parameter**).
 - Migrating `GET /audit/events` off Cursor Page.
 - A global page-size number imposed on every endpoint.

@@ -12,7 +12,7 @@ UNSET: Any = object()
 
 
 class CatalogWriteAborted(Exception):
-    """Raised when fail-safe or incomplete collect prevents catalog mutation."""
+    """Raised when identity match or related collect rules prevent catalog mutation."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)

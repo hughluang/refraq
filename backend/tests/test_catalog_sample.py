@@ -23,6 +23,7 @@ from backend.admin.roles import seed_roles  # noqa: E402
 from backend.admin.role_store import get_role_store, reset_role_store  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import get_user_store, reset_user_store  # noqa: E402
+from backend.admin.system_parameters import set_parameter  # noqa: E402
 from backend.core.config import reset_settings_cache  # noqa: E402
 from backend.jobs.store import reset_job_store  # noqa: E402
 from backend.main import app  # noqa: E402
@@ -181,7 +182,6 @@ def _seed_object(source_id: str, *, source_key: str = "mes-prod") -> CatalogObje
         job_id="job_sample",
         collected=[record],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     stored = get_catalog_store().get_object(object_id)
     assert stored is not None
@@ -423,8 +423,7 @@ def test_sample_endpoint_failed_maps(
 def test_sample_page_cap_rejected(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("REFRAQ_QUERY_MAX_ROWS", "100")
-    reset_settings_cache()
+    set_parameter("query_max_rows", 100, actor_user_id=None)
     source = _make_source(client, key="cap-src")
     obj = _seed_object(source["id"], source_key=source["key"])
     resp = client.post(
@@ -504,7 +503,6 @@ def test_sample_rejects_routines(client: TestClient) -> None:
         job_id="job_sample",
         collected=[record],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     resp = client.post(f"/objects/{record.id}/sample", json={"limit": 10})
     assert resp.status_code == 400

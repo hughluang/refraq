@@ -9,8 +9,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from backend.admin.audit import persist_audit_event
-from backend.core.config import get_settings
 from backend.core.errors import AppError
+from backend.metadata.parameters import query_max_rows, query_timeout_sec
 from backend.metadata.catalog.service import get_object
 from backend.metadata.connectors.base import ConnectorError, QueryResult
 from backend.metadata.connectors.runtime import prepare, run_bounded
@@ -229,9 +229,8 @@ def run_controlled_query(
     actor_user_id: str | None,
     actor_token_id: str | None,
 ) -> QueryOutcome:
-    settings = get_settings()
-    platform_cap = settings.refraq_query_max_rows
-    timeout_sec = settings.refraq_query_timeout_sec
+    platform_cap = query_max_rows()
+    timeout_sec = query_timeout_sec()
     effective_max = DEFAULT_MAX_ROWS if max_rows is None else int(max_rows)
     started = time.perf_counter()
 
@@ -283,9 +282,8 @@ def run_catalog_sample(
     actor_user_id: str | None,
     actor_token_id: str | None,
 ) -> SampleOutcome:
-    settings = get_settings()
-    platform_cap = settings.refraq_query_max_rows
-    timeout_sec = settings.refraq_query_timeout_sec
+    platform_cap = query_max_rows()
+    timeout_sec = query_timeout_sec()
     effective_limit = DEFAULT_SAMPLE_LIMIT if limit is None else int(limit)
     effective_offset = int(offset)
     started = time.perf_counter()

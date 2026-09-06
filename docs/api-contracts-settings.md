@@ -46,20 +46,23 @@ Related: `docs/business-system-parameters.md`, `docs/adr/0028-system-parameters.
 | `seed` | Product default restored by reset |
 | `source` | `seed` or `user` |
 | `constraint` | JSON Schema fragment under a closed profile: only `type`, `minimum`, `maximum`, `enum`, `pattern`, `maxLength`. `title` and `description` are unused. Type lives here; there is no top-level `value_type` |
-| `group` | Console grouping (`session`, `jobs`) |
+| `group` | Console grouping (`session`, `jobs`, `query`) |
 | `operator_action_required` | Whether apply needs an action outside this page |
 | `label_key` / `help_key` / `apply_note_key` | i18n keys; the panel does not hard-code English |
 | `updated_at` | Change Instant |
 | `updated_by_user_id` / `updated_by_account` | Acting User; null for product occupy |
 
-Items are ordered by group (`session`, `jobs`) then `key`.
+Items are ordered by group (`session`, `jobs`, `query`) then `key`.
 
 ### Registered keys
 
 | Key | Seed | Constraint | Operator action | Applies |
 | --- | --- | --- | --- | --- |
 | `admin_session_ttl_hours` | 8 | integer 1–168 | No | New **Session**s only |
+| `sso_pending_ttl_days` | 7 | integer 1–30 | No | New pending federated identities only |
 | `job_lost_detection_sec` | 60 | integer 15–3600 | No | Widen live; tighten waits `max(5, previous/3)` s before the reaper cutoff shrinks. The hidden system reaper **Scheduled Task** interval is derived from this value |
+| `query_timeout_sec` | 30 | integer 5–3600 | No | Next Controlled Query, Catalog Sample, and MCP `run_sql` |
+| `query_max_rows` | 1000 | integer 100–10000 | No | Next Controlled Query / `run_sql` `max_rows` and Catalog Sample `offset + limit` |
 
 ## 4. `GET /settings`
 
@@ -158,7 +161,7 @@ Updated catalog shape (§3).
 
 - A top-level PATCH body `{ "admin_session_ttl_hours": 12 }` (no `values` wrapper) is `REQUEST_INVALID`
 - `DELETE /settings/override` is not a route (`HTTP_NOT_FOUND`)
-- `job_worker_concurrency`, `beat_sync_every_sec`, `beat_max_interval_sec`, `reaper_interval_sec` — retired from the set (`docs/business-system-parameters.md` §5.2). A PATCH naming any of them is an unknown key
+- `job_worker_concurrency`, `beat_sync_every_sec`, `beat_max_interval_sec`, `reaper_interval_sec`, `catalog_fail_safe_threshold` — retired from the set (`docs/business-system-parameters.md` §5.2). A PATCH naming any of them is an unknown key
 
 ## 8. Non-Goals (this slice)
 
@@ -166,5 +169,4 @@ Updated catalog shape (§3).
 - Exposing or mutating secrets / initial admin credentials
 - Bulk session revoke when TTL shortens
 - Runtime-defined keys or an admin UI to create a key
-- `metadata` candidates (`catalog_fail_safe_threshold`, query timeout / max rows)
 - Choice, text, bool, or secret parameter keys (intended shapes live in `docs/adr/0028-system-parameters.md`)

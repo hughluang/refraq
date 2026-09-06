@@ -132,7 +132,6 @@ def test_search_objects_ranking_exact_prefix_substring_business() -> None:
             ),
         ],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     # Seed business fields (structure insert keeps incoming business_*).
     items, total = store.search_objects("work_order", limit=10, offset=0)
@@ -196,7 +195,6 @@ def test_search_columns_name_and_business() -> None:
         job_id="j1",
         collected=[obj],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     items, total = store.search_columns("wo_id", limit=10, offset=0)
     assert total >= 1

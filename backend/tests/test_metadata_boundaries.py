@@ -291,7 +291,6 @@ def test_illegal_semantics_and_field_kind_not_writable(client: TestClient) -> No
         job_id="seed",
         collected=[obj],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     stored = store.get_object(obj.id)
     assert stored is not None
@@ -350,7 +349,6 @@ def test_join_path_reasons() -> None:
         job_id="j1",
         collected=[a, b],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     missing_start = find_join_paths(
         store=store,
@@ -399,7 +397,6 @@ def test_fk_unresolved_aborts_and_keeps_snapshot() -> None:
         job_id="job_old",
         collected=[customers, orders],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     joins_before, _ = store.list_joins_for_object("obj_orders")
     assert len(joins_before) == 1
@@ -433,7 +430,6 @@ def test_fk_unresolved_aborts_and_keeps_snapshot() -> None:
             job_id="job_bad",
             collected=[customers, broken_orders],
             schema_scope=None,
-            fail_safe_threshold=1.0,
         )
     assert exc.value.code == "JOB_FK_UNRESOLVED"
     present_after = {o.id: o.name for o in store.list_present_for_source("src_1")}
@@ -470,7 +466,6 @@ def test_fk_column_mismatch_aborts() -> None:
             job_id="job_mismatch",
             collected=[parent, child],
             schema_scope=None,
-            fail_safe_threshold=1.0,
         )
     assert exc.value.code == "JOB_FK_COLUMN_MISMATCH"
     assert store.list_present_for_source("src_1") == []
@@ -507,7 +502,6 @@ def test_fk_retarget_inserts_new_edge_keeps_old() -> None:
         job_id="job_v1",
         collected=[customers, partners, orders],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     first, _ = store.list_joins_for_object("obj_orders")
     assert len(first) == 1
@@ -532,7 +526,6 @@ def test_fk_retarget_inserts_new_edge_keeps_old() -> None:
         job_id="job_v2",
         collected=[customers, partners, retargeted],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     second, _ = store.list_joins_for_object("obj_orders")
     by_to = {join.to_column_id: join for join in second}

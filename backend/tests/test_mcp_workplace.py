@@ -175,7 +175,6 @@ def test_semantics_change_http_and_mcp(client: TestClient) -> None:
         job_id="j1",
         collected=[_obj(object_id="obj_wo", name="wo_hdr")],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     patched = client.patch(
         "/objects/obj_wo/semantics",
@@ -217,7 +216,6 @@ def test_hybrid_search_finds_semantic_only_hit() -> None:
             _obj(object_id="obj_wid", name="widgets"),
         ],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     _, lexical_total = get_catalog_store().search_objects("buyer", limit=10, offset=0)
     items, total = search_objects("buyer", limit=10, offset=0)
@@ -238,7 +236,6 @@ def test_join_path_query_without_hit_is_unreachable() -> None:
         job_id="j1",
         collected=[_obj(object_id="obj_wo", name="wo_hdr")],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     result = lookup_join_paths(
         "obj/postgresql/mes-prod/public/table/wo_hdr",
@@ -262,7 +259,6 @@ def test_hybrid_query_embed_failure_uses_lexical_page() -> None:
         job_id="j1",
         collected=[_obj(object_id="obj_cust", name="cust_hdr")],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     items, total = search_objects("cust_hdr", limit=10, offset=0)
     store_items, store_total = get_catalog_store().search_objects(
@@ -281,7 +277,6 @@ def test_join_path_query_empty_start_is_unavailable() -> None:
         job_id="j1",
         collected=[empty],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     with pytest.raises(JoinPathUnavailable):
         lookup_join_paths(

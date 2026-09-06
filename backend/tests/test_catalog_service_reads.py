@@ -197,7 +197,6 @@ def test_service_read_model_and_semantics() -> None:
         job_id="j1",
         collected=[a],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     items, total = catalog_service.list_objects_for_source("src_1")
     assert total == 1
@@ -232,7 +231,6 @@ def test_list_q_and_readiness_filters_and_present_keeps_columns() -> None:
         job_id="j1",
         collected=[ready, not_ready, wildcard],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
 
     listed, total = catalog_service.list_objects_for_source("src_1", q="Payment")
@@ -278,14 +276,12 @@ def test_include_absent_changes_list_total() -> None:
         job_id="j1",
         collected=[keep, gone],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     apply_structure_snapshot(
         source=require_source("src_1"),
         job_id="j2",
         collected=[keep],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
 
     with_absent, total_all = catalog_service.list_objects_for_source(
@@ -317,7 +313,6 @@ def test_list_filters_http_and_mcp(client: TestClient) -> None:
             ),
         ],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
 
     ready = client.get("/sources/src_1/objects?business_semantics_ready=true")
@@ -352,7 +347,6 @@ def test_list_filters_http_and_mcp(client: TestClient) -> None:
         job_id="j2",
         collected=[_table("obj_a", "orders", [("col_id", "id")])],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     with_absent = client.get("/sources/src_1/objects")
     present_only = client.get("/sources/src_1/objects?include_absent=false")
@@ -394,7 +388,6 @@ def test_catalog_http_mcp_projection_parity(client: TestClient) -> None:
         job_id="j1",
         collected=[_table("obj_a", "orders", [("col_id", "id")])],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     get_catalog_store().write_insert_join(
         from_column_id="col_id",
@@ -504,7 +497,6 @@ def test_service_lookup_join_paths() -> None:
         job_id="j1",
         collected=[a, b],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     store.write_insert_join(
         from_column_id="col_a_b",
@@ -528,7 +520,6 @@ def test_service_lookup_join_paths() -> None:
         job_id="j2",
         collected=[a, b, empty],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     with pytest.raises(JoinPathUnavailable):
         catalog_service.lookup_join_paths(empty.locator_key)
@@ -612,7 +603,6 @@ def test_http_join_path_smoke(client: TestClient) -> None:
         job_id="j1",
         collected=[a],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     resp = client.get(
         "/joins/path",
@@ -702,7 +692,6 @@ def test_mcp_find_join_path_smoke(client: TestClient) -> None:
         job_id="j1",
         collected=[a],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     expires = format_instant(utc_now() + timedelta(days=7))
     tok = client.post("/tokens", json={"name": "path-pat", "expires_at": expires})

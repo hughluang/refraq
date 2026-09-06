@@ -139,7 +139,6 @@ def _plan(existing: list[CatalogObjectRecord], incoming: list[CatalogObjectRecor
         existing_joins=[],
         incoming=incoming,
         schema_scope=None,
-        fail_safe_threshold=1.0,
         engine="postgresql",
         kind="database",
         source_key="demo",
@@ -164,7 +163,6 @@ def test_no_change_refresh_advances_collected_at() -> None:
         job_id="job_seed",
         collected=[table],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     first = get_catalog_store().get_object("obj_orders")
     assert first is not None
@@ -174,7 +172,6 @@ def test_no_change_refresh_advances_collected_at() -> None:
         job_id="job_refresh",
         collected=[table],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     again = get_catalog_store().get_object("obj_orders")
     assert again is not None
@@ -193,7 +190,6 @@ def test_refresh_keeps_patched_semantics() -> None:
         job_id="job_seed",
         collected=[table],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     get_catalog_store().patch_object_semantics(
         "obj_orders",
@@ -211,7 +207,6 @@ def test_refresh_keeps_patched_semantics() -> None:
         job_id="job_refresh",
         collected=[changed],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     obj = get_catalog_store().get_object("obj_orders")
     assert obj is not None
@@ -249,7 +244,6 @@ def test_apply_persists_structure_diff() -> None:
         job_id="job_seed",
         collected=[table],
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     assert commit.facts.diff_class == "non_breaking"
     assert commit.structure_diff_id
@@ -262,9 +256,7 @@ def test_apply_persists_structure_diff() -> None:
     assert diffs[0].job_id == "job_seed"
 
 
-def test_fail_safe_apply_persists_no_structure_diff() -> None:
-    from backend.metadata.catalog.store import CatalogWriteAborted
-
+def test_mass_absent_apply_persists_structure_diff() -> None:
     now = utc_now()
     tables = [
         CatalogObjectRecord(
@@ -325,23 +317,21 @@ def test_fail_safe_apply_persists_no_structure_diff() -> None:
         job_id="job_seed",
         collected=tables,
         schema_scope=None,
-        fail_safe_threshold=1.0,
     )
     seed_diffs, seed_total = get_structure_diff_store().list_for_source("src_1")
     assert seed_total == 1
-    with pytest.raises(CatalogWriteAborted) as exc:
-        apply_structure_snapshot(
-            source=require_source("src_1"),
-            job_id="job_bad",
-            collected=[tables[0]],
-            schema_scope=None,
-            fail_safe_threshold=0.5,
-        )
-    assert exc.value.code == "JOB_FAIL_SAFE"
+    commit = apply_structure_snapshot(
+        source=require_source("src_1"),
+        job_id="job_mass",
+        collected=[tables[0]],
+        schema_scope=None,
+    )
+    assert commit.facts.diff_class == "breaking"
     diffs, total = get_structure_diff_store().list_for_source("src_1")
-    assert total == seed_total
-    assert [d.job_id for d in diffs] == [d.job_id for d in seed_diffs]
-    assert not any(d.job_id == "job_bad" for d in diffs)
+    assert total == seed_total + 1
+    assert any(d.job_id == "job_mass" for d in diffs)
+    present = get_catalog_store().list_present_for_source("src_1")
+    assert [o.name for o in present] == ["t0"]
 
 
 def test_diff_persist_failure_leaves_catalog_unchanged(
@@ -363,7 +353,6 @@ def test_diff_persist_failure_leaves_catalog_unchanged(
             job_id="job_fail",
             collected=[table],
             schema_scope=None,
-            fail_safe_threshold=1.0,
         )
     assert get_catalog_store().get_object("obj_orders") is None
     diffs, total = get_structure_diff_store().list_for_source("src_1")
@@ -409,7 +398,6 @@ def test_diff_create_then_raise_rolls_back_catalog_and_diff(
             job_id="job_partial",
             collected=[table],
             schema_scope=None,
-            fail_safe_threshold=1.0,
         )
     assert get_catalog_store().get_object("obj_orders") is None
     diffs, total = store.list_for_source("src_1", limit=300)

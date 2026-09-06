@@ -27,7 +27,6 @@ from backend.metadata.catalog.records import (
     CatalogIndexRecord,
     CatalogJoinRecord,
     CatalogObjectRecord,
-    CatalogWriteAborted,
     new_column_id,
     new_fk_id,
     new_index_id,
@@ -137,40 +136,15 @@ def build_structure_refresh_plan(
     existing_joins: list[CatalogJoinRecord],
     incoming: list[CatalogObjectRecord],
     schema_scope: str | None,
-    fail_safe_threshold: float,
     engine: str | None,
     kind: str,
     source_key: str,
     now: datetime,
 ) -> StructureRefreshPlan:
-    """Fail-safe + merge + FK join sync decisions → immutable plan (one present snapshot)."""
+    """Merge + FK join sync decisions → immutable plan (one present snapshot)."""
     incoming_keys = {
         (o.schema_name, o.name, o.object_type): o for o in incoming
     }
-    in_scope_present = [
-        o
-        for o in existing_objects
-        if o.is_present
-        and (schema_scope is None or o.schema_name == schema_scope)
-    ]
-    would_absent = [
-        o
-        for o in in_scope_present
-        if not _incoming_covers_existing(
-            existing_schema=o.schema_name,
-            existing_name=o.name,
-            existing_type=o.object_type,
-            incoming_keys=incoming_keys,
-        )
-    ]
-    if in_scope_present:
-        ratio = len(would_absent) / len(in_scope_present)
-        if ratio > fail_safe_threshold:
-            raise CatalogWriteAborted(
-                "JOB_FAIL_SAFE",
-                f"Absent ratio {ratio:.2f} exceeds fail-safe threshold "
-                f"{fail_safe_threshold:.2f}",
-            )
 
     # Working map of objects after refresh (id → record).
     by_id: dict[str, CatalogObjectRecord] = {o.id: o for o in existing_objects}
