@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
+from backend.core.admission import await_admitted
 from backend.core.pagination import (
     CATALOG_OBJECT_LIST,
     CATALOG_SEARCH,
@@ -26,6 +27,7 @@ from backend.metadata.catalog.present import (
     present_object,
 )
 from backend.metadata.catalog.join_origin import HUMAN_JOIN_ORIGIN
+from backend.metadata.catalog.embedding import embedding_configured
 from backend.metadata.query import service as query_service
 from backend.metadata.query.compile_sample import SampleFilterSpec, SampleOrderSpec
 from backend.metadata.schemas.catalog import (
@@ -111,47 +113,59 @@ def list_objects(
     )
 
 @router.get("/catalog/objects/search", response_model=CatalogObjectSearchResponse)
-def search_objects(
+async def search_objects(
     q: str | None = None,
     source_id: str | None = None,
     object_type: str | None = None,
     page: PageParams = Depends(page_params(CATALOG_SEARCH)),
-    _: UserRecord = Depends(require_permission("metadata:read")),
+    user: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogObjectSearchResponse:
-    items, total = catalog_reads.search_objects(
-        q or "",
-        source_id=source_id,
-        object_type=object_type,
-        limit=page.limit,
-        offset=page.offset,
+    def _run() -> object:
+        return catalog_reads.search_objects(
+            q or "",
+            source_id=source_id,
+            object_type=object_type,
+            limit=page.limit,
+            offset=page.offset,
+        )
+
+    found = (
+        await await_admitted(user.id, _run) if embedding_configured() else _run()
     )
     return CatalogObjectSearchResponse(
-        items=[_object_out(o) for o in items],
-        total=total,
+        items=[_object_out(o) for o in found.items],
         limit=page.limit,
         offset=page.offset,
+        rank_mode=found.rank_mode,
+        truncated=found.truncated,
     )
 
 @router.get("/catalog/columns/search", response_model=CatalogColumnSearchResponse)
-def search_columns(
+async def search_columns(
     q: str | None = None,
     source_id: str | None = None,
     object_type: str | None = None,
     page: PageParams = Depends(page_params(CATALOG_SEARCH)),
-    _: UserRecord = Depends(require_permission("metadata:read")),
+    user: UserRecord = Depends(require_permission("metadata:read")),
 ) -> CatalogColumnSearchResponse:
-    items, total = catalog_reads.search_columns(
-        q or "",
-        source_id=source_id,
-        object_type=object_type,
-        limit=page.limit,
-        offset=page.offset,
+    def _run() -> object:
+        return catalog_reads.search_columns(
+            q or "",
+            source_id=source_id,
+            object_type=object_type,
+            limit=page.limit,
+            offset=page.offset,
+        )
+
+    found = (
+        await await_admitted(user.id, _run) if embedding_configured() else _run()
     )
     return CatalogColumnSearchResponse(
-        items=[_column_out(c) for c in items],
-        total=total,
+        items=[_column_out(c) for c in found.items],
         limit=page.limit,
         offset=page.offset,
+        rank_mode=found.rank_mode,
+        truncated=found.truncated,
     )
 
 @router.get("/objects/{object_id}", response_model=CatalogObjectResponse)
@@ -204,29 +218,32 @@ def list_object_semantics_changes(
     )
 
 @router.post("/objects/{object_id}/sample", response_model=SampleResponse)
-def run_object_sample(
+async def run_object_sample(
     object_id: str,
     body: SampleRequest,
     request: Request,
     user: UserRecord = Depends(require_permission("catalog:sample")),
 ) -> SampleResponse:
-    outcome = query_service.run_catalog_sample(
-        object_id=object_id,
-        columns=body.columns,
-        filters=[
-            SampleFilterSpec(column=f.column, op=f.op, value=f.value)
-            for f in body.filters
-        ],
-        order_by=[
-            SampleOrderSpec(column=o.column, direction=o.direction)
-            for o in body.order_by
-        ],
-        offset=body.offset,
-        limit=body.limit,
-        include_sql=body.include_sql,
-        actor_user_id=user.id,
-        actor_token_id=get_actor_token_id(request),
-    )
+    def _run() -> query_service.SampleOutcome:
+        return query_service.run_catalog_sample(
+            object_id=object_id,
+            columns=body.columns,
+            filters=[
+                SampleFilterSpec(column=f.column, op=f.op, value=f.value)
+                for f in body.filters
+            ],
+            order_by=[
+                SampleOrderSpec(column=o.column, direction=o.direction)
+                for o in body.order_by
+            ],
+            offset=body.offset,
+            limit=body.limit,
+            include_sql=body.include_sql,
+            actor_user_id=user.id,
+            actor_token_id=get_actor_token_id(request),
+        )
+
+    outcome = await await_admitted(user.id, _run)
     return SampleResponse(
         columns=outcome.columns,
         rows=outcome.rows,
@@ -355,21 +372,25 @@ def create_joins_batch(
     )
 
 @router.get("/joins/path", response_model=JoinPathResponse)
-def get_join_path(
+async def get_join_path(
     start: str = Query(...),
     target: str | None = None,
     q: str | None = None,
     max_hops: int = Query(default=1, ge=1, le=5),
     top_targets: int = Query(default=3, ge=1, le=20),
-    _: UserRecord = Depends(require_permission("metadata:read")),
+    user: UserRecord = Depends(require_permission("metadata:read")),
 ) -> JoinPathResponse:
-    result = catalog_reads.lookup_join_paths(
-        start,
-        target,
-        query_text=q,
-        max_hops=max_hops,
-        top_targets=top_targets,
-    )
+    def _run() -> object:
+        return catalog_reads.lookup_join_paths(
+            start,
+            target,
+            query_text=q,
+            max_hops=max_hops,
+            top_targets=top_targets,
+        )
+
+    admit = bool((q or "").strip()) and not target and embedding_configured()
+    result = await await_admitted(user.id, _run) if admit else _run()
     return JoinPathResponse(
         paths_found=result.paths_found,
         paths=[
@@ -395,6 +416,7 @@ def get_join_path(
         ],
         direct_joins=[_join_out(j) for j in result.direct_joins],
         reason=result.reason,
+        rank_mode=result.rank_mode,
     )
 
 @router.patch("/joins/{join_id}", response_model=JoinResponse)

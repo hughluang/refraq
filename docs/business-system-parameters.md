@@ -63,7 +63,7 @@ Applying the test to `docs/env.md` gives a fixed classification. This is the ref
 | `ADMIN_SESSION_TTL_HOURS`, `REFRAQ_JOB_LOST_DETECTION_SEC`, `REFRAQ_QUERY_TIMEOUT_SEC`, `REFRAQ_QUERY_MAX_ROWS` | **System Parameter** — registered (§5); the variables leave `.env` |
 | `REFRAQ_JOB_WORKER_CONCURRENCY` | Neither. Worker pool size is owned by the deployment and set on the worker command line (§5.2); the variable is retired |
 | `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD` | Neither. Retired (§5.2). A complete successful structure collect always commits; leftover name is ignored and reported at startup |
-| `REFRAQ_EMBEDDING_API_URL`, `REFRAQ_EMBEDDING_MODEL`, `REFRAQ_EMBEDDING_TIMEOUT_SEC` | Neither. Retired. Catalog Search hybrid is an in-use **Model Service** (`docs/business-model-services.md`); leftover names are ignored and reported at startup |
+| `REFRAQ_EMBEDDING_API_URL`, `REFRAQ_EMBEDDING_MODEL`, `REFRAQ_EMBEDDING_TIMEOUT_SEC` | Neither. Retired. Catalog Search vector path is an in-use **Model Service** (`docs/business-model-services.md`); leftover names are ignored and reported at startup |
 
 ## 3. Admission Rules
 
@@ -191,7 +191,7 @@ Stated in advance so the design changes only for a named reason.
 - A settings-side reload, callback, or polling job that applies values into domains
 - Bootstrap credentials or the secrets master key in the store (secret *parameters* are a later mechanism; those two stay environment variables)
 - Temporary rollout switches, experiment flags, or kill switches
-- Engineering tuning knobs — pool sizes, worker or replica counts, loop and poll intervals, buffer and batch sizes — whose value is chosen from telemetry rather than business intent, and whose real owner is the deployment or an in-code constant
+- Engineering tuning knobs — pool sizes, worker or replica counts, loop and poll intervals, buffer and batch sizes, HTTP in-flight caps, thread tokens, admission slots and per-actor share, and platform-Postgres `shared_buffers` / `effective_cache_size` / `work_mem` — whose value is chosen from telemetry rather than business intent, and whose real owner is the deployment or an in-code constant. Concurrent admission slots, per-actor shares, and database supply are deployment env (ADR 0040 / 0045), not System Parameters. Live-peek timeout and row cap stay `query_timeout_sec` / `query_max_rows`.
 - Per-object knobs (a **Scheduled Task** field, including **Running Time Limit**; a **Source** `access` document) and per-**User** preferences
 - Reference data catalogs on the Platform Settings page
 - Runtime-defined parameters: the catalog is code, and there is no admin UI to create a key

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from backend.core.time import utc_now, format_instant
+import asyncio
 import json
 import os
 from dataclasses import replace
@@ -176,11 +177,11 @@ def test_mcp_empty_search_returns_query_required(client: TestClient) -> None:
     secret = _pat_secret(client)
     auth = f"Bearer {secret}"
     calls = (
-        lambda: mcp_search_objects(),
-        lambda: mcp_search_objects(query_text=""),
-        lambda: mcp_search_objects(query_text="   "),
-        lambda: mcp_search_columns(query_text=""),
-        lambda: mcp_search_columns(query_text="   "),
+        lambda: asyncio.run(mcp_search_objects()),
+        lambda: asyncio.run(mcp_search_objects(query_text="")),
+        lambda: asyncio.run(mcp_search_objects(query_text="   ")),
+        lambda: asyncio.run(mcp_search_columns(query_text="")),
+        lambda: asyncio.run(mcp_search_columns(query_text="   ")),
     )
     with mcp_authorization(auth):
         for call in calls:
@@ -431,10 +432,13 @@ def test_catalog_http_mcp_projection_parity(client: TestClient) -> None:
 
     http_search = client.get("/catalog/objects/search?q=order")
     with mcp_authorization(auth):
-        mcp_search = json.loads(mcp_search_objects(query_text="order"))
+        mcp_search = json.loads(asyncio.run(mcp_search_objects(query_text="order")))
     assert http_search.status_code == 200
     assert "error" not in mcp_search, mcp_search
-    assert http_search.json()["total"] == mcp_search["total"]
+    assert "total" not in http_search.json()
+    assert "total" not in mcp_search
+    assert http_search.json()["truncated"] == mcp_search["truncated"]
+    assert http_search.json()["rank_mode"] == mcp_search["rank_mode"] == "lexical"
     assert _pick(http_search.json()["items"][0], _OBJECT_IDENTITY) == _pick(
         mcp_search["items"][0], _OBJECT_IDENTITY
     )
@@ -442,10 +446,13 @@ def test_catalog_http_mcp_projection_parity(client: TestClient) -> None:
 
     http_cols = client.get("/catalog/columns/search?q=id")
     with mcp_authorization(auth):
-        mcp_cols = json.loads(mcp_search_columns(query_text="id"))
+        mcp_cols = json.loads(asyncio.run(mcp_search_columns(query_text="id")))
     assert http_cols.status_code == 200
     assert "error" not in mcp_cols, mcp_cols
-    assert http_cols.json()["total"] == mcp_cols["total"]
+    assert "total" not in http_cols.json()
+    assert "total" not in mcp_cols
+    assert http_cols.json()["truncated"] == mcp_cols["truncated"]
+    assert http_cols.json()["rank_mode"] == mcp_cols["rank_mode"] == "lexical"
     assert http_cols.json()["items"][0]["id"] == mcp_cols["items"][0]["id"]
     assert "normalized_type" in http_cols.json()["items"][0]
     assert "normalized_type" not in mcp_cols["items"][0]
@@ -612,6 +619,7 @@ def test_http_join_path_smoke(client: TestClient) -> None:
     body = resp.json()
     assert "paths_found" in body
     assert "direct_joins" in body
+    assert body["rank_mode"] is None
 
 
 def test_mcp_find_join_path_smoke(client: TestClient) -> None:
@@ -698,10 +706,13 @@ def test_mcp_find_join_path_smoke(client: TestClient) -> None:
     assert tok.status_code == 201, tok.text
     secret = tok.json()["secret"]
     with mcp_authorization(f"Bearer {secret}"):
-        payload = find_join_path(
-            start_locator_key=a.locator_key,
-            max_hops=1,
+        payload = asyncio.run(
+            find_join_path(
+                start_locator_key=a.locator_key,
+                max_hops=1,
+            )
         )
     body = json.loads(payload)
     assert "error" not in body
     assert "paths_found" in body
+    assert body["rank_mode"] is None

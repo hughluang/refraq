@@ -6,7 +6,9 @@ import {
   joinDeleteErrorKey,
   joinRowActions,
   joinRowState,
+  joinWriteErrorKey,
   mergeSelectedOption,
+  objectRefFromColumnLocator,
   retainSelectedOption,
   validateJoinDraft,
 } from "@/features/sources/catalog-detail/joinEdges";
@@ -80,6 +82,47 @@ describe("joinDeleteErrorKey", () => {
   it("returns null for unrelated codes", () => {
     expect(joinDeleteErrorKey("JOIN_ALREADY_DEFINED")).toBeNull();
     expect(joinDeleteErrorKey("CATALOG_JOIN_NOT_FOUND")).toBeNull();
+  });
+});
+
+describe("joinWriteErrorKey", () => {
+  it("maps write refusal codes to locale keys", () => {
+    expect(joinWriteErrorKey("JOIN_CROSS_SOURCE")).toBe(
+      "catalog.joins.error.JOIN_CROSS_SOURCE",
+    );
+    expect(joinWriteErrorKey("JOIN_EVIDENCE_REQUIRED")).toBe(
+      "catalog.joins.error.JOIN_EVIDENCE_REQUIRED",
+    );
+    expect(joinWriteErrorKey("JOIN_INVALID")).toBe(
+      "catalog.joins.error.JOIN_INVALID",
+    );
+    expect(joinWriteErrorKey("JOIN_ALREADY_DEFINED")).toBe(
+      "catalog.joins.error.JOIN_ALREADY_DEFINED",
+    );
+    expect(joinWriteErrorKey("JOIN_REJECTED")).toBe(
+      "catalog.joins.error.JOIN_REJECTED",
+    );
+  });
+
+  it("returns null for unrelated codes", () => {
+    expect(joinWriteErrorKey("JOIN_DELETE_AUTOMATIC")).toBeNull();
+    expect(joinWriteErrorKey("CATALOG_JOIN_NOT_FOUND")).toBeNull();
+  });
+});
+
+describe("objectRefFromColumnLocator", () => {
+  it("derives the object locator from a column locator", () => {
+    expect(
+      objectRefFromColumnLocator(
+        "col/postgresql/mes-a/public/table/orders/column/id",
+      ),
+    ).toBe("obj/postgresql/mes-a/public/table/orders");
+  });
+
+  it("returns null when the locator is missing or too short", () => {
+    expect(objectRefFromColumnLocator(null)).toBeNull();
+    expect(objectRefFromColumnLocator("col/too/short")).toBeNull();
+    expect(objectRefFromColumnLocator("obj/postgresql/mes/public/table/t")).toBeNull();
   });
 });
 

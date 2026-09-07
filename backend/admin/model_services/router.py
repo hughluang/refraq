@@ -40,6 +40,7 @@ from backend.admin.model_services.service import (
 )
 from backend.admin.model_services.store import ModelServiceStore, get_model_service_store
 from backend.admin.user_store import UserRecord
+from backend.core.admission import await_admitted
 from backend.core.pagination import PageParams, page_params
 
 router = APIRouter(prefix="/model-services", tags=["model-services"])
@@ -160,53 +161,63 @@ def get_service(
 
 
 @router.patch("/{service_id}")
-def patch_service_http(
+async def patch_service_http(
     service_id: str,
     body: ModelServicePatchIn,
     caller: UserRecord = Depends(require_permission("model_services:write")),
     actor_token_id: str | None = Depends(get_actor_token_id),
     store: ModelServiceStore = Depends(get_model_service_store),
 ) -> ModelServiceOut:
-    record = patch_service(
-        service_id=service_id,
-        display_name=body.display_name,
-        url=body.url,
-        model=body.model,
-        protocol=body.protocol,
-        api_key=body.api_key,
-        clear_api_key=body.clear_api_key,
-        actor_user_id=caller.id,
-        actor_token_id=actor_token_id,
-    )
+    def _run() -> ModelServiceRecord:
+        return patch_service(
+            service_id=service_id,
+            display_name=body.display_name,
+            url=body.url,
+            model=body.model,
+            protocol=body.protocol,
+            api_key=body.api_key,
+            clear_api_key=body.clear_api_key,
+            actor_user_id=caller.id,
+            actor_token_id=actor_token_id,
+        )
+
+    probes = body.url is not None or body.api_key is not None
+    record = await await_admitted(caller.id, _run) if probes else _run()
     return _out(record, in_use_id=store.get_purpose(record.purpose).in_use_id)
 
 
 @router.post("/{service_id}/test")
-def test_service_http(
+async def test_service_http(
     service_id: str,
     caller: UserRecord = Depends(require_permission("model_services:write")),
     actor_token_id: str | None = Depends(get_actor_token_id),
 ) -> ModelServiceTestOut:
     return ModelServiceTestOut.model_validate(
-        test_service(
-            service_id=service_id,
-            actor_user_id=caller.id,
-            actor_token_id=actor_token_id,
+        await await_admitted(
+            caller.id,
+            lambda: test_service(
+                service_id=service_id,
+                actor_user_id=caller.id,
+                actor_token_id=actor_token_id,
+            ),
         )
     )
 
 
 @router.post("/{service_id}/activate")
-def activate_service_http(
+async def activate_service_http(
     service_id: str,
     caller: UserRecord = Depends(require_permission("model_services:write")),
     actor_token_id: str | None = Depends(get_actor_token_id),
     store: ModelServiceStore = Depends(get_model_service_store),
 ) -> ModelServiceOut:
-    record = activate_service(
-        service_id=service_id,
-        actor_user_id=caller.id,
-        actor_token_id=actor_token_id,
+    record = await await_admitted(
+        caller.id,
+        lambda: activate_service(
+            service_id=service_id,
+            actor_user_id=caller.id,
+            actor_token_id=actor_token_id,
+        ),
     )
     return _out(record, in_use_id=store.get_purpose(record.purpose).in_use_id)
 
@@ -240,18 +251,21 @@ def close_purpose_http(
 
 
 @router.post("/purpose/{purpose}/open")
-def open_purpose_http(
+async def open_purpose_http(
     purpose: str,
     body: ModelServiceOpenIn,
     caller: UserRecord = Depends(require_permission("model_services:write")),
     actor_token_id: str | None = Depends(get_actor_token_id),
 ) -> PurposeStateOut:
     return _purpose_out(
-        open_purpose(
-            purpose=purpose,
-            rebuild=body.rebuild,
-            actor_user_id=caller.id,
-            actor_token_id=actor_token_id,
+        await await_admitted(
+            caller.id,
+            lambda: open_purpose(
+                purpose=purpose,
+                rebuild=body.rebuild,
+                actor_user_id=caller.id,
+                actor_token_id=actor_token_id,
+            ),
         )
     )
 

@@ -8,7 +8,7 @@ Related boundaries:
 
 - Terminology: `docs/glossary.md` and root `CONTEXT.md`.
 - HTTP: `docs/api-contracts-model-services.md`.
-- Catalog Search ranking: `docs/business-metadata.md` §10.5 and `docs/adr/0037-catalog-search-hybrid-ranking.md`.
+- Catalog Search ranking: `docs/business-metadata.md` §10.5 and `docs/adr/0043-catalog-search-vector-complete-state.md`.
 - Decision: `docs/adr/0039-model-services-and-catalog-embed.md`.
 - Jobs: `docs/business-jobs.md`.
 - Console IA: `docs/business-management-console.md`.
@@ -42,7 +42,7 @@ Permissions are `model_services:read` and `model_services:write`. Seeded Roles o
 
 Purpose says what the connection is for. Protocol says how to speak to it. Additional purposes and protocols are new values on the same object type.
 
-`openai_compat` posts `{ "model", "input": [string, …] }` to the configured **full** embeddings URL and reads `{ "data": [{ "index", "embedding" }] }`. A configured API key is sent as `Authorization: Bearer`. The product does not append `/v1/embeddings`. Timeout is an in-code constant.
+`openai_compat` posts `{ "model", "input": [string, …] }` to the configured **full** embeddings URL and reads `{ "data": [{ "index", "embedding" }] }`. A configured API key is sent as `Authorization: Bearer`. The product does not append `/v1/embeddings`. Probe, index batch, and query embed share one client timeout (`TIMEOUT_SEC`). Index and query vectors are projected to `EMBEDDING_OUTPUT_DIM` (1024) by prefix truncation and L2-normalize when the model returns a longer vector. Probe reports the native width and `elapsed_ms` as an observation, not a threshold.
 
 Model and protocol are editable on a draft (not in use). They are immutable while the record is in use. Changing model or protocol means create another record, test it, and set it in use.
 
@@ -50,11 +50,11 @@ Model and protocol are editable on a draft (not in use). They are immutable whil
 
 There is no separate “clear in use” action. Temporary stop uses **close**. Discarding a connection uses **delete**. Replacing a connection uses **set in use** (the previous in-use row becomes a draft). Absence of an in-use service comes from never setting one, or from deleting the in-use row.
 
-**Close** is a purpose-level vector switch. It does not lock the form, change field rules, or forbid test / set-in-use / URL or secret edits / delete. Search is lexical while closed. Incremental structure and semantics embedding writes do not run while closed. Close does not cancel an in-flight `catalog_embed` Job.
+**Close** is a purpose-level vector switch. It does not lock the form, change field rules, or forbid test / set-in-use / URL or secret edits / delete. Search is lexical (process state) while closed. Incremental structure and semantics embedding writes do not run while closed. Close does not cancel an in-flight `catalog_embed` Job.
 
-**Open** tests the current in-use service first. Failure leaves the purpose closed. There is no in-use service → open is refused. After a successful test the operator chooses **no recompute** or **full recompute**. Open does not scan the index. No recompute does not mint a Job: hybrid returns only when the ready bit is still set; otherwise search stays lexical. Full recompute clears the ready bit and mints `catalog_embed`.
+**Open** tests the current in-use service first. Failure leaves the purpose closed. There is no in-use service → open is refused. After a successful test the operator chooses **no recompute** or **full recompute**. Open does not scan the index. No recompute does not mint a Job: vector Search returns only when the ready bit is still set; otherwise search stays lexical. Full recompute clears the ready bit and mints `catalog_embed`.
 
-**Ready** is not computed by scanning vectors. It is a bit the last successful `catalog_embed` Job writes. Cleanup, or the start of any rebuild (set in use, in-use URL change, rebuild-now, or open with full recompute), clears it. Hybrid reads only this bit (plus in-use and not closed).
+**Ready** is not computed by scanning vectors. It is a bit the last successful `catalog_embed` Job writes. Cleanup, or the start of any rebuild (set in use, in-use URL change, rebuild-now, or open with full recompute), clears it. Vector Search reads only this bit (plus in-use and not closed).
 
 **Cleanup** is a one-shot: delete that purpose’s catalog embedding rows and clear ready. It is allowed only when the purpose is closed or has no in-use service. It is refused while open with an in-use service. It does not mint a Job. An in-flight `catalog_embed` Job is cancelled first.
 
@@ -65,12 +65,12 @@ Delete of an in-use record removes the row and secret, leaves the purpose with n
 | Intent | Action | Search | Index / ready | Rebuild Job |
 | --- | --- | --- | --- | --- |
 | Pause remote calls | Close | Lexical immediately | Kept | No |
-| Resume using the current index | Open, no recompute | Hybrid iff ready | Unchanged | No |
+| Resume using the current index | Open, no recompute | Vector iff ready | Unchanged | No |
 | Resume and align the closed window | Open, full recompute | Lexical until Job success | Ready cleared at start | Yes |
 | Drop stored vectors | Cleanup (closed or no in-use) | Already lexical | Rows deleted; ready cleared | No (cancel in-flight) |
 | Index after cleanup | Rebuild-now, or open with full recompute | Lexical until success | Ready set on success | Yes |
 | Replace wiring or change in-use URL | Set in use / patch URL (test first; URL change must resupply or explicitly clear the secret) | Lexical immediately | Ready cleared at start | Yes |
-| Rotate secret only | Patch secret (test first) | Hybrid continues | Unchanged | No |
+| Rotate secret only | Patch secret (test first) | Vector continues | Unchanged | No |
 | Discard the record | Delete (in-use allowed) | Lexical if it was in use | Index not cleaned; cancel in-flight if in use | No |
 
 Set in use while closed still starts a rebuild. Incremental writes stay off until open.
@@ -85,15 +85,15 @@ Rebuilds that start from set-in-use, in-use URL change, rebuild-now, or open wit
 
 After claim, the runner takes a site-wide **Kind execution lock** named `catalog_embed` (not per-**Source**). Contention ends that Job `failed` with `JOB_ALREADY_ACTIVE`.
 
-The Job rewrites object and column embedding rows for the current generation. Skip compares `(content_hash, generation)`: `content_hash` is the text sent to embed; generation is its own column. The Job result records attempted / written / failed / skipped counts per kind and, on success, `failure_reasons` (distinct embed error messages with counts). The run log reports per-Source planned totals, throttled written/failed/skipped heartbeats, and the same deduplicated embed failure reasons. Progress and reasons are not written onto public Job fields or purpose state. Observe remains `GET /jobs`. Per-row embed failures do not fail the Job when at least one vector was written. A run that writes no vectors against a non-empty catalog fails and does not set ready; its `error_summary` includes the dominant embed reason when one was recorded. Success writes the ready bit only when the Job’s service and generation are still current. Failure leaves the service in use and search lexical. The operator starts another rebuild without switching services. Hybrid does not scan rows for a partial index. Cooperative cancel is honored at embed-batch boundaries.
+The Job rewrites object and column embedding rows for the current generation. Skip compares `(content_hash, generation)`: `content_hash` is the text sent to embed; generation is its own column. The Job result records attempted / written / failed / skipped counts per kind and, on success, `failure_reasons` (distinct embed error messages with counts). The run log reports per-Source planned totals, throttled written/failed/skipped heartbeats, and the same deduplicated embed failure reasons. Progress and reasons are not written onto public Job fields or purpose state. Observe remains `GET /jobs`. Per-row embed failures do not fail the Job when at least one vector was written. A run that writes no vectors against a non-empty catalog fails and does not set ready; its `error_summary` includes the dominant embed reason when one was recorded. Success writes the ready bit only when the Job’s service and generation are still current. Failure leaves the service in use and search lexical. The operator starts another rebuild without switching services. Vector Search does not scan rows for a partial index. Cooperative cancel is honored at embed-batch boundaries.
 
 While a rebuild runs, structure-commit and semantics incremental writes (if the purpose is not closed) use the new wiring and the current generation. Search stays lexical until ready is set, so a half-written index is not a product state.
 
 ## 7. Catalog Search
 
-Hybrid rank is on only when an embedding Model Service is in use, the purpose is not closed, and ready is true. Otherwise Catalog Search is the lexical ladder — a complete rank, not a degraded mode. A failed query embedding call uses the lexical store page for that request and does not close the purpose or clear ready. Catalog Search `total` is the lexical filtered-set count on every path (ADR 0037).
+Complete-state rank is vector nearest-neighbor when an embedding Model Service is in use, the purpose is not closed, and ready is true. Otherwise Catalog Search is the lexical ladder — a declared **process state**, not a second complete rank. Each search page names the path that produced it (`rank_mode`: `vector` or `lexical`). The two values do not mean "this request fell back". A failed query embedding call, a missed model API timeout, or a neighbor-score failure is `CATALOG_SEARCH_EMBED_FAILED` / `CATALOG_SEARCH_NEIGHBOR_FAILED` and does not close the purpose or clear ready. An empty neighbor list is a successful empty vector page. `index_status` / ready describe index build, not the page. Serving-time path rate is `refraq_catalog_search_hybrid_total{outcome=vector|lexical}` on `/metrics`. `refraq_catalog_search_vector_errors_total{reason=embed_failed|no_vectors|neighbor_failed}` counts those errors. Catalog Search is a **Top-K Read** (no `total`; ADR 0043).
 
-HTTP, Console callers of those endpoints, and MCP share this rank.
+HTTP and MCP share this rank.
 
 ## 8. Secrets And Environment
 
@@ -105,7 +105,7 @@ The API key is encrypted at rest, write-only, and never returned. Reads expose `
 
 Create, update, test, set-in-use, close, open, cleanup, rebuild-now, and delete produce **Management Audit Event**s (`resource_type` `model_service`). Audit detail must not include the API key.
 
-The Console Module `model-services` lives in the `settings` nav group. The page must show the closed-state note (structure and semantics edits during the closed window do not enter the index automatically) and the open confirmation as a choice, not an announcement. Set-in-use on a draft row is labeled **Enable**; its confirm title is **Enable this service?**. Status remains **In use**. **Enable** is not **open**. Any Console action that mints `catalog_embed` (set in use, rebuild-now, open with full recompute) confirms before minting. An in-use URL save that mints stays a form submit and does not add a second confirm.
+The Console Module `model-services` lives in the `settings` nav group. The page must show the closed-state note (structure and semantics edits during the closed window do not enter the index automatically) and the open confirmation as a choice, not an announcement. Set-in-use on a draft row is labeled **Enable**; its confirm title is **Enable this service?**. Status remains **In use**. **Enable** is not **open**. Enable runs the connectivity test first. Any Console action that mints `catalog_embed` (set in use, rebuild-now, open with full recompute) confirms before minting. An in-use URL save that mints stays a form submit and does not add a second confirm.
 
 ## 10. Non-Goals
 
@@ -120,6 +120,6 @@ The Console Module `model-services` lives in the `settings` nav group. The page 
 
 - `docs/api-contracts-model-services.md`
 - `docs/adr/0039-model-services-and-catalog-embed.md`
-- `docs/adr/0037-catalog-search-hybrid-ranking.md`
+- `docs/adr/0043-catalog-search-vector-complete-state.md`
 - `docs/business-metadata.md`
 - `docs/business-jobs.md`

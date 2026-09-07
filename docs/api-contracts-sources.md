@@ -183,6 +183,7 @@ Rules:
 - Success response: `{ "ok": true }`. Success proves the live endpoint **and** that the dialect catalog scope object (`schema` / `owner` from the same `access` document) exists. A reachable host with a missing scope is not success.
 - Completed probe failure (unreachable, auth rejected, declared scope missing, timeout ~10s): HTTP 200 with `{ "ok": false, "code": "SOURCE_TEST_FAILED" | "SOURCE_TEST_TIMEOUT", "message": "..." }` — never row data beyond the result envelope; audit detail must not include passwords. Draft uses `resource_id` `"draft"`.
 - Validation / missing Source: 400 / 404 with stable codes as elsewhere.
+- Admission pool full or this actor's share full: `ADMISSION_CAPACITY_EXCEEDED` (`503`) / `ADMISSION_ACTOR_LIMIT_EXCEEDED` (`429`), same as Controlled Query (ADR 0045).
 - Probe does not block save; results are not persisted on the Source.
 
 ## 4. Non-Goals

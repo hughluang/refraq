@@ -397,8 +397,8 @@ Avoid env as the embeddings home; treating the URL as a System Parameter; a seco
 
 ### Catalog Search
 
-Cross-Source object and column search by required non-empty query. Empty or whitespace-only query is `CATALOG_SEARCH_QUERY_REQUIRED` on HTTP and MCP. One ranking authority per deployment: portable lexical ladder, plus optional embedding hybrid when an embedding **Model Service** is in use, the purpose is not closed, and ready is true (ADR 0037 / 0039). If the query embedding call fails, that request uses the lexical store page. `total` is the lexical filtered-set count on every path. HTTP, Console callers of those endpoints, and MCP share that rank.
-Avoid treating Per-Source list `q` as Catalog Search; avoid FTS as the ranking authority; avoid a second MCP-only rank.
+Cross-Source object and column search by required non-empty query. Empty or whitespace-only query is `CATALOG_SEARCH_QUERY_REQUIRED` on HTTP and MCP. Complete state is vector nearest-neighbor when an embedding **Model Service** is in use, the purpose is not closed, and ready is true; otherwise the path is the portable lexical ladder (process state) (ADR 0043 / 0039). `source_id` and `object_type` bind both paths. Each page names its path (`rank_mode`: `vector` or `lexical`). A failed query embed or neighbor score is a Problem Code, not a silent lexical page. Envelope is **Top-K Read** (no `total`). HTTP and MCP share that rank. Join Path `q` / `query_text` ranks the reachable set; it is not a catalog-wide Search that then tries BFS (ADR 0044).
+Avoid treating Per-Source list `q` as Catalog Search; avoid FTS as the ranking authority; avoid a second MCP-only rank; avoid treating exact-name first place as a Search guarantee (use locator resolve).
 
 ### Semantics Change
 
@@ -474,6 +474,11 @@ The agreed request and response shape between frontend and backend.
 The platform envelope for a paged collection list: `{ "items", "total", "limit", "offset" }`. `total` is the filtered set. Newest-first pages order by `created_at DESC` with an `id` tiebreaker.
 Contract: [`docs/conventions-pagination.md`](conventions-pagination.md).
 Avoid `{items}`-only collection responses for new lists; avoid `total_count`; avoid a Cursor Page without ADR admission; avoid treating page bounds as Job retention.
+
+### Top-K Read
+
+The Catalog Search envelope: `{ "items", "limit", "offset", "rank_mode", "truncated" }`. No `total`. `limit` / `offset` slice a declared window. Admitted by ADR 0043; new uses need an ADR.
+Avoid using Offset Page `total` as a neighbor count; avoid a silent third envelope.
 
 ## Repository And Process
 

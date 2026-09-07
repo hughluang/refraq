@@ -48,4 +48,5 @@ export type ModelServiceTestResult = {
   dimension: number;
   elapsed_ms: number;
   model: string;
+  output_dim: number;
 };

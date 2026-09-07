@@ -187,15 +187,21 @@ class MemoryCatalogStore:
         source_id: str | None = None,
         object_type: str | None = None,
         include_absent: bool = True,
+        object_ids: list[str] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[CatalogColumnRecord], int]:
+        if object_ids is not None and not object_ids:
+            return [], 0
+        allowed = set(object_ids) if object_ids is not None else None
         with self._lock:
             candidates: list[CatalogColumnRecord] = []
             for obj in self._objects.values():
                 if source_id is not None and obj.source_id != source_id:
                     continue
                 if object_type is not None and obj.object_type != object_type:
+                    continue
+                if allowed is not None and obj.id not in allowed:
                     continue
                 for col in obj.columns:
                     if include_absent or col.is_present:
@@ -217,6 +223,22 @@ class MemoryCatalogStore:
     def get_object(self, object_id: str) -> CatalogObjectRecord | None:
         with self._lock:
             return self._objects.get(object_id)
+
+    def get_objects_by_ids(self, object_ids: list[str]) -> list[CatalogObjectRecord]:
+        with self._lock:
+            return [
+                self._objects[oid] for oid in object_ids if oid in self._objects
+            ]
+
+    def get_columns_by_ids(self, column_ids: list[str]) -> list[CatalogColumnRecord]:
+        wanted = set(column_ids)
+        found: list[CatalogColumnRecord] = []
+        with self._lock:
+            for obj in self._objects.values():
+                for col in obj.columns:
+                    if col.id in wanted:
+                        found.append(col)
+        return found
 
     def get_object_by_locator(self, locator_key: str) -> CatalogObjectRecord | None:
         with self._lock:
@@ -611,9 +633,60 @@ class MemoryCatalogStore:
         with self._lock:
             return self._embeddings.get((kind, target_id))
 
-    def list_embeddings(self, *, kind: str) -> list[Any]:
+    def _object_for_embedding(
+        self, kind: str, target_id: str
+    ) -> CatalogObjectRecord | None:
+        if kind == "object":
+            return self._objects.get(target_id)
+        for obj in self._objects.values():
+            for col in obj.columns:
+                if col.id == target_id:
+                    return obj
+        return None
+
+    def nearest_embeddings(
+        self,
+        *,
+        kind: str,
+        query: list[float],
+        limit: int,
+        generation: int,
+        source_id: str | None = None,
+        object_type: str | None = None,
+        object_ids: list[str] | None = None,
+    ) -> list[str]:
+        from backend.metadata.catalog.embedding import cosine_similarity
+
+        if not query or limit < 1:
+            return []
+        if object_ids is not None and not object_ids:
+            return []
+        scored: list[tuple[float, str]] = []
+        allowed = set(object_ids) if object_ids is not None else None
+        scoped = (
+            source_id is not None or object_type is not None or allowed is not None
+        )
         with self._lock:
-            return [r for (k, _tid), r in self._embeddings.items() if k == kind]
+            rows = [r for (k, _tid), r in self._embeddings.items() if k == kind]
+            for rec in rows:
+                if rec.generation != generation:
+                    continue
+                if scoped:
+                    obj = self._object_for_embedding(kind, rec.target_id)
+                    if obj is None:
+                        continue
+                    if source_id is not None and obj.source_id != source_id:
+                        continue
+                    if object_type is not None and obj.object_type != object_type:
+                        continue
+                    if allowed is not None and obj.id not in allowed:
+                        continue
+                score = cosine_similarity(query, rec.embedding)
+                if score is None or score <= 0:
+                    continue
+                scored.append((score, rec.target_id))
+        scored.sort(key=lambda pair: (-pair[0], pair[1]))
+        return [target_id for _score, target_id in scored[:limit]]
 
     def delete_embeddings(self) -> None:
         with self._lock:

@@ -269,6 +269,16 @@ def test_leftover_query_env_is_logged(
     assert "query_max_rows" in caplog.text
 
 
+def test_dead_peek_slots_env_is_logged(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("REFRAQ_PEEK_SLOTS", "4")
+    with caplog.at_level(logging.WARNING, logger="backend.worker.parameters"):
+        assemble_system_parameters()
+    assert "REFRAQ_PEEK_SLOTS" in caplog.text
+    assert "REFRAQ_ADMISSION_SLOTS" in caplog.text
+
+
 def test_dead_fail_safe_env_is_logged(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -201,6 +201,20 @@ def test_existing_custom_roles_do_not_gain_write(client: TestClient, stores) -> 
     assert "model_services:write" in ALL_PERMISSIONS
 
 
+def test_test_service_reports_probe_elapsed(client: TestClient) -> None:
+    _login(client)
+    created = _create(client)
+    response = client.post(f"/model-services/{created['id']}/test")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["dimension"] == 8
+    assert "search_timeout_sec" not in body
+    assert "within_search_timeout" not in body
+    assert body["output_dim"] == 1024
+    assert body["elapsed_ms"] >= 0
+
+
 def test_create_list_spec_and_secret_write_only(client: TestClient) -> None:
     _login(client)
     spec = client.get("/model-services/spec")

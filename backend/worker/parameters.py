@@ -57,6 +57,10 @@ _DEAD_ENV: tuple[tuple[str, str], ...] = (
         "REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD",
         "catalog fail-safe is retired; a complete successful collect always commits",
     ),
+    (
+        "REFRAQ_PEEK_SLOTS",
+        "use REFRAQ_ADMISSION_SLOTS (ADR 0045)",
+    ),
 )
 
 

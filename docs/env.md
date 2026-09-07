@@ -26,12 +26,35 @@ Current `backend/.env.example` defines:
 - `INITIAL_ADMIN_PASSWORD=change-me`
 - `REFRAQ_SECRETS_MASTER_KEY=change-me-secrets-master-key` (metadata foundation: encrypt Source secrets at rest)
 - `CELERY_BROKER_URL=redis://127.0.0.1:6379/2` (Celery broker; prefer a logical DB separate from Session `REDIS_URL`). If unset, broker is derived from `REDIS_URL` (`…/2`); if both unset, resolution fails (no localhost invent).
-- `REFRAQ_EMBEDDING_API_URL`, `REFRAQ_EMBEDDING_MODEL`, `REFRAQ_EMBEDDING_TIMEOUT_SEC` (retired. Catalog Search hybrid is an in-use **Model Service**. These names are ignored and reported at startup as dead. They are not **System Parameter**s and are not imported into rows)
+- `REFRAQ_EMBEDDING_API_URL`, `REFRAQ_EMBEDDING_MODEL`, `REFRAQ_EMBEDDING_TIMEOUT_SEC` (retired. Catalog Search vector path is an in-use **Model Service**. These names are ignored and reported at startup as dead. They are not **System Parameter**s and are not imported into rows)
 - `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD` (retired. A complete successful structure collect always commits. Leftover name is ignored and reported at startup)
+- `REFRAQ_PEEK_SLOTS` (retired. Admission size is `REFRAQ_ADMISSION_SLOTS` / `REFRAQ_ADMISSION_ACTOR_SHARE`. Leftover name is ignored and reported at startup)
 
 Session TTL, occupancy lost-detection, live-peek timeout, and live-peek row cap are **System Parameter**s (`docs/business-system-parameters.md` §5). They are not environment variables. A leftover name matching a registered key (`ADMIN_SESSION_TTL_HOURS`, `REFRAQ_JOB_LOST_DETECTION_SEC`, `REFRAQ_QUERY_TIMEOUT_SEC`, `REFRAQ_QUERY_MAX_ROWS`, or the key itself in uppercase) is ignored and reported at startup as dead. The stored row is the only home.
 
 Worker concurrency is neither. It is owned by the deployment and set on the worker command line (§8); `REFRAQ_JOB_WORKER_CONCURRENCY` is retired and reading it is not implemented anywhere. Beat loop / reload intervals and the reaper poll interval are in-code constants or derived from lost-detection (`docs/business-system-parameters.md` §5.2), not environment variables and not System Parameters.
+
+Runtime capacity (ADR 0040 / 0045) is also deployment env, not System Parameters. Each process declares `REFRAQ_PROCESS_ROLE` (`api` / `mcp` / `worker`) at its entry so import-time pool construction sees the role. Do not put this key in a shared `.env` — API, MCP, and worker would then share one value. Unset keys use process-role defaults (`api` / `mcp` / `worker`):
+
+| Variable | api default | mcp default | worker default |
+| --- | --- | --- | --- |
+| `REFRAQ_DB_POOL_SIZE` | 8 | 5 | 5 |
+| `REFRAQ_DB_MAX_OVERFLOW` | 4 | 3 | 5 |
+| `REFRAQ_DB_POOL_TIMEOUT_SEC` | 5 | 5 | 5 |
+| `REFRAQ_DB_POOL_RECYCLE_SEC` | 1800 | 1800 | 1800 |
+| `REFRAQ_DB_STATEMENT_TIMEOUT_MS` | 30000 | 30000 | unset (no statement_timeout) |
+| `REFRAQ_HTTP_MAX_INFLIGHT` | 32 | 16 | n/a |
+| `REFRAQ_THREAD_TOKENS` | 8 | 4 | n/a |
+| `REFRAQ_ADMISSION_SLOTS` | 32 | 16 | n/a |
+| `REFRAQ_ADMISSION_ACTOR_SHARE` | 8 | 8 | n/a |
+
+`REFRAQ_ADMISSION_SLOTS` is the concurrent-people declaration for work that waits on an external system (ADR 0045). `REFRAQ_ADMISSION_ACTOR_SHARE` is one User's concurrent external waits (agent fan-out); it is clamped to the slot count and is 0 when slots is 0. `REFRAQ_ADMISSION_SLOTS=0` on api/mcp is honored: admitted work is refused immediately (`ADMISSION_CAPACITY_EXCEEDED`). Worker admission stays 0 regardless of the env keys. `REFRAQ_PEEK_SLOTS` is retired; leftover names are ignored and reported at startup. Tune slots from `/metrics` (`refraq_admission_slots_occupied`, `refraq_admission_slots_limit`, `refraq_admission_actor_share_limit`, `refraq_capacity_rejects_total`). Deploy constraint: sum over API + MCP + worker + Beat of `(pool_size + max_overflow)` should stay at or below `0.8 ×` Postgres `max_connections`. Admission slots are not part of that sum. Intranet `GET /metrics` (Prometheus text) is on the API and MCP processes, compose-internal and never published. The Console proxy returns 404 for `/api/metrics` so the `/api/:path*` rewrite cannot expose it. `/api/readyz` stays as today. `/healthz`, `/readyz`, and `/metrics` on the process bypass load-shed.
+
+Database supply is the other half of ADR 0040. Local `compose.yaml` and `deploy/compose.yaml` set `shm_size: 2gb` and start Postgres with `shared_buffers=1GB`, `effective_cache_size=3GB`, `work_mem=16MB`. These are Compose command flags, not `REFRAQ_*` process env and not System Parameters. Do not leave `shared_buffers` at the 128MB factory default: Catalog embeddings are toast-heavy and neighbor SQL is an exact scan. `effective_cache_size` is a planner hint (it does not allocate). Container `shm_size` must exceed `shared_buffers` or PostgreSQL will not start.
+
+Persistent Store Backend requires **PostgreSQL 18 or newer** with `pg_trgm` and `pgvector` enabled (ADR 0041). Local `compose.yaml` and `deploy/compose.yaml` use `pgvector/pgvector:pg18`. Foundation Upgrade fail-fasts if either extension cannot be created. Catalog embeddings are stored as `vector` plus `embedding_dim` (no typmod). Catalog Search projects query and index vectors to 1024-d (`EMBEDDING_OUTPUT_DIM`) so a later ANN index is physically possible (`vector` HNSW limit 2000). Exact `<=>` scan is the neighbor path until ADR 0041 Decision 5 fires.
+
+A PG16 data directory cannot be opened by PG18. Upgrading an existing volume is dump → replace the image → restore (`scripts/upgrade_platform_postgres_to_pg18.sh`). Do not attach a 16-era `refraq_pg` volume to the pg18 image. After restore, run Foundation Upgrade so revision `0040_catalog_embeddings_vector` converts JSONB embeddings.
 
 Remove `ADMIN_SESSION_TTL_HOURS`, `REFRAQ_JOB_LOST_DETECTION_SEC`, `REFRAQ_QUERY_TIMEOUT_SEC`, and `REFRAQ_QUERY_MAX_ROWS` from live `.env` files. Changing them and restarting has no effect. Tune those values in Platform Settings. Set concurrency where the worker is launched.
 
@@ -103,10 +126,14 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - `CELERY_BROKER_URL` (required when running Celery worker/beat; default same host Redis DB `2`)
 - `REFRAQ_BROWSER_FACING_HOST` (optional; host or `host:port`, no scheme) — canonical Console host for OIDC `redirect_uri`; when unset, only a loopback Host is used
 - `REFRAQ_CATALOG_FAIL_SAFE_THRESHOLD` (retired; ignored and reported at startup)
-- `REFRAQ_EMBEDDING_API_URL`, `REFRAQ_EMBEDDING_MODEL`, `REFRAQ_EMBEDDING_TIMEOUT_SEC` (retired; ignored and reported at startup)
+- `REFRAQ_EMBEDDING_API_URL`, `REFRAQ_EMBEDDING_MODEL`, `REFRAQ_EMBEDDING_TIMEOUT_SEC`, `REFRAQ_PEEK_SLOTS` (retired; ignored and reported at startup)
 - `REFRAQ_INTEGRATION_DATABASE_URL` (pytest `@pytest.mark.integration` only; default `…/refraq_test`)
 - `REFRAQ_INTEGRATION_REDIS_URL` (integration only; default `redis://127.0.0.1:6379/1`)
 - `REFRAQ_INTEGRATION_CELERY_BROKER_URL` (integration only; default `redis://127.0.0.1:6379/3`)
+- `REFRAQ_PROCESS_ROLE` (`api` / `mcp` / `worker`; declared per process at the entry, not in a shared `.env`)
+- `REFRAQ_DB_POOL_SIZE`, `REFRAQ_DB_MAX_OVERFLOW`, `REFRAQ_DB_POOL_TIMEOUT_SEC`, `REFRAQ_DB_POOL_RECYCLE_SEC`, `REFRAQ_DB_STATEMENT_TIMEOUT_MS` (SQLAlchemy platform pool; role defaults in §2)
+- `REFRAQ_HTTP_MAX_INFLIGHT`, `REFRAQ_THREAD_TOKENS`, `REFRAQ_ADMISSION_SLOTS`, `REFRAQ_ADMISSION_ACTOR_SHARE` (API/MCP runtime capacity; ADR 0040 / 0045)
+- Postgres `shared_buffers` / `effective_cache_size` / `work_mem` / container `shm_size` (database supply; ADR 0040; set on the Compose `postgres` service, not as process env)
 
 ### Frontend-Owned Variables
 

@@ -26,11 +26,15 @@ FIELD_VALUE_INVALID = "VALUE_INVALID"
 _LOC_PREFIXES = frozenset({"body", "query", "path", "header", "cookie"})
 
 
+RETRY_AFTER_DEFAULT_SEC = 1
+
+
 class AppError(Exception):
     """Base class for errors that map to an API error response."""
 
     code: str = "APP_ERROR"
     http_status: int = 400
+    retry_after_sec: int | None = None
 
     def __init__(self, message: str | None = None) -> None:
         super().__init__(message or self.code)
@@ -38,6 +42,46 @@ class AppError(Exception):
 
     def _default_message(self) -> str:
         return self.code
+
+    def extra_headers(self) -> dict[str, str]:
+        if self.retry_after_sec is None:
+            return {}
+        return {"Retry-After": str(int(self.retry_after_sec))}
+
+
+class PlatformCapacityExceeded(AppError):
+    code = "PLATFORM_CAPACITY_EXCEEDED"
+    http_status = 503
+    retry_after_sec = RETRY_AFTER_DEFAULT_SEC
+
+    def _default_message(self) -> str:
+        return "Platform is at capacity"
+
+
+class PlatformTimeout(AppError):
+    code = "PLATFORM_TIMEOUT"
+    http_status = 504
+
+    def _default_message(self) -> str:
+        return "Platform request exceeded the statement timeout"
+
+
+class AdmissionCapacityExceeded(AppError):
+    code = "ADMISSION_CAPACITY_EXCEEDED"
+    http_status = 503
+    retry_after_sec = RETRY_AFTER_DEFAULT_SEC
+
+    def _default_message(self) -> str:
+        return "Platform admission is at capacity"
+
+
+class AdmissionActorLimitExceeded(AppError):
+    code = "ADMISSION_ACTOR_LIMIT_EXCEEDED"
+    http_status = 429
+    retry_after_sec = RETRY_AFTER_DEFAULT_SEC
+
+    def _default_message(self) -> str:
+        return "This user already holds the admission share"
 
 
 class ProblemFieldError(BaseModel):
@@ -93,6 +137,7 @@ def problem_response(
     detail: str,
     details: list[ProblemFieldError] | None = None,
     request_id: str | None = None,
+    headers: dict[str, str] | None = None,
 ) -> ProblemJSONResponse:
     body = problem_body(
         status=status,
@@ -101,10 +146,13 @@ def problem_response(
         details=details,
         request_id=request_id,
     )
+    response_headers = {HEADER_NAME: str(body["request_id"])}
+    if headers:
+        response_headers.update(headers)
     return ProblemJSONResponse(
         status_code=status,
         content=body,
-        headers={HEADER_NAME: str(body["request_id"])},
+        headers=response_headers,
     )
 
 

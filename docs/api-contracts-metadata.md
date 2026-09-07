@@ -240,10 +240,10 @@ Batch request:
 
 Batch response: `{ "created_count": 1, "already_known_count": 0, "rejected_count": 0, "items": [Join] }`. Asserted known pairs increment `already_known_count`. Rejected pairs increment `rejected_count` and appear in `items` with `is_rejected`; evidence is not overwritten and the row is not restored.
 
-Path query params: `start` (object or column id or locator_key), optional `target`, optional `q` (Catalog Search query; same rank as `/catalog/*/search`; picks targets then BFS), `max_hops` (1–5, default 1), `top_targets` (default 3). `target` and `q` may be combined; an explicit `target` still walks that pair.
+Path query params: `start` (object or column id or locator_key), optional `target`, optional `q` (question text; ranks objects already reachable from `start` within `max_hops`), `max_hops` (1–5, default 1; at most that many hops in every mode), `top_targets` (default 3). `target` and `q` may be combined; an explicit `target` still walks that pair and does not rank.
 
-Path response: `{ "paths_found": N, "paths": […], "direct_joins": […], "reason": null | "…" }`.
-`reason` may be set when no usable path is returned (e.g. `TARGET_UNREACHABLE`). A start that cannot expand is `JOIN_PATH_UNAVAILABLE` (including when `q` is set). `direct_joins` is filled when start is a column and `max_hops=1`, including the `q` mode.
+Path response: `{ "paths_found": N, "paths": […], "direct_joins": […], "reason": null | "…", "rank_mode": null | "vector" | "lexical" }`.
+`rank_mode` is set when `q` is present and `target` is omitted (vector complete state or lexical process state on the reachable set) and `null` otherwise. A serving-time embed or neighbor failure is the same Problem Code as Catalog Search. `reason` may be set when no usable path is returned (e.g. `TARGET_UNREACHABLE` when the reachable set is empty or the rank window is empty). A start that cannot expand is `JOIN_PATH_UNAVAILABLE` (including when `q` is set). `direct_joins` is filled when start is a column and `max_hops=1`, including the `q` mode. `q` candidates are constructed from the reachable set; `JOIN_CROSS_SOURCE` applies only to an explicit `target` on another Source.
 
 Reject joins that lack evidence with `JOIN_EVIDENCE_REQUIRED`. Cross-Source edges → `JOIN_CROSS_SOURCE`. Self-loop → `JOIN_INVALID`. Duplicate create on an asserted pair → `JOIN_ALREADY_DEFINED` (message includes join id). Single `POST /joins` create or `PATCH` amend on a rejected pair → `JOIN_REJECTED` (batch reports via `rejected_count` instead). Reject of an already-rejected row → `JOIN_ALREADY_REJECTED`. Restore of an asserted row → `JOIN_NOT_REJECTED`. `DELETE` of an automatic edge (`created_by_user_id` null) → `JOIN_DELETE_AUTOMATIC` (including when the row is also rejected; automatic is checked first). `DELETE` of a rejected human-created row → `JOIN_REJECTED`. Create is `201`.
 
@@ -256,7 +256,9 @@ Reject joins that lack evidence with `JOIN_EVIDENCE_REQUIRED`. Cross-Source edge
 
 Query params: `q` (**required**, non-empty after strip for both objects and columns), `source_id`, `object_type`, `limit` (default 20, max 100), `offset`. Missing, empty, or whitespace-only `q` is `400 CATALOG_SEARCH_QUERY_REQUIRED` (domain-owned; HTTP does not emit `422 REQUEST_INVALID` for emptiness). MCP `search_objects` / `search_columns` use the same code in the tool-error envelope.
 
-**Offset Page** response: `{ "items": […], "total": N, "limit": L, "offset": O }`. `total` is always the lexical filtered-set count, including when hybrid is on and when the query embedding call fails. Ranking (ADR 0037): exact locator/name → prefix → name substring → business name/description substring, then a locator/`id` tiebreaker. When an embedding **Model Service** is in use, the purpose is not closed, and ready is true, those lexical hits fuse with embedding nearest-neighbors (RRF) inside a bounded candidate window (lexical pool 500, semantic 50). Hybrid changes `items` order and may inject semantic-only hits; it does not change `total`. An `offset` past that window may return empty `items` while `total` stays the lexical count. A semantic-only hit may appear in `items` when `total` is 0. Otherwise ranking is lexical only. If the query embedding call fails, that request pages the lexical store the same way. HTTP, Console callers of these endpoints, and MCP share this rank. Per-Source list `q` is not this ranking.
+**Top-K Read** response: `{ "items": […], "limit": L, "offset": O, "rank_mode": "vector" | "lexical", "truncated": B }`. No `total`. `rank_mode` names the path that produced this page: `vector` when an embedding **Model Service** is in use, the purpose is not closed, and ready is true; `lexical` when those bits are off (process state). The two values do not mean "this request fell back". Complete-state ranking is neighbor order (`k` store rows). Process-state ranking is the portable lexical ladder (ADR 0041): exact locator/name → prefix → name substring → business name/description substring, then a locator/`id` tiebreaker (`COLLATE "C"`). `source_id` and `object_type` bind both paths. `limit` / `offset` slice the declared window; `truncated` is true when the window has rows beyond this slice. An `offset` past the window is `200` with empty `items`. An empty neighbor list is a successful empty vector page. If the query embedding call fails or exceeds the model API timeout, the request is `CATALOG_SEARCH_EMBED_FAILED` (`503`). Neighbor-score failure other than platform time is `CATALOG_SEARCH_NEIGHBOR_FAILED` (`503`) (`refraq_catalog_search_vector_errors_total{reason=embed_failed|no_vectors|neighbor_failed}`). Semantic neighbors come from the store (`k` rows), not a process-local full scan. HTTP and MCP share this rank. Per-Source list `q` is not this ranking.
+
+Process-wide overload: `PLATFORM_CAPACITY_EXCEEDED` (`503` + `Retry-After`) when in-flight HTTP work is at the cap, the platform pool is exhausted, or the platform database refuses a new connection (ADR 0040). A platform short read canceled by `statement_timeout` is `PLATFORM_TIMEOUT` (`504`, no `Retry-After`), not `QUERY_TIMEOUT` and not a lexical page when vector Search was on.
 
 ### `GET /objects/{id}/semantics-changes`
 
@@ -297,6 +299,10 @@ Errors:
 | `QUERY_NOT_READONLY` | DDL/DML/unclassified, parse failure, row locking, blocked functions |
 | `QUERY_MULTI_STATEMENT` | More than one statement |
 | `QUERY_TIMEOUT` | Exceeded timeout |
+| `ADMISSION_CAPACITY_EXCEEDED` | Admission pool is full (`503` + `Retry-After`) |
+| `ADMISSION_ACTOR_LIMIT_EXCEEDED` | This actor already holds the admission share (`429` + `Retry-After`) |
+| `PLATFORM_CAPACITY_EXCEEDED` | Platform in-flight cap, pool checkout timeout, or platform database refused a connection (`503` + `Retry-After`) |
+| `PLATFORM_TIMEOUT` | Platform short read or short write canceled by `statement_timeout` (`504`) |
 | `QUERY_ROW_LIMIT` | Rejected before run if max_rows above platform cap |
 
 Every attempt writes a management audit event (statement summary or hash, never Source secret).
@@ -333,7 +339,7 @@ Request:
 | `limit` | Default **50**; must be ≥ 1 |
 | `include_sql` | Default **false**; when true, response includes compiled `sql` |
 
-Hard cap: `offset + limit` must be ≤ `query_max_rows` (seed **1000**); otherwise `QUERY_ROW_LIMIT` before connect. Platform timeout matches Controlled Query (`query_timeout_sec`).
+Hard cap: `offset + limit` must be ≤ `query_max_rows` (seed **1000**); otherwise `QUERY_ROW_LIMIT` before connect. Platform timeout matches Controlled Query (`query_timeout_sec`). Admission matches Controlled Query (`ADMISSION_CAPACITY_EXCEEDED` / `ADMISSION_ACTOR_LIMIT_EXCEEDED`).
 
 Response `200`:
 

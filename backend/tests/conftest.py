@@ -21,6 +21,8 @@ from backend.admin.branding.store import reset_branding_store
 from backend.admin.model_services import reset_model_service_store
 from backend.core.config import reset_settings_cache
 from backend.core.db import reset_db_singletons
+from backend.core.bulkhead import reset_peek_bulkhead
+from backend.core.runtime import reset_runtime_capacity, set_process_role
 from backend.core.redis_client import reset_redis_singleton
 from backend.core.time import reset_clock
 from backend.admin.audit_store import reset_audit_store
@@ -81,6 +83,9 @@ def _reset_foundation_singletons() -> None:
     reset_schedule_store()
     reset_kind_execution_locks_for_tests()
     reset_db_singletons()
+    set_process_role("api")
+    reset_peek_bulkhead()
+    reset_runtime_capacity()
     reset_redis_singleton()
     yield
     reset_user_store()
@@ -105,6 +110,9 @@ def _reset_foundation_singletons() -> None:
     reset_schedule_store()
     reset_kind_execution_locks_for_tests()
     reset_db_singletons()
+    set_process_role("api")
+    reset_peek_bulkhead()
+    reset_runtime_capacity()
     reset_redis_singleton()
     reset_system_parameters()
     reset_settings_cache()

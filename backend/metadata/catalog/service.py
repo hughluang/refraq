@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Generic, Literal, NamedTuple, TypeVar
+
+from backend.core.metrics import record_catalog_hybrid
 from backend.metadata.catalog.embedding import embedding_configured
 from backend.metadata.catalog.refs import resolve_column_ref, resolve_object_ref
-from backend.metadata.catalog.search_hybrid import LEXICAL_POOL, hybrid_page
+from backend.metadata.catalog.search_hybrid import vector_page
 from backend.metadata.catalog.semantics_changes import CatalogSemanticsChangeRecord
 from backend.metadata.catalog.store import get_catalog_store
 from backend.metadata.catalog.views import (
@@ -23,8 +26,22 @@ from backend.metadata.errors import (
     CatalogSearchQueryRequired,
     JoinPathUnavailable,
 )
-from backend.metadata.joins.graph import find_join_paths
+from backend.metadata.joins.graph import (
+    JoinPath,
+    JoinPathResult,
+    find_join_paths,
+    find_reachable_object_paths,
+)
 from backend.metadata.sources.service import require_source
+
+T = TypeVar("T")
+RankMode = Literal["vector", "lexical"]
+
+
+class CatalogSearchPage(NamedTuple, Generic[T]):
+    items: list[T]
+    rank_mode: RankMode
+    truncated: bool
 
 
 def _resolve_path_endpoint(
@@ -70,7 +87,7 @@ def search_objects(
     object_type: str | None = None,
     limit: int = 20,
     offset: int = 0,
-) -> tuple[list[ObjectView], int]:
+) -> CatalogSearchPage[ObjectView]:
     cleaned = (query or "").strip()
     if not cleaned:
         raise CatalogSearchQueryRequired()
@@ -83,33 +100,26 @@ def search_objects(
             limit=limit,
             offset=offset,
         )
-        return [object_view(o, include_columns=False) for o in items], total
-    pool, lexical_total = store.search_objects(
-        cleaned,
-        source_id=source_id,
-        object_type=object_type,
-        limit=LEXICAL_POOL,
-        offset=0,
-    )
-    merged = hybrid_page(
+        record_catalog_hybrid("lexical")
+        return CatalogSearchPage(
+            [object_view(o, include_columns=False) for o in items],
+            "lexical",
+            offset + len(items) < total,
+        )
+    items, truncated = vector_page(
         query=cleaned,
-        lexical_items=pool,
         kind="object",
         id_of=lambda o: o.id,
         limit=limit,
         offset=offset,
+        source_id=source_id,
+        object_type=object_type,
     )
-    if merged is None:
-        items, total = store.search_objects(
-            cleaned,
-            source_id=source_id,
-            object_type=object_type,
-            limit=limit,
-            offset=offset,
-        )
-        return [object_view(o, include_columns=False) for o in items], total
-    items, _window = merged
-    return [object_view(o, include_columns=False) for o in items], lexical_total
+    return CatalogSearchPage(
+        [object_view(o, include_columns=False) for o in items],
+        "vector",
+        truncated,
+    )
 
 
 def search_columns(
@@ -119,7 +129,7 @@ def search_columns(
     object_type: str | None = None,
     limit: int = 20,
     offset: int = 0,
-) -> tuple[list[ColumnView], int]:
+) -> CatalogSearchPage[ColumnView]:
     cleaned = (query or "").strip()
     if not cleaned:
         raise CatalogSearchQueryRequired()
@@ -132,33 +142,22 @@ def search_columns(
             limit=limit,
             offset=offset,
         )
-        return [column_view(c) for c in items], total
-    pool, lexical_total = store.search_columns(
-        cleaned,
-        source_id=source_id,
-        object_type=object_type,
-        limit=LEXICAL_POOL,
-        offset=0,
-    )
-    merged = hybrid_page(
+        record_catalog_hybrid("lexical")
+        return CatalogSearchPage(
+            [column_view(c) for c in items],
+            "lexical",
+            offset + len(items) < total,
+        )
+    items, truncated = vector_page(
         query=cleaned,
-        lexical_items=pool,
         kind="column",
         id_of=lambda c: c.id,
         limit=limit,
         offset=offset,
+        source_id=source_id,
+        object_type=object_type,
     )
-    if merged is None:
-        items, total = store.search_columns(
-            cleaned,
-            source_id=source_id,
-            object_type=object_type,
-            limit=limit,
-            offset=offset,
-        )
-        return [column_view(c) for c in items], total
-    items, _window = merged
-    return [column_view(c) for c in items], lexical_total
+    return CatalogSearchPage([column_view(c) for c in items], "vector", truncated)
 
 
 def get_object(object_ref: str) -> ObjectView:
@@ -206,15 +205,28 @@ def lookup_join_paths(
         )
 
     store = get_catalog_store()
-    result = find_join_paths(
-        store=store,
-        start_object_id=start_object_id,
-        start_column_id=start_column_id,
-        target_object_id=target_object_id,
-        target_column_id=target_column_id,
-        max_hops=max_hops,
-        top_targets=top_targets,
-    )
+    if target_object_id or target_column_id:
+        result = find_join_paths(
+            store=store,
+            start_object_id=start_object_id,
+            start_column_id=start_column_id,
+            target_object_id=target_object_id,
+            target_column_id=target_column_id,
+            max_hops=max_hops,
+            top_targets=top_targets,
+        )
+    else:
+        reachable = find_reachable_object_paths(
+            store=store,
+            start_object_id=start_object_id,
+            start_column_id=start_column_id,
+            max_hops=max_hops,
+        )
+        result = JoinPathResult(
+            paths=reachable.paths[:top_targets],
+            direct_joins=reachable.direct_joins,
+            reason=reachable.reason,
+        )
     if result.reason == "NO_START_COLUMNS":
         raise JoinPathUnavailable()
 
@@ -222,34 +234,13 @@ def lookup_join_paths(
 
 
 def _join_path_lookup(result: object) -> JoinPathLookup:
-    paths: list[JoinPathView] = []
-    for path in result.paths:  # type: ignore[attr-defined]
-        hops = [
-            JoinPathHopView(
-                from_column_id=hop.from_column_id,
-                to_column_id=hop.to_column_id,
-                from_column_locator_key=hop.from_column_locator_key,
-                to_column_locator_key=hop.to_column_locator_key,
-                join_id=hop.join.id,
-                join_kind=hop.join.join_kind,
-                join_expression=hop.join.join_expression,
-                evidence=hop.join.evidence,
-            )
-            for hop in path.hops
-        ]
-        paths.append(
-            JoinPathView(
-                target_object_id=path.target_object_id,
-                target_column_id=path.target_column_id,
-                hops=hops,
-                path_summary=path.path_summary,
-            )
-        )
+    paths = [_join_path_view(path) for path in result.paths]  # type: ignore[attr-defined]
     return JoinPathLookup(
         paths_found=len(paths),
         paths=paths,
         direct_joins=[join_view(j) for j in result.direct_joins],  # type: ignore[attr-defined]
         reason=result.reason,  # type: ignore[attr-defined]
+        rank_mode=None,
     )
 
 
@@ -262,62 +253,113 @@ def _lookup_join_paths_from_query(
     top_targets: int,
 ) -> JoinPathLookup:
     store = get_catalog_store()
-    start_probe = find_join_paths(
+    reachable = find_reachable_object_paths(
         store=store,
         start_object_id=start_object_id,
         start_column_id=start_column_id,
         max_hops=max_hops,
-        top_targets=1,
     )
-    if start_probe.reason == "NO_START_COLUMNS":
+    if reachable.reason == "NO_START_COLUMNS":
         raise JoinPathUnavailable()
-    direct_joins = _join_path_lookup(start_probe).direct_joins
+    direct_joins = _join_path_lookup(reachable).direct_joins
+    by_object = {
+        path.target_object_id: path
+        for path in reachable.paths
+        if path.target_object_id is not None
+    }
+    object_ids = list(by_object)
+    rank_mode: RankMode = "vector" if embedding_configured() else "lexical"
+    if not object_ids:
+        return JoinPathLookup(
+            paths_found=0,
+            paths=[],
+            direct_joins=direct_joins,
+            reason="TARGET_UNREACHABLE",
+            rank_mode=rank_mode,
+        )
 
-    objects, _ = search_objects(query_text, limit=max(top_targets * 3, 10), offset=0)
-    columns, _ = search_columns(query_text, limit=max(top_targets * 3, 10), offset=0)
-    start_obj = start_object_id
-    if start_column_id:
-        col = store.get_column(start_column_id)
-        start_obj = col.object_id if col is not None else start_obj
+    ranked_object_ids = _rank_objects_by_query(
+        query_text,
+        object_ids=object_ids,
+        rank_mode=rank_mode,
+    )
     collected: list[JoinPathView] = []
-    seen: set[tuple[str | None, str | None]] = set()
-    targets: list[tuple[str | None, str | None]] = []
-    for obj in objects:
-        if obj.id == start_obj:
-            continue
-        targets.append((obj.id, None))
-    for col in columns:
-        if col.id == start_column_id:
-            continue
-        parent = get_catalog_store().get_column(col.id)
-        if parent is not None and parent.object_id == start_obj:
-            continue
-        targets.append((None, col.id))
-    for target_object_id, target_column_id in targets:
+    for object_id in ranked_object_ids:
         if len(collected) >= top_targets:
             break
-        result = find_join_paths(
-            store=store,
-            start_object_id=start_object_id,
-            start_column_id=start_column_id,
-            target_object_id=target_object_id,
-            target_column_id=target_column_id,
-            max_hops=max_hops,
-            top_targets=1,
-        )
-        lookup = _join_path_lookup(result)
-        for path in lookup.paths:
-            key = (path.target_object_id, path.target_column_id)
-            if key in seen:
-                continue
-            seen.add(key)
-            collected.append(path)
-            if len(collected) >= top_targets:
-                break
+        collected.append(_join_path_view(by_object[object_id]))
     reason = None if collected else "TARGET_UNREACHABLE"
     return JoinPathLookup(
         paths_found=len(collected),
         paths=collected,
         direct_joins=direct_joins,
         reason=reason,
+        rank_mode=rank_mode,
+    )
+
+
+def _rank_objects_by_query(
+    query_text: str,
+    *,
+    object_ids: list[str],
+    rank_mode: RankMode,
+) -> list[str]:
+    store = get_catalog_store()
+    if rank_mode == "lexical":
+        columns, _total = store.search_columns(
+            query_text,
+            object_ids=object_ids,
+            limit=50,
+            offset=0,
+        )
+        record_catalog_hybrid("lexical")
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for col in columns:
+            if col.object_id in seen:
+                continue
+            seen.add(col.object_id)
+            ordered.append(col.object_id)
+        return ordered
+
+    items, _truncated = vector_page(
+        query=query_text,
+        kind="column",
+        id_of=lambda c: c.id,
+        limit=50,
+        offset=0,
+        object_ids=object_ids,
+    )
+    records = store.get_columns_by_ids([c.id for c in items])
+    by_id = {col.id: col for col in records}
+    ordered = []
+    seen = set()
+    for item in items:
+        col = by_id.get(item.id)
+        if col is None or col.object_id in seen:
+            continue
+        seen.add(col.object_id)
+        ordered.append(col.object_id)
+    return ordered
+
+
+def _join_path_view(path: JoinPath) -> JoinPathView:
+    hops = [
+        JoinPathHopView(
+            from_column_id=hop.from_column_id,
+            to_column_id=hop.to_column_id,
+            from_column_locator_key=hop.from_column_locator_key,
+            to_column_locator_key=hop.to_column_locator_key,
+            join_id=hop.join.id,
+            join_kind=hop.join.join_kind,
+            join_expression=hop.join.join_expression,
+            evidence=hop.join.evidence,
+        )
+        for hop in path.hops
+    ]
+    return JoinPathView(
+        target_object_id=path.target_object_id,
+        target_column_id=path.target_column_id,
+        hops=hops,
+        path_summary=path.path_summary,
     )

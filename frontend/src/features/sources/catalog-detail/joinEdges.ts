@@ -61,6 +61,34 @@ export function joinDeleteErrorKey(code: string): string | null {
   return null;
 }
 
+export function joinWriteErrorKey(code: string): string | null {
+  if (code === "JOIN_CROSS_SOURCE") {
+    return "catalog.joins.error.JOIN_CROSS_SOURCE";
+  }
+  if (code === "JOIN_EVIDENCE_REQUIRED") {
+    return "catalog.joins.error.JOIN_EVIDENCE_REQUIRED";
+  }
+  if (code === "JOIN_INVALID") {
+    return "catalog.joins.error.JOIN_INVALID";
+  }
+  if (code === "JOIN_ALREADY_DEFINED") {
+    return "catalog.joins.error.JOIN_ALREADY_DEFINED";
+  }
+  if (code === "JOIN_REJECTED") {
+    return "catalog.joins.error.JOIN_REJECTED";
+  }
+  return null;
+}
+
+export function objectRefFromColumnLocator(
+  locator: string | null | undefined,
+): string | null {
+  if (!locator || !locator.startsWith("col/")) return null;
+  const parts = locator.split("/");
+  if (parts.length < 8) return null;
+  return `obj/${parts[1]}/${parts[2]}/${parts[3]}/${parts[4]}/${parts[5]}`;
+}
+
 export function columnOptionLabel(name: string, locatorKey: string): string {
   return `${name} · ${locatorKey}`;
 }

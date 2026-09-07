@@ -174,6 +174,7 @@ export type JoinPathResult = {
   paths: JoinPath[];
   direct_joins: CatalogJoin[];
   reason?: string | null;
+  rank_mode?: "vector" | "lexical" | null;
 };
 
 export type QueryResult = {

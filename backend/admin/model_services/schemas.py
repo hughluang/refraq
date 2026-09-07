@@ -64,6 +64,7 @@ class ModelServiceTestOut(BaseModel):
     dimension: int
     elapsed_ms: int
     model: str
+    output_dim: int
 
 
 class ModelServiceSpecOut(BaseModel):

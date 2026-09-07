@@ -29,7 +29,6 @@ from backend.metadata.errors import JoinPathUnavailable  # noqa: E402
 from backend.metadata.catalog.store import (  # noqa: E402
     CatalogColumnRecord,
     CatalogObjectRecord,
-    get_catalog_store,
     reset_catalog_store,
 )
 from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
@@ -217,15 +216,13 @@ def test_hybrid_search_finds_semantic_only_hit() -> None:
         ],
         schema_scope=None,
     )
-    _, lexical_total = get_catalog_store().search_objects("buyer", limit=10, offset=0)
-    items, total = search_objects("buyer", limit=10, offset=0)
-    assert total == lexical_total
-    assert any(o.id == "obj_cust" for o in items)
+    found = search_objects("buyer", limit=10, offset=0)
+    assert found.rank_mode == "vector"
+    assert any(o.id == "obj_cust" for o in found.items)
 
-    _, lexical_cust = get_catalog_store().search_objects("cust", limit=10, offset=0)
-    fused, fused_total = search_objects("cust", limit=10, offset=0)
-    assert fused_total == lexical_cust
-    assert any(o.id == "obj_cust" for o in fused)
+    technical = search_objects("cust", limit=10, offset=0)
+    assert technical.rank_mode == "vector"
+    assert technical.items[0].id == "obj_wid"
     set_embed_fn_for_tests(None)
 
 
@@ -247,25 +244,23 @@ def test_join_path_query_without_hit_is_unreachable() -> None:
     assert result.reason == "TARGET_UNREACHABLE"
 
 
-def test_hybrid_query_embed_failure_uses_lexical_page() -> None:
+def test_hybrid_query_embed_failure_is_error() -> None:
+    from backend.metadata.errors import CatalogSearchEmbedFailed
+
     _source()
-
-    def boom(_texts: list[str]) -> list[list[float]]:
-        raise RuntimeError("embed down")
-
-    set_embed_fn_for_tests(boom)
     apply_structure_snapshot(
         source=require_source("src_1"),
         job_id="j1",
         collected=[_obj(object_id="obj_cust", name="cust_hdr")],
         schema_scope=None,
     )
-    items, total = search_objects("cust_hdr", limit=10, offset=0)
-    store_items, store_total = get_catalog_store().search_objects(
-        "cust_hdr", limit=10, offset=0
-    )
-    assert total == store_total
-    assert [o.id for o in items] == [o.id for o in store_items]
+
+    def boom(_texts: list[str]) -> list[list[float]]:
+        raise RuntimeError("embed down")
+
+    set_embed_fn_for_tests(boom)
+    with pytest.raises(CatalogSearchEmbedFailed):
+        search_objects("cust_hdr", limit=10, offset=0)
     set_embed_fn_for_tests(None)
 
 

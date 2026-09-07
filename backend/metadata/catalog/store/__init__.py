@@ -80,11 +80,16 @@ class CatalogReadStore(Protocol):
         source_id: str | None = None,
         object_type: str | None = None,
         include_absent: bool = True,
+        object_ids: list[str] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[CatalogColumnRecord], int]: ...
 
     def get_object(self, object_id: str) -> CatalogObjectRecord | None: ...
+
+    def get_objects_by_ids(self, object_ids: list[str]) -> list[CatalogObjectRecord]: ...
+
+    def get_columns_by_ids(self, column_ids: list[str]) -> list[CatalogColumnRecord]: ...
 
     def get_object_by_locator(self, locator_key: str) -> CatalogObjectRecord | None: ...
 
@@ -140,7 +145,17 @@ class CatalogSemanticsStore(Protocol):
 
     def get_embedding(self, *, kind: str, target_id: str) -> Any | None: ...
 
-    def list_embeddings(self, *, kind: str) -> list[Any]: ...
+    def nearest_embeddings(
+        self,
+        *,
+        kind: str,
+        query: list[float],
+        limit: int,
+        generation: int,
+        source_id: str | None = None,
+        object_type: str | None = None,
+        object_ids: list[str] | None = None,
+    ) -> list[str]: ...
 
     def delete_embeddings(self) -> None: ...
 

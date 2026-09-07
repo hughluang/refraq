@@ -32,6 +32,9 @@ from backend.admin.user_store import MemoryUserStore, get_user_store, reset_user
 from backend.admin.federation.protocols.oidc.jwks import signing_key  # noqa: E402
 from backend.admin.federation.service import safe_from  # noqa: E402
 from backend.admin.federation.spec import OidcConfig  # noqa: E402
+from backend.core.admission import GUEST_ACTOR  # noqa: E402
+from backend.core.bulkhead import get_peek_bulkhead, reset_peek_bulkhead  # noqa: E402
+from backend.core.runtime import reset_runtime_capacity  # noqa: E402
 from backend.core.time import utc_now  # noqa: E402
 from backend.main import app  # noqa: E402
 from backend.tests.problem import assert_problem  # noqa: E402
@@ -1254,4 +1257,37 @@ def test_unexpected_callback_error_is_internal(
         )
     assert_problem(response, status=500, code="INTERNAL_ERROR")
     assert "database is down" not in response.text
+
+
+def test_guest_admission_rejects_sso_start(
+    client: TestClient, store_bundle, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    _login_root(client)
+    _, roles, _ = store_bundle
+    created = client.post("/identity-providers", json=_provider_body(_operator_id(roles)))
+    assert created.status_code == 200, created.text
+    provider_id = created.json()["provider"]["id"]
+    monkeypatch.setenv("REFRAQ_ADMISSION_SLOTS", "1")
+    monkeypatch.setenv("REFRAQ_ADMISSION_ACTOR_SHARE", "1")
+    reset_runtime_capacity()
+    reset_peek_bulkhead()
+    hold = threading.Event()
+
+    def _block() -> str:
+        hold.wait(timeout=2)
+        return "held"
+
+    future = get_peek_bulkhead().submit_nowait(GUEST_ACTOR, _block)
+    response = client.get(
+        f"/auth/sso/{provider_id}/start",
+        params={"from": "/console"},
+        follow_redirects=False,
+    )
+    assert_problem(response, status=429, code="ADMISSION_ACTOR_LIMIT_EXCEEDED")
+    hold.set()
+    assert future.result(timeout=2) == "held"
+    reset_peek_bulkhead()
+    reset_runtime_capacity()
 

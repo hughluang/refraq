@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
+from starlette.responses import Response
 
 from backend.core.config import get_settings
 from backend.core.db import ping_database
+from backend.core.metrics import metrics_response
 from backend.core.redis_client import ping_redis
 
 
@@ -35,3 +37,8 @@ def readyz() -> JSONResponse:
         status_code=200,
         content={"status": "ready", "backend": "persistent"},
     )
+
+
+@router.get("/metrics")
+async def metrics() -> Response:
+    return metrics_response()

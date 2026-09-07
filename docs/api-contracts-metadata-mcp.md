@@ -75,8 +75,8 @@ Response: `{ updated_count, requested_count, skipped_columns }`.
 `list_joins` args: object locator plus `limit` (default **50**, max **200**) and `offset` (default **0**). Result is the same **Offset Page** as HTTP `GET /objects/{id}/joins`: `{ "items", "total", "limit", "offset" }`. Order: `created_at ASC`, `id ASC`. Rejected rows are included.
 
 `find_join_path` args: `start_locator_key` (required), optional `target_locator_key`, optional `query_text`, `max_hops` (1–5), `top_targets`.
-`query_text` uses Catalog Search (same rank as `search_objects` / `search_columns`) to pick targets, then BFS. Explicit `target_locator_key` still walks the shortest path. Both omitted → graph exploration.
-Returns `paths_found`, per-target `path_summary` / `hops`, `direct_joins` when start is a column and `max_hops=1` (including `query_text` mode), and optional `reason` when no usable path is available (e.g. `TARGET_UNREACHABLE`). A start that cannot expand is `JOIN_PATH_UNAVAILABLE` in every mode. Rejected rows are omitted.
+`query_text` ranks objects already reachable from start within `max_hops` (vector complete state or lexical process state on that set). Explicit `target_locator_key` still walks the shortest path and does not rank. Both omitted → graph exploration of the same reachable set (at most `max_hops`). `JOIN_CROSS_SOURCE` applies only to an explicit target on another Source.
+Returns `paths_found`, per-target `path_summary` / `hops`, `direct_joins` when start is a column and `max_hops=1` (including `query_text` mode), optional `reason` when no usable path is available (e.g. `TARGET_UNREACHABLE`), and `rank_mode` (`vector` | `lexical`) when `query_text` is set and `target_locator_key` is omitted (`null` otherwise). A serving-time embed or neighbor failure is the same Problem Code as Catalog Search. A start that cannot expand is `JOIN_PATH_UNAVAILABLE` in every mode. Rejected rows are omitted.
 
 `upsert_joins` returns `created_count`, `already_known_count`, `rejected_count`, `skipped_count`, `skipped_joins` (missing endpoints), and `items`. Asserted known pairs are skipped, not overwritten. Rejected pairs increment `rejected_count` and appear in `items` with `is_rejected` (including `id`); they are not overwritten and not restored. To re-assert, call `restore_join`; to change evidence after restore, call `patch_join`. Single `upsert_join` on a rejected pair still returns `JOIN_REJECTED`.
 
@@ -87,7 +87,9 @@ Returns `paths_found`, per-target `path_summary` / `hops`, `direct_joins` when s
 | `search_objects` | `metadata:read` | Cross-Source object search |
 | `search_columns` | `metadata:read` | Cross-Source column search |
 
-Args align with HTTP search: `query_text` **required and non-empty** after strip for both object and column search; optional source/object filters, `limit`/`offset`. Missing, empty, or whitespace-only `query_text` is `CATALOG_SEARCH_QUERY_REQUIRED` (same Problem Code as HTTP `400`). Ranking is the Catalog Search authority (lexical; optional embedding hybrid when an embedding **Model Service** is in use, open, and ready — ADR 0037 / 0039). If the query embedding call fails, that request pages the lexical store the same way as when hybrid is off. `total` is always the lexical filtered-set count (ADR 0037), including when hybrid ranks a bounded fusion window.
+Args align with HTTP search: `query_text` **required and non-empty** after strip for both object and column search; optional source/object filters, `limit`/`offset`. Missing, empty, or whitespace-only `query_text` is `CATALOG_SEARCH_QUERY_REQUIRED` (same Problem Code as HTTP `400`). Ranking is the Catalog Search path (vector complete state when an embedding **Model Service** is in use, open, and ready; otherwise lexical process state — ADR 0043 / 0039). SQL executes the lexical ladder (ADR 0041) without changing same-tier order (`COLLATE "C"`). `source_locator_key` and `object_type` bind both paths. The tool payload is a **Top-K Read**: `items` / `limit` / `offset` / `rank_mode` (`vector` or `lexical`) / `truncated`. No `total`. If the query embedding call fails or exceeds the model API timeout, the tool error is `CATALOG_SEARCH_EMBED_FAILED`. Neighbor-score failure other than platform time is `CATALOG_SEARCH_NEIGHBOR_FAILED`. An empty neighbor list is a successful empty vector page. A platform `statement_timeout` during neighbor SQL is `PLATFORM_TIMEOUT`, not a lexical page. Semantic neighbors are `k` store rows, not a process-local full scan.
+
+Tool-error codes for process overload and platform time (same identity as HTTP, ADR 0040 / 0045): `PLATFORM_CAPACITY_EXCEEDED`, `PLATFORM_TIMEOUT`, `ADMISSION_CAPACITY_EXCEEDED`, `ADMISSION_ACTOR_LIMIT_EXCEEDED`. MCP HTTP `503` from the process load-shed is Problem Details on the Streamable HTTP request; an admission reject during `run_sql` or vector Search is the tool-error envelope; a platform `statement_timeout` during a tool is `PLATFORM_TIMEOUT` in the tool-error envelope.
 
 ## 7. Controlled Query
 
@@ -95,7 +97,7 @@ Args align with HTTP search: `query_text` **required and non-empty** after strip
 | --- | --- | --- |
 | `run_sql` | `query:run` | Read-only single statement via `source_locator_key` |
 
-Guards match `docs/api-contracts-metadata.md` §7 (same defaults/caps/timeouts and per-attempt audit). Tool annotation `readOnlyHint` is advisory only and does not replace platform guards.
+Guards match `docs/api-contracts-metadata.md` §7 (same defaults/caps/timeouts and per-attempt audit). Tool annotation `readOnlyHint` is advisory only and does not replace platform guards. Admission uses the MCP process pool (ADR 0045): `ADMISSION_CAPACITY_EXCEEDED` / `ADMISSION_ACTOR_LIMIT_EXCEEDED` in the tool-error envelope when the pool or this actor's share is full.
 
 There is **no** MCP Catalog Sample tool; agents peek via `run_sql`. HTTP Catalog Sample remains `POST /objects/{id}/sample` (`catalog:sample`).
 

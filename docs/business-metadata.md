@@ -442,13 +442,21 @@ Rules:
   ambiguous referenced targets, the structure Job **fails** and the prior successful catalog
   snapshot is left unchanged (same success-only commit as §9).
 - **Join path:** BFS over asserted (non-rejected) edges (max hops 1–5) from object or column locator; modes are
-  explicit target locator, **query text** (Catalog Search picks targets, then BFS), or graph
-  exploration. Returns path summary and per-hop join
+  explicit target locator, **query text** (candidates are objects reachable
+  within `max_hops`; the question ranks that set), or graph
+  exploration (the same reachable set, one shortest path per object, then
+  `top_targets` by hop count). `max_hops` always means at most that many hops.
+  Returns path summary and per-hop join
   expressions; responses may include a `reason` when no usable path is available
   (e.g. unreachable target). A start that cannot expand (`NO_START_COLUMNS`) is
   `JOIN_PATH_UNAVAILABLE` in every mode, including query text. HTTP `q` and MCP
   `query_text` are the same mode. When start is a column and `max_hops=1`,
   `direct_joins` is the start's asserted neighbors (query text does not omit them).
+  Query-text mode ranks columns of the reachable set (ADR 0043 / 0044); the path
+  envelope includes `rank_mode` (`vector` | `lexical`) when `q` / `query_text`
+  is set and no explicit target is present, and `null` otherwise. A serving-time embed or neighbor failure is the
+  same Problem Code as Catalog Search. `JOIN_CROSS_SOURCE` applies only to an
+  explicit target on another Source.
 
 ## 10.5 Catalog search
 
@@ -456,17 +464,42 @@ Rules:
   business_name, business_description) with optional `source_id` / `object_type` filters and
   `limit`/`offset`. Empty, omitted, or whitespace-only query is rejected for both object
   and column search with `CATALOG_SEARCH_QUERY_REQUIRED` (HTTP and MCP share that code).
-- Ranking is one authority per deployment (ADR 0037), shared by HTTP Catalog Search, Console
-  callers of those endpoints, and MCP `search_objects` / `search_columns`. Portable lexical
-  tiers (identical in memory and SQL stores): exact locator/name → prefix → name substring →
-  business name/description substring. When an embedding **Model Service** is in use, the
-  purpose is not closed, and the purpose ready bit is true, those lexical hits fuse with
-  embedding nearest-neighbors (reciprocal-rank fusion). Otherwise ranking is lexical only.
-  If the query embedding call fails, that request uses the same lexical store page.
-  `total` is the lexical filtered-set count on every path. Hybrid ranks a bounded
-  fusion window (lexical pool 500, semantic 50) and may inject semantic-only hits
-  into `items`; `offset` past that window may be empty while `total` stays lexical.
+- Ranking is one declared path per request (ADR 0043), shared by HTTP Catalog Search
+  and MCP `search_objects` / `search_columns`. When an embedding
+  **Model Service** is in use, the purpose is not closed, and ready is true, the path is
+  vector nearest-neighbor (complete state). Otherwise the path is the portable lexical
+  ladder (process state): exact locator/name → prefix → name substring →
+  business name/description substring. The SQL adapter executes that ladder in SQL (ADR 0041);
+  it does not change the tiers or same-tier item order (SQL tie-break uses `COLLATE "C"`).
+  `source_id` and `object_type` constrain the lexical set and the neighbor query.
+  Each page names the path (`rank_mode`: `vector` or `lexical`).
+  If the query embedding call fails or exceeds the model API timeout, the request
+  is `CATALOG_SEARCH_EMBED_FAILED`.
+  Neighbor-score failure other than `PLATFORM_TIMEOUT` is `CATALOG_SEARCH_NEIGHBOR_FAILED`.
+  Those errors do not page the lexical store
+  (`refraq_catalog_search_vector_errors_total{reason=embed_failed|no_vectors|neighbor_failed}`).
+  An empty neighbor list is a successful empty vector page.
+  Serving-time path rate is `refraq_catalog_search_hybrid_total{outcome=vector|lexical}`.
+  Semantic nearest-neighbor is `k` rows from the store (SQL `<=>` on `vector`; memory cosine),
+  not a full-table load into the API process. Index and query vectors share
+  `EMBEDDING_OUTPUT_DIM` (1024). One request holds one query vector; there is no
+  process cache of query embeddings. Neighbor time is
+  `refraq_catalog_neighbor_seconds` on `/metrics`. Catalog Search is a **Top-K Read**:
+  `{ items, limit, offset, rank_mode, truncated }`, no `total`. `offset` past the
+  window may be empty. Exact locator resolve is `GET /objects/{ref}`, not Search.
   Per-Source list `q` is not this ranking. Model Service rules: `docs/business-model-services.md`.
+- Concurrent Catalog Search and other platform short reads are bounded by the runtime
+  capacity contract (ADR 0040 / 0045). Excess in-flight work, a full platform pool, or the
+  platform database refusing a new connection returns `PLATFORM_CAPACITY_EXCEEDED`
+  (HTTP 503 + `Retry-After`). A platform short read or short write canceled by
+  `statement_timeout` returns `PLATFORM_TIMEOUT` (HTTP 504, no `Retry-After`) — not
+  `QUERY_TIMEOUT`, and not a silent lexical page when vector Search was on. Work that
+  waits on an external system (Controlled Query, Catalog Sample, MCP `run_sql`, Source
+  probe, vector query embed, Model Service probe, OIDC start/callback) uses one admission
+  pool: pool full → `ADMISSION_CAPACITY_EXCEEDED` (503 + `Retry-After`); this actor's
+  share full → `ADMISSION_ACTOR_LIMIT_EXCEEDED` (429 + `Retry-After`). A peek that exceeds
+  `query_timeout_sec` remains `QUERY_TIMEOUT` (504). Slot and share sizes are deployment env,
+  not a **System Parameter**.
 - Per-Source object list pages **Current catalog** under one Source. Pagination uses
   `limit`/`offset`. Filters: `include_absent` (default include tombstones), `object_type`,
   optional `business_semantics_ready` (`true` | `false`; omit for no readiness filter).
@@ -551,7 +584,7 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - Delivering non-database Source kinds (CSV/file import, Attachment APIs, etc.) in this phase — foresight only in §4.4
 - Source soft delete / versioned credential history / audit-per-rotation (hard-delete of disabled Sources is delivered)
 - Query result type normalization / continuation tokens / data masking (deferred past depth)
-- Full-text search engines or PG-only FTS as the ranking authority (optional embedding hybrid is ADR 0037)
+- Full-text search engines or PG-only FTS as the ranking authority (vector complete state is ADR 0043)
 - Catchup / backfill / RRule
 - Treating **Job** or **Scheduled Task** as Metadata domain entities (platform rules: `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`)
 
@@ -569,7 +602,7 @@ Full platform audit of every login/Settings/Users path is out of scope for this 
 - `docs/adr/0014-defer-semantic-field-protection.md`
 - `docs/adr/0015-semantic-field-admission.md`
 - `docs/adr/0036-mcp-workplace-and-split-reads.md`
-- `docs/adr/0037-catalog-search-hybrid-ranking.md`
+- `docs/adr/0043-catalog-search-vector-complete-state.md`
 - `docs/adr/0038-semantics-change-ledger.md`
 - `docs/adr/0024-normalized-type-mapping.md`
 - `docs/business-user-tokens.md`

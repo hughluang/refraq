@@ -1,6 +1,15 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg18
+    shm_size: "2gb"
+    command:
+      - postgres
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=3GB
+      - -c
+      - work_mem=16MB
     environment:
       POSTGRES_USER: refraq
       POSTGRES_PASSWORD: refraq

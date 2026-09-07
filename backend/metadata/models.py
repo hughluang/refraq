@@ -12,6 +12,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from pgvector.sqlalchemy import VECTOR
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -290,7 +291,8 @@ class CatalogEmbeddingRow(Base):
     target_id: Mapped[str] = mapped_column(String(64), nullable=False)
     locator_key: Mapped[str] = mapped_column(Text, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    embedding: Mapped[list] = mapped_column(JSONB, nullable=False)
+    embedding: Mapped[list] = mapped_column(VECTOR(), nullable=False)
+    embedding_dim: Mapped[int] = mapped_column(Integer, nullable=False)
     indexed_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 

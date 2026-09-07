@@ -23,6 +23,8 @@ from backend.admin.roles import seed_roles  # noqa: E402
 from backend.admin.role_store import get_role_store, reset_role_store  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import get_user_store, reset_user_store  # noqa: E402
+from backend.core.bulkhead import get_peek_bulkhead, reset_peek_bulkhead  # noqa: E402
+from backend.core.runtime import reset_runtime_capacity  # noqa: E402
 from backend.admin.system_parameters import set_parameter  # noqa: E402
 from backend.core.config import reset_settings_cache  # noqa: E402
 from backend.jobs.store import reset_job_store  # noqa: E402
@@ -507,3 +509,30 @@ def test_sample_rejects_routines(client: TestClient) -> None:
     resp = client.post(f"/objects/{record.id}/sample", json={"limit": 10})
     assert resp.status_code == 400
     assert resp.json()["code"] == "SAMPLE_OBJECT_TYPE_UNSUPPORTED"
+
+
+def test_sample_http_actor_limit(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    monkeypatch.setenv("REFRAQ_ADMISSION_SLOTS", "1")
+    reset_runtime_capacity()
+    reset_peek_bulkhead()
+    source = _make_source(client)
+    obj = _seed_object(source["id"], source_key=source["key"])
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+    hold = threading.Event()
+
+    def _block() -> str:
+        hold.wait(timeout=2)
+        return "held"
+
+    future = get_peek_bulkhead().submit_nowait(admin.id, _block)
+    resp = client.post(f"/objects/{obj.id}/sample", json={"limit": 10})
+    assert resp.status_code == 429, resp.text
+    assert resp.json()["code"] == "ADMISSION_ACTOR_LIMIT_EXCEEDED"
+    assert resp.headers.get("retry-after") == "1"
+    hold.set()
+    assert future.result(timeout=2) == "held"

@@ -27,6 +27,9 @@ from backend.core.errors import (
     validation_field_errors,
 )
 from backend.core.health import router as health_router
+from backend.core.bulkhead import reset_peek_bulkhead
+from backend.core.http_runtime import apply_http_runtime
+from backend.core.load_shed import LoadSheddingMiddleware
 from backend.core.request_id import (
     RequestIdMiddleware,
     SCOPE_KEY,
@@ -103,7 +106,11 @@ def _bootstrap_site(target_settings: Settings) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _bootstrap_site(settings)
-    yield
+    apply_http_runtime()
+    try:
+        yield
+    finally:
+        reset_peek_bulkhead()
 
 
 app = FastAPI(
@@ -119,6 +126,7 @@ async def app_error_handler(_request: Request, exc: AppError) -> object:
         status=exc.http_status,
         code=exc.code,
         detail=exc.message,
+        headers=exc.extra_headers(),
     )
 
 
@@ -182,4 +190,5 @@ app.include_router(metadata_mcp_router)
 app.include_router(jobs_mechanism_router)
 app.include_router(schedules_mechanism_router)
 
+app.add_middleware(LoadSheddingMiddleware)
 app.add_middleware(RequestIdMiddleware)

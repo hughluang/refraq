@@ -5,6 +5,7 @@ from __future__ import annotations
 from backend.core.time import utc_now, format_instant
 import json
 import os
+import asyncio
 import time
 from datetime import datetime, timedelta
 from typing import Any
@@ -24,6 +25,8 @@ from backend.admin.roles import seed_roles  # noqa: E402
 from backend.admin.role_store import get_role_store, reset_role_store  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import get_user_store, reset_user_store  # noqa: E402
+from backend.core.bulkhead import get_peek_bulkhead, reset_peek_bulkhead  # noqa: E402
+from backend.core.runtime import reset_runtime_capacity  # noqa: E402
 from backend.admin.system_parameters import set_parameter  # noqa: E402
 from backend.core.config import reset_settings_cache  # noqa: E402
 from backend.jobs.store import reset_job_store  # noqa: E402
@@ -403,10 +406,12 @@ def test_mcp_run_sql_success_and_forbidden(
     from backend.metadata.mcp_actor import mcp_authorization
 
     with mcp_authorization(f"Bearer {secret}"):
-        raw = run_sql(
-            source_locator_key=source["locator_key"],
-            sql="SELECT 1 AS c",
-            max_rows=10,
+        raw = asyncio.run(
+            run_sql(
+                source_locator_key=source["locator_key"],
+                sql="SELECT 1 AS c",
+                max_rows=10,
+            )
         )
     payload = json.loads(raw)
     assert payload["columns"] == ["c"]
@@ -427,9 +432,11 @@ def test_mcp_run_sql_success_and_forbidden(
         return op_user, "tok_fake"
 
     monkeypatch.setattr(mcp_mod, "current_actor", _fake_actor)
-    forbidden = run_sql(
-        source_locator_key=source["locator_key"],
-        sql="SELECT 1",
+    forbidden = asyncio.run(
+        run_sql(
+            source_locator_key=source["locator_key"],
+            sql="SELECT 1",
+        )
     )
     err = json.loads(forbidden)
     assert err["error"]["code"] == "AUTH_FORBIDDEN"
@@ -524,3 +531,50 @@ def test_query_unexpected_exception_maps_to_query_failed(
     assert resp.json()["code"] == "QUERY_FAILED"
     events, _ = get_audit_store().list_events(action="query.run")
     assert any(e.detail.get("code") == "QUERY_FAILED" for e in events)
+
+
+def test_query_http_actor_share_and_cabin_full(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    monkeypatch.setenv("REFRAQ_ADMISSION_SLOTS", "1")
+    reset_runtime_capacity()
+    reset_peek_bulkhead()
+    source = _make_source(client)
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+    hold = threading.Event()
+
+    def _block() -> str:
+        hold.wait(timeout=2)
+        return "held"
+
+    share_future = get_peek_bulkhead().submit_nowait(admin.id, _block)
+    share = client.post(
+        f"/sources/{source['id']}/query",
+        json={"sql": "SELECT 1"},
+    )
+    assert share.status_code == 429, share.text
+    assert share.json()["code"] == "ADMISSION_ACTOR_LIMIT_EXCEEDED"
+    assert share.headers.get("retry-after") == "1"
+    hold.set()
+    assert share_future.result(timeout=2) == "held"
+
+    reset_peek_bulkhead()
+    hold_full = threading.Event()
+
+    def _block_other() -> str:
+        hold_full.wait(timeout=2)
+        return "held"
+
+    full_future = get_peek_bulkhead().submit_nowait("other-user", _block_other)
+    cabin = client.post(
+        f"/sources/{source['id']}/query",
+        json={"sql": "SELECT 1"},
+    )
+    assert cabin.status_code == 503, cabin.text
+    assert cabin.json()["code"] == "ADMISSION_CAPACITY_EXCEEDED"
+    assert cabin.headers.get("retry-after") == "1"
+    hold_full.set()
+    assert full_future.result(timeout=2) == "held"

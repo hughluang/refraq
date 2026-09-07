@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { isConsoleBlockedApiPath } from "@/lib/console-api-gate";
 import {
   isMcpPassthroughPath,
   mcpProxyTimeoutMs,
@@ -16,8 +17,11 @@ describe("mcp proxy helpers", () => {
     expect(isMcpPassthroughPath("/mcp")).toBe(true);
     expect(isMcpPassthroughPath("/mcp/")).toBe(true);
     expect(isMcpPassthroughPath("/readyz")).toBe(false);
+    expect(isMcpPassthroughPath("/metrics")).toBe(false);
     expect(isMcpPassthroughPath("/api/mcp/catalog")).toBe(false);
     expect(isProtectedPath("/mcp")).toBe(false);
+    expect(isConsoleBlockedApiPath("/api/metrics")).toBe(true);
+    expect(isConsoleBlockedApiPath("/api/readyz")).toBe(false);
   });
 
   it("streams /mcp through a Route Handler, not a rewrite", () => {
@@ -33,6 +37,7 @@ describe("mcp proxy helpers", () => {
       "utf8",
     );
     expect(nextConfig).not.toMatch(/source:\s*["']\/mcp/);
+    expect(nextConfig).not.toMatch(/source:\s*["']\/metrics/);
   });
 
   it("waits the query timeout ceiling plus margin", () => {

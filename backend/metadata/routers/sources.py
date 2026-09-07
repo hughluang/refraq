@@ -19,7 +19,8 @@ from backend.metadata.sources.access import (
     validate_access,
 )
 from backend.metadata.sources import service as source_service
-from backend.metadata.sources.probe import run_source_probe
+from backend.core.admission import await_admitted
+from backend.metadata.sources.probe import ProbeResult, run_source_probe
 from backend.metadata.sources.store import SourceRecord, get_source_store
 from backend.metadata.schemas.sources import (
     AccessSchemaResponse,
@@ -97,16 +98,20 @@ def post_source(
 
 
 @router.post("/sources/test", response_model=SourceTestResponse)
-def test_source_draft(
+async def test_source_draft(
     payload: TestSourceDraftRequest,
     request: Request,
     user: UserRecord = Depends(require_permission("sources:write")),
 ) -> SourceTestResponse:
     access = validate_access(payload.engine, payload.access)
-    result = run_source_probe(
-        engine=payload.engine,
-        access=access,
-    )
+
+    def _probe() -> ProbeResult:
+        return run_source_probe(
+            engine=payload.engine,
+            access=access,
+        )
+
+    result = await await_admitted(user.id, _probe)
     persist_audit_event(
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),
@@ -204,7 +209,7 @@ def delete_source_endpoint(
 
 
 @router.post("/sources/{source_id}/test", response_model=SourceTestResponse)
-def test_source_stored(
+async def test_source_stored(
     source_id: str,
     payload: TestSourceRequest,
     request: Request,
@@ -223,10 +228,13 @@ def test_source_stored(
             raise SourceSecretRequired()
         access = validate_access(engine, decrypt_access_blob(record.access_ciphertext))
 
-    result = run_source_probe(
-        engine=engine,
-        access=access,
-    )
+    def _probe() -> ProbeResult:
+        return run_source_probe(
+            engine=engine,
+            access=access,
+        )
+
+    result = await await_admitted(user.id, _probe)
     persist_audit_event(
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),

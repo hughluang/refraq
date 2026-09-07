@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import i18nConfig from "../i18n.config";
 import { browserFacingHostFromEnv } from "./lib/browser-facing-host";
 import { browserFacingProtoFromEnv } from "./lib/browser-facing-proto";
+import { isConsoleBlockedApiPath } from "./lib/console-api-gate";
 import { isMcpPassthroughPath } from "./lib/mcp-proxy";
 import { isProtectedPath } from "./lib/route-scope";
 
@@ -46,6 +47,10 @@ function apiRewriteWithTrustedProto(request: NextRequest): NextResponse {
 }
 
 export function proxy(request: NextRequest): NextResponse {
+  if (isConsoleBlockedApiPath(request.nextUrl.pathname)) {
+    return new NextResponse(null, { status: 404 });
+  }
+
   if (request.nextUrl.pathname.startsWith("/api")) {
     return apiRewriteWithTrustedProto(request);
   }

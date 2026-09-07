@@ -12,6 +12,8 @@ __all__ = [
     "CatalogColumnNotFound",
     "CatalogJoinNotFound",
     "CatalogObjectNotFound",
+    "CatalogSearchEmbedFailed",
+    "CatalogSearchNeighborFailed",
     "CatalogSearchQueryRequired",
     "JobInputInvalid",
     "JobSecretMissing",
@@ -193,6 +195,22 @@ class CatalogSearchQueryRequired(AppError):
 
     def _default_message(self) -> str:
         return "Search query is required"
+
+
+class CatalogSearchEmbedFailed(AppError):
+    code = "CATALOG_SEARCH_EMBED_FAILED"
+    http_status = 503
+
+    def _default_message(self) -> str:
+        return "Catalog Search query embed failed"
+
+
+class CatalogSearchNeighborFailed(AppError):
+    code = "CATALOG_SEARCH_NEIGHBOR_FAILED"
+    http_status = 503
+
+    def _default_message(self) -> str:
+        return "Catalog Search neighbor score failed"
 
 
 class JoinPathUnavailable(AppError):

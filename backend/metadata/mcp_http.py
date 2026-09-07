@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import uvicorn
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -15,7 +17,12 @@ from backend.admin.errors import AuthUnauthenticated
 from backend.core.config import get_settings
 from backend.core.errors import problem_response
 from backend.core.health import readyz as core_readyz
+from backend.core.bulkhead import reset_peek_bulkhead
+from backend.core.http_runtime import apply_http_runtime
+from backend.core.load_shed import LoadSheddingMiddleware
+from backend.core.metrics import metrics_response
 from backend.core.request_id import RequestIdMiddleware
+from backend.core.runtime import get_runtime_capacity, set_process_role
 from backend.metadata.mcp_actor import (
     actor_from_authorization_header,
     reset_mcp_actor,
@@ -65,6 +72,10 @@ async def readyz(_request: Request) -> JSONResponse:
     return core_readyz()
 
 
+async def metrics(_request: Request) -> Response:
+    return metrics_response()
+
+
 def _transport_security() -> TransportSecuritySettings | None:
     settings = get_settings()
     # Loopback bind keeps the SDK Host whitelist (DNS-rebinding cover for a
@@ -87,24 +98,42 @@ def create_mcp_http_app() -> Starlette:
         transport_security=_transport_security(),
         host=settings.refraq_mcp_host,
     )
+    inner_lifespan = inner.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(_app: Starlette):
+        apply_http_runtime()
+        async with inner_lifespan(inner):
+            try:
+                yield
+            finally:
+                reset_peek_bulkhead()
+
     return Starlette(
         routes=[
             Route("/readyz", endpoint=readyz, methods=["GET"]),
+            Route("/metrics", endpoint=metrics, methods=["GET"]),
             Mount("/", app=PatOnlyGate(inner)),
         ],
-        lifespan=inner.router.lifespan_context,
-        middleware=[Middleware(RequestIdMiddleware)],
+        lifespan=lifespan,
+        middleware=[
+            Middleware(RequestIdMiddleware),
+            Middleware(LoadSheddingMiddleware),
+        ],
     )
 
 
 def main() -> None:
     assemble_system_parameters()
+    set_process_role("mcp")
     settings = get_settings()
+    cap = get_runtime_capacity()
     uvicorn.run(
         create_mcp_http_app(),
         host=settings.refraq_mcp_host,
         port=settings.refraq_mcp_port,
         factory=False,
+        timeout_keep_alive=cap.timeout_keep_alive,
     )
 
 

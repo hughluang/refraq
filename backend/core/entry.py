@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 
 from backend.core.config import get_settings
+from backend.core.runtime import get_runtime_capacity
 from backend.core.upgrade import migrate_with_advisory_lock, run_upgrade
 
 # Re-export for callers/tests that imported migrate from entry.
@@ -26,13 +27,15 @@ def main() -> None:
         print(f"upgrade failed: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
+    cap = get_runtime_capacity()
     import uvicorn
-
     uvicorn.run(
         "backend.main:app",
         host=settings.refraq_api_host,
         port=settings.refraq_api_port,
         factory=False,
+        limit_concurrency=cap.uvicorn_limit_concurrency,
+        timeout_keep_alive=cap.timeout_keep_alive,
     )
 
 

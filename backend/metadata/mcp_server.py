@@ -27,6 +27,7 @@ from backend.metadata.mcp_guidance import (
     SERVER_INSTRUCTIONS,
     TOOL_DESCRIPTIONS,
 )
+from backend.core.admission import await_admitted
 from backend.core.errors import AppError
 from backend.core.pagination import (
     BUSINESS_DOMAIN_LIST,
@@ -49,6 +50,7 @@ from backend.metadata.catalog.present import (
     present_column,
     present_object,
 )
+from backend.metadata.catalog.embedding import embedding_configured
 from backend.metadata.catalog.join_origin import MCP_JOIN_ORIGIN
 from backend.metadata.query import service as query_service
 from backend.metadata.sources import service as source_service
@@ -480,7 +482,7 @@ def list_semantics_changes(
         return _err(exc)
 
 @mcp.tool(description=TOOL_DESCRIPTIONS["search_objects"])
-def search_objects(
+async def search_objects(
     query_text: str | None = None,
     source_locator_key: str | None = None,
     object_type: str | None = None,
@@ -496,26 +498,35 @@ def search_objects(
             source_id = catalog_refs.resolve_source_ref(source_locator_key).id
         lim = CATALOG_SEARCH.clamp(limit)
         off = max(0, int(offset or 0))
-        items, total = catalog_reads.search_objects(
-            query_text or "",
-            source_id=source_id,
-            object_type=object_type,
-            limit=lim,
-            offset=off,
+
+        def _run() -> object:
+            return catalog_reads.search_objects(
+                query_text or "",
+                source_id=source_id,
+                object_type=object_type,
+                limit=lim,
+                offset=off,
+            )
+
+        found = (
+            await await_admitted(user.id, _run) if embedding_configured() else _run()
         )
         return _dumps(
             {
-                "items": [_object_payload(o, include_columns=False) for o in items],
-                "total": total,
+                "items": [
+                    _object_payload(o, include_columns=False) for o in found.items
+                ],
                 "limit": lim,
                 "offset": off,
+                "rank_mode": found.rank_mode,
+                "truncated": found.truncated,
             }
         )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
 @mcp.tool(description=TOOL_DESCRIPTIONS["search_columns"])
-def search_columns(
+async def search_columns(
     query_text: str,
     source_locator_key: str | None = None,
     object_type: str | None = None,
@@ -531,21 +542,29 @@ def search_columns(
             source_id = catalog_refs.resolve_source_ref(source_locator_key).id
         lim = CATALOG_SEARCH.clamp(limit)
         off = max(0, int(offset or 0))
-        items, total = catalog_reads.search_columns(
-            query_text or "",
-            source_id=source_id,
-            object_type=object_type,
-            limit=lim,
-            offset=off,
+
+        def _run() -> object:
+            return catalog_reads.search_columns(
+                query_text or "",
+                source_id=source_id,
+                object_type=object_type,
+                limit=lim,
+                offset=off,
+            )
+
+        found = (
+            await await_admitted(user.id, _run) if embedding_configured() else _run()
         )
         return _dumps(
             {
                 "items": [
-                    present_column(c, include_normalized_type=False) for c in items
+                    present_column(c, include_normalized_type=False)
+                    for c in found.items
                 ],
-                "total": total,
                 "limit": lim,
                 "offset": off,
+                "rank_mode": found.rank_mode,
+                "truncated": found.truncated,
             }
         )
     except Exception as exc:  # noqa: BLE001
@@ -747,7 +766,7 @@ def delete_join(join_id: str) -> str:
         return _err(exc)
 
 @mcp.tool(description=TOOL_DESCRIPTIONS["find_join_path"])
-def find_join_path(
+async def find_join_path(
     start_locator_key: str,
     target_locator_key: str | None = None,
     query_text: str | None = None,
@@ -758,13 +777,18 @@ def find_join_path(
     try:
         user, _token_id = current_actor()
         _require(user, "metadata:read")
-        result = catalog_reads.lookup_join_paths(
-            start_locator_key,
-            target_locator_key,
-            query_text=query_text,
-            max_hops=_clamp(max_hops, default=1, maximum=5),
-            top_targets=_clamp(top_targets, default=3, maximum=20),
-        )
+
+        def _run() -> object:
+            return catalog_reads.lookup_join_paths(
+                start_locator_key,
+                target_locator_key,
+                query_text=query_text,
+                max_hops=_clamp(max_hops, default=1, maximum=5),
+                top_targets=_clamp(top_targets, default=3, maximum=20),
+            )
+
+        admit = bool((query_text or "").strip()) and not target_locator_key and embedding_configured()
+        result = await await_admitted(user.id, _run) if admit else _run()
         return _dumps(
             {
                 "paths_found": result.paths_found,
@@ -779,6 +803,7 @@ def find_join_path(
                 ],
                 "direct_joins": [asdict(j) for j in result.direct_joins],
                 "reason": result.reason,
+                "rank_mode": result.rank_mode,
             }
         )
     except Exception as exc:  # noqa: BLE001
@@ -788,7 +813,7 @@ def find_join_path(
     description=TOOL_DESCRIPTIONS["run_sql"],
     annotations=ToolAnnotations(read_only_hint=True),
 )
-def run_sql(
+async def run_sql(
     source_locator_key: str,
     sql: str,
     max_rows: int | None = None,
@@ -798,13 +823,17 @@ def run_sql(
         user, token_id = current_actor()
         _require(user, "query:run")
         source = catalog_refs.resolve_source_ref(source_locator_key)
-        outcome = query_service.run_controlled_query(
-            source_id=source.id,
-            sql=sql,
-            max_rows=max_rows,
-            actor_user_id=user.id,
-            actor_token_id=token_id,
-        )
+
+        def _run() -> query_service.QueryOutcome:
+            return query_service.run_controlled_query(
+                source_id=source.id,
+                sql=sql,
+                max_rows=max_rows,
+                actor_user_id=user.id,
+                actor_token_id=token_id,
+            )
+
+        outcome = await await_admitted(user.id, _run)
         return _dumps(
             {
                 "columns": outcome.columns,

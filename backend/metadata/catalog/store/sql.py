@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Iterator
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import and_, bindparam, case, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, defer, noload, selectinload
 
@@ -27,7 +27,6 @@ from backend.metadata.catalog.records import (
     UNSET,
 )
 from backend.metadata.catalog.list_query import list_object_sql_filters
-from backend.metadata.catalog.search_rank import _search_rank, rank_and_page
 from backend.metadata.catalog.structure_merge import StructureRefreshPlan
 from backend.metadata.catalog.join_pair import Inserted, Occupied, apply_insert_join
 from backend.metadata.catalog.structure_persist import (
@@ -85,6 +84,92 @@ def _select_joins_for_source(source_id: str):
             CatalogJoinRow.to_column_id.in_(source_col_ids),
         )
     )
+
+
+_LIKE_ESCAPE = "\\"
+
+
+def _like_escape(value: str) -> str:
+    return (
+        value.replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+
+
+def _search_query(query: str) -> str:
+    return query.lower().strip()
+
+
+def _ilike(column: object, pattern: str):
+    return column.ilike(pattern, escape=_LIKE_ESCAPE)
+
+
+def _nonempty_text(column: object):
+    return and_(column.is_not(None), column != "")
+
+
+def _object_search_clause(q: str):
+    escaped = _like_escape(q)
+    prefix = f"{escaped}%"
+    substr = f"%{escaped}%"
+    loc = CatalogObjectRow.locator_key
+    name = CatalogObjectRow.name
+    schema = CatalogObjectRow.schema_name
+    biz_name = CatalogObjectRow.business_name
+    biz_desc = CatalogObjectRow.business_description
+    schema_ok = schema != ""
+    where = or_(
+        _ilike(loc, substr),
+        _ilike(name, substr),
+        and_(schema_ok, _ilike(schema, substr)),
+        and_(_nonempty_text(biz_name), _ilike(biz_name, substr)),
+        and_(_nonempty_text(biz_desc), _ilike(biz_desc, substr)),
+    )
+    rank = case(
+        (or_(_ilike(loc, escaped), _ilike(name, escaped)), 0),
+        (
+            or_(
+                _ilike(loc, prefix),
+                _ilike(name, prefix),
+                and_(schema_ok, _ilike(schema, prefix)),
+            ),
+            1,
+        ),
+        (
+            or_(
+                _ilike(name, substr),
+                _ilike(loc, substr),
+                and_(schema_ok, _ilike(schema, substr)),
+            ),
+            2,
+        ),
+        else_=3,
+    )
+    return where, rank
+
+
+def _column_search_clause(q: str):
+    escaped = _like_escape(q)
+    prefix = f"{escaped}%"
+    substr = f"%{escaped}%"
+    loc = CatalogColumnRow.locator_key
+    name = CatalogColumnRow.name
+    biz_name = CatalogColumnRow.business_name
+    biz_desc = CatalogColumnRow.business_description
+    where = or_(
+        _ilike(loc, substr),
+        _ilike(name, substr),
+        and_(_nonempty_text(biz_name), _ilike(biz_name, substr)),
+        and_(_nonempty_text(biz_desc), _ilike(biz_desc, substr)),
+    )
+    rank = case(
+        (or_(_ilike(loc, escaped), _ilike(name, escaped)), 0),
+        (or_(_ilike(loc, prefix), _ilike(name, prefix)), 1),
+        (or_(_ilike(name, substr), _ilike(loc, substr)), 2),
+        else_=3,
+    )
+    return where, rank
 
 
 class _SqlStructureWrite:
@@ -192,31 +277,45 @@ class SqlCatalogStore:
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[CatalogObjectRecord], int]:
-
+        q = _search_query(query)
+        if not q:
+            return [], 0
+        where, rank = _object_search_clause(q)
+        filters = [where]
+        if source_id is not None:
+            filters.append(CatalogObjectRow.source_id == source_id)
+        if object_type is not None:
+            filters.append(CatalogObjectRow.object_type == object_type)
+        if not include_absent:
+            filters.append(CatalogObjectRow.is_present.is_(True))
         with session_scope() as session:
-            stmt = select(CatalogObjectRow).options(
-                selectinload(CatalogObjectRow.columns)
+            total = int(
+                session.execute(
+                    select(func.count()).select_from(CatalogObjectRow).where(*filters)
+                ).scalar_one()
             )
-            if source_id is not None:
-                stmt = stmt.where(CatalogObjectRow.source_id == source_id)
-            if object_type is not None:
-                stmt = stmt.where(CatalogObjectRow.object_type == object_type)
-            if not include_absent:
-                stmt = stmt.where(CatalogObjectRow.is_present.is_(True))
+            stmt = (
+                select(CatalogObjectRow)
+                .where(*filters)
+                .options(
+                    noload(CatalogObjectRow.columns),
+                    noload(CatalogObjectRow.foreign_keys),
+                    noload(CatalogObjectRow.indexes),
+                    defer(CatalogObjectRow.ddl),
+                )
+                .order_by(
+                    rank,
+                    CatalogObjectRow.schema_name.collate("C"),
+                    CatalogObjectRow.name.collate("C"),
+                    CatalogObjectRow.id.collate("C"),
+                )
+                .offset(offset)
+                .limit(limit)
+            )
             rows = session.scalars(stmt).all()
-            return rank_and_page(
-                (_row_to_object(row) for row in rows),
-                rank_of=lambda o: _search_rank(
-                    query,
-                    locator_key=o.locator_key,
-                    name=o.name,
-                    schema_name=o.schema_name,
-                    business_name=o.business_name,
-                    business_description=o.business_description,
-                ),
-                tiebreak=lambda o: (o.schema_name, o.name, o.id),
-                limit=limit,
-                offset=offset,
+            return (
+                [_row_to_object(row, include_structure=False) for row in rows],
+                total,
             )
 
     def search_columns(
@@ -226,38 +325,48 @@ class SqlCatalogStore:
         source_id: str | None = None,
         object_type: str | None = None,
         include_absent: bool = True,
+        object_ids: list[str] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[CatalogColumnRecord], int]:
-
+        q = _search_query(query)
+        if not q:
+            return [], 0
+        if object_ids is not None and not object_ids:
+            return [], 0
+        where, rank = _column_search_clause(q)
+        filters = [where]
+        if source_id is not None:
+            filters.append(CatalogObjectRow.source_id == source_id)
+        if object_type is not None:
+            filters.append(CatalogObjectRow.object_type == object_type)
+        if object_ids is not None:
+            filters.append(CatalogColumnRow.object_id.in_(object_ids))
+        if not include_absent:
+            filters.append(CatalogColumnRow.is_present.is_(True))
         with session_scope() as session:
-            stmt = select(CatalogObjectRow).options(
-                selectinload(CatalogObjectRow.columns)
+            base = (
+                select(CatalogColumnRow)
+                .join(
+                    CatalogObjectRow,
+                    CatalogColumnRow.object_id == CatalogObjectRow.id,
+                )
+                .where(*filters)
             )
-            if source_id is not None:
-                stmt = stmt.where(CatalogObjectRow.source_id == source_id)
-            if object_type is not None:
-                stmt = stmt.where(CatalogObjectRow.object_type == object_type)
+            total = int(
+                session.execute(select(func.count()).select_from(base.subquery())).scalar_one()
+            )
+            stmt = (
+                base.order_by(
+                    rank,
+                    CatalogColumnRow.name.collate("C"),
+                    CatalogColumnRow.id.collate("C"),
+                )
+                .offset(offset)
+                .limit(limit)
+            )
             rows = session.scalars(stmt).all()
-            candidates: list[CatalogColumnRecord] = []
-            for row in rows:
-                obj = _row_to_object(row)
-                for col in obj.columns:
-                    if include_absent or col.is_present:
-                        candidates.append(col)
-            return rank_and_page(
-                candidates,
-                rank_of=lambda c: _search_rank(
-                    query,
-                    locator_key=c.locator_key,
-                    name=c.name,
-                    business_name=c.business_name,
-                    business_description=c.business_description,
-                ),
-                tiebreak=lambda c: (c.name, c.id),
-                limit=limit,
-                offset=offset,
-            )
+            return [_row_to_column(row) for row in rows], total
 
     def get_object(self, object_id: str) -> CatalogObjectRecord | None:
         with session_scope() as session:
@@ -281,6 +390,35 @@ class SqlCatalogStore:
         with session_scope() as session:
             row = session.get(CatalogColumnRow, column_id)
             return _row_to_column(row) if row else None
+
+    def get_objects_by_ids(self, object_ids: list[str]) -> list[CatalogObjectRecord]:
+        if not object_ids:
+            return []
+        with session_scope() as session:
+            rows = list(
+                session.scalars(
+                    select(CatalogObjectRow)
+                    .where(CatalogObjectRow.id.in_(object_ids))
+                    .options(
+                        noload(CatalogObjectRow.columns),
+                        noload(CatalogObjectRow.foreign_keys),
+                        noload(CatalogObjectRow.indexes),
+                        defer(CatalogObjectRow.ddl),
+                    )
+                ).all()
+            )
+            return [_row_to_object(row, include_structure=False) for row in rows]
+
+    def get_columns_by_ids(self, column_ids: list[str]) -> list[CatalogColumnRecord]:
+        if not column_ids:
+            return []
+        with session_scope() as session:
+            rows = list(
+                session.scalars(
+                    select(CatalogColumnRow).where(CatalogColumnRow.id.in_(column_ids))
+                ).all()
+            )
+            return [_row_to_column(row) for row in rows]
 
     def get_column_by_locator(self, locator_key: str) -> CatalogColumnRecord | None:
         with session_scope() as session:
@@ -708,6 +846,7 @@ class SqlCatalogStore:
                     CatalogEmbeddingRow.target_id == record.target_id,
                 )
             )
+            dim = len(record.embedding)
             if row is None:
                 session.add(
                     CatalogEmbeddingRow(
@@ -717,6 +856,7 @@ class SqlCatalogStore:
                         locator_key=record.locator_key,
                         content_hash=record.content_hash,
                         embedding=record.embedding,
+                        embedding_dim=dim,
                         indexed_at=record.indexed_at,
                         generation=record.generation,
                     )
@@ -725,6 +865,7 @@ class SqlCatalogStore:
                 row.locator_key = record.locator_key
                 row.content_hash = record.content_hash
                 row.embedding = record.embedding
+                row.embedding_dim = dim
                 row.indexed_at = record.indexed_at
                 row.generation = record.generation
             session.flush()
@@ -741,14 +882,86 @@ class SqlCatalogStore:
             )
             return _row_to_embedding(row) if row is not None else None
 
-    def list_embeddings(self, *, kind: str) -> list[CatalogEmbeddingRecord]:
-        with session_scope() as session:
-            rows = list(
-                session.scalars(
-                    select(CatalogEmbeddingRow).where(CatalogEmbeddingRow.kind == kind)
-                ).all()
+    def nearest_embeddings(
+        self,
+        *,
+        kind: str,
+        query: list[float],
+        limit: int,
+        generation: int,
+        source_id: str | None = None,
+        object_type: str | None = None,
+        object_ids: list[str] | None = None,
+    ) -> list[str]:
+        if not query or limit < 1:
+            return []
+        if object_ids is not None and not object_ids:
+            return []
+        vec = "[" + ",".join(repr(float(n)) for n in query) + "]"
+        params: dict[str, object] = {
+            "kind": kind,
+            "generation": generation,
+            "dim": len(query),
+            "q": vec,
+            "k": int(limit),
+        }
+        extra: list[str] = []
+        if source_id is not None:
+            extra.append("AND o.source_id = :source_id")
+            params["source_id"] = source_id
+        if object_type is not None:
+            extra.append("AND o.object_type = :object_type")
+            params["object_type"] = object_type
+        if object_ids is not None:
+            extra.append("AND o.id IN :object_ids")
+            params["object_ids"] = list(object_ids)
+        scope = " ".join(extra)
+        if not extra:
+            scored_from = """
+                SELECT target_id, embedding <=> CAST(:q AS vector) AS d
+                FROM catalog_embeddings
+                WHERE kind = :kind
+                  AND generation = :generation
+                  AND embedding_dim = :dim
+            """
+        elif kind == "column":
+            scored_from = f"""
+                SELECT e.target_id, e.embedding <=> CAST(:q AS vector) AS d
+                FROM catalog_embeddings e
+                JOIN catalog_columns c ON c.id = e.target_id
+                JOIN catalog_objects o ON o.id = c.object_id
+                WHERE e.kind = :kind
+                  AND e.generation = :generation
+                  AND e.embedding_dim = :dim
+                  {scope}
+            """
+        else:
+            scored_from = f"""
+                SELECT e.target_id, e.embedding <=> CAST(:q AS vector) AS d
+                FROM catalog_embeddings e
+                JOIN catalog_objects o ON o.id = e.target_id
+                WHERE e.kind = :kind
+                  AND e.generation = :generation
+                  AND e.embedding_dim = :dim
+                  {scope}
+            """
+        stmt = text(
+            f"""
+            WITH scored AS MATERIALIZED (
+                {scored_from}
             )
-            return [_row_to_embedding(r) for r in rows]
+            SELECT target_id
+            FROM scored
+            WHERE d < 1
+            ORDER BY d, target_id COLLATE "C"
+            LIMIT :k
+            """
+        )
+        if object_ids is not None:
+            stmt = stmt.bindparams(bindparam("object_ids", expanding=True))
+        with session_scope() as session:
+            rows = session.execute(stmt, params).all()
+            return [str(row[0]) for row in rows]
 
     def delete_embeddings(self) -> None:
         with session_scope() as session:

@@ -138,12 +138,20 @@ class CatalogObjectListResponse(OffsetPage[CatalogObjectOut]):
     pass
 
 
-class CatalogObjectSearchResponse(OffsetPage[CatalogObjectOut]):
-    pass
+class CatalogObjectSearchResponse(BaseModel):
+    items: list[CatalogObjectOut]
+    limit: int
+    offset: int
+    rank_mode: Literal["vector", "lexical"]
+    truncated: bool
 
 
-class CatalogColumnSearchResponse(OffsetPage[CatalogColumnOut]):
-    pass
+class CatalogColumnSearchResponse(BaseModel):
+    items: list[CatalogColumnOut]
+    limit: int
+    offset: int
+    rank_mode: Literal["vector", "lexical"]
+    truncated: bool
 
 
 class CatalogObjectResponse(BaseModel):
@@ -268,6 +276,7 @@ class JoinPathResponse(BaseModel):
     paths: list[JoinPathOut]
     direct_joins: list[JoinOut] = Field(default_factory=list)
     reason: str | None = None
+    rank_mode: Literal["vector", "lexical"] | None = None
 
 
 class SemanticsChangeOut(BaseModel):

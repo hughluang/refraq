@@ -1,4 +1,4 @@
-"""Optional embedding client and Catalog Search hybrid rank (ADR 0037 / 0039)."""
+"""Optional embedding client and Catalog Search vector rank (ADR 0043 / 0039)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,11 @@ from hashlib import sha256
 from typing import Any
 
 from backend.admin.model_services import get_embedding_runtime
-from backend.admin.model_services.openai_compat import TIMEOUT_SEC, post_openai_embeddings
+from backend.admin.model_services.openai_compat import (
+    EMBEDDING_OUTPUT_DIM,
+    TIMEOUT_SEC,
+    post_openai_embeddings,
+)
 
 EmbedFn = Callable[[list[str]], list[list[float]]]
 
@@ -27,7 +31,6 @@ class CatalogEmbeddingRecord:
     generation: int = 0
 
 _override_embed: EmbedFn | None = None
-RRF_K = 60
 
 
 def set_embed_fn_for_tests(fn: EmbedFn | None) -> None:
@@ -41,7 +44,7 @@ def current_generation() -> int:
 
 
 def embedding_configured() -> bool:
-    """True when Catalog Search hybrid should run."""
+    """True when Catalog Search complete state (vector) should run."""
     if _override_embed is not None:
         return True
     runtime = get_embedding_runtime()
@@ -100,7 +103,20 @@ def column_embedding_text(col: Any, *, object_name: str | None = None) -> str:
     )
 
 
-def embed_texts(texts: list[str]) -> list[list[float]]:
+def project_embedding(
+    vec: list[float], *, dim: int = EMBEDDING_OUTPUT_DIM
+) -> list[float]:
+    """Truncate a longer vector to `dim` and L2-normalize. Shorter vectors pass through."""
+    if len(vec) <= dim:
+        return vec
+    truncated = vec[:dim]
+    norm = math.sqrt(sum(n * n for n in truncated))
+    if norm <= 0.0:
+        return truncated
+    return [n / norm for n in truncated]
+
+
+def embed_texts(texts: list[str], *, timeout: int = TIMEOUT_SEC) -> list[list[float]]:
     if not texts:
         return []
     if _override_embed is not None:
@@ -108,13 +124,17 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
     runtime = get_embedding_runtime()
     if runtime is None or not runtime.url:
         raise RuntimeError("embedding URL is not configured")
-    return post_openai_embeddings(
+    # Native width may exceed EMBEDDING_OUTPUT_DIM. The in-use Qwen3
+    # endpoint accepts `dimensions` but still returns 4096; project locally
+    # so index writes and query embeds share one width.
+    vectors = post_openai_embeddings(
         url=runtime.url,
         model=runtime.model,
         api_key=runtime.secret,
         texts=texts,
-        timeout=TIMEOUT_SEC,
+        timeout=timeout,
     )
+    return [project_embedding(vec, dim=EMBEDDING_OUTPUT_DIM) for vec in vectors]
 
 
 def cosine_similarity(left: list[float], right: list[float]) -> float | None:
@@ -131,17 +151,3 @@ def cosine_similarity(left: list[float], right: list[float]) -> float | None:
     if ln <= 0.0 or rn <= 0.0:
         return None
     return dot / (math.sqrt(ln) * math.sqrt(rn))
-
-
-def rrf_merge(
-    lexical_ids: list[str],
-    semantic_ids: list[str],
-    *,
-    k: int = RRF_K,
-) -> list[str]:
-    scores: dict[str, float] = {}
-    for rank, item_id in enumerate(lexical_ids, start=1):
-        scores[item_id] = scores.get(item_id, 0.0) + 1.0 / (k + rank)
-    for rank, item_id in enumerate(semantic_ids, start=1):
-        scores[item_id] = scores.get(item_id, 0.0) + 1.0 / (k + rank)
-    return sorted(scores, key=lambda item_id: (-scores[item_id], item_id))

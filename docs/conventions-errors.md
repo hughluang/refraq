@@ -72,6 +72,10 @@ Kernel codes owned by this contract:
 | `HTTP_NOT_FOUND` | 404 | Unmatched route |
 | `HTTP_METHOD_NOT_ALLOWED` | 405 | Wrong method on a known path |
 | `HTTP_ERROR` | other 4xx from Starlette `HTTPException` | Framework HTTP errors that are not 404/405 |
+| `PLATFORM_CAPACITY_EXCEEDED` | 503 + `Retry-After` | In-flight HTTP cap, platform pool checkout timeout, or the platform database refuses a new connection (ADR 0040) |
+| `PLATFORM_TIMEOUT` | 504 | Platform short read or short write canceled by `statement_timeout` (ADR 0040). Not `QUERY_TIMEOUT`. |
+| `ADMISSION_CAPACITY_EXCEEDED` | 503 + `Retry-After` | Admission pool full (ADR 0045) |
+| `ADMISSION_ACTOR_LIMIT_EXCEEDED` | 429 + `Retry-After` | This actor already holds the admission share (ADR 0045) |
 
 Domain codes stay on `AppError` subclasses (`AUTH_*`, `SOURCE_*`, …).
 

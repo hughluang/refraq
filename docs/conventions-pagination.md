@@ -6,7 +6,7 @@ Domain terms: [`docs/glossary.md`](glossary.md).
 
 ## 1. Scope
 
-This document defines how collection reads are paged: the **Offset Page** envelope, total ordering, the **Cursor Page** admission rule, Whole-Set Read exemptions, MCP mirroring, and Console list-footer rules.
+This document defines how collection reads are paged: the **Offset Page** envelope, total ordering, the **Cursor Page** admission rule, **Top-K Read** admission, Whole-Set Read exemptions, MCP mirroring, and Console list-footer rules.
 
 It does not define Job/log retention, Catalog Sample row peeks, or Controlled Query row caps.
 
@@ -19,7 +19,7 @@ Related boundaries:
 
 ## 2. Offset Page
 
-Every HTTP collection list that pages uses this envelope. The envelope is always complete; omitting `limit` / `offset` applies the endpoint defaults and still returns all four fields.
+Every HTTP collection list that pages uses this envelope, except Catalog Search (**Top-K Read**, §4.1). The envelope is always complete; omitting `limit` / `offset` applies the endpoint defaults and still returns all four fields.
 
 ```json
 {
@@ -64,6 +64,12 @@ A **Cursor Page** is `{ "items": [...], "limit": L, "next_cursor": null | "…" 
 
 Today that is exactly `GET /audit/events`. New endpoints must not choose a Cursor Page without an ADR that names the admission.
 
+### 4.1 Top-K Read
+
+A **Top-K Read** is `{ "items": [...], "limit": L, "offset": O, "rank_mode": "vector" | "lexical", "truncated": false }`. It has no `total`. `limit` / `offset` slice a declared window. `truncated` is true when that window has rows beyond this slice. An `offset` past the window is `200` with empty `items`.
+
+It is admitted only for Catalog Search (ADR 0043). New endpoints must not choose a Top-K Read without an ADR that names the admission.
+
 ## 5. Whole-Set Read
 
 A Whole-Set Read is not a page. It is a composite configuration document bounded by platform definition, not by data volume. Keys are not `items`:
@@ -79,7 +85,7 @@ Do not rewrite these as Offset Pages.
 
 ## 6. MCP
 
-MCP list tools that correspond to an Offset Page HTTP list use the same fields: `limit`, `offset`, and a result carrying `items`, `total`, `limit`, `offset`. They do not invent a second envelope.
+MCP list tools that correspond to an Offset Page HTTP list use the same fields: `limit`, `offset`, and a result carrying `items`, `total`, `limit`, `offset`. They do not invent a second envelope. Catalog Search tools use the **Top-K Read** envelope (no `total`).
 
 MCP list tools clamp out-of-range `limit` / `offset` to the documented default and max and echo the applied values. HTTP Offset Page lists reject the same inputs with `422 REQUEST_INVALID`.
 
@@ -95,7 +101,7 @@ Pickers that need a closed option set (role Select, Source Select) fetch one pag
 
 1. A collection list that pages with `{ "items": [...] }` only.
 2. Returning `total` / `limit` / `offset` only “when pagination params are used”.
-3. A third envelope (`has_more` on a collection list, `total_count`, cursor without §4 admission).
+3. A third envelope (`has_more` on a collection list, `total_count`, cursor without §4 admission, Top-K Read without §4.1 admission).
 4. Newest-first Offset Pages ordered by `created_at` without an `id` (or equivalent) tiebreaker.
 5. Computing Offset Page `total` by materializing every filtered row.
 6. A default `limit` with no documented max cap.

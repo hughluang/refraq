@@ -166,6 +166,18 @@ export function ModelServiceList() {
     }
   };
 
+  const openActivate = async (row: ModelService) => {
+    setActivatingId(row.id);
+    try {
+      await testModelService(row.id);
+      activateConfirm.open(row);
+    } catch (err) {
+      notifyError(err, t("modelServices.test.failed"));
+    } finally {
+      setActivatingId(null);
+    }
+  };
+
   const confirmActivate = async () => {
     const pending = activateConfirm.pending;
     if (!pending) return;
@@ -436,7 +448,7 @@ export function ModelServiceList() {
                           size="compact-xs"
                           variant="light"
                           loading={activatingId === row.id}
-                          onClick={() => activateConfirm.open(row)}
+                          onClick={() => void openActivate(row)}
                         >
                           {t("modelServices.activate")}
                         </Button>
@@ -496,6 +508,11 @@ export function ModelServiceList() {
               </Text>
               <Text size="sm">
                 {t("modelServices.test.dimension")}: {testResult.dimension}
+              </Text>
+              <Text size="sm">
+                {t("modelServices.test.outputDim", {
+                  dim: testResult.output_dim,
+                })}
               </Text>
               <Text size="sm" c="dimmed">
                 {t("modelServices.test.elapsed", {

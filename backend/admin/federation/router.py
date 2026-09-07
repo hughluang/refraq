@@ -8,6 +8,7 @@ from fastapi import APIRouter, Cookie, Depends, Query, Request, Response
 from fastapi.responses import RedirectResponse
 
 from backend.admin.audit import persist_audit_event
+from backend.core.admission import GUEST_ACTOR, await_admitted
 from backend.admin.deps import (
     SESSION_COOKIE_NAME,
     browser_facing_https,
@@ -135,7 +136,7 @@ def public_providers(
 
 
 @router.get("/auth/sso/{provider_id}/start")
-def start_login(
+async def start_login(
     provider_id: str,
     request: Request,
     from_: str | None = Query(default=None, alias="from"),
@@ -150,7 +151,10 @@ def start_login(
         audit_sso_reject(provider_id=provider_id, reason="callback_origin_invalid")
         return _login_error("AUTH_SSO_PROVIDER_UNAVAILABLE")
     try:
-        url, handoff = start_sso(item, callback, from_ or "/")
+        url, handoff = await await_admitted(
+            GUEST_ACTOR,
+            lambda: start_sso(item, callback, from_ or "/"),
+        )
     except SsoProviderUnavailable:
         audit_sso_reject(provider_id=provider_id, reason="provider_unavailable")
         return _login_error("AUTH_SSO_PROVIDER_UNAVAILABLE")
@@ -172,7 +176,7 @@ def start_login(
 
 
 @router.get("/auth/sso/{provider_id}/callback")
-def callback(
+async def callback(
     provider_id: str,
     request: Request,
     code: str | None = None,
@@ -202,15 +206,18 @@ def callback(
         audit_sso_reject(provider_id=provider_id, reason="provider_unavailable")
         return _clear(_login_error("AUTH_SSO_PROVIDER_UNAVAILABLE"))
     try:
-        user = complete_sso(
-            provider=item,
-            handoff=handoff,
-            code=code,
-            response_iss=iss,
-            users=users,
-            roles=roles,
-            bindings=bindings,
-            pending=pending,
+        user = await await_admitted(
+            GUEST_ACTOR,
+            lambda: complete_sso(
+                provider=item,
+                handoff=handoff,
+                code=code,
+                response_iss=iss,
+                users=users,
+                roles=roles,
+                bindings=bindings,
+                pending=pending,
+            ),
         )
     except SsoNotAdmitted:
         return _clear(_login_error("AUTH_SSO_NOT_ADMITTED"))

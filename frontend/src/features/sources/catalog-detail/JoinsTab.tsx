@@ -20,7 +20,10 @@ import { ListTable } from "@/components/display/ListTable";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { FillColumn } from "@/components/layout/FillColumn";
 import { SectionHeader } from "@/components/layout/SectionHeader";
-import { searchCatalogColumns } from "@/features/sources/api/catalog";
+import {
+  getCatalogObject,
+  listCatalogObjects,
+} from "@/features/sources/api/catalog";
 import {
   deleteJoin,
   createJoin,
@@ -37,7 +40,9 @@ import {
   joinDeleteErrorKey,
   joinRowActions,
   joinRowState,
+  joinWriteErrorKey,
   mergeSelectedOption,
+  objectRefFromColumnLocator,
   retainSelectedOption,
   validateJoinDraft,
 } from "@/features/sources/catalog-detail/joinEdges";
@@ -72,10 +77,13 @@ export function JoinsTab({
   const [joinKind, setJoinKind] = useState<string | null>("INNER");
   const [joinExpression, setJoinExpression] = useState("");
   const [editingJoinId, setEditingJoinId] = useState<string | null>(null);
-  const [toSearch, setToSearch] = useState("");
-  const debouncedToSearch = useSearchDebounce(toSearch);
-  const [toOptions, setToOptions] = useState<JoinSelectOption[]>([]);
-  const [toSearchLoading, setToSearchLoading] = useState(false);
+  const [toObjectSearch, setToObjectSearch] = useState("");
+  const debouncedToObjectSearch = useSearchDebounce(toObjectSearch);
+  const [toObjectId, setToObjectId] = useState<string | null>(null);
+  const [toObjectOptions, setToObjectOptions] = useState<JoinSelectOption[]>([]);
+  const [toObjectLoading, setToObjectLoading] = useState(false);
+  const [toColumnOptions, setToColumnOptions] = useState<JoinSelectOption[]>([]);
+  const [toColumnLoading, setToColumnLoading] = useState(false);
   const [maxHops, setMaxHops] = useState(2);
   const [pathLoading, setPathLoading] = useState(false);
   const [pathResult, setPathResult] = useState<JoinPathResult | null>(null);
@@ -100,40 +108,74 @@ export function JoinsTab({
   }, [object.id]);
 
   useEffect(() => {
-    const query = debouncedToSearch.trim();
-    if (!query) {
-      setToOptions((prev) => retainSelectedOption(prev, joinToId));
-      return;
-    }
+    const query = debouncedToObjectSearch.trim();
     let cancelled = false;
-    setToSearchLoading(true);
-    void searchCatalogColumns({
-      q: query,
-      source_id: object.source_id,
+    setToObjectLoading(true);
+    void listCatalogObjects(object.source_id, query || undefined, {
       limit: 20,
+      include_absent: false,
     })
       .then((data) => {
         if (cancelled) return;
-        const next = data.items.map((c) => ({
-          value: c.id,
-          label: columnOptionLabel(c.name, c.locator_key),
-        }));
-        setToOptions((prev) => mergeSelectedOption(next, joinToId, prev));
+        const next = data.items
+          .filter((item) => item.id !== object.id)
+          .map((item) => ({
+            value: item.id,
+            label: `${item.schema_name}.${item.name} · ${item.locator_key}`,
+          }));
+        setToObjectOptions((prev) =>
+          mergeSelectedOption(next, toObjectId, prev),
+        );
       })
       .catch((err) => {
         if (cancelled) return;
+        setToObjectOptions((prev) => retainSelectedOption(prev, toObjectId));
         open?.({
           type: "error",
           message: err instanceof ApiError ? err.detail : String(err),
         });
       })
       .finally(() => {
-        if (!cancelled) setToSearchLoading(false);
+        if (!cancelled) setToObjectLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [debouncedToSearch, object.source_id, joinToId, open]);
+  }, [debouncedToObjectSearch, object.id, object.source_id, toObjectId, open]);
+
+  useEffect(() => {
+    if (!toObjectId) {
+      setToColumnOptions((prev) => retainSelectedOption(prev, joinToId));
+      return;
+    }
+    let cancelled = false;
+    setToColumnLoading(true);
+    void getCatalogObject(toObjectId)
+      .then((data) => {
+        if (cancelled) return;
+        const next = data.object.columns
+          .filter((c) => c.is_present)
+          .map((c) => ({
+            value: c.id,
+            label: columnOptionLabel(c.name, c.locator_key),
+          }));
+        setToColumnOptions((prev) => mergeSelectedOption(next, joinToId, prev));
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setToColumnOptions((prev) => retainSelectedOption(prev, joinToId));
+        open?.({
+          type: "error",
+          message: err instanceof ApiError ? err.detail : String(err),
+        });
+      })
+      .finally(() => {
+        if (!cancelled) setToColumnLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [toObjectId, joinToId, open]);
 
   const saveJoinEdge = async () => {
     const check = validateJoinDraft({
@@ -168,9 +210,16 @@ export function JoinsTab({
       setEditingJoinId(null);
       open?.({ type: "success", message: t("catalog.joins.saved") });
     } catch (err) {
+      const messageKey =
+        err instanceof ApiError ? joinWriteErrorKey(err.code) : null;
       open?.({
         type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
+        message:
+          messageKey != null
+            ? t(messageKey)
+            : err instanceof ApiError
+              ? err.detail
+              : String(err),
       });
     } finally {
       setSaving(false);
@@ -293,25 +342,42 @@ export function JoinsTab({
               disabled={editingJoinId != null}
             />
             <Select
-              label={t("catalog.joins.toColumn")}
-              data={toOptions}
-              value={joinToId}
-              onChange={setJoinToId}
+              label={t("catalog.joins.toObject")}
+              data={toObjectOptions}
+              value={toObjectId}
+              onChange={(value) => {
+                setToObjectId(value);
+                setJoinToId(null);
+              }}
               searchable
-              searchValue={toSearch}
-              onSearchChange={setToSearch}
+              searchValue={toObjectSearch}
+              onSearchChange={setToObjectSearch}
               filter={({ options }) => options}
               clearable
               size="sm"
               nothingFoundMessage={
-                toSearchLoading
+                toObjectLoading ? "…" : t("catalog.joins.toObjectPlaceholder")
+              }
+              placeholder={t("catalog.joins.toObjectPlaceholder")}
+              disabled={editingJoinId != null}
+            />
+            <Select
+              label={t("catalog.joins.toColumn")}
+              data={toColumnOptions}
+              value={joinToId}
+              onChange={setJoinToId}
+              searchable
+              clearable
+              size="sm"
+              nothingFoundMessage={
+                toColumnLoading
                   ? "…"
-                  : debouncedToSearch.trim()
+                  : toObjectId
                     ? undefined
-                    : t("catalog.joins.toColumnPlaceholder")
+                    : t("catalog.joins.toColumnNeedObject")
               }
               placeholder={t("catalog.joins.toColumnPlaceholder")}
-              disabled={editingJoinId != null}
+              disabled={editingJoinId != null || toObjectId == null}
             />
           </Group>
           <Group grow>
@@ -435,7 +501,23 @@ export function JoinsTab({
                               setEditingJoinId(join.id);
                               setJoinFromId(join.from_column_id);
                               setJoinToId(join.to_column_id);
-                              setToOptions((prev) =>
+                              const objectRef = objectRefFromColumnLocator(
+                                join.to_column_locator_key,
+                              );
+                              if (objectRef) {
+                                void getCatalogObject(objectRef).then((data) => {
+                                  setToObjectId(data.object.id);
+                                  setToObjectOptions((prev) =>
+                                    mergeSelectedOption(prev, data.object.id, [
+                                      {
+                                        value: data.object.id,
+                                        label: `${data.object.schema_name}.${data.object.name} · ${data.object.locator_key}`,
+                                      },
+                                    ]),
+                                  );
+                                });
+                              }
+                              setToColumnOptions((prev) =>
                                 mergeSelectedOption(
                                   prev,
                                   join.to_column_id,
@@ -496,44 +578,55 @@ export function JoinsTab({
         position="right"
         size="md"
       >
-        {pathResult == null ? null : pathResult.paths.length === 0 ? (
-          <Text size="sm" c="dimmed">
-            {t("catalog.joins.path.empty")}
-          </Text>
-        ) : (
+        {pathResult == null ? null : (
           <Stack gap="sm">
-            {pathResult.paths.map((path, idx) => (
-              <Stack
-                key={`${path.target_object_id ?? "t"}-${idx}`}
-                gap={4}
-                p="sm"
-                style={{
-                  border: "1px solid var(--mantine-color-gray-3)",
-                  borderRadius: 8,
-                }}
-              >
-                <Text size="sm" fw={500}>
-                  {t("catalog.joins.path.summary")}: {path.path_summary}
-                </Text>
-                {path.hops.map((hop) => (
-                  <Text key={hop.join_id} size="xs" c="dimmed">
-                    {hop.from_column_locator_key} → {hop.to_column_locator_key}{" "}
-                    ({hop.join_kind})
-                  </Text>
-                ))}
-                {path.target_object_id ? (
-                  <Button
-                    component={Link}
-                    href={`/console/catalog/${path.target_object_id}`}
-                    size="xs"
-                    variant="light"
-                    w="fit-content"
+            {pathResult.rank_mode ? (
+              <Text size="xs" c="dimmed">
+                {t("catalog.joins.path.rank", {
+                  mode: t(`catalog.joins.rank.${pathResult.rank_mode}`),
+                })}
+              </Text>
+            ) : null}
+            {pathResult.paths.length === 0 ? (
+              <Text size="sm" c="dimmed">
+                {t("catalog.joins.path.empty")}
+              </Text>
+            ) : (
+              <Stack gap="sm">
+                {pathResult.paths.map((path, idx) => (
+                  <Stack
+                    key={`${path.target_object_id ?? "t"}-${idx}`}
+                    gap={4}
+                    p="sm"
+                    style={{
+                      border: "1px solid var(--mantine-color-gray-3)",
+                      borderRadius: 8,
+                    }}
                   >
-                    {t("catalog.joins.path.openTarget")}
-                  </Button>
-                ) : null}
+                    <Text size="sm" fw={500}>
+                      {t("catalog.joins.path.summary")}: {path.path_summary}
+                    </Text>
+                    {path.hops.map((hop) => (
+                      <Text key={hop.join_id} size="xs" c="dimmed">
+                        {hop.from_column_locator_key} → {hop.to_column_locator_key}{" "}
+                        ({hop.join_kind})
+                      </Text>
+                    ))}
+                    {path.target_object_id ? (
+                      <Button
+                        component={Link}
+                        href={`/console/catalog/${path.target_object_id}`}
+                        size="xs"
+                        variant="light"
+                        w="fit-content"
+                      >
+                        {t("catalog.joins.path.openTarget")}
+                      </Button>
+                    ) : null}
+                  </Stack>
+                ))}
               </Stack>
-            ))}
+            )}
           </Stack>
         )}
       </Drawer>

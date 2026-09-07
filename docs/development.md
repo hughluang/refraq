@@ -33,8 +33,9 @@ This document records the stable development conventions for contributors workin
 
 ### Dependencies (Postgres + Redis)
 
-- Start: `docker compose up -d`
+- Start: `docker compose up -d` (Postgres image is `pgvector/pgvector:pg18`; `pg_trgm` and `pgvector` are required — `docs/env.md`)
 - Stop: `docker compose down`
+- A leftover PG16 volume or container data directory cannot start under PG18. Dump, replace the image, restore (`scripts/upgrade_platform_postgres_to_pg18.sh`), then Foundation Upgrade.
 
 ### Backend
 

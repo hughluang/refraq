@@ -81,7 +81,7 @@ An in-use URL change that passes the test clears ready, increments generation, c
 
 ### `POST /model-services/{id}/test`
 
-Permission: `model_services:write`. Posts a fixed short probe (`input` as a string array; no `dimensions`) to the stored full URL. Success: `{ "ok": true, "dimension": N, "elapsed_ms": N, "model": "…" }`. Failure: Problem Details with a classified code; `detail` may include the **actual request URL** and a truncated remote body. Does not change in-use, closed, or ready.
+Permission: `model_services:write`. Posts a fixed short probe (`input` as a string array; no `dimensions`) to the stored full URL. Success: `{ "ok": true, "dimension": N, "elapsed_ms": N, "model": "…", "output_dim": 1024 }`. `dimension` is the native probe width. `output_dim` is `EMBEDDING_OUTPUT_DIM`, the stored and query width after prefix truncation and L2-normalize. `elapsed_ms` is how long this probe took; it is not a threshold. Probe, index batch, and query embed share the model API timeout (`TIMEOUT_SEC`). Failure: Problem Details with a classified code; `detail` may include the **actual request URL** and a truncated remote body. Does not change in-use, closed, or ready.
 
 ### `POST /model-services/{id}/activate`
 
@@ -99,7 +99,7 @@ Permission: `model_services:write`. Sets `closed=true`. Search becomes lexical. 
 
 Permission: `model_services:write`. Body: `{ "rebuild": "none" | "full" }`. Tests the current in-use service, then sets `closed=false`. No in-use service → `MODEL_SERVICE_NOT_IN_USE`. Test failure leaves the purpose closed.
 
-`rebuild=none` does not mint a Job. Hybrid resumes only if ready is still true.
+`rebuild=none` does not mint a Job. Vector Search resumes only if ready is still true.
 
 `rebuild=full` clears ready, increments generation, cancels an in-flight same-kind Job, and mints `catalog_embed`.
 

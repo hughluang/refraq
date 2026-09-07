@@ -1,94 +1,116 @@
-"""Catalog Search: lexical plus optional embedding RRF."""
+"""Catalog Search: vector nearest-neighbor, or raise on embed/neighbor failure."""
 
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from typing import TypeVar
 
-from backend.metadata.catalog.embedding import (
-    cosine_similarity,
-    current_generation,
-    embed_texts,
-    rrf_merge,
+from backend.admin.model_services.errors import ModelServiceError
+from backend.core.errors import AppError
+from backend.core.metrics import (
+    observe_catalog_neighbor,
+    record_catalog_hybrid,
+    record_catalog_search_vector_error,
 )
+from backend.metadata.catalog.embedding import current_generation, embed_texts
 from backend.metadata.catalog.store import get_catalog_store
+from backend.metadata.errors import CatalogSearchEmbedFailed, CatalogSearchNeighborFailed
 
 T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
 _SEMANTIC_CANDIDATE_LIMIT = 50
-LEXICAL_POOL = 500
 
 
-def hybrid_page(
+def vector_page(
     *,
     query: str,
-    lexical_items: list[T],
     kind: str,
     id_of: Callable[[T], str],
     limit: int,
     offset: int,
-) -> tuple[list[T], int] | None:
-    """Merge lexical-ranked items with embedding neighbors.
+    source_id: str | None = None,
+    object_type: str | None = None,
+    object_ids: list[str] | None = None,
+) -> tuple[list[T], bool]:
+    """Return nearest neighbors sliced to `limit`/`offset`, plus truncated.
 
-    Returns None when the query vector cannot be produced so the caller
-    pages the lexical store the same way as when embeddings are unset.
+    Raises when the query vector cannot be produced or neighbor scoring
+    fails (other than AppError). An empty neighbor list is a successful
+    empty page, not a lexical fallback.
     """
-    semantic_ids = _nearest_ids(kind, query)
-    if semantic_ids is None:
-        return None
+    semantic_ids = _nearest_ids(
+        kind,
+        query,
+        source_id=source_id,
+        object_type=object_type,
+        object_ids=object_ids,
+    )
+    record_catalog_hybrid("vector")
+    if not semantic_ids:
+        return [], False
 
-    lexical_ids = [id_of(item) for item in lexical_items]
-    by_id: dict[str, T] = {id_of(item): item for item in lexical_items}
     store = get_catalog_store()
-    for target_id in semantic_ids:
-        if target_id in by_id:
-            continue
-        extra = (
-            store.get_object(target_id)
-            if kind == "object"
-            else store.get_column(target_id)
-        )
-        if extra is None:
-            continue
-        by_id[target_id] = extra  # type: ignore[assignment]
-    merged_ids = rrf_merge(lexical_ids, semantic_ids)
-    merged = [by_id[item_id] for item_id in merged_ids if item_id in by_id]
-    return merged[offset : offset + limit], len(merged)
+    extras: list[T]
+    if kind == "object":
+        extras = store.get_objects_by_ids(semantic_ids)  # type: ignore[assignment]
+    else:
+        extras = store.get_columns_by_ids(semantic_ids)  # type: ignore[assignment]
+    by_id: dict[str, T] = {id_of(item): item for item in extras}
+    ordered = [by_id[item_id] for item_id in semantic_ids if item_id in by_id]
+    sliced = ordered[offset : offset + limit]
+    truncated = offset + limit < len(ordered)
+    return sliced, truncated
 
 
-def _nearest_ids(kind: str, query: str) -> list[str] | None:
+def _nearest_ids(
+    kind: str,
+    query: str,
+    *,
+    source_id: str | None = None,
+    object_type: str | None = None,
+    object_ids: list[str] | None = None,
+) -> list[str]:
+    started = time.perf_counter()
     try:
         vectors = embed_texts([query])
-    except Exception:
+    except ModelServiceError:
+        observe_catalog_neighbor(kind, "embed", time.perf_counter() - started)
         logger.warning("catalog search query embed failed for kind %s", kind)
-        return None
+        record_catalog_search_vector_error("embed_failed")
+        raise CatalogSearchEmbedFailed() from None
+    except AppError:
+        observe_catalog_neighbor(kind, "embed", time.perf_counter() - started)
+        raise
+    except Exception:
+        observe_catalog_neighbor(kind, "embed", time.perf_counter() - started)
+        logger.warning("catalog search query embed failed for kind %s", kind)
+        record_catalog_search_vector_error("embed_failed")
+        raise CatalogSearchEmbedFailed() from None
+    observe_catalog_neighbor(kind, "embed", time.perf_counter() - started)
     if not vectors:
         logger.warning("catalog search query embed returned no vectors for kind %s", kind)
-        return None
-    query_vec = vectors[0]
-    scored: list[tuple[float, str]] = []
-    skipped = 0
-    generation = current_generation()
-    for rec in get_catalog_store().list_embeddings(kind=kind):
-        if rec.generation != generation:
-            continue
-        score = cosine_similarity(query_vec, rec.embedding)
-        if score is None:
-            skipped += 1
-            continue
-        scored.append((score, rec.target_id))
-    if skipped:
-        logger.warning(
-            "skipped %s %s embeddings with incompatible vectors",
-            skipped,
-            kind,
+        record_catalog_search_vector_error("no_vectors")
+        raise CatalogSearchEmbedFailed()
+    started_score = time.perf_counter()
+    try:
+        return get_catalog_store().nearest_embeddings(
+            kind=kind,
+            query=vectors[0],
+            limit=_SEMANTIC_CANDIDATE_LIMIT,
+            generation=current_generation(),
+            source_id=source_id,
+            object_type=object_type,
+            object_ids=object_ids,
         )
-    scored.sort(key=lambda pair: (-pair[0], pair[1]))
-    return [
-        target_id
-        for score, target_id in scored[:_SEMANTIC_CANDIDATE_LIMIT]
-        if score > 0
-    ]
+    except AppError:
+        raise
+    except Exception:
+        logger.warning("catalog search neighbor failed for kind %s", kind)
+        record_catalog_search_vector_error("neighbor_failed")
+        raise CatalogSearchNeighborFailed() from None
+    finally:
+        observe_catalog_neighbor(kind, "score", time.perf_counter() - started_score)

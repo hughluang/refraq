@@ -6,9 +6,12 @@ import os
 
 from celery import Celery
 
+from celery.signals import beat_init, celeryd_init, worker_process_init
+
 from backend.core.celery_broker import celery_broker_url
 from backend.core.config import get_settings
 from backend.core.request_id import connect_celery_request_id, install_request_id_log_filter
+from backend.core.worker_runtime import init_parent_worker_runtime, mark_worker_process
 from backend.worker.api import ensure_system_schedules
 from backend.worker.parameters import BEAT_MAX_INTERVAL_SEC, assemble_system_parameters
 
@@ -45,6 +48,11 @@ celery_app.set_default()
 
 install_request_id_log_filter()
 connect_celery_request_id()
+
+
+celeryd_init.connect(init_parent_worker_runtime, weak=False)
+beat_init.connect(init_parent_worker_runtime, weak=False)
+worker_process_init.connect(mark_worker_process, weak=False)
 
 # Occupancy renew / startup local reap (Job primitive; shares Beat with schedules).
 import backend.worker.occupancy  # noqa: E402,F401

@@ -17,7 +17,8 @@
       "env": {
         "PYTHONPATH": "${workspaceFolder}",
         "VIRTUAL_ENV": "${workspaceFolder}/.venv",
-        "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}"
+        "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}",
+        "REFRAQ_PROCESS_ROLE": "api"
       },
       "console": "integratedTerminal",
       "justMyCode": true,
@@ -36,7 +37,8 @@
         "VIRTUAL_ENV": "${workspaceFolder}/.venv",
         "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}",
         "REFRAQ_MCP_HOST": "127.0.0.1",
-        "REFRAQ_MCP_PORT": "8001"
+        "REFRAQ_MCP_PORT": "8001",
+        "REFRAQ_PROCESS_ROLE": "mcp"
       },
       "console": "integratedTerminal",
       "justMyCode": true
@@ -61,7 +63,8 @@
         "PYTHONPATH": "${workspaceFolder}",
         "VIRTUAL_ENV": "${workspaceFolder}/.venv",
         "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}",
-        "TZ": "UTC"
+        "TZ": "UTC",
+        "REFRAQ_PROCESS_ROLE": "worker"
       },
       "console": "integratedTerminal",
       "justMyCode": true
@@ -84,7 +87,8 @@
         "PYTHONPATH": "${workspaceFolder}",
         "VIRTUAL_ENV": "${workspaceFolder}/.venv",
         "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}",
-        "TZ": "UTC"
+        "TZ": "UTC",
+        "REFRAQ_PROCESS_ROLE": "worker"
       },
       "console": "integratedTerminal",
       "justMyCode": true

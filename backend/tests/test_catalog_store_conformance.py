@@ -31,7 +31,7 @@ _MAINTENANCE_DATABASE_URL = os.getenv(
 _CATALOG_TABLES = (
     "sources, catalog_objects, catalog_columns, catalog_foreign_keys,"
     " catalog_indexes, catalog_joins, catalog_join_changes, structure_diffs,"
-    " business_domains"
+    " business_domains, catalog_embeddings"
 )
 
 
@@ -362,6 +362,27 @@ def test_search_objects_and_columns_agree(catalog_store) -> None:
     assert paged_total == 2
     assert len(paged) == 1
     assert paged[0].name == "order_items"
+
+    ids = [o.id for o in objects]
+    batched = catalog_store.get_objects_by_ids(ids)
+    assert {row.id for row in batched} == set(ids)
+    assert catalog_store.get_objects_by_ids([]) == []
+    col_ids = [c.id for c in same_name[:2]]
+    batched_cols = catalog_store.get_columns_by_ids(col_ids)
+    assert {row.id for row in batched_cols} == set(col_ids)
+
+    orders = catalog_store.get_object_by_locator(
+        f"obj/postgresql/{SOURCE_KEY}/public/table/orders"
+    )
+    assert orders is not None
+    scoped, scoped_total = catalog_store.search_columns(
+        "id", object_ids=[orders.id]
+    )
+    assert scoped_total >= 1
+    assert {c.object_id for c in scoped} == {orders.id}
+    empty, empty_total = catalog_store.search_columns("id", object_ids=[])
+    assert empty == []
+    assert empty_total == 0
 
 
 def _owning_object_id(store, column_id: str) -> str:

@@ -114,12 +114,17 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "search_objects": (
         "Cross-Source Catalog Search for objects. query_text is required. "
-        "Same rank as HTTP search (lexical; hybrid when embeddings are configured). "
+        "Same path as HTTP search. rank_mode is vector (complete) or lexical "
+        "(process). Top-K envelope: items, limit, offset, truncated; no total. "
+        "source_locator_key and object_type bind both paths. "
         "Not the per-Source list. Requires metadata:read."
     ),
     "search_columns": (
         "Cross-Source Catalog Search for columns. query_text is required. "
-        "Same rank as HTTP /catalog/columns/search. Requires metadata:read."
+        "Same path as HTTP /catalog/columns/search. rank_mode is vector or lexical. "
+        "Top-K envelope: items, limit, offset, truncated; no total. "
+        "source_locator_key and object_type bind both paths. "
+        "Requires metadata:read."
     ),
     "list_joins": (
         "List join edges that touch an object locator, including rejected rows. "
@@ -151,8 +156,9 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "find_join_path": (
         "Join path lookup. Modes: start + query_text (Catalog Search then BFS), "
-        "start + target_locator_key, or start only (graph). Rejected edges omitted. "
-        "Requires metadata:read."
+        "start + target_locator_key, or start only (graph). query_text mode sets "
+        "rank_mode to the Catalog Search path; embed failure is an error. "
+        "Rejected edges omitted. Requires metadata:read."
     ),
     "run_sql": (
         "Single read-only SELECT on a Source locator. Platform AST guards apply. "

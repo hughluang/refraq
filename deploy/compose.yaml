@@ -7,7 +7,18 @@ name: refraq-prod
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg18
+    # ADR 0040: database supply is part of the capacity contract.
+    # shared_buffers must fit in the container shm (default 64MB is too small).
+    shm_size: "2gb"
+    command:
+      - postgres
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=3GB
+      - -c
+      - work_mem=16MB
     environment:
       POSTGRES_USER: refraq
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -35,6 +46,7 @@ services:
     image: ghcr.io/hughluang/refraq-api:__REFRAQ_RELEASE_TAG__
     environment:
       REFRAQ_ENV: prod
+      REFRAQ_PROCESS_ROLE: api
       REFRAQ_API_HOST: 0.0.0.0
       REFRAQ_API_PORT: 8000
       REFRAQ_STORE_BACKEND: persistent
@@ -70,6 +82,7 @@ services:
     command: ["celery", "-A", "backend.worker.app", "worker"]
     environment:
       REFRAQ_ENV: prod
+      REFRAQ_PROCESS_ROLE: worker
       REFRAQ_STORE_BACKEND: persistent
       TZ: UTC
       DATABASE_URL: postgresql+psycopg://refraq:${POSTGRES_PASSWORD}@postgres:5432/refraq
@@ -90,6 +103,7 @@ services:
     command: ["celery", "-A", "backend.worker.app", "beat"]
     environment:
       REFRAQ_ENV: prod
+      REFRAQ_PROCESS_ROLE: worker
       REFRAQ_STORE_BACKEND: persistent
       TZ: UTC
       DATABASE_URL: postgresql+psycopg://refraq:${POSTGRES_PASSWORD}@postgres:5432/refraq
@@ -108,6 +122,7 @@ services:
     command: ["python", "-m", "backend.metadata.mcp_http"]
     environment:
       REFRAQ_ENV: prod
+      REFRAQ_PROCESS_ROLE: mcp
       REFRAQ_STORE_BACKEND: persistent
       REFRAQ_MCP_HOST: 0.0.0.0
       REFRAQ_MCP_PORT: 8001

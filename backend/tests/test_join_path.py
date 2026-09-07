@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from backend.core.time import utc_now
 import os
-from datetime import datetime
 
 import pytest
 
@@ -20,7 +19,11 @@ from backend.metadata.catalog.store import (  # noqa: E402
     reset_catalog_store,
 )
 from backend.metadata.catalog.structure_refresh import apply_structure_snapshot  # noqa: E402
-from backend.metadata.joins.graph import find_join_paths  # noqa: E402
+from backend.metadata.catalog import service as catalog_service  # noqa: E402
+from backend.metadata.joins.graph import (  # noqa: E402
+    find_join_paths,
+    find_reachable_object_paths,
+)
 from backend.metadata.sources.service import require_source  # noqa: E402
 from backend.metadata.sources.store import (  # noqa: E402
     SourceRecord,
@@ -154,6 +157,25 @@ def test_two_hop_join_path() -> None:
     assert path.target_object_id == "obj_c"
     assert path.path_summary
 
+    explore = catalog_service.lookup_join_paths(
+        "obj_a",
+        max_hops=2,
+        top_targets=10,
+    )
+    hops_by_target = {
+        path.target_object_id: len(path.hops) for path in explore.paths
+    }
+    assert hops_by_target == {"obj_b": 1, "obj_c": 2}
+
+    reachable = find_reachable_object_paths(
+        store=store,
+        start_object_id="obj_a",
+        max_hops=2,
+    )
+    assert {
+        path.target_object_id: len(path.hops) for path in reachable.paths
+    } == {"obj_b": 1, "obj_c": 2}
+
 
 def test_direct_joins_for_column_start() -> None:
     store = get_catalog_store()
@@ -172,11 +194,10 @@ def test_direct_joins_for_column_start() -> None:
         created_by_user_id=None,
         attester="human",
     )
-    result = find_join_paths(
+    result = find_reachable_object_paths(
         store=store,
         start_column_id="col_a_b",
         max_hops=1,
-        top_targets=3,
     )
     assert len(result.direct_joins) == 1
     assert result.direct_joins[0].from_column_id == "col_a_b"
@@ -204,11 +225,10 @@ def test_rejected_join_is_omitted_from_paths() -> None:
         rejected_at=utc_now(),
         rejected_by_user_id="u1",
     )
-    result = find_join_paths(
+    result = find_reachable_object_paths(
         store=store,
         start_column_id="col_a_b",
         max_hops=1,
-        top_targets=3,
     )
     assert result.direct_joins == []
     hops = find_join_paths(
@@ -219,4 +239,41 @@ def test_rejected_join_is_omitted_from_paths() -> None:
         top_targets=3,
     )
     assert hops.paths == []
+
+
+def test_explore_keeps_one_path_when_two_edges_share_an_object() -> None:
+    store = get_catalog_store()
+    a = _table(
+        "obj_a",
+        "a",
+        [("col_a_id", "id"), ("col_a_b1", "b1_id"), ("col_a_b2", "b2_id")],
+    )
+    b = _table("obj_b", "b", [("col_b_id", "id"), ("col_b_alt", "alt")])
+    apply_structure_snapshot(
+        source=require_source("src_1"),
+        job_id="j1",
+        collected=[a, b],
+        schema_scope=None,
+    )
+    store.write_insert_join(
+        from_column_id="col_a_b1",
+        to_column_id="col_b_id",
+        evidence="fk_1",
+        created_by_user_id=None,
+        attester="human",
+    )
+    store.write_insert_join(
+        from_column_id="col_a_b2",
+        to_column_id="col_b_alt",
+        evidence="fk_2",
+        created_by_user_id=None,
+        attester="human",
+    )
+    explore = catalog_service.lookup_join_paths(
+        "obj_a",
+        max_hops=1,
+        top_targets=10,
+    )
+    assert [path.target_object_id for path in explore.paths] == ["obj_b"]
+    assert len(explore.paths[0].hops) == 1
 

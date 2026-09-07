@@ -144,7 +144,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Outbound adapter families | Owning product domain (e.g. `metadata/connectors`: engine adapters + `runtime` invocation shell that binds an already-interpreted `SourceEndpoint`) |
 | Domain error types | That product domain (base in `core`) |
 | Site Branding singleton, assets, validation, cache policy, and HTTP | `admin/branding` language unit |
-| Config, engine, secrets crypto, Instant/Clock (`core.time`), Offset Page (`core.pagination`), upgrade orchestration, `AppError` / Problem Details, request-id helpers, process probes | `core` (upgrade may call platform-kernel published API); time contract in [`docs/conventions-time.md`](conventions-time.md); errors in [`docs/conventions-errors.md`](conventions-errors.md); pagination in [`docs/conventions-pagination.md`](conventions-pagination.md) |
+| Config, engine, secrets crypto, Instant/Clock (`core.time`), Offset Page (`core.pagination`), upgrade orchestration, `AppError` / Problem Details, request-id helpers, process probes, runtime capacity (pool / limiter / admission / `/metrics`) | `core` (upgrade may call platform-kernel published API); time contract in [`docs/conventions-time.md`](conventions-time.md); errors in [`docs/conventions-errors.md`](conventions-errors.md); pagination in [`docs/conventions-pagination.md`](conventions-pagination.md); capacity in ADR 0040 / 0045 |
 | Celery app, Beat, **Scheduled Task**, system tasks, task registration | `worker` |
 | Domain async work units (`@shared_task` or equivalent) | Owning product domain; **discovered and registered by `worker`** |
 | Process probes (health/ready) | `core` (thin); not inside a product domain |

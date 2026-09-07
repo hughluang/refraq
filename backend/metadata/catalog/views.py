@@ -139,6 +139,7 @@ class JoinPathLookup:
     paths: list[JoinPathView]
     direct_joins: list[JoinView]
     reason: str | None
+    rank_mode: str | None = None
 
 
 def domain_ref_view(domain_id: str | None) -> DomainRefView | None:

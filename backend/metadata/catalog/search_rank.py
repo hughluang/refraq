@@ -1,8 +1,10 @@
 """Portable catalog search ranking and pagination helpers.
 
-Ranking and paging happen in Python for both adapters. Candidate narrowing
-(source_id, object_type, include_absent) stays with the adapter so SQL can
-push those predicates into WHERE. Do not move those filters here.
+The integer ladder is the ranking spec (ADR 0037 / 0041). The memory adapter
+runs it in Python. The SQL adapter replicates the same predicates, CASE, and
+tie-break in SQL. Dual-adapter tests keep the two identical on a locale-stable
+fixture. Candidate narrowing (source_id, object_type, include_absent) stays
+with the adapter.
 """
 
 from __future__ import annotations

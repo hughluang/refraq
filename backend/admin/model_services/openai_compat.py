@@ -13,6 +13,7 @@ from backend.admin.model_services.errors import (
 
 PROBE_TEXT = "refraq catalog search probe"
 TIMEOUT_SEC = 30
+EMBEDDING_OUTPUT_DIM = 1024
 
 
 def post_openai_embeddings(

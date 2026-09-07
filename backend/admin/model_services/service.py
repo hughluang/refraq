@@ -17,7 +17,10 @@ from backend.admin.model_services.errors import (
     ModelServiceSecretRequired,
     ModelServiceWireImmutable,
 )
-from backend.admin.model_services.openai_compat import probe_embeddings
+from backend.admin.model_services.openai_compat import (
+    EMBEDDING_OUTPUT_DIM,
+    probe_embeddings,
+)
 from backend.admin.model_services.ports import catalog_embed_jobs
 from backend.admin.model_services.records import (
     SUPPORTED_PROTOCOLS,
@@ -272,13 +275,14 @@ def test_service(*, service_id: str, actor_user_id: str, actor_token_id: str | N
         actor_token_id=actor_token_id,
         resource_id=record.id,
         action="test",
-        detail={"dimension": dimension},
+        detail={"dimension": dimension, "elapsed_ms": elapsed_ms},
     )
     return {
         "ok": True,
         "dimension": dimension,
         "elapsed_ms": elapsed_ms,
         "model": model,
+        "output_dim": EMBEDDING_OUTPUT_DIM,
     }
 
 
