@@ -29,3 +29,17 @@ For repository structure and long-lived development guidance, read:
 
 - This root file is an **Agent Protocol Entry** retained for tool discovery.
 - Local **Process Documents** live under `.process/` (a **Process Workspace**) and are intentionally outside the committed baseline.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are tracked in GitHub Issues for `hughluang/refraq`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The canonical triage label names are used unchanged. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repository uses a single-context domain documentation layout. See `docs/agents/domain.md`.

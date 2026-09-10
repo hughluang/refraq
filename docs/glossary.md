@@ -441,6 +441,36 @@ Avoid mounting **Job** or **Scheduled Task** modules here — those belong to th
 A persisted record of a sensitive management-plane action (who, when, resource, action, result) for metadata and related credentials.
 Avoid treating it as a full platform SIEM or a substitute for application access logs.
 
+## Entity Layer
+
+### Business Entity
+
+A definition of a reusable business thing (material, supplier, inventory fact), identified by an immutable `code` that spans all its **Entity Version**s. Authoring one requires business meaning and not only a shape: name, description, category from the same closed set as `object_category`, grain description, business key, and attributes typed by the **Normalized Type** closed set.
+Permissions: `entity:read` / `entity:write`, grantable at `platform` scope only.
+Avoid calling it a **Catalog Object**, a Data Product, or a Serving output. Avoid putting source bindings, extract SQL, transforms, or lineage on the definition — those belong to a **Data Channel**. Avoid a second modelling vocabulary beside the object category set.
+
+### Entity Version
+
+One compatible shape family of a **Business Entity**, owning exactly one **Entity Table**. A version grows only additively: add a nullable attribute, promote `unknown` to any type, promote `integer` to `number`, relax a required attribute to nullable. Renaming or dropping an attribute, any other type change, tightening nullability, or changing grain or business key is breaking and opens the next version rather than changing this one. A non-breaking change may stay on the current version or open the next.
+A retired version accepts no **Data Channel** writes. Deleting a version removes definition rows only.
+Avoid treating a version as a byte-exact frozen shape, applying a breaking change in place, sharing one Entity Table across versions, or reading the version as a data-refresh generation.
+
+### Entity Table
+
+The physical table refraq creates from a **Business Entity** definition, in the refraq-owned entity database declared separately from the metadata database. Its name is derived from `code` and the version (`{code}_v{version}`), which is why `code` is character-set and length constrained.
+Created empty; rows arrive only from a **Data Channel**. The definition lands before the table exists, because creating it is a **Job** and no transaction spans the two databases; a materialization state on the **Entity Version** reports which side is done. Dropping one is a destructive act behind its own Permission and is refused while the table holds rows.
+Avoid creating it inside a **Source** (Sources stay read-only origins), placing it in the metadata database, collecting it as a Catalog Object, an opaque surrogate name, auto-suffixing around a name collision, or reading an empty table as a failed materialization.
+
+### Entity Definition Ledger
+
+An append-only record of applied **Business Entity** definition changes: field name, old value, new value, actor, **Instant**, and whether the change was breaking. Written for in-place non-breaking changes and for version-opening changes alike.
+Avoid conflating it with **Semantics Change**, a **Management Audit Event**, or a **Structure Diff**. Avoid treating it as a record of row content or load runs, or as a restore path.
+
+### Data Channel
+
+The product domain that moves rows from declared inputs into one declared target table, owning the mapping, transform, and lineage that a **Business Entity** definition does not carry. Its target is polymorphic: an **Entity Table** whose shape refraq declared and governs, or a consumer-owned target agreed with that consumer.
+Avoid conflating it with **Job** or **Scheduled Task**, with a DAG or workflow engine, or with structure collection (which reads a **Source** into the catalog). Avoid an Entity-only name, since consumer delivery is another target kind on this same domain. Avoid reading "channel load" as request load in the load-shedding sense.
+
 ## Auth Concepts
 
 ### Authentication
