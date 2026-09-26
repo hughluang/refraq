@@ -1,10 +1,11 @@
 "use client";
 
-import { Badge, Button, Switch, Table, Text } from "@mantine/core";
+import { Badge, Button, Table, Text } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
+import { SwitchField } from "@/components/form/SwitchField";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { listSchedules, patchSchedule } from "@/features/schedules/api";
 import { ScheduleFormModal } from "@/features/schedules/ScheduleFormModal";
@@ -102,7 +103,8 @@ export function ScheduleList() {
             </Table.Td>
             <Table.Td>{timezoneLabel(task)}</Table.Td>
             <Table.Td>
-              <Switch
+              <SwitchField
+                editable
                 checked={task.enabled}
                 onChange={async (event) => {
                   try {

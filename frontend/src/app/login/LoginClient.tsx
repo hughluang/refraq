@@ -11,9 +11,9 @@ import {
   PasswordInput,
   Stack,
   Text,
-  TextInput,
   Title,
 } from "@mantine/core";
+import { TextField } from "@/components/form/TextField";
 import { useLogin, useTranslate } from "@refinedev/core";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState, type FormEvent } from "react";
@@ -80,7 +80,8 @@ function LoginForm() {
   return (
     <form onSubmit={onSubmit}>
       <Stack gap="sm">
-        <TextInput
+        <TextField
+          editable
           label={t("auth.login.account")}
           value={account}
           onChange={(event) => setAccount(event.currentTarget.value)}

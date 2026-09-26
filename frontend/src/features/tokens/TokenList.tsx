@@ -9,13 +9,13 @@ import {
   Stack,
   Table,
   Text,
-  TextInput,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { CanAccess, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
+import { TextField } from "@/components/form/TextField";
 import { ListTable } from "@/components/display/ListTable";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { SectionHeader } from "@/components/layout/SectionHeader";
@@ -323,13 +323,15 @@ export function TokenList() {
       >
         <form onSubmit={form.onSubmit(onCreate)}>
           <Stack gap="md">
-            <TextInput
+            <TextField
+              editable
               label={t("tokens.fields.name")}
               placeholder={t("tokens.fields.name.placeholder")}
               withAsterisk
               {...form.getInputProps("name")}
             />
-            <TextInput
+            <TextField
+              editable
               type="datetime-local"
               label={t("tokens.fields.expiresAt")}
               description={t("tokens.fields.expiresAt.hint")}

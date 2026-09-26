@@ -5,6 +5,7 @@ import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
+import { SelectField } from "@/components/form/SelectField";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
@@ -63,6 +64,7 @@ export function TypeMappingList() {
   const { items, reload } = list;
 
   const onPatch = async (row: TypeMapping, value: string | null) => {
+    if (busyId === row.id) return;
     if (!value || value === row.normalized_type) return;
     setBusyId(row.id);
     try {
@@ -145,23 +147,19 @@ export function TypeMappingList() {
                 </Text>
               </Table.Td>
               <Table.Td>
-                {isSeed || !canWrite?.can ? (
-                  <Text size="sm">{row.normalized_type}</Text>
-                ) : (
-                  <Select
-                    size="xs"
-                    w={160}
-                    value={
-                      row.normalized_type === "unknown"
-                        ? null
-                        : row.normalized_type
-                    }
-                    placeholder="unknown"
-                    data={PATCHABLE}
-                    disabled={busyId === row.id}
-                    onChange={(value) => void onPatch(row, value)}
-                  />
-                )}
+                <SelectField
+                  editable={!isSeed && Boolean(canWrite?.can)}
+                  size="xs"
+                  w={160}
+                  value={
+                    row.normalized_type === "unknown"
+                      ? null
+                      : row.normalized_type
+                  }
+                  placeholder="unknown"
+                  data={PATCHABLE}
+                  onChange={(value) => void onPatch(row, value)}
+                />
               </Table.Td>
               <Table.Td>
                 <Badge

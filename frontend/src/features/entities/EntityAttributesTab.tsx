@@ -28,7 +28,7 @@ export function EntityAttributesTab({
           {t(hintKey)}
         </Text>
       ) : null}
-      <AttributeEditor form={shapeForm} disabled={!canWrite} />
+      <AttributeEditor form={shapeForm} editable={canWrite} />
     </Stack>
   );
 }

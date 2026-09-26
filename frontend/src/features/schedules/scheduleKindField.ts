@@ -1,6 +1,8 @@
 export type SourceScheduleKind = "structure" | "join_detection";
 
-export function defaultCron(kind: SourceScheduleKind): string {
+export function defaultCron(
+  kind: SourceScheduleKind,
+): "0 4 * * *" | "0 2 * * *" {
   return kind === "join_detection" ? "0 4 * * *" : "0 2 * * *";
 }
 

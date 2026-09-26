@@ -5,16 +5,18 @@ import {
   Box,
   Button,
   Group,
-  NumberInput,
-  Select,
   Stack,
   Text,
   TextInput,
-  Textarea,
 } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useMemo, useState } from "react";
 
+import { FieldDisplay } from "@/components/form/FieldDisplay";
+import { NumberField } from "@/components/form/NumberField";
+import { SelectField } from "@/components/form/SelectField";
+import { TextareaField } from "@/components/form/TextareaField";
+import { TextField } from "@/components/form/TextField";
 import type {
   ConnectorSpec,
   JsonSchemaProperty,
@@ -25,7 +27,7 @@ type SpecTreeProps = {
   schema: ConnectorSpec | null;
   value: SourceAccess;
   onChange: (next: SourceAccess) => void;
-  disabled?: boolean;
+  editable: boolean;
 };
 
 function isSecret(prop: JsonSchemaProperty | undefined): boolean {
@@ -56,7 +58,7 @@ export function defaultsFromSchema(schema: ConnectorSpec): SourceAccess {
   return out;
 }
 
-export function SpecTree({ schema, value, onChange, disabled }: SpecTreeProps) {
+export function SpecTree({ schema, value, onChange, editable }: SpecTreeProps) {
   const t = useTranslate();
   const [extraOpen, setExtraOpen] = useState(true);
   const [newExtraKey, setNewExtraKey] = useState("");
@@ -83,7 +85,7 @@ export function SpecTree({ schema, value, onChange, disabled }: SpecTreeProps) {
     const label = (
       <>
         {key}
-        {required.has(key) ? (
+        {editable && required.has(key) ? (
           <Text span c="red" inherit>
             {" "}
             *
@@ -96,13 +98,13 @@ export function SpecTree({ schema, value, onChange, disabled }: SpecTreeProps) {
 
     if (prop.enum?.length) {
       return (
-        <Select
+        <SelectField
           key={key}
           label={label}
           description={description}
           data={prop.enum}
+          editable={editable}
           value={typeof current === "string" ? current : (prop.default as string) ?? prop.enum[0]}
-          disabled={disabled}
           onChange={(v) => setField(key, v ?? prop.enum![0])}
         />
       );
@@ -110,14 +112,14 @@ export function SpecTree({ schema, value, onChange, disabled }: SpecTreeProps) {
 
     if (propType(prop) === "integer" || propType(prop) === "number") {
       return (
-        <NumberInput
+        <NumberField
           key={key}
           label={label}
           description={description}
           min={prop.minimum}
           max={prop.maximum}
           allowDecimal={propType(prop) === "number"}
-          disabled={disabled}
+          editable={editable}
           value={typeof current === "number" ? current : undefined}
           onChange={(v) => setField(key, typeof v === "number" ? v : Number(v) || 0)}
         />
@@ -125,6 +127,11 @@ export function SpecTree({ schema, value, onChange, disabled }: SpecTreeProps) {
     }
 
     if (isSecret(prop) || key === "password") {
+      if (!editable) {
+        return (
+          <FieldDisplay key={key} label={label} description={description} />
+        );
+      }
       return (
         <TextInput
           key={key}
@@ -132,7 +139,6 @@ export function SpecTree({ schema, value, onChange, disabled }: SpecTreeProps) {
           description={description}
           type="password"
           autoComplete="new-password"
-          disabled={disabled}
           value={typeof current === "string" ? current : ""}
           onChange={(e) => setField(key, e.currentTarget.value)}
         />
@@ -145,13 +151,13 @@ export function SpecTree({ schema, value, onChange, disabled }: SpecTreeProps) {
       key === "ssl_client_key"
     ) {
       return (
-        <Textarea
+        <TextareaField
           key={key}
           label={label}
           description={description}
           autosize
           minRows={2}
-          disabled={disabled}
+          editable={editable}
           value={typeof current === "string" ? current : ""}
           onChange={(e) => setField(key, e.currentTarget.value)}
         />
@@ -159,11 +165,11 @@ export function SpecTree({ schema, value, onChange, disabled }: SpecTreeProps) {
     }
 
     return (
-      <TextInput
+      <TextField
         key={key}
         label={label}
         description={description}
-        disabled={disabled}
+        editable={editable}
         value={typeof current === "string" ? current : String(current ?? "")}
         onChange={(e) => setField(key, e.currentTarget.value)}
       />
@@ -240,19 +246,19 @@ export function SpecTree({ schema, value, onChange, disabled }: SpecTreeProps) {
             <Stack gap="xs">
               {Object.entries(extraValue).map(([ek, ev]) => (
                 <Group key={ek} align="flex-end" wrap="nowrap" gap="xs">
-                  <TextInput
+                  <TextField
                     label={ek}
                     style={{ flex: 1 }}
-                    disabled={disabled}
+                    editable={editable}
                     value={ev}
                     onChange={(e) =>
                       setExtra({ ...extraValue, [ek]: e.currentTarget.value })
                     }
                   />
+                  {editable ? (
                   <ActionIcon
                     variant="subtle"
                     color="red"
-                    disabled={disabled}
                     onClick={() => {
                       const next = { ...extraValue };
                       delete next[ek];
@@ -262,19 +268,21 @@ export function SpecTree({ schema, value, onChange, disabled }: SpecTreeProps) {
                   >
                     ×
                   </ActionIcon>
+                  ) : null}
                 </Group>
               ))}
+              {editable ? (
               <Group align="flex-end" gap="xs">
-                <TextInput
+                <TextField
                   label={t("sources.spec.addExtraKey")}
                   style={{ flex: 1 }}
-                  disabled={disabled}
+                  editable
                   value={newExtraKey}
                   onChange={(e) => setNewExtraKey(e.currentTarget.value)}
                 />
                 <Button
                   variant="light"
-                  disabled={disabled || !newExtraKey.trim()}
+                  disabled={!newExtraKey.trim()}
                   onClick={() => {
                     const k = newExtraKey.trim();
                     if (!k || k in extraValue) return;
@@ -285,6 +293,7 @@ export function SpecTree({ schema, value, onChange, disabled }: SpecTreeProps) {
                   {t("sources.spec.addExtra")}
                 </Button>
               </Group>
+              ) : null}
             </Stack>
           ) : null}
         </Box>

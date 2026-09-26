@@ -3,17 +3,13 @@
 import {
   Badge,
   Button,
-  Select,
   Stack,
   Text,
   Group,
   Modal,
   PasswordInput,
-  SegmentedControl,
-  Switch,
   Table,
   Tabs,
-  TextInput,
 } from "@mantine/core";
 import {
   useCan,
@@ -26,6 +22,9 @@ import {
 import { useCallback, useState } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
+import { SegmentedField } from "@/components/form/SegmentedField";
+import { SelectField } from "@/components/form/SelectField";
+import { TextField } from "@/components/form/TextField";
 import { ListTable } from "@/components/display/ListTable";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { FillColumn } from "@/components/layout/FillColumn";
@@ -256,16 +255,20 @@ export function UserList() {
               />
             </Table.Td>
             <Table.Td>
-              <Switch
-                checked={row.status === "active"}
-                onChange={() => statusConfirm.open(row)}
-                disabled={!canWrite?.can || mutation.isPending || isSelf}
-                size="sm"
+              <SegmentedField
+                editable={Boolean(canWrite?.can) && !isSelf}
+                size="xs"
                 aria-label={
                   row.status === "active"
                     ? t("users.status.active")
                     : t("users.status.disabled")
                 }
+                data={[
+                  { value: "active", label: t("users.status.active") },
+                  { value: "disabled", label: t("users.status.disabled") },
+                ]}
+                value={row.status}
+                onChange={() => statusConfirm.open(row)}
               />
             </Table.Td>
             <Table.Td>
@@ -359,7 +362,8 @@ export function UserList() {
         centered
       >
         <Stack gap="sm">
-          <SegmentedControl
+          <SegmentedField
+            editable
             fullWidth
             value={claimMode}
             onChange={(value) =>
@@ -377,7 +381,8 @@ export function UserList() {
             ]}
           />
           {claimMode === "existing" ? (
-            <Select
+            <SelectField
+              editable
               label={t("users.pending.claimExisting")}
               data={claimableUsers}
               clearable
@@ -386,13 +391,15 @@ export function UserList() {
             />
           ) : (
             <>
-              <TextInput
+              <TextField
+                editable
                 label={t("users.fields.account")}
                 value={claimAccount}
                 onChange={(event) => setClaimAccount(event.currentTarget.value)}
                 required
               />
-              <TextInput
+              <TextField
+                editable
                 label={t("users.fields.displayName")}
                 value={claimDisplayName}
                 onChange={(event) =>
@@ -400,7 +407,8 @@ export function UserList() {
                 }
                 required
               />
-              <Select
+              <SelectField
+                editable
                 label={t("users.fields.role")}
                 data={roleOptions}
                 required

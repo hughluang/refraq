@@ -4,9 +4,7 @@ import {
   Button,
   Divider,
   Group,
-  Select,
   Stack,
-  TextInput,
   Title,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
@@ -20,6 +18,8 @@ import { useChangeLanguage } from "next-i18next/client";
 import { useEffect, useMemo, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
+import { SelectField } from "@/components/form/SelectField";
+import { TextField } from "@/components/form/TextField";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { AccountSectionNav } from "@/features/account/AccountSectionNav";
 import { ACCOUNT_SECTION } from "@/features/account/account-sections";
@@ -178,28 +178,32 @@ export function AccountPanel() {
             <form onSubmit={profileForm.onSubmit(onSaveProfile)}>
               <Stack gap="sm">
                 <Title order={4}>{t("account.section.profile")}</Title>
-                <TextInput
+                <TextField
                   label={t("account.fields.displayName")}
                   withAsterisk
+                  editable
                   {...profileForm.getInputProps("display_name")}
                 />
-                <TextInput
+                <TextField
                   label={t("account.fields.email")}
                   description={t("account.fields.email.hint")}
+                  editable
                   {...profileForm.getInputProps("email")}
                 />
-                <Select
+                <SelectField
                   label={t("account.fields.locale")}
                   data={LOCALE_SELECT_DATA}
                   allowDeselect={false}
+                  editable
                   {...profileForm.getInputProps("locale")}
                 />
-                <Select
+                <SelectField
                   label={t("account.fields.displayTimezone")}
                   description={t("account.fields.displayTimezone.hint")}
                   data={timezoneSelectData}
                   searchable
                   allowDeselect={false}
+                  editable
                   {...profileForm.getInputProps("display_timezone")}
                 />
                 <Group justify="flex-end">

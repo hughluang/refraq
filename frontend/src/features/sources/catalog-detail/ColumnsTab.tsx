@@ -9,12 +9,13 @@ import {
   Table,
   Text,
   TextInput,
-  Textarea,
 } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useEffect, useMemo, useRef, useState, useCallback, Fragment } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
+import { TextareaField } from "@/components/form/TextareaField";
+import { TextField } from "@/components/form/TextField";
 import { FillColumn } from "@/components/layout/FillColumn";
 import { patchColumnSemanticsBatch } from "@/features/sources/api/semantics";
 import {
@@ -253,34 +254,28 @@ export function ColumnsTab({
                       : t("catalog.fields.no")}
                   </Table.Td>
                   <Table.Td>
-                    {writable ? (
-                      <TextInput
-                        size="xs"
-                        value={draft.business_name}
-                        onChange={(e) =>
-                          updateDraft(col.id, {
-                            business_name: e.currentTarget.value,
-                          })
-                        }
-                      />
-                    ) : (
-                      col.business_name ?? "—"
-                    )}
+                    <TextField
+                      size="xs"
+                      editable={writable}
+                      value={draft.business_name}
+                      onChange={(e) =>
+                        updateDraft(col.id, {
+                          business_name: e.currentTarget.value,
+                        })
+                      }
+                    />
                   </Table.Td>
                   <Table.Td>
-                    {writable ? (
-                      <TextInput
-                        size="xs"
-                        value={draft.business_description}
-                        onChange={(e) =>
-                          updateDraft(col.id, {
-                            business_description: e.currentTarget.value,
-                          })
-                        }
-                      />
-                    ) : (
-                      col.business_description ?? "—"
-                    )}
+                    <TextField
+                      size="xs"
+                      editable={writable}
+                      value={draft.business_description}
+                      onChange={(e) =>
+                        updateDraft(col.id, {
+                          business_description: e.currentTarget.value,
+                        })
+                      }
+                    />
                   </Table.Td>
                   <Table.Td>
                     <Button
@@ -304,11 +299,11 @@ export function ColumnsTab({
                     <Table.Td colSpan={7}>
                       <Stack gap="xs" p="sm">
                         <Group grow>
-                          <TextInput
+                          <TextField
                             label={t("catalog.semantics.semanticType")}
                             size="xs"
+                            editable={writable}
                             value={draft.column_semantics.semantic_type ?? ""}
-                            disabled={!writable}
                             onChange={(e) =>
                               updateDraft(col.id, {
                                 column_semantics: {
@@ -318,11 +313,11 @@ export function ColumnsTab({
                               })
                             }
                           />
-                          <TextInput
+                          <TextField
                             label={t("catalog.semantics.valuePattern")}
                             size="xs"
+                            editable={writable}
                             value={draft.column_semantics.value_pattern ?? ""}
-                            disabled={!writable}
                             onChange={(e) =>
                               updateDraft(col.id, {
                                 column_semantics: {
@@ -332,11 +327,11 @@ export function ColumnsTab({
                               })
                             }
                           />
-                          <TextInput
+                          <TextField
                             label={t("catalog.semantics.unit")}
                             size="xs"
+                            editable={writable}
                             value={draft.column_semantics.unit ?? ""}
-                            disabled={!writable}
                             onChange={(e) =>
                               updateDraft(col.id, {
                                 column_semantics: {
@@ -352,11 +347,11 @@ export function ColumnsTab({
                         </Text>
                         {draft.enum_catalog.map((entry, idx) => (
                           <Group key={`${col.id}-enum-${idx}`} align="flex-end">
-                            <TextInput
+                            <TextField
                               label={t("catalog.columns.enumCode")}
                               size="xs"
+                              editable={writable}
                               value={entry.code}
-                              disabled={!writable}
                               onChange={(e) => {
                                 const next = [...draft.enum_catalog];
                                 next[idx] = {
@@ -366,11 +361,11 @@ export function ColumnsTab({
                                 updateDraft(col.id, { enum_catalog: next });
                               }}
                             />
-                            <TextInput
+                            <TextField
                               label={t("catalog.columns.enumLabel")}
                               size="xs"
+                              editable={writable}
                               value={entry.label}
-                              disabled={!writable}
                               onChange={(e) => {
                                 const next = [...draft.enum_catalog];
                                 next[idx] = {
@@ -380,11 +375,11 @@ export function ColumnsTab({
                                 updateDraft(col.id, { enum_catalog: next });
                               }}
                             />
-                            <Textarea
+                            <TextareaField
                               label={t("catalog.columns.enumDescription")}
                               size="xs"
+                              editable={writable}
                               value={entry.description ?? ""}
-                              disabled={!writable}
                               minRows={1}
                               onChange={(e) => {
                                 const next = [...draft.enum_catalog];

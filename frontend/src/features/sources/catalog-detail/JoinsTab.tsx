@@ -5,18 +5,18 @@ import {
   Button,
   Drawer,
   Group,
-  NumberInput,
-  Select,
   Stack,
   Table,
   Text,
-  Textarea,
 } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
+import { NumberField } from "@/components/form/NumberField";
+import { SelectField } from "@/components/form/SelectField";
+import { TextareaField } from "@/components/form/TextareaField";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { FillColumn } from "@/components/layout/FillColumn";
 import { SectionHeader } from "@/components/layout/SectionHeader";
@@ -304,7 +304,8 @@ export function JoinsTab({
 
   const pathActions = (
     <Group gap="xs" align="flex-end" wrap="nowrap">
-      <NumberInput
+      <NumberField
+        editable
         label={t("catalog.joins.path.maxHops")}
         value={maxHops}
         onChange={(v) => setMaxHops(typeof v === "number" ? v : 2)}
@@ -329,8 +330,9 @@ export function JoinsTab({
               : t("catalog.joins.add")}
           </Text>
           <Group align="flex-end" grow>
-            <Select
+            <SelectField
               label={t("catalog.joins.from")}
+              editable={editingJoinId == null}
               data={object.columns.map((c) => ({
                 value: c.id,
                 label: columnOptionLabel(c.name, c.locator_key),
@@ -339,10 +341,10 @@ export function JoinsTab({
               onChange={setJoinFromId}
               searchable
               size="sm"
-              disabled={editingJoinId != null}
             />
-            <Select
+            <SelectField
               label={t("catalog.joins.toObject")}
+              editable={editingJoinId == null}
               data={toObjectOptions}
               value={toObjectId}
               onChange={(value) => {
@@ -359,10 +361,10 @@ export function JoinsTab({
                 toObjectLoading ? "…" : t("catalog.joins.toObjectPlaceholder")
               }
               placeholder={t("catalog.joins.toObjectPlaceholder")}
-              disabled={editingJoinId != null}
             />
-            <Select
+            <SelectField
               label={t("catalog.joins.toColumn")}
+              editable={editingJoinId == null && toObjectId != null}
               data={toColumnOptions}
               value={joinToId}
               onChange={setJoinToId}
@@ -377,18 +379,19 @@ export function JoinsTab({
                     : t("catalog.joins.toColumnNeedObject")
               }
               placeholder={t("catalog.joins.toColumnPlaceholder")}
-              disabled={editingJoinId != null || toObjectId == null}
             />
           </Group>
           <Group grow>
-            <Select
+            <SelectField
+              editable
               label={t("catalog.joins.kind")}
               data={["INNER", "LEFT", "RIGHT", "FULL"]}
               value={joinKind}
               onChange={setJoinKind}
               size="sm"
             />
-            <Textarea
+            <TextareaField
+              editable
               label={t("catalog.joins.expression")}
               value={joinExpression}
               onChange={(e) => setJoinExpression(e.currentTarget.value)}
@@ -396,7 +399,8 @@ export function JoinsTab({
               size="sm"
             />
           </Group>
-          <Textarea
+          <TextareaField
+            editable
             label={t("catalog.joins.evidence")}
             value={joinEvidence}
             onChange={(e) => setJoinEvidence(e.currentTarget.value)}

@@ -6,16 +6,16 @@ import {
   Button,
   Group,
   Loader,
-  NumberInput,
-  Select,
   Stack,
   Table,
   Text,
-  TextInput,
 } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useMemo } from "react";
 
+import { NumberField } from "@/components/form/NumberField";
+import { SelectField } from "@/components/form/SelectField";
+import { TextField } from "@/components/form/TextField";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import {
   formatSampleCell,
@@ -89,7 +89,8 @@ export function SampleTab({ object }: SampleTabProps) {
   return (
     <Stack gap="sm">
       <Group align="flex-end" wrap="wrap">
-        <NumberInput
+        <NumberField
+          editable
           label={t("catalog.sample.pageSize")}
           value={limit}
           onChange={(v) => {
@@ -100,7 +101,8 @@ export function SampleTab({ object }: SampleTabProps) {
           max={500}
           w={140}
         />
-        <Select
+        <SelectField
+          editable
           label={t("catalog.sample.filterColumn")}
           placeholder={t("catalog.sample.filterColumnPlaceholder")}
           data={columnOptions}
@@ -113,7 +115,8 @@ export function SampleTab({ object }: SampleTabProps) {
           searchable
           w={200}
         />
-        <Select
+        <SelectField
+          editable={filter.column != null}
           label={t("catalog.sample.filterOp")}
           data={opOptions}
           value={filter.op}
@@ -124,9 +127,9 @@ export function SampleTab({ object }: SampleTabProps) {
           }}
           allowDeselect={false}
           w={140}
-          disabled={!filter.column}
         />
-        <TextInput
+        <TextField
+          editable={needsValue}
           label={t("catalog.sample.filterValue")}
           value={filter.value}
           onChange={(e) => {
@@ -135,9 +138,9 @@ export function SampleTab({ object }: SampleTabProps) {
             setOffset(0);
           }}
           w={200}
-          disabled={!needsValue}
         />
-        <Select
+        <SelectField
+          editable
           label={t("catalog.sample.orderColumn")}
           placeholder={t("catalog.sample.orderColumnPlaceholder")}
           data={columnOptions}
@@ -150,7 +153,8 @@ export function SampleTab({ object }: SampleTabProps) {
           searchable
           w={200}
         />
-        <Select
+        <SelectField
+          editable={orderColumn != null}
           label={t("catalog.sample.orderDirection")}
           data={[
             { value: "asc", label: t("catalog.sample.orderAsc") },
@@ -165,7 +169,6 @@ export function SampleTab({ object }: SampleTabProps) {
           }}
           allowDeselect={false}
           w={120}
-          disabled={!orderColumn}
         />
         <Button
           loading={running}

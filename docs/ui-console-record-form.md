@@ -30,12 +30,12 @@ Create, show, and edit render **one** layout component. Mode is taken from the r
 | State | Route | Fields | Definition save | Lifecycle header actions |
 | --- | --- | --- | --- | --- |
 | create | `routes.create` | Writable, including identity keys that become immutable after create | One create request in the header standard cluster | None |
-| show | `routes.show` | All authorable fields disabled | None | Allowed; header lifecycle cluster; still gated by permission and domain lifecycle |
+| show | `routes.show` | All authorable fields in display mode | None | Allowed; header lifecycle cluster; still gated by permission and domain lifecycle |
 | edit | `routes.edit` | Writable when the actor has the module write permission and domain lifecycle allows authoring | One definition patch in the header standard cluster | Allowed; same gates as show |
 
 A field is writable only when `mode` is `create` or `edit`, the actor has the module write permission, and domain lifecycle allows authoring. Show never writes fields, including when the actor has write permission and the record is unpublished.
 
-Visiting edit when authoring is refused **redirects to show** (keep an in-page tab query if present). The edit URL does not stay up as a disabled form.
+Visiting edit when authoring is refused **redirects to show** (keep an in-page tab query if present). The edit URL does not stay up when authoring is refused.
 
 Create success navigates to that record's edit route (optional tab query). Edit save stays on edit and clears dirty.
 
@@ -43,9 +43,11 @@ A domain lifecycle command that is not a field write (publish, open version, dep
 
 ### 3.1 Controls
 
-Show-state read-only is a form-state lock: the same inputs with `disabled`. Do not replace the shared layout with a second display tree (`DisplayField` or otherwise).
+Show, missing write permission, an identity key that is immutable after create, and a field that is temporarily not authorable on an otherwise editable form all use the same field component in **display mode** (`editable={false}`). Edit mode (`editable={true}`) is the matching input. Display mode follows the value's shape (plain text, option label, yes/no, segmented label, or a cron phrase). It is not a `disabled` or `readOnly` input. There is no third presentation (`locked`, `disabled`, or `readOnly`) for a field the actor cannot change.
 
-An identity key that is immutable after create stays `disabled` on edit (same temporary-lock pattern as a Role `key`). Pages that are not a record-form show still use `DisplayField` for values that are permanently read-only on that page (`frontend/README.md`).
+Create, show, and edit still share one layout. The branch is inside the field component. Do not replace that layout with a second page tree.
+
+Facts that are not form fields (timestamps, job ids) stay on `DisplayField` (`frontend/README.md`).
 
 ### 3.2 Header action clusters
 
@@ -64,7 +66,7 @@ The filled primary is save/create when the definition form is on screen (create/
 3. Treating write permission as edit intent on show.
 4. Staying on the edit URL when authoring is refused.
 5. Splitting definition save across pages or buttons so identity and body are authored on different layouts.
-6. Implementing show-state field lock with `DisplayField` or `readOnly` inputs.
+6. Implementing a non-editable field with a `disabled` or `readOnly` input. Show, missing permission, immutable keys, and in-form temporary locks share display mode.
 7. A form-footer Cancel/Save row that duplicates header standard actions.
 8. Putting the row-scoped verb (drop table) in the page header.
 

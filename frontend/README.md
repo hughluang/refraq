@@ -23,17 +23,16 @@ Browser calls are same-origin via Next rewrite: `/api/*` → backend (`REFRAQ_AP
 
 ## Form display
 
-Permanent read-only vs editable fields must look different. Prefer display-vs-input separation (same idea as react-admin Field / Odoo readonly plain text / Ant Design ProForm read mode)—do not disguise permanent read-only values as `TextInput readOnly`.
+A form field has two presentations, chosen inside the field component by `editable` (`src/components/form/`). A value the actor cannot change is display mode, not a `disabled` or `readOnly` input. There is no third presentation (`locked`, `disabled`, `readOnly`).
 
-| Scenario | Control | Meaning |
-| --- | --- | --- |
-| Permanent read-only on this page | `DisplayField` (`src/components/display/DisplayField.tsx`) | Label + plain text (optional description); not a form control—no border / focus ring |
-| Editable | `TextInput` / `Select` / `PasswordInput` / etc. | Normal interactive inputs |
-| Temporarily locked (missing permission, edit-mode locked key) | Input + `disabled` | Still a form control; grayed to mean “would be editable, not now” |
+| `editable` | Presentation |
+| --- | --- |
+| `true` | The matching editor (text, number, select, tags, switch, segmented control, cron expression). Required markers and errors appear only here. |
+| `false` | Display for that value's shape: plain text (empty is an em dash), the option label, yes/no, the current segmented label, or a cron phrase with the expression beside it. |
 
-Do not use `TextInput readOnly` for “looks like a form row” permanent display. Temporary locks (e.g. `RoleForm` key on edit) stay on `disabled`.
+`editable={false}` covers show, missing write permission, a key that is immutable after create, and a field that is temporarily not authorable inside an otherwise editable form. Save and connectivity tests keep the fields editable; the busy state stays on the button.
 
-Record-form **show** (`docs/ui-console-record-form.md`) is a form-state lock, not permanent read-only on that page: keep the shared inputs and set `disabled`. Do not swap show to `DisplayField`.
+`DisplayField` (`src/components/display/DisplayField.tsx`) is for facts that are not form fields (timestamps, job ids). Record-form show uses the same field components as create and edit (`docs/ui-console-record-form.md`). The branch stays inside the field component.
 
 ## Commands
 

@@ -1,11 +1,12 @@
 "use client";
 
-import { Button, Group, Modal, Switch, Table, Text } from "@mantine/core";
+import { Button, Group, Modal, Table, Text } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
+import { SwitchField } from "@/components/form/SwitchField";
 import { PageChrome } from "@/components/layout/PageChrome";
 import {
   listSourceSchedules,
@@ -138,7 +139,8 @@ export function SourceSchedulesPage({ sourceId }: Props) {
                 </Table.Td>
                 <Table.Td>{timezoneLabel(task)}</Table.Td>
                 <Table.Td>
-                  <Switch
+                  <SwitchField
+                    editable
                     checked={task.enabled}
                     onChange={async (event) => {
                       try {

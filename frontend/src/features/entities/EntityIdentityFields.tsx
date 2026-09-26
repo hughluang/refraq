@@ -1,7 +1,9 @@
 "use client";
 
-import { TextInput, Textarea } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
+
+import { TextareaField } from "@/components/form/TextareaField";
+import { TextField } from "@/components/form/TextField";
 
 type IdentityFormApi = {
   getInputProps: (path: string) => object;
@@ -10,44 +12,40 @@ type IdentityFormApi = {
 type Props = {
   form: IdentityFormApi;
   tableName: { mode: "create" } | { mode: "readonly"; value: string };
-  disabled?: boolean;
+  editable: boolean;
 };
 
-export function EntityIdentityFields({
-  form,
-  tableName,
-  disabled = false,
-}: Props) {
+export function EntityIdentityFields({ form, tableName, editable }: Props) {
   const t = useTranslate();
 
   return (
     <>
       {tableName.mode === "readonly" ? (
-        <TextInput
+        <TextField
           label={t("entities.fields.tableName")}
+          editable={false}
           value={tableName.value}
-          disabled
         />
       ) : (
-        <TextInput
+        <TextField
           label={t("entities.fields.tableName")}
           required
+          editable={editable}
           {...form.getInputProps("table_name")}
-          disabled={disabled}
         />
       )}
-      <TextInput
+      <TextField
         label={t("entities.fields.name")}
-        required
+        required={editable}
+        editable={editable}
         {...form.getInputProps("name")}
-        disabled={disabled}
       />
-      <Textarea
+      <TextareaField
         label={t("entities.fields.description")}
-        required
+        required={editable}
+        editable={editable}
         minRows={2}
         {...form.getInputProps("description")}
-        disabled={disabled}
       />
     </>
   );

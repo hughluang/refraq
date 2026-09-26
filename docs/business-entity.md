@@ -182,7 +182,7 @@ The list shows entity status and the current version's publish status. The page 
 
 The Console list filters by entity status. The control opens on **Not in service** and **In service** and sends that selection as `status`. The list API applies an entity-status predicate only when `status` is present.
 
-`entities` is a record authoring surface (`docs/ui-console-record-form.md`). Create, show, and edit share one layout. Identity and attributes are authored on create and, while the current version is unpublished, on edit. Show renders the same fields disabled. Visiting edit when authoring is refused redirects to show.
+`entities` is a record authoring surface (`docs/ui-console-record-form.md`). Create, show, and edit share one layout. Identity and attributes are authored on create and, while the current version is unpublished, on edit. Show renders the same fields in display mode. Visiting edit when authoring is refused redirects to show.
 
 Page actions:
 

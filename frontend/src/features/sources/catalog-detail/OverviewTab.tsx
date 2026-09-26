@@ -4,14 +4,9 @@ import {
   Badge,
   Button,
   Group,
-  MultiSelect,
-  Select,
   SimpleGrid,
   Stack,
-  TagsInput,
   Text,
-  TextInput,
-  Textarea,
   Title,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
@@ -19,6 +14,11 @@ import { useTranslate } from "@refinedev/core";
 import { useEffect, useMemo, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
+import { MultiSelectField } from "@/components/form/MultiSelectField";
+import { SelectField } from "@/components/form/SelectField";
+import { TagsField } from "@/components/form/TagsField";
+import { TextareaField } from "@/components/form/TextareaField";
+import { TextField } from "@/components/form/TextField";
 import { listBusinessDomains } from "@/features/business-domains/api";
 import type { BusinessDomain } from "@/features/business-domains/types";
 import { patchObjectSemantics } from "@/features/sources/api/semantics";
@@ -121,55 +121,55 @@ export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
   return (
     <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="lg">
       <Stack>
-        <TextInput
+        <TextField
           label={t("catalog.semantics.businessName")}
+          editable={writable}
           {...form.getInputProps("business_name")}
-          disabled={!writable}
         />
-        <Textarea
+        <TextareaField
           label={t("catalog.semantics.businessDescription")}
-          {...form.getInputProps("business_description")}
-          disabled={!writable}
+          editable={writable}
           minRows={3}
+          {...form.getInputProps("business_description")}
         />
-        <Select
+        <SelectField
           label={t("catalog.semantics.category")}
           data={OBJECT_CATEGORY_OPTIONS}
           clearable
           searchable
+          editable={writable}
           {...form.getInputProps("object_category")}
-          disabled={!writable}
         />
-        <Textarea
+        <TextareaField
           label={t("catalog.semantics.grain")}
-          {...form.getInputProps("grain_description")}
-          disabled={!writable}
+          editable={writable}
           minRows={2}
+          {...form.getInputProps("grain_description")}
         />
-        <Select
+        <SelectField
           label={t("catalog.semantics.domain")}
           data={domainOptions}
           clearable
           searchable
+          editable={writable}
           {...form.getInputProps("business_domain_code")}
-          disabled={!writable}
         />
-        <MultiSelect
+        <MultiSelectField
           label={t("catalog.semantics.businessPrimaryKey")}
           data={columnOptions}
           searchable
+          editable={writable}
           {...form.getInputProps("business_primary_key")}
-          disabled={!writable}
         />
-        <TagsInput
+        <TagsField
           label={t("catalog.semantics.evidenceSummary")}
+          editable={writable}
           {...form.getInputProps("evidence_summary")}
-          disabled={!writable}
         />
-        <TagsInput
+        <TagsField
           label={t("catalog.semantics.openQuestions")}
+          editable={writable}
           {...form.getInputProps("open_questions")}
-          disabled={!writable}
         />
         {writable ? (
           <Button

@@ -4,11 +4,12 @@ import {
   Button,
   Group,
   PasswordInput,
-  Select,
   Stack,
-  TextInput,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
+
+import { SelectField } from "@/components/form/SelectField";
+import { TextField } from "@/components/form/TextField";
 import {
   useForm as useRefineForm,
   useList,
@@ -82,15 +83,17 @@ export function UserCreateForm() {
           )}
         >
           <Stack gap="sm">
-            <TextInput
+            <TextField
               label={t("users.fields.account")}
               required
+              editable
               maxLength={64}
               {...form.getInputProps("account")}
             />
-            <TextInput
+            <TextField
               label={t("users.fields.displayName")}
               required
+              editable
               maxLength={64}
               {...form.getInputProps("display_name")}
             />
@@ -100,7 +103,8 @@ export function UserCreateForm() {
               maxLength={256}
               {...form.getInputProps("password")}
             />
-            <Select
+            <SelectField
+              editable
               label={t("users.fields.role")}
               clearable
               placeholder={t("users.roles.none")}

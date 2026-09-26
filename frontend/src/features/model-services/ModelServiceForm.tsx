@@ -1,6 +1,8 @@
 "use client";
 
 import { Button, Checkbox, Group, Stack, Text, TextInput } from "@mantine/core";
+
+import { TextField } from "@/components/form/TextField";
 import { useForm } from "@mantine/form";
 import { useTranslate } from "@refinedev/core";
 
@@ -80,31 +82,33 @@ export function ModelServiceForm({
   return (
     <form onSubmit={form.onSubmit(onSubmit)}>
       <Stack gap="sm">
-        <TextInput
+        <TextField
           label={t("modelServices.fields.display_name")}
           required
+          editable
           {...form.getInputProps("display_name")}
         />
-        <TextInput
+        <TextField
           label={t("modelServices.fields.purpose")}
+          editable={false}
           value={t("modelServices.purpose.embedding")}
-          disabled
         />
-        <TextInput
+        <TextField
           label={t("modelServices.fields.protocol")}
+          editable={false}
           value={t("modelServices.protocol.openai_compat")}
-          disabled
         />
-        <TextInput
+        <TextField
           label={t("modelServices.fields.url")}
           description={t("modelServices.fields.url.help")}
           required
+          editable
           {...form.getInputProps("url")}
         />
-        <TextInput
+        <TextField
           label={t("modelServices.fields.model")}
           required
-          disabled={wireLocked}
+          editable={!wireLocked}
           description={
             wireLocked ? t("modelServices.fields.model.locked") : undefined
           }

@@ -1,9 +1,12 @@
 "use client";
 
-import { Button, Group, Select, Stack, Switch, Text, TextInput } from "@mantine/core";
+import { Button, Group, Stack, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import type { CSSProperties } from "react";
 
+import { SelectField } from "@/components/form/SelectField";
+import { SwitchField } from "@/components/form/SwitchField";
+import { TextField } from "@/components/form/TextField";
 import { EMPTY_ATTRIBUTE, NORMALIZED_TYPES } from "@/features/entities/constants";
 import type { AttributeDraft } from "@/features/entities/types";
 
@@ -19,16 +22,15 @@ export type AttributeFormApi = {
 
 type Props = {
   form: AttributeFormApi;
-  disabled?: boolean;
+  editable: boolean;
 };
 
 /** Column flex basis. Validation copy renders under the row, not inside these columns. */
 const NAME_COL: CSSProperties = { flex: "1 1 10rem", minWidth: 0 };
 const TYPE_COL: CSSProperties = { flex: "1 1 9rem", minWidth: 0 };
 const DESCRIPTION_COL: CSSProperties = { flex: "2 1 12rem", minWidth: 0 };
-
-/** Approx. Input.Label + gap so unlabeled controls line up with labeled inputs. */
-const LABEL_OFFSET_MT = "1.75rem";
+/** Shared width so flag headers line up with the switches under them. */
+const FLAG_COL: CSSProperties = { flex: "0 0 5.5rem" };
 
 function splitFieldError(props: object): {
   message: string | null;
@@ -40,12 +42,51 @@ function splitFieldError(props: object): {
   return { message, inputProps };
 }
 
-export function AttributeEditor({ form, disabled = false }: Props) {
+function ColumnHeading({
+  label,
+  style,
+}: {
+  label: string;
+  style: CSSProperties;
+}) {
+  return (
+    <Text component="div" size="sm" fw={500} style={style}>
+      {label}
+    </Text>
+  );
+}
+
+export function AttributeEditor({ form, editable }: Props) {
   const t = useTranslate();
   const attributes = form.values.attributes;
+  const nameLabel = t("entities.fields.attributeName");
+  const typeLabel = t("entities.fields.normalizedType");
+  const nullableLabel = t("entities.fields.nullable");
+  const uniqueLabel = t("entities.fields.unique");
+  const indexedLabel = t("entities.fields.indexed");
+  const descriptionLabel = t("entities.fields.attributeDescription");
 
   return (
     <Stack gap="sm">
+      <Group align="flex-start" wrap="wrap" gap="xs">
+        <ColumnHeading label={nameLabel} style={NAME_COL} />
+        <ColumnHeading label={typeLabel} style={TYPE_COL} />
+        <ColumnHeading label={nullableLabel} style={FLAG_COL} />
+        <ColumnHeading label={uniqueLabel} style={FLAG_COL} />
+        <ColumnHeading label={indexedLabel} style={FLAG_COL} />
+        <ColumnHeading label={descriptionLabel} style={DESCRIPTION_COL} />
+        {editable ? (
+          <Button
+            size="xs"
+            variant="subtle"
+            aria-hidden
+            tabIndex={-1}
+            style={{ visibility: "hidden" }}
+          >
+            {t("actions.delete")}
+          </Button>
+        ) : null}
+      </Group>
       {attributes.map((_, index) => {
         const nameField = splitFieldError(
           form.getInputProps(`attributes.${index}.name`),
@@ -65,67 +106,65 @@ export function AttributeEditor({ form, disabled = false }: Props) {
         return (
           <Stack key={index} gap={4}>
             <Group align="flex-start" wrap="wrap" gap="xs">
-              <TextInput
-                label={index === 0 ? t("entities.fields.attributeName") : undefined}
-                disabled={disabled}
+              <TextField
+                editable={editable}
                 style={NAME_COL}
                 {...nameField.inputProps}
-                error={nameField.message != null}
+                aria-label={nameLabel}
+                error={editable && nameField.message != null}
               />
-              <Select
-                label={index === 0 ? t("entities.fields.normalizedType") : undefined}
+              <SelectField
                 data={NORMALIZED_TYPES}
                 allowDeselect={false}
-                disabled={disabled}
+                editable={editable}
                 style={TYPE_COL}
                 {...typeField.inputProps}
-                error={typeField.message != null}
+                aria-label={typeLabel}
+                error={editable && typeField.message != null}
               />
-              <Switch
-                label={t("entities.fields.nullable")}
-                disabled={disabled}
-                mt={index === 0 ? LABEL_OFFSET_MT : undefined}
+              <SwitchField
+                editable={editable}
+                style={FLAG_COL}
                 {...form.getInputProps(`attributes.${index}.nullable`, {
                   type: "checkbox",
                 })}
+                aria-label={nullableLabel}
               />
-              <Switch
-                label={t("entities.fields.unique")}
-                disabled={disabled}
-                mt={index === 0 ? LABEL_OFFSET_MT : undefined}
+              <SwitchField
+                editable={editable}
+                style={FLAG_COL}
                 {...form.getInputProps(`attributes.${index}.unique`, {
                   type: "checkbox",
                 })}
+                aria-label={uniqueLabel}
               />
-              <Switch
-                label={t("entities.fields.indexed")}
-                disabled={disabled}
-                mt={index === 0 ? LABEL_OFFSET_MT : undefined}
+              <SwitchField
+                editable={editable}
+                style={FLAG_COL}
                 {...form.getInputProps(`attributes.${index}.indexed`, {
                   type: "checkbox",
                 })}
+                aria-label={indexedLabel}
               />
-              <TextInput
-                label={
-                  index === 0 ? t("entities.fields.attributeDescription") : undefined
-                }
-                disabled={disabled}
+              <TextField
+                editable={editable}
                 style={DESCRIPTION_COL}
                 {...descriptionField.inputProps}
-                error={descriptionField.message != null}
+                aria-label={descriptionLabel}
+                error={editable && descriptionField.message != null}
               />
-              <Button
-                size="xs"
-                variant="subtle"
-                color="red"
-                disabled={disabled}
-                mt={index === 0 ? LABEL_OFFSET_MT : undefined}
-                onClick={() => form.removeListItem("attributes", index)}
-              >
-                {t("actions.delete")}
-              </Button>
+              {editable ? (
+                <Button
+                  size="xs"
+                  variant="subtle"
+                  color="red"
+                  onClick={() => form.removeListItem("attributes", index)}
+                >
+                  {t("actions.delete")}
+                </Button>
+              ) : null}
             </Group>
-            {messages.length > 0 ? (
+            {editable && messages.length > 0 ? (
               <Stack gap={2}>
                 {messages.map((message, messageIndex) => (
                   <Text key={messageIndex} c="red" size="xs">
@@ -137,14 +176,15 @@ export function AttributeEditor({ form, disabled = false }: Props) {
           </Stack>
         );
       })}
-      <Button
-        size="xs"
-        variant="light"
-        disabled={disabled}
-        onClick={() => form.insertListItem("attributes", { ...EMPTY_ATTRIBUTE })}
-      >
-        {t("entities.attributes.add")}
-      </Button>
+      {editable ? (
+        <Button
+          size="xs"
+          variant="light"
+          onClick={() => form.insertListItem("attributes", { ...EMPTY_ATTRIBUTE })}
+        >
+          {t("entities.attributes.add")}
+        </Button>
+      ) : null}
     </Stack>
   );
 }

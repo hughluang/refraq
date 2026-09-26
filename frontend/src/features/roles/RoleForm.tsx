@@ -1,14 +1,9 @@
 "use client";
 
-import {
-  Button,
-  Checkbox,
-  Group,
-  Stack,
-  Text,
-  TextInput,
-} from "@mantine/core";
+import { Button, Checkbox, Group, Stack, Text } from "@mantine/core";
 import { useForm } from "@mantine/form";
+
+import { TextField } from "@/components/form/TextField";
 import {
   useCreate,
   useOne,
@@ -192,16 +187,17 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
       ) : (
         <form onSubmit={form.onSubmit(submit)}>
           <Stack gap="sm">
-            <TextInput
+            <TextField
               label={t("roles.fields.key")}
               required={mode === "create"}
-              disabled={mode === "edit"}
+              editable={mode === "create"}
               maxLength={64}
               {...form.getInputProps("key")}
             />
-            <TextInput
+            <TextField
               label={t("roles.fields.name")}
               required
+              editable
               maxLength={64}
               {...form.getInputProps("name")}
             />

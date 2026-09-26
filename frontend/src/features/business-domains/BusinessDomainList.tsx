@@ -8,13 +8,14 @@ import {
   Table,
   Text,
   TextInput,
-  Textarea,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { CanAccess, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
+import { TextareaField } from "@/components/form/TextareaField";
+import { TextField } from "@/components/form/TextField";
 import { ListTable } from "@/components/display/ListTable";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { PageChrome } from "@/components/layout/PageChrome";
@@ -250,18 +251,21 @@ export function BusinessDomainList() {
       >
         <form onSubmit={createForm.onSubmit((v) => void submitCreate(v))}>
           <Stack>
-            <TextInput
+            <TextField
               label={t("businessDomains.fields.code")}
               required
+              editable
               {...createForm.getInputProps("code")}
             />
-            <TextInput
+            <TextField
               label={t("businessDomains.fields.name")}
               required
+              editable
               {...createForm.getInputProps("name")}
             />
-            <Textarea
+            <TextareaField
               label={t("businessDomains.fields.description")}
+              editable
               {...createForm.getInputProps("description")}
               minRows={2}
             />
@@ -279,18 +283,20 @@ export function BusinessDomainList() {
       >
         <form onSubmit={editForm.onSubmit((v) => void submitEdit(v))}>
           <Stack>
-            <TextInput
+            <TextField
               label={t("businessDomains.fields.code")}
+              editable={false}
               value={editTarget?.code ?? ""}
-              disabled
             />
-            <TextInput
+            <TextField
               label={t("businessDomains.fields.name")}
               required
+              editable
               {...editForm.getInputProps("name")}
             />
-            <Textarea
+            <TextareaField
               label={t("businessDomains.fields.description")}
+              editable
               {...editForm.getInputProps("description")}
               minRows={2}
             />

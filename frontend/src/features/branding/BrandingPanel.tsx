@@ -1,5 +1,8 @@
 "use client";
 
+import { DisplayField } from "@/components/display/DisplayField";
+import { SwitchField } from "@/components/form/SwitchField";
+import { TextField } from "@/components/form/TextField";
 import { generateColors } from "@mantine/colors-generator";
 import {
   Alert,
@@ -12,10 +15,8 @@ import {
   Paper,
   SimpleGrid,
   Stack,
-  Switch,
   Tabs,
   Text,
-  TextInput,
   Title,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
@@ -329,10 +330,10 @@ export function BrandingPanel() {
                 {LOCALE_CATALOG.map(({ code }) => (
                   <Tabs.Panel key={code} value={code} pt="md">
                     <Stack>
-                      <TextInput
+                      <TextField
                         label={t("branding.fields.name")}
                         maxLength={80}
-                        disabled={!canWrite?.can}
+                        editable={Boolean(canWrite?.can)}
                         {...form.getInputProps(`brandNames.${code}`)}
                         rightSection={
                           canWrite?.can && form.values.brandNames[code] ? (
@@ -349,11 +350,11 @@ export function BrandingPanel() {
                         }
                         rightSectionWidth={64}
                       />
-                      <TextInput
+                      <TextField
                         label={t("branding.fields.tagline")}
                         description={t("branding.fields.tagline.help")}
                         maxLength={160}
-                        disabled={!canWrite?.can}
+                        editable={Boolean(canWrite?.can)}
                         {...form.getInputProps(`taglines.${code}`)}
                         rightSection={
                           canWrite?.can && form.values.taglines[code] ? (
@@ -378,10 +379,10 @@ export function BrandingPanel() {
 
             <Paper withBorder p="md">
               <Stack>
+                {canWrite?.can ? (
                 <ColorInput
                   label={t("branding.fields.color")}
                   placeholder={DEFAULT_PRIMARY_COLOR}
-                  disabled={!canWrite?.can}
                   format="hex"
                   swatches={[
                     "#228be6",
@@ -393,6 +394,12 @@ export function BrandingPanel() {
                   ]}
                   {...form.getInputProps("primaryColor")}
                 />
+                ) : (
+                  <DisplayField
+                    label={t("branding.fields.color")}
+                    value={form.values.primaryColor || undefined}
+                  />
+                )}
                 <Group justify="space-between">
                   <Text size="xs" c="dimmed">
                     {t("branding.contrast.ratio", {
@@ -414,16 +421,16 @@ export function BrandingPanel() {
                     {t("branding.contrast.body")}
                   </Alert>
                 ) : null}
-                <Switch
+                <SwitchField
                   label={t("branding.fields.showLogo")}
-                  disabled={!canWrite?.can}
+                  editable={Boolean(canWrite?.can)}
                   {...form.getInputProps("showLogo", {
                     type: "checkbox",
                   })}
                 />
-                <Switch
+                <SwitchField
                   label={t("branding.fields.showName")}
-                  disabled={!canWrite?.can}
+                  editable={Boolean(canWrite?.can)}
                   {...form.getInputProps("showBrandNameWithLogo", {
                     type: "checkbox",
                   })}
@@ -433,18 +440,25 @@ export function BrandingPanel() {
 
             <Paper withBorder p="md">
               <Stack>
+                {canWrite?.can ? (
                 <FileInput
                   label={t("branding.fields.logo")}
                   description={t("branding.fields.logo.help")}
                   accept="image/png,image/jpeg,image/svg+xml"
                   clearable
                   value={logoFile}
-                  disabled={!canWrite?.can}
                   onChange={(file) => {
                     setLogoFile(file);
                     if (file) setLogoCleared(false);
                   }}
                 />
+                ) : (
+                  <DisplayField
+                    label={t("branding.fields.logo")}
+                    description={t("branding.fields.logo.help")}
+                    value={branding.logo_source ?? undefined}
+                  />
+                )}
                 {canWrite?.can
                 && showsRestoreAssetControl(
                   branding.logo_source,
@@ -462,18 +476,25 @@ export function BrandingPanel() {
                     {t("branding.assets.clearLogo")}
                   </Button>
                 ) : null}
+                {canWrite?.can ? (
                 <FileInput
                   label={t("branding.fields.favicon")}
                   description={t("branding.fields.favicon.help")}
                   accept="image/png,image/vnd.microsoft.icon,.ico"
                   clearable
                   value={faviconFile}
-                  disabled={!canWrite?.can}
                   onChange={(file) => {
                     setFaviconFile(file);
                     if (file) setFaviconCleared(false);
                   }}
                 />
+                ) : (
+                  <DisplayField
+                    label={t("branding.fields.favicon")}
+                    description={t("branding.fields.favicon.help")}
+                    value={branding.favicon_source ?? undefined}
+                  />
+                )}
                 {canWrite?.can
                 && showsRestoreAssetControl(
                   branding.favicon_source,

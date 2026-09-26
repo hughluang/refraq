@@ -1,19 +1,14 @@
 "use client";
 
-import {
-  Button,
-  Group,
-  Select,
-  Stack,
-  Switch,
-  Text,
-  TextInput,
-} from "@mantine/core";
+import { Button, Group, Stack, Text, TextInput } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useList, useTranslate } from "@refinedev/core";
 import { useEffect, useMemo, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
+import { SelectField } from "@/components/form/SelectField";
+import { SwitchField } from "@/components/form/SwitchField";
+import { TextField } from "@/components/form/TextField";
 import { ModuleId } from "@/features/console/module-identity";
 import type { RoleRow } from "@/features/roles/types";
 import { getIdentityProviderSpec } from "@/features/identity-providers/api";
@@ -211,21 +206,14 @@ export function SpecDrivenForm({
     const description = prop?.description;
 
     if (key === "issuer") {
-      if (provider) {
-        return (
-          <DisplayField
-            key={key}
-            label={label}
-            description={t("identityProviders.fields.issuerLocked")}
-            value={form.values.issuer}
-          />
-        );
-      }
       return (
-        <TextInput
+        <TextField
           key={key}
-          label={label}
-          description={description}
+          label={fieldLabel("issuer", markRequired && !provider)}
+          description={
+            provider ? t("identityProviders.fields.issuerLocked") : description
+          }
+          editable={!provider}
           {...form.getInputProps("issuer")}
         />
       );
@@ -233,10 +221,11 @@ export function SpecDrivenForm({
 
     if (key === "default_role_id") {
       return (
-        <Select
+        <SelectField
           key={key}
           label={label}
           description={description}
+          editable
           data={roleOptions}
           clearable
           value={form.values.default_role_id}
@@ -247,10 +236,11 @@ export function SpecDrivenForm({
 
     if (key === "auto_provision" || propType(prop) === "boolean") {
       return (
-        <Switch
+        <SwitchField
           key={key}
           label={label}
           description={description}
+          editable
           {...form.getInputProps(key, { type: "checkbox" })}
         />
       );
@@ -274,10 +264,11 @@ export function SpecDrivenForm({
     }
 
     return (
-      <TextInput
+      <TextField
         key={key}
         label={label}
         description={description}
+        editable
         {...form.getInputProps(key)}
       />
     );
@@ -286,17 +277,19 @@ export function SpecDrivenForm({
   return (
     <form onSubmit={form.onSubmit(onSubmit)}>
       <Stack gap="sm">
-        <TextInput
+        <TextField
           label={fieldLabel("display_name", true)}
+          editable
           {...form.getInputProps("display_name")}
         />
-        <TextInput
+        <TextField
           label={t("identityProviders.fields.protocol")}
+          editable={false}
           value={form.values.protocol}
-          disabled
         />
-        <Switch
+        <SwitchField
           label={t("identityProviders.fields.enabled")}
+          editable
           {...form.getInputProps("enabled", { type: "checkbox" })}
         />
         {callbackUrl ? (

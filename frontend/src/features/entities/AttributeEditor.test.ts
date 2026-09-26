@@ -107,6 +107,7 @@ describe("AttributeEditor", () => {
         MantineProvider,
         null,
         createElement(AttributeEditor, {
+          editable: true,
           form: formApi([draft({ name: "BadName" })], {
             "attributes.0.name": LONG_ERROR,
             "attributes.0.description":
@@ -161,6 +162,7 @@ describe("AttributeEditor", () => {
         MantineProvider,
         null,
         createElement(AttributeEditor, {
+          editable: true,
           form: formApi([draft()]),
         }),
       ),
@@ -173,5 +175,81 @@ describe("AttributeEditor", () => {
     expect(nameCol.style.minWidth).toBe("0px");
     expect(container.querySelector(".mantine-InputWrapper-error")).toBeNull();
     expect(screen.queryByText(LONG_ERROR)).toBeNull();
+  });
+
+  const columnHeaders = [
+    "entities.fields.attributeName",
+    "entities.fields.normalizedType",
+    "entities.fields.nullable",
+    "entities.fields.unique",
+    "entities.fields.indexed",
+    "entities.fields.attributeDescription",
+  ];
+
+  it.each([true, false])(
+    "shows each column header once when editable is %s",
+    async (editable) => {
+      const { AttributeEditor } = await import(
+        "@/features/entities/AttributeEditor"
+      );
+
+      render(
+        createElement(
+          MantineProvider,
+          null,
+          createElement(AttributeEditor, {
+            editable,
+            form: formApi([draft(), draft({ name: "other_name", nullable: false })]),
+          }),
+        ),
+      );
+
+      for (const header of columnHeaders) {
+        const nodes = screen.getAllByText(header);
+        expect(nodes).toHaveLength(1);
+        expect(nodes[0]?.closest("label")).toBeNull();
+      }
+    },
+  );
+
+  it("names each editable control with its column", async () => {
+    const { AttributeEditor } = await import(
+      "@/features/entities/AttributeEditor"
+    );
+
+    render(
+      createElement(
+        MantineProvider,
+        null,
+        createElement(AttributeEditor, {
+          editable: true,
+          form: formApi([draft(), draft({ name: "other_name" })]),
+        }),
+      ),
+    );
+
+    expect(
+      screen.getAllByRole("textbox", { name: "entities.fields.attributeName" }),
+    ).toHaveLength(2);
+    expect(
+      screen.getAllByRole("textbox", {
+        name: "entities.fields.attributeDescription",
+      }),
+    ).toHaveLength(2);
+    expect(
+      screen.getAllByRole("combobox", { name: "entities.fields.normalizedType" }),
+    ).toHaveLength(2);
+    expect(
+      screen.getAllByRole("switch", { name: "entities.fields.nullable" }),
+    ).toHaveLength(2);
+    expect(
+      screen.getAllByRole("switch", { name: "entities.fields.unique" }),
+    ).toHaveLength(2);
+    expect(
+      screen.getAllByRole("switch", { name: "entities.fields.indexed" }),
+    ).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "actions.delete" })).toHaveLength(
+      2,
+    );
   });
 });

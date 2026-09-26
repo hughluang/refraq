@@ -5,12 +5,9 @@ import {
   Button,
   Group,
   Modal,
-  Select,
   Stack,
   Table,
   Text,
-  TextInput,
-  Textarea,
   Tooltip,
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
@@ -19,6 +16,9 @@ import Link from "next/link";
 import { useCallback, useState } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
+import { SelectField } from "@/components/form/SelectField";
+import { TextareaField } from "@/components/form/TextareaField";
+import { TextField } from "@/components/form/TextField";
 import { ListTable } from "@/components/display/ListTable";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { PageChrome } from "@/components/layout/PageChrome";
@@ -461,26 +461,30 @@ export function SourceList() {
           >
             <Stack gap="sm">
               {!editing ? (
-                <TextInput
+                <TextField
                   label={t("sources.fields.key")}
                   required
+                  editable
                   {...form.getInputProps("key")}
                 />
               ) : null}
-              <TextInput
+              <TextField
                 label={t("sources.fields.name")}
                 required
+                editable
                 {...form.getInputProps("name")}
               />
-              <Textarea
+              <TextareaField
                 label={t("sources.fields.description")}
                 autosize
                 minRows={2}
+                editable
                 {...form.getInputProps("description")}
               />
               {editing ? (
-                <Select
+                <SelectField
                   label={t("sources.fields.status")}
+                  editable
                   data={[
                     { value: "active", label: "active" },
                     { value: "disabled", label: "disabled" },
@@ -488,10 +492,11 @@ export function SourceList() {
                   {...form.getInputProps("status")}
                 />
               ) : null}
-              <Select
+              <SelectField
                 label={t("sources.fields.engine")}
                 data={ENGINE_OPTIONS}
                 required
+                editable
                 placeholder={t("sources.validation.required")}
                 value={form.values.engine || null}
                 onChange={(value) =>
@@ -503,7 +508,7 @@ export function SourceList() {
                 schema={schema}
                 value={access}
                 onChange={setAccess}
-                disabled={busy || testing}
+                editable
               />
 
               <Group justify="space-between">

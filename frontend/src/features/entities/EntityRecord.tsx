@@ -604,7 +604,7 @@ export function EntityRecord(props: Props) {
                       value: entity?.table_name ?? form.values.table_name,
                     }
               }
-              disabled={!fieldsWritable}
+              editable={fieldsWritable}
             />
           </Stack>
         }

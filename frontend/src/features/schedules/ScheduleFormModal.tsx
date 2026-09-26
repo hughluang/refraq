@@ -1,15 +1,6 @@
 "use client";
 
-import {
-  Button,
-  Group,
-  Modal,
-  NumberInput,
-  Select,
-  Stack,
-  Switch,
-  TextInput,
-} from "@mantine/core";
+import { Button, Group, Modal, Stack } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useNotification, useTranslate } from "@refinedev/core";
 import { useEffect, useState } from "react";
@@ -30,6 +21,12 @@ import {
   scheduleKindFromTask,
 } from "@/features/schedules/scheduleKindField";
 import type { ScheduledTask } from "@/features/schedules/types";
+import { CronField } from "@/components/form/CronField";
+import type { PresetCron } from "@/components/form/cronPhrase";
+import { NumberField } from "@/components/form/NumberField";
+import { SelectField } from "@/components/form/SelectField";
+import { SwitchField } from "@/components/form/SwitchField";
+import { TextField } from "@/components/form/TextField";
 import { ApiError } from "@/lib/api";
 
 const PRESETS = [
@@ -60,6 +57,23 @@ type FormValues = {
   enabled: boolean;
   name: string;
 };
+
+function displayedCron(
+  cadence: "hourly" | "daily" | "weekly",
+  kind: FormValues["kind"],
+): PresetCron {
+  if (cadence === "daily") return defaultCron(kind);
+  if (cadence === "hourly") return "0 * * * *";
+  return "0 2 * * 1";
+}
+
+function presetCron(
+  cadence: CadenceKind,
+  kind: FormValues["kind"],
+): PresetCron | null {
+  if (cadence === "custom" || cadence === "interval") return null;
+  return displayedCron(cadence, kind);
+}
 
 function inferCadence(
   task: ScheduledTask | null,
@@ -146,13 +160,7 @@ export function ScheduleFormModal({
               name,
             }
           : {
-              cron:
-                form.values.cadence === "custom"
-                  ? form.values.cron.trim()
-                  : form.values.cadence === "daily"
-                    ? defaultCron(form.values.kind)
-                    : (PRESETS.find((p) => p.value === form.values.cadence)
-                        ?.cron ?? form.values.cron.trim()),
+              cron: form.values.cron.trim(),
               interval_seconds: null as number | null,
               schedule_timezone: timezone,
               running_timeout_sec,
@@ -190,7 +198,8 @@ export function ScheduleFormModal({
     <Modal opened={opened} onClose={onClose} title={title} size="md">
       <Stack gap="sm">
         {schedule ? null : (
-          <Select
+          <SelectField
+            editable
             label={t("schedules.fields.kind")}
             data={[
               {
@@ -214,7 +223,9 @@ export function ScheduleFormModal({
             }}
           />
         )}
-        <Select
+        <SelectField
+          editable
+          allowDeselect={false}
           label={t("schedules.fields.cadence")}
           data={PRESETS.map((preset) => ({
             value: preset.value,
@@ -223,38 +234,45 @@ export function ScheduleFormModal({
                 ? t(dailyPresetLabelKey(form.values.kind))
                 : t(`schedules.preset.${preset.value}`),
           }))}
-          {...form.getInputProps("cadence")}
+          value={form.values.cadence}
+          onChange={(value) => {
+            const cadence = value as CadenceKind;
+            const next: Partial<FormValues> = { cadence };
+            const preset = presetCron(cadence, form.values.kind);
+            if (preset != null) next.cron = preset;
+            form.setValues(next);
+          }}
         />
         {form.values.cadence === "interval" ? (
-          <NumberInput
+          <NumberField
+            editable
             label={t("schedules.fields.intervalSeconds")}
             min={1}
             {...form.getInputProps("interval_seconds")}
           />
-        ) : (
-          <TextInput
+        ) : form.values.cadence === "custom" ? (
+          <CronField
+            editable
             label={t("schedules.fields.cron")}
-            disabled={form.values.cadence !== "custom"}
-            value={
-              form.values.cadence === "custom"
-                ? form.values.cron
-                : form.values.cadence === "daily"
-                  ? defaultCron(form.values.kind)
-                  : (PRESETS.find((p) => p.value === form.values.cadence)
-                      ?.cron ?? form.values.cron)
-            }
-            onChange={(event) =>
-              form.setFieldValue("cron", event.currentTarget.value)
-            }
+            value={form.values.cron}
+            onChange={(cron) => form.setFieldValue("cron", cron)}
+          />
+        ) : (
+          <CronField
+            editable={false}
+            label={t("schedules.fields.cron")}
+            value={displayedCron(form.values.cadence, form.values.kind)}
           />
         )}
-        <Select
+        <SelectField
+          editable
           label={t("schedules.fields.timezone")}
           data={TIMEZONES}
           searchable
           {...form.getInputProps("schedule_timezone")}
         />
-        <NumberInput
+        <NumberField
+          editable
           label={t("schedules.fields.runningTimeout")}
           description={t("schedules.fields.runningTimeoutHelp")}
           min={1}
@@ -272,11 +290,13 @@ export function ScheduleFormModal({
             }
           }}
         />
-        <TextInput
+        <TextField
+          editable
           label={t("schedules.fields.name")}
           {...form.getInputProps("name")}
         />
-        <Switch
+        <SwitchField
+          editable
           label={t("schedules.fields.enabled")}
           checked={form.values.enabled}
           onChange={(event) =>

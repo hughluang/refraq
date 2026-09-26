@@ -5,7 +5,6 @@ import {
   Badge,
   Button,
   Group,
-  NumberInput,
   Stack,
   Text,
 } from "@mantine/core";
@@ -17,6 +16,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
+import { NumberField } from "@/components/form/NumberField";
 import { PageError } from "@/components/feedback/PageError";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageChrome } from "@/components/layout/PageChrome";
@@ -198,10 +198,11 @@ export function SettingsPanel() {
                     );
                     return (
                     <Stack key={item.key} gap="xs" p="sm">
-                      <NumberInput
+                      <NumberField
                         label={t(item.label_key)}
                         description={t(item.help_key)}
                         value={draft}
+                        editable={Boolean(canWrite?.can)}
                         onChange={(value) =>
                           setDrafts((current) => ({
                             ...current,
@@ -211,7 +212,6 @@ export function SettingsPanel() {
                         min={item.constraint.minimum}
                         max={item.constraint.maximum}
                         allowDecimal={false}
-                        disabled={!canWrite?.can}
                         error={
                           !admitted.ok && draft !== item.value
                             ? t(draftReasonKey(admitted.reason), {
