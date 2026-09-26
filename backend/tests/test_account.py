@@ -149,16 +149,12 @@ def test_update_profile_display_timezone_path_value_error(
 
 
 def test_display_timezone_does_not_change_instant_wire(
-    client: TestClient, store_bundle
+    client: TestClient,
 ) -> None:
     """HTTP Instant fields stay UTC Z after Display TZ is set (Console-only formatting)."""
     from backend.core.time import format_instant, utc_now
 
-    user_store, _, _, _ = store_bundle
-    user = user_store.get_by_account("root")
-    assert user is not None
-    when = utc_now().replace(microsecond=0)
-    user_store.update_last_login(user.id, when)
+    before = utc_now()
     _login(client)
     assert (
         client.patch(
@@ -167,10 +163,11 @@ def test_display_timezone_does_not_change_instant_wire(
         == 200
     )
     listed = client.get("/users")
+    after = utc_now()
     assert listed.status_code == 200
     row = next(item for item in listed.json()["items"] if item["account"] == "root")
     assert row["display_timezone"] == "Asia/Shanghai"
-    assert row["last_login_at"] == format_instant(when)
+    assert format_instant(before) <= row["last_login_at"] <= format_instant(after)
     assert row["last_login_at"].endswith("Z")
 
 

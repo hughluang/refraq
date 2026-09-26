@@ -32,6 +32,27 @@ services:
       timeout: 5s
       retries: 10
 
+  # POSTGRES_DB only creates `refraq`. Entity Tables live in `refraq_entity`
+  # on the same instance. This one-shot is required on every up, including
+  # an already-initialized volume (initdb.d would not run again).
+  ensure-entity-db:
+    image: pgvector/pgvector:pg18
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      TZ: UTC
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        set -euo pipefail
+        until pg_isready -h postgres -U refraq -d refraq; do sleep 1; done
+        if ! psql -h postgres -U refraq -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='refraq_entity'" | grep -q 1; then
+          psql -h postgres -U refraq -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE refraq_entity"
+        fi
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   redis:
     image: redis:7-alpine
     volumes:
@@ -86,6 +107,7 @@ services:
       REFRAQ_STORE_BACKEND: persistent
       TZ: UTC
       DATABASE_URL: postgresql+psycopg://refraq:${POSTGRES_PASSWORD}@postgres:5432/refraq
+      ENTITY_DATABASE_URL: postgresql+psycopg://refraq:${POSTGRES_PASSWORD}@postgres:5432/refraq_entity
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/2
       REFRAQ_SECRETS_MASTER_KEY: ${REFRAQ_SECRETS_MASTER_KEY}
@@ -96,6 +118,8 @@ services:
         condition: service_healthy
       api:
         condition: service_healthy
+      ensure-entity-db:
+        condition: service_completed_successfully
 
   # Run exactly one Beat replica (Postgres Scheduled Task SSOT; do not scale).
   beat:

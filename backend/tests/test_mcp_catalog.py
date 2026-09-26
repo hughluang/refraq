@@ -75,7 +75,7 @@ def test_catalog_names_match_registered_tools() -> None:
     registered = {tool.name for tool in asyncio.run(MCPServer.list_tools(mcp))}
     assert registered == {spec.name for spec in MCP_TOOLS}
     assert len(MCP_TOOLS) == 23
-    assert {"get_job"}.isdisjoint(registered)
+    assert {"get_job", "list_entities", "get_entity"}.isdisjoint(registered)
     assert {
         "get_object_ddl",
         "get_object_semantics",

@@ -6,7 +6,7 @@ This document defines what each module is responsible for, what it may depend on
 
 **Backend structure contract** (package tiers, published APIs, placement, dependency whitelist, enforcement): [`docs/backend-layout.md`](backend-layout.md). This file focuses on responsibilities and ownership; when they disagree on layout, `backend-layout.md` wins.
 
-The layout covers the **Management Console**, **Management Foundation**, and **metadata foundation**. Later Data Product catalog / Entity modules arrive only with real code.
+The layout covers the **Management Console**, **Management Foundation**, the **metadata foundation**, and the **entity** product domain. Do not pre-create empty packages for **Data Channel** or Data Product catalog.
 
 ## 2. Backend Modules
 
@@ -136,8 +136,31 @@ Must not contain:
 - Celery app / Beat scheduler ownership (stay in `worker/`)
 - Session cookie issuance (stay in `admin/`)
 - Importing `worker.app`
-- Pre-scaffolded empty subpackages for Entity / Data Product catalog
+- Pre-scaffolded empty subpackages for Data Product catalog
+- Importing `entity` domain modules
 - Single-language orchestration or persistence at the package root
+
+### `backend/entity/`
+
+Responsibilities:
+
+- **Business Entity** definition, **Entity Version**, and attributes
+- Change classifier: a pure function of two definition shapes (`breaking` / `non_breaking` / `unchanged`); not a write gate
+- Stored publish status (`unpublished` / `publishing` / `published`) and Entity deprecate
+- Derived `table_present` from the stored attribute-set snapshot and the latest publish **Job**
+- Minting `entity_reconcile` (publish create) and `entity_table_drop` Jobs; own Celery task and kind dispatch (`entity/tasks.py`), discovered by `worker`. Not registered on `metadata.tasks`
+- Domain use-case HTTP under `entity/routers/` and shapes under `entity/schemas/`
+- Published API listed in `docs/backend-layout.md` §3
+
+Must not contain:
+
+- Owning the platform Job table (lives in `backend/jobs/`)
+- An entity-database engine or pool in the API or MCP process; that pool exists only in the worker
+- Duplicating the **Normalized Type** closed set (import the published `metadata` leaf module)
+- Mapping, transform, lineage, row movement, or write admission (**Data Channel**)
+- A read path for Entity Table contents
+- Importing `worker.app`
+- Pre-scaffolded empty subpackages for Data Channel
 
 ### `backend/worker/`
 
@@ -291,7 +314,8 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 - `admin` → `core` (+ own modules)
 - `jobs` → `core`; published `admin` (including System Parameter resolver) when needed
 - `metadata` → `core`; published `admin` / `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; process entries `mcp_http` / `mcp_server` may import `worker.parameters`
-- `worker` → `core`; published surfaces for assembly
+- `entity` → `core`; published `admin` / `jobs`; published `metadata.catalog.normalized_type`
+- `worker` → `core`; published surfaces for assembly, including `entity.tasks`
 - `main` → `core` + package routers / bootstrap via published surfaces
 - `alembic` → `core` Base + every package `models` module
 
@@ -314,6 +338,7 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 - Do not house Job observation UI or `/jobs` HTTP in `features/sources` (belongs in `features/jobs`)
 - Do not import `worker.app` from domain or HTTP adapters
 - Do not subclass concrete `admin.errors` types from product domains or platform primitives (use `core.errors.AppError`)
+- Do not import `entity` from `metadata` domain modules. The coupling direction is `entity` → `metadata` (closed vocabularies only). `metadata` importing an entity job runner would close a package-level cycle.
 
 ## 6. First-Slice Ownership
 

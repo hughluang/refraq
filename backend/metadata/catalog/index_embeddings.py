@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 UpsertOutcome = Literal["written", "skipped", "failed"]
 _EMBED_BATCH = 32
-_LOAD_EVERY = 64
+LOAD_EVERY = 128
 _REASON_MAX = 300
 _LENGTH_MISMATCH = "embeddings response length mismatch"
 
@@ -171,7 +171,7 @@ def _refresh_source_embeddings(
     for index, obj in enumerate(objects, start=1):
         detail = store.get_object(obj.id)
         if detail is None:
-            if progress is not None and (index % _LOAD_EVERY == 0 or index == listed):
+            if progress is not None and (index % LOAD_EVERY == 0 or index == listed):
                 progress.loading(objects=listed, loaded=index)
             continue
         objects_attempted += 1
@@ -188,7 +188,7 @@ def _refresh_source_embeddings(
                     column_embedding_text(col, object_name=detail.name),
                 )
             )
-        if progress is not None and (index % _LOAD_EVERY == 0 or index == listed):
+        if progress is not None and (index % LOAD_EVERY == 0 or index == listed):
             progress.loading(objects=listed, loaded=index)
     total = len(pending)
     if progress is not None:

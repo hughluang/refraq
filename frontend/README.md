@@ -33,6 +33,8 @@ Permanent read-only vs editable fields must look different. Prefer display-vs-in
 
 Do not use `TextInput readOnly` for “looks like a form row” permanent display. Temporary locks (e.g. `RoleForm` key on edit) stay on `disabled`.
 
+Record-form **show** (`docs/ui-console-record-form.md`) is a form-state lock, not permanent read-only on that page: keep the shared inputs and set `disabled`. Do not swap show to `DisplayField`.
+
 ## Commands
 
 ```bash

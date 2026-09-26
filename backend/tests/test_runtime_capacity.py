@@ -40,7 +40,9 @@ from backend.core.runtime import (
     set_process_role,
 )
 from backend.core.worker_runtime import init_parent_worker_runtime
+from backend.entity.entity_db import open_entity_pool_when_persistent
 from backend.main import app
+from backend.worker.app import ensure_persistent_entity_pool_or_abort
 
 
 def test_healthz_and_metrics_bypass_and_render() -> None:
@@ -257,6 +259,7 @@ def test_init_parent_worker_runtime_logs_banner(
         init_parent_worker_runtime()
     assert "runtime capacity role=worker" in caplog.text
     assert "admission_slots=0" in caplog.text
+    assert "runtime capacity entity pool=" in caplog.text
     reset_runtime_capacity()
 
 
@@ -272,6 +275,89 @@ def test_init_parent_worker_runtime_marks_role_before_banner(
     assert "runtime capacity role=worker" in caplog.text
     set_process_role("api")
     reset_runtime_capacity()
+
+
+def test_open_entity_pool_is_noop_in_memory() -> None:
+    open_entity_pool_when_persistent()
+
+
+class _PersistentNoEntityUrl:
+    store_backend = "persistent"
+    entity_database_url = None
+
+
+def test_open_entity_pool_requires_url_when_persistent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "backend.entity.entity_db.get_settings", lambda: _PersistentNoEntityUrl()
+    )
+    with pytest.raises(ValueError, match="ENTITY_DATABASE_URL"):
+        open_entity_pool_when_persistent()
+
+
+def test_entity_pool_gate_aborts_when_url_missing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        "backend.entity.entity_db.get_settings", lambda: _PersistentNoEntityUrl()
+    )
+    with pytest.raises(SystemExit) as aborted:
+        ensure_persistent_entity_pool_or_abort()
+    assert aborted.value.code == 1
+    err = capsys.readouterr().err
+    assert "entity pool open failed" in err
+    assert "ENTITY_DATABASE_URL" in err
+
+
+def test_entity_pool_gate_aborts_when_connect_fails(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def _refuse() -> None:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr("backend.worker.app.init_worker_entity_pool", _refuse)
+    with pytest.raises(SystemExit) as aborted:
+        ensure_persistent_entity_pool_or_abort()
+    assert aborted.value.code == 1
+    assert "connection refused" in capsys.readouterr().err
+
+
+def test_celeryd_after_setup_propagates_entity_pool_systemexit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from celery.signals import celeryd_after_setup
+
+    monkeypatch.setattr(
+        "backend.entity.entity_db.get_settings", lambda: _PersistentNoEntityUrl()
+    )
+    with pytest.raises(SystemExit) as aborted:
+        celeryd_after_setup.send(sender="test@host")
+    assert aborted.value.code == 1
+
+
+def test_celery_signal_send_swallows_exception_not_systemexit() -> None:
+    from celery.utils.dispatch import Signal
+
+    swallowed = Signal(name="entity-pool-exception", providing_args=set())
+
+    def _raise_exception(**_kwargs: object) -> None:
+        raise ValueError("ENTITY_DATABASE_URL")
+
+    swallowed.connect(_raise_exception, weak=False)
+    responses = swallowed.send(sender="test@host")
+    assert len(responses) == 1
+    assert isinstance(responses[0][1], ValueError)
+
+    aborting = Signal(name="entity-pool-systemexit", providing_args=set())
+
+    def _raise_systemexit(**_kwargs: object) -> None:
+        raise SystemExit(1)
+
+    aborting.connect(_raise_systemexit, weak=False)
+    with pytest.raises(SystemExit) as aborted:
+        aborting.send(sender="test@host")
+    assert aborted.value.code == 1
 
 
 def test_worker_process_role_engine_omits_statement_timeout(

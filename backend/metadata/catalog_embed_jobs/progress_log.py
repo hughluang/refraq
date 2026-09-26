@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from backend.jobs.store import append_job_log
-from backend.metadata.catalog.index_embeddings import EmbeddingRefreshCounts
+from backend.metadata.catalog.index_embeddings import (
+    EmbeddingRefreshCounts,
+    LOAD_EVERY,
+)
 
 PROGRESS_EVERY = 512
-LOAD_EVERY = 128
 MAX_DISTINCT_REASONS = 8
 
 

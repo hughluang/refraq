@@ -181,6 +181,24 @@ EXPECTED_IDENTITIES = {
             "sample": None,
         },
     },
+    "entities": {
+        "label_key": "entities.title",
+        "routes": {
+            "list": "/console/entities",
+            "create": "/console/entities/new",
+            "edit": "/console/entities/:id/edit",
+            "show": "/console/entities/:id",
+            "aliases": [],
+        },
+        "actions": {
+            "list": "entity:read",
+            "create": "entity:write",
+            "edit": "entity:write",
+            "delete": "entity:write",
+            "show": "entity:read",
+            "sample": None,
+        },
+    },
     "jobs": {
         "label_key": "jobs.title",
         "routes": {"list": "/console/jobs", "create": None, "edit": None, "show": None, "aliases": []},

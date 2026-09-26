@@ -88,9 +88,34 @@ export function matchPath(
   const resources = toRefineResources(modules);
   const matched = matchResourceFromRoute(pathname, resources);
   if (matched.found && matched.resource?.name && matched.action) {
-    return { resource: matched.resource.name, action: matched.action };
+    const action = pageGateAction(
+      modules,
+      matched.resource.name,
+      matched.action,
+    );
+    return { resource: matched.resource.name, action };
   }
   return matchAliasPath(pathname, modules);
+}
+
+/** When edit and show share a path, the page gate is show (read). */
+function pageGateAction(
+  modules: ModuleIdentity[],
+  resource: string,
+  action: string,
+): string {
+  if (action !== "edit") {
+    return action;
+  }
+  const module = modules.find((item) => item.id === resource);
+  if (
+    module?.routes.show &&
+    module.routes.edit &&
+    module.routes.show === module.routes.edit
+  ) {
+    return "show";
+  }
+  return action;
 }
 
 function segmentsMatch(pathname: string, pattern: string): boolean {

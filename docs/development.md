@@ -33,7 +33,7 @@ This document records the stable development conventions for contributors workin
 
 ### Dependencies (Postgres + Redis)
 
-- Start: `docker compose up -d` (Postgres image is `pgvector/pgvector:pg18`; `pg_trgm` and `pgvector` are required — `docs/env.md`)
+- Start: `docker compose up -d` (Postgres image is `pgvector/pgvector:pg18`; `pg_trgm` and `pgvector` are required — `docs/env.md`). Compose also ensures database `refraq_entity` for `ENTITY_DATABASE_URL`.
 - Stop: `docker compose down`
 - A leftover PG16 volume or container data directory cannot start under PG18. Dump, replace the image, restore (`scripts/upgrade_platform_postgres_to_pg18.sh`), then Foundation Upgrade.
 
@@ -49,6 +49,7 @@ This document records the stable development conventions for contributors workin
   - After schema changes, run `python -m backend.core.upgrade` (or use `entry`), then restart worker and Beat (`docs/env.md` §8). Super Admin effective permissions follow the Permission catalog by identity; adding a catalog key does not require Upgrade for Super Admin authz.
 - Run API tests (memory Store Backend via conftest): `pytest backend/tests -q`
 - Catalog store dual-adapter contract: `pytest backend/tests/test_catalog_store_conformance.py -q` (Memory always; SQL param runs when Compose Postgres is up, otherwise skips). Run this file when changing `backend/metadata/catalog/store/`.
+- Entity store dual-adapter contract: `pytest backend/tests/test_entity_store_conformance.py -q` (Memory always; SQL param runs when Compose Postgres is up, otherwise skips). Run this file when changing `backend/entity/store.py`.
 - Run integration tests (Compose must be up): `pytest backend/tests -q -m integration`
   - Uses isolated stores by default: Postgres DB `refraq_test` + Redis logical DB `1` (does not TRUNCATE/FLUSH interactive `refraq` / Redis `0`)
   - Override with `REFRAQ_INTEGRATION_DATABASE_URL` / `REFRAQ_INTEGRATION_REDIS_URL` if needed
@@ -60,6 +61,7 @@ This document records the stable development conventions for contributors workin
 - Run lint: `npm run lint`
 - Run build: `npm run build`
 - Management Console content width: `docs/ui-console-layout.md` (section containers full width; internal controls own their own width)
+- Console record create / show / edit: `docs/ui-console-record-form.md`
 
 ### Release and site install
 
@@ -101,7 +103,7 @@ Treat `docs/product-core/*` as **long-horizon** reference only (files are marked
 6. `docs/adr/0003-foundation-upgrade-vs-bootstrap.md` (cite by full filename; another `0003-*.md` exists)
 7. `docs/business-login-auth.md`
 8. `docs/business-management-console.md`
-9. `docs/ui-console-layout.md` (Console main-area width)
+9. `docs/ui-console-layout.md` (Console main-area width); `docs/ui-console-record-form.md` (record create / show / edit)
 10. `docs/api-contracts-auth.md`
 11. `docs/api-contracts-users.md`
 12. `docs/api-contracts-roles.md`

@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 
 type SectionHeaderProps = {
   title: string;
+  titleExtra?: ReactNode;
   description?: string;
   actions?: ReactNode;
   order: 2 | 4;
@@ -12,6 +13,7 @@ type SectionHeaderProps = {
 
 export function SectionHeader({
   title,
+  titleExtra,
   description,
   actions,
   order,
@@ -19,7 +21,10 @@ export function SectionHeader({
   return (
     <Group justify="space-between" align="flex-start" gap="md" wrap="wrap">
       <Stack gap={4} style={{ flex: 1, minWidth: 0 }}>
-        <Title order={order}>{title}</Title>
+        <Group gap="sm" align="center" wrap="wrap">
+          <Title order={order}>{title}</Title>
+          {titleExtra}
+        </Group>
         {description ? (
           <Text size="sm" c="dimmed">
             {description}

@@ -1,6 +1,6 @@
 "use client";
 
-import { Stack } from "@mantine/core";
+import { Group, Stack } from "@mantine/core";
 import type { ReactNode } from "react";
 
 import { PageBreadcrumb } from "@/components/layout/PageBreadcrumb";
@@ -8,6 +8,7 @@ import { SectionHeader } from "@/components/layout/SectionHeader";
 
 type PageChromeProps = {
   title: string;
+  titleExtra?: ReactNode;
   description?: string;
   actions?: ReactNode;
   children?: ReactNode;
@@ -15,6 +16,7 @@ type PageChromeProps = {
 
 export function PageChrome({
   title,
+  titleExtra,
   description,
   actions,
   children,
@@ -28,10 +30,15 @@ export function PageChrome({
       style={{ overflow: "auto" }}
     >
       <PageBreadcrumb />
+      {actions ? (
+        <Group gap="sm" justify="flex-start" wrap="wrap" align="center">
+          {actions}
+        </Group>
+      ) : null}
       <SectionHeader
         title={title}
+        titleExtra={titleExtra}
         description={description}
-        actions={actions}
         order={2}
       />
       {children}

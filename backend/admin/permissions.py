@@ -32,6 +32,9 @@ Permission = Literal[
     "identity_providers:write",
     "model_services:read",
     "model_services:write",
+    "entity:read",
+    "entity:write",
+    "entity:drop_table",
 ]
 
 ALL_PERMISSIONS: tuple[Permission, ...] = (
@@ -59,6 +62,9 @@ ALL_PERMISSIONS: tuple[Permission, ...] = (
     "identity_providers:write",
     "model_services:read",
     "model_services:write",
+    "entity:read",
+    "entity:write",
+    "entity:drop_table",
 )
 
 PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
@@ -86,6 +92,9 @@ PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
     "identity_providers:write": "Create, update, test, and delete identity providers",
     "model_services:read": "View Model Services and embedding purpose state",
     "model_services:write": "Create, update, test, activate, close, open, clean, rebuild, and delete Model Services",
+    "entity:read": "Read Business Entity definitions, versions, and attributes",
+    "entity:write": "Create and save unpublished Business Entity definitions, publish, open versions, deprecate, and delete a never-published definition",
+    "entity:drop_table": "Enqueue an Entity Table drop",
 }
 
 CATALOG_SET: frozenset[str] = frozenset(ALL_PERMISSIONS)

@@ -10,6 +10,7 @@ export const ModuleId = {
   catalog: "catalog",
   businessDomains: "business-domains",
   typeMappings: "type-mappings",
+  entities: "entities",
   jobs: "jobs",
   schedules: "schedules",
   settings: "settings",

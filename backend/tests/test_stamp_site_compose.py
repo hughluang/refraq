@@ -35,6 +35,13 @@ def test_template_is_not_a_live_site_pin() -> None:
     assert "REFRAQ_VERSION" not in env_text
 
 
+def test_template_isolates_entity_database() -> None:
+    text = TEMPLATE.read_text(encoding="utf-8")
+    assert "5432/refraq_entity" in text
+    assert "ensure-entity-db:" in text
+    assert "service_completed_successfully" in text
+
+
 @pytest.mark.parametrize("version", ["latest", "v0.1.3", SENTINEL, "", "1.2", "abc"])
 def test_stamp_rejects_unusable_version(version: str) -> None:
     with pytest.raises(ValueError):

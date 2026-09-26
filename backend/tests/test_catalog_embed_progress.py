@@ -55,7 +55,7 @@ def test_progress_throttles_heartbeats() -> None:
         "INFO indexing embed-src…",
         "INFO indexing embed-src: 10 objects, 290 columns",
         "INFO embed-src 32/300 written=32 failed=0 skipped=0",
-        "INFO embed-src 256/300 written=256 failed=0 skipped=0",
+        f"INFO embed-src {PROGRESS_EVERY}/300 written={PROGRESS_EVERY} failed=0 skipped=0",
         "INFO embed-src 300/300 written=300 failed=0 skipped=0",
     ]
 
@@ -70,7 +70,7 @@ def test_loading_reports_listed_then_throttled_counts() -> None:
     log.planned(objects=200, columns=10)
     messages = _messages(job.id)
     assert messages.index("INFO loading embed-src: 200 objects…") < messages.index(
-        "INFO loading embed-src: 64/200 objects"
+        f"INFO loading embed-src: {LOAD_EVERY}/200 objects"
     )
     assert messages.index("INFO loading embed-src: 200/200 objects") < messages.index(
         "INFO indexing embed-src: 200 objects, 10 columns"
@@ -231,7 +231,8 @@ def test_catalog_embed_run_log_includes_planned_and_heartbeats() -> None:
 
 
 def test_catalog_embed_loading_throttles_before_planned() -> None:
-    _seed_source(object_count=70, columns_per_object=1)
+    listed = LOAD_EVERY + 6
+    _seed_source(object_count=listed, columns_per_object=1)
 
     def ok(texts: list[str]) -> list[list[float]]:
         return [[1.0, 0.0] for _ in texts]
@@ -239,16 +240,16 @@ def test_catalog_embed_loading_throttles_before_planned() -> None:
     record = _run_embed(embed_fn=ok)
     assert record.status == "succeeded"
     messages = _messages(record.id)
-    assert "INFO loading embed-src: 70 objects…" in messages
-    assert "INFO loading embed-src: 64/70 objects" in messages
-    assert "INFO loading embed-src: 70/70 objects" in messages
-    assert "INFO indexing embed-src: 70 objects, 70 columns" in messages
-    assert messages.index("INFO loading embed-src: 70 objects…") < messages.index(
-        "INFO loading embed-src: 64/70 objects"
-    )
-    assert messages.index("INFO loading embed-src: 70/70 objects") < messages.index(
-        "INFO indexing embed-src: 70 objects, 70 columns"
-    )
+    start = f"INFO loading embed-src: {listed} objects…"
+    mid = f"INFO loading embed-src: {LOAD_EVERY}/{listed} objects"
+    done = f"INFO loading embed-src: {listed}/{listed} objects"
+    planned = f"INFO indexing embed-src: {listed} objects, {listed} columns"
+    assert start in messages
+    assert mid in messages
+    assert done in messages
+    assert planned in messages
+    assert messages.index(start) < messages.index(mid)
+    assert messages.index(done) < messages.index(planned)
 
 
 def test_repeated_embed_error_dedupes_and_fails_zero_writes() -> None:

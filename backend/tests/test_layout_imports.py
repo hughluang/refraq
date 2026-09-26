@@ -18,6 +18,7 @@ PACKAGE_DIRS = {
     "admin": BACKEND_ROOT / "admin",
     "jobs": BACKEND_ROOT / "jobs",
     "metadata": BACKEND_ROOT / "metadata",
+    "entity": BACKEND_ROOT / "entity",
     "worker": BACKEND_ROOT / "worker",
 }
 
@@ -66,6 +67,14 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "metadata.mcp_http",
             "metadata.tasks",
             "metadata.routers",
+            "metadata.catalog.normalized_type",
+        }
+    ),
+    "entity": frozenset(
+        {
+            "entity.errors",
+            "entity.tasks",
+            "entity.routers",
         }
     ),
     "worker": frozenset(
@@ -92,7 +101,10 @@ def _iter_py_files(root: Path) -> list[Path]:
     return sorted(
         p
         for p in root.rglob("*.py")
-        if "__pycache__" not in p.parts and "alembic" not in p.parts
+        if "__pycache__" not in p.parts
+        and "alembic" not in p.parts
+        and ".venv" not in p.parts
+        and "venv" not in p.parts
     )
 
 
@@ -150,7 +162,7 @@ def test_layout_imports(path: Path) -> None:
 
     for imported in _imported_backend_modules(tree):
         if imported == "worker.app" or imported.startswith("worker.app."):
-            if importer_pkg in {"admin", "jobs", "metadata", "core"} or importer.startswith(
+            if importer_pkg in {"admin", "jobs", "metadata", "entity", "core"} or importer.startswith(
                 "routers."
             ):
                 if not _allowlisted(importer, imported):
@@ -166,7 +178,7 @@ def test_layout_imports(path: Path) -> None:
             continue
 
         # docs/backend-layout.md §8: admin may import core and own modules only.
-        if importer_pkg == "admin" and target_pkg in {"jobs", "metadata", "worker"}:
+        if importer_pkg == "admin" and target_pkg in {"jobs", "metadata", "entity", "worker"}:
             if not _allowlisted(importer, imported):
                 raise AssertionError(
                     f"{importer} must not import {imported} "
@@ -183,6 +195,13 @@ def test_layout_imports(path: Path) -> None:
                     "(only MCP process entries assemble System Parameters)"
                 )
 
+        if importer_pkg == "metadata" and target_pkg == "entity":
+            if not _allowlisted(importer, imported):
+                raise AssertionError(
+                    f"{importer} must not import {imported} "
+                    "(metadata may not import entity)"
+                )
+
         # docs/backend-layout.md §8 from-column: jobs may not import worker.
         if importer_pkg == "jobs" and target_pkg not in {"core", "admin"}:
             if not _allowlisted(importer, imported):
@@ -193,7 +212,7 @@ def test_layout_imports(path: Path) -> None:
 
         # core must not import business packages (upgrade → published admin/worker/metadata seeds).
         if importer_pkg == "core":
-            if target_pkg in {"admin", "jobs", "metadata", "worker"}:
+            if target_pkg in {"admin", "jobs", "metadata", "entity", "worker"}:
                 if importer == "core.upgrade" and target_pkg in {"admin", "worker", "metadata"}:
                     if target_pkg == "worker":
                         if imported == "worker.api" or imported.startswith("worker.api."):
@@ -211,6 +230,18 @@ def test_layout_imports(path: Path) -> None:
                     continue
                 raise AssertionError(
                     f"core module {importer} must not import {imported}"
+                )
+            continue
+
+        if importer_pkg == "entity" and target_pkg == "metadata":
+            allowed = (
+                imported == "metadata.catalog.normalized_type"
+                or imported.startswith("metadata.catalog.normalized_type.")
+            )
+            if not allowed:
+                raise AssertionError(
+                    f"{importer} may import only metadata.catalog.normalized_type; "
+                    f"imported {imported}"
                 )
             continue
 

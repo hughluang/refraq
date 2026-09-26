@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from backend.core.pagination import OffsetPage
 from backend.core.time import Instant
+from backend.metadata.catalog.object_category import ObjectCategory
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -43,13 +44,6 @@ __all__ = [
     "SemanticSource",
 ]
 
-ObjectCategory = Literal[
-    "transaction_fact",
-    "master_data",
-    "dimension",
-    "reference",
-    "event",
-]
 SemanticSource = Literal["mcp", "user_input"]
 
 

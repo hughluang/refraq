@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Iterator
 
 from backend.core.pagination import apply_offset_page
+from backend.metadata.catalog.embedding import cosine_similarity
 from backend.metadata.catalog.identity import (
     _recompute_column_locator,
     _recompute_object_locator,
@@ -655,8 +656,6 @@ class MemoryCatalogStore:
         object_type: str | None = None,
         object_ids: list[str] | None = None,
     ) -> list[str]:
-        from backend.metadata.catalog.embedding import cosine_similarity
-
         if not query or limit < 1:
             return []
         if object_ids is not None and not object_ids:

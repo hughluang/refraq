@@ -1,4 +1,4 @@
-import { ColorSchemeScript, mantineHtmlProps } from "@mantine/core";
+import { mantineHtmlProps } from "@mantine/core";
 import type { Metadata } from "next";
 import {
   getResources,
@@ -21,6 +21,20 @@ import {
 import i18nConfig from "../../i18n.config";
 
 initServerI18next(i18nConfig);
+
+/**
+ * Inline blocking color-scheme init matching @mantine/core ColorSchemeScript.
+ * ColorSchemeScript is a Client Component that emits <script>; React 19 / Next.js 16
+ * warn and do not execute scripts rendered from the client tree. Emitting the same
+ * script from this Server Component keeps pre-paint localStorage application.
+ */
+const MANTINE_COLOR_SCHEME_SCRIPT = `try {
+  var _colorScheme = window.localStorage.getItem("mantine-color-scheme-value");
+  var colorScheme = _colorScheme === "light" || _colorScheme === "dark" || _colorScheme === "auto" ? _colorScheme : "light";
+  var computedColorScheme = colorScheme !== "auto" ? colorScheme : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.setAttribute("data-mantine-color-scheme", computedColorScheme);
+} catch (e) {}
+`;
 
 export const dynamic = "force-dynamic";
 
@@ -55,7 +69,10 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   return (
     <html lang={lng} {...mantineHtmlProps}>
       <head>
-        <ColorSchemeScript defaultColorScheme="light" />
+        <script
+          data-mantine-script
+          dangerouslySetInnerHTML={{ __html: MANTINE_COLOR_SCHEME_SCRIPT }}
+        />
       </head>
       <body>
         <AppI18nProvider language={lng} resources={resources}>

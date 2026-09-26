@@ -12,11 +12,13 @@ import backend.admin.models  # noqa: F401 — register Foundation tables
 import backend.admin.branding.models  # noqa: F401 — register branding tables
 import backend.jobs.models  # noqa: F401 — register Job tables
 import backend.metadata.models  # noqa: F401 — register Source/Catalog tables
+import backend.entity.models  # noqa: F401 — register Business Entity tables
 import backend.worker.models  # noqa: F401 — register Scheduled Task tables
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # A migration entry point must not disable host application loggers.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

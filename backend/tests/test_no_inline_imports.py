@@ -29,6 +29,8 @@ def _iter_prod_py_files() -> list[Path]:
         if "__pycache__" not in p.parts
         and "alembic" not in p.parts
         and "tests" not in p.parts
+        and ".venv" not in p.parts
+        and "venv" not in p.parts
     )
 
 

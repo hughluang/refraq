@@ -56,10 +56,24 @@ class RuntimeCapacity:
     admission_actor_share: int
     uvicorn_limit_concurrency: int | None
     timeout_keep_alive: int
+    entity_pool_size: int
+    entity_max_overflow: int
+    entity_pool_timeout_sec: float
+    entity_pool_recycle_sec: int
 
     @property
     def pool_max_connections(self) -> int:
         return self.pool_size + self.max_overflow
+
+    @property
+    def entity_pool_max_connections(self) -> int:
+        return self.entity_pool_size + self.entity_max_overflow
+
+    @property
+    def process_pool_budget(self) -> int:
+        if self.role == "worker":
+            return self.pool_max_connections + self.entity_pool_max_connections
+        return self.pool_max_connections
 
 
 def _defaults_for(role: ProcessRole) -> dict[str, int]:
@@ -97,6 +111,10 @@ def _from_env(role: ProcessRole) -> RuntimeCapacity:
     max_overflow = max(0, _env_int("REFRAQ_DB_MAX_OVERFLOW", d["max_overflow"]))
     pool_timeout_sec = float(_env_int("REFRAQ_DB_POOL_TIMEOUT_SEC", 5))
     pool_recycle_sec = max(0, _env_int("REFRAQ_DB_POOL_RECYCLE_SEC", 1800))
+    entity_pool_size = max(1, _env_int("REFRAQ_ENTITY_DB_POOL_SIZE", 5))
+    entity_max_overflow = max(0, _env_int("REFRAQ_ENTITY_DB_MAX_OVERFLOW", 5))
+    entity_pool_timeout_sec = float(_env_int("REFRAQ_ENTITY_DB_POOL_TIMEOUT_SEC", 5))
+    entity_pool_recycle_sec = max(0, _env_int("REFRAQ_ENTITY_DB_POOL_RECYCLE_SEC", 1800))
     if role == "worker":
         return RuntimeCapacity(
             role=role,
@@ -111,6 +129,10 @@ def _from_env(role: ProcessRole) -> RuntimeCapacity:
             admission_actor_share=0,
             uvicorn_limit_concurrency=None,
             timeout_keep_alive=5,
+            entity_pool_size=entity_pool_size,
+            entity_max_overflow=entity_max_overflow,
+            entity_pool_timeout_sec=entity_pool_timeout_sec,
+            entity_pool_recycle_sec=entity_pool_recycle_sec,
         )
     http_max_inflight = max(1, _env_int("REFRAQ_HTTP_MAX_INFLIGHT", d["http_max_inflight"]))
     thread_tokens = max(1, _env_int("REFRAQ_THREAD_TOKENS", d["thread_tokens"]))
@@ -135,6 +157,10 @@ def _from_env(role: ProcessRole) -> RuntimeCapacity:
         admission_actor_share=admission_actor_share,
         uvicorn_limit_concurrency=None if role == "mcp" else http_max_inflight + 32,
         timeout_keep_alive=5,
+        entity_pool_size=entity_pool_size,
+        entity_max_overflow=entity_max_overflow,
+        entity_pool_timeout_sec=entity_pool_timeout_sec,
+        entity_pool_recycle_sec=entity_pool_recycle_sec,
     )
 
 
@@ -176,9 +202,21 @@ def log_capacity_warnings(cap: RuntimeCapacity) -> None:
             cap.thread_tokens,
             cap.pool_max_connections,
         )
+    if cap.role == "worker":
+        entity_banner = (
+            "runtime capacity entity pool=%s+%s timeout=%ss recycle=%ss"
+            % (
+                cap.entity_pool_size,
+                cap.entity_max_overflow,
+                cap.entity_pool_timeout_sec,
+                cap.entity_pool_recycle_sec,
+            )
+        )
+        print(entity_banner, flush=True)
+        logger.info(entity_banner)
     print(
         "runtime capacity deploy constraint: sum over api/mcp/worker/beat of "
         f"(pool_size+max_overflow) should stay at or below 0.8 x Postgres max_connections; "
-        f"this process budget is {cap.pool_max_connections}",
+        f"this process budget is {cap.process_pool_budget}",
         flush=True,
     )

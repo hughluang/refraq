@@ -9,7 +9,7 @@ It defines what the console business base must provide. It does not prescribe vi
 Related boundaries:
 
 - **Management Foundation** (login, session, users, roles, permissions) is the enabling layer: `docs/business-login-auth.md`.
-- Console shell mounts modules by nav group. Metadata modules mount under `metadata` (`docs/business-metadata.md`); platform **Job** / **Scheduled Task** modules mount under `operations` (`docs/business-jobs.md`, `docs/business-scheduled-tasks.md`). Data Product catalog / Entity modules mount later and stay out of scope here.
+- Console shell mounts modules by nav group. Metadata modules mount under `metadata` (`docs/business-metadata.md`); **Business Entity** mounts under `entity` as module `entities` (`docs/business-entity.md`) and is not under the `metadata` group; platform **Job** / **Scheduled Task** modules mount under `operations` (`docs/business-jobs.md`, `docs/business-scheduled-tasks.md`). Data Product catalog modules stay out of scope here.
 - Permission decisions are authoritative in the backend; frontend show/hide only improves UX: `docs/architecture.md`.
 - Navigation catalog decision: `docs/adr/0002-console-navigation-catalog.md`. Identity Provider business rules: `docs/business-identity-providers.md`; its API is `docs/api-contracts-identity-providers.md`.
 - Site Branding and Brand Attribution: `docs/business-branding.md`; HTTP: `docs/api-contracts-branding.md`.
@@ -48,10 +48,12 @@ The side nav carries only module structural navigation and **renders exactly the
 | Workbench | `workbench` | Home (`dashboard`) |
 | Administration | `admin` | Users, Roles, Identity Providers (`identity-providers`) |
 | Metadata | `metadata` | Sources (`sources`), Catalog (`catalog`), Business Domains (`business-domains`), Type Mappings (`type-mappings`) |
+| Entity | `entity` | Entities (`entities`) |
 | Operations | `operations` | Jobs (`jobs`), Schedules (`schedules`) |
 | Platform settings | `settings` | System parameters (`settings`), Site branding (`branding`), Model Services (`model-services`) |
 
-- The `operations` group sits after `metadata` and before `settings`. Module field details: `docs/business-metadata.md`, `docs/business-user-tokens.md`, `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`.
+- The `entity` group sits after `metadata` and before `operations`. The `operations` group sits after `entity` and before `settings`. Module field details: `docs/business-metadata.md`, `docs/business-entity.md`, `docs/business-user-tokens.md`, `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`.
+- Module `entities` is registered under nav group `entity`. It is not mounted under `metadata`.
 - About is a top-bar user-menu utility, not structural navigation. It carries **Brand Attribution**, is not a Console Module, and is never permission-filtered.
 - Data products and Governance groups (and any persona composer) are reserved for later and not implemented. The hide-vs-empty policy for empty future groups is deferred.
 
@@ -62,8 +64,8 @@ The side nav carries only module structural navigation and **renders exactly the
 | Region | Purpose |
 | --- | --- |
 | Breadcrumb or back | Locate deep resources |
-| Title + short description | This page's business object and purpose |
 | Primary action cluster | Show only authorized actions |
+| Title + short description | This page's business object and purpose |
 | Content area | List / form / detail |
 | Status area | Empty list, unauthorized, load failure |
 
@@ -80,12 +82,13 @@ flowchart TB
     G1["Workbench"]
     G2["Administration · users/roles/identity-providers"]
     G3["Metadata · sources/catalog/domains/type-mappings"]
-    G4["Operations · jobs/schedules"]
-    G5["Platform settings"]
+    G4["Entity · entities"]
+    G5["Operations · jobs/schedules"]
+    G6["Platform settings"]
   end
 
   subgraph Main["Main work area"]
-    Chrome["Breadcrumb + title + primary actions"]
+    Chrome["Breadcrumb + primary actions + title"]
     Body["Module page"]
     Empty["Unauthorized empty state"]
   end
@@ -109,7 +112,7 @@ Each Console Module declaration includes at least:
 | Field (business meaning) | Notes |
 | --- | --- |
 | Module id | Stable technical name (e.g. `users`, `roles`, `settings`) |
-| Nav group | `workbench` / `admin` / `settings` / `metadata` / `operations` / … |
+| Nav group | `workbench` / `admin` / `settings` / `metadata` / `entity` / `operations` / … |
 | Routes | List (nav entry) plus optional create/edit/show paths for SPA wiring; optional `route_aliases` for extra deep-link paths when primary slots are full |
 | Actions | Refine action → Permission; `list` is also the nav visibility permission |
 | Label key | i18n key for the module label |
@@ -161,6 +164,7 @@ Console rules:
 - `docs/business-branding.md`
 - `docs/business-system-parameters.md`
 - `docs/adr/0028-system-parameters.md`
+- `docs/business-entity.md`
 - `docs/business-metadata.md`
 - `docs/business-user-tokens.md`
 - `docs/adr/0002-console-navigation-catalog.md`

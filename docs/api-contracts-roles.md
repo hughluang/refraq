@@ -59,23 +59,30 @@ Purpose: return the fixed Permission catalog for Role editing UIs.
     { "key": "roles:write", "description": "Create, update, and delete roles" },
     { "key": "settings:read", "description": "View platform system parameters" },
     { "key": "settings:write", "description": "Change platform system parameters" },
-    { "key": "model_services:read", "description": "View Model Services and embedding purpose state" },
-    { "key": "model_services:write", "description": "Create, update, test, activate, close, open, clean, rebuild, and delete Model Services" },
+    { "key": "branding:read", "description": "View site branding configuration" },
+    { "key": "branding:write", "description": "Change and reset site branding and assets" },
     { "key": "sources:read", "description": "List and view Sources (non-secret fields)" },
-    { "key": "sources:write", "description": "Create, update, and hard-delete (disabled only) Sources; set secrets; run reachability tests; creating a database Source, or a mutating update of one with a missing product-default schedule kind, also inserts the product-default Scheduled Task for each missing kind (`structure`, `join_detection`)" },
+    { "key": "sources:write", "description": "Create, update, and hard-delete (disabled only) Sources; set secrets; run reachability tests; creating a database Source also inserts the product-default structure Scheduled Task" },
     { "key": "metadata:read", "description": "Browse catalog objects, semantics, and joins" },
     { "key": "metadata:write", "description": "Write semantics and join edges" },
     { "key": "jobs:run", "description": "Enqueue and manage Jobs; manage domain Scheduled Tasks" },
-    { "key": "query:run", "description": "Run controlled read-only SQL against a Source" },
+    { "key": "query:run", "description": "Run controlled read-only SQL against a Source endpoint" },
     { "key": "catalog:sample", "description": "Run Catalog Sample (structured live peek) on a Catalog Object" },
     { "key": "tokens:read", "description": "List own User PAT metadata" },
     { "key": "tokens:write", "description": "Create, deactivate, restore, and soft-delete (deactivated only) own User PATs" },
-    { "key": "audit:read", "description": "Read management-plane audit events" }
+    { "key": "audit:read", "description": "Read management audit events" },
+    { "key": "identity_providers:read", "description": "View identity providers" },
+    { "key": "identity_providers:write", "description": "Create, update, test, and delete identity providers" },
+    { "key": "model_services:read", "description": "View Model Services and embedding purpose state" },
+    { "key": "model_services:write", "description": "Create, update, test, activate, close, open, clean, rebuild, and delete Model Services" },
+    { "key": "entity:read", "description": "Read Business Entity definitions, versions, and attributes" },
+    { "key": "entity:write", "description": "Create and save unpublished Business Entity definitions, publish, open versions, deprecate, and delete a never-published definition" },
+    { "key": "entity:drop_table", "description": "Enqueue an Entity Table drop" }
   ]
 }
 ```
 
-Catalog meanings for metadata-phase keys: `docs/business-metadata.md` §6 and `docs/business-user-tokens.md`. Platform **Job** / **Scheduled Task** permission `jobs:run`: `docs/business-jobs.md`.
+Catalog meanings for metadata-phase keys: `docs/business-metadata.md` §6 and `docs/business-user-tokens.md`. Platform **Job** / **Scheduled Task** permission `jobs:run`: `docs/business-jobs.md`. Entity keys: `docs/business-entity.md` §6.
 
 ## 4. `GET /roles`
 

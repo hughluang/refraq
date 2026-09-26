@@ -40,6 +40,12 @@ class Settings(BaseSettings):
         validation_alias="REFRAQ_STORE_BACKEND",
     )
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
+    entity_database_url: str | None = Field(
+        default=None, validation_alias="ENTITY_DATABASE_URL"
+    )
+    refraq_entity_db_schema: str = Field(
+        default="public", validation_alias="REFRAQ_ENTITY_DB_SCHEMA"
+    )
     redis_url: str | None = Field(default=None, validation_alias="REDIS_URL")
     admin_session_secret: str = Field(
         default="change-me",
@@ -94,6 +100,21 @@ class Settings(BaseSettings):
                     + "; memory mode is for automated tests only"
                 )
         return self
+
+
+def require_entity_database_url(url: str | None) -> str:
+    """Worker close path: persistent DDL must have a usable entity-database URL.
+
+    Not a Settings constructor rule. API, MCP, and Beat do not open the entity
+    pool and must still start without this variable.
+    """
+    cleaned = (url or "").strip()
+    if not cleaned:
+        raise ValueError(
+            "persistent Store Backend requires ENTITY_DATABASE_URL "
+            "to open the entity pool"
+        )
+    return cleaned
 
 
 @lru_cache

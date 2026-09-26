@@ -72,6 +72,12 @@ describe("evaluateCan", () => {
     ).toEqual({ can: true });
   });
 
+  it("grants entities show with entity:read", () => {
+    expect(
+      evaluateCan(CATALOG, ["entity:read"], "entities", "show"),
+    ).toEqual({ can: true });
+  });
+
   it("grants catalog sample with catalog:sample", () => {
     expect(
       evaluateCan(CATALOG, ["catalog:sample"], "catalog", "sample"),
@@ -159,6 +165,22 @@ describe("matchPath", () => {
     expect(matchPath("/console/catalog/obj_1", CATALOG)).toEqual({
       resource: "catalog",
       action: "show",
+    });
+    expect(matchPath("/console/entities", CATALOG)).toEqual({
+      resource: "entities",
+      action: "list",
+    });
+    expect(matchPath("/console/entities/new", CATALOG)).toEqual({
+      resource: "entities",
+      action: "create",
+    });
+    expect(matchPath("/console/entities/ent_1", CATALOG)).toEqual({
+      resource: "entities",
+      action: "show",
+    });
+    expect(matchPath("/console/entities/ent_1/edit", CATALOG)).toEqual({
+      resource: "entities",
+      action: "edit",
     });
     expect(matchPath("/console/jobs", CATALOG)).toEqual({
       resource: "jobs",

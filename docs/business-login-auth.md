@@ -157,6 +157,7 @@ Fixed Permission catalog (Foundation + metadata foundation extensions):
 - `roles:write`
 - `settings:read`
 - `settings:write`
+- `branding:read` / `branding:write`
 - `sources:read` / `sources:write`
 - `metadata:read` / `metadata:write`
 - `jobs:run`
@@ -165,14 +166,17 @@ Fixed Permission catalog (Foundation + metadata foundation extensions):
 - `tokens:read` / `tokens:write`
 - `audit:read`
 - `identity_providers:read` / `identity_providers:write`
+- `model_services:read` / `model_services:write`
+- `entity:read` / `entity:write` / `entity:drop_table`
 
 Rules:
 
 - New permissions enter the catalog in code/docs first; Role UI only checkboxes catalog entries
 - Free-form permission strings are rejected
 - Frontend checks are UX only; backend remains authoritative
-- Seeded `operator` keeps `console:access` + `dashboard:read` only (no `settings:*`, no metadata write/query/sample/token/audit by default)
+- Seeded `operator` keeps `console:access` + `dashboard:read` only (no `settings:*`, no metadata write/query/sample/token/audit, and no `entity:*` by default). `entity:drop_table` is not seeded onto `operator` and is not implied by `entity:write`.
 - `identity_providers:read` lists configured providers and the protocol spec; `identity_providers:write` creates, updates, tests, enables, disables, and deletes them. Neither permission grants Role or User permissions.
+- Entity permission meanings: `docs/business-entity.md` §6.
 - An auto-provisioned provider default Role must not effectively contain `users:write`, `roles:write`, or `identity_providers:write`; the locked `super_admin` Role is therefore never valid as an auto-provisioning default.
 - Metadata permission meanings: `docs/business-metadata.md` §6; User PAT: `docs/business-user-tokens.md`
 - Session TTL used at login is the **effective** value of the `admin_session_ttl_hours` **System Parameter** (stored value, seeded 8; no env fallback); changing TTL does not rewrite existing sessions — see `docs/business-system-parameters.md` and `docs/api-contracts-settings.md`

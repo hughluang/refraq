@@ -845,6 +845,7 @@ async def run_sql(
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 
+
 def main() -> None:
     """stdio entry for local/tests. Product port is HTTP (`mcp_http`)."""
     assemble_system_parameters()

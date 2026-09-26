@@ -133,7 +133,7 @@ Returns `{ "job_id", "body", "updated_at" }` where `body` is the full multiline 
 | `JOB_SECRET_MISSING` | No usable Source secret when required (structure collect, or join-detection same-catalog defense) |
 | `JOB_INPUT_INVALID` | Kind/input failed domain validation (including missing Source `engine`/`access`) |
 | `JOB_NOT_CANCELLABLE` | Job already terminal |
-| `JOB_ALREADY_ACTIVE` | Runner could not take the **Kind execution lock** (`structure:{source_id}`, `join_detection:{source_id}`, or site-wide `catalog_embed`). Not a schedule mint / HTTP conflict |
+| `JOB_ALREADY_ACTIVE` | Runner could not take the **Kind execution lock** (`structure:{source_id}`, `join_detection:{source_id}`, site-wide `catalog_embed`, or per-Entity `entity_table:{entity_id}`). Not a schedule mint / HTTP conflict |
 | `JOB_WORKER_LOST` | Occupancy stale; worker gone |
 | `JOB_RUNNING_TIMEOUT` | Job snapshot `running_timeout_sec` is set and elapsed while still occupied |
 | `JOB_COLLECT_FAILED` | Connector collect aborted; catalog unchanged |
@@ -147,6 +147,8 @@ Stable aliases of older draft codes (`INGESTION_*`) must not be reintroduced in 
 ### Kind execution lock
 
 After claim, a structure or join-detection Job tries a Metadata **Kind execution lock** for `(kind, source_id)` (`structure:{source_id}` or `join_detection:{source_id}`). Failure ends this Job `failed` with `JOB_ALREADY_ACTIVE` and a run-log line naming kind and Source. The lock covers the whole runner (collect/parse through persist), not only the persist window. Authority is the lock, not the Job table and not Celery. Cross-kind runs on the same Source may overlap. The **Scheduled Task** always mints; lock contention is never a schedule mint skip or HTTP 409.
+
+`entity_reconcile` and `entity_table_drop` take the same per-**Business Entity** lock (`entity_table:{entity_id}`), not a per-kind lock, so publish create and drop cannot run concurrently against one Entity's tables. Enqueue HTTP is idempotent and returns the in-flight Job; lock contention at execution still uses `JOB_ALREADY_ACTIVE`. Envelopes: `docs/api-contracts-entity.md`.
 
 ## 5. Slice Notes
 

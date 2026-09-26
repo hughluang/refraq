@@ -205,6 +205,27 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         module_order=27,
     ),
     ConsoleModuleSeed(
+        id="entities",
+        group_id="entity",
+        group_label_key="layout.navGroup.entity",
+        label_key="entities.title",
+        routes=ModuleRoutes(
+            list="/console/entities",
+            create="/console/entities/new",
+            edit="/console/entities/:id/edit",
+            show="/console/entities/:id",
+        ),
+        actions=ModuleActions(
+            list="entity:read",
+            create="entity:write",
+            edit="entity:write",
+            delete="entity:write",
+            show="entity:read",
+        ),
+        group_order=26,
+        module_order=10,
+    ),
+    ConsoleModuleSeed(
         id="jobs",
         group_id="operations",
         group_label_key="layout.navGroup.operations",

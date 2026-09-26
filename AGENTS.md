@@ -24,6 +24,7 @@ For repository structure and long-lived development guidance, read:
 5. `docs/modules.md`
 6. domain or contract documents under `docs/` that match the task (metadata: `docs/business-metadata.md`, `docs/business-user-tokens.md`; jobs/schedules: `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`; matching `docs/api-contracts-*.md`)
 7. root `CONTEXT.md` for domain language
+8. `docs/ui-console-record-form.md` when adding or changing a Console create / show / edit record form
 
 ## Notes
 
