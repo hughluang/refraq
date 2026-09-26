@@ -26,7 +26,6 @@ function entity(
       ? {
           id: "encv_1",
           version: 1,
-          superseded: false,
           publish_status,
           table_name: null,
           alignment: {

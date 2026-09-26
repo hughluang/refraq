@@ -70,7 +70,6 @@ def test_create_list_get_and_empty_snapshot(client: TestClient) -> None:
     entity = created.json()["entity"]
     assert entity["table_name"] == "material"
     assert entity["current_version"]["version"] == 1
-    assert entity["current_version"]["superseded"] is False
     assert entity["current_version"]["table_name"] is None
     assert entity["current_version"]["publish_status"] == "unpublished"
     assert entity["ever_published"] is False

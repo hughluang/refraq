@@ -122,15 +122,11 @@ def list_versions(
         entity_id, limit=limit, offset=offset
     )
     all_versions = get_entity_store().list_all_versions(entity_id)
-    current = current_version_of(all_versions)
-    assert current is not None
-    current_n = current.version
     latest = latest_published_of(all_versions)
     return [
         version_out(
             version,
             entity=entity,
-            current_version_number=current_n,
             include_attributes=False,
             latest_published=latest,
         )
@@ -142,13 +138,9 @@ def get_version(entity_id: str, version_id: str) -> dict[str, Any]:
     entity = require_entity(entity_id)
     version = require_version(entity_id, version_id)
     all_versions = get_entity_store().list_all_versions(entity_id)
-    current = current_version_of(all_versions)
-    assert current is not None
-    current_n = current.version
     return version_out(
         version,
         entity=entity,
-        current_version_number=current_n,
         include_attributes=True,
         latest_published=latest_published_of(all_versions),
     )
@@ -358,7 +350,6 @@ def patch_version(
     return version_out(
         saved,
         entity=entity,
-        current_version_number=saved.version,
         include_attributes=True,
         latest_published=latest_published_of(versions),
     )
@@ -413,7 +404,6 @@ def open_version(
     return version_out(
         saved,
         entity=entity,
-        current_version_number=saved.version,
         include_attributes=True,
         latest_published=latest_published_of(versions),
     )

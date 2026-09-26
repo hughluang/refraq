@@ -108,7 +108,6 @@ def entity_out(
         current_payload = {
             "id": current.id,
             "version": current.version,
-            "superseded": False,
             "publish_status": current.publish_status,
             "table_name": physical_table_name(
                 stem=entity.table_name,
@@ -134,7 +133,6 @@ def version_out(
     version: EntityVersionRecord,
     *,
     entity: BusinessEntityRecord,
-    current_version_number: int,
     include_attributes: bool,
     latest_published: EntityVersionRecord | None,
 ) -> dict[str, Any]:
@@ -142,7 +140,6 @@ def version_out(
         "id": version.id,
         "entity_id": entity.id,
         "version": version.version,
-        "superseded": version.version < current_version_number,
         "publish_status": version.publish_status,
         "table_name": physical_table_name(
             stem=entity.table_name,

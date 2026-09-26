@@ -74,7 +74,6 @@ Each list endpoint declares its default and max `limit`. HTTP rejects out-of-ran
   "id": "encv_01HZX",
   "entity_id": "ent_01HZX",
   "version": 1,
-  "superseded": false,
   "publish_status": "unpublished",
   "attributes": [
     {
@@ -98,7 +97,7 @@ Each list endpoint declares its default and max `limit`. HTTP rejects out-of-ran
 }
 ```
 
-`version` is a positive integer. The first version is `1`. Each newly opened version is the previous current version plus one. `superseded` is `true` when a newer version exists. It is derived; it is not a stored flag and not a write input.
+`version` is a positive integer. The first version is `1`. Each newly opened version is the previous current version plus one.
 
 `publish_status` is stored: `unpublished` | `publishing` | `published`. Create and open-version start `unpublished`. Publish is the only transition to `publishing` and then `published`. A failed publish Job returns the version to `unpublished`.
 
@@ -128,7 +127,6 @@ Each list endpoint declares its default and max `limit`. HTTP rejects out-of-ran
   "current_version": {
     "id": "encv_01HZX",
     "version": 1,
-    "superseded": false,
     "publish_status": "unpublished",
     "table_name": null,
     "alignment": {

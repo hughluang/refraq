@@ -42,7 +42,6 @@ export type PublishStatus = "unpublished" | "publishing" | "published";
 export type CurrentVersionSummary = {
   id: string;
   version: number;
-  superseded: boolean;
   publish_status: PublishStatus;
   table_name: string | null;
   alignment: Alignment;
@@ -64,7 +63,6 @@ export type EntityVersion = {
   id: string;
   entity_id: string;
   version: number;
-  superseded: boolean;
   publish_status: PublishStatus;
   attributes?: EntityAttribute[];
   attribute_count?: number;

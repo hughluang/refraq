@@ -49,7 +49,6 @@ function entity(overrides: Record<string, unknown> = {}): BusinessEntity {
     current_version: {
       id: "encv_1",
       version: 1,
-      superseded: false,
       publish_status: "unpublished",
       table_name: null,
       alignment: {
@@ -134,7 +133,6 @@ describe("EntityStatusBadge", () => {
             current_version: {
               id: "encv_2",
               version: 2,
-              superseded: false,
               publish_status: "unpublished",
               table_name: null,
               alignment: {

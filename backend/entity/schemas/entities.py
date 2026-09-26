@@ -54,7 +54,6 @@ class AlignmentOut(BaseModel):
 class CurrentVersionOut(BaseModel):
     id: str
     version: int
-    superseded: bool
     publish_status: str
     table_name: str | None
     alignment: AlignmentOut
@@ -76,7 +75,6 @@ class EntityVersionOut(BaseModel):
     id: str
     entity_id: str
     version: int
-    superseded: bool
     publish_status: str
     attributes: list[AttributeOut] | None = None
     attribute_count: int | None = None

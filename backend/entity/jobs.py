@@ -11,7 +11,6 @@ from backend.entity.errors import EntityVersionNotSuperseded
 from backend.entity.kinds import ENTITY_TABLE_KINDS, KIND_DROP, KIND_RECONCILE
 from backend.entity.lifecycle import PUBLISHING, is_deprecated
 from backend.entity.present import (
-    current_version_of,
     latest_published_of,
     occupies_live_table,
     physical_table_name,
@@ -111,15 +110,12 @@ def enqueue_drop(
     entity = require_entity(entity_id)
     version = require_version(entity_id, version_id)
     versions = get_entity_store().list_all_versions(entity_id)
-    current = current_version_of(versions)
-    current_n = current.version if current is not None else version.version
     latest = latest_published_of(versions)
     if occupies_live_table(version, latest) and not is_deprecated(entity):
         raise EntityVersionNotSuperseded()
     presented = version_out(
         version,
         entity=entity,
-        current_version_number=current_n,
         include_attributes=True,
         latest_published=latest,
     )

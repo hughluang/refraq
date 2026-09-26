@@ -40,7 +40,6 @@ export function EntityVersionsTab({
           <Table.Th>{t("entities.fields.version")}</Table.Th>
           <Table.Th>{t("entities.fields.tableName")}</Table.Th>
           <Table.Th>{t("entities.fields.versionStatus")}</Table.Th>
-          <Table.Th>{t("entities.fields.superseded")}</Table.Th>
           <Table.Th />
         </Table.Tr>
       </Table.Thead>
@@ -55,11 +54,6 @@ export function EntityVersionsTab({
             </Table.Td>
             <Table.Td>
               <PublishStatusBadge publishStatus={version.publish_status} />
-            </Table.Td>
-            <Table.Td>
-              {version.superseded
-                ? t("entities.versions.supersededYes")
-                : t("entities.versions.current")}
             </Table.Td>
             <Table.Td>
               <Group gap="xs" justify="flex-end">
