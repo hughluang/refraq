@@ -150,7 +150,7 @@ Global assignment of **Normalized Type** for one `engine` + canonical native typ
 | id | Stable technical identifier |
 | engine | Wire/protocol family (`postgresql` \| `mssql` \| `oracle` in Slice A) |
 | native_type | Canonical parameter-free type name (lowercase, whitespace folded, every `(…)` group removed). `varchar(50)` and `varchar(100)` share one row; `varchar` and `character varying` do not. `TIMESTAMP(6) WITH TIME ZONE` → `timestamp with time zone` |
-| normalized_type | Closed 12-value **Normalized Type** |
+| normalized_type | Closed 13-value **Normalized Type** (`decimal` included; `number` stays approximate) |
 | origin | **Type Mapping Origin**: `product` (seed), `job` (structure Job recorded `unknown`), `user` (Console PATCH) |
 
 Rules:
@@ -276,13 +276,19 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
     Rename is drop+add (no rename detection). FK/index/unique changes are recorded on the Diff
     but do not raise `class`.
   - Full locators live on the Diff; Job result holds counts only.
-- **Normalized Type** values: `string` \| `integer` \| `number` \| `boolean` \| `date` \|
+- **Normalized Type** values: `string` \| `integer` \| `number` \| `decimal` \| `boolean` \| `date` \|
   `timestamp` \| `time` \| `interval` \| `binary` \| `json` \| `array` \| `unknown`.
+  `number` is approximate; `decimal` is exact. Precision stays in native `data_type` and is not
+  part of the Type Mapping identity. Product seeds map exact natives to `decimal`: PostgreSQL
+  `numeric`, `decimal`, and `money`; SQL Server `numeric`, `decimal`, `money`, and `smallmoney`;
+  Oracle `number`. Approximate natives stay `number` (`real`, `double precision`, `float`,
+  `binary_float`, `binary_double`, and the aliases already seeded beside them).
   Native `data_type` remains the engine string. Assignment is a **Type Mapping** lookup
   (ADR 0024): canonicalize, look up `(engine, native type)`, insert `unknown` (`origin=job`)
   if missing, never overwrite an existing row. Product seeds are Upgrade-occupied and
-  immutable. `type_changed` compares native `data_type` strings (exact inequality; not
-  Normalized Type). Columns with `unknown` stay visible (Console Badge; one Job `WARN`
+  immutable. Upgrade takes over an existing row on a seeded key. `type_changed` compares
+  native `data_type` strings (exact inequality; not Normalized Type). A column already
+  snapshotted as `number` stays `number` until the next successful structure Job. Columns with `unknown` stay visible (Console Badge; one Job `WARN`
   with count and up to 10 locators). Job result / Structure Diff do not grow unknown counters.
 - **Semantics preservation:** structure upserts whitelist structural columns only; never overwrite
   semantics fields. Structure never updates or deletes join rows.

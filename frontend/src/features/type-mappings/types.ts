@@ -4,6 +4,7 @@ export type PatchableNormalizedType =
   | "string"
   | "integer"
   | "number"
+  | "decimal"
   | "boolean"
   | "date"
   | "timestamp"

@@ -1,33 +1,74 @@
-export type NormalizedType =
+export type AttributeType =
   | "string"
+  | "text"
   | "integer"
+  | "decimal"
   | "number"
   | "boolean"
   | "date"
   | "timestamp"
   | "time"
-  | "interval"
-  | "binary"
   | "json"
-  | "array"
-  | "unknown";
+  | "enumeration"
+  | "reference";
+
+export type EnumerationEntry = {
+  code: string;
+  label?: string | null;
+};
+
+export type AttributeConfig = {
+  max_length?: number;
+  precision?: number;
+  scale?: number;
+  entries?: EnumerationEntry[];
+  target_entity_id?: string;
+};
+
+export type ReferenceTarget = {
+  entity_id: string;
+  name: string;
+  table_name: string;
+};
 
 export type EntityAttribute = {
   name: string;
-  normalized_type: NormalizedType;
-  nullable: boolean;
+  type: AttributeType;
+  required: boolean;
   unique: boolean;
   indexed: boolean;
   description: string | null;
+  config: AttributeConfig;
+  target?: ReferenceTarget | null;
+};
+
+export type EntityRecordFormValues = {
+  table_name: string;
+  name: string;
+  description: string;
+  attributes: AttributeDraft[];
 };
 
 export type AttributeDraft = {
+  type: AttributeType;
   name: string;
-  normalized_type: NormalizedType;
-  nullable: boolean;
+  required: boolean;
   unique: boolean;
   indexed: boolean;
   description: string;
+  max_length: string;
+  precision: string;
+  scale: string;
+  enumeration_text: string;
+  target_entity_id: string;
+  target_name: string;
+  target_table_name: string;
+};
+
+export type InboundReference = {
+  entity_id: string;
+  table_name: string;
+  attribute_name: string;
 };
 
 export type Alignment = {
@@ -55,6 +96,7 @@ export type BusinessEntity = {
   deprecated_at: string | null;
   ever_published: boolean;
   current_version: CurrentVersionSummary | null;
+  inbound_references?: InboundReference[];
   created_at: string;
   updated_at: string;
 };

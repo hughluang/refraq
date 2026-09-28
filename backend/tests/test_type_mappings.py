@@ -266,7 +266,7 @@ def test_homonym_seeds() -> None:
     assert resolve_normalized_type(engine="oracle", data_type="DATE") == "timestamp"
     assert resolve_normalized_type(engine="oracle", data_type="LONG") == "string"
     assert resolve_normalized_type(engine="oracle", data_type="LONG RAW") == "binary"
-    assert resolve_normalized_type(engine="oracle", data_type="NUMBER(10)") == "number"
+    assert resolve_normalized_type(engine="oracle", data_type="NUMBER(10)") == "decimal"
     assert resolve_normalized_type(engine="postgresql", data_type="time") == "time"
     assert resolve_normalized_type(engine="postgresql", data_type="integer[]") == "array"
 

@@ -1,23 +1,31 @@
 "use client";
 
 import { Stack, Text } from "@mantine/core";
+import type { UseFormReturnType } from "@mantine/form";
 import { useTranslate } from "@refinedev/core";
 
 import {
   AttributeEditor,
-  type AttributeFormApi,
+  type AttributeReveal,
 } from "@/features/entities/AttributeEditor";
+import type { EntityRecordFormValues } from "@/features/entities/types";
 
 type Props = {
-  shapeForm: AttributeFormApi;
+  form: UseFormReturnType<EntityRecordFormValues>;
   canWrite: boolean;
+  selfEntityId: string | null;
   hintKey?: string;
+  onEditingChange?: (open: boolean) => void;
+  reveal?: AttributeReveal | null;
 };
 
 export function EntityAttributesTab({
-  shapeForm,
+  form,
   canWrite,
+  selfEntityId,
   hintKey,
+  onEditingChange,
+  reveal,
 }: Props) {
   const t = useTranslate();
 
@@ -28,7 +36,13 @@ export function EntityAttributesTab({
           {t(hintKey)}
         </Text>
       ) : null}
-      <AttributeEditor form={shapeForm} editable={canWrite} />
+      <AttributeEditor
+        form={form}
+        editable={canWrite}
+        selfEntityId={selfEntityId}
+        onEditingChange={onEditingChange}
+        reveal={reveal}
+      />
     </Stack>
   );
 }

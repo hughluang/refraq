@@ -43,6 +43,8 @@ class EntityStore(Protocol):
 
     def get_entity(self, entity_id: str) -> BusinessEntityRecord | None: ...
 
+    def list_all_entities(self) -> list[BusinessEntityRecord]: ...
+
     def create_entity(
         self,
         entity: BusinessEntityRecord,
@@ -115,6 +117,10 @@ class MemoryEntityStore:
     def get_entity(self, entity_id: str) -> BusinessEntityRecord | None:
         with self._lock:
             return self._entities.get(entity_id)
+
+    def list_all_entities(self) -> list[BusinessEntityRecord]:
+        with self._lock:
+            return list(self._entities.values())
 
     def create_entity(
         self,
@@ -272,6 +278,11 @@ class SqlEntityStore:
         with session_scope() as session:
             row = session.get(BusinessEntityRow, entity_id)
             return _entity_from_row(row) if row else None
+
+    def list_all_entities(self) -> list[BusinessEntityRecord]:
+        with session_scope() as session:
+            rows = session.execute(select(BusinessEntityRow)).scalars().all()
+            return [_entity_from_row(row) for row in rows]
 
     def create_entity(
         self,

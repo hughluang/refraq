@@ -314,7 +314,7 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 - `admin` → `core` (+ own modules)
 - `jobs` → `core`; published `admin` (including System Parameter resolver) when needed
 - `metadata` → `core`; published `admin` / `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; process entries `mcp_http` / `mcp_server` may import `worker.parameters`
-- `entity` → `core`; published `admin` / `jobs`; published `metadata.catalog.normalized_type`
+- `entity` → `core`; published `admin` / `jobs`
 - `worker` → `core`; published surfaces for assembly, including `entity.tasks`
 - `main` → `core` + package routers / bootstrap via published surfaces
 - `alembic` → `core` Base + every package `models` module

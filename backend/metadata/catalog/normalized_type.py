@@ -12,6 +12,7 @@ CLOSED_NORMALIZED_TYPES: frozenset[str] = frozenset(
         "string",
         "integer",
         "number",
+        "decimal",
         "boolean",
         "date",
         "timestamp",

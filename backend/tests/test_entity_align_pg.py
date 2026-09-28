@@ -69,8 +69,21 @@ def test_generated_ddl_accepted_by_postgres(monkeypatch: pytest.MonkeyPatch) -> 
         schema,
         table,
         [
-            AttributeRecord("sku", "string", False, None, True, False),
-            AttributeRecord("note", "string", True, None, False, True),
+            AttributeRecord(
+                name="sku",
+                type="string",
+                required=True,
+                unique=True,
+                indexed=False,
+                max_length=32,
+            ),
+            AttributeRecord(
+                name="note",
+                type="text",
+                required=False,
+                unique=False,
+                indexed=True,
+            ),
         ],
         archive_as=None,
         archive_attributes=None,

@@ -19,7 +19,15 @@ import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageError } from "@/components/feedback/PageError";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
-import type { AttributeFormApi } from "@/features/entities/AttributeEditor";
+import {
+  type AttributeReveal,
+} from "@/features/entities/AttributeEditor";
+import {
+  attributeDraftIssues,
+  attributeIndexFromPath,
+  firstAttributeErrorIndex,
+  type AttributeIssueField,
+} from "@/features/entities/attributeDraftValidation";
 import { EntityAttributesTab } from "@/features/entities/EntityAttributesTab";
 import { EntityIdentityFields } from "@/features/entities/EntityIdentityFields";
 import { EntityOverviewTab } from "@/features/entities/EntityOverviewTab";
@@ -38,11 +46,7 @@ import {
   patchEntity,
   publishVersion,
 } from "@/features/entities/api";
-import { DROP_TABLE_PERMISSION, EMPTY_ATTRIBUTE } from "@/features/entities/constants";
-import {
-  ATTRIBUTE_NAME_MAX_LEN,
-  attributeNameError,
-} from "@/features/entities/attributeNameValidation";
+import { DROP_TABLE_PERMISSION } from "@/features/entities/constants";
 import {
   createFormErrorTab,
   entityDetailHref,
@@ -63,8 +67,8 @@ import {
 } from "@/features/entities/entityRecordActions";
 import { canAuthor, isPublishing } from "@/features/entities/publishStatus";
 import type {
-  AttributeDraft,
   BusinessEntity,
+  EntityRecordFormValues,
   EntityVersion,
 } from "@/features/entities/types";
 import { JobDetailModal } from "@/features/jobs/JobDetailModal";
@@ -75,13 +79,6 @@ import { useLeaveGuard } from "@/hooks/useLeaveGuard";
 import { ApiError } from "@/lib/api";
 
 export type { EntityRecordMode };
-
-type RecordForm = {
-  table_name: string;
-  name: string;
-  description: string;
-  attributes: AttributeDraft[];
-};
 
 type Props =
   | { mode: "create" }
@@ -119,12 +116,34 @@ export function EntityRecord(props: Props) {
   const dropConfirm = useConfirmAction<EntityVersion>();
   const deprecateConfirm = useConfirmAction<true>();
 
-  const form = useForm<RecordForm>({
+  const [attributeEditorOpen, setAttributeEditorOpen] = useState(false);
+  const [attributeReveal, setAttributeReveal] = useState<AttributeReveal | null>(
+    null,
+  );
+
+  const attributeFieldMessage = (
+    values: EntityRecordFormValues,
+    path: string,
+    field: AttributeIssueField,
+  ): string | null => {
+    const index = attributeIndexFromPath(path);
+    if (index == null) return null;
+    const draft = values.attributes[index];
+    if (!draft) return null;
+    const issue = attributeDraftIssues(
+      draft,
+      values.attributes.map((item) => item.name),
+    ).find((item) => item.field === field);
+    if (!issue) return null;
+    return issue.values ? t(issue.key, issue.values) : t(issue.key);
+  };
+
+  const form = useForm<EntityRecordFormValues>({
     initialValues: {
       table_name: "",
       name: "",
       description: "",
-      attributes: [{ ...EMPTY_ATTRIBUTE }],
+      attributes: [],
     },
     validate: {
       table_name: (value) =>
@@ -136,33 +155,18 @@ export function EntityRecord(props: Props) {
       description: (value) =>
         value.trim() ? null : t("entities.validation.required"),
       attributes: {
-        name: (value, values) => {
-          const reason = attributeNameError(
-            value,
-            values.attributes.map((item) => item.name),
-          );
-          if (reason === "tooLong") {
-            return t("entities.validation.attributeName.tooLong", {
-              max: ATTRIBUTE_NAME_MAX_LEN,
-            });
-          }
-          if (reason === "reserved") {
-            return t("entities.validation.attributeName.reserved", {
-              name: value.trim(),
-            });
-          }
-          if (reason === "duplicate") {
-            return t("entities.validation.attributeName.duplicate", {
-              name: value.trim(),
-            });
-          }
-          if (reason === "charset") {
-            return t("entities.validation.attributeName.charset", {
-              name: value.trim(),
-            });
-          }
-          return null;
-        },
+        name: (_value, values, path) =>
+          attributeFieldMessage(values, path, "name"),
+        max_length: (_value, values, path) =>
+          attributeFieldMessage(values, path, "max_length"),
+        precision: (_value, values, path) =>
+          attributeFieldMessage(values, path, "precision"),
+        scale: (_value, values, path) =>
+          attributeFieldMessage(values, path, "scale"),
+        enumeration_text: (_value, values, path) =>
+          attributeFieldMessage(values, path, "enumeration_text"),
+        target_entity_id: (_value, values, path) =>
+          attributeFieldMessage(values, path, "target_entity_id"),
       },
     },
   });
@@ -197,9 +201,7 @@ export function EntityRecord(props: Props) {
         table_name: loaded.table_name,
         name: loaded.name,
         description: loaded.description,
-        attributes: version
-          ? draftsFromVersion(version)
-          : [{ ...EMPTY_ATTRIBUTE }],
+        attributes: version ? draftsFromVersion(version) : [],
       });
       form.resetDirty();
     } catch (err) {
@@ -257,7 +259,7 @@ export function EntityRecord(props: Props) {
       entity != null &&
       canAuthor(entity));
 
-  const submit = async (values: RecordForm) => {
+  const submit = async (values: EntityRecordFormValues) => {
     setBusy(true);
     try {
       if (mode === "create") {
@@ -552,6 +554,7 @@ export function EntityRecord(props: Props) {
             form={ENTITY_RECORD_FORM_ID}
             size="sm"
             loading={busy}
+            disabled={attributeEditorOpen}
           >
             {mode === "create"
               ? t("entities.create.submit")
@@ -610,11 +613,14 @@ export function EntityRecord(props: Props) {
         }
         attributes={
           <EntityAttributesTab
-            shapeForm={form as unknown as AttributeFormApi}
+            form={form}
             canWrite={fieldsWritable}
+            selfEntityId={entity?.id ?? null}
             hintKey={
               mode === "create" ? "entities.create.attributesHint" : undefined
             }
+            onEditingChange={setAttributeEditorOpen}
+            reveal={attributeReveal}
           />
         }
         versions={
@@ -646,12 +652,24 @@ export function EntityRecord(props: Props) {
         <form
           id={ENTITY_RECORD_FORM_ID}
           noValidate
-          onSubmit={form.onSubmit(
-            (values) => void submit(values),
-            (errors) => {
-              selectTab(createFormErrorTab(errors));
-            },
-          )}
+          onSubmit={(event) => {
+            if (attributeEditorOpen) {
+              event.preventDefault();
+              return;
+            }
+            form.onSubmit(
+              (values) => void submit(values),
+              (errors) => {
+                const next = createFormErrorTab(errors);
+                selectTab(next);
+                if (next !== "attributes") return;
+                const index = firstAttributeErrorIndex(errors);
+                if (index != null) {
+                  setAttributeReveal({ index, nonce: Date.now() });
+                }
+              },
+            )(event);
+          }}
         >
           {formBody}
         </form>

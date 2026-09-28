@@ -2,46 +2,106 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from backend.core.pagination import OffsetPage
 from backend.core.time import Instant
+from backend.entity.errors import EntityAttributeInvalid
+from backend.entity.validate import ATTRIBUTE_TYPES, CONFIG_KEYS
 from backend.jobs.schemas.jobs import JobOut
 
-NormalizedType = Literal[
-    "string",
-    "integer",
-    "number",
-    "boolean",
-    "date",
-    "timestamp",
-    "time",
-    "interval",
-    "binary",
-    "json",
-    "array",
-    "unknown",
-]
+_RETIRED_ATTRIBUTE_FIELDS = (
+    "kind",
+    "normalized_type",
+    "precision",
+    "scale",
+    "target_table_name",
+    "enumeration",
+    "inverse_attribute",
+)
 
 
 class AttributeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=63)
-    normalized_type: NormalizedType
-    nullable: bool
+    type: str | None = None
+    required: bool = False
     unique: bool = False
     indexed: bool = False
     description: str | None = None
+    config: dict[str, Any] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_retired_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        for key in _RETIRED_ATTRIBUTE_FIELDS:
+            if key in data:
+                raise EntityAttributeInvalid(
+                    f"Attribute field '{key}' is not accepted"
+                )
+        attribute_type = data.get("type")
+        if attribute_type in ("many2one", "one2many"):
+            raise EntityAttributeInvalid(
+                f"Attribute type '{attribute_type}' is not accepted"
+            )
+        return data
+
+    @model_validator(mode="after")
+    def _require_type_and_config(self) -> AttributeIn:
+        if self.type not in ATTRIBUTE_TYPES:
+            shown = self.type or ""
+            raise EntityAttributeInvalid(
+                f"Attribute type '{shown}' is not in the closed set"
+                if shown
+                else "Attribute type is required"
+            )
+        if not isinstance(self.config, dict):
+            raise EntityAttributeInvalid(
+                f"Attribute '{self.name}' requires config"
+            )
+        assert self.type is not None
+        unknown = set(self.config) - CONFIG_KEYS[self.type]
+        if unknown:
+            listed = ", ".join(sorted(unknown))
+            raise EntityAttributeInvalid(
+                f"Attribute '{self.name}' of type {self.type} rejects config {listed}"
+            )
+        return self
+
+
+class ReferenceTargetOut(BaseModel):
+    entity_id: str
+    name: str
+    table_name: str
 
 
 class AttributeOut(BaseModel):
     name: str
-    normalized_type: str
-    nullable: bool
+    type: str
+    required: bool
     unique: bool = False
     indexed: bool = False
     description: str | None = None
+    config: dict[str, Any]
+    target: ReferenceTargetOut | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_target_unless_reference(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        if data.get("type") != "reference":
+            data.pop("target", None)
+        return data
+
+
+class InboundReferenceOut(BaseModel):
+    entity_id: str
+    table_name: str
+    attribute_name: str
 
 
 class AlignmentOut(BaseModel):
@@ -67,8 +127,18 @@ class BusinessEntityOut(BaseModel):
     deprecated_at: Instant | None = None
     ever_published: bool = False
     current_version: CurrentVersionOut | None = None
+    inbound_references: list[InboundReferenceOut] | None = None
     created_at: Instant
     updated_at: Instant
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_inbound(
+        self, handler: Any
+    ) -> dict[str, Any]:
+        data = handler(self)
+        if data.get("inbound_references") is None:
+            data.pop("inbound_references", None)
+        return data
 
 
 class EntityVersionOut(BaseModel):
@@ -134,6 +204,8 @@ class EntityPatchRequest(BaseModel):
 
 
 class ShapeWriteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     attributes: list[AttributeIn] | None = None
 
 

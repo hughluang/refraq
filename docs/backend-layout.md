@@ -112,9 +112,8 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | `backend.metadata.mcp_http` | Product Streamable HTTP process entry; assembles System Parameters |
 | `backend.metadata.tasks` | Job kind handler dispatch (`run_job`); discovered by `worker` |
 | `backend.metadata.routers.*` | Domain use-case HTTP; mounted by `main` |
-| `backend.metadata.catalog.normalized_type` | Closed **Normalized Type** set and native-type canonicalize helper. Published so `entity` imports the vocabulary instead of duplicating it |
 
-This published-surface extension is deliberate: Entity attribute typing derives from that Metadata vocabulary. Do not treat a later layout-enforcement failure as a reason to widen the list further.
+`backend.metadata.catalog.normalized_type` is an internal catalog module. **Attribute Type** does not import it (ADR 0049).
 
 ### `entity` published modules
 
@@ -224,7 +223,7 @@ Enforcement: `backend/tests/test_no_inline_imports.py`. Rationale: ADR 0020.
 Forward rules:
 
 1. `core` depends on no platform kernel / primitive / product-domain business package (upgrade may import **published** `admin`, `worker.api`, `worker.parameters`, and `metadata.type_mappings.seeds` only for orchestration).
-2. **Product domain ↔ product domain:** no direct imports. Collaborate via shared-kernel protocols or composition binding—extend this contract with an explicit edge when needed. The admitted edge is `entity` → the `metadata` published leaf module `catalog.normalized_type`. The reverse direction is forbidden: `metadata` must not import `entity`.
+2. **Product domain ↔ product domain:** no direct imports. Collaborate via shared-kernel protocols or composition binding—extend this contract with an explicit edge when needed. `entity` does not import `metadata`. `metadata` must not import `entity`.
 3. **Product domain → platform kernel / primitive:** published API only (Conformist).
 4. Platform primitive → platform kernel: default none; if needed, add an explicit whitelist edge via published API.
 5. Drivers (router/MCP) → own-package domain logic → published APIs / `core`. Domain and HTTP **must not** import `worker.app`. Delivery goes through `jobs` published API (or an agreed async published surface). Tasks use `@shared_task` (or equivalent); `worker` assembles.
@@ -239,7 +238,7 @@ Concrete edges:
 | `admin` | `core`; own stores/schemas/routers / `system_parameters` / `parameters` / `model_services` |
 | `jobs` | `core`; own store/schemas/routers / `parameters`; published `admin` (audit, System Parameter resolver) |
 | `metadata` | `core`; published `admin`; published `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; process entries `mcp_http` / `mcp_server` may import `worker.parameters`; own modules. Must not import `entity` |
-| `entity` | `core`; published `admin`; published `jobs`; published `metadata.catalog.normalized_type`; own modules |
+| `entity` | `core`; published `admin`; published `jobs`; own modules |
 | `worker` | `core`; published `admin` / `jobs` / `metadata` / `entity` for assembly and system tasks |
 | `alembic` | `core` Base + every package `models` module |
 | `tests` | any backend module (enforcement tests assert production edges) |

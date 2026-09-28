@@ -189,7 +189,7 @@ def test_revert_failure_is_logged_and_original_error_kept(
         raise RuntimeError("snapshot write failed")
 
     monkeypatch.setattr(
-        "backend.entity.align.snapshot_from_attributes", _snapshot_fails
+        "backend.entity.align.attribute_to_dict", _snapshot_fails
     )
     entity = _create(client)
     version_id = entity["current_version"]["id"]
@@ -211,7 +211,7 @@ def test_save_refused_after_publish(client: TestClient) -> None:
     _publish(client, entity)
     refused = client.patch(
         f"/entities/{entity['id']}/versions/{version_id}",
-        json={"attributes": [SKU, {**SKU, "name": "note", "nullable": True}]},
+        json={"attributes": [SKU, {**SKU, "name": "note", "required": False}]},
     )
     assert refused.status_code == 422
     assert refused.json()["code"] == "ENTITY_NOT_UNPUBLISHED"
@@ -414,7 +414,12 @@ def test_persistent_drop_without_entity_url_fails_and_keeps_snapshot(
             version,
             publish_status="published",
             materialized_attributes=[
-                {"name": "sku", "normalized_type": "string", "nullable": False}
+                {
+                    "name": "sku",
+                    "type": "string",
+                    "required": True,
+                    "config": {"max_length": 32},
+                }
             ],
             updated_at=utc_now(),
         )

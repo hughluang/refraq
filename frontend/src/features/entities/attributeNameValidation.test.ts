@@ -6,9 +6,9 @@ import {
 } from "@/features/entities/attributeNameValidation";
 
 describe("attributeNameError", () => {
-  it("allows empty placeholder rows", () => {
-    expect(attributeNameError("", [])).toBeNull();
-    expect(attributeNameError("   ", ["sku"])).toBeNull();
+  it("rejects an empty name", () => {
+    expect(attributeNameError("", [])).toBe("required");
+    expect(attributeNameError("   ", ["sku"])).toBe("required");
   });
 
   it("accepts a valid name", () => {

@@ -6,7 +6,7 @@ import pytest
 
 from backend.entity.classify import DefinitionShape, classify_shapes
 from backend.entity.errors import EntityAttributeInvalid, EntityTableNameInvalid
-from backend.entity.records import AttributeRecord
+from backend.entity.records import AttributeRecord, EnumerationEntry
 from backend.entity.validate import (
     ATTRIBUTE_NAME_MAX_LEN,
     TABLE_NAME_MAX_LEN,
@@ -18,20 +18,30 @@ from backend.entity.validate import (
 
 def _attr(
     name: str,
-    normalized_type: str = "string",
+    attribute_type: str = "string",
     *,
-    nullable: bool = False,
+    required: bool = True,
     unique: bool = False,
     indexed: bool = False,
     description: str | None = None,
+    max_length: int | None = None,
+    precision: int | None = None,
+    scale: int | None = None,
+    entries: tuple[EnumerationEntry, ...] | None = None,
+    target_entity_id: str | None = None,
 ) -> AttributeRecord:
     return AttributeRecord(
         name=name,
-        normalized_type=normalized_type,
-        nullable=nullable,
+        type=attribute_type,
+        required=required,
         unique=unique,
         indexed=indexed,
         description=description,
+        max_length=32 if attribute_type == "string" and max_length is None else max_length,
+        precision=precision,
+        scale=scale,
+        entries=entries,
+        target_entity_id=target_entity_id,
     )
 
 
@@ -49,8 +59,8 @@ def test_empty_shapes_are_unchanged() -> None:
     assert result.changes == ()
 
 
-def test_add_first_nullable_attribute_to_empty_is_non_breaking() -> None:
-    result = classify_shapes(_shape(), _shape(_attr("note", nullable=True)))
+def test_add_first_optional_attribute_to_empty_is_non_breaking() -> None:
+    result = classify_shapes(_shape(), _shape(_attr("note", required=False)))
     assert result.change_class == "non_breaking"
 
 
@@ -61,9 +71,9 @@ def test_unchanged_empty_delta() -> None:
     assert result.changes == ()
 
 
-def test_add_nullable_attribute_is_non_breaking() -> None:
+def test_add_optional_attribute_is_non_breaking() -> None:
     before = _shape(_attr("sku"))
-    after = _shape(_attr("sku"), _attr("note", nullable=True))
+    after = _shape(_attr("sku"), _attr("note", required=False))
     result = classify_shapes(before, after)
     assert result.change_class == "non_breaking"
     assert result.changes[0].field == "attributes.note"
@@ -72,34 +82,90 @@ def test_add_nullable_attribute_is_non_breaking() -> None:
 
 def test_add_required_attribute_is_breaking() -> None:
     before = _shape(_attr("sku"))
-    after = _shape(_attr("sku"), _attr("lot_id", nullable=False))
+    after = _shape(_attr("sku"), _attr("lot_id", required=True))
     result = classify_shapes(before, after)
     assert result.change_class == "breaking"
     assert result.changes[0].change_class == "breaking"
 
 
-def test_unknown_to_any_type_is_non_breaking() -> None:
-    before = _shape(_attr("sku"), _attr("qty", "unknown", nullable=True))
-    after = _shape(_attr("sku"), _attr("qty", "integer", nullable=True))
+def test_string_to_text_is_breaking() -> None:
+    before = _shape(_attr("note", "string"))
+    after = _shape(_attr("note", "text"))
+    result = classify_shapes(before, after)
+    assert result.change_class == "breaking"
+    assert result.changes[0].field == "attributes.note.type"
+
+
+def test_integer_to_number_is_breaking() -> None:
+    before = _shape(_attr("sku"), _attr("qty", "integer", required=False))
+    after = _shape(_attr("sku"), _attr("qty", "number", required=False))
+    result = classify_shapes(before, after)
+    assert result.change_class == "breaking"
+    assert result.changes[0].field == "attributes.qty.type"
+
+
+def test_widen_max_length_is_non_breaking_and_narrow_is_breaking() -> None:
+    before = _shape(_attr("sku", max_length=16))
+    wider = classify_shapes(before, _shape(_attr("sku", max_length=32)))
+    assert wider.change_class == "non_breaking"
+    assert wider.changes[0].field == "attributes.sku.config.max_length"
+    narrower = classify_shapes(before, _shape(_attr("sku", max_length=8)))
+    assert narrower.change_class == "breaking"
+
+
+def test_enumeration_code_add_is_non_breaking_and_label_is_unchanged() -> None:
+    before = _shape(
+        _attr(
+            "status",
+            "enumeration",
+            entries=(EnumerationEntry(code="draft", label="Draft"),),
+        )
+    )
+    added = classify_shapes(
+        before,
+        _shape(
+            _attr(
+                "status",
+                "enumeration",
+                entries=(
+                    EnumerationEntry(code="draft", label="Draft"),
+                    EnumerationEntry(code="live", label="Live"),
+                ),
+            )
+        ),
+    )
+    assert added.change_class == "non_breaking"
+    assert added.changes[0].field == "attributes.status.config.entries"
+    removed = classify_shapes(
+        before,
+        _shape(
+            _attr(
+                "status",
+                "enumeration",
+                entries=(EnumerationEntry(code="live", label="Live"),),
+            )
+        ),
+    )
+    assert removed.change_class == "breaking"
+    relabeled = classify_shapes(
+        before,
+        _shape(
+            _attr(
+                "status",
+                "enumeration",
+                entries=(EnumerationEntry(code="draft", label="New"),),
+            )
+        ),
+    )
+    assert relabeled.change_class == "unchanged"
+
+
+def test_relax_required_is_non_breaking() -> None:
+    before = _shape(_attr("sku"), _attr("note", "string", required=True))
+    after = _shape(_attr("sku"), _attr("note", "string", required=False))
     result = classify_shapes(before, after)
     assert result.change_class == "non_breaking"
-    assert result.changes[0].field == "attributes.qty.normalized_type"
-    assert result.changes[0].change_class == "non_breaking"
-
-
-def test_integer_to_number_is_non_breaking() -> None:
-    before = _shape(_attr("sku"), _attr("qty", "integer", nullable=True))
-    after = _shape(_attr("sku"), _attr("qty", "number", nullable=True))
-    result = classify_shapes(before, after)
-    assert result.change_class == "non_breaking"
-
-
-def test_relax_required_to_nullable_is_non_breaking() -> None:
-    before = _shape(_attr("sku"), _attr("note", "string", nullable=False))
-    after = _shape(_attr("sku"), _attr("note", "string", nullable=True))
-    result = classify_shapes(before, after)
-    assert result.change_class == "non_breaking"
-    assert result.changes[0].field == "attributes.note.nullable"
+    assert result.changes[0].field == "attributes.note.required"
 
 
 def test_rename_attribute_is_breaking() -> None:
@@ -113,7 +179,7 @@ def test_rename_attribute_is_breaking() -> None:
 
 
 def test_drop_attribute_is_breaking() -> None:
-    before = _shape(_attr("sku"), _attr("note", nullable=True))
+    before = _shape(_attr("sku"), _attr("note", required=False))
     after = _shape(_attr("sku"))
     result = classify_shapes(before, after)
     assert result.change_class == "breaking"
@@ -121,15 +187,15 @@ def test_drop_attribute_is_breaking() -> None:
 
 
 def test_other_type_change_is_breaking() -> None:
-    before = _shape(_attr("sku"), _attr("qty", "number", nullable=True))
-    after = _shape(_attr("sku"), _attr("qty", "integer", nullable=True))
+    before = _shape(_attr("sku"), _attr("qty", "number", required=False))
+    after = _shape(_attr("sku"), _attr("qty", "integer", required=False))
     result = classify_shapes(before, after)
     assert result.change_class == "breaking"
 
 
-def test_tighten_nullable_to_required_is_breaking() -> None:
-    before = _shape(_attr("sku"), _attr("note", nullable=True))
-    after = _shape(_attr("sku"), _attr("note", nullable=False))
+def test_tighten_required_is_breaking() -> None:
+    before = _shape(_attr("sku"), _attr("note", required=False))
+    after = _shape(_attr("sku"), _attr("note", required=True))
     result = classify_shapes(before, after)
     assert result.change_class == "breaking"
 

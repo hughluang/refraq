@@ -38,11 +38,12 @@ _ENTITY_TABLES = "business_entities, entity_versions"
 
 SKU = AttributeRecord(
     name="sku",
-    normalized_type="string",
-    nullable=False,
+    type="string",
+    required=True,
     unique=True,
     indexed=False,
     description="SKU code",
+    max_length=32,
 )
 
 

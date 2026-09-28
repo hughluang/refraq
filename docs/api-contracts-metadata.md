@@ -90,7 +90,7 @@ All Source and catalog responses include `locator_key` (ADR 0012). HTTP path par
 ```
 
 Identity is `source_id` (+ object coordinates). `collected_at` is optional provenance only.
-`normalized_type` is the closed coarse physical type assigned by **Type Mapping** (`string` | `integer` | `number` | `boolean` | `date` | `timestamp` | `time` | `interval` | `binary` | `json` | `array` | `unknown`). It is a snapshot from the last successful structure Job, not a live lookup. Native `data_type` is unchanged. MCP catalog tools omit this field.
+`normalized_type` is the closed coarse physical type assigned by **Type Mapping** (`string` | `integer` | `number` | `decimal` | `boolean` | `date` | `timestamp` | `time` | `interval` | `binary` | `json` | `array` | `unknown`). `number` is approximate; `decimal` is exact. It is a snapshot from the last successful structure Job, not a live lookup. Native `data_type` is unchanged. MCP catalog tools omit this field.
 `field_kind` is read-only on semantics writes (structure-held). `model_routing_hint` is not in this phase.
 `time_semantics`, `status_semantics`, `relation_summary`, and `confidence` are removed from read and write contracts (ADR 0015); time/status meaning lives on column descriptions (and optional free-text `semantic_type` / `enum_catalog` — closed vocabulary deferred, ADR 0016); object relationships live in join edges.
 `business_domain` on read is `{ "id", "code", "name" } | null` (ADR 0017). Object semantics writes accept `business_domain_code` (not the nested object); a present JSON `null` (or blank string) clears the domain link (ADR 0018).
@@ -183,7 +183,7 @@ Create conflicts on duplicate `code` → `BUSINESS_DOMAIN_CODE_CONFLICT`. Missin
 
 No POST or DELETE. **Offset Page** response: `{ "items": […], "total": N, "limit": L, "offset": O }`. Order: `engine`, `native_type`, `id`. Mapping shape: `{ "id", "engine", "native_type", "normalized_type", "origin", "created_at", "updated_at" }`. `origin` is `product` \| `job` \| `user`.
 
-PATCH body: `{ "normalized_type": "<one of 11 buckets>" }` — any closed Normalized Type except `unknown`. Product seed (`origin=product`) → `TYPE_MAPPING_SEED_IMMUTABLE`. Target `unknown` → `TYPE_MAPPING_UNKNOWN_FORBIDDEN`. Missing id → `TYPE_MAPPING_NOT_FOUND`. Successful PATCH writes a **Management Audit Event** (`resource_type=type_mapping`, `action=type_mapping.patch`).
+PATCH body: `{ "normalized_type": "<one of 12 buckets>" }` — any closed Normalized Type except `unknown`. Product seeds assign exact numeric natives (`numeric`, `decimal`, `money`, SQL Server `smallmoney`, Oracle `number`) to `decimal`; approximate natives stay `number`. Product seed (`origin=product`) → `TYPE_MAPPING_SEED_IMMUTABLE`. Target `unknown` → `TYPE_MAPPING_UNKNOWN_FORBIDDEN`. Missing id → `TYPE_MAPPING_NOT_FOUND`. Successful PATCH writes a **Management Audit Event** (`resource_type=type_mapping`, `action=type_mapping.patch`).
 
 ## 5. Join Endpoints (C + Depth)
 

@@ -19,7 +19,7 @@ from backend.entity.present import (
     physical_table_name,
     table_present,
 )
-from backend.entity.records import snapshot_from_attributes
+from backend.entity.records import attribute_to_dict
 from backend.entity.store import get_entity_store
 from backend.entity.table_port import (
     EntityTableHasRows,
@@ -116,7 +116,9 @@ def _reconcile(job_id: str, version_id: str) -> dict[str, str]:
             replace(
                 version,
                 publish_status=PUBLISHED,
-                materialized_attributes=snapshot_from_attributes(definition),
+                materialized_attributes=[
+                    attribute_to_dict(attr) for attr in definition
+                ],
                 latest_reconcile_job_id=job_id,
                 updated_at=utc_now(),
             )

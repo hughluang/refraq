@@ -11,7 +11,8 @@ from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord, get_user_store
 from backend.core.pagination import ENTITY_LIST, PageParams, page_params
 from backend.entity.jobs import enqueue_drop, enqueue_publish
-from backend.entity.records import AttributeRecord
+from backend.entity.errors import EntityAttributeInvalid
+from backend.entity.records import AttributeRecord, EnumerationEntry
 from backend.entity.schemas.entities import (
     AttributeIn,
     BusinessEntityListResponse,
@@ -48,17 +49,77 @@ router = APIRouter(tags=["entities"])
 def _attrs(items: list[AttributeIn] | None) -> list[AttributeRecord] | None:
     if items is None:
         return None
-    return [
-        AttributeRecord(
-            name=item.name,
-            normalized_type=item.normalized_type,
-            nullable=item.nullable,
-            unique=item.unique,
-            indexed=item.indexed,
-            description=item.description,
+
+    return [_record(item) for item in items]
+
+
+def _record(item: AttributeIn) -> AttributeRecord:
+    assert item.type is not None and item.config is not None
+    config = item.config
+    return AttributeRecord(
+        name=item.name,
+        type=item.type,
+        required=item.required,
+        unique=item.unique,
+        indexed=item.indexed,
+        description=item.description,
+        max_length=_config_int(item.name, "max_length", config.get("max_length"))
+        if "max_length" in config
+        else None,
+        precision=_config_int(item.name, "precision", config.get("precision"))
+        if "precision" in config
+        else None,
+        scale=_config_int(item.name, "scale", config.get("scale"))
+        if "scale" in config
+        else None,
+        entries=_config_entries(item.name, config.get("entries"))
+        if "entries" in config
+        else None,
+        target_entity_id=_config_target(item.name, config.get("target_entity_id"))
+        if "target_entity_id" in config
+        else None,
+    )
+
+
+def _config_int(name: str, field: str, value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise EntityAttributeInvalid(
+            f"Attribute '{name}' {field} must be an integer"
         )
-        for item in items
-    ]
+    return value
+
+
+def _config_target(name: str, value: Any) -> str:
+    if not isinstance(value, str):
+        raise EntityAttributeInvalid(
+            f"Attribute '{name}' target_entity_id must be a string"
+        )
+    return value.strip()
+
+
+def _config_entries(name: str, value: Any) -> tuple[EnumerationEntry, ...]:
+    if not isinstance(value, list):
+        raise EntityAttributeInvalid(
+            f"Attribute '{name}' enumeration must be a non-empty list"
+        )
+    entries: list[EnumerationEntry] = []
+    for item in value:
+        if not isinstance(item, dict) or "code" not in item:
+            raise EntityAttributeInvalid(
+                f"Attribute '{name}' enumeration code must be a string"
+            )
+        code = item["code"]
+        if not isinstance(code, str):
+            raise EntityAttributeInvalid(
+                f"Attribute '{name}' enumeration code must be a string"
+            )
+        label = item.get("label")
+        if label is not None and not isinstance(label, str):
+            raise EntityAttributeInvalid(
+                f"Attribute '{name}' enumeration label must be a string"
+            )
+        entries.append(EnumerationEntry(code=code, label=label))
+    return tuple(entries)
 
 
 def _present_job(record: JobRecord) -> Any:

@@ -21,6 +21,7 @@ const PATCHABLE: PatchableNormalizedType[] = [
   "string",
   "integer",
   "number",
+  "decimal",
   "boolean",
   "date",
   "timestamp",

@@ -4,29 +4,26 @@ import { EMPTY_ATTRIBUTE } from "@/features/entities/constants";
 import {
   attributesFromDrafts,
   draftsFromVersion,
+  referenceSummaryLabel,
 } from "@/features/entities/entityPresentation";
 import type { AttributeDraft, EntityVersion } from "@/features/entities/types";
 
-function draft(
-  overrides: Partial<AttributeDraft> = {},
-): AttributeDraft {
+function draft(overrides: Partial<AttributeDraft> = {}): AttributeDraft {
   return { ...EMPTY_ATTRIBUTE, ...overrides };
 }
 
 describe("attributesFromDrafts", () => {
-  it("persists an empty shape when no named drafts are present", () => {
+  it("persists an empty shape", () => {
     expect(attributesFromDrafts([])).toEqual([]);
-    expect(attributesFromDrafts([draft()])).toEqual([]);
-    expect(attributesFromDrafts([draft({ name: "   " })])).toEqual([]);
   });
 
-  it("keeps named drafts and trims fields", () => {
+  it("keeps named string drafts and trims fields", () => {
     expect(
       attributesFromDrafts([
-        draft(),
         draft({
           name: " sku ",
-          nullable: true,
+          max_length: "32",
+          required: false,
           unique: true,
           indexed: true,
           description: " SKU code ",
@@ -34,12 +31,86 @@ describe("attributesFromDrafts", () => {
       ]),
     ).toEqual([
       {
+        type: "string",
         name: "sku",
-        normalized_type: "string",
-        nullable: true,
+        required: false,
         unique: true,
         indexed: true,
         description: "SKU code",
+        config: { max_length: 32 },
+      },
+    ]);
+  });
+
+  it("maps reference and text without extra config", () => {
+    expect(
+      attributesFromDrafts([
+        draft({
+          type: "reference",
+          name: "supplier_id",
+          target_entity_id: " ent_supplier ",
+          target_name: "Supplier",
+          target_table_name: "supplier",
+        }),
+        draft({ type: "text", name: "notes" }),
+      ]),
+    ).toEqual([
+      {
+        type: "reference",
+        name: "supplier_id",
+        required: false,
+        unique: false,
+        indexed: false,
+        description: null,
+        config: { target_entity_id: "ent_supplier" },
+      },
+      {
+        type: "text",
+        name: "notes",
+        required: false,
+        unique: false,
+        indexed: false,
+        description: null,
+        config: {},
+      },
+    ]);
+  });
+
+  it("maps decimal precision and enumeration lines", () => {
+    expect(
+      attributesFromDrafts([
+        draft({
+          name: "amount",
+          type: "decimal",
+          precision: "10",
+          scale: "2",
+        }),
+        draft({
+          name: "status",
+          type: "enumeration",
+          enumeration_text: "ACTIVE|Active\nDONE",
+        }),
+      ]),
+    ).toEqual([
+      {
+        type: "decimal",
+        name: "amount",
+        required: false,
+        unique: false,
+        indexed: false,
+        description: null,
+        config: { precision: 10, scale: 2 },
+      },
+      {
+        type: "enumeration",
+        name: "status",
+        required: false,
+        unique: false,
+        indexed: false,
+        description: null,
+        config: {
+          entries: [{ code: "ACTIVE", label: "Active" }, { code: "DONE" }],
+        },
       },
     ]);
   });
@@ -47,8 +118,102 @@ describe("attributesFromDrafts", () => {
 
 describe("draftsFromVersion", () => {
   it("maps an empty version shape to no drafts", () => {
+    expect(draftsFromVersion({ attributes: [] } as EntityVersion)).toEqual([]);
+  });
+
+  it("keeps reference config when other config fields are omitted", () => {
     expect(
-      draftsFromVersion({ attributes: [] } as EntityVersion),
-    ).toEqual([]);
+      draftsFromVersion({
+        attributes: [
+          {
+            type: "reference",
+            name: "supplier_id",
+            required: false,
+            unique: false,
+            indexed: false,
+            description: null,
+            config: { target_entity_id: "ent_supplier" },
+            target: {
+              entity_id: "ent_supplier",
+              name: "Supplier",
+              table_name: "supplier",
+            },
+          },
+        ],
+      } as EntityVersion),
+    ).toEqual([
+      {
+        ...EMPTY_ATTRIBUTE,
+        type: "reference",
+        name: "supplier_id",
+        target_entity_id: "ent_supplier",
+        target_name: "Supplier",
+        target_table_name: "supplier",
+      },
+    ]);
+  });
+
+  it("round-trips an empty enumeration label separately from a bare code", () => {
+    const [drafted] = draftsFromVersion({
+      attributes: [
+        {
+          type: "enumeration",
+          name: "status",
+          required: false,
+          unique: false,
+          indexed: false,
+          description: null,
+          config: { entries: [{ code: "ACTIVE", label: "" }] },
+        },
+      ],
+    } as EntityVersion);
+    expect(drafted.enumeration_text).toBe("ACTIVE|");
+    expect(attributesFromDrafts([drafted])).toEqual([
+      {
+        type: "enumeration",
+        name: "status",
+        required: false,
+        unique: false,
+        indexed: false,
+        description: null,
+        config: { entries: [{ code: "ACTIVE", label: "" }] },
+      },
+    ]);
+  });
+
+  it("labels a reference from the entity, the form, or the raw id", () => {
+    expect(
+      referenceSummaryLabel({
+        targetEntityId: "ent_supplier",
+        selfEntityId: null,
+        selfName: "",
+        selfTableName: "",
+        cachedName: "Supplier",
+        cachedTableName: "supplier",
+        emptyNameLabel: "This entity",
+      }),
+    ).toBe("Supplier（supplier）");
+    expect(
+      referenceSummaryLabel({
+        targetEntityId: "self",
+        selfEntityId: null,
+        selfName: "",
+        selfTableName: "items",
+        cachedName: "",
+        cachedTableName: "",
+        emptyNameLabel: "This entity",
+      }),
+    ).toBe("This entity（items）");
+    expect(
+      referenceSummaryLabel({
+        targetEntityId: "ent_gone",
+        selfEntityId: "ent_items",
+        selfName: "Items",
+        selfTableName: "items",
+        cachedName: "",
+        cachedTableName: "",
+        emptyNameLabel: "This entity",
+      }),
+    ).toBe("ent_gone");
   });
 });

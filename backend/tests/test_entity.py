@@ -24,11 +24,12 @@ from backend.main import app  # noqa: E402
 
 SKU = {
     "name": "sku",
-    "normalized_type": "string",
-    "nullable": False,
+    "type": "string",
+    "required": True,
     "unique": True,
     "indexed": False,
     "description": "SKU code",
+    "config": {"max_length": 32},
 }
 
 
@@ -192,8 +193,9 @@ def test_reserved_row_id_is_rejected(client: TestClient) -> None:
             attributes=[
                 {
                     "name": "row_id",
-                    "normalized_type": "integer",
-                    "nullable": False,
+                    "type": "integer",
+                    "required": True,
+                    "config": {},
                 }
             ]
         ),
@@ -213,8 +215,9 @@ def test_attribute_name_rules_report_concrete_detail(client: TestClient) -> None
             attributes=[
                 {
                     "name": "1bad",
-                    "normalized_type": "string",
-                    "nullable": False,
+                    "type": "string",
+                    "required": True,
+                    "config": {"max_length": 32},
                 }
             ]
         ),
@@ -230,8 +233,9 @@ def test_attribute_name_rules_report_concrete_detail(client: TestClient) -> None
             attributes=[
                 {
                     "name": "   ",
-                    "normalized_type": "string",
-                    "nullable": False,
+                    "type": "string",
+                    "required": True,
+                    "config": {"max_length": 32},
                 }
             ]
         ),
@@ -246,13 +250,15 @@ def test_attribute_name_rules_report_concrete_detail(client: TestClient) -> None
             attributes=[
                 {
                     "name": "sku",
-                    "normalized_type": "string",
-                    "nullable": False,
+                    "type": "string",
+                    "required": True,
+                    "config": {"max_length": 32},
                 },
                 {
                     "name": "sku",
-                    "normalized_type": "integer",
-                    "nullable": False,
+                    "type": "integer",
+                    "required": True,
+                    "config": {},
                 },
             ]
         ),
@@ -359,9 +365,10 @@ def test_non_breaking_in_place_and_open_version(client: TestClient) -> None:
         SKU,
         {
             "name": "note",
-            "normalized_type": "string",
-            "nullable": True,
+            "type": "string",
+            "required": False,
             "description": "Optional note",
+            "config": {"max_length": 200},
         },
     ]
     patched = client.patch(

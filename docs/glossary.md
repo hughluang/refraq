@@ -358,9 +358,9 @@ Avoid conflating with **Normalized Type**.
 
 ### Normalized Type
 
-A closed coarse physical type on a catalog column (`string` | `integer` | `number` | `boolean` | `date` | `timestamp` | `time` | `interval` | `binary` | `json` | `array` | `unknown`). On a database-kind Source it is assigned by a **Type Mapping** for that `engine` and native type. The value on a column is the snapshot from the last successful structure **Job**, not a live lookup.
+A closed coarse physical type on a catalog column (`string` | `integer` | `number` | `decimal` | `boolean` | `date` | `timestamp` | `time` | `interval` | `binary` | `json` | `array` | `unknown`). On a database-kind Source it is assigned by a **Type Mapping** for that `engine` and native type. The value on a column is the snapshot from the last successful structure **Job**, not a live lookup. `number` is approximate; `decimal` is exact. Precision is not part of the Type Mapping identity; on a catalog column it stays in native `data_type`.
 `type_changed` on a **Structure Diff** compares native `data_type` strings, not Normalized Type.
-Avoid replacing native `data_type`; avoid **Semantic Type**; avoid treating Normalized Type as MCP catalog payload.
+Avoid replacing native `data_type`; avoid **Semantic Type**; avoid treating Normalized Type as MCP catalog payload; avoid folding `decimal` back into `number`.
 
 ### Type Mapping
 
@@ -445,9 +445,29 @@ Avoid treating it as a full platform SIEM or a substitute for application access
 
 ### Business Entity
 
-A definition of a reusable business thing (material, supplier, inventory fact), identified by an immutable `table_name` that spans all its **Entity Version**s and is the live physical table name. Authoring one requires business meaning and not only a shape: name and description. Attributes may be empty; when declared they are typed by the **Normalized Type** closed set and may be marked `unique` and/or `indexed`. The Entity Table carries a platform `row_id` identity column; authors do not pick a business primary key.
+A definition of a reusable business thing (material, supplier, inventory fact), identified by an immutable `table_name` that spans all its **Entity Version**s and is the live physical table name. Authoring one requires business meaning and not only a shape: name and description. Each attribute has one **Attribute Type** and that type's configuration, and may be marked `unique` and/or `indexed`. The Entity Table carries a platform `row_id` identity column; authors do not pick a business primary key. **Inbound Reference**s are derived and are not attributes.
 Permissions: `entity:read` / `entity:write` / `entity:drop_table`.
-Avoid calling it a **Catalog Object**, a Data Product, or a Serving output. Avoid putting source bindings, extract SQL, transforms, or lineage on the definition — those belong to a **Data Channel**. Avoid putting the `object_category` closed set on the Entity. Avoid treating `row_id` as a **Data Channel** upsert key.
+Avoid calling it a **Catalog Object**, a Data Product, or a Serving output. Avoid putting source bindings, extract SQL, transforms, or lineage on the definition — those belong to a **Data Channel**. Avoid putting the `object_category` closed set on the Entity. Avoid treating `row_id` as a **Data Channel** upsert key. Avoid a link table or a relationship-entity subtype; a many-to-many is an ordinary Business Entity with two **Entity Reference**s. Avoid many-to-one, one-to-many, and many2one as names. Avoid **Join** and **Enum Catalog** as the home of entity references or enumerations. Avoid hierarchy and inheritance between Business Entities. Avoid typing an attribute with **Normalized Type**.
+
+### Attribute Type
+
+The closed set of classes that define one attribute of a **Business Entity**: `string`, `text`, `integer`, `decimal`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, `enumeration`, `reference`. Each class owns its configuration. `json` is a JSON document with an empty configuration; a JSON array is a value of that type. `required`, `unique`, and `indexed` are facts of every attribute.
+Avoid **Normalized Type**, **Semantic Type**, a JSON Schema or OpenAPI format, `array` as its own class, a unit or quantity on `decimal`, a cardinality on `reference`, and treating `enumeration` as a constraint on `string` or `integer`.
+
+### Attribute Enumeration
+
+The inline closed code list that is the configuration of an `enumeration` **Attribute Type**. Each entry has a required string code and an optional label. The list belongs to that one attribute.
+Avoid **Enum Catalog**, a database enum type, **Normalized Type**, a shared code-list resource, declaring one on `string` or `integer`, and an integer code kind.
+
+### Entity Reference
+
+An attribute whose **Attribute Type** is `reference`. It names a target Business Entity by entity id and stores that target's live-table `row_id`. The target may be the same entity. A stored `row_id` may not resolve. It is not a **Normalized Type** and not a database foreign key.
+Avoid many-to-one, many2one, **Join**, **Inbound Reference** as something the author saves, a `kind` beside the type, and a foreign key constraint.
+
+### Inbound Reference
+
+A read-only fact that another **Business Entity**'s current version has an **Entity Reference** aimed at this one. It carries that entity's id and `table_name`, and the attribute name. Not an attribute, not saved, and not named on this entity.
+Avoid one-to-many, one2many, treating it as part of the saved shape, and counting a historical version as current.
 
 ### Entity Version
 
@@ -456,7 +476,7 @@ Avoid treating a version as a byte-exact frozen shape, ALTERing a published tabl
 
 ### Entity Table
 
-The physical table refraq creates from a **Business Entity** definition, in the refraq-owned entity database declared separately from the metadata database. The Entity `table_name` is the live table; a superseded version's table is renamed to `{table_name}__rfq_v{version}` when the next version publishes. `table_name` is character-set and length constrained so both names fit the engine identifier limit. Every table carries `row_id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY`; authorable attributes become the remaining columns, with optional UNIQUE constraints and non-unique indexes.
+The physical table refraq creates from a **Business Entity** definition, in the refraq-owned entity database declared separately from the metadata database. The Entity `table_name` is the live table; a superseded version's table is renamed to `{table_name}__rfq_v{version}` when the next version publishes. `table_name` is character-set and length constrained so both names fit the engine identifier limit. Every table carries `row_id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY`; each attribute becomes one remaining column, with optional UNIQUE constraints and non-unique indexes. An **Inbound Reference** is not a column.
 Created empty by **Publish**; rows arrive only from a **Data Channel**. The definition lands before the table exists: publish is an explicit **Job** and no transaction spans the two databases. Publish status is stored; `table_present` is derived from the attribute-set snapshot. Dropping one is a destructive act behind `entity:drop_table`, permitted on an archived version's table or on the live stem after the Entity is deprecated, and is refused while the table holds rows.
 Avoid creating it inside a **Source** (Sources stay read-only origins), placing it in the metadata database, collecting it as a Catalog Object, an opaque surrogate name, auto-suffixing around a name collision, reading an empty table as a failed publish, or using `row_id` as a **Data Channel** upsert key.
 

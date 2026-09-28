@@ -45,13 +45,31 @@ The definition carries no source binding, extract SQL, transform, dependency gra
 
 ### 2.3 Attributes
 
-A version may declare no attributes while unpublished. When present, an attribute declares a `name`, a type from the **Normalized Type** closed set (`string`, `integer`, `number`, `boolean`, `date`, `timestamp`, `time`, `interval`, `binary`, `json`, `array`, `unknown`), whether it is nullable, whether it is `unique`, whether it is `indexed`, and an optional `description`. `unique` and `indexed` default to false.
+A version may declare no attributes while unpublished. Each attribute has one **Attribute Type** and a `config` object for that type. Attributes share one name namespace inside an **Entity Version**. There is no `kind`.
 
-Attribute names are unique within an **Entity Version** and follow the same character set as `table_name` (lowercase ASCII letters, digits, and underscores; starts with a letter), because each becomes a physical column. They are not subject to the reserved archive-suffix rule. The name `row_id` is reserved for the platform primary key (§2.4). Violations are `ENTITY_ATTRIBUTE_INVALID`; Problem `detail` names the concrete rule.
+The closed set is `string`, `text`, `integer`, `decimal`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, `enumeration`, and `reference`. It is not the **Normalized Type** set. Normalized Type stays the catalog column vocabulary assigned by **Type Mapping**. **Semantic Type**, a JSON Schema or OpenAPI format, a unit, a quantity, a multi-value, a file, a localized label, and `array` are not members and are not config keys. A JSON array is a value of `json`, not its own type. A unit or quantity, if added later, is a new type or a composite value, not a key of `decimal` config. A multi-value is not a cardinality on `reference` config. An enumeration is not a constraint on `string` or `integer`.
 
-`unique` is a single-column UNIQUE constraint. A unique attribute may be nullable; Postgres treats distinct NULLs as non-conflicting. `indexed` is a non-unique btree. When `unique` is true, publish does not also create a non-unique index for that column. Composite unique constraints and composite indexes are out of scope.
+Every attribute also declares whether it is `required`, whether it is `unique`, whether it is `indexed`, and an optional `description`. `required`, `unique`, and `indexed` default to false. A `number` attribute may be unique or indexed. It is a poor business key: the value is approximate and may be NaN.
 
-The Normalized Type set is the platform's portable type vocabulary: it is what a catalog column carries once a **Type Mapping** has classified its engine-native type. Using it on Entity attributes means one type language spans the catalog a modeller reads and the Entity they declare, whatever engines the rows will later come from.
+`string` requires `config.max_length`, an integer from 1 through 65535. There is no default. 65535 is the product cap for a bounded string, not a ceiling for all text and not the Postgres `VARCHAR` limit. Longer or unbounded text is `text`.
+
+`text`, `integer`, `number`, `boolean`, `date`, `timestamp`, `time`, and `json` require `config` to be `{}`. `timestamp` is one instant. The attribute does not choose a timezone. `json` carries a JSON document, including a JSON array, and does not carry a schema, a path, or a format.
+
+`decimal` requires `config.precision` (an integer from 1 through 1000) and `config.scale` (an integer from 0 through `precision`). There is no default.
+
+`enumeration` is its own type. `config.entries` is a non-empty inline code list owned by that attribute. There is no shared code-list resource. Each entry has a required string `code` and an optional `label`. A code is non-empty, at most 64 characters, and case-sensitive, with no further character-set restriction. A label is at most 200 characters and is a single language. Codes are unique within the attribute. An integer code is not a second code kind. Replacing the inline list with a reference to a shared catalog would be a breaking change. A later locale map for labels must not change the column type.
+
+`reference` is an **Entity Reference**. `config.target_entity_id` is required and is the only config key. On write it is `self` or the id of an existing Business Entity that is not deprecated. `self` means the entity of the request and is replaced with that entity's id before the shape is stored. A read never returns `self`. The target may still be unpublished. The same entity may be the target. When a version read includes attributes, a `reference` also carries a read-only `target` of `{ entity_id, name, table_name }`, or `null` when the id does not resolve. Other attribute types omit `target`. `target` is not stored and is not accepted on write. `unique` means at most one row of this entity points at a given target `row_id`. The stored integer may not resolve to a live row. The product does not create a foreign key and does not cascade. Resolving the integer belongs to a **Data Channel**.
+
+A config key that belongs to another type, an unknown config key, or a top-level `kind`, `normalized_type`, `precision`, `scale`, `target_table_name`, or `enumeration` is `ENTITY_ATTRIBUTE_INVALID`.
+
+**Inbound Reference** is not an attribute. It is derived when a current version, including this entity's own and including an unpublished current version, has an Entity Reference whose `target_entity_id` is this entity's id. Historical versions do not count. The derived fact carries the referring entity's id and `table_name`, and that attribute's `name`; it has no name or description of its own. A many-to-many is an ordinary Business Entity that declares two Entity References, not a third type and not a link table.
+
+Attribute names are unique within an **Entity Version** and follow the same character set as `table_name` (lowercase ASCII letters, digits, and underscores; starts with a letter), because each attribute becomes a physical column. They are not subject to the reserved archive-suffix rule. The name `row_id` is reserved for the platform primary key (§2.4). Violations, including a missing or unknown type, a `string` without `max_length`, a `decimal` without precision or scale, an illegal enumeration, or a `target_entity_id` that is missing, unknown, or names a deprecated entity, are `ENTITY_ATTRIBUTE_INVALID`; Problem `detail` names the concrete rule.
+
+`unique` is a single-column UNIQUE constraint. A unique attribute may leave `required` false; Postgres treats distinct NULLs as non-conflicting. `indexed` is a non-unique btree. When `unique` is true, publish does not also create a non-unique index for that column. Composite unique constraints and composite indexes are out of scope.
+
+**Attribute Type** is the vocabulary an author uses to define an attribute. **Normalized Type** is the vocabulary a catalog column receives once a **Type Mapping** has classified an engine-native type. The two are not one language. Which source column feeds which attribute belongs to a **Data Channel** and is not stored on the definition.
 
 ### 2.4 Platform Row Identity
 
@@ -67,7 +85,7 @@ An **Entity Version** is one shape under a Business Entity `table_name`, and it 
 
 A version stores a publish status: `unpublished`, `publishing`, or `published`. Create and **Open new version** start `unpublished`. Publish is the only act that creates that version's table. A version is published at most once. There is no product path that ALTERs a published table.
 
-A read-only classifier still reports `breaking` / `non_breaking` / `unchanged` for a proposed shape (`docs/api-contracts-entity.md` §3.4). That judgment is not a write gate. An unpublished current version may save any valid shape.
+A read-only classifier still reports `breaking` / `non_breaking` / `unchanged` for a proposed shape (`docs/api-contracts-entity.md` §3.4). That judgment is not a write gate. An unpublished current version may save any valid shape. Changing **Attribute Type** is breaking, including `string` to `text`, `integer` to `number`, and `integer` to `decimal`. Widening `string` `max_length` is `non_breaking` as a classifier signal and is not an ALTER of a published column. Narrowing `max_length` is breaking. Changing decimal precision or scale is breaking. For an enumeration, adding codes while every previous code remains is `non_breaking` as a classifier signal and is not an ALTER of the published CHECK. Removing or rewriting a code is breaking. Changing only labels is unchanged. Changing `target_entity_id` is breaking. Adding an attribute is non-breaking when the new attribute is not required, and breaking when it is. Removing an attribute is breaking.
 
 ### 3.2 Save Writes Definition Only
 
@@ -102,7 +120,7 @@ While the new version is unpublished, display identity (`name`, `description`) i
 
 Deprecate is an Entity-level terminal act. Versions do not have a deprecated status; they only iterate.
 
-Deprecate is permitted only when the Entity has been published at least once (`ENTITY_NEVER_PUBLISHED` otherwise). It is refused while any version is `publishing`. It cannot be undone (`ENTITY_ALREADY_DEPRECATED` on a second call).
+Deprecate is permitted only when the Entity has been published at least once (`ENTITY_NEVER_PUBLISHED` otherwise). It is refused while any version is `publishing`. It is refused when a current version, including this entity's own, has an **Entity Reference** whose target is this entity (`ENTITY_REFERENCED`); a historical version does not count. It cannot be undone (`ENTITY_ALREADY_DEPRECATED` on a second call).
 
 A deprecated Entity is read-only for authoring: no save, publish, open version, identity patch, or delete. Table drop remains available under §5.
 
@@ -146,7 +164,7 @@ Rename of a superseded table also renames its UNIQUE constraints and indexes so 
 
 ### 4.4 Attribute Type To Physical Type
 
-Each **Normalized Type** maps to one physical type in the entity database engine. That mapping is product-owned and fixed; it is not a maintainable registry and not a **System Parameter**. It differs from **Type Mapping**, which classifies many engines' native types *into* Normalized Type and needs operator gap maintenance because new engines bring new native types. Here there is a single target engine and no business decision for an operator to make.
+Each **Attribute Type** maps to one physical type in the entity database engine. That mapping is product-owned and fixed; it is not a maintainable registry and not a **System Parameter**. It differs from **Type Mapping**, which classifies many engines' native types *into* **Normalized Type**. Here there is a single target engine and no second type registry for an operator to maintain. `string` is `VARCHAR(max_length)`. `text` is `TEXT`. `integer` is `BIGINT`. `decimal` is `NUMERIC(precision, scale)`. `number` is `DOUBLE PRECISION`. `boolean`, `date`, `timestamp`, and `time` are `BOOLEAN`, `DATE`, `TIMESTAMPTZ`, and `TIME`. `json` is `JSONB`. `enumeration` is `VARCHAR(64)` plus a CHECK that non-null values are members of the code list; `required` decides whether the column is `NOT NULL`. It is not a Postgres ENUM. An **Entity Reference** is `BIGINT` and is not a foreign key. An **Inbound Reference** creates no column. Publish creates the table, or renames the previous live table and creates a new empty one. It does not `ALTER` a published column or CHECK when the classifier reports `non_breaking` for a wider `max_length` or an added code. Publishing a successor does not rewrite `row_id` values already stored in referring tables.
 
 ## 5. Supersession And Disposal
 
@@ -154,7 +172,7 @@ A version is **superseded** when a newer version exists. Supersession is a deriv
 
 Deleting a definition never drops a table. Deleting a never-published Business Entity removes definition rows only.
 
-Delete is permitted only when the Entity has never been published (`ENTITY_ALREADY_PUBLISHED` otherwise). A never-published Entity has no table; delete removes definition rows only.
+Delete is permitted only when the Entity has never been published (`ENTITY_ALREADY_PUBLISHED` otherwise) and no current version, including this entity's own, has an **Entity Reference** whose target is this entity (`ENTITY_REFERENCED` otherwise). A historical version does not count. A never-published Entity has no table; delete removes definition rows only.
 
 Dropping an **Entity Table** is a separate destructive act behind its own **Permission** (§6). It runs as a **Job** (`entity_table_drop`). While the Entity is not deprecated, drop is permitted only on an **archived** version's table (the physical name is not the stem). The live stem table may be dropped only after the Entity is deprecated. Drop of the live table while the Entity is not deprecated is `ENTITY_VERSION_NOT_SUPERSEDED`. Opening a newer unpublished version does not archive the prior table, so that prior version remains undeletable as a table until a successor publish renames it, or the Entity is deprecated. Drop is refused while the table holds rows, rejected with `ENTITY_TABLE_NOT_EMPTY`, and emptiness is checked in the same transaction as the drop. Because refraq owns the entity database, emptiness is a fact it reads rather than a policy it assumes. Emptying a table is the operator's act in the entity database, not a product path.
 
@@ -210,8 +228,12 @@ Persist a **Management Audit Event** for: Business Entity create, definition sav
 8. Collecting Entity Tables as **Catalog Object**s, or registering the entity database as a **Source**.
 9. Creating tables inside a Source, or any write SQL against a Source.
 10. Entity-level ACL, per-attribute permissions, and masking.
-11. A hierarchy, inheritance, or relationship graph between Business Entities.
+11. A hierarchy or inheritance between Business Entities. An **Inbound Reference** is not a saved relationship, and a many-to-many is not a link table or a relationship-entity subtype.
 12. Exposing Business Entity on the **MCP endpoint**.
+13. **Semantic Type**, or a JSON Schema or OpenAPI format, as an **Attribute Type**.
+14. A unit or quantity on a `decimal` attribute. A later quantity is a new type or a composite value, not a `decimal` config key.
+15. A multi-value attribute, including a cardinality on `reference` config. A many-to-many stays two **Entity Reference**s on an ordinary Business Entity.
+16. An enumeration as a constraint on a `string` or `integer` attribute, a shared code-list resource, or an integer code kind.
 
 ## 10. References
 

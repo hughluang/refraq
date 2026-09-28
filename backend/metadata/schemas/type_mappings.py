@@ -16,10 +16,14 @@ __all__ = [
 ]
 
 TypeMappingOrigin = Literal["product", "job", "user"]
+# Wire accepts closed-set members including unknown so the service can
+# refuse unknown with TYPE_MAPPING_UNKNOWN_FORBIDDEN; operators PATCH onto
+# the 12 non-unknown buckets (PATCHABLE_NORMALIZED_TYPES).
 PatchableNormalizedType = Literal[
     "string",
     "integer",
     "number",
+    "decimal",
     "boolean",
     "date",
     "timestamp",

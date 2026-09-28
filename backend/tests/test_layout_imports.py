@@ -67,7 +67,6 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "metadata.mcp_http",
             "metadata.tasks",
             "metadata.routers",
-            "metadata.catalog.normalized_type",
         }
     ),
     "entity": frozenset(
@@ -234,16 +233,9 @@ def test_layout_imports(path: Path) -> None:
             continue
 
         if importer_pkg == "entity" and target_pkg == "metadata":
-            allowed = (
-                imported == "metadata.catalog.normalized_type"
-                or imported.startswith("metadata.catalog.normalized_type.")
+            raise AssertionError(
+                f"{importer} must not import {imported}; Attribute Type does not use Normalized Type"
             )
-            if not allowed:
-                raise AssertionError(
-                    f"{importer} may import only metadata.catalog.normalized_type; "
-                    f"imported {imported}"
-                )
-            continue
 
         # Cross-package into another tiered package: published only.
         if target_pkg in PUBLISHED:

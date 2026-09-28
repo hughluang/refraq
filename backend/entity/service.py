@@ -22,6 +22,7 @@ from backend.entity.errors import (
     EntityNotUnpublished,
     EntityPublishEmpty,
     EntityPublishing,
+    EntityReferenced,
     EntityRequestInvalid,
     EntityVersionNotFound,
     EntityVersionSuperseded,
@@ -40,6 +41,7 @@ from backend.entity.lifecycle import (
 from backend.entity.present import (
     current_version_of,
     entity_out,
+    inbound_references_for,
     latest_published_of,
     version_out,
 )
@@ -51,6 +53,8 @@ from backend.entity.records import (
 )
 from backend.entity.store import get_entity_store
 from backend.entity.validate import (
+    bind_reference_self,
+    require_reference_targets,
     require_table_name,
     validate_shape,
 )
@@ -90,7 +94,7 @@ def require_version(entity_id: str, version_id: str) -> EntityVersionRecord:
 def get_entity(entity_id: str) -> dict[str, Any]:
     entity = require_entity(entity_id)
     current = get_entity_store().current_version(entity.id)
-    return entity_out(entity, current=current)
+    return entity_out(entity, current=current, include_inbound_references=True)
 
 
 def list_entities(
@@ -159,9 +163,16 @@ def create_entity(
     cleaned_name = _require_text(name, "name")
     cleaned_description = _require_text(description, "description")
     attrs = validate_shape(attributes=attributes)
+    entity_id = new_entity_id()
+    attrs = bind_reference_self(attrs, entity_id=entity_id)
+    require_reference_targets(
+        get_entity_store(),
+        attrs,
+        entity_id=entity_id,
+    )
     now = utc_now()
     entity = BusinessEntityRecord(
-        id=new_entity_id(),
+        id=entity_id,
         table_name=cleaned_table_name,
         name=cleaned_name,
         description=cleaned_description,
@@ -190,7 +201,7 @@ def create_entity(
         result="success",
         detail={"table_name": entity.table_name, "version_id": version.id},
     )
-    return entity_out(entity, current=version)
+    return entity_out(entity, current=version, include_inbound_references=True)
 
 
 def patch_entity(
@@ -229,6 +240,7 @@ def patch_entity(
             current,
             attributes=attributes,
             validate_write=True,
+            entity_id=entity.id,
         )
         result = classify_shapes(
             DefinitionShape(attributes=tuple(current.attributes)),
@@ -239,7 +251,7 @@ def patch_entity(
             attribute_to_dict(item) for item in current.attributes
         ]
     if not changed_fields and not shape_changed:
-        return entity_out(entity, current=current)
+        return entity_out(entity, current=current, include_inbound_references=True)
     store = get_entity_store()
     saved_entity = entity
     saved_version = current
@@ -284,7 +296,9 @@ def patch_entity(
         result="success",
         detail=detail,
     )
-    return entity_out(saved_entity, current=saved_version)
+    return entity_out(
+        saved_entity, current=saved_version, include_inbound_references=True
+    )
 
 
 def classify_entity(
@@ -292,13 +306,14 @@ def classify_entity(
     *,
     attributes: list[AttributeRecord] | None,
 ) -> dict[str, Any]:
-    require_entity(entity_id)
+    entity = require_entity(entity_id)
     current = get_entity_store().current_version(entity_id)
     assert current is not None
     proposed = _overlay_shape(
         current,
         attributes=attributes,
         validate_write=False,
+        entity_id=entity.id,
     )
     result = classify_shapes(
         DefinitionShape(attributes=tuple(current.attributes)),
@@ -326,6 +341,7 @@ def patch_version(
         version,
         attributes=attributes,
         validate_write=True,
+        entity_id=entity.id,
     )
     result = classify_shapes(
         DefinitionShape(attributes=tuple(version.attributes)),
@@ -374,6 +390,7 @@ def open_version(
         current,
         attributes=attributes,
         validate_write=True,
+        entity_id=entity.id,
     )
     result = classify_shapes(
         DefinitionShape(attributes=tuple(current.attributes)),
@@ -424,6 +441,8 @@ def deprecate_entity(
         raise EntityAlreadyDeprecated()
     if not ever_published(versions):
         raise EntityNeverPublished()
+    if inbound_references_for(get_entity_store(), entity.id):
+        raise EntityReferenced()
     now = utc_now()
     saved = get_entity_store().save_entity(replace(entity, deprecated_at=now, updated_at=now))
     persist_audit_event(
@@ -435,7 +454,7 @@ def deprecate_entity(
         result="success",
         detail={"table_name": entity.table_name},
     )
-    return entity_out(saved, current=current)
+    return entity_out(saved, current=current, include_inbound_references=True)
 
 
 def delete_entity(
@@ -446,6 +465,8 @@ def delete_entity(
 ) -> None:
     entity = require_entity(entity_id)
     _assert_never_published(entity_id)
+    if inbound_references_for(get_entity_store(), entity.id):
+        raise EntityReferenced()
     get_entity_store().delete_entity(entity_id)
     persist_audit_event(
         actor_user_id=actor_user_id,
@@ -509,10 +530,18 @@ def _overlay_shape(
     *,
     attributes: list[AttributeRecord] | None,
     validate_write: bool,
+    entity_id: str,
 ) -> EntityVersionRecord:
     attrs = current.attributes if attributes is None else attributes
     if validate_write:
         attrs = validate_shape(attributes=attrs)
+    attrs = bind_reference_self(attrs, entity_id=entity_id)
+    if validate_write:
+        require_reference_targets(
+            get_entity_store(),
+            attrs,
+            entity_id=entity_id,
+        )
     return replace(current, attributes=list(attrs))
 
 

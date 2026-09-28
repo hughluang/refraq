@@ -1,190 +1,467 @@
 "use client";
 
-import { Button, Group, Stack, Text } from "@mantine/core";
+import { Button, Drawer, Group, Stack, Table, Text } from "@mantine/core";
+import type { UseFormReturnType } from "@mantine/form";
 import { useTranslate } from "@refinedev/core";
-import type { CSSProperties } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { FieldDisplay } from "@/components/form/FieldDisplay";
+import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
 import { SwitchField } from "@/components/form/SwitchField";
+import { TextareaField } from "@/components/form/TextareaField";
 import { TextField } from "@/components/form/TextField";
-import { EMPTY_ATTRIBUTE, NORMALIZED_TYPES } from "@/features/entities/constants";
-import type { AttributeDraft } from "@/features/entities/types";
+import {
+  attributeConfigSummary,
+  attributeDraftIssues,
+  type AttributeIssue,
+  type AttributeIssueField,
+} from "@/features/entities/attributeDraftValidation";
+import { ATTRIBUTE_TYPES, EMPTY_ATTRIBUTE } from "@/features/entities/constants";
+import { physicalColumnType } from "@/features/entities/physicalType";
+import { referenceSummaryLabel } from "@/features/entities/entityPresentation";
+import { TargetEntityField } from "@/features/entities/TargetEntityField";
+import type {
+  AttributeDraft,
+  AttributeType,
+  EntityRecordFormValues,
+} from "@/features/entities/types";
 
-export type AttributeFormApi = {
-  values: { attributes: AttributeDraft[] };
-  getInputProps: (
-    path: string,
-    options?: { type?: "checkbox" },
-  ) => object;
-  insertListItem: (path: string, item: AttributeDraft) => void;
-  removeListItem: (path: string, index: number) => void;
+export type AttributeReveal = {
+  index: number;
+  nonce: number;
+};
+
+type DrawerState = {
+  kind: "create" | "edit";
+  index: number | null;
+  draft: AttributeDraft;
+  issues: AttributeIssue[];
 };
 
 type Props = {
-  form: AttributeFormApi;
+  form: UseFormReturnType<EntityRecordFormValues>;
   editable: boolean;
+  selfEntityId: string | null;
+  onEditingChange?: (open: boolean) => void;
+  reveal?: AttributeReveal | null;
 };
 
-/** Column flex basis. Validation copy renders under the row, not inside these columns. */
-const NAME_COL: CSSProperties = { flex: "1 1 10rem", minWidth: 0 };
-const TYPE_COL: CSSProperties = { flex: "1 1 9rem", minWidth: 0 };
-const DESCRIPTION_COL: CSSProperties = { flex: "2 1 12rem", minWidth: 0 };
-/** Shared width so flag headers line up with the switches under them. */
-const FLAG_COL: CSSProperties = { flex: "0 0 5.5rem" };
-
-function splitFieldError(props: object): {
-  message: string | null;
-  inputProps: object;
-} {
-  const record = props as { error?: unknown };
-  const message = typeof record.error === "string" && record.error ? record.error : null;
-  const { error: _error, ...inputProps } = record;
-  return { message, inputProps };
+function integerValue(value: string): number | undefined {
+  if (value === "") return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isNaN(parsed) ? undefined : parsed;
 }
 
-function ColumnHeading({
-  label,
-  style,
-}: {
-  label: string;
-  style: CSSProperties;
-}) {
-  return (
-    <Text component="div" size="sm" fw={500} style={style}>
-      {label}
-    </Text>
+function namesFor(
+  attributes: AttributeDraft[],
+  draft: AttributeDraft,
+  index: number | null,
+): string[] {
+  if (index == null) {
+    return [...attributes.map((item) => item.name), draft.name];
+  }
+  return attributes.map((item, itemIndex) =>
+    itemIndex === index ? draft.name : item.name,
   );
 }
 
-export function AttributeEditor({ form, editable }: Props) {
+export function AttributeEditor({
+  form,
+  editable,
+  selfEntityId,
+  onEditingChange,
+  reveal,
+}: Props) {
   const t = useTranslate();
+  const [drawer, setDrawer] = useState<DrawerState | null>(null);
   const attributes = form.values.attributes;
-  const nameLabel = t("entities.fields.attributeName");
-  const typeLabel = t("entities.fields.normalizedType");
-  const nullableLabel = t("entities.fields.nullable");
-  const uniqueLabel = t("entities.fields.unique");
-  const indexedLabel = t("entities.fields.indexed");
-  const descriptionLabel = t("entities.fields.attributeDescription");
+  const locked = drawer != null;
+  const typeOptions = ATTRIBUTE_TYPES.map((value) => ({
+    value,
+    label: t(`entities.attributeType.${value}`),
+  }));
+
+  const changeDrawer = (next: DrawerState | null) => {
+    setDrawer(next);
+    onEditingChange?.(next != null);
+  };
+
+  useEffect(() => {
+    if (!editable) changeDrawer(null);
+  }, [editable]);
+
+  useEffect(() => {
+    if (!editable || reveal == null) return;
+    const source = form.values.attributes[reveal.index];
+    if (!source) return;
+    const draft = { ...source };
+    changeDrawer({
+      kind: "edit",
+      index: reveal.index,
+      draft,
+      issues: attributeDraftIssues(
+        draft,
+        form.values.attributes.map((item) => item.name),
+      ),
+    });
+  }, [editable, reveal]);
+
+  const openEdit = (index: number) => {
+    if (!editable || locked) return;
+    const source = attributes[index];
+    if (!source) return;
+    changeDrawer({
+      kind: "edit",
+      index,
+      draft: { ...source },
+      issues: [],
+    });
+  };
+
+  const openCreate = () => {
+    if (!editable || locked) return;
+    changeDrawer({
+      kind: "create",
+      index: null,
+      draft: { ...EMPTY_ATTRIBUTE },
+      issues: [],
+    });
+  };
+
+  const closeDrawer = () => changeDrawer(null);
+
+  const confirmDrawer = () => {
+    if (!drawer) return;
+    const issues = attributeDraftIssues(
+      drawer.draft,
+      namesFor(attributes, drawer.draft, drawer.index),
+    );
+    if (issues.length > 0) {
+      changeDrawer({ ...drawer, issues });
+      return;
+    }
+    if (drawer.kind === "create") {
+      form.insertListItem("attributes", drawer.draft);
+    } else if (drawer.index != null) {
+      form.replaceListItem("attributes", drawer.index, drawer.draft);
+    }
+    changeDrawer(null);
+  };
+
+  const updateDraft = (patch: Partial<AttributeDraft>) => {
+    setDrawer((current) =>
+      current
+        ? { ...current, draft: { ...current.draft, ...patch } }
+        : current,
+    );
+  };
+
+  const issueMessage = (field: AttributeIssueField): string | undefined => {
+    const issue = drawer?.issues.find((item) => item.field === field);
+    if (!issue) return undefined;
+    return issue.values ? t(issue.key, issue.values) : t(issue.key);
+  };
+
+  const configText = (attr: AttributeDraft): string | null => {
+    if (attr.type === "reference") {
+      return referenceSummaryLabel({
+        targetEntityId: attr.target_entity_id,
+        selfEntityId,
+        selfName: form.values.name,
+        selfTableName: form.values.table_name,
+        cachedName: attr.target_name,
+        cachedTableName: attr.target_table_name,
+        emptyNameLabel: t("entities.attributes.selfEntity"),
+      });
+    }
+    const fact = attributeConfigSummary(attr);
+    if (!fact) return null;
+    if (fact.kind === "max_length") {
+      return t("entities.attributes.config.maxLength", {
+        label: t("entities.fields.maxLength"),
+        value: fact.value,
+      });
+    }
+    if (fact.kind === "decimal") {
+      return t("entities.attributes.config.decimal", {
+        precisionLabel: t("entities.fields.precision"),
+        precision: fact.precision,
+        scaleLabel: t("entities.fields.scale"),
+        scale: fact.scale,
+      });
+    }
+    return t("entities.attributes.config.enumeration", { count: fact.count });
+  };
+
+  const draft = drawer?.draft;
+  const liveTitle =
+    draft == null
+      ? null
+      : draft.name.trim()
+        ? draft.name.trim()
+        : drawer?.kind === "create"
+          ? t("entities.attributes.drawer.create")
+          : t("entities.attributes.drawer.untitled");
+  const titleRef = useRef(liveTitle ?? "");
+  if (liveTitle) titleRef.current = liveTitle;
 
   return (
     <Stack gap="sm">
-      <Group align="flex-start" wrap="wrap" gap="xs">
-        <ColumnHeading label={nameLabel} style={NAME_COL} />
-        <ColumnHeading label={typeLabel} style={TYPE_COL} />
-        <ColumnHeading label={nullableLabel} style={FLAG_COL} />
-        <ColumnHeading label={uniqueLabel} style={FLAG_COL} />
-        <ColumnHeading label={indexedLabel} style={FLAG_COL} />
-        <ColumnHeading label={descriptionLabel} style={DESCRIPTION_COL} />
-        {editable ? (
-          <Button
-            size="xs"
-            variant="subtle"
-            aria-hidden
-            tabIndex={-1}
-            style={{ visibility: "hidden" }}
-          >
-            {t("actions.delete")}
-          </Button>
-        ) : null}
-      </Group>
-      {attributes.map((_, index) => {
-        const nameField = splitFieldError(
-          form.getInputProps(`attributes.${index}.name`),
-        );
-        const typeField = splitFieldError(
-          form.getInputProps(`attributes.${index}.normalized_type`),
-        );
-        const descriptionField = splitFieldError(
-          form.getInputProps(`attributes.${index}.description`),
-        );
-        const messages = [
-          nameField.message,
-          typeField.message,
-          descriptionField.message,
-        ].filter((message): message is string => message != null);
-
-        return (
-          <Stack key={index} gap={4}>
-            <Group align="flex-start" wrap="wrap" gap="xs">
-              <TextField
-                editable={editable}
-                style={NAME_COL}
-                {...nameField.inputProps}
-                aria-label={nameLabel}
-                error={editable && nameField.message != null}
-              />
-              <SelectField
-                data={NORMALIZED_TYPES}
-                allowDeselect={false}
-                editable={editable}
-                style={TYPE_COL}
-                {...typeField.inputProps}
-                aria-label={typeLabel}
-                error={editable && typeField.message != null}
-              />
-              <SwitchField
-                editable={editable}
-                style={FLAG_COL}
-                {...form.getInputProps(`attributes.${index}.nullable`, {
-                  type: "checkbox",
-                })}
-                aria-label={nullableLabel}
-              />
-              <SwitchField
-                editable={editable}
-                style={FLAG_COL}
-                {...form.getInputProps(`attributes.${index}.unique`, {
-                  type: "checkbox",
-                })}
-                aria-label={uniqueLabel}
-              />
-              <SwitchField
-                editable={editable}
-                style={FLAG_COL}
-                {...form.getInputProps(`attributes.${index}.indexed`, {
-                  type: "checkbox",
-                })}
-                aria-label={indexedLabel}
-              />
-              <TextField
-                editable={editable}
-                style={DESCRIPTION_COL}
-                {...descriptionField.inputProps}
-                aria-label={descriptionLabel}
-                error={editable && descriptionField.message != null}
-              />
-              {editable ? (
-                <Button
-                  size="xs"
-                  variant="subtle"
-                  color="red"
-                  onClick={() => form.removeListItem("attributes", index)}
+      <Table.ScrollContainer minWidth={720}>
+        <Table highlightOnHover={editable && !locked} horizontalSpacing="sm" verticalSpacing="xs">
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>{t("entities.fields.attributeName")}</Table.Th>
+              <Table.Th>{t("entities.fields.attributeType")}</Table.Th>
+              <Table.Th>{t("entities.fields.attributeConfig")}</Table.Th>
+              <Table.Th>{t("entities.fields.required")}</Table.Th>
+              <Table.Th>{t("entities.fields.unique")}</Table.Th>
+              <Table.Th>{t("entities.fields.indexed")}</Table.Th>
+              <Table.Th>{t("entities.fields.attributeDescription")}</Table.Th>
+              {editable ? <Table.Th>{t("actions.delete")}</Table.Th> : null}
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {attributes.map((attr, index) => {
+              const config = configText(attr);
+              return (
+                <Table.Tr
+                  key={index}
+                  onClick={() => openEdit(index)}
+                  style={
+                    editable && !locked ? { cursor: "pointer" } : undefined
+                  }
                 >
-                  {t("actions.delete")}
-                </Button>
-              ) : null}
-            </Group>
-            {editable && messages.length > 0 ? (
-              <Stack gap={2}>
-                {messages.map((message, messageIndex) => (
-                  <Text key={messageIndex} c="red" size="xs">
-                    {message}
-                  </Text>
-                ))}
-              </Stack>
-            ) : null}
-          </Stack>
-        );
-      })}
+                  <Table.Td>
+                    <Text size="sm">{attr.name}</Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Stack gap={2}>
+                      <Text size="sm">
+                        {t(`entities.attributeType.${attr.type}`)}
+                      </Text>
+                      <Text size="xs" c="dimmed" ff="monospace">
+                        {physicalColumnType(attr)}
+                      </Text>
+                    </Stack>
+                  </Table.Td>
+                  <Table.Td>
+                    {config ? <Text size="sm">{config}</Text> : null}
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm">
+                      {attr.required ? t("form.value.yes") : t("form.value.no")}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm">
+                      {attr.unique ? t("form.value.yes") : t("form.value.no")}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm">
+                      {attr.indexed ? t("form.value.yes") : t("form.value.no")}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm">{attr.description}</Text>
+                  </Table.Td>
+                  {editable ? (
+                    <Table.Td>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="subtle"
+                        color="red"
+                        disabled={locked && drawer?.index !== index}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          form.removeListItem("attributes", index);
+                          if (drawer?.kind === "edit" && drawer.index === index) {
+                            changeDrawer(null);
+                          }
+                        }}
+                      >
+                        {t("actions.delete")}
+                      </Button>
+                    </Table.Td>
+                  ) : null}
+                </Table.Tr>
+              );
+            })}
+          </Table.Tbody>
+        </Table>
+      </Table.ScrollContainer>
       {editable ? (
         <Button
+          type="button"
           size="xs"
           variant="light"
-          onClick={() => form.insertListItem("attributes", { ...EMPTY_ATTRIBUTE })}
+          disabled={locked}
+          onClick={openCreate}
         >
           {t("entities.attributes.add")}
         </Button>
       ) : null}
+      <Drawer
+        opened={drawer != null}
+        onClose={closeDrawer}
+        position="right"
+        size="md"
+        title={titleRef.current}
+      >
+        {draft ? (
+          <Stack gap="sm">
+            <TextField
+              editable
+              label={t("entities.fields.attributeName")}
+              value={draft.name}
+              onChange={(event) => updateDraft({ name: event.currentTarget.value })}
+              error={issueMessage("name")}
+            />
+            <SelectField
+              editable
+              label={t("entities.fields.attributeType")}
+              data={typeOptions}
+              allowDeselect={false}
+              value={draft.type}
+              onChange={(value) =>
+                updateDraft({ type: (value ?? draft.type) as AttributeType })
+              }
+            />
+            <FieldDisplay
+              label={t("entities.fields.databaseType")}
+              value={
+                <Text ff="monospace" size="sm">
+                  {physicalColumnType(draft)}
+                </Text>
+              }
+            />
+            {draft.type === "string" ? (
+              <NumberField
+                editable
+                required
+                label={t("entities.fields.maxLength")}
+                min={1}
+                max={65535}
+                allowDecimal={false}
+                value={integerValue(draft.max_length)}
+                onChange={(value) =>
+                  updateDraft({
+                    max_length:
+                      value === "" || value == null ? "" : String(value),
+                  })
+                }
+                error={issueMessage("max_length")}
+              />
+            ) : null}
+            {draft.type === "decimal" ? (
+              <Group grow>
+                <NumberField
+                  editable
+                  required
+                  label={t("entities.fields.precision")}
+                  min={1}
+                  max={1000}
+                  allowDecimal={false}
+                  value={integerValue(draft.precision)}
+                  onChange={(value) =>
+                    updateDraft({
+                      precision:
+                        value === "" || value == null ? "" : String(value),
+                    })
+                  }
+                  error={issueMessage("precision")}
+                />
+                <NumberField
+                  editable
+                  required
+                  label={t("entities.fields.scale")}
+                  min={0}
+                  max={1000}
+                  allowDecimal={false}
+                  value={integerValue(draft.scale)}
+                  onChange={(value) =>
+                    updateDraft({
+                      scale: value === "" || value == null ? "" : String(value),
+                    })
+                  }
+                  error={issueMessage("scale")}
+                />
+              </Group>
+            ) : null}
+            {draft.type === "reference" ? (
+              <TargetEntityField
+                required
+                label={t("entities.fields.targetTableName")}
+                error={issueMessage("target_entity_id")}
+                value={draft.target_entity_id}
+                selfEntityId={selfEntityId}
+                selfName={form.values.name}
+                selfTableName={form.values.table_name}
+                cachedName={draft.target_name}
+                cachedTableName={draft.target_table_name}
+                onChange={(next) => updateDraft(next)}
+              />
+            ) : null}
+            {draft.type === "enumeration" ? (
+              <TextareaField
+                editable
+                required
+                minRows={4}
+                label={t("entities.fields.enumeration")}
+                description={t("entities.fields.enumerationHint")}
+                value={draft.enumeration_text}
+                onChange={(event) =>
+                  updateDraft({ enumeration_text: event.currentTarget.value })
+                }
+                error={issueMessage("enumeration_text")}
+              />
+            ) : null}
+            <SwitchField
+              editable
+              label={t("entities.fields.required")}
+              checked={draft.required}
+              onChange={(event) =>
+                updateDraft({ required: event.currentTarget.checked })
+              }
+            />
+            <SwitchField
+              editable
+              label={t("entities.fields.unique")}
+              checked={draft.unique}
+              onChange={(event) =>
+                updateDraft({ unique: event.currentTarget.checked })
+              }
+            />
+            <SwitchField
+              editable
+              label={t("entities.fields.indexed")}
+              checked={draft.indexed}
+              onChange={(event) =>
+                updateDraft({ indexed: event.currentTarget.checked })
+              }
+            />
+            <TextField
+              editable
+              label={t("entities.fields.attributeDescription")}
+              value={draft.description}
+              onChange={(event) =>
+                updateDraft({ description: event.currentTarget.value })
+              }
+            />
+            <Group justify="flex-end">
+              <Button type="button" variant="default" onClick={closeDrawer}>
+                {t("entities.attributes.drawer.cancel")}
+              </Button>
+              <Button type="button" onClick={confirmDrawer}>
+                {t("entities.attributes.drawer.confirm")}
+              </Button>
+            </Group>
+          </Stack>
+        ) : null}
+      </Drawer>
     </Stack>
   );
 }

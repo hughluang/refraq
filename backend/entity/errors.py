@@ -15,6 +15,7 @@ __all__ = [
     "EntityNotUnpublished",
     "EntityPublishEmpty",
     "EntityPublishing",
+    "EntityReferenced",
     "EntityRequestInvalid",
     "EntityTableNameDup",
     "EntityTableNameInvalid",
@@ -134,6 +135,16 @@ class EntityAlreadyPublished(AppError):
 
     def _default_message(self) -> str:
         return "A published Business Entity cannot be deleted"
+
+
+class EntityReferenced(AppError):
+    code = "ENTITY_REFERENCED"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return (
+            "A current-version Entity Reference aims at this Business Entity"
+        )
 
 
 class EntityVersionSuperseded(AppError):
