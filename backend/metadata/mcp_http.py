@@ -15,7 +15,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from backend.admin.errors import AuthUnauthenticated
 from backend.core.config import get_settings
-from backend.core.errors import problem_response
+from backend.core.errors import CODE_HTTP_METHOD_NOT_ALLOWED, problem_response
 from backend.core.health import readyz as core_readyz
 from backend.core.bulkhead import reset_peek_bulkhead
 from backend.core.http_runtime import apply_http_runtime
@@ -34,7 +34,7 @@ from backend.worker.parameters import assemble_system_parameters
 
 
 class PatOnlyGate:
-    """Require User PAT on /mcp. Ignore cookies. Do not advertise OAuth metadata."""
+    """Require User PAT on /mcp, then accept POST only. Ignore cookies. Do not advertise OAuth metadata."""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -57,6 +57,16 @@ class PatOnlyGate:
         except AuthUnauthenticated as exc:
             response = problem_response(
                 status=exc.http_status, code=exc.code, detail=exc.message
+            )
+            await response(scope, receive, send)
+            return
+
+        if scope.get("method") != "POST":
+            response = problem_response(
+                status=405,
+                code=CODE_HTTP_METHOD_NOT_ALLOWED,
+                detail="Only POST is accepted",
+                headers={"Allow": "POST"},
             )
             await response(scope, receive, send)
             return

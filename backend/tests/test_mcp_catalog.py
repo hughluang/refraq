@@ -7,6 +7,7 @@ import json
 import os
 from datetime import timedelta
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from mcp.server import MCPServer
@@ -177,6 +178,23 @@ def test_mcp_http_unauthenticated_is_401() -> None:
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
         )
         assert_problem(bad, status=401, code="AUTH_UNAUTHENTICATED")
+
+
+def test_mcp_http_non_post_is_405_after_auth(client: TestClient) -> None:
+    secret = _pat(client)
+    with StarletteTestClient(create_mcp_http_app()) as mcp_client:
+        mcp_client.timeout = httpx.Timeout(2.0)
+        headers = {"Authorization": f"Bearer {secret}"}
+        for method in ("get", "delete"):
+            response = getattr(mcp_client, method)("/mcp", headers=headers)
+            assert_problem(response, status=405, code="HTTP_METHOD_NOT_ALLOWED")
+            assert response.headers.get("allow") == "POST"
+
+        unauthenticated = mcp_client.get("/mcp")
+        assert_problem(unauthenticated, status=401, code="AUTH_UNAUTHENTICATED")
+
+        listed = _tools_list(mcp_client, secret)
+        assert listed.status_code == 200, listed.text
 
 
 def _tools_list(mcp_client: StarletteTestClient, secret: str):

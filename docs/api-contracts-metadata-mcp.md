@@ -15,7 +15,8 @@ Legacy external `dbmeta` tool names are **reference only**; refraq owns normativ
 ## 2. Cross-Cutting Rules
 
 - Tool failures are **not** HTTP Problem Details. Shape: `{ "error": { "code": "<Problem Code>", "message": "..." } }`. Human text stays `message` (not `detail`). JSON-RPC protocol `error.code` is an integer and is not a Problem Code. Shared identity with HTTP: [`docs/conventions-errors.md`](conventions-errors.md)
-- Missing, invalid, or cookie-only credentials on `/mcp` → **HTTP 401** (`AUTH_UNAUTHENTICATED`). The request does not enter `server/discover`, `tools/list`, or `tools/call`
+- Missing, invalid, or cookie-only credentials on `/mcp` → **HTTP 401** (`AUTH_UNAUTHENTICATED`), for every method. The request does not enter `server/discover`, `tools/list`, or `tools/call`
+- `/mcp` accepts **POST** only. After authentication, any other method (including GET and DELETE) is **HTTP 405** (`HTTP_METHOD_NOT_ALLOWED`) with `Allow: POST`. The server does not open a listening stream and does not push server-initiated messages
 - Authenticated but lacking permission on a tool that was still invoked → tool error mapped from `403` with required permission named when practical
 - `tools/list` (and `GET /mcp/catalog`) return only tools the caller's Role can invoke, in catalog order, with `ttlMs` / `cacheScope: "private"` on the protocol list. Input schemas do not contain `authorization`
 - Mutations write management audit events
