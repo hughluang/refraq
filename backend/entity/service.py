@@ -386,22 +386,33 @@ def open_version(
     _assert_not_publishing(versions)
     if current.publish_status != PUBLISHED:
         raise EntityNotPublished()
-    proposed = _overlay_shape(
-        current,
-        attributes=attributes,
-        validate_write=True,
-        entity_id=entity.id,
+    proposed_attributes = (
+        list(current.attributes) if attributes is None else list(attributes)
     )
     result = classify_shapes(
         DefinitionShape(attributes=tuple(current.attributes)),
-        DefinitionShape(attributes=tuple(proposed.attributes)),
+        DefinitionShape(attributes=tuple(proposed_attributes)),
     )
+    if result.change_class == "unchanged":
+        stored_attributes = list(current.attributes)
+    else:
+        overlaid = _overlay_shape(
+            current,
+            attributes=proposed_attributes,
+            validate_write=True,
+            entity_id=entity.id,
+        )
+        stored_attributes = list(overlaid.attributes)
+        result = classify_shapes(
+            DefinitionShape(attributes=tuple(current.attributes)),
+            DefinitionShape(attributes=tuple(stored_attributes)),
+        )
     now = utc_now()
     version = EntityVersionRecord(
         id=new_version_id(),
         entity_id=entity.id,
         version=current.version + 1,
-        attributes=list(proposed.attributes),
+        attributes=stored_attributes,
         materialized_attributes=[],
         publish_status=UNPUBLISHED,
         latest_reconcile_job_id=None,
@@ -522,7 +533,36 @@ def prepare_publish(entity_id: str, version_id: str) -> EntityVersionRecord:
         raise EntityNotUnpublished()
     if not current.attributes:
         raise EntityPublishEmpty()
+    accepted = latest_published_of(versions)
+    if accepted is None or not _shape_unchanged(
+        accepted.attributes, current.attributes
+    ):
+        _require_writable_shape(current.attributes, entity_id=entity.id)
     return current
+
+
+def _shape_unchanged(
+    before: list[AttributeRecord], after: list[AttributeRecord]
+) -> bool:
+    result = classify_shapes(
+        DefinitionShape(attributes=tuple(before)),
+        DefinitionShape(attributes=tuple(after)),
+    )
+    return result.change_class == "unchanged"
+
+
+def _require_writable_shape(
+    attributes: list[AttributeRecord], *, entity_id: str
+) -> list[AttributeRecord]:
+    """Apply write rules. The caller decides whether to store the result."""
+    attrs = validate_shape(attributes=attributes)
+    attrs = bind_reference_self(attrs, entity_id=entity_id)
+    require_reference_targets(
+        get_entity_store(),
+        attrs,
+        entity_id=entity_id,
+    )
+    return attrs
 
 
 def _overlay_shape(
@@ -534,14 +574,9 @@ def _overlay_shape(
 ) -> EntityVersionRecord:
     attrs = current.attributes if attributes is None else attributes
     if validate_write:
-        attrs = validate_shape(attributes=attrs)
-    attrs = bind_reference_self(attrs, entity_id=entity_id)
-    if validate_write:
-        require_reference_targets(
-            get_entity_store(),
-            attrs,
-            entity_id=entity_id,
-        )
+        attrs = _require_writable_shape(attrs, entity_id=entity_id)
+    else:
+        attrs = bind_reference_self(attrs, entity_id=entity_id)
     return replace(current, attributes=list(attrs))
 
 

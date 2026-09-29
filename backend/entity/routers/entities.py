@@ -75,7 +75,7 @@ def _record(item: AttributeIn) -> AttributeRecord:
         entries=_config_entries(item.name, config.get("entries"))
         if "entries" in config
         else None,
-        target_entity_id=_config_target(item.name, config.get("target_entity_id"))
+        target_entity_id=_optional_target(item.name, config.get("target_entity_id"))
         if "target_entity_id" in config
         else None,
     )
@@ -87,6 +87,13 @@ def _config_int(name: str, field: str, value: Any) -> int:
             f"Attribute '{name}' {field} must be an integer"
         )
     return value
+
+
+def _optional_target(name: str, value: Any) -> str | None:
+    """JSON null matches a stored reference that has no target entity."""
+    if value is None:
+        return None
+    return _config_target(name, value)
 
 
 def _config_target(name: str, value: Any) -> str:

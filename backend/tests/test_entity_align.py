@@ -107,7 +107,6 @@ def test_publish_creates_table_and_locks(
     assert version["table_name"] == "material"
     alignment = version["alignment"]
     assert alignment["table_present"] is True
-    assert alignment["definition_ahead"] is False
     assert alignment["latest_job_id"] == job["id"]
     assert alignment["latest_job_status"] == "succeeded"
 

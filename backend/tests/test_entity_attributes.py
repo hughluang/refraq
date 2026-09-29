@@ -22,13 +22,20 @@ from backend.entity.classify import DefinitionShape, classify_shapes  # noqa: E4
 from backend.entity.ddl import column_sql, create_table_statements  # noqa: E402
 from backend.entity.errors import EntityAttributeInvalid  # noqa: E402
 from backend.entity.present import attribute_payload  # noqa: E402
+from backend.core.time import utc_now  # noqa: E402
+from backend.entity.entity_db import entity_db_schema  # noqa: E402
+from backend.entity.ids import new_entity_id, new_version_id  # noqa: E402
+from backend.entity.lifecycle import PUBLISHED, UNPUBLISHED  # noqa: E402
 from backend.entity.records import (  # noqa: E402
     AttributeRecord,
+    BusinessEntityRecord,
+    EntityVersionRecord,
     EnumerationEntry,
     attribute_from_dict,
     attribute_to_dict,
 )
-from backend.entity.store import MemoryEntityStore  # noqa: E402
+from backend.entity.store import MemoryEntityStore, get_entity_store  # noqa: E402
+from backend.entity.table_port import get_entity_table_port  # noqa: E402
 from backend.entity.validate import validate_shape  # noqa: E402
 from backend.main import app  # noqa: E402
 from backend.metadata.catalog.normalized_type import (  # noqa: E402
@@ -685,3 +692,169 @@ def test_attribute_payload_omits_target_from_storage() -> None:
         AttributeRecord(name="sku", type="string", required=False, max_length=32),
     )
     assert "target" not in plain
+
+
+def _accepted_snapshot() -> list[AttributeRecord]:
+    return [
+        AttributeRecord(name="code", type="string", required=False, max_length=32),
+        AttributeRecord(
+            name="parent", type="reference", required=False, target_entity_id=None
+        ),
+    ]
+
+
+def _changed_snapshot() -> list[AttributeRecord]:
+    return [
+        *_accepted_snapshot(),
+        AttributeRecord(name="notes", type="text", required=False),
+    ]
+
+
+def _plant_snapshot(
+    *,
+    table_name: str,
+    attributes: list[AttributeRecord],
+    published: bool,
+    successor: list[AttributeRecord] | None = None,
+) -> tuple[str, str]:
+    now = utc_now()
+    entity_id = new_entity_id()
+    version_id = new_version_id()
+    store = get_entity_store()
+    store.create_entity(
+        BusinessEntityRecord(
+            id=entity_id,
+            table_name=table_name,
+            name="Probe",
+            description="Accepted snapshot.",
+            deprecated_at=None,
+            created_at=now,
+            updated_at=now,
+        ),
+        EntityVersionRecord(
+            id=version_id,
+            entity_id=entity_id,
+            version=1,
+            attributes=list(attributes),
+            materialized_attributes=(
+                [attribute_to_dict(attr) for attr in attributes] if published else []
+            ),
+            publish_status=PUBLISHED if published else UNPUBLISHED,
+            latest_reconcile_job_id=None,
+            created_at=now,
+            updated_at=now,
+        ),
+    )
+    current_id = version_id
+    if published:
+        get_entity_table_port().publish_table(
+            entity_db_schema(),
+            table_name,
+            list(attributes),
+            archive_as=None,
+            archive_attributes=None,
+        )
+    if successor is not None:
+        current_id = new_version_id()
+        store.create_version(
+            EntityVersionRecord(
+                id=current_id,
+                entity_id=entity_id,
+                version=2,
+                attributes=list(successor),
+                materialized_attributes=[],
+                publish_status=UNPUBLISHED,
+                latest_reconcile_job_id=None,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    return entity_id, current_id
+
+
+def _parent_target(version: dict) -> object:
+    parent = next(item for item in version["attributes"] if item["name"] == "parent")
+    return parent["config"]["target_entity_id"]
+
+
+def test_open_version_copies_accepted_reference_without_target(
+    client: TestClient,
+) -> None:
+    omitted_id, _version_id = _plant_snapshot(
+        table_name="copy_omitted",
+        attributes=_accepted_snapshot(),
+        published=True,
+    )
+    omitted = client.post(f"/entities/{omitted_id}/versions", json={})
+    assert omitted.status_code == 201, omitted.text
+    assert omitted.json()["version"]["version"] == 2
+    assert _parent_target(omitted.json()["version"]) is None
+
+    echoed_id, _echo_version = _plant_snapshot(
+        table_name="copy_echo",
+        attributes=_accepted_snapshot(),
+        published=True,
+    )
+    echoed = client.post(
+        f"/entities/{echoed_id}/versions",
+        json={"attributes": [attribute_to_dict(attr) for attr in _accepted_snapshot()]},
+    )
+    assert echoed.status_code == 201, echoed.text
+    assert _parent_target(echoed.json()["version"]) is None
+
+
+def test_publish_unchanged_successor_keeps_accepted_reference(
+    client: TestClient,
+) -> None:
+    entity_id, _version_id = _plant_snapshot(
+        table_name="republish_copy",
+        attributes=_accepted_snapshot(),
+        published=True,
+    )
+    opened = client.post(f"/entities/{entity_id}/versions", json={})
+    assert opened.status_code == 201, opened.text
+    version_id = opened.json()["version"]["id"]
+    published = client.post(f"/entities/{entity_id}/versions/{version_id}/publish")
+    assert published.status_code == 201, published.text
+    assert published.json()["job"]["status"] == "succeeded"
+    saved = client.get(f"/entities/{entity_id}/versions/{version_id}")
+    assert saved.status_code == 200, saved.text
+    assert _parent_target(saved.json()["version"]) is None
+
+
+def test_changed_shape_still_requires_reference_target(client: TestClient) -> None:
+    open_id, _open_version = _plant_snapshot(
+        table_name="changed_open",
+        attributes=_accepted_snapshot(),
+        published=True,
+    )
+    opened = client.post(
+        f"/entities/{open_id}/versions",
+        json={"attributes": [attribute_to_dict(attr) for attr in _changed_snapshot()]},
+    )
+    assert opened.status_code == 422
+    assert opened.json()["code"] == "ENTITY_ATTRIBUTE_INVALID"
+    assert "target_entity_id" in opened.json()["detail"]
+
+    publish_id, version_id = _plant_snapshot(
+        table_name="changed_publish",
+        attributes=_accepted_snapshot(),
+        published=True,
+        successor=_changed_snapshot(),
+    )
+    published = client.post(f"/entities/{publish_id}/versions/{version_id}/publish")
+    assert published.status_code == 422
+    assert published.json()["code"] == "ENTITY_ATTRIBUTE_INVALID"
+    assert "target_entity_id" in published.json()["detail"]
+
+
+def test_first_publish_requires_reference_target(client: TestClient) -> None:
+    entity_id, version_id = _plant_snapshot(
+        table_name="first_publish_ref",
+        attributes=_accepted_snapshot(),
+        published=False,
+    )
+    published = client.post(f"/entities/{entity_id}/versions/{version_id}/publish")
+    assert published.status_code == 422
+    assert published.json()["code"] == "ENTITY_ATTRIBUTE_INVALID"
+    assert "target_entity_id" in published.json()["detail"]

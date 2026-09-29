@@ -127,7 +127,6 @@ A config key that belongs to another type, an unknown config key, or a top-level
   "table_name": null,
   "alignment": {
     "table_present": false,
-    "definition_ahead": true,
     "latest_job_id": null,
     "latest_job_status": null
   },
@@ -147,7 +146,6 @@ A config key that belongs to another type, an unknown config key, or a top-level
 | Field | Meaning |
 | --- | --- |
 | `table_present` | The snapshot is non-empty (the table exists) |
-| `definition_ahead` | The snapshot is empty, or the snapshot differs from this version's attributes |
 | `latest_job_id` | Latest `entity_reconcile` Job for this version, or `null` |
 | `latest_job_status` | That Job's `status`, or `null` |
 
@@ -170,7 +168,6 @@ A config key that belongs to another type, an unknown config key, or a top-level
     "table_name": null,
     "alignment": {
       "table_present": false,
-      "definition_ahead": true,
       "latest_job_id": null,
       "latest_job_status": null
     }
@@ -347,6 +344,8 @@ The new version starts as a copy of the current version's saved shape; the body 
 
 The field is optional. An omitted field stays as copied. A body that does not change the shape is still a new unpublished version.
 
+The server classifies the overlay against the current published shape before write validation. An `unchanged` classification, including an omitted `attributes` field and a body that repeats the stored attributes, stores a copy of the published shape and does not re-apply attribute write rules. A body that changes the shape must satisfy those rules. Failure is `422 ENTITY_ATTRIBUTE_INVALID`.
+
 Opening a version has no cross-database side effect. The new version is `unpublished` and readable immediately. Its table does not exist until publish succeeds. The prior version becomes superseded. The prior version's table and rows are untouched.
 
 Success `201`: `{ "version": { … } }`.
@@ -373,6 +372,7 @@ Body is empty.
 - Non-current target is `422 ENTITY_VERSION_SUPERSEDED`.
 - Non-unpublished is `422 ENTITY_NOT_UNPUBLISHED`.
 - Deprecated Entity is `422 ENTITY_DEPRECATED`.
+- The first publish of an Entity, and a publish whose shape is not `unchanged` relative to the latest published shape, apply the attribute write rules. Failure is `422 ENTITY_ATTRIBUTE_INVALID` and does not enqueue. An `unchanged` successor of an already published shape is enqueued as stored. Publish does not rewrite that shape.
 
 Enqueue is idempotent:
 

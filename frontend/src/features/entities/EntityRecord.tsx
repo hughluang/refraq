@@ -632,6 +632,11 @@ export function EntityRecord(props: Props) {
               versions={versions}
               canDropTable={canDropTable}
               busy={busy}
+              formatInstant={formatInstant}
+              onOpenJob={openJob}
+              onViewError={(err) =>
+                notifyError(err, t("entities.versions.view.failed"))
+              }
               onDrop={(version) => dropConfirm.open(version)}
             />
           )

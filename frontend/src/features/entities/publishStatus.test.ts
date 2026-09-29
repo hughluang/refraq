@@ -30,7 +30,6 @@ function entity(
           table_name: null,
           alignment: {
             table_present: false,
-            definition_ahead: true,
             latest_job_id: null,
             latest_job_status: null,
           },

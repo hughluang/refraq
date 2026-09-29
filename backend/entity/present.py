@@ -10,7 +10,6 @@ from backend.entity.records import (
     BusinessEntityRecord,
     EntityVersionRecord,
     attribute_to_dict,
-    snapshot_signature,
 )
 from backend.entity.store import EntityStore, get_entity_store
 from backend.jobs.store import JobRecord, get_job_store
@@ -19,7 +18,6 @@ __all__ = [
     "alignment_state",
     "archived_table_name",
     "current_version_of",
-    "definition_ahead",
     "entity_out",
     "inbound_references_for",
     "latest_published_of",
@@ -71,19 +69,10 @@ def occupies_live_table(
     )
 
 
-def definition_ahead(version: EntityVersionRecord) -> bool:
-    if not version.materialized_attributes:
-        return True
-    return snapshot_signature(version.materialized_attributes) != snapshot_signature(
-        [attribute_to_dict(attr) for attr in version.attributes]
-    )
-
-
 def alignment_state(version: EntityVersionRecord) -> dict[str, Any]:
     job = _latest_reconcile_job(version)
     return {
         "table_present": table_present(version),
-        "definition_ahead": definition_ahead(version),
         "latest_job_id": version.latest_reconcile_job_id,
         "latest_job_status": job.status if job is not None else None,
     }

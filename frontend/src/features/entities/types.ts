@@ -73,7 +73,6 @@ export type InboundReference = {
 
 export type Alignment = {
   table_present: boolean;
-  definition_ahead: boolean;
   latest_job_id: string | null;
   latest_job_status: string | null;
 };

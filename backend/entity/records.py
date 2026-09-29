@@ -13,7 +13,6 @@ __all__ = [
     "EnumerationEntry",
     "attribute_from_dict",
     "attribute_to_dict",
-    "snapshot_signature",
 ]
 
 
@@ -106,13 +105,6 @@ def attribute_from_dict(payload: dict[str, Any]) -> AttributeRecord:
     )
 
 
-def snapshot_signature(
-    items: list[dict[str, Any]],
-) -> tuple[tuple[Any, ...], ...]:
-    rows = [_signature_row(item) for item in items]
-    return tuple(sorted(rows))
-
-
 def _config_dict(attr: AttributeRecord) -> dict[str, Any]:
     if attr.type == "string":
         return {"max_length": attr.max_length}
@@ -138,26 +130,6 @@ def _entries_payload(
         )
         for entry in entries
     ]
-
-
-def _signature_row(item: dict[str, Any]) -> tuple[Any, ...]:
-    config = item.get("config") if isinstance(item.get("config"), dict) else {}
-    raw_entries = config.get("entries")
-    enum_codes: tuple[str, ...] = ()
-    if raw_entries is not None:
-        enum_codes = tuple(str(entry["code"]) for entry in raw_entries)
-    return (
-        str(item["name"]),
-        str(item["type"]),
-        bool(item.get("required", False)),
-        bool(item.get("unique", False)),
-        bool(item.get("indexed", False)),
-        config.get("max_length"),
-        config.get("precision"),
-        config.get("scale"),
-        enum_codes,
-        config.get("target_entity_id"),
-    )
 
 
 def _enumeration_from_payload(

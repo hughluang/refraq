@@ -106,7 +106,6 @@ class InboundReferenceOut(BaseModel):
 
 class AlignmentOut(BaseModel):
     table_present: bool
-    definition_ahead: bool
     latest_job_id: str | None = None
     latest_job_status: str | None = None
 

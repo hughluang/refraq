@@ -53,7 +53,6 @@ function entity(overrides: Record<string, unknown> = {}): BusinessEntity {
       table_name: null,
       alignment: {
         table_present: false,
-        definition_ahead: true,
         latest_job_id: null,
         latest_job_status: null,
       },
@@ -137,7 +136,6 @@ describe("EntityStatusBadge", () => {
               table_name: null,
               alignment: {
                 table_present: false,
-                definition_ahead: true,
                 latest_job_id: null,
                 latest_job_status: null,
               },

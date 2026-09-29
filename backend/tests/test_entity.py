@@ -77,7 +77,6 @@ def test_create_list_get_and_empty_snapshot(client: TestClient) -> None:
     assert entity["deprecated_at"] is None
     assert entity["current_version"]["alignment"] == {
         "table_present": False,
-        "definition_ahead": True,
         "latest_job_id": None,
         "latest_job_status": None,
     }
@@ -100,7 +99,6 @@ def test_create_list_get_and_empty_snapshot(client: TestClient) -> None:
     assert body["attributes"][0]["unique"] is True
     assert body["attributes"][0]["indexed"] is False
     assert body["alignment"]["table_present"] is False
-    assert body["alignment"]["definition_ahead"] is True
 
     events, _ = get_audit_store().list_events(action="entity.create")
     assert len(events) == 1
@@ -119,7 +117,6 @@ def test_create_allows_empty_attributes(client: TestClient) -> None:
     body = version.json()["version"]
     assert body["attributes"] == []
     assert body["alignment"]["table_present"] is False
-    assert body["alignment"]["definition_ahead"] is True
 
     listed = client.get(f"/entities/{entity['id']}/versions")
     assert listed.status_code == 200
@@ -376,7 +373,6 @@ def test_non_breaking_in_place_and_open_version(client: TestClient) -> None:
         json={"attributes": attrs},
     )
     assert patched.status_code == 200, patched.text
-    assert patched.json()["version"]["alignment"]["definition_ahead"] is True
     assert len(patched.json()["version"]["attributes"]) == 2
 
     refused_open = client.post(f"/entities/{entity['id']}/versions", json={})

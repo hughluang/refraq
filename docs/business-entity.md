@@ -97,6 +97,8 @@ Save is refused when the Entity is deprecated (`ENTITY_DEPRECATED`), when any ve
 
 Publish targets the current `unpublished` version. It refuses an empty attribute list (`ENTITY_PUBLISH_EMPTY`), a non-unpublished version (`ENTITY_NOT_UNPUBLISHED`), and a deprecated Entity (`ENTITY_DEPRECATED`).
 
+The first publish of an Entity, and any publish whose shape is not `unchanged` relative to the latest published shape, applies the attribute write rules. A reference without `target_entity_id` is `ENTITY_ATTRIBUTE_INVALID` and is not enqueued. An `unchanged` successor of an already published shape is enqueued as stored. Publish does not rewrite that stored shape.
+
 Publish sets the version to `publishing` and enqueues a **Job** (`entity_reconcile`) that creates this version's **Entity Table** (including `row_id`) at the Entity `table_name`. When a previous published version still holds that live name, the same Job first RENAMEs that table to the archive name (§4.3), in one entity-database transaction with the CREATE. While `publishing`, every write is refused: save, publish, open version, identity patch, delete, and deprecate (`ENTITY_PUBLISHING`).
 
 No transaction spans the metadata database and the entity database. Publish makes that visible as the `publishing` status rather than hiding it behind compensation.
@@ -113,6 +115,8 @@ A derived `table_present` flag remains: the snapshot is non-empty. It is not the
 Opening the next version is permitted only when the current version is `published` and the Entity is not deprecated. Otherwise `ENTITY_NOT_PUBLISHED` or `ENTITY_DEPRECATED`.
 
 The new version starts as a copy of the current version's saved shape and is `unpublished`. Its table does not exist until that version is published. The prior version becomes superseded. The prior version's table and rows are untouched.
+
+The body may overlay that copy. The overlay is classified against the published shape before any write rule runs. An `unchanged` result, including an omitted `attributes` field, stores a copy of the published attributes and does not re-apply write rules. A changed overlay must satisfy the same write rules as save. A reference without `target_entity_id` on that changed overlay is `ENTITY_ATTRIBUTE_INVALID`.
 
 While the new version is unpublished, display identity (`name`, `description`) is writable again. `table_name` stays immutable. Publishing the new version freezes display identity once more.
 
@@ -196,7 +200,7 @@ The Console presents definitions, versions with stored publish status, and attri
 
 Entity status is derived, not stored. It is **Deprecated** when `deprecated_at` is set. Otherwise it is **In service** when the Entity has ever been published: a live table cannot be dropped until the Entity is deprecated, and opening another version does not remove the table still in service. Otherwise it is **Not in service**, including while the first publish has not succeeded. Deprecate wins, so a deprecated Entity does not also show whether a table remains.
 
-The list shows entity status and the current version's publish status. The page title shows entity status. Each version row shows that version's publish status, including after the Entity is deprecated. The overview shows the publish Job and does not repeat a status.
+The list shows entity status and the current version's publish status. The page title shows entity status. Each version row shows that version's publish status, attribute count, created time, and latest publish Job, including after the Entity is deprecated. A row action opens a read-only view of that version's saved attributes. The overview shows the current version's publish Job and does not repeat a version status.
 
 The Console list filters by entity status. The control opens on **Not in service** and **In service** and sends that selection as `status`. The list API applies an entity-status predicate only when `status` is present.
 
