@@ -14,6 +14,12 @@ const nextConfig = {
   async rewrites() {
     return [
       {
+        // ReDoc and Swagger UI (reached at /api/redoc and /api/docs) load the
+        // spec from root-absolute /openapi.json on this origin.
+        source: "/openapi.json",
+        destination: `${apiUpstream}/openapi.json`,
+      },
+      {
         source: "/api/:path*",
         destination: `${apiUpstream}/:path*`,
       },
