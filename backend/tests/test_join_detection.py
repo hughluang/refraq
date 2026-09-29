@@ -171,6 +171,341 @@ def test_parser_token_error_keeps_other_fragments() -> None:
     assert parsed.parse_errors == 0
 
 
+def test_parser_reads_oracle_ddl_wrappers_as_queries() -> None:
+    view = parse_definition_joins(
+        'CREATE OR REPLACE FORCE EDITIONABLE VIEW "HR"."V_ORDERS" ("ID") AS\n'
+        "SELECT o.id FROM orders o JOIN customers c ON o.customer_id = c.id",
+        engine="oracle",
+        default_schema="HR",
+    )
+    assert view.fragment_errors == 0
+    assert {
+        (leaf.left_table.casefold(), leaf.left_column.casefold(), leaf.right_table.casefold(), leaf.right_column.casefold())
+        for leaf in view.leaves
+    } == {("orders", "customer_id", "customers", "id")}
+
+    routine = parse_definition_joins(
+        'CREATE OR REPLACE EDITIONABLE PROCEDURE "HR"."REFRESH_ORDERS" '
+        "(p_id IN NUMBER) IS\n"
+        "BEGIN\n"
+        "  SELECT * FROM orders o JOIN customers c ON o.customer_id = c.id;\n"
+        "END;",
+        engine="oracle",
+        default_schema="HR",
+    )
+    assert routine.fragment_errors == 0
+    assert {
+        (leaf.left_table.casefold(), leaf.left_column.casefold(), leaf.right_table.casefold(), leaf.right_column.casefold())
+        for leaf in routine.leaves
+    } == {("orders", "customer_id", "customers", "id")}
+
+
+def test_parser_reads_queries_inside_procedural_text() -> None:
+    branches = parse_definition_joins(
+        """
+        IF @a = 1
+        BEGIN
+          SELECT * FROM orders o JOIN customers c ON o.customer_id = c.id
+        END
+        ELSE
+        BEGIN
+          SELECT * FROM orders o JOIN items i ON o.id = i.order_id
+        END
+        """,
+        engine="mssql",
+        default_schema="dbo",
+    )
+    assert branches.fragment_errors == 0
+    assert _pairs(branches.leaves) == {
+        ("orders", "customer_id", "customers", "id"),
+        ("orders", "id", "items", "order_id"),
+    }
+
+    # T-SQL tokenization of a leading END swallows the following statement
+    # until a semicolon. The query after it still has to be read.
+    after_end = parse_definition_joins(
+        "END\nSELECT * FROM orders o JOIN customers c ON o.customer_id = c.id",
+        engine="mssql",
+        default_schema="dbo",
+    )
+    assert after_end.fragment_errors == 0
+    assert _pairs(after_end.leaves) == {("orders", "customer_id", "customers", "id")}
+
+    dollar = parse_definition_joins(
+        """
+        CREATE FUNCTION f() RETURNS void AS $$
+        BEGIN
+          SELECT * FROM orders o JOIN customers c ON o.customer_id = c.id;
+        END;
+        $$ LANGUAGE plpgsql;
+        """,
+        engine="postgresql",
+        default_schema="public",
+    )
+    assert dollar.fragment_errors == 0
+    assert _pairs(dollar.leaves) == {("orders", "customer_id", "customers", "id")}
+
+    assigned = parse_definition_joins(
+        "SET @x = (SELECT o.id FROM orders o JOIN customers c ON o.customer_id = c.id)",
+        engine="mssql",
+        default_schema="dbo",
+    )
+    assert assigned.fragment_errors == 0
+    assert _pairs(assigned.leaves) == {("orders", "customer_id", "customers", "id")}
+
+
+def test_parser_reads_sql_inside_string_literals() -> None:
+    dynamic = parse_definition_joins(
+        "SET @sql = 'SELECT o.id FROM orders o JOIN customers c "
+        "ON o.name = ''x'' AND o.customer_id = c.id'",
+        engine="mssql",
+        default_schema="dbo",
+    )
+    assert dynamic.fragment_errors == 0
+    assert _pairs(dynamic.leaves) == {("orders", "customer_id", "customers", "id")}
+
+    broken = parse_definition_joins(
+        "SET @sql = 'SELECT FROM'",
+        engine="mssql",
+        default_schema="dbo",
+    )
+    assert broken.parse_errors >= 1
+    assert broken.leaves == []
+
+
+def test_parser_ignores_procedural_text_comments_and_truncated_queries() -> None:
+    noise = parse_definition_joins(
+        "SET @x = 1\nPRINT 'hi'\nv := 0",
+        engine="mssql",
+        default_schema="dbo",
+    )
+    assert noise.fragment_errors == 0
+    assert noise.leaves == []
+
+    commented = parse_definition_joins(
+        "SELECT * FROM orders o\n"
+        "-- SELECT * FROM ghost g JOIN customers c ON g.id = c.id\n"
+        "JOIN customers c ON o.customer_id = c.id",
+        engine="postgresql",
+        default_schema="public",
+    )
+    assert commented.fragment_errors == 0
+    assert _pairs(commented.leaves) == {("orders", "customer_id", "customers", "id")}
+
+
+def test_parser_traces_union_output_columns_to_every_branch() -> None:
+    parsed = parse_definition_joins(
+        """
+        SELECT * FROM (
+          SELECT id, gl FROM orders
+          UNION
+          SELECT id, gl FROM customers
+        ) u
+        JOIN items i ON u.gl = i.order_id
+        """,
+        engine="mssql",
+        default_schema="dbo",
+    )
+    assert parsed.fragment_errors == 0
+    assert _pairs(parsed.leaves) == {
+        ("orders", "gl", "items", "order_id"),
+        ("customers", "gl", "items", "order_id"),
+    }
+
+    nested = parse_definition_joins(
+        """
+        SELECT * FROM formtable_main_110 lcbd
+        JOIN (
+          SELECT src.glcclc1 FROM (
+            SELECT glcclc1, requestid FROM formtable_main_109
+            UNION
+            SELECT glcclc1, requestid FROM formtable_main_110
+          ) src
+        ) fcbd ON fcbd.glcclc1 = lcbd.requestid
+        """,
+        engine="mssql",
+        default_schema="dbo",
+    )
+    assert nested.fragment_errors == 0
+    assert _pairs(nested.leaves) == {
+        ("formtable_main_109", "glcclc1", "formtable_main_110", "requestid"),
+        ("formtable_main_110", "glcclc1", "formtable_main_110", "requestid"),
+    }
+
+
+def test_parser_star_union_of_different_tables_stays_unresolved() -> None:
+    parsed = parse_definition_joins(
+        """
+        SELECT * FROM (
+          SELECT * FROM orders
+          UNION
+          SELECT * FROM customers
+        ) u
+        JOIN items i ON u.gl = i.order_id
+        """,
+        engine="mssql",
+        default_schema="dbo",
+    )
+    assert parsed.fragment_errors == 0
+    assert parsed.leaves == []
+    assert parsed.alias_unresolved >= 1
+
+
+def test_parser_mixes_named_union_branch_with_star() -> None:
+    parsed = parse_definition_joins(
+        """
+        SELECT * FROM (
+          SELECT id FROM orders
+          UNION
+          SELECT * FROM customers
+        ) u
+        JOIN items i ON u.id = i.order_id
+        """,
+        engine="mssql",
+        default_schema="dbo",
+    )
+    assert parsed.fragment_errors == 0
+    assert _pairs(parsed.leaves) == {
+        ("orders", "id", "items", "order_id"),
+        ("customers", "id", "items", "order_id"),
+    }
+
+
+def test_parser_star_union_of_the_same_table_keeps_that_table() -> None:
+    parsed = parse_definition_joins(
+        """
+        SELECT * FROM (
+          SELECT * FROM orders
+          UNION
+          SELECT * FROM orders
+        ) u
+        JOIN items i ON u.id = i.order_id
+        """,
+        engine="mssql",
+        default_schema="dbo",
+    )
+    assert parsed.fragment_errors == 0
+    assert parsed.alias_unresolved == 0
+    assert _pairs(parsed.leaves) == {("orders", "id", "items", "order_id")}
+
+
+def test_parser_keeps_union_branch_joins_when_aliases_repeat() -> None:
+    parsed = parse_definition_joins(
+        """
+        SELECT a.id FROM #t a
+        UNION ALL
+        SELECT a.customer_id
+        FROM orders a, customers b
+        WHERE a.customer_id = b.id
+        """,
+        engine="mssql",
+        default_schema="dbo",
+    )
+    assert parsed.fragment_errors == 0
+    assert _pairs(parsed.leaves) == {("orders", "customer_id", "customers", "id")}
+
+
+def test_parser_keeps_each_union_branch_subquery_alias() -> None:
+    parsed = parse_definition_joins(
+        """
+        SELECT * FROM orders a
+        JOIN (SELECT id FROM customers) x ON x.id = a.customer_id
+        UNION ALL
+        SELECT * FROM orders a
+        JOIN (SELECT id FROM items) x ON x.id = a.customer_id
+        """,
+        engine="mssql",
+        default_schema="dbo",
+    )
+    assert parsed.fragment_errors == 0
+    assert _pairs(parsed.leaves) == {
+        ("customers", "id", "orders", "customer_id"),
+        ("items", "id", "orders", "customer_id"),
+    }
+
+
+def test_parser_reads_update_after_insert_without_semicolon() -> None:
+    parsed = parse_definition_joins(
+        """
+        INSERT INTO target (id)
+        SELECT id FROM orders
+        UPDATE a
+        SET name = b.name
+        FROM orders a
+        JOIN customers b ON a.customer_id = b.id
+        """,
+        engine="mssql",
+        default_schema="dbo",
+    )
+    assert parsed.fragment_errors == 0
+    assert _pairs(parsed.leaves) == {("orders", "customer_id", "customers", "id")}
+
+
+def test_parser_reads_join_inside_assigned_subquery() -> None:
+    parsed = parse_definition_joins(
+        """
+        SELECT @html = (
+          SELECT c.name
+          FROM orders o
+          JOIN customers c ON o.customer_id = c.id
+          FOR XML PATH(''), TYPE
+        ).value('.', 'NVARCHAR(MAX)');
+        """,
+        engine="mssql",
+        default_schema="dbo",
+    )
+    assert parsed.fragment_errors == 0
+    assert parsed.alias_unresolved == 0
+    assert _pairs(parsed.leaves) == {("orders", "customer_id", "customers", "id")}
+
+
+def test_parser_traces_grouped_subquery_output_columns() -> None:
+    parsed = parse_definition_joins(
+        """
+        SELECT A.customer_id
+        FROM orders A
+        LEFT JOIN (
+          SELECT id, name, SUM(qty) AS qty
+          FROM customers
+          GROUP BY id, name
+        ) C5 ON A.customer_id = C5.id AND A.name = C5.name
+        """,
+        engine="mssql",
+        default_schema="dbo",
+    )
+    assert parsed.fragment_errors == 0
+    assert _pairs(parsed.leaves) == {
+        ("orders", "customer_id", "customers", "id"),
+        ("orders", "name", "customers", "name"),
+    }
+
+
+def test_parser_resolves_update_from_alias_ignoring_case() -> None:
+    parsed = parse_definition_joins(
+        """
+        UPDATE A
+        SET A.docno = C.orderno
+        FROM orders a
+        INNER JOIN customers C ON A.customer_id = C.id
+        """,
+        engine="mssql",
+        default_schema="dbo",
+    )
+    assert parsed.fragment_errors == 0
+    assert _pairs(parsed.leaves) == {("orders", "customer_id", "customers", "id")}
+
+
+def test_parser_keeps_correlated_update_join_when_qualify_rewrites_it() -> None:
+    parsed = parse_definition_joins(
+        "UPDATE orders W SET customer_id = "
+        "(SELECT MIN(c.id) FROM customers c WHERE c.id = W.customer_id)",
+        engine="oracle",
+        default_schema="HR",
+    )
+    assert parsed.fragment_errors == 0
+    assert _pairs(parsed.leaves) == {("customers", "id", "orders", "customer_id")}
+
+
 def test_resolver_skips_unresolved_endpoints() -> None:
     now = utc_now()
     objects = [

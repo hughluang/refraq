@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 
@@ -73,6 +74,14 @@ def ensure_persistent_entity_pool_or_abort(**_kwargs: object) -> None:
         raise SystemExit(1) from exc
 
 
+def _quiet_sqlglot_parse_warnings(**_kwargs: object) -> None:
+    """sqlglot logs the SQL text when it cannot parse a statement. Join detection
+    records that failure on the Job; the worker log should not repeat the text.
+    """
+    logging.getLogger("sqlglot").setLevel(logging.ERROR)
+
+
+_quiet_sqlglot_parse_warnings()
 celeryd_init.connect(init_parent_worker_runtime, weak=False)
 beat_init.connect(init_parent_worker_runtime, weak=False)
 celeryd_after_setup.connect(ensure_persistent_entity_pool_or_abort, weak=False)
