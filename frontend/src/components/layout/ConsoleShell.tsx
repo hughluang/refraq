@@ -261,7 +261,7 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
         centered
       >
         <Text size="sm">
-          {t("branding.attribution", { brand: "Refraq" })}
+          Refraq
         </Text>
         <Anchor
           href="https://github.com/hughluang/refraq"

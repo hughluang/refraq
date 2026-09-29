@@ -71,7 +71,7 @@ Absence is therefore sufficient to express "no tagline"; the model does not add 
 
 **Brand Attribution** always identifies `Refraq` as the technology provider. Site Branding cannot replace or remove it.
 
-The invariant is enforced by contract shape: branding write schemas contain no attribution field, and the public branding representation does not return one. The frontend owns the constant brand name and link; surrounding localized copy uses an interpolation placeholder for `Refraq` so the brand remains Latin-script text in every locale.
+The invariant is enforced by contract shape: branding write schemas contain no attribution field, and the public branding representation does not return one. The frontend owns the constant brand name and link. Visible attribution text is the Latin-script constant `Refraq` in every locale, with no surrounding localized phrase.
 
 Attribution appears in the login footer and in About within the top-bar user menu. About is not structural navigation, does not enter the Console Module catalog, and requires no branding Permission. This invariant protects the supported product and management API. A downstream source fork can alter frontend constants and is outside the enforcement boundary.
 

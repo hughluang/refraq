@@ -243,7 +243,7 @@ function LoginGate() {
             target="_blank"
             rel="noreferrer"
           >
-            {t("branding.attribution", { brand: "Refraq" })}
+            Refraq
           </Anchor>
         </Stack>
       </Paper>

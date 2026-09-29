@@ -787,7 +787,6 @@
   "branding.title": "Site branding",
   "branding.description": "Customize the site product mark for every user. Unsaved changes appear only in the preview.",
   "branding.about": "About",
-  "branding.attribution": "Powered by {{brand}}",
   "branding.save": "Save branding",
   "branding.save.success": "Site branding updated",
   "branding.reset": "Restore Refraq defaults",

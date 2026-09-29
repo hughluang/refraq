@@ -787,7 +787,6 @@
   "branding.title": "站点品牌",
   "branding.description": "为所有用户自定义站点主标识。未保存改动仅显示在预览中。",
   "branding.about": "关于",
-  "branding.attribution": "由 {{brand}} 提供技术支持",
   "branding.save": "保存品牌设置",
   "branding.save.success": "站点品牌已更新",
   "branding.reset": "恢复 Refraq 默认外观",
