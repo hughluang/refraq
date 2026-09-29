@@ -15,8 +15,8 @@ from backend.entity.records import AttributeRecord, EnumerationEntry
 from backend.entity.store import EntityStore
 
 IDENT_RE = re.compile(r"^[a-z][a-z0-9_]*$")
-ARCHIVE_TABLE_RE = re.compile(r"__rfq_v[0-9]+$")
-TABLE_NAME_MAX_LEN = 48
+PHYSICAL_TABLE_RE = re.compile(r"^.+__v[0-9]+__[0-9a-f]{16}$")
+TABLE_NAME_MAX_LEN = 63
 ATTRIBUTE_NAME_MAX_LEN = 63
 STRING_MAX_LENGTH_MIN = 1
 STRING_MAX_LENGTH_MAX = 65535
@@ -78,7 +78,7 @@ def require_table_name(table_name: str) -> str:
         not cleaned
         or len(cleaned) > TABLE_NAME_MAX_LEN
         or not IDENT_RE.match(cleaned)
-        or ARCHIVE_TABLE_RE.search(cleaned)
+        or PHYSICAL_TABLE_RE.match(cleaned)
     ):
         raise EntityTableNameInvalid()
     return cleaned

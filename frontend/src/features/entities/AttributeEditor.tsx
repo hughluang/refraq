@@ -315,14 +315,14 @@ export function AttributeEditor({
           <Stack gap="sm">
             <TextField
               editable
-              label={t("entities.fields.attributeName")}
+              label={t("entities.attributes.drawer.name")}
               value={draft.name}
               onChange={(event) => updateDraft({ name: event.currentTarget.value })}
               error={issueMessage("name")}
             />
             <SelectField
               editable
-              label={t("entities.fields.attributeType")}
+              label={t("entities.attributes.drawer.type")}
               data={typeOptions}
               allowDeselect={false}
               value={draft.type}
@@ -445,7 +445,7 @@ export function AttributeEditor({
             />
             <TextField
               editable
-              label={t("entities.fields.attributeDescription")}
+              label={t("entities.attributes.drawer.description")}
               value={draft.description}
               onChange={(event) =>
                 updateDraft({ description: event.currentTarget.value })

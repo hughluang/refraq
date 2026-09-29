@@ -16,8 +16,10 @@ __all__ = [
     "create_table_statements",
     "ident",
     "index_name",
+    "comment_table_sql",
+    "create_view_sql",
+    "drop_view_sql",
     "qualified_table",
-    "rename_table_statements",
     "unique_constraint_name",
 ]
 
@@ -130,31 +132,17 @@ def create_index_sql(schema: str, table: str, column: str) -> str:
     )
 
 
-def rename_table_statements(
-    schema: str,
-    current: str,
-    new: str,
-    attributes: list[AttributeRecord],
-) -> list[str]:
-    statements = [
-        f"ALTER TABLE {qualified_table(schema, current)} RENAME TO {ident(new)}"
-    ]
-    for attr in attributes:
-        if attr.unique:
-            statements.append(
-                f"ALTER TABLE {qualified_table(schema, new)} "
-                f"RENAME CONSTRAINT {ident(unique_constraint_name(current, attr.name))} "
-                f"TO {ident(unique_constraint_name(new, attr.name))}"
-            )
-        if attr.type == "enumeration":
-            statements.append(
-                f"ALTER TABLE {qualified_table(schema, new)} "
-                f"RENAME CONSTRAINT {ident(_bounded_name('ck', current, attr.name))} "
-                f"TO {ident(_bounded_name('ck', new, attr.name))}"
-            )
-        if attr_wants_index(attr):
-            statements.append(
-                f"ALTER INDEX {ident(schema)}.{ident(index_name(current, attr.name))} "
-                f"RENAME TO {ident(index_name(new, attr.name))}"
-            )
-    return statements
+def comment_table_sql(schema: str, table: str, comment: str) -> str:
+    escaped = comment.replace("'", "''")
+    return f"COMMENT ON TABLE {qualified_table(schema, table)} IS '{escaped}'"
+
+
+def create_view_sql(schema: str, view: str, table: str) -> str:
+    return (
+        f"CREATE VIEW {qualified_table(schema, view)} AS "
+        f"SELECT * FROM {qualified_table(schema, table)}"
+    )
+
+
+def drop_view_sql(schema: str, view: str) -> str:
+    return f"DROP VIEW {qualified_table(schema, view)}"

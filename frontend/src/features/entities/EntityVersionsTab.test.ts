@@ -26,7 +26,7 @@ const LABELS: Record<string, string> = {
   "entities.fields.maxLength": "Max length",
   "entities.status.published": "Published",
   "entities.status.unpublished": "Unpublished",
-  "entities.attributeType.string": "Bounded text",
+  "entities.attributeType.string": "String",
   "entities.attributes.config.maxLength": "Max length {{value}}",
   "entities.versions.view": "View",
   "entities.drop": "Drop table",
@@ -184,7 +184,8 @@ describe("EntityVersionsTab", () => {
 
     expect(screen.getByText("Attribute count")).toBeTruthy();
     expect(screen.getByText("Created")).toBeTruthy();
-    expect(screen.getByText("2")).toBeTruthy();
+    expect(screen.getByText("1")).toBeTruthy();
+    expect(screen.getAllByText("2")).toHaveLength(2);
     expect(screen.getByText("3")).toBeTruthy();
     expect(screen.getAllByText("2026-09-10T04:00:00Z")).toHaveLength(2);
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);

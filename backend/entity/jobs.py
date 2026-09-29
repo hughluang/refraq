@@ -7,7 +7,7 @@ from typing import Any
 
 from backend.admin.audit import persist_audit_event
 from backend.core.time import utc_now
-from backend.entity.errors import EntityVersionNotSuperseded
+from backend.entity.errors import EntityTableInService
 from backend.entity.kinds import ENTITY_TABLE_KINDS, KIND_DROP, KIND_RECONCILE
 from backend.entity.lifecycle import PUBLISHING, is_deprecated
 from backend.entity.present import (
@@ -112,23 +112,18 @@ def enqueue_drop(
     versions = get_entity_store().list_all_versions(entity_id)
     latest = latest_published_of(versions)
     if occupies_live_table(version, latest) and not is_deprecated(entity):
-        raise EntityVersionNotSuperseded()
+        raise EntityTableInService()
     presented = version_out(
         version,
         entity=entity,
         include_attributes=True,
-        latest_published=latest,
     )
     if not table_present(version):
         return EnqueueResult(job=None, version=presented, minted=False)
     inflight = find_inflight_entity_table_job(version.id)
     if inflight is not None:
         return EnqueueResult(job=inflight, version=None, minted=False)
-    physical = physical_table_name(
-        stem=entity.table_name,
-        version=version,
-        latest_published=latest,
-    )
+    physical = physical_table_name(version, entity.table_name)
     job = create_queued_job(
         kind=KIND_DROP,
         input={"entity_version_id": version.id},

@@ -16,14 +16,14 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
 from backend.core.time import utc_now
-from backend.entity.errors import EntityTableNameDup
+from backend.entity.errors import EntityTableNameDup, EntityVersionIdConflict
 from backend.entity.ids import new_entity_id, new_version_id
 from backend.entity.records import (
     AttributeRecord,
     BusinessEntityRecord,
     EntityVersionRecord,
 )
-from backend.entity.store import _is_entity_table_name_dup
+from backend.entity.store import _is_entity_table_name_dup, _is_version_id_conflict
 
 INTEGRATION_DATABASE_URL = os.getenv(
     "REFRAQ_INTEGRATION_DATABASE_URL",
@@ -163,6 +163,17 @@ def test_duplicate_table_name_is_entity_table_name_dup(entity_store) -> None:
         entity_store.create_entity(second, second_version)
 
 
+def test_duplicate_version_id_conflicts(entity_store) -> None:
+    first = _entity(_table_name())
+    version = _version(first.id, 1)
+    entity_store.create_entity(first, version)
+    second = _entity(_table_name())
+    clash = _version(second.id, 1)
+    clash.id = version.id
+    with pytest.raises(EntityVersionIdConflict):
+        entity_store.create_entity(second, clash)
+
+
 def test_integrity_classifier_is_table_name_unique_only() -> None:
     assert _is_entity_table_name_dup(
         _integrity("23505", "uq_business_entities_table_name")
@@ -173,6 +184,10 @@ def test_integrity_classifier_is_table_name_unique_only() -> None:
     )
     assert not _is_entity_table_name_dup(
         _integrity("23503", "entity_versions_entity_id_fkey")
+    )
+    assert _is_version_id_conflict(_integrity("23505", "entity_versions_pkey"))
+    assert not _is_version_id_conflict(
+        _integrity("23505", "uq_entity_versions_entity_version")
     )
 
 

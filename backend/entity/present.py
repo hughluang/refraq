@@ -16,7 +16,7 @@ from backend.jobs.store import JobRecord, get_job_store
 
 __all__ = [
     "alignment_state",
-    "archived_table_name",
+    "compose_physical_table_name",
     "current_version_of",
     "entity_out",
     "inbound_references_for",
@@ -27,9 +27,7 @@ __all__ = [
     "version_out",
 ]
 
-
-def archived_table_name(stem: str, version: int) -> str:
-    return f"{stem}__rfq_v{version}"
+_IDENT_MAX = 63
 
 
 def table_present(version: EntityVersionRecord) -> bool:
@@ -45,17 +43,27 @@ def latest_published_of(
     return max(published, key=lambda item: (item.version, item.id))
 
 
-def physical_table_name(
-    *,
-    stem: str,
-    version: EntityVersionRecord,
-    latest_published: EntityVersionRecord | None,
-) -> str | None:
+def compose_physical_table_name(
+    stem: str, version: int, version_id: str
+) -> tuple[str, str | None]:
+    """Physical relation name, and the full stem when that stem was shortened.
+
+    The suffix ``__v{version}__{version_id}`` is kept whole. A stem that would
+    push the identifier past 63 characters is shortened from the right.
+    """
+    suffix = f"__v{version}__{version_id}"
+    if len(stem) + len(suffix) <= _IDENT_MAX:
+        return f"{stem}{suffix}", None
+    head = stem[: _IDENT_MAX - len(suffix)]
+    return f"{head}{suffix}", stem
+
+
+def physical_table_name(version: EntityVersionRecord, stem: str) -> str | None:
+    """Physical table holding this version's rows. The entity stem is a view."""
     if not table_present(version):
         return None
-    if latest_published is not None and version.id == latest_published.id:
-        return stem
-    return archived_table_name(stem, version.version)
+    name, _comment = compose_physical_table_name(stem, version.version, version.id)
+    return name
 
 
 def occupies_live_table(
@@ -143,18 +151,13 @@ def entity_out(
 ) -> dict[str, Any]:
     store = get_entity_store()
     versions = store.list_all_versions(entity.id)
-    latest = latest_published_of(versions)
     current_payload: dict[str, Any] | None = None
     if current is not None:
         current_payload = {
             "id": current.id,
             "version": current.version,
             "publish_status": current.publish_status,
-            "table_name": physical_table_name(
-                stem=entity.table_name,
-                version=current,
-                latest_published=latest,
-            ),
+            "table_name": physical_table_name(current, entity.table_name),
             "alignment": alignment_state(current),
         }
     payload: dict[str, Any] = {
@@ -178,18 +181,13 @@ def version_out(
     *,
     entity: BusinessEntityRecord,
     include_attributes: bool,
-    latest_published: EntityVersionRecord | None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "id": version.id,
         "entity_id": entity.id,
         "version": version.version,
         "publish_status": version.publish_status,
-        "table_name": physical_table_name(
-            stem=entity.table_name,
-            version=version,
-            latest_published=latest_published,
-        ),
+        "table_name": physical_table_name(version, entity.table_name),
         "alignment": alignment_state(version),
         "created_at": version.created_at,
         "updated_at": version.updated_at,

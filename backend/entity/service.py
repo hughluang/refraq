@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
-from typing import Any
+from typing import Any, TypeVar
 
 from backend.admin.audit import persist_audit_event
 from backend.core.time import utc_now
@@ -24,6 +25,7 @@ from backend.entity.errors import (
     EntityPublishing,
     EntityReferenced,
     EntityRequestInvalid,
+    EntityVersionIdConflict,
     EntityVersionNotFound,
     EntityVersionSuperseded,
 )
@@ -75,6 +77,18 @@ __all__ = [
     "require_version",
 ]
 
+_VERSION_ID_ATTEMPTS = 5
+_T = TypeVar("_T")
+
+
+def _with_fresh_version_id(insert: Callable[[str], _T]) -> _T:
+    for _attempt in range(_VERSION_ID_ATTEMPTS - 1):
+        try:
+            return insert(new_version_id())
+        except EntityVersionIdConflict:
+            pass
+    return insert(new_version_id())
+
 
 def require_entity(entity_id: str) -> BusinessEntityRecord:
     record = get_entity_store().get_entity(entity_id)
@@ -125,14 +139,11 @@ def list_versions(
     versions, total = get_entity_store().list_versions(
         entity_id, limit=limit, offset=offset
     )
-    all_versions = get_entity_store().list_all_versions(entity_id)
-    latest = latest_published_of(all_versions)
     return [
         version_out(
             version,
             entity=entity,
             include_attributes=False,
-            latest_published=latest,
         )
         for version in versions
     ], total
@@ -141,12 +152,10 @@ def list_versions(
 def get_version(entity_id: str, version_id: str) -> dict[str, Any]:
     entity = require_entity(entity_id)
     version = require_version(entity_id, version_id)
-    all_versions = get_entity_store().list_all_versions(entity_id)
     return version_out(
         version,
         entity=entity,
         include_attributes=True,
-        latest_published=latest_published_of(all_versions),
     )
 
 
@@ -180,18 +189,23 @@ def create_entity(
         created_at=now,
         updated_at=now,
     )
-    version = EntityVersionRecord(
-        id=new_version_id(),
-        entity_id=entity.id,
-        version=1,
-        attributes=attrs,
-        materialized_attributes=[],
-        publish_status=UNPUBLISHED,
-        latest_reconcile_job_id=None,
-        created_at=now,
-        updated_at=now,
-    )
-    get_entity_store().create_entity(entity, version)
+
+    def _insert(version_id: str) -> EntityVersionRecord:
+        version = EntityVersionRecord(
+            id=version_id,
+            entity_id=entity.id,
+            version=1,
+            attributes=attrs,
+            materialized_attributes=[],
+            publish_status=UNPUBLISHED,
+            latest_reconcile_job_id=None,
+            created_at=now,
+            updated_at=now,
+        )
+        _saved_entity, saved_version = get_entity_store().create_entity(entity, version)
+        return saved_version
+
+    version = _with_fresh_version_id(_insert)
     persist_audit_event(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -367,7 +381,6 @@ def patch_version(
         saved,
         entity=entity,
         include_attributes=True,
-        latest_published=latest_published_of(versions),
     )
 
 
@@ -408,18 +421,22 @@ def open_version(
             DefinitionShape(attributes=tuple(stored_attributes)),
         )
     now = utc_now()
-    version = EntityVersionRecord(
-        id=new_version_id(),
-        entity_id=entity.id,
-        version=current.version + 1,
-        attributes=stored_attributes,
-        materialized_attributes=[],
-        publish_status=UNPUBLISHED,
-        latest_reconcile_job_id=None,
-        created_at=now,
-        updated_at=now,
-    )
-    saved = get_entity_store().create_version(version)
+
+    def _insert(version_id: str) -> EntityVersionRecord:
+        version = EntityVersionRecord(
+            id=version_id,
+            entity_id=entity.id,
+            version=current.version + 1,
+            attributes=stored_attributes,
+            materialized_attributes=[],
+            publish_status=UNPUBLISHED,
+            latest_reconcile_job_id=None,
+            created_at=now,
+            updated_at=now,
+        )
+        return get_entity_store().create_version(version)
+
+    saved = _with_fresh_version_id(_insert)
     persist_audit_event(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -433,7 +450,6 @@ def open_version(
         saved,
         entity=entity,
         include_attributes=True,
-        latest_published=latest_published_of(versions),
     )
 
 

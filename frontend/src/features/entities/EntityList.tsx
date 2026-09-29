@@ -1,14 +1,15 @@
 "use client";
 
-import { Button, Group, MultiSelect, Table, Text, TextInput } from "@mantine/core";
-import { useTranslate } from "@refinedev/core";
+import { Anchor, Button, Group, MultiSelect, Table, Text, TextInput } from "@mantine/core";
+import { useCan, useTranslate } from "@refinedev/core";
 import Link from "next/link";
 import { useCallback, useState } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
 import { ListTable } from "@/components/display/ListTable";
 import { PageChrome } from "@/components/layout/PageChrome";
-import { ModuleId } from "@/features/console/module-identity";
+import { ModuleAction, ModuleId } from "@/features/console/module-identity";
+import { EntityRowActions } from "@/features/entities/EntityRowActions";
 import { EntityStatusBadge } from "@/features/entities/EntityStatusBadge";
 import { PublishStatusBadge } from "@/features/entities/PublishStatusBadge";
 import { listEntities } from "@/features/entities/api";
@@ -28,6 +29,10 @@ const PAGE_SIZE = 50;
 export function EntityList() {
   const t = useTranslate();
   const formatInstant = useFormatInstant();
+  const { data: canWrite } = useCan({
+    resource: ModuleId.entities,
+    action: ModuleAction.edit,
+  });
   const [q, setQ] = useState("");
   const [statuses, setStatuses] = useState<EntityStatus[]>([
     ...DEFAULT_ENTITY_LIST_STATUSES,
@@ -141,12 +146,17 @@ export function EntityList() {
           return (
             <Table.Tr key={row.id}>
               <Table.Td>
-                <Text ff="monospace" size="sm">
+                <Anchor
+                  component={Link}
+                  href={`/console/entities/${row.id}`}
+                  size="sm"
+                  ff="monospace"
+                >
                   {row.table_name}
-                </Text>
+                </Anchor>
               </Table.Td>
               <Table.Td>{row.name}</Table.Td>
-              <Table.Td>{current ? `v${current.version}` : "—"}</Table.Td>
+              <Table.Td>{current ? current.version : "—"}</Table.Td>
               <Table.Td>
                 <EntityStatusBadge entity={row} />
               </Table.Td>
@@ -163,14 +173,11 @@ export function EntityList() {
                 </Text>
               </Table.Td>
               <Table.Td>
-                <Button
-                  component={Link}
-                  href={`/console/entities/${row.id}`}
-                  size="xs"
-                  variant="light"
-                >
-                  {t("actions.show")}
-                </Button>
+                <EntityRowActions
+                  entity={row}
+                  canWrite={Boolean(canWrite?.can)}
+                  onChanged={() => void list.reload()}
+                />
               </Table.Td>
             </Table.Tr>
           );

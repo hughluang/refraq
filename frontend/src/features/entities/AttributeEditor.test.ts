@@ -145,7 +145,7 @@ describe("AttributeEditor", () => {
       screen.queryByRole("textbox", { name: "entities.fields.enumeration" }),
     ).toBeNull();
     expect(
-      screen.queryByRole("combobox", { name: "entities.fields.attributeType" }),
+      screen.queryByRole("combobox", { name: "entities.attributes.drawer.type" }),
     ).toBeNull();
   });
 
@@ -154,7 +154,7 @@ describe("AttributeEditor", () => {
 
     fireEvent.click(screen.getByText("sku"));
     fireEvent.change(
-      screen.getByRole("textbox", { name: "entities.fields.attributeName" }),
+      screen.getByRole("textbox", { name: "entities.attributes.drawer.name" }),
       { target: { value: "sku_code" } },
     );
     expect(screen.getByText("sku")).toBeTruthy();
@@ -167,7 +167,7 @@ describe("AttributeEditor", () => {
 
     expect(screen.getByText("sku_code")).toBeTruthy();
     expect(
-      screen.queryByRole("textbox", { name: "entities.fields.attributeName" }),
+      screen.queryByRole("textbox", { name: "entities.attributes.drawer.name" }),
     ).toBeNull();
   });
 
@@ -176,7 +176,7 @@ describe("AttributeEditor", () => {
 
     fireEvent.click(screen.getByText("sku"));
     fireEvent.change(
-      screen.getByRole("textbox", { name: "entities.fields.attributeName" }),
+      screen.getByRole("textbox", { name: "entities.attributes.drawer.name" }),
       { target: { value: "renamed" } },
     );
     fireEvent.click(
@@ -197,7 +197,7 @@ describe("AttributeEditor", () => {
       screen.getByText("entities.validation.attribute.maxLengthRequired"),
     ).toBeTruthy();
     expect(
-      screen.getByRole("textbox", { name: "entities.fields.attributeName" }),
+      screen.getByRole("textbox", { name: "entities.attributes.drawer.name" }),
     ).toBeTruthy();
     expect(screen.queryByText("renamed")).toBeNull();
   });
@@ -255,7 +255,7 @@ describe("AttributeEditor", () => {
 
     fireEvent.click(screen.getByText("sku"));
     expect(
-      screen.queryByRole("textbox", { name: "entities.fields.attributeName" }),
+      screen.queryByRole("textbox", { name: "entities.attributes.drawer.name" }),
     ).toBeNull();
     expect(
       screen.queryByRole("button", { name: "actions.delete" }),

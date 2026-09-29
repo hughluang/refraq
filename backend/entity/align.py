@@ -9,11 +9,12 @@ from celery import current_task
 from backend.core.time import utc_now
 from backend.entity.ddl import attr_wants_index
 from backend.entity.entity_db import entity_db_schema
+from backend.entity.errors import EntityTableInService
 from backend.entity.kinds import KIND_DROP, KIND_RECONCILE
 from backend.entity.lifecycle import PUBLISHED, PUBLISHING, UNPUBLISHED, is_deprecated
 from backend.entity.locks import try_acquire_entity_table_lock
 from backend.entity.present import (
-    archived_table_name,
+    compose_physical_table_name,
     latest_published_of,
     occupies_live_table,
     physical_table_name,
@@ -57,7 +58,8 @@ def run_entity_table_job(job_id: str) -> dict[str, str]:
         return _fail(job_id, "ENTITY_NOT_FOUND", "Business Entity not found")
     lock = try_acquire_entity_table_lock(entity.id)
     if lock is None:
-        _rollback_publish(version)
+        if current.kind == KIND_RECONCILE:
+            _rollback_publish(version, accept_published=False)
         return _fail(
             job_id,
             "JOB_ALREADY_ACTIVE",
@@ -82,33 +84,27 @@ def _reconcile(job_id: str, version_id: str) -> dict[str, str]:
         return _fail(job_id, "ENTITY_NOT_FOUND", "Business Entity not found")
     schema = entity_db_schema()
     stem = entity.table_name
+    physical, comment = compose_physical_table_name(stem, version.version, version.id)
     versions = get_entity_store().list_all_versions(entity.id)
     previous = latest_published_of(versions)
-    archive_as: str | None = None
-    archive_attributes = None
+    expected_target: str | None = None
     if (
         previous is not None
         and previous.id != version.id
         and table_present(previous)
     ):
-        archive_as = archived_table_name(stem, previous.version)
-        archive_attributes = list(previous.attributes)
+        expected_target = physical_table_name(previous, stem)
     definition = list(version.attributes)
     created = False
+    published_saved = False
     try:
         port = get_entity_table_port()
         append_job_log(
             job_id,
             level="info",
-            message=f"creating {schema}.{stem}",
+            message=f"creating {schema}.{physical}",
         )
-        port.publish_table(
-            schema,
-            stem,
-            definition,
-            archive_as=archive_as,
-            archive_attributes=archive_attributes,
-        )
+        port.create_physical_table(schema, physical, definition, comment=comment)
         created = True
         unique_added = sum(1 for attr in definition if attr.unique)
         indexes_added = sum(1 for attr in definition if attr_wants_index(attr))
@@ -123,8 +119,17 @@ def _reconcile(job_id: str, version_id: str) -> dict[str, str]:
                 updated_at=utc_now(),
             )
         )
+        published_saved = True
+        port.swap_stem_view(
+            schema,
+            stem,
+            physical=physical,
+            expected_target=expected_target,
+        )
     except EntityTableNameConflict as exc:
-        _rollback_publish(version)
+        if created:
+            _revert_physical_table(job_id, schema, physical)
+        _rollback_publish(version, accept_published=published_saved)
         return _fail(
             job_id,
             "ENTITY_TABLE_NAME_CONFLICT",
@@ -132,19 +137,13 @@ def _reconcile(job_id: str, version_id: str) -> dict[str, str]:
         )
     except Exception as exc:  # noqa: BLE001
         if created:
-            _revert_created_table(
-                job_id,
-                schema,
-                stem,
-                archive_as=archive_as,
-                archive_attributes=archive_attributes,
-            )
-        _rollback_publish(version)
+            _revert_physical_table(job_id, schema, physical)
+        _rollback_publish(version, accept_published=published_saved)
         return _fail(job_id, "JOB_EXECUTION_FAILED", str(exc))
     result = {
         "schema": "entity_reconcile.v1",
         "entity_version_id": version_id,
-        "table_name": stem,
+        "table_name": physical,
         "action": "created",
         "columns_added": len(definition),
         "nullability_relaxed": 0,
@@ -159,11 +158,12 @@ def _reconcile(job_id: str, version_id: str) -> dict[str, str]:
     return {"status": "succeeded"}
 
 
-def _rollback_publish(version) -> None:
+def _rollback_publish(version, *, accept_published: bool) -> None:
     fresh = get_entity_store().get_version(version.id)
     if fresh is None:
         return
-    if fresh.publish_status != PUBLISHING:
+    allowed = (PUBLISHING, PUBLISHED) if accept_published else (PUBLISHING,)
+    if fresh.publish_status not in allowed:
         return
     get_entity_store().save_version(
         replace(
@@ -175,21 +175,16 @@ def _rollback_publish(version) -> None:
     )
 
 
-def _revert_created_table(
-    job_id: str,
-    schema: str,
-    stem: str,
-    *,
-    archive_as: str | None,
-    archive_attributes,
-) -> None:
+def _revert_physical_table(job_id: str, schema: str, table: str) -> None:
     try:
-        get_entity_table_port().revert_publish_table(
-            schema,
-            stem,
-            archive_as=archive_as,
-            archive_attributes=archive_attributes,
+        get_entity_table_port().revert_physical_table(schema, table)
+    except EntityTableHasRows as exc:
+        append_job_log(
+            job_id,
+            level="warn",
+            message=f"{exc.table} has rows and was left in place",
         )
+        return
     except Exception as exc:  # noqa: BLE001
         append_job_log(
             job_id,
@@ -208,18 +203,12 @@ def _drop(job_id: str, version_id: str) -> dict[str, str]:
         return _fail(job_id, "ENTITY_NOT_FOUND", "Business Entity not found")
     versions = get_entity_store().list_all_versions(entity.id)
     latest = latest_published_of(versions)
-    if occupies_live_table(version, latest) and not is_deprecated(entity):
-        return _fail(
-            job_id,
-            "ENTITY_VERSION_NOT_SUPERSEDED",
-            "Table drop is permitted only on an archived version or a deprecated Entity",
-        )
+    is_head = occupies_live_table(version, latest)
+    if is_head and not is_deprecated(entity):
+        refusal = EntityTableInService()
+        return _fail(job_id, refusal.code, refusal.message)
     schema = entity_db_schema()
-    table = physical_table_name(
-        stem=entity.table_name,
-        version=version,
-        latest_published=latest,
-    )
+    table = physical_table_name(version, entity.table_name)
     if table is None:
         mark_succeeded(
             job_id,
@@ -232,10 +221,12 @@ def _drop(job_id: str, version_id: str) -> dict[str, str]:
         return {"status": "succeeded"}
     try:
         port = get_entity_table_port()
-        if port.table_exists(schema, table):
+        if is_head:
+            port.drop_head(schema, table, entity.table_name)
+        elif port.table_exists(schema, table):
             port.drop_table(schema, table)
-    except EntityTableHasRows:
-        return _fail(job_id, "ENTITY_TABLE_NOT_EMPTY", f"{table} is not empty")
+    except EntityTableHasRows as exc:
+        return _fail(job_id, "ENTITY_TABLE_NOT_EMPTY", f"{exc.table} is not empty")
     except Exception as exc:  # noqa: BLE001
         return _fail(job_id, "JOB_EXECUTION_FAILED", str(exc))
     get_entity_store().save_version(

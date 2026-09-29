@@ -17,10 +17,11 @@ __all__ = [
     "EntityPublishing",
     "EntityReferenced",
     "EntityRequestInvalid",
+    "EntityTableInService",
     "EntityTableNameDup",
     "EntityTableNameInvalid",
+    "EntityVersionIdConflict",
     "EntityVersionNotFound",
-    "EntityVersionNotSuperseded",
     "EntityVersionSuperseded",
 ]
 
@@ -55,6 +56,10 @@ class EntityTableNameInvalid(AppError):
 
     def _default_message(self) -> str:
         return "Business Entity table_name is invalid"
+
+
+class EntityVersionIdConflict(Exception):
+    """The version id primary key is already taken."""
 
 
 class EntityTableNameDup(AppError):
@@ -155,10 +160,13 @@ class EntityVersionSuperseded(AppError):
         return "Save and publish target the current version only"
 
 
-class EntityVersionNotSuperseded(AppError):
-    code = "ENTITY_VERSION_NOT_SUPERSEDED"
+class EntityTableInService(AppError):
+    code = "ENTITY_TABLE_IN_SERVICE"
     http_status = 422
 
     def _default_message(self) -> str:
-        return "Table drop is permitted only on a superseded version or a deprecated Entity"
+        return (
+            "This table still serves the Entity; drop it after the Entity is deprecated."
+            " Opening a new version does not take it out of service"
+        )
 

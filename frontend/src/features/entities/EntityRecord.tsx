@@ -114,6 +114,7 @@ export function EntityRecord(props: Props) {
 
   const deleteEntityConfirm = useConfirmAction<true>();
   const dropConfirm = useConfirmAction<EntityVersion>();
+  const publishConfirm = useConfirmAction<true>();
   const deprecateConfirm = useConfirmAction<true>();
 
   const [attributeEditorOpen, setAttributeEditorOpen] = useState(false);
@@ -294,11 +295,12 @@ export function EntityRecord(props: Props) {
     }
   };
 
-  const publish = async () => {
+  const confirmPublish = async () => {
     if (!entityId || !current) return;
     setBusy(true);
     try {
       const result = await publishVersion(entityId, current.id);
+      publishConfirm.close();
       if (result.job) {
         open?.({ type: "success", message: t("entities.publish.queued") });
         openJob(result.job.id);
@@ -466,7 +468,7 @@ export function EntityRecord(props: Props) {
               variant={header.publishFilled ? "filled" : "light"}
               loading={busy}
               disabled={dirty || savedEmpty}
-              onClick={() => void publish()}
+              onClick={() => publishConfirm.open(true)}
             >
               {t("entities.publish")}
             </Button>
@@ -682,6 +684,15 @@ export function EntityRecord(props: Props) {
 
       {entity ? (
         <>
+          <ConfirmActionModal
+            opened={publishConfirm.opened}
+            onClose={publishConfirm.close}
+            title={t("entities.publish.confirmTitle")}
+            body={t("entities.publish.confirmBody", { name: entity.name })}
+            loading={busy}
+            confirmLabel={t("entities.publish")}
+            onConfirm={() => void confirmPublish()}
+          />
           <ConfirmActionModal
             opened={deprecateConfirm.opened}
             onClose={deprecateConfirm.close}

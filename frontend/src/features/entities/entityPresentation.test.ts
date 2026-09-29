@@ -4,6 +4,7 @@ import { EMPTY_ATTRIBUTE } from "@/features/entities/constants";
 import {
   attributesFromDrafts,
   draftsFromVersion,
+  isLegalTableName,
   referenceSummaryLabel,
 } from "@/features/entities/entityPresentation";
 import type { AttributeDraft, EntityVersion } from "@/features/entities/types";
@@ -215,5 +216,13 @@ describe("draftsFromVersion", () => {
         emptyNameLabel: "This entity",
       }),
     ).toBe("ent_gone");
+  });
+});
+
+describe("isLegalTableName", () => {
+  it("rejects a physical table name and accepts a business stem", () => {
+    expect(isLegalTableName("material")).toBe(true);
+    expect(isLegalTableName("encv_0123456789ab")).toBe(true);
+    expect(isLegalTableName("material__v1__0123456789abcdef")).toBe(false);
   });
 });

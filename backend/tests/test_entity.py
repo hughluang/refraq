@@ -15,6 +15,7 @@ os.environ.pop("REDIS_URL", None)
 os.environ.setdefault("CELERY_BROKER_URL", "memory://")
 
 from backend.admin.audit_store import get_audit_store  # noqa: E402
+from backend.entity.present import compose_physical_table_name  # noqa: E402
 from backend.admin.roles import create_role, seed_roles  # noqa: E402
 from backend.admin.role_store import get_role_store  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
@@ -166,7 +167,7 @@ def test_table_name_dup_and_invalid(client: TestClient) -> None:
     assert invalid.status_code == 422
     assert invalid.json()["code"] == "ENTITY_TABLE_NAME_INVALID"
 
-    too_long = client.post("/entities", json=_create_body(table_name="a" * 49))
+    too_long = client.post("/entities", json=_create_body(table_name="a" * 64))
     assert too_long.status_code == 422
     assert too_long.json()["code"] == "ENTITY_TABLE_NAME_INVALID"
 
@@ -177,7 +178,8 @@ def test_table_name_dup_and_invalid(client: TestClient) -> None:
     assert unknown.json()["code"] == "REQUEST_INVALID"
 
     archived_shape = client.post(
-        "/entities", json=_create_body(table_name="material__rfq_v1")
+        "/entities",
+        json=_create_body(table_name="material__v1__0123456789abcdef"),
     )
     assert archived_shape.status_code == 422
     assert archived_shape.json()["code"] == "ENTITY_TABLE_NAME_INVALID"
@@ -449,6 +451,76 @@ def test_permissions_and_operator_has_no_entity_keys(client: TestClient) -> None
     assert drop.status_code == 403
 
 
+def test_version_id_is_sixteen_hex() -> None:
+    from backend.entity.ids import new_entity_id, new_version_id
+
+    version_id = new_version_id()
+    assert len(version_id) == 16
+    int(version_id, 16)
+    assert new_entity_id().startswith("ent_")
+
+
+def test_create_retries_when_version_id_is_taken(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.core.time import utc_now
+    from backend.entity import service as entity_service
+    from backend.entity.ids import new_entity_id
+    from backend.entity.records import BusinessEntityRecord, EntityVersionRecord
+    from backend.entity.store import get_entity_store
+
+    taken = "aaaaaaaaaaaaaaaa"
+    fresh = "bbbbbbbbbbbbbbbb"
+    minted = iter([taken, fresh])
+    monkeypatch.setattr(entity_service, "new_version_id", lambda: next(minted))
+    now = utc_now()
+    entity_id = new_entity_id()
+    get_entity_store().create_entity(
+        BusinessEntityRecord(
+            id=entity_id,
+            table_name="held_stem",
+            name="Held",
+            description="Holds the first version id.",
+            deprecated_at=None,
+            created_at=now,
+            updated_at=now,
+        ),
+        EntityVersionRecord(
+            id=taken,
+            entity_id=entity_id,
+            version=1,
+            attributes=[],
+            materialized_attributes=[],
+            publish_status="unpublished",
+            latest_reconcile_job_id=None,
+            created_at=now,
+            updated_at=now,
+        ),
+    )
+    created = client.post("/entities", json=_create_body(table_name="retry_stem"))
+    assert created.status_code == 201, created.text
+    assert created.json()["entity"]["current_version"]["id"] == fresh
+
+
+def test_version_id_retry_propagates_the_fifth_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.entity import service as entity_service
+    from backend.entity.errors import EntityVersionIdConflict
+
+    conflicts = [EntityVersionIdConflict(f"taken-{index}") for index in range(5)]
+    pending = iter(conflicts)
+    monkeypatch.setattr(entity_service, "new_version_id", lambda: "aaaaaaaaaaaaaaaa")
+
+    def insert(version_id: str) -> str:
+        del version_id
+        raise next(pending)
+
+    with pytest.raises(EntityVersionIdConflict) as raised:
+        entity_service._with_fresh_version_id(insert)
+    assert raised.value is conflicts[4]
+
+
 def test_unknown_entity_is_404(client: TestClient) -> None:
     missing = client.get("/entities/ent_missing")
     assert missing.status_code == 404
@@ -473,7 +545,9 @@ def test_publish_locks_and_open_version_unlocks(client: TestClient) -> None:
     body = detail.json()["entity"]
     assert body["ever_published"] is True
     assert body["current_version"]["publish_status"] == "published"
-    assert body["current_version"]["table_name"] == "material"
+    physical, comment = compose_physical_table_name("material", 1, version_id)
+    assert comment is None
+    assert body["current_version"]["table_name"] == physical
 
     identity = client.patch(f"/entities/{entity['id']}", json={"name": "Locked"})
     assert identity.status_code == 422
@@ -496,7 +570,7 @@ def test_publish_locks_and_open_version_unlocks(client: TestClient) -> None:
     assert opened.json()["version"]["version"] == 2
     assert opened.json()["version"]["table_name"] is None
     v1 = client.get(f"/entities/{entity['id']}/versions/{version_id}")
-    assert v1.json()["version"]["table_name"] == "material"
+    assert v1.json()["version"]["table_name"] == physical
 
     renamed = client.patch(f"/entities/{entity['id']}", json={"name": "Next draft"})
     assert renamed.status_code == 200

@@ -32,14 +32,31 @@ type Props = {
   onDrop: (version: EntityVersion) => void;
 };
 
-function canDropVersion(entity: BusinessEntity, version: EntityVersion): boolean {
+function isMetadataHead(versions: EntityVersion[], version: EntityVersion): boolean {
+  let head: EntityVersion | null = null;
+  for (const item of versions) {
+    if (item.publish_status !== "published") {
+      continue;
+    }
+    if (head === null || item.version > head.version) {
+      head = item;
+    }
+  }
+  return head !== null && head.id === version.id;
+}
+
+function canDropVersion(
+  entity: BusinessEntity,
+  version: EntityVersion,
+  versions: EntityVersion[],
+): boolean {
   if (!version.alignment.table_present || !version.table_name) {
     return false;
   }
   if (entity.deprecated_at) {
     return true;
   }
-  return version.table_name !== entity.table_name;
+  return !isMetadataHead(versions, version);
 }
 
 export function EntityVersionsTab({
@@ -85,7 +102,7 @@ export function EntityVersionsTab({
         <Table.Tbody>
           {versions.map((version) => (
             <Table.Tr key={version.id}>
-              <Table.Td>v{version.version}</Table.Td>
+              <Table.Td>{version.version}</Table.Td>
               <Table.Td>
                 <Text ff="monospace" size="sm">
                   {version.table_name ?? "—"}
@@ -118,7 +135,7 @@ export function EntityVersionsTab({
                   >
                     {t("entities.versions.view")}
                   </Button>
-                  {canDropTable && canDropVersion(entity, version) ? (
+                  {canDropTable && canDropVersion(entity, version, versions) ? (
                     <Button
                       size="xs"
                       color="red"
@@ -140,7 +157,7 @@ export function EntityVersionsTab({
         onClose={() => setOpened(null)}
         position="right"
         size="xl"
-        title={opened ? `v${opened.version}` : ""}
+        title={opened ? String(opened.version) : ""}
       >
         {opened ? (
           <VersionShape

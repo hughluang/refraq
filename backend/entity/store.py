@@ -12,7 +12,12 @@ from sqlalchemy.orm import Session
 
 from backend.core.config import get_settings
 from backend.core.db import session_scope
-from backend.entity.errors import EntityNotFound, EntityTableNameDup, EntityVersionNotFound
+from backend.entity.errors import (
+    EntityNotFound,
+    EntityTableNameDup,
+    EntityVersionIdConflict,
+    EntityVersionNotFound,
+)
 from backend.entity.lifecycle import PUBLISHED, EntityListStatus, entity_list_status
 from backend.entity.models import BusinessEntityRow, EntityVersionRow
 from backend.entity.records import (
@@ -130,6 +135,8 @@ class MemoryEntityStore:
         with self._lock:
             if entity.table_name in self._by_table_name:
                 raise EntityTableNameDup()
+            if version.id in self._versions:
+                raise EntityVersionIdConflict()
             self._entities[entity.id] = entity
             self._by_table_name[entity.table_name] = entity.id
             self._versions[version.id] = version
@@ -201,6 +208,8 @@ class MemoryEntityStore:
         with self._lock:
             if version.entity_id not in self._entities:
                 raise EntityNotFound()
+            if version.id in self._versions:
+                raise EntityVersionIdConflict()
             self._versions[version.id] = version
             return version
 
@@ -415,6 +424,7 @@ def _write_version_row(row: EntityVersionRow, version: EntityVersionRecord) -> N
 
 
 _TABLE_NAME_UNIQUE = "uq_business_entities_table_name"
+_VERSION_ID_PK = "entity_versions_pkey"
 
 
 def _pgcode(exc: BaseException) -> str | None:
@@ -435,6 +445,13 @@ def _constraint_name(exc: BaseException) -> str | None:
         return name
     name = getattr(orig, "constraint_name", None)
     return name if isinstance(name, str) and name else None
+
+
+def _is_version_id_conflict(exc: BaseException) -> bool:
+    """True only for the entity_versions primary key."""
+    if _pgcode(exc) != "23505":
+        return False
+    return _constraint_name(exc) == _VERSION_ID_PK
 
 
 def _is_entity_table_name_dup(exc: BaseException) -> bool:
@@ -458,6 +475,8 @@ def _flush_entity_rows(
     except IntegrityError as exc:
         if _is_entity_table_name_dup(exc):
             raise EntityTableNameDup() from exc
+        if _is_version_id_conflict(exc):
+            raise EntityVersionIdConflict() from exc
         raise
 
 

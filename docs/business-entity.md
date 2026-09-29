@@ -21,9 +21,9 @@ Related boundaries:
 
 ### 2.1 Identity
 
-A Business Entity is identified by an immutable `table_name`. That value is the live physical table name in the entity database (§4.3) and spans every **Entity Version** of the Entity. It is unique across the platform.
+A Business Entity is identified by an immutable `table_name`. That value is the stem view name in the entity database (§4.3) and spans every **Entity Version** of the Entity. It is unique across the platform.
 
-`table_name` is constrained because it is a physical table identifier: lowercase ASCII letters, digits, and underscores; it starts with a letter; length at most 48 so `{table_name}__rfq_v{version}` stays inside the entity-database identifier limit (63 bytes); and it must not match `.*__rfq_v[0-9]+$`, which is reserved for superseded tables. A `table_name` outside those constraints is rejected with `ENTITY_TABLE_NAME_INVALID`. A `table_name` already registered is rejected with `ENTITY_TABLE_NAME_DUP`.
+`table_name` is the business name of the Entity and the name of a view in the entity database. It is lowercase ASCII letters, digits, and underscores; it starts with a letter; length at most 63, the identifier limit. It must not match a physical table name: one or more characters, then `__v`, one or more digits, `__`, and 16 lowercase hexadecimal digits (for example `material__v1__0123456789abcdef`). A `table_name` outside those constraints is rejected with `ENTITY_TABLE_NAME_INVALID`. A `table_name` already registered is rejected with `ENTITY_TABLE_NAME_DUP`.
 
 A Business Entity is not scoped to a **Source**. It may describe a business thing whose rows will later be assembled from several Sources.
 
@@ -65,7 +65,7 @@ A config key that belongs to another type, an unknown config key, or a top-level
 
 **Inbound Reference** is not an attribute. It is derived when a current version, including this entity's own and including an unpublished current version, has an Entity Reference whose `target_entity_id` is this entity's id. Historical versions do not count. The derived fact carries the referring entity's id and `table_name`, and that attribute's `name`; it has no name or description of its own. A many-to-many is an ordinary Business Entity that declares two Entity References, not a third type and not a link table.
 
-Attribute names are unique within an **Entity Version** and follow the same character set as `table_name` (lowercase ASCII letters, digits, and underscores; starts with a letter), because each attribute becomes a physical column. They are not subject to the reserved archive-suffix rule. The name `row_id` is reserved for the platform primary key (§2.4). Violations, including a missing or unknown type, a `string` without `max_length`, a `decimal` without precision or scale, an illegal enumeration, or a `target_entity_id` that is missing, unknown, or names a deprecated entity, are `ENTITY_ATTRIBUTE_INVALID`; Problem `detail` names the concrete rule.
+Attribute names are unique within an **Entity Version** and follow the same character set as `table_name` (lowercase ASCII letters, digits, and underscores; starts with a letter), because each attribute becomes a physical column. They are not subject to the reserved physical-table-name rule. The name `row_id` is reserved for the platform primary key (§2.4). Violations, including a missing or unknown type, a `string` without `max_length`, a `decimal` without precision or scale, an illegal enumeration, or a `target_entity_id` that is missing, unknown, or names a deprecated entity, are `ENTITY_ATTRIBUTE_INVALID`; Problem `detail` names the concrete rule.
 
 `unique` is a single-column UNIQUE constraint. A unique attribute may leave `required` false; Postgres treats distinct NULLs as non-conflicting. `indexed` is a non-unique btree. When `unique` is true, publish does not also create a non-unique index for that column. Composite unique constraints and composite indexes are out of scope.
 
@@ -99,12 +99,12 @@ Publish targets the current `unpublished` version. It refuses an empty attribute
 
 The first publish of an Entity, and any publish whose shape is not `unchanged` relative to the latest published shape, applies the attribute write rules. A reference without `target_entity_id` is `ENTITY_ATTRIBUTE_INVALID` and is not enqueued. An `unchanged` successor of an already published shape is enqueued as stored. Publish does not rewrite that stored shape.
 
-Publish sets the version to `publishing` and enqueues a **Job** (`entity_reconcile`) that creates this version's **Entity Table** (including `row_id`) at the Entity `table_name`. When a previous published version still holds that live name, the same Job first RENAMEs that table to the archive name (§4.3), in one entity-database transaction with the CREATE. While `publishing`, every write is refused: save, publish, open version, identity patch, delete, and deprecate (`ENTITY_PUBLISHING`).
+Publish sets the version to `publishing` and enqueues a **Job** (`entity_reconcile`) that creates this version's **Entity Table** (including `row_id`) under the physical name in §4.3. The Job then stores `published` and replaces the stem view so it selects that table. The previous physical table is not renamed. While `publishing`, every write is refused: save, publish, open version, identity patch, delete, and deprecate (`ENTITY_PUBLISHING`).
 
 No transaction spans the metadata database and the entity database. Publish makes that visible as the `publishing` status rather than hiding it behind compensation.
 
 - Job success: status becomes `published`. The stored attribute-set snapshot records the created shape. Display identity and this version's attributes are frozen. The only authoring act left on this Entity is **Open new version**, or **Deprecate** the Entity.
-- Job failure: status returns to `unpublished`. If the entity-database transaction is still open, it rolls back. If the DDL committed and metadata then failed, the failure path drops the new empty live table and RENAMEs the archived previous table back to `table_name`. The definition is unchanged. The author may save and publish again.
+- Job failure: status returns to `unpublished`, including when `published` was stored and the stem view then failed to move. The failure path drops the new physical table when it is still empty. A new table that already has rows is left in place, and a later publish of the same version hits `ENTITY_TABLE_NAME_CONFLICT`. The stem view is left as it was when the replacement did not commit. The definition is unchanged. The author may save and publish again.
 
 Enqueue is idempotent: an in-flight Job for that version is returned rather than duplicated. Execution takes a per-Entity lock shared with table drop (`entity_table:{entity_id}`), and reuses `JOB_ALREADY_ACTIVE`.
 
@@ -146,29 +146,32 @@ Entity Tables are not collected as **Catalog Object**s. The Entity definition is
 
 Creating or saving a version has no cross-database side effect. The definition lands first and is immediately readable. The table appears only when Publish succeeds.
 
-The Job creates the live table when absent. It does not ALTER a published table's columns. Publishing a successor RENAMEs the previous live table to its archive name; that is not an ALTER of the new version's shape. A name collision with a table already present in the entity schema fails the Job with `ENTITY_TABLE_NAME_CONFLICT` and is never auto-suffixed around the collision.
+The Job creates that version's physical table under the name in §4.3. It does not ALTER a published table's columns. Publishing a successor leaves the previous physical table in place and, after the version is `published`, replaces the stem view so it selects the new table. A name collision with a relation already present in the entity schema fails the Job with `ENTITY_TABLE_NAME_CONFLICT` and is never auto-suffixed around the collision.
 
-Write admission belongs to **Data Channel** and is not implemented here. Being superseded does not freeze Data Channel writes.
+The product head is the latest published version that still has a table. That fact is metadata. The stem view is updated after `published` is stored. Until that update commits, SQL against the stem still reads the previous table. Product writes, including a later **Data Channel**, address the head's physical table and do not write a superseded version. Direct SQL against a physical table name is not revoked by this rule. Write admission itself belongs to **Data Channel** and is not implemented here.
 
 ### 4.3 Physical Naming And Collision
 
-The Entity has one `table_name` (the stem). Physical names are derived and never stored:
+The Entity has one `table_name` (the stem). That name is a view. Each version's physical table name is derived, never stored, and never renamed. It is the stem, then `__v`, then the version number with no zero-padding, then `__`, then the version id. A version id is 16 lowercase hexadecimal digits and has no prefix. Stem `material`, version `1`, and id `0123456789abcdef` produce `material__v1__0123456789abcdef`.
+
+The application composes that name and keeps it within 63 characters. It does not send a longer identifier to the engine. When the stem and the suffix together exceed 63 characters, the stem is shortened from the right until the name is exactly 63 characters. The suffix stays whole. A version number is a 32-bit integer, at most 10 digits, so the suffix is at most 31 characters and at least 32 characters of the stem remain. When the stem is shortened, publish writes `COMMENT ON TABLE` set to the full stem. When the stem fits, publish writes no comment. An `encv_` prefix is not a version id and is not a physical table name.
+
+Reported names:
 
 - No table (`table_present` is false, including unpublished versions): the version's reported `table_name` is `null`.
-- The latest published version that still has a table occupies the stem (`material`).
-- Every earlier published version that still has a table occupies `{table_name}__rfq_v{version}` (`material__rfq_v1`).
+- A version that still has a table reports the composed physical name.
 
-Opening a new version does not rename. The prior published version keeps the stem until the successor publish Job succeeds. A later **Data Channel** binds by **Entity Version** id and resolves the physical name at runtime; it must not hard-code the stem onto an archived version.
+Opening a new version does not move the view. The prior published version keeps its physical table until a successor publish marks the new version `published` and then replaces the view. A later **Data Channel** binds by **Entity Version** id and writes only when that version is the head.
 
 All DDL is schema-qualified against the configured entity schema (`REFRAQ_ENTITY_DB_SCHEMA`, default `public`). The product uses that schema and never creates it. Emptiness and collision checks are evaluated in that schema so their meaning does not drift with a connection-level `search_path`.
 
-Two Business Entities cannot collide, because `table_name` is unique. A derived archive name, or the stem, may still collide with a table already present in that schema. Publish then fails with `ENTITY_TABLE_NAME_CONFLICT`. refraq does not rename around a collision.
+Two Business Entities cannot collide, because `table_name` is unique. A physical table name, or the stem view, may still collide with a relation already present in that schema. Publish then fails with `ENTITY_TABLE_NAME_CONFLICT`. refraq does not rename around a collision.
 
-Rename of a superseded table also renames its UNIQUE constraints and indexes so the live stem can reuse product-owned names.
+Constraints and indexes are named from the physical table, so two versions do not share them. Publish does not rename a superseded table.
 
 ### 4.4 Attribute Type To Physical Type
 
-Each **Attribute Type** maps to one physical type in the entity database engine. That mapping is product-owned and fixed; it is not a maintainable registry and not a **System Parameter**. It differs from **Type Mapping**, which classifies many engines' native types *into* **Normalized Type**. Here there is a single target engine and no second type registry for an operator to maintain. `string` is `VARCHAR(max_length)`. `text` is `TEXT`. `integer` is `BIGINT`. `decimal` is `NUMERIC(precision, scale)`. `number` is `DOUBLE PRECISION`. `boolean`, `date`, `timestamp`, and `time` are `BOOLEAN`, `DATE`, `TIMESTAMPTZ`, and `TIME`. `json` is `JSONB`. `enumeration` is `VARCHAR(64)` plus a CHECK that non-null values are members of the code list; `required` decides whether the column is `NOT NULL`. It is not a Postgres ENUM. An **Entity Reference** is `BIGINT` and is not a foreign key. An **Inbound Reference** creates no column. Publish creates the table, or renames the previous live table and creates a new empty one. It does not `ALTER` a published column or CHECK when the classifier reports `non_breaking` for a wider `max_length` or an added code. Publishing a successor does not rewrite `row_id` values already stored in referring tables.
+Each **Attribute Type** maps to one physical type in the entity database engine. That mapping is product-owned and fixed; it is not a maintainable registry and not a **System Parameter**. It differs from **Type Mapping**, which classifies many engines' native types *into* **Normalized Type**. Here there is a single target engine and no second type registry for an operator to maintain. `string` is `VARCHAR(max_length)`. `text` is `TEXT`. `integer` is `BIGINT`. `decimal` is `NUMERIC(precision, scale)`. `number` is `DOUBLE PRECISION`. `boolean`, `date`, `timestamp`, and `time` are `BOOLEAN`, `DATE`, `TIMESTAMPTZ`, and `TIME`. `json` is `JSONB`. `enumeration` is `VARCHAR(64)` plus a CHECK that non-null values are members of the code list; `required` decides whether the column is `NOT NULL`. It is not a Postgres ENUM. An **Entity Reference** is `BIGINT` and is not a foreign key. An **Inbound Reference** creates no column. Publish creates that version's empty physical table, then replaces the stem view after the version is `published`. It does not `ALTER` a published column or CHECK when the classifier reports `non_breaking` for a wider `max_length` or an added code. Publishing a successor does not rewrite `row_id` values already stored in referring tables.
 
 ## 5. Supersession And Disposal
 
@@ -178,7 +181,7 @@ Deleting a definition never drops a table. Deleting a never-published Business E
 
 Delete is permitted only when the Entity has never been published (`ENTITY_ALREADY_PUBLISHED` otherwise) and no current version, including this entity's own, has an **Entity Reference** whose target is this entity (`ENTITY_REFERENCED` otherwise). A historical version does not count. A never-published Entity has no table; delete removes definition rows only.
 
-Dropping an **Entity Table** is a separate destructive act behind its own **Permission** (§6). It runs as a **Job** (`entity_table_drop`). While the Entity is not deprecated, drop is permitted only on an **archived** version's table (the physical name is not the stem). The live stem table may be dropped only after the Entity is deprecated. Drop of the live table while the Entity is not deprecated is `ENTITY_VERSION_NOT_SUPERSEDED`. Opening a newer unpublished version does not archive the prior table, so that prior version remains undeletable as a table until a successor publish renames it, or the Entity is deprecated. Drop is refused while the table holds rows, rejected with `ENTITY_TABLE_NOT_EMPTY`, and emptiness is checked in the same transaction as the drop. Because refraq owns the entity database, emptiness is a fact it reads rather than a policy it assumes. Emptying a table is the operator's act in the entity database, not a product path.
+Dropping an **Entity Table** is a separate destructive act behind its own **Permission** (§6). It runs as a **Job** (`entity_table_drop`). While the Entity is not deprecated, drop is permitted only on a published version that is not the metadata head (the latest published version that still has a table). The head may be dropped only after the Entity is deprecated, and that drop also drops the stem view in the same entity-database transaction. Drop of the table still in service — the metadata head while the Entity is not deprecated — is `ENTITY_TABLE_IN_SERVICE`. Opening a newer unpublished version does not move the head, so the prior version remains undeletable until a successor publish stores `published`, or the Entity is deprecated. Drop is refused while the table holds rows, rejected with `ENTITY_TABLE_NOT_EMPTY`, and emptiness is checked in the same transaction as the drop. Because refraq owns the entity database, emptiness is a fact it reads rather than a policy it assumes. Emptying a table is the operator's act in the entity database, not a product path.
 
 It is refused while a **Data Channel** references any version, rejected with `ENTITY_IN_USE`.
 
@@ -203,6 +206,8 @@ Entity status is derived, not stored. It is **Deprecated** when `deprecated_at` 
 The list shows entity status and the current version's publish status. The page title shows entity status. Each version row shows that version's publish status, attribute count, created time, and latest publish Job, including after the Entity is deprecated. A row action opens a read-only view of that version's saved attributes. The overview shows the current version's publish Job and does not repeat a version status.
 
 The Console list filters by entity status. The control opens on **Not in service** and **In service** and sends that selection as `status`. The list API applies an entity-status predicate only when `status` is present.
+
+The list's table name opens the record. A row offers the same lifecycle and standard verbs as the record header, under the same gates: Publish, Open new version, Deprecate, Edit, and Delete. Open new version from the list asks for confirmation, then opens the edit route. Publish, Deprecate, and Delete ask for confirmation and leave the operator on the list. The record header is unchanged, including Open new version without a confirmation. Drop table stays on the version row.
 
 `entities` is a record authoring surface (`docs/ui-console-record-form.md`). Create, show, and edit share one layout. Identity and attributes are authored on create and, while the current version is unpublished, on edit. Show renders the same fields in display mode. Visiting edit when authoring is refused redirects to show.
 

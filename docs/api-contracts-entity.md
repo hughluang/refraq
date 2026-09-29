@@ -41,7 +41,7 @@ Each list endpoint declares its default and max `limit`. HTTP rejects out-of-ran
 | Resource | Example | Rule |
 | --- | --- | --- |
 | Business Entity | `ent_01HZX` | Opaque server-issued id |
-| Entity Version | `encv_01HZX` | Opaque server-issued id |
+| Entity Version | `0123456789abcdef` | 16 lowercase hexadecimal digits, no prefix |
 | Job | `job_01HZX` | Platform Job id (`docs/api-contracts-jobs.md`) |
 
 `table_name` is the immutable business identity. It is not an HTTP path substitute for `id`.
@@ -109,7 +109,7 @@ A config key that belongs to another type, an unknown config key, or a top-level
 
 ```json
 {
-  "id": "encv_01HZX",
+  "id": "0123456789abcdef",
   "entity_id": "ent_01HZX",
   "version": 1,
   "publish_status": "unpublished",
@@ -139,7 +139,7 @@ A config key that belongs to another type, an unknown config key, or a top-level
 
 `publish_status` is stored: `unpublished` | `publishing` | `published`. Create and open-version start `unpublished`. Publish is the only transition to `publishing` and then `published`. A failed publish Job returns the version to `unpublished`.
 
-`table_name` on a version is the current physical table of that version, derived and never stored: `null` when `table_present` is false; the Entity stem when this version is the latest published version that still has a table; `{stem}__rfq_v{version}` for an earlier published version that still has a table. Publishing a successor RENAMEs the previous live table to the archive name.
+`table_name` on a version is the physical table of that version, derived and never stored: `null` when `table_present` is false; otherwise the composed physical name. That name is the Entity stem, `__v`, the version number with no zero-padding, `__`, and the version id (16 lowercase hexadecimal digits, no prefix). Example: `material__v1__0123456789abcdef`. The application keeps the name within 63 characters by shortening the stem from the right when the suffix would not fit, and the suffix stays whole. When the stem is shortened, publish writes `COMMENT ON TABLE` set to the full stem. When the stem fits, publish writes no comment. An `encv_` prefix is not a version id and is not a physical table name. The Entity `table_name` is a view of the latest published version that still has a table. Publish creates the physical table, stores `published`, then replaces that view. The view may still point at the previous table until that replacement commits. A superseded version is not a product write target.
 
 `alignment` is derived from the stored attribute-set snapshot and the latest create Job:
 
@@ -162,7 +162,7 @@ A config key that belongs to another type, an unknown config key, or a top-level
   "deprecated_at": null,
   "ever_published": false,
   "current_version": {
-    "id": "encv_01HZX",
+    "id": "0123456789abcdef",
     "version": 1,
     "publish_status": "unpublished",
     "table_name": null,
@@ -252,7 +252,7 @@ Response: `{ "items": […], "total": N, "limit": L, "offset": O }`. Items use t
 
 Required: `table_name`, `name`, `description`, `attributes`. Any other field is `422 REQUEST_INVALID`.
 
-`table_name` is `[a-z][a-z0-9_]*`, at most **48** characters, and must not match `.*__rfq_v[0-9]+$`, so `{table_name}__rfq_v{version}` stays inside the entity-database identifier limit (63 bytes). A `table_name` outside those constraints is `ENTITY_TABLE_NAME_INVALID`. A `table_name` already registered is `ENTITY_TABLE_NAME_DUP`. `table_name` cannot change after create.
+`table_name` is `[a-z][a-z0-9_]*`, at most **63** characters, and must not match a physical table name (one or more characters, `__v`, digits, `__`, and 16 lowercase hexadecimal digits). That pattern is reserved for a version's physical table. A `table_name` outside those constraints is `ENTITY_TABLE_NAME_INVALID`. A `table_name` already registered is `ENTITY_TABLE_NAME_DUP`. `table_name` cannot change after create.
 
 `attributes` may be empty. An attribute named `row_id` is `ENTITY_ATTRIBUTE_INVALID`.
 
@@ -364,7 +364,7 @@ Success `200`: `{ "version": { … } }`.
 
 ### 5.5 `POST /entities/{id}/versions/{version_id}/publish`
 
-Publishes the current `unpublished` version: set `publishing` and enqueue `entity_reconcile` to CREATE the live stem table, RENAMEing the previous live table to `{stem}__rfq_v{previous}` when one exists.
+Publishes the current `unpublished` version: set `publishing` and enqueue `entity_reconcile` to CREATE the version's physical table, store `published`, then replace the stem view so it selects that table. The previous physical table is not renamed.
 
 Body is empty.
 
@@ -379,15 +379,15 @@ Enqueue is idempotent:
 - An in-flight create or drop Job for this version is returned as `200` with that Job. A second Job is not minted.
 - Otherwise the response is `201` `{ "job": { … } }`.
 
-A successful run writes `published`, the attribute-set snapshot, and the Job reference. A failed run returns the version to `unpublished`, rolls back or compensates the entity-database DDL (drop the new live table; rename the archived previous table back), leaves the definition in place, and records failure on the Job.
+A successful run writes `published`, the attribute-set snapshot, and the Job reference. A failed run returns the version to `unpublished` even when `published` was already stored, drops the new physical table only when it is still empty, leaves a nonempty new table in place, leaves the stem view unchanged when the replacement did not commit, leaves the definition in place, and records failure on the Job.
 
 Success envelope on the Job (`result` only when `succeeded`):
 
 ```json
 {
   "schema": "entity_reconcile.v1",
-  "entity_version_id": "encv_01HZX",
-  "table_name": "material",
+  "entity_version_id": "0123456789abcdef",
+  "table_name": "material__v1__0123456789abcdef",
   "action": "created",
   "columns_added": 1,
   "nullability_relaxed": 0,
@@ -409,7 +409,7 @@ Success envelope on the Job (`result` only when `succeeded`):
 
 The body is an empty object. The response is a platform Job in `{ "job": { … } }` using the Job shape in `docs/api-contracts-jobs.md`. Observe, logs, and cancel stay on `/jobs/{id}`. Domain enqueue does not require `jobs:run`.
 
-`input` is `{ "entity_version_id": "encv_01HZX" }`. `trigger_kind` is `user`; `trigger_ref` and `created_by` are the acting User.
+`input` is `{ "entity_version_id": "0123456789abcdef" }`. `trigger_kind` is `user`; `trigger_ref` and `created_by` are the acting User.
 
 Publish create and drop share one execution lock keyed per Entity (`entity_table:{entity_id}`), not per kind and not per version. A runner that cannot take the lock ends that Job `failed` with `JOB_ALREADY_ACTIVE`. The lock is the race backstop; it is not an HTTP 409.
 
@@ -419,7 +419,7 @@ The API and MCP processes hold no connection to the entity database. Only the wo
 
 ### 6.1 `POST /entities/{id}/versions/{version_id}/drop-table`
 
-Permitted on an archived version's table (physical name is not the Entity stem), or on the live stem table after the Entity is deprecated. The live table while the Entity is not deprecated is `422 ENTITY_VERSION_NOT_SUPERSEDED`.
+Permitted on a published version that is not the metadata head, or on the head after the Entity is deprecated. Dropping the head also drops the stem view. Dropping the table still in service — the metadata head while the Entity is not deprecated — is `422 ENTITY_TABLE_IN_SERVICE`. Opening a newer unpublished version does not take that table out of service.
 
 Enqueue is idempotent with the same in-flight rule as publish (`200` returns the in-flight Job). A version whose snapshot is already empty is `200` `{ "job": null, "version": { … } }`.
 
@@ -430,8 +430,8 @@ Success envelope:
 ```json
 {
   "schema": "entity_table_drop.v1",
-  "entity_version_id": "encv_01HZX",
-  "table_name": "material__rfq_v1"
+  "entity_version_id": "0123456789abcdef",
+  "table_name": "material__v1__0123456789abcdef"
 }
 ```
 
@@ -445,7 +445,7 @@ Kernel codes (`REQUEST_INVALID`, `AUTH_UNAUTHENTICATED`, and the other codes in 
 | --- | --- | --- |
 | `ENTITY_NOT_FOUND` | 404 | Unknown Business Entity id |
 | `ENTITY_VERSION_NOT_FOUND` | 404 | Unknown version id, or the version is not under the given entity |
-| `ENTITY_TABLE_NAME_INVALID` | 422 | `table_name` charset, length, or reserved archive suffix is outside the rule |
+| `ENTITY_TABLE_NAME_INVALID` | 422 | `table_name` charset, length, or reserved physical table name (stem, `__v`, digits, `__`, 16 lowercase hexadecimal digits) is outside the rule |
 | `ENTITY_TABLE_NAME_DUP` | 409 | `table_name` already registered |
 | `ENTITY_ATTRIBUTE_INVALID` | 422 | Attribute `name` charset, length, reserved (`row_id`), or duplicate within the version; `type` missing or outside the **Attribute Type** closed set; `config` missing, carrying another type's key, or an unknown key; `string` `max_length` outside 1–65535; `decimal` precision or scale outside the rule; enumeration shape or code lexical rule; `target_entity_id` missing, unknown, or naming a deprecated entity; or a retired top-level field (`kind`, `normalized_type`, `precision`, `scale`, `target_table_name`, `enumeration`). `detail` names the concrete rule (and the value when safe to show) |
 | `ENTITY_NOT_UNPUBLISHED` | 422 | Save or publish targeted a version that is not `unpublished` |
@@ -458,13 +458,13 @@ Kernel codes (`REQUEST_INVALID`, `AUTH_UNAUTHENTICATED`, and the other codes in 
 | `ENTITY_ALREADY_PUBLISHED` | 409 | Delete after the Entity has been published |
 | `ENTITY_REFERENCED` | 409 | Deprecate, or delete of a never-published definition, while a current version (including this entity's own) has an **Entity Reference** aimed at this entity |
 | `ENTITY_VERSION_SUPERSEDED` | 422 | Save or publish targeted a superseded version |
-| `ENTITY_VERSION_NOT_SUPERSEDED` | 422 | Table drop targeted the live stem table on a non-deprecated Entity |
+| `ENTITY_TABLE_IN_SERVICE` | 422 | Table drop targeted the table still in service: the metadata head of an Entity that is not deprecated. Opening a newer unpublished version does not take that table out of service |
 
 Job-terminal codes (successful GET of a failed Job; not Problem Details on the enqueue when the Job was minted):
 
 | Problem Code | When |
 | --- | --- |
-| `ENTITY_TABLE_NAME_CONFLICT` | Publish found the live stem or archive name already present in `REFRAQ_ENTITY_DB_SCHEMA` |
+| `ENTITY_TABLE_NAME_CONFLICT` | Publish found the physical table name or the stem view's name already present in `REFRAQ_ENTITY_DB_SCHEMA` |
 | `ENTITY_TABLE_NOT_EMPTY` | Drop found rows in the same transaction |
 | `JOB_ALREADY_ACTIVE` | Runner could not take `entity_table:{entity_id}` |
 | `JOB_WORKER_LOST` | Occupancy stale (`docs/api-contracts-jobs.md`) |

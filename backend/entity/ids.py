@@ -12,4 +12,4 @@ def new_entity_id() -> str:
 
 
 def new_version_id() -> str:
-    return f"encv_{uuid.uuid4().hex[:12]}"
+    return uuid.uuid4().hex[:16]

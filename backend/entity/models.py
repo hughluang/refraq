@@ -20,7 +20,7 @@ class BusinessEntityRow(Base):
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    table_name: Mapped[str] = mapped_column(String(48), nullable=False, index=True)
+    table_name: Mapped[str] = mapped_column(String(63), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     deprecated_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)

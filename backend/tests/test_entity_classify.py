@@ -227,7 +227,8 @@ def test_table_name_length_boundary() -> None:
     with pytest.raises(EntityTableNameInvalid):
         require_table_name("Bad")
     with pytest.raises(EntityTableNameInvalid):
-        require_table_name("material__rfq_v1")
+        require_table_name("material__v1__0123456789abcdef")
+    require_table_name("encv_0123456789ab")
 
 
 def test_row_id_is_reserved() -> None:

@@ -21,7 +21,7 @@ from backend.admin.user_store import get_user_store  # noqa: E402
 from backend.entity.classify import DefinitionShape, classify_shapes  # noqa: E402
 from backend.entity.ddl import column_sql, create_table_statements  # noqa: E402
 from backend.entity.errors import EntityAttributeInvalid  # noqa: E402
-from backend.entity.present import attribute_payload  # noqa: E402
+from backend.entity.present import attribute_payload, compose_physical_table_name  # noqa: E402
 from backend.core.time import utc_now  # noqa: E402
 from backend.entity.entity_db import entity_db_schema  # noqa: E402
 from backend.entity.ids import new_entity_id, new_version_id  # noqa: E402
@@ -747,12 +747,18 @@ def _plant_snapshot(
     )
     current_id = version_id
     if published:
-        get_entity_table_port().publish_table(
+        physical, _comment = compose_physical_table_name(table_name, 1, version_id)
+        port = get_entity_table_port()
+        port.create_physical_table(
+            entity_db_schema(),
+            physical,
+            list(attributes),
+        )
+        port.swap_stem_view(
             entity_db_schema(),
             table_name,
-            list(attributes),
-            archive_as=None,
-            archive_attributes=None,
+            physical=physical,
+            expected_target=None,
         )
     if successor is not None:
         current_id = new_version_id()

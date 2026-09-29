@@ -97,9 +97,9 @@ export function attributesFromDrafts(
 
 export const REFERENCE_SELF = "self";
 
-const TABLE_NAME_MAX_LEN = 48;
+const TABLE_NAME_MAX_LEN = 63;
 const TABLE_NAME_RE = /^[a-z][a-z0-9_]*$/;
-const ARCHIVE_TABLE_RE = /__rfq_v[0-9]+$/;
+const PHYSICAL_TABLE_RE = /^.+__v[0-9]+__[0-9a-f]{16}$/;
 
 export function isLegalTableName(value: string): boolean {
   const cleaned = value.trim();
@@ -107,7 +107,7 @@ export function isLegalTableName(value: string): boolean {
     cleaned.length > 0 &&
     cleaned.length <= TABLE_NAME_MAX_LEN &&
     TABLE_NAME_RE.test(cleaned) &&
-    !ARCHIVE_TABLE_RE.test(cleaned)
+    !PHYSICAL_TABLE_RE.test(cleaned)
   );
 }
 
