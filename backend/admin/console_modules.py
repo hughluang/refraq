@@ -226,6 +226,27 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         module_order=10,
     ),
     ConsoleModuleSeed(
+        id="dictionaries",
+        group_id="entity",
+        group_label_key="layout.navGroup.entity",
+        label_key="dictionaries.title",
+        routes=ModuleRoutes(
+            list="/console/dictionaries",
+            create="/console/dictionaries/new",
+            edit="/console/dictionaries/:id/edit",
+            show="/console/dictionaries/:id",
+        ),
+        actions=ModuleActions(
+            list="entity:read",
+            create="entity:write",
+            edit="entity:write",
+            delete="entity:write",
+            show="entity:read",
+        ),
+        group_order=26,
+        module_order=20,
+    ),
+    ConsoleModuleSeed(
         id="jobs",
         group_id="operations",
         group_label_key="layout.navGroup.operations",

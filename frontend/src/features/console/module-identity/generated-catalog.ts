@@ -199,6 +199,25 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
     }
   },
   {
+    "id": "dictionaries",
+    "label_key": "dictionaries.title",
+    "routes": {
+      "list": "/console/dictionaries",
+      "create": "/console/dictionaries/new",
+      "edit": "/console/dictionaries/:id/edit",
+      "show": "/console/dictionaries/:id",
+      "aliases": []
+    },
+    "actions": {
+      "list": "entity:read",
+      "create": "entity:write",
+      "edit": "entity:write",
+      "delete": "entity:write",
+      "show": "entity:read",
+      "sample": null
+    }
+  },
+  {
     "id": "jobs",
     "label_key": "jobs.title",
     "routes": {

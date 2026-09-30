@@ -145,6 +145,7 @@ Must not contain:
 Responsibilities:
 
 - **Business Entity** definition, **Entity Version**, and attributes
+- **Dictionary** definitions referenced by `dictionary` attributes, and the publish snapshot of active codes
 - Change classifier: a pure function of two definition shapes (`breaking` / `non_breaking` / `unchanged`); not a write gate
 - Stored publish status (`unpublished` / `publishing` / `published`) and Entity deprecate
 - Derived `table_present` from the stored attribute-set snapshot and the latest publish **Job**

@@ -15,7 +15,12 @@ ROOT = BACKEND.parent
 def _iter_py_files() -> list[Path]:
     files: list[Path] = []
     for path in BACKEND.rglob("*.py"):
-        if "alembic" in path.parts or "__pycache__" in path.parts:
+        if (
+            "alembic" in path.parts
+            or "__pycache__" in path.parts
+            or ".venv" in path.parts
+            or "venv" in path.parts
+        ):
             continue
         files.append(path)
     return files

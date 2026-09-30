@@ -13,6 +13,10 @@ from backend.entity.classify import (
     DefinitionShape,
     classify_shapes,
 )
+from backend.entity.dictionary_binding import (
+    bind_dictionary_codes,
+    require_attribute_dictionaries,
+)
 from backend.entity.errors import (
     EntityAlreadyDeprecated,
     EntityAlreadyPublished,
@@ -171,13 +175,9 @@ def create_entity(
     cleaned_table_name = require_table_name(table_name)
     cleaned_name = _require_text(name, "name")
     cleaned_description = _require_text(description, "description")
-    attrs = validate_shape(attributes=attributes)
     entity_id = new_entity_id()
-    attrs = bind_reference_self(attrs, entity_id=entity_id)
-    require_reference_targets(
-        get_entity_store(),
-        attrs,
-        entity_id=entity_id,
+    attrs = _require_writable_shape(
+        attributes, entity_id=entity_id, previous=[]
     )
     now = utc_now()
     entity = BusinessEntityRecord(
@@ -256,9 +256,8 @@ def patch_entity(
             validate_write=True,
             entity_id=entity.id,
         )
-        result = classify_shapes(
-            DefinitionShape(attributes=tuple(current.attributes)),
-            DefinitionShape(attributes=tuple(proposed.attributes)),
+        result = _classify(
+            current.attributes, proposed.attributes, versions=versions
         )
         change_class = result.change_class
         shape_changed = [attribute_to_dict(item) for item in proposed.attributes] != [
@@ -323,16 +322,14 @@ def classify_entity(
     entity = require_entity(entity_id)
     current = get_entity_store().current_version(entity_id)
     assert current is not None
+    versions = get_entity_store().list_all_versions(entity_id)
     proposed = _overlay_shape(
         current,
         attributes=attributes,
         validate_write=False,
         entity_id=entity.id,
     )
-    result = classify_shapes(
-        DefinitionShape(attributes=tuple(current.attributes)),
-        DefinitionShape(attributes=tuple(proposed.attributes)),
-    )
+    result = _classify(current.attributes, proposed.attributes, versions=versions)
     return _classification_out(result)
 
 
@@ -357,9 +354,8 @@ def patch_version(
         validate_write=True,
         entity_id=entity.id,
     )
-    result = classify_shapes(
-        DefinitionShape(attributes=tuple(version.attributes)),
-        DefinitionShape(attributes=tuple(proposed.attributes)),
+    result = _classify(
+        version.attributes, proposed.attributes, versions=versions
     )
     now = utc_now()
     updated = replace(
@@ -402,9 +398,8 @@ def open_version(
     proposed_attributes = (
         list(current.attributes) if attributes is None else list(attributes)
     )
-    result = classify_shapes(
-        DefinitionShape(attributes=tuple(current.attributes)),
-        DefinitionShape(attributes=tuple(proposed_attributes)),
+    result = _classify(
+        current.attributes, proposed_attributes, versions=versions
     )
     if result.change_class == "unchanged":
         stored_attributes = list(current.attributes)
@@ -416,9 +411,8 @@ def open_version(
             entity_id=entity.id,
         )
         stored_attributes = list(overlaid.attributes)
-        result = classify_shapes(
-            DefinitionShape(attributes=tuple(current.attributes)),
-            DefinitionShape(attributes=tuple(stored_attributes)),
+        result = _classify(
+            current.attributes, stored_attributes, versions=versions
         )
     now = utc_now()
 
@@ -530,7 +524,8 @@ def _assert_not_publishing(versions: list[EntityVersionRecord]) -> None:
 def _assert_never_published(entity_id: str) -> None:
     require_entity(entity_id)
     versions = get_entity_store().list_all_versions(entity_id)
-    if ever_published(versions) or any_publishing(versions):
+    _assert_not_publishing(versions)
+    if ever_published(versions):
         raise EntityAlreadyPublished()
 
 
@@ -551,24 +546,53 @@ def prepare_publish(entity_id: str, version_id: str) -> EntityVersionRecord:
         raise EntityPublishEmpty()
     accepted = latest_published_of(versions)
     if accepted is None or not _shape_unchanged(
-        accepted.attributes, current.attributes
+        accepted.attributes, current.attributes, versions=versions
     ):
-        _require_writable_shape(current.attributes, entity_id=entity.id)
+        _require_writable_shape(
+            current.attributes, entity_id=entity.id, previous=current.attributes
+        )
+    require_attribute_dictionaries(
+        current.attributes, previous=current.attributes
+    )
     return current
 
 
 def _shape_unchanged(
-    before: list[AttributeRecord], after: list[AttributeRecord]
+    before: list[AttributeRecord],
+    after: list[AttributeRecord],
+    *,
+    versions: list[EntityVersionRecord],
 ) -> bool:
-    result = classify_shapes(
-        DefinitionShape(attributes=tuple(before)),
-        DefinitionShape(attributes=tuple(after)),
+    return (
+        _classify(before, after, versions=versions).change_class == "unchanged"
     )
-    return result.change_class == "unchanged"
+
+
+def _classify(
+    before: list[AttributeRecord],
+    after: list[AttributeRecord],
+    *,
+    versions: list[EntityVersionRecord],
+) -> Classification:
+    return classify_shapes(
+        DefinitionShape(
+            attributes=bind_dictionary_codes(
+                tuple(before), versions=versions, use_snapshot=True
+            )
+        ),
+        DefinitionShape(
+            attributes=bind_dictionary_codes(
+                tuple(after), versions=versions, use_snapshot=False
+            )
+        ),
+    )
 
 
 def _require_writable_shape(
-    attributes: list[AttributeRecord], *, entity_id: str
+    attributes: list[AttributeRecord],
+    *,
+    entity_id: str,
+    previous: list[AttributeRecord],
 ) -> list[AttributeRecord]:
     """Apply write rules. The caller decides whether to store the result."""
     attrs = validate_shape(attributes=attributes)
@@ -578,6 +602,7 @@ def _require_writable_shape(
         attrs,
         entity_id=entity_id,
     )
+    require_attribute_dictionaries(attrs, previous=previous)
     return attrs
 
 
@@ -590,7 +615,9 @@ def _overlay_shape(
 ) -> EntityVersionRecord:
     attrs = current.attributes if attributes is None else attributes
     if validate_write:
-        attrs = _require_writable_shape(attrs, entity_id=entity_id)
+        attrs = _require_writable_shape(
+            attrs, entity_id=entity_id, previous=current.attributes
+        )
     else:
         attrs = bind_reference_self(attrs, entity_id=entity_id)
     return replace(current, attributes=list(attrs))

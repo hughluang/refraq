@@ -164,8 +164,8 @@ export function EntityRecord(props: Props) {
           attributeFieldMessage(values, path, "precision"),
         scale: (_value, values, path) =>
           attributeFieldMessage(values, path, "scale"),
-        enumeration_text: (_value, values, path) =>
-          attributeFieldMessage(values, path, "enumeration_text"),
+        dictionary_id: (_value, values, path) =>
+          attributeFieldMessage(values, path, "dictionary_id"),
         target_entity_id: (_value, values, path) =>
           attributeFieldMessage(values, path, "target_entity_id"),
       },

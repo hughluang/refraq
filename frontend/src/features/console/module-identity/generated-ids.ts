@@ -11,6 +11,7 @@ export const ModuleId = {
   businessDomains: "business-domains",
   typeMappings: "type-mappings",
   entities: "entities",
+  dictionaries: "dictionaries",
   jobs: "jobs",
   schedules: "schedules",
   settings: "settings",

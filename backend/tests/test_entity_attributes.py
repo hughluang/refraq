@@ -30,7 +30,6 @@ from backend.entity.records import (  # noqa: E402
     AttributeRecord,
     BusinessEntityRecord,
     EntityVersionRecord,
-    EnumerationEntry,
     attribute_from_dict,
     attribute_to_dict,
 )
@@ -141,20 +140,28 @@ def test_attribute_from_dict_requires_type_and_config() -> None:
 
 
 def test_malformed_enumeration_and_precision_fail_hydration() -> None:
+    ignored = attribute_from_dict(
+        {
+            "name": "status",
+            "type": "dictionary",
+            "config": {"entries": "ACTIVE"},
+        }
+    )
+    assert ignored.dictionary_id is None
+    bound = attribute_from_dict(
+        {
+            "name": "status",
+            "type": "dictionary",
+            "config": {"dictionary_id": "cl_status", "entries": [{"code": "ACTIVE"}]},
+        }
+    )
+    assert bound.dictionary_id == "cl_status"
     with pytest.raises(TypeError):
         attribute_from_dict(
             {
                 "name": "status",
-                "type": "enumeration",
-                "config": {"entries": "ACTIVE"},
-            }
-        )
-    with pytest.raises(KeyError):
-        attribute_from_dict(
-            {
-                "name": "status",
-                "type": "enumeration",
-                "config": {"entries": [{"label": "Active"}]},
+                "type": "dictionary",
+                "config": {"dictionary_id": 1},
             }
         )
     with pytest.raises(TypeError):
@@ -241,20 +248,18 @@ def test_enumeration_is_its_own_type() -> None:
         attributes=[
             AttributeRecord(
                 name="status",
-                type="enumeration",
+                type="dictionary",
                 required=True,
-                entries=(
-                    EnumerationEntry(code="ACTIVE", label="Active"),
-                    EnumerationEntry(code="DONE"),
-                ),
+                dictionary_id="cl_status",
             )
         ]
     )
-    assert [entry.code for entry in cleaned[0].entries or ()] == ["ACTIVE", "DONE"]
-    with pytest.raises(EntityAttributeInvalid, match="non-empty"):
+    assert cleaned[0].dictionary_id == "cl_status"
+    assert attribute_to_dict(cleaned[0])["config"] == {"dictionary_id": "cl_status"}
+    with pytest.raises(EntityAttributeInvalid, match="dictionary_id"):
         validate_shape(
             attributes=[
-                AttributeRecord(name="status", type="enumeration", required=False, entries=())
+                AttributeRecord(name="status", type="dictionary", required=False)
             ]
         )
     with pytest.raises(EntityAttributeInvalid, match="rejects config"):
@@ -265,7 +270,7 @@ def test_enumeration_is_its_own_type() -> None:
                     type="string",
                     required=False,
                     max_length=32,
-                    entries=(EnumerationEntry(code="x"),),
+                    dictionary_id="cl_status",
                 )
             ]
         )
@@ -288,9 +293,10 @@ def test_ddl_string_text_decimal_reference_and_enumeration() -> None:
     )
     enum_attr = AttributeRecord(
         name="status",
-        type="enumeration",
+        type="dictionary",
         required=True,
-        entries=(EnumerationEntry(code="ACTIVE", label="Active"),),
+        dictionary_id="cl_status",
+        codes=("ACTIVE",),
     )
     assert "VARCHAR(32)" in column_sql(string_attr, table="material")
     assert column_sql(text_attr, table="material").split()[1] == "TEXT"
@@ -313,9 +319,10 @@ def test_classifier_type_precision_enumeration_target() -> None:
             AttributeRecord(name="qty", type="integer", required=False),
             AttributeRecord(
                 name="status",
-                type="enumeration",
+                type="dictionary",
                 required=False,
-                entries=(EnumerationEntry(code="a", label="A"),),
+                dictionary_id="cl_status",
+                codes=("a",),
             ),
             AttributeRecord(
                 name="supplier_id",
@@ -336,9 +343,10 @@ def test_classifier_type_precision_enumeration_target() -> None:
             ),
             AttributeRecord(
                 name="status",
-                type="enumeration",
+                type="dictionary",
                 required=False,
-                entries=(EnumerationEntry(code="a", label="A"),),
+                dictionary_id="cl_status",
+                codes=("a",),
             ),
             AttributeRecord(
                 name="supplier_id",
@@ -354,12 +362,10 @@ def test_classifier_type_precision_enumeration_target() -> None:
             AttributeRecord(name="qty", type="integer", required=False),
             AttributeRecord(
                 name="status",
-                type="enumeration",
+                type="dictionary",
                 required=False,
-                entries=(
-                    EnumerationEntry(code="a", label="A"),
-                    EnumerationEntry(code="b", label="B"),
-                ),
+                dictionary_id="cl_status",
+                codes=("a", "b"),
             ),
             AttributeRecord(
                 name="supplier_id",
@@ -375,9 +381,10 @@ def test_classifier_type_precision_enumeration_target() -> None:
             AttributeRecord(name="qty", type="integer", required=False),
             AttributeRecord(
                 name="status",
-                type="enumeration",
+                type="dictionary",
                 required=False,
-                entries=(EnumerationEntry(code="a", label="A"),),
+                dictionary_id="cl_status",
+                codes=("a",),
             ),
             AttributeRecord(
                 name="supplier_id",
@@ -535,6 +542,30 @@ def test_inbound_rejects_on_write_and_forbidden_kinds(client: TestClient) -> Non
     )
     assert bad_inverse.status_code == 422
     assert bad_inverse.json()["code"] == "ENTITY_ATTRIBUTE_INVALID"
+
+
+def test_top_level_entries_is_attribute_invalid(client: TestClient) -> None:
+    created = client.post("/entities", json=_create())
+    assert created.status_code == 201, created.text
+    entity = created.json()["entity"]
+    version_id = entity["current_version"]["id"]
+    attribute = {**_value(), "entries": [{"code": "open"}]}
+
+    posted = client.post(
+        "/entities",
+        json=_create(table_name="sku_item", attributes=[attribute]),
+    )
+    assert posted.status_code == 422
+    assert posted.json()["code"] == "ENTITY_ATTRIBUTE_INVALID"
+    assert posted.json()["detail"] == "Attribute field 'entries' is not accepted"
+
+    patched = client.patch(
+        f"/entities/{entity['id']}/versions/{version_id}",
+        json={"attributes": [attribute]},
+    )
+    assert patched.status_code == 422
+    assert patched.json()["code"] == "ENTITY_ATTRIBUTE_INVALID"
+    assert patched.json()["detail"] == "Attribute field 'entries' is not accepted"
 
 
 def test_entity_referenced_blocks_deprecate_and_delete_not_publish(

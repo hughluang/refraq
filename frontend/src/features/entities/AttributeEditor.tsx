@@ -9,8 +9,8 @@ import { FieldDisplay } from "@/components/form/FieldDisplay";
 import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
 import { SwitchField } from "@/components/form/SwitchField";
-import { TextareaField } from "@/components/form/TextareaField";
 import { TextField } from "@/components/form/TextField";
+import { DictionarySelect } from "@/features/dictionaries/DictionarySelect";
 import {
   attributeConfigSummary,
   attributeDraftIssues,
@@ -191,7 +191,7 @@ export function AttributeEditor({
         scale: fact.scale,
       });
     }
-    return t("entities.attributes.config.enumeration", { count: fact.count });
+    return fact.label;
   };
 
   const draft = drawer?.draft;
@@ -248,6 +248,11 @@ export function AttributeEditor({
                   </Table.Td>
                   <Table.Td>
                     {config ? <Text size="sm">{config}</Text> : null}
+                    {attr.behind ? (
+                      <Text size="xs" c="orange">
+                        {t("entities.attributes.behind")}
+                      </Text>
+                    ) : null}
                   </Table.Td>
                   <Table.Td>
                     <Text size="sm">
@@ -405,18 +410,16 @@ export function AttributeEditor({
                 onChange={(next) => updateDraft(next)}
               />
             ) : null}
-            {draft.type === "enumeration" ? (
-              <TextareaField
+            {draft.type === "dictionary" ? (
+              <DictionarySelect
                 editable
-                required
-                minRows={4}
-                label={t("entities.fields.enumeration")}
-                description={t("entities.fields.enumerationHint")}
-                value={draft.enumeration_text}
-                onChange={(event) =>
-                  updateDraft({ enumeration_text: event.currentTarget.value })
-                }
-                error={issueMessage("enumeration_text")}
+                value={draft.dictionary_id}
+                name={draft.dictionary_name}
+                displayName={draft.dictionary_display_name}
+                deprecated={draft.dictionary_deprecated}
+                behind={draft.behind}
+                error={issueMessage("dictionary_id")}
+                onChange={(next) => updateDraft(next)}
               />
             ) : null}
             <SwitchField

@@ -104,7 +104,7 @@ def test_super_admin_sees_all_seed_modules(client: TestClient) -> None:
         "business-domains",
         "type-mappings",
     ]
-    assert [m["id"] for m in groups["entity"]["modules"]] == ["entities"]
+    assert [m["id"] for m in groups["entity"]["modules"]] == ["entities", "dictionaries"]
     assert [m["id"] for m in groups["operations"]["modules"]] == ["jobs", "schedules"]
     assert [g["id"] for g in response.json()["groups"]] == [
         "workbench",

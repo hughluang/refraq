@@ -44,7 +44,7 @@ describe("physicalColumnType", () => {
         timestamp: "TIMESTAMPTZ",
         time: "TIME",
         json: "JSONB",
-        enumeration: "VARCHAR(64)",
+        dictionary: "VARCHAR(64)",
         reference: "BIGINT",
       };
     for (const [type, column] of Object.entries(fixed)) {

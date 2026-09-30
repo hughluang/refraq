@@ -66,6 +66,7 @@ from backend.metadata.routers.sources import router as sources_router
 from backend.metadata.routers.structure_diffs import router as structure_diffs_router
 from backend.metadata.routers.type_mappings import router as type_mappings_router
 from backend.metadata.type_mappings.seeds import ensure_product_type_mappings
+from backend.entity.routers.dictionaries import router as dictionaries_router
 from backend.entity.routers.entities import router as entities_router
 from backend.worker.api import ensure_system_schedules
 from backend.worker.parameters import assemble_system_parameters
@@ -190,6 +191,7 @@ app.include_router(structure_diffs_router)
 app.include_router(metadata_query_router)
 app.include_router(metadata_mcp_router)
 app.include_router(entities_router)
+app.include_router(dictionaries_router)
 app.include_router(jobs_mechanism_router)
 app.include_router(schedules_mechanism_router)
 

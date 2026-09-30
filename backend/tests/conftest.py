@@ -42,6 +42,7 @@ from backend.metadata.source_job_runner import reset_kind_execution_locks_for_te
 from backend.metadata.sources.store import reset_source_store
 from backend.metadata.structure_diffs.store import reset_structure_diff_store
 from backend.metadata.type_mappings.store import reset_type_mapping_store
+from backend.entity.dictionaries.store import reset_dictionary_store
 from backend.entity.locks import reset_entity_table_locks_for_tests
 from backend.entity.store import reset_entity_store
 from backend.entity.table_port import reset_entity_table_port
@@ -86,6 +87,7 @@ def _reset_foundation_singletons() -> None:
     reset_type_mapping_store()
     reset_schedule_store()
     reset_entity_store()
+    reset_dictionary_store()
     reset_entity_table_port()
     reset_entity_table_locks_for_tests()
     reset_entity_engine()
@@ -117,6 +119,7 @@ def _reset_foundation_singletons() -> None:
     reset_type_mapping_store()
     reset_schedule_store()
     reset_entity_store()
+    reset_dictionary_store()
     reset_entity_table_port()
     reset_entity_table_locks_for_tests()
     reset_entity_engine()

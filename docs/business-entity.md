@@ -47,7 +47,7 @@ The definition carries no source binding, extract SQL, transform, dependency gra
 
 A version may declare no attributes while unpublished. Each attribute has one **Attribute Type** and a `config` object for that type. Attributes share one name namespace inside an **Entity Version**. There is no `kind`.
 
-The closed set is `string`, `text`, `integer`, `decimal`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, `enumeration`, and `reference`. It is not the **Normalized Type** set. Normalized Type stays the catalog column vocabulary assigned by **Type Mapping**. **Semantic Type**, a JSON Schema or OpenAPI format, a unit, a quantity, a multi-value, a file, a localized label, and `array` are not members and are not config keys. A JSON array is a value of `json`, not its own type. A unit or quantity, if added later, is a new type or a composite value, not a key of `decimal` config. A multi-value is not a cardinality on `reference` config. An enumeration is not a constraint on `string` or `integer`.
+The closed set is `string`, `text`, `integer`, `decimal`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, `dictionary`, and `reference`. It is not the **Normalized Type** set. Normalized Type stays the catalog column vocabulary assigned by **Type Mapping**. **Semantic Type**, a JSON Schema or OpenAPI format, a unit, a quantity, a multi-value, a file, a localized label, and `array` are not members and are not config keys. A JSON array is a value of `json`, not its own type. A unit or quantity, if added later, is a new type or a composite value, not a key of `decimal` config. A multi-value is not a cardinality on `reference` config. A dictionary is not a constraint on `string` or `integer`.
 
 Every attribute also declares whether it is `required`, whether it is `unique`, whether it is `indexed`, and an optional `description`. `required`, `unique`, and `indexed` default to false. A `number` attribute may be unique or indexed. It is a poor business key: the value is approximate and may be NaN.
 
@@ -57,15 +57,15 @@ Every attribute also declares whether it is `required`, whether it is `unique`, 
 
 `decimal` requires `config.precision` (an integer from 1 through 1000) and `config.scale` (an integer from 0 through `precision`). There is no default.
 
-`enumeration` is its own type. `config.entries` is a non-empty inline code list owned by that attribute. There is no shared code-list resource. Each entry has a required string `code` and an optional `label`. A code is non-empty, at most 64 characters, and case-sensitive, with no further character-set restriction. A label is at most 200 characters and is a single language. Codes are unique within the attribute. An integer code is not a second code kind. Replacing the inline list with a reference to a shared catalog would be a breaking change. A later locale map for labels must not change the column type.
+`dictionary` is its own type. `config.dictionary_id` is required and is the only config key. It names one **Dictionary** (§2.5). The attribute does not own codes. `entries` on an attribute is `ENTITY_ATTRIBUTE_INVALID`. An integer code is not a second code kind. A later locale map for labels must not change the column type. When a version read includes attributes, a `dictionary` also carries a read-only `dictionary` of `{ id, name, display_name, deprecated }`, or `null` when the id does not resolve, and `behind` (§2.5). Other attribute types omit both. Neither field is stored on the attribute or accepted on write.
 
 `reference` is an **Entity Reference**. `config.target_entity_id` is required and is the only config key. On write it is `self` or the id of an existing Business Entity that is not deprecated. `self` means the entity of the request and is replaced with that entity's id before the shape is stored. A read never returns `self`. The target may still be unpublished. The same entity may be the target. When a version read includes attributes, a `reference` also carries a read-only `target` of `{ entity_id, name, table_name }`, or `null` when the id does not resolve. Other attribute types omit `target`. `target` is not stored and is not accepted on write. `unique` means at most one row of this entity points at a given target `row_id`. The stored integer may not resolve to a live row. The product does not create a foreign key and does not cascade. Resolving the integer belongs to a **Data Channel**.
 
-A config key that belongs to another type, an unknown config key, or a top-level `kind`, `normalized_type`, `precision`, `scale`, `target_table_name`, or `enumeration` is `ENTITY_ATTRIBUTE_INVALID`.
+A config key that belongs to another type, an unknown config key, or a top-level `kind`, `normalized_type`, `precision`, `scale`, `target_table_name`, `enumeration`, or `entries` is `ENTITY_ATTRIBUTE_INVALID`.
 
 **Inbound Reference** is not an attribute. It is derived when a current version, including this entity's own and including an unpublished current version, has an Entity Reference whose `target_entity_id` is this entity's id. Historical versions do not count. The derived fact carries the referring entity's id and `table_name`, and that attribute's `name`; it has no name or description of its own. A many-to-many is an ordinary Business Entity that declares two Entity References, not a third type and not a link table.
 
-Attribute names are unique within an **Entity Version** and follow the same character set as `table_name` (lowercase ASCII letters, digits, and underscores; starts with a letter), because each attribute becomes a physical column. They are not subject to the reserved physical-table-name rule. The name `row_id` is reserved for the platform primary key (§2.4). Violations, including a missing or unknown type, a `string` without `max_length`, a `decimal` without precision or scale, an illegal enumeration, or a `target_entity_id` that is missing, unknown, or names a deprecated entity, are `ENTITY_ATTRIBUTE_INVALID`; Problem `detail` names the concrete rule.
+Attribute names are unique within an **Entity Version** and follow the same character set as `table_name` (lowercase ASCII letters, digits, and underscores; starts with a letter), because each attribute becomes a physical column. They are not subject to the reserved physical-table-name rule. The name `row_id` is reserved for the platform primary key (§2.4). Violations, including a missing or unknown type, a `string` without `max_length`, a `decimal` without precision or scale, an illegal dictionary, or a `target_entity_id` that is missing, unknown, or names a deprecated entity, are `ENTITY_ATTRIBUTE_INVALID`; Problem `detail` names the concrete rule.
 
 `unique` is a single-column UNIQUE constraint. A unique attribute may leave `required` false; Postgres treats distinct NULLs as non-conflicting. `indexed` is a non-unique btree. When `unique` is true, publish does not also create a non-unique index for that column. Composite unique constraints and composite indexes are out of scope.
 
@@ -77,6 +77,24 @@ Every **Entity Table** carries a platform column `row_id BIGINT GENERATED BY DEF
 
 The column is named `row_id` so it does not occupy `id`, which is the usual source-system primary-key name an agent maps onto an attribute. Its values are short integers so a later `RETURNING` or lineage citation is a single token rather than a UUID.
 
+### 2.5 Dictionary
+
+A **Dictionary** is the shared code set a `dictionary` attribute references. It is not an **Enum Catalog**. An Enum Catalog is evidence attached to a catalog column. A Dictionary is authored, and more than one attribute may name the same one.
+
+A Dictionary has an id, an immutable `name`, a `display_name`, an optional `description`, a `revision`, and an optional `deprecated_at`. `name` is unique, uses the `table_name` character set (lowercase ASCII letters, digits, and underscores; starts with a letter), and is at most 63 characters. `revision` starts at 1 and increases only when the set of active codes changes.
+
+Each entry has a required `code`, an optional `label`, and `active`. A code is a non-empty string of at most 64 characters and is case-sensitive, with no further character-set restriction. A label is at most 200 characters and is a single language. Codes are unique on the list. A code is not renamed. A code that has never appeared in a publish snapshot may be removed. A code that has appeared in a snapshot stays on the list and can only be deactivated. Adding, removing, activating, or deactivating a code changes the active set and increments `revision`. Changing a label, `display_name`, `description`, or order does not. A patch that omits entries does not write entry rows. Concurrent patches of one Dictionary commit one at a time: a patch that includes entries replaces the whole set, and a concurrent patch does not fail as an internal error.
+
+Deprecate sets `deprecated_at`. A deprecated Dictionary cannot be selected by a new dictionary attribute, or by an attribute whose `dictionary_id` changes. An unpublished save may keep an attribute that already names it. Deprecate does not change a published CHECK.
+
+Delete is refused while any **Entity Version** attribute names the Dictionary, or any publish snapshot names it, including a historical version and including a version whose table has been dropped (`DICTIONARY_IN_USE`). Problem `detail` names the referring entities and attributes.
+
+Publish acceptance reads each dictionary attribute's Dictionary once and freezes the active codes and whether that Dictionary is already deprecated into the Job input. A Dictionary with no active code, or an unknown `dictionary_id`, refuses acceptance (`ENTITY_ATTRIBUTE_INVALID`) and does not enqueue. Execution requires the same active code set, and refuses a Dictionary that becomes deprecated after acceptance. Either mismatch fails the Job (`ENTITY_ATTRIBUTE_INVALID`): the version returns to `unpublished` and no table is created. The CHECK and the snapshot codes are the frozen codes. The snapshot stores `dictionary_id`, the Dictionary's `revision` at execution, and those codes. A Dictionary already deprecated at acceptance may still publish when the code set is unchanged. A later edit of the Dictionary does not change the snapshot or the CHECK. The snapshot remains after the table is dropped.
+
+`behind` is true on a dictionary attribute when a publish snapshot for that attribute names its Dictionary and the snapshot `revision` is less than the Dictionary's current `revision`. The snapshot compared is the one stored on the version being read, or, when that version has none, the latest published version's snapshot for the same attribute and Dictionary. A label change does not by itself make an attribute behind, because it does not increase `revision`.
+
+The classifier compares code sets. When a published snapshot exists for the attribute, that snapshot's codes are the baseline and the active codes of the Dictionary named by the proposed attribute are the proposal. Adding codes while every snapshotted code remains is `non_breaking`. Removing a code from the active set is `breaking`. An equal set is `unchanged`, including a change that touches only labels and a switch to another Dictionary with the same codes. The change lists the added codes and the removed codes. When no snapshot exists, the baseline is the active codes of the Dictionary named by the saved attribute. The classifier does not gate save or publish.
+
 ## 3. Entity Version, Save, And Publish
 
 ### 3.1 A Version Is One Published Shape
@@ -85,7 +103,7 @@ An **Entity Version** is one shape under a Business Entity `table_name`, and it 
 
 A version stores a publish status: `unpublished`, `publishing`, or `published`. Create and **Open new version** start `unpublished`. Publish is the only act that creates that version's table. A version is published at most once. There is no product path that ALTERs a published table.
 
-A read-only classifier still reports `breaking` / `non_breaking` / `unchanged` for a proposed shape (`docs/api-contracts-entity.md` §3.4). That judgment is not a write gate. An unpublished current version may save any valid shape. Changing **Attribute Type** is breaking, including `string` to `text`, `integer` to `number`, and `integer` to `decimal`. Widening `string` `max_length` is `non_breaking` as a classifier signal and is not an ALTER of a published column. Narrowing `max_length` is breaking. Changing decimal precision or scale is breaking. For an enumeration, adding codes while every previous code remains is `non_breaking` as a classifier signal and is not an ALTER of the published CHECK. Removing or rewriting a code is breaking. Changing only labels is unchanged. Changing `target_entity_id` is breaking. Adding an attribute is non-breaking when the new attribute is not required, and breaking when it is. Removing an attribute is breaking.
+A read-only classifier still reports `breaking` / `non_breaking` / `unchanged` for a proposed shape (`docs/api-contracts-entity.md` §3.4). That judgment is not a write gate. An unpublished current version may save any valid shape. Changing **Attribute Type** is breaking, including `string` to `text`, `integer` to `number`, and `integer` to `decimal`. Widening `string` `max_length` is `non_breaking` as a classifier signal and is not an ALTER of a published column. Narrowing `max_length` is breaking. Changing decimal precision or scale is breaking. For a dictionary, the classifier compares code sets as in §2.5. Those classes are not an ALTER of the published CHECK. Changing `target_entity_id` is breaking. Adding an attribute is non-breaking when the new attribute is not required, and breaking when it is. Removing an attribute is breaking.
 
 ### 3.2 Save Writes Definition Only
 
@@ -171,7 +189,7 @@ Constraints and indexes are named from the physical table, so two versions do no
 
 ### 4.4 Attribute Type To Physical Type
 
-Each **Attribute Type** maps to one physical type in the entity database engine. That mapping is product-owned and fixed; it is not a maintainable registry and not a **System Parameter**. It differs from **Type Mapping**, which classifies many engines' native types *into* **Normalized Type**. Here there is a single target engine and no second type registry for an operator to maintain. `string` is `VARCHAR(max_length)`. `text` is `TEXT`. `integer` is `BIGINT`. `decimal` is `NUMERIC(precision, scale)`. `number` is `DOUBLE PRECISION`. `boolean`, `date`, `timestamp`, and `time` are `BOOLEAN`, `DATE`, `TIMESTAMPTZ`, and `TIME`. `json` is `JSONB`. `enumeration` is `VARCHAR(64)` plus a CHECK that non-null values are members of the code list; `required` decides whether the column is `NOT NULL`. It is not a Postgres ENUM. An **Entity Reference** is `BIGINT` and is not a foreign key. An **Inbound Reference** creates no column. Publish creates that version's empty physical table, then replaces the stem view after the version is `published`. It does not `ALTER` a published column or CHECK when the classifier reports `non_breaking` for a wider `max_length` or an added code. Publishing a successor does not rewrite `row_id` values already stored in referring tables.
+Each **Attribute Type** maps to one physical type in the entity database engine. That mapping is product-owned and fixed; it is not a maintainable registry and not a **System Parameter**. It differs from **Type Mapping**, which classifies many engines' native types *into* **Normalized Type**. Here there is a single target engine and no second type registry for an operator to maintain. `string` is `VARCHAR(max_length)`. `text` is `TEXT`. `integer` is `BIGINT`. `decimal` is `NUMERIC(precision, scale)`. `number` is `DOUBLE PRECISION`. `boolean`, `date`, `timestamp`, and `time` are `BOOLEAN`, `DATE`, `TIMESTAMPTZ`, and `TIME`. `json` is `JSONB`. `dictionary` is `VARCHAR(64)` plus a CHECK that non-null values are members of the codes snapshotted from the **Dictionary** at publish; `required` decides whether the column is `NOT NULL`. It is not a Postgres ENUM. Changing the Dictionary does not `ALTER` that CHECK. An **Entity Reference** is `BIGINT` and is not a foreign key. An **Inbound Reference** creates no column. Publish creates that version's empty physical table, then replaces the stem view after the version is `published`. It does not `ALTER` a published column or CHECK when the classifier reports `non_breaking` for a wider `max_length` or an added code. Publishing a successor does not rewrite `row_id` values already stored in referring tables.
 
 ## 5. Supersession And Disposal
 
@@ -189,15 +207,15 @@ It is refused while a **Data Channel** references any version, rejected with `EN
 
 | Permission | Grants |
 | --- | --- |
-| `entity:read` | Read Business Entity definitions, versions, and attributes |
-| `entity:write` | Create and save unpublished definitions, publish, open versions, deprecate, and delete a never-published definition |
+| `entity:read` | Read Business Entity definitions, versions, and attributes, and read **Dictionaries** |
+| `entity:write` | Create and save unpublished definitions, publish, open versions, deprecate, and delete a never-published definition; create, update, and delete **Dictionaries** |
 | `entity:drop_table` | Enqueue an **Entity Table** drop (§5) |
 
 `entity:drop_table` is in the Permission catalog and is not seeded onto the `operator` **Role**. It is not implied by `entity:write`.
 
 ## 7. Management Console
 
-Business Entity management mounts as Console module `entities` under nav group `entity`. It is not mounted under the `metadata` nav group, which covers Sources, catalog browsing, Business Domains, and Type Mappings.
+Business Entity management mounts as Console module `entities` under nav group `entity`. **Dictionary** management mounts as Console module `dictionaries` in that same group. Neither is mounted under the `metadata` nav group, which covers Sources, catalog browsing, Business Domains, and Type Mappings.
 
 The Console presents definitions, versions with stored publish status, and attributes. Entity status and version publish status are different facts. Each fact appears once on a screen.
 
@@ -223,7 +241,7 @@ Where a **Data Channel** module mounts is out of scope for this document.
 
 ## 8. Management Audit
 
-Persist a **Management Audit Event** for: Business Entity create, definition save, version open, publish enqueue, deprecate, definition delete, and table drop enqueue. Each event records actor, **Instant**, resource, action, and result.
+Persist a **Management Audit Event** for: Business Entity create, definition save, version open, publish enqueue, deprecate, definition delete, and table drop enqueue; and for **Dictionary** create, update, and delete. Each event records actor, **Instant**, resource, action, and result.
 
 ## 9. Non-Goals
 
@@ -242,7 +260,7 @@ Persist a **Management Audit Event** for: Business Entity create, definition sav
 13. **Semantic Type**, or a JSON Schema or OpenAPI format, as an **Attribute Type**.
 14. A unit or quantity on a `decimal` attribute. A later quantity is a new type or a composite value, not a `decimal` config key.
 15. A multi-value attribute, including a cardinality on `reference` config. A many-to-many stays two **Entity Reference**s on an ordinary Business Entity.
-16. An enumeration as a constraint on a `string` or `integer` attribute, a shared code-list resource, or an integer code kind.
+16. A dictionary as a constraint on a `string` or `integer` attribute, or an integer code kind.
 
 ## 10. References
 

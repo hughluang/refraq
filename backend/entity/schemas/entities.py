@@ -20,6 +20,7 @@ _RETIRED_ATTRIBUTE_FIELDS = (
     "target_table_name",
     "enumeration",
     "inverse_attribute",
+    "entries",
 )
 
 
@@ -80,6 +81,13 @@ class ReferenceTargetOut(BaseModel):
     table_name: str
 
 
+class DictionaryRefOut(BaseModel):
+    id: str
+    name: str
+    display_name: str
+    deprecated: bool
+
+
 class AttributeOut(BaseModel):
     name: str
     type: str
@@ -89,12 +97,17 @@ class AttributeOut(BaseModel):
     description: str | None = None
     config: dict[str, Any]
     target: ReferenceTargetOut | None = None
+    dictionary: DictionaryRefOut | None = None
+    behind: bool | None = None
 
     @model_serializer(mode="wrap")
-    def _omit_target_unless_reference(self, handler: Any) -> dict[str, Any]:
+    def _omit_type_specific(self, handler: Any) -> dict[str, Any]:
         data = handler(self)
         if data.get("type") != "reference":
             data.pop("target", None)
+        if data.get("type") != "dictionary":
+            data.pop("dictionary", None)
+            data.pop("behind", None)
         return data
 
 

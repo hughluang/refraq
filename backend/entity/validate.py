@@ -11,7 +11,7 @@ from backend.entity.errors import (
     EntityTableNameInvalid,
 )
 from backend.entity.lifecycle import is_deprecated
-from backend.entity.records import AttributeRecord, EnumerationEntry
+from backend.entity.records import AttributeRecord
 from backend.entity.store import EntityStore
 
 IDENT_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -20,8 +20,6 @@ TABLE_NAME_MAX_LEN = 63
 ATTRIBUTE_NAME_MAX_LEN = 63
 STRING_MAX_LENGTH_MIN = 1
 STRING_MAX_LENGTH_MAX = 65535
-ENUM_CODE_MAX_LEN = 64
-ENUM_LABEL_MAX_LEN = 200
 DECIMAL_PRECISION_MIN = 1
 DECIMAL_PRECISION_MAX = 1000
 
@@ -37,7 +35,7 @@ ATTRIBUTE_TYPES = frozenset(
         "timestamp",
         "time",
         "json",
-        "enumeration",
+        "dictionary",
         "reference",
     }
 )
@@ -52,7 +50,7 @@ CONFIG_KEYS: dict[str, frozenset[str]] = {
     "timestamp": frozenset(),
     "time": frozenset(),
     "json": frozenset(),
-    "enumeration": frozenset({"entries"}),
+    "dictionary": frozenset({"dictionary_id"}),
     "reference": frozenset({"target_entity_id"}),
 }
 
@@ -155,14 +153,18 @@ def _validate_attribute(
             precision=precision,
             scale=scale,
         )
-    if attribute_type == "enumeration":
-        entries = _require_entries(name=name, entries=attr.entries)
+    if attribute_type == "dictionary":
+        dictionary_id = (attr.dictionary_id or "").strip()
+        if not dictionary_id:
+            raise EntityAttributeInvalid(
+                f"Attribute '{name}' of type dictionary requires dictionary_id"
+            )
         return _base(
             attr,
             name=name,
             attribute_type=attribute_type,
             description=description,
-            entries=entries,
+            dictionary_id=dictionary_id,
         )
     if attribute_type == "reference":
         target = (attr.target_entity_id or "").strip()
@@ -189,7 +191,7 @@ def _base(
     max_length: int | None = None,
     precision: int | None = None,
     scale: int | None = None,
-    entries: tuple[EnumerationEntry, ...] | None = None,
+    dictionary_id: str | None = None,
     target_entity_id: str | None = None,
 ) -> AttributeRecord:
     return AttributeRecord(
@@ -202,7 +204,7 @@ def _base(
         max_length=max_length,
         precision=precision,
         scale=scale,
-        entries=entries,
+        dictionary_id=dictionary_id,
         target_entity_id=target_entity_id,
     )
 
@@ -217,8 +219,8 @@ def _reject_foreign_config(
         present.append("precision")
     if attr.scale is not None:
         present.append("scale")
-    if attr.entries is not None:
-        present.append("entries")
+    if attr.dictionary_id is not None:
+        present.append("dictionary_id")
     if attr.target_entity_id is not None:
         present.append("target_entity_id")
     allowed = CONFIG_KEYS[attribute_type]
@@ -315,57 +317,6 @@ def _require_precision_scale(
             f" (got {scale})"
         )
     return precision, scale
-
-
-def _require_entries(
-    *,
-    name: str,
-    entries: tuple[EnumerationEntry, ...] | None,
-) -> tuple[EnumerationEntry, ...]:
-    if entries is None or len(entries) == 0:
-        raise EntityAttributeInvalid(
-            f"Attribute '{name}' enumeration must be a non-empty list"
-        )
-    seen_codes: set[str] = set()
-    cleaned: list[EnumerationEntry] = []
-    for entry in entries:
-        code = _validate_enum_code(name=name, code=entry.code)
-        if code in seen_codes:
-            raise EntityAttributeInvalid(
-                f"Attribute '{name}' enumeration code '{code}' is duplicated"
-            )
-        seen_codes.add(code)
-        label = _validate_enum_label(name=name, label=entry.label)
-        cleaned.append(EnumerationEntry(code=code, label=label))
-    return tuple(cleaned)
-
-
-def _validate_enum_code(*, name: str, code: str) -> str:
-    if not isinstance(code, str):
-        raise EntityAttributeInvalid(
-            f"Attribute '{name}' enumeration code must be a string"
-        )
-    if not code or len(code) > ENUM_CODE_MAX_LEN:
-        raise EntityAttributeInvalid(
-            f"Attribute '{name}' enumeration code must be non-empty and"
-            f" at most {ENUM_CODE_MAX_LEN} characters"
-        )
-    return code
-
-
-def _validate_enum_label(*, name: str, label: str | None) -> str | None:
-    if label is None:
-        return None
-    if not isinstance(label, str):
-        raise EntityAttributeInvalid(
-            f"Attribute '{name}' enumeration label must be a string"
-        )
-    if len(label) > ENUM_LABEL_MAX_LEN:
-        raise EntityAttributeInvalid(
-            f"Attribute '{name}' enumeration label must be at most"
-            f" {ENUM_LABEL_MAX_LEN} characters"
-        )
-    return label
 
 
 def _clean_description(description: str | None) -> str | None:

@@ -3,22 +3,19 @@ import {
   attributeNameError,
   type AttributeNameErrorReason,
 } from "@/features/entities/attributeNameValidation";
-import { enumerationEntriesFromText } from "@/features/entities/entityPresentation";
 import type { AttributeDraft } from "@/features/entities/types";
 
 export const STRING_MAX_LENGTH_MIN = 1;
 export const STRING_MAX_LENGTH_MAX = 65535;
 export const DECIMAL_PRECISION_MIN = 1;
 export const DECIMAL_PRECISION_MAX = 1000;
-export const ENUM_CODE_MAX_LEN = 64;
-export const ENUM_LABEL_MAX_LEN = 200;
 
 export type AttributeIssueField =
   | "name"
   | "max_length"
   | "precision"
   | "scale"
-  | "enumeration_text"
+  | "dictionary_id"
   | "target_entity_id";
 
 export type AttributeIssue = {
@@ -128,48 +125,14 @@ function decimalIssues(draft: AttributeDraft): AttributeIssue[] {
   return issues;
 }
 
-function enumerationIssues(draft: AttributeDraft): AttributeIssue[] {
-  const entries = enumerationEntriesFromText(draft.enumeration_text);
-  if (!entries || entries.length === 0) {
-    return [
-      {
-        field: "enumeration_text",
-        key: "entities.validation.attribute.enumerationRequired",
-      },
-    ];
-  }
-  const seen = new Set<string>();
-  for (const entry of entries) {
-    if (!entry.code || entry.code.length > ENUM_CODE_MAX_LEN) {
-      return [
-        {
-          field: "enumeration_text",
-          key: "entities.validation.attribute.enumerationCode",
-          values: { max: ENUM_CODE_MAX_LEN },
-        },
-      ];
-    }
-    if (seen.has(entry.code)) {
-      return [
-        {
-          field: "enumeration_text",
-          key: "entities.validation.attribute.enumerationDuplicate",
-          values: { code: entry.code },
-        },
-      ];
-    }
-    seen.add(entry.code);
-    if (entry.label != null && entry.label.length > ENUM_LABEL_MAX_LEN) {
-      return [
-        {
-          field: "enumeration_text",
-          key: "entities.validation.attribute.enumerationLabel",
-          values: { max: ENUM_LABEL_MAX_LEN },
-        },
-      ];
-    }
-  }
-  return [];
+function dictionaryIssues(draft: AttributeDraft): AttributeIssue[] {
+  if (draft.dictionary_id.trim() !== "") return [];
+  return [
+    {
+      field: "dictionary_id",
+      key: "entities.validation.attribute.dictionaryRequired",
+    },
+  ];
 }
 
 function referenceIssues(draft: AttributeDraft): AttributeIssue[] {
@@ -192,7 +155,7 @@ export function attributeDraftIssues(
   if (name) issues.push(name);
   if (draft.type === "string") issues.push(...stringIssues(draft));
   if (draft.type === "decimal") issues.push(...decimalIssues(draft));
-  if (draft.type === "enumeration") issues.push(...enumerationIssues(draft));
+  if (draft.type === "dictionary") issues.push(...dictionaryIssues(draft));
   if (draft.type === "reference") issues.push(...referenceIssues(draft));
   return issues;
 }
@@ -200,7 +163,7 @@ export function attributeDraftIssues(
 export type AttributeConfigFact =
   | { kind: "max_length"; value: string }
   | { kind: "decimal"; precision: string; scale: string }
-  | { kind: "enumeration"; count: number };
+  | { kind: "dictionary"; label: string };
 
 /** Type configuration for the attribute list. Null when the type has no config, or the config is blank. */
 export function attributeConfigSummary(
@@ -216,10 +179,13 @@ export function attributeConfigSummary(
     if (!precision || !scale) return null;
     return { kind: "decimal", precision, scale };
   }
-  if (draft.type === "enumeration") {
-    const entries = enumerationEntriesFromText(draft.enumeration_text);
-    if (!entries || entries.length === 0) return null;
-    return { kind: "enumeration", count: entries.length };
+  if (draft.type === "dictionary") {
+    const label =
+      draft.dictionary_display_name.trim() ||
+      draft.dictionary_name.trim() ||
+      draft.dictionary_id.trim();
+    if (!label) return null;
+    return { kind: "dictionary", label };
   }
   return null;
 }

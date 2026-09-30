@@ -5,6 +5,11 @@ from __future__ import annotations
 from backend.core.errors import AppError
 
 __all__ = [
+    "DictionaryDeprecated",
+    "DictionaryInUse",
+    "DictionaryInvalid",
+    "DictionaryNameDup",
+    "DictionaryNotFound",
     "EntityAlreadyDeprecated",
     "EntityAlreadyPublished",
     "EntityAttributeInvalid",
@@ -24,6 +29,46 @@ __all__ = [
     "EntityVersionNotFound",
     "EntityVersionSuperseded",
 ]
+
+
+class DictionaryNotFound(AppError):
+    code = "DICTIONARY_NOT_FOUND"
+    http_status = 404
+
+    def _default_message(self) -> str:
+        return "Dictionary not found"
+
+
+class DictionaryNameDup(AppError):
+    code = "DICTIONARY_NAME_DUP"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Dictionary name already exists"
+
+
+class DictionaryInvalid(AppError):
+    code = "DICTIONARY_INVALID"
+    http_status = 422
+
+    def _default_message(self) -> str:
+        return "Dictionary definition is invalid"
+
+
+class DictionaryInUse(AppError):
+    code = "DICTIONARY_IN_USE"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Dictionary is referenced and cannot be deleted"
+
+
+class DictionaryDeprecated(AppError):
+    code = "DICTIONARY_DEPRECATED"
+    http_status = 422
+
+    def _default_message(self) -> str:
+        return "A deprecated Dictionary cannot be newly selected"
 
 
 class EntityRequestInvalid(AppError):

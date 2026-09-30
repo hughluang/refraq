@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-__all__ = ["new_entity_id", "new_version_id"]
+__all__ = ["new_dictionary_id", "new_entity_id", "new_version_id"]
 
 
 def new_entity_id() -> str:
@@ -13,3 +13,7 @@ def new_entity_id() -> str:
 
 def new_version_id() -> str:
     return uuid.uuid4().hex[:16]
+
+
+def new_dictionary_id() -> str:
+    return f"dct_{uuid.uuid4().hex[:12]}"

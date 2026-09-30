@@ -61,28 +61,16 @@ describe("attributeDraftIssues", () => {
     ).toEqual([]);
   });
 
-  it("requires enumeration codes and rejects duplicates", () => {
+  it("requires a code list on an enumeration attribute", () => {
     expect(
-      fields(draft({ name: "status", type: "enumeration" }), ["status"]),
-    ).toEqual(["enumeration_text"]);
-    const duplicate = attributeDraftIssues(
-      draft({
-        name: "status",
-        type: "enumeration",
-        enumeration_text: "A\nA",
-      }),
-      ["status"],
-    );
-    expect(duplicate.map((issue) => issue.field)).toEqual(["enumeration_text"]);
-    expect(duplicate[0]?.key).toBe(
-      "entities.validation.attribute.enumerationDuplicate",
-    );
+      fields(draft({ name: "status", type: "dictionary" }), ["status"]),
+    ).toEqual(["dictionary_id"]);
     expect(
       fields(
         draft({
           name: "status",
-          type: "enumeration",
-          enumeration_text: "ACTIVE|Active\nDONE",
+          type: "dictionary",
+          dictionary_id: "cl_status",
         }),
         ["status"],
       ),
@@ -112,9 +100,17 @@ describe("attributeConfigSummary", () => {
     ).toEqual({ kind: "decimal", precision: "10", scale: "2" });
     expect(
       attributeConfigSummary(
-        draft({ type: "enumeration", enumeration_text: "A\nB\nC" }),
+        draft({
+          type: "dictionary",
+          dictionary_id: "cl_status",
+          dictionary_display_name: "Order status",
+          behind: true,
+        }),
       ),
-    ).toEqual({ kind: "enumeration", count: 3 });
+    ).toEqual({
+      kind: "dictionary",
+      label: "Order status",
+    });
     expect(
       attributeConfigSummary(
         draft({ type: "reference", target_entity_id: "ent_supplier" }),

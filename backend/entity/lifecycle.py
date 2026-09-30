@@ -29,6 +29,15 @@ def ever_published(versions: list[EntityVersionRecord]) -> bool:
     return any(item.publish_status == PUBLISHED for item in versions)
 
 
+def latest_published_of(
+    versions: list[EntityVersionRecord],
+) -> EntityVersionRecord | None:
+    published = [item for item in versions if item.publish_status == PUBLISHED]
+    if not published:
+        return None
+    return max(published, key=lambda item: (item.version, item.id))
+
+
 def entity_list_status(
     entity: BusinessEntityRecord, versions: list[EntityVersionRecord]
 ) -> EntityListStatus:

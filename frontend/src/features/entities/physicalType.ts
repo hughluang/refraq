@@ -16,7 +16,7 @@ const FIXED_COLUMN_TYPE: Record<
   timestamp: "TIMESTAMPTZ",
   time: "TIME",
   json: "JSONB",
-  enumeration: "VARCHAR(64)",
+  dictionary: "VARCHAR(64)",
   reference: "BIGINT",
 };
 

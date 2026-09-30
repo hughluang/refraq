@@ -3,34 +3,7 @@ import type {
   AttributeDraft,
   EntityAttribute,
   EntityVersion,
-  EnumerationEntry,
 } from "@/features/entities/types";
-
-function enumerationToText(
-  entries: EnumerationEntry[] | null | undefined,
-): string {
-  if (!entries || entries.length === 0) return "";
-  return entries
-    .map((entry) =>
-      entry.label == null ? entry.code : `${entry.code}|${entry.label}`,
-    )
-    .join("\n");
-}
-
-export function enumerationEntriesFromText(
-  text: string,
-): EnumerationEntry[] | null {
-  const lines = text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line !== "");
-  if (lines.length === 0) return null;
-  return lines.map((line) => {
-    const sep = line.indexOf("|");
-    if (sep < 0) return { code: line };
-    return { code: line.slice(0, sep), label: line.slice(sep + 1) };
-  });
-}
 
 function parsedInt(value: string): number | undefined {
   if (value.trim() === "") return undefined;
@@ -51,8 +24,8 @@ function configFromDraft(item: AttributeDraft): AttributeConfig {
       ...(scale == null ? {} : { scale }),
     };
   }
-  if (item.type === "enumeration") {
-    return { entries: enumerationEntriesFromText(item.enumeration_text) ?? [] };
+  if (item.type === "dictionary") {
+    return { dictionary_id: item.dictionary_id.trim() };
   }
   if (item.type === "reference") {
     return { target_entity_id: item.target_entity_id.trim() };
@@ -73,7 +46,11 @@ export function draftsFromVersion(version: EntityVersion): AttributeDraft[] {
       max_length: config.max_length != null ? String(config.max_length) : "",
       precision: config.precision != null ? String(config.precision) : "",
       scale: config.scale != null ? String(config.scale) : "",
-      enumeration_text: enumerationToText(config.entries),
+      dictionary_id: config.dictionary_id ?? "",
+      dictionary_name: item.dictionary?.name ?? "",
+      dictionary_display_name: item.dictionary?.display_name ?? "",
+      dictionary_deprecated: item.dictionary?.deprecated ?? false,
+      behind: item.behind ?? false,
       target_entity_id: config.target_entity_id ?? "",
       target_name: item.target?.name ?? "",
       target_table_name: item.target?.table_name ?? "",

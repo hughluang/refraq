@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.entity.lifecycle import PUBLISHED, ever_published
+from backend.entity.dictionaries.store import get_dictionary_store
+from backend.entity.dictionary_binding import relevant_snapshot
+from backend.entity.lifecycle import ever_published, latest_published_of
 from backend.entity.records import (
     AttributeRecord,
     BusinessEntityRecord,
@@ -32,15 +34,6 @@ _IDENT_MAX = 63
 
 def table_present(version: EntityVersionRecord) -> bool:
     return bool(version.materialized_attributes)
-
-
-def latest_published_of(
-    versions: list[EntityVersionRecord],
-) -> EntityVersionRecord | None:
-    published = [item for item in versions if item.publish_status == PUBLISHED]
-    if not published:
-        return None
-    return max(published, key=lambda item: (item.version, item.id))
 
 
 def compose_physical_table_name(
@@ -119,13 +112,46 @@ def inbound_references_for(
     return found
 
 
-def attribute_payload(store: EntityStore, attr: AttributeRecord) -> dict[str, Any]:
-    """Stored attribute shape, plus a read-only ``target`` on references."""
+def attribute_payload(
+    store: EntityStore,
+    attr: AttributeRecord,
+    *,
+    version: EntityVersionRecord | None = None,
+) -> dict[str, Any]:
+    """Stored attribute shape, plus read-only reference and dictionary fields."""
     payload = attribute_to_dict(attr)
-    if attr.type != "reference":
-        return payload
-    payload["target"] = _reference_target(store, attr.target_entity_id)
+    if attr.type == "reference":
+        payload["target"] = _reference_target(store, attr.target_entity_id)
+    if attr.type == "dictionary":
+        payload.update(_dictionary_read(store, attr, version))
     return payload
+
+
+def _dictionary_read(
+    store: EntityStore,
+    attr: AttributeRecord,
+    version: EntityVersionRecord | None,
+) -> dict[str, Any]:
+    linked = None
+    revision: int | None = None
+    found = get_dictionary_store().get(attr.dictionary_id or "")
+    if found is not None:
+        linked = {
+            "id": found.id,
+            "name": found.name,
+            "display_name": found.display_name,
+            "deprecated": found.deprecated_at is not None,
+        }
+        revision = found.revision
+    behind = False
+    if version is not None and revision is not None and attr.dictionary_id:
+        versions = store.list_all_versions(version.entity_id)
+        snapshot = relevant_snapshot(
+            versions, version, attr.name, attr.dictionary_id
+        )
+        if snapshot is not None:
+            behind = int(snapshot.get("revision") or 0) < revision
+    return {"dictionary": linked, "behind": behind}
 
 
 def _reference_target(
@@ -195,7 +221,8 @@ def version_out(
     if include_attributes:
         store = get_entity_store()
         payload["attributes"] = [
-            attribute_payload(store, attr) for attr in version.attributes
+            attribute_payload(store, attr, version=version)
+            for attr in version.attributes
         ]
     else:
         payload["attribute_count"] = len(version.attributes)

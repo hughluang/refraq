@@ -65,16 +65,19 @@ Each list endpoint declares its default and max `limit`. HTTP rejects out-of-ran
 ```json
 {
   "name": "status",
-  "type": "enumeration",
+  "type": "dictionary",
   "required": true,
   "unique": false,
   "indexed": false,
   "description": null,
-  "config": {
-    "entries": [
-      { "code": "ACTIVE", "label": "Active" }
-    ]
-  }
+  "config": { "dictionary_id": "dct_01HZX" },
+  "dictionary": {
+    "id": "dct_01HZX",
+    "name": "order_status",
+    "display_name": "Order status",
+    "deprecated": false
+  },
+  "behind": false
 }
 ```
 
@@ -95,11 +98,11 @@ Each list endpoint declares its default and max `limit`. HTTP rejects out-of-ran
 }
 ```
 
-`type` is required and is one **Attribute Type**: `string`, `text`, `integer`, `decimal`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, `enumeration`, or `reference`. Any other type, including `many2one`, `one2many`, and `array`, is `ENTITY_ATTRIBUTE_INVALID`. `inverse_attribute` is not a field. `kind` is not a field.
+`type` is required and is one **Attribute Type**: `string`, `text`, `integer`, `decimal`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, `dictionary`, or `reference`. Any other type, including `many2one`, `one2many`, and `array`, is `ENTITY_ATTRIBUTE_INVALID`. `inverse_attribute` is not a field. `kind` is not a field.
 
-`config` is a required object. `string` requires `max_length`, an integer from 1 through 65535, and no other key. `text`, `integer`, `number`, `boolean`, `date`, `timestamp`, `time`, and `json` require `{}`. `json` is a JSON document, including a JSON array, with no schema, path, or format key. The published column is `JSONB`. `decimal` requires `precision` (1–1000) and `scale` (0–`precision`) and no other key. `enumeration` requires `entries`, a non-empty array of `{ "code", "label"? }`, and no other key. A `code` is a non-empty string of at most 64 characters and is case-sensitive. `label`, when present, is at most 200 characters. Codes are unique within the attribute. `reference` requires `target_entity_id` and no other key. On write, `target_entity_id` is `self` or the id of an existing Business Entity that is not deprecated. `self` means the entity of this request. Create allocates that id and replaces `self` before the entity is stored. Save and classify replace `self` with the entity id in the path. The stored value is always that entity's id. A read never returns `self`. The target may be unpublished, and it may be this entity. A version read that includes attributes adds `target` on a `reference` attribute only: `{ "entity_id", "name", "table_name" }` when the id names an entity, otherwise `null`. Other attribute types omit `target`. `target` is not stored and is rejected on write as an extra field. The example above is a read. Writers omit `target` and may send `"target_entity_id": "self"`. The published column is `BIGINT` and stores the target live table's `row_id`. The contract does not create a foreign key. A stored `row_id` may not resolve.
+`config` is a required object. `string` requires `max_length`, an integer from 1 through 65535, and no other key. `text`, `integer`, `number`, `boolean`, `date`, `timestamp`, `time`, and `json` require `{}`. `json` is a JSON document, including a JSON array, with no schema, path, or format key. The published column is `JSONB`. `decimal` requires `precision` (1–1000) and `scale` (0–`precision`) and no other key. `dictionary` requires `dictionary_id`, the id of an existing **Dictionary**, and no other key (§3.5). `entries` is rejected. A version read that includes attributes adds `dictionary` and `behind` on a `dictionary` attribute only. `dictionary` is `{ "id", "name", "display_name", "deprecated" }` when the id names a Dictionary, otherwise `null`. `behind` is a boolean (§3.5). Other attribute types omit both. Neither is stored on the attribute or accepted on write. `reference` requires `target_entity_id` and no other key. On write, `target_entity_id` is `self` or the id of an existing Business Entity that is not deprecated. `self` means the entity of this request. Create allocates that id and replaces `self` before the entity is stored. Save and classify replace `self` with the entity id in the path. The stored value is always that entity's id. A read never returns `self`. The target may be unpublished, and it may be this entity. A version read that includes attributes adds `target` on a `reference` attribute only: `{ "entity_id", "name", "table_name" }` when the id names an entity, otherwise `null`. Other attribute types omit `target`. `target` is not stored and is rejected on write as an extra field. The example above is a read. Writers omit `target` and may send `"target_entity_id": "self"`. The published column is `BIGINT` and stores the target live table's `row_id`. The contract does not create a foreign key. A stored `row_id` may not resolve.
 
-A config key that belongs to another type, an unknown config key, or a top-level `kind`, `normalized_type`, `precision`, `scale`, `target_table_name`, or `enumeration` is `ENTITY_ATTRIBUTE_INVALID`.
+A config key that belongs to another type, an unknown config key, or a top-level `kind`, `normalized_type`, `precision`, `scale`, `target_table_name`, `enumeration`, or `entries` is `ENTITY_ATTRIBUTE_INVALID`.
 
 `required`, `unique`, and `indexed` default to `false` when omitted. `unique` is a single-column UNIQUE constraint. `indexed` is a non-unique btree; when `unique` is true, publish does not also create a non-unique index for that column. On a reference, `unique` means at most one row points at a given target `row_id`. A `number` attribute may be unique or indexed; it is a poor business key because the value is approximate and may be NaN.
 
@@ -201,11 +204,41 @@ List items use this shape. Entity detail (`GET /entities/{id}`) adds `inbound_re
 
 `class` is the roll-up of `changes`: `breaking` if any change is breaking, else `non_breaking` if any change is non-breaking, else `unchanged`. An empty `changes` array is `unchanged`.
 
-The classifier is a pure function of two attribute sets. It is a read tool. It does not gate save or publish. **Inbound Reference**s are not an input.
+The classifier is a pure function of two resolved attribute sets. Dictionary codes are resolved first: a published snapshot supplies the baseline when one exists, and the named **Dictionary** supplies the active codes. It is a read tool. It does not gate save or publish. **Inbound Reference**s are not an input.
 
 Compared as today: adding an attribute is `non_breaking` when the added attribute is not required and `breaking` when it is; removing an attribute is `breaking`; changing `required` from false to true is `breaking` and from true to false is `non_breaking`; `unique` and `indexed` changes are `non_breaking`; a description change is `unchanged`. An **Attribute Type** change is `breaking`, including `string` to `text`, `integer` to `number`, and `integer` to `decimal`. There is no `unknown` promotion.
 
-Widening `config.max_length` on `string` is `non_breaking`. Narrowing it is `breaking`. Those classes are not an `ALTER` of a published column. A change of `precision` or `scale` is `breaking`. Adding enumeration codes while every previous code remains is `non_breaking`. Removing or rewriting a code is `breaking`. A change that touches only `label` values is `unchanged`. Those enumeration classes are not an `ALTER` of a published CHECK. A change of `target_entity_id` is `breaking`.
+Widening `config.max_length` on `string` is `non_breaking`. Narrowing it is `breaking`. Those classes are not an `ALTER` of a published column. A change of `precision` or `scale` is `breaking`. For a dictionary, the baseline is the last published snapshot's codes when one exists for that attribute, otherwise the active codes of the Dictionary named by the saved attribute. The proposal is the active codes of the Dictionary named by the proposed attribute. Additions only are `non_breaking`. A code that leaves the active set is `breaking`. An equal set is `unchanged`, including a label-only change and a switch to another Dictionary with the same codes. The dictionary change's `new_value` carries `added` and `removed` code arrays. Those classes are not an `ALTER` of a published CHECK. A change of `target_entity_id` is `breaking`.
+
+### 3.5 Dictionary
+
+```json
+{
+  "id": "dct_01HZX",
+  "name": "order_status",
+  "display_name": "Order status",
+  "description": null,
+  "revision": 1,
+  "deprecated_at": null,
+  "entry_count": 1,
+  "entries": [
+    { "code": "open", "label": "Open", "active": true }
+  ],
+  "usages": [],
+  "created_at": "2026-09-29T00:00:00Z",
+  "updated_at": "2026-09-29T00:00:00Z"
+}
+```
+
+`name` is required on create, immutable, unique, and uses the `table_name` character set at a length of at most 63. `display_name` is required and at most 256 characters. `description` is optional. `revision` starts at 1 and increases only when the set of active codes changes. `deprecated_at` is an **Instant** after deprecate, otherwise `null`.
+
+`entries` is required on create and is a non-empty array. Each entry has a required `code`, an optional `label`, and `active` (default `true`). A code is a non-empty string of at most 64 characters and is case-sensitive. A label is at most 200 characters. Codes are unique on the list. A code cannot be renamed. Omitting a code that has appeared in any publish snapshot is `DICTIONARY_INVALID`. Omitting a code that has never been snapshotted removes it. `active: false` deactivates a code and does not remove it. Replacing labels, `display_name`, `description`, or order leaves `revision` unchanged.
+
+List items omit `entries` and `usages`. A single-resource read includes both. A usage is `{ "entity_id", "entity_name", "table_name", "attribute_name", "version_id", "version", "publish_status", "behind" }`, ordered by `table_name`, then `version`, then `attribute_name`. `behind` is true when that version's snapshot for the attribute names this Dictionary and the snapshot `revision` is less than the current `revision`.
+
+A dictionary attribute read adds `dictionary` and `behind` as in §3.1. `behind` uses the snapshot on the version being read when that snapshot names the attribute's Dictionary. When the version has no snapshot, it uses the latest published version's snapshot for the same attribute and Dictionary.
+
+Publish acceptance freezes the active codes and whether the Dictionary is already deprecated. Execution copies those frozen codes into the version snapshot and into the CHECK. The snapshot `revision` is the Dictionary's revision at execution. A Dictionary with no active code, or an unknown `dictionary_id`, makes acceptance `ENTITY_ATTRIBUTE_INVALID` and does not enqueue. A different active code set at execution, or a Dictionary deprecated after acceptance, fails the Job with `ENTITY_ATTRIBUTE_INVALID`. Choosing a deprecated Dictionary for a new dictionary attribute, or changing an attribute's `dictionary_id` to a deprecated Dictionary, is `DICTIONARY_DEPRECATED`. Saving an attribute that already names that Dictionary is allowed. An unknown `dictionary_id` on an attribute is `ENTITY_ATTRIBUTE_INVALID`.
 
 ## 4. Business Entity Endpoints
 
@@ -218,6 +251,11 @@ Widening `config.max_length` on `string` is `non_breaking`. Narrowing it is `bre
 | `DELETE` | `/entities/{id}` | `entity:write` | Delete a never-published Business Entity |
 | `POST` | `/entities/{id}/classify` | `entity:read` | Classify a proposed shape against the current version |
 | `POST` | `/entities/{id}/deprecate` | `entity:write` | Deprecate the Entity |
+| `GET` | `/dictionaries` | `entity:read` | List Dictionaries (**Offset Page**) |
+| `POST` | `/dictionaries` | `entity:write` | Create a Dictionary |
+| `GET` | `/dictionaries/{id}` | `entity:read` | Get one Dictionary, including entries and usages |
+| `PATCH` | `/dictionaries/{id}` | `entity:write` | Update display fields, deprecate, or replace entries |
+| `DELETE` | `/dictionaries/{id}` | `entity:write` | Delete a Dictionary that is not referenced |
 
 Creating a Business Entity has no cross-database side effect. Version `1` is `unpublished` and readable immediately. Its **Entity Table** does not exist until publish succeeds.
 
@@ -278,7 +316,7 @@ Success `200`: `{ "entity": { … } }`.
 
 Deleting a definition removes definition rows only. It never drops an Entity Table.
 
-Delete is refused when the Entity has ever been published (`409 ENTITY_ALREADY_PUBLISHED`). It is also refused when a current version, including this entity's own, has an **Entity Reference** whose target is this entity (`409 ENTITY_REFERENCED`). A historical version does not count. A never-published Entity has no table.
+Delete is refused while any version is `publishing` (`422 ENTITY_PUBLISHING`), including when an older version is already `published`. It is refused when the Entity has ever been published and no version is `publishing` (`409 ENTITY_ALREADY_PUBLISHED`). It is also refused when a current version, including this entity's own, has an **Entity Reference** whose target is this entity (`409 ENTITY_REFERENCED`). A historical version does not count. A never-published Entity has no table.
 
 Success `204` with an empty body.
 
@@ -303,6 +341,16 @@ Marks the Entity deprecated. Body is empty.
 Refused when the Entity has never been published (`422 ENTITY_NEVER_PUBLISHED`), is already deprecated (`422 ENTITY_ALREADY_DEPRECATED`), any version is `publishing` (`422 ENTITY_PUBLISHING`), or a current version, including this entity's own, has an **Entity Reference** whose target is this entity (`409 ENTITY_REFERENCED`). A historical version does not count. Publishing a new version of a referenced entity is not refused by that reference.
 
 Success `200`: `{ "entity": { … } }` with `deprecated_at` set.
+
+### 4.8 Dictionary Endpoints
+
+`GET /dictionaries` is an **Offset Page** (`created_at DESC`, `id DESC`). Query params: `q` (literal substring of `name` or `display_name`), `limit` (default **50**, max **200**), `offset` (default **0**).
+
+`POST /dictionaries` body is `{ "name", "display_name", "description"?, "entries" }`. The response is `201` `{ "dictionary": { … } }` including entries and usages. `name` already registered is `409 DICTIONARY_NAME_DUP`. A body that includes `name` on `PATCH` is `422 REQUEST_INVALID` because `name` is not a patch field.
+
+`PATCH /dictionaries/{id}` accepts any subset of `display_name`, `description`, `deprecated`, and `entries`. `deprecated: true` sets `deprecated_at` when it is null. `deprecated: false` clears it. Omitting `entries` leaves the codes unchanged and does not write entry rows. Concurrent patches of one Dictionary are serialized; a patch that includes `entries` replaces the whole set, and a concurrent patch does not return `INTERNAL_ERROR`. The response is `{ "dictionary": { … } }`.
+
+`DELETE /dictionaries/{id}` is `204` with an empty body. A Dictionary named by any version attribute or any publish snapshot is `409 DICTIONARY_IN_USE`; Problem `detail` names the referring `table_name.attribute_name` pairs.
 
 ## 5. Entity Version And Attribute Endpoints
 
@@ -364,7 +412,7 @@ Success `200`: `{ "version": { … } }`.
 
 ### 5.5 `POST /entities/{id}/versions/{version_id}/publish`
 
-Publishes the current `unpublished` version: set `publishing` and enqueue `entity_reconcile` to CREATE the version's physical table, store `published`, then replace the stem view so it selects that table. The previous physical table is not renamed.
+Publishes the current `unpublished` version: set `publishing` and enqueue `entity_reconcile` to CREATE the version's physical table, store `published`, then replace the stem view so it selects that table. The previous physical table is not renamed. Acceptance freezes each dictionary attribute's active codes and deprecation into that Job's `dictionary_bindings`. Between acceptance and execution, a changed active code set or a Dictionary deprecated after acceptance fails the Job with `ENTITY_ATTRIBUTE_INVALID` and creates no table. The CHECK uses the frozen codes.
 
 Body is empty.
 
@@ -447,7 +495,12 @@ Kernel codes (`REQUEST_INVALID`, `AUTH_UNAUTHENTICATED`, and the other codes in 
 | `ENTITY_VERSION_NOT_FOUND` | 404 | Unknown version id, or the version is not under the given entity |
 | `ENTITY_TABLE_NAME_INVALID` | 422 | `table_name` charset, length, or reserved physical table name (stem, `__v`, digits, `__`, 16 lowercase hexadecimal digits) is outside the rule |
 | `ENTITY_TABLE_NAME_DUP` | 409 | `table_name` already registered |
-| `ENTITY_ATTRIBUTE_INVALID` | 422 | Attribute `name` charset, length, reserved (`row_id`), or duplicate within the version; `type` missing or outside the **Attribute Type** closed set; `config` missing, carrying another type's key, or an unknown key; `string` `max_length` outside 1–65535; `decimal` precision or scale outside the rule; enumeration shape or code lexical rule; `target_entity_id` missing, unknown, or naming a deprecated entity; or a retired top-level field (`kind`, `normalized_type`, `precision`, `scale`, `target_table_name`, `enumeration`). `detail` names the concrete rule (and the value when safe to show) |
+| `ENTITY_ATTRIBUTE_INVALID` | 422 | Attribute `name` charset, length, reserved (`row_id`), or duplicate within the version; `type` missing or outside the **Attribute Type** closed set; `config` missing, carrying another type's key, or an unknown key; `string` `max_length` outside 1–65535; `decimal` precision or scale outside the rule; dictionary `dictionary_id` missing or unknown, or the Dictionary has no active code at publish; `entries` on an attribute; `target_entity_id` missing, unknown, or naming a deprecated entity; or a retired top-level field (`kind`, `normalized_type`, `precision`, `scale`, `target_table_name`, `enumeration`). `detail` names the concrete rule (and the value when safe to show) |
+| `DICTIONARY_NOT_FOUND` | 404 | Unknown Dictionary id |
+| `DICTIONARY_NAME_DUP` | 409 | Dictionary `name` already registered |
+| `DICTIONARY_INVALID` | 422 | Dictionary `name`, `display_name`, or entry shape outside the rule; duplicate code; or removal of a code that a publish snapshot contains. `detail` names the concrete rule |
+| `DICTIONARY_IN_USE` | 409 | Delete while any Entity Version attribute or publish snapshot names the Dictionary. `detail` names referring `table_name.attribute_name` pairs |
+| `DICTIONARY_DEPRECATED` | 422 | A dictionary attribute newly selects, or changes `dictionary_id` to, a deprecated Dictionary |
 | `ENTITY_NOT_UNPUBLISHED` | 422 | Save or publish targeted a version that is not `unpublished` |
 | `ENTITY_NOT_PUBLISHED` | 422 | Open version while the current version is not `published` |
 | `ENTITY_PUBLISHING` | 422 | A write while any version is `publishing` |
@@ -455,7 +508,7 @@ Kernel codes (`REQUEST_INVALID`, `AUTH_UNAUTHENTICATED`, and the other codes in 
 | `ENTITY_DEPRECATED` | 422 | A write on a deprecated Entity |
 | `ENTITY_NEVER_PUBLISHED` | 422 | Deprecate while the Entity has never been published |
 | `ENTITY_ALREADY_DEPRECATED` | 422 | Deprecate when already deprecated |
-| `ENTITY_ALREADY_PUBLISHED` | 409 | Delete after the Entity has been published |
+| `ENTITY_ALREADY_PUBLISHED` | 409 | Delete after the Entity has been published, while no version is `publishing` |
 | `ENTITY_REFERENCED` | 409 | Deprecate, or delete of a never-published definition, while a current version (including this entity's own) has an **Entity Reference** aimed at this entity |
 | `ENTITY_VERSION_SUPERSEDED` | 422 | Save or publish targeted a superseded version |
 | `ENTITY_TABLE_IN_SERVICE` | 422 | Table drop targeted the table still in service: the metadata head of an Entity that is not deprecated. Opening a newer unpublished version does not take that table out of service |
@@ -464,6 +517,7 @@ Job-terminal codes (successful GET of a failed Job; not Problem Details on the e
 
 | Problem Code | When |
 | --- | --- |
+| `ENTITY_ATTRIBUTE_INVALID` | Publish execution found an active code set different from acceptance, or a Dictionary deprecated after acceptance. The version returns to `unpublished` and no physical table is created |
 | `ENTITY_TABLE_NAME_CONFLICT` | Publish found the physical table name or the stem view's name already present in `REFRAQ_ENTITY_DB_SCHEMA` |
 | `ENTITY_TABLE_NOT_EMPTY` | Drop found rows in the same transaction |
 | `JOB_ALREADY_ACTIVE` | Runner could not take `entity_table:{entity_id}` |
@@ -473,7 +527,7 @@ Job-terminal codes (successful GET of a failed Job; not Problem Details on the e
 
 ## 8. Management Audit
 
-Persist a **Management Audit Event** for: Business Entity create, definition save, version open, publish enqueue, deprecate, definition delete, and table-drop enqueue. Each event records actor, Instant, resource, action, and result.
+Persist a **Management Audit Event** for: Business Entity create, definition save, version open, publish enqueue, deprecate, definition delete, and table-drop enqueue; and for Dictionary create, update, and delete. Each event records actor, Instant, resource, action, and result.
 
 ## 9. Non-Goals
 
@@ -483,10 +537,10 @@ Persist a **Management Audit Event** for: Business Entity create, definition sav
 4. Composite unique constraints, composite indexes, ALTER of a published table, and per-Entity evolution policy switches.
 5. Registering the entity database as a **Source**, or collecting Entity Tables as **Catalog Object**s.
 6. Entity-level ACL, attribute-level permissions, and masking.
-7. Hierarchy or inheritance between Business Entities. An **Inbound Reference** is derived and is not a saved attribute. A many-to-many is not a link table, a relationship-entity subtype, or an extra attribute type. Semantic Type, a unit on `decimal`, a cardinality on `reference`, and an enumeration constraint on `string` or `integer` are not part of this contract.
+7. Hierarchy or inheritance between Business Entities. An **Inbound Reference** is derived and is not a saved attribute. A many-to-many is not a link table, a relationship-entity subtype, or an extra attribute type. Semantic Type, a unit on `decimal`, a cardinality on `reference`, and a dictionary constraint on `string` or `integer` are not part of this contract.
 8. An authorization scope mechanism.
 9. A global `POST /jobs` create path.
-10. MCP tools for Business Entity.
+10. MCP tools for Business Entity or Dictionary.
 
 ## 10. References
 

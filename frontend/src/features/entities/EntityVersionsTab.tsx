@@ -229,7 +229,7 @@ function VersionShape({
         scale: fact.scale,
       });
     }
-    return t("entities.attributes.config.enumeration", { count: fact.count });
+    return fact.label;
   };
 
   const yesNo = (value: boolean) =>
@@ -287,6 +287,11 @@ function VersionShape({
                     </Table.Td>
                     <Table.Td>
                       {config ? <Text size="sm">{config}</Text> : null}
+                      {attr.behind ? (
+                        <Text size="xs" c="orange">
+                          {t("entities.attributes.behind")}
+                        </Text>
+                      ) : null}
                     </Table.Td>
                     <Table.Td>
                       <Text size="sm">{yesNo(attr.required)}</Text>

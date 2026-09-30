@@ -19,7 +19,7 @@ A Console Module is a **record authoring surface** when its catalog routes regis
 
 Modules that lack that triple are out of class. That includes list-plus-modal authoring, single-route panels, observe-only lists, ingested-object workbenches, and an edit route with no show route.
 
-`entities` is in class. Out of class includes `roles`, `catalog`, `settings`, `jobs`, `sources`, `identity-providers`, `business-domains`, `type-mappings`, `model-services`, `users`, `branding`, and `account`.
+`entities` and `dictionaries` are in class. Out of class includes `roles`, `catalog`, `settings`, `jobs`, `sources`, `identity-providers`, `business-domains`, `type-mappings`, `model-services`, `users`, `branding`, and `account`.
 
 Record authoring surfaces keep three paths. They do not collapse show and edit onto one URL.
 

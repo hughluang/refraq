@@ -12,7 +12,7 @@ from backend.admin.user_store import UserRecord, get_user_store
 from backend.core.pagination import ENTITY_LIST, PageParams, page_params
 from backend.entity.jobs import enqueue_drop, enqueue_publish
 from backend.entity.errors import EntityAttributeInvalid
-from backend.entity.records import AttributeRecord, EnumerationEntry
+from backend.entity.records import AttributeRecord
 from backend.entity.schemas.entities import (
     AttributeIn,
     BusinessEntityListResponse,
@@ -72,8 +72,8 @@ def _record(item: AttributeIn) -> AttributeRecord:
         scale=_config_int(item.name, "scale", config.get("scale"))
         if "scale" in config
         else None,
-        entries=_config_entries(item.name, config.get("entries"))
-        if "entries" in config
+        dictionary_id=_config_dictionary_id(item.name, config.get("dictionary_id"))
+        if "dictionary_id" in config
         else None,
         target_entity_id=_optional_target(item.name, config.get("target_entity_id"))
         if "target_entity_id" in config
@@ -104,29 +104,12 @@ def _config_target(name: str, value: Any) -> str:
     return value.strip()
 
 
-def _config_entries(name: str, value: Any) -> tuple[EnumerationEntry, ...]:
-    if not isinstance(value, list):
+def _config_dictionary_id(name: str, value: Any) -> str:
+    if not isinstance(value, str):
         raise EntityAttributeInvalid(
-            f"Attribute '{name}' enumeration must be a non-empty list"
+            f"Attribute '{name}' dictionary_id must be a string"
         )
-    entries: list[EnumerationEntry] = []
-    for item in value:
-        if not isinstance(item, dict) or "code" not in item:
-            raise EntityAttributeInvalid(
-                f"Attribute '{name}' enumeration code must be a string"
-            )
-        code = item["code"]
-        if not isinstance(code, str):
-            raise EntityAttributeInvalid(
-                f"Attribute '{name}' enumeration code must be a string"
-            )
-        label = item.get("label")
-        if label is not None and not isinstance(label, str):
-            raise EntityAttributeInvalid(
-                f"Attribute '{name}' enumeration label must be a string"
-            )
-        entries.append(EnumerationEntry(code=code, label=label))
-    return tuple(entries)
+    return value.strip()
 
 
 def _present_job(record: JobRecord) -> Any:

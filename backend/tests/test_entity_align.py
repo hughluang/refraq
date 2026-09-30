@@ -27,6 +27,7 @@ from backend.entity.kinds import KIND_RECONCILE  # noqa: E402
 from backend.entity.lifecycle import PUBLISHING  # noqa: E402
 from backend.entity.locks import try_acquire_entity_table_lock  # noqa: E402
 from backend.entity.store import get_entity_store  # noqa: E402
+from backend.entity.tasks import run_job  # noqa: E402
 from backend.entity.table_port import (  # noqa: E402
     EntityTableHasRows,
     RecordingEntityTablePort,
@@ -197,6 +198,280 @@ def test_publish_name_conflict_rolls_back(
     version = client.get(f"/entities/{entity['id']}/versions/{version_id}")
     assert version.json()["version"]["publish_status"] == "unpublished"
     assert version.json()["version"]["alignment"]["table_present"] is False
+
+
+def _defer_publish(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "backend.entity.jobs.dispatch_entity_job", lambda job: job.id
+    )
+
+
+def _code_list(client: TestClient) -> str:
+    created = client.post(
+        "/dictionaries",
+        json={
+            "name": "order_status",
+            "display_name": "Order status",
+            "entries": [
+                {"code": "open", "label": "Open", "active": True},
+                {"code": "closed", "label": "Closed", "active": True},
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    return created.json()["dictionary"]["id"]
+
+
+def _entity_on_dictionary(client: TestClient, dictionary_id: str) -> tuple[dict, dict]:
+    attribute = {
+        "name": "status",
+        "type": "dictionary",
+        "description": "Order status",
+        "config": {"dictionary_id": dictionary_id},
+    }
+    created = client.post(
+        "/entities",
+        json={
+            "table_name": "orders",
+            "name": "Orders",
+            "description": "Customer orders.",
+            "attributes": [attribute],
+        },
+    )
+    assert created.status_code == 201, created.text
+    return created.json()["entity"], attribute
+
+
+def _patch_dictionary(client: TestClient, dictionary_id: str, body: dict) -> dict:
+    patched = client.patch(f"/dictionaries/{dictionary_id}", json=body)
+    assert patched.status_code == 200, patched.text
+    return patched.json()["dictionary"]
+
+
+def test_publish_without_frozen_bindings_fails_closed(
+    client: TestClient,
+    port: RecordingEntityTablePort,
+) -> None:
+    entity = _create(client)
+    version_id = entity["current_version"]["id"]
+    queued = create_queued_job(
+        kind=KIND_RECONCILE,
+        input={"entity_version_id": version_id},
+        created_by="user_admin",
+        trigger_kind="user",
+        trigger_ref="user_admin",
+    )
+    store = get_entity_store()
+    version = store.get_version(version_id)
+    assert version is not None
+    store.save_version(
+        replace(
+            version,
+            publish_status=PUBLISHING,
+            latest_reconcile_job_id=queued.id,
+            updated_at=utc_now(),
+        )
+    )
+    assert run_job(queued.id)["status"] == "failed"
+    job = get_job_store().get(queued.id)
+    assert job is not None
+    assert job.error_code == "JOB_INPUT_INVALID"
+    physical, _comment = compose_physical_table_name("material", 1, version_id)
+    assert port.table_exists("public", physical) is False
+    read = client.get(f"/entities/{entity['id']}/versions/{version_id}")
+    body = read.json()["version"]
+    assert body["publish_status"] == "unpublished"
+    assert body["alignment"]["table_present"] is False
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["subset", "added", "cleared", "deprecated"],
+)
+def test_publish_rejects_dictionary_change_after_accept(
+    client: TestClient,
+    port: RecordingEntityTablePort,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    dictionary_id = _code_list(client)
+    entity, attribute = _entity_on_dictionary(client, dictionary_id)
+    version_id = entity["current_version"]["id"]
+    _defer_publish(monkeypatch)
+    queued = client.post(f"/entities/{entity['id']}/versions/{version_id}/publish")
+    assert queued.status_code == 201, queued.text
+    job_id = queued.json()["job"]["id"]
+    if change == "subset":
+        _patch_dictionary(
+            client,
+            dictionary_id,
+            {
+                "entries": [
+                    {"code": "open", "label": "Open", "active": True},
+                    {"code": "closed", "label": "Closed", "active": False},
+                ]
+            },
+        )
+    elif change == "added":
+        _patch_dictionary(
+            client,
+            dictionary_id,
+            {
+                "entries": [
+                    {"code": "open", "label": "Open", "active": True},
+                    {"code": "closed", "label": "Closed", "active": True},
+                    {"code": "held", "label": "Held", "active": True},
+                ]
+            },
+        )
+    elif change == "cleared":
+        _patch_dictionary(
+            client,
+            dictionary_id,
+            {
+                "entries": [
+                    {"code": "open", "label": "Open", "active": False},
+                    {"code": "closed", "label": "Closed", "active": False},
+                ]
+            },
+        )
+    else:
+        _patch_dictionary(client, dictionary_id, {"deprecated": True})
+    assert run_job(job_id)["status"] == "failed"
+    job = get_job_store().get(job_id)
+    assert job is not None
+    assert job.error_code == "ENTITY_ATTRIBUTE_INVALID"
+    summary = job.error_summary or ""
+    assert summary.startswith("Dictionary changed after publish was accepted")
+    assert "accepted=[open, closed]" in summary
+    if change == "subset":
+        assert "now=[open]" in summary
+    elif change == "added":
+        assert "now=[open, closed, held]" in summary
+    elif change == "cleared":
+        assert "now=[]" in summary
+    else:
+        assert "now=[open, closed]" in summary
+        assert "deprecated" in summary
+    physical, _comment = compose_physical_table_name("orders", 1, version_id)
+    assert port.table_exists("public", physical) is False
+    read = client.get(f"/entities/{entity['id']}/versions/{version_id}")
+    body = read.json()["version"]
+    assert body["publish_status"] == "unpublished"
+    assert body["alignment"]["table_present"] is False
+    if change != "cleared":
+        return
+    saved = client.patch(
+        f"/entities/{entity['id']}/versions/{version_id}",
+        json={
+            "attributes": [{**attribute, "description": "Status after a failed publish"}]
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    again = client.post(f"/entities/{entity['id']}/versions/{version_id}/publish")
+    assert again.status_code == 422
+    assert again.json()["code"] == "ENTITY_ATTRIBUTE_INVALID"
+    _records, total = get_job_store().list(kind=KIND_RECONCILE)
+    assert total == 1
+    deleted = client.delete(f"/entities/{entity['id']}")
+    assert deleted.status_code == 204
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["label", "restored", "already_deprecated", "undeprecated"],
+)
+def test_publish_keeps_frozen_codes_when_dictionary_still_matches(
+    client: TestClient,
+    port: RecordingEntityTablePort,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    dictionary_id = _code_list(client)
+    entity, _attribute = _entity_on_dictionary(client, dictionary_id)
+    version_id = entity["current_version"]["id"]
+    if change == "already_deprecated":
+        _patch_dictionary(client, dictionary_id, {"deprecated": True})
+    _defer_publish(monkeypatch)
+    queued = client.post(f"/entities/{entity['id']}/versions/{version_id}/publish")
+    assert queued.status_code == 201, queued.text
+    job_id = queued.json()["job"]["id"]
+    if change == "label":
+        _patch_dictionary(
+            client,
+            dictionary_id,
+            {
+                "entries": [
+                    {"code": "open", "label": "Opened", "active": True},
+                    {"code": "closed", "label": "Shut", "active": True},
+                ]
+            },
+        )
+    elif change == "restored":
+        _patch_dictionary(
+            client,
+            dictionary_id,
+            {"entries": [{"code": "open", "label": "Open", "active": True}]},
+        )
+        _patch_dictionary(
+            client,
+            dictionary_id,
+            {
+                "entries": [
+                    {"code": "closed", "label": "Closed", "active": True},
+                    {"code": "open", "label": "Open", "active": True},
+                ]
+            },
+        )
+    elif change == "undeprecated":
+        _patch_dictionary(client, dictionary_id, {"deprecated": True})
+        _patch_dictionary(client, dictionary_id, {"deprecated": False})
+    assert run_job(job_id)["status"] == "succeeded"
+    stored = get_entity_store().get_version(version_id)
+    assert stored is not None
+    snapshot = stored.dictionary_snapshots["status"]
+    assert snapshot["codes"] == ["open", "closed"]
+    detail = client.get(f"/dictionaries/{dictionary_id}")
+    assert snapshot["revision"] == detail.json()["dictionary"]["revision"]
+    check = next(sql for sql in port.statements if "CHECK" in sql)
+    assert "'open', 'closed'" in check
+
+
+def test_delete_while_first_publish_names_publishing(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "backend.entity.jobs.dispatch_entity_job", lambda job: job.id
+    )
+    entity = _create(client)
+    version_id = entity["current_version"]["id"]
+    queued = client.post(f"/entities/{entity['id']}/versions/{version_id}/publish")
+    assert queued.status_code == 201, queued.text
+    refused = client.delete(f"/entities/{entity['id']}")
+    assert refused.status_code == 422
+    body = refused.json()
+    assert body["code"] == "ENTITY_PUBLISHING"
+    assert body["detail"] == "A publishing version refuses writes"
+
+
+def test_delete_while_successor_publishing_names_publishing(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entity = _create(client)
+    _publish(client, entity)
+    opened = client.post(f"/entities/{entity['id']}/versions", json={})
+    assert opened.status_code == 201, opened.text
+    version_id = opened.json()["version"]["id"]
+    monkeypatch.setattr(
+        "backend.entity.jobs.dispatch_entity_job", lambda job: job.id
+    )
+    queued = client.post(f"/entities/{entity['id']}/versions/{version_id}/publish")
+    assert queued.status_code == 201, queued.text
+    refused = client.delete(f"/entities/{entity['id']}")
+    assert refused.status_code == 422
+    body = refused.json()
+    assert body["code"] == "ENTITY_PUBLISHING"
+    assert body["detail"] == "A publishing version refuses writes"
 
 
 def test_revert_failure_is_logged_and_original_error_kept(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 from functools import lru_cache
-from typing import Protocol
+from typing import Any, Protocol
 
 from sqlalchemy import ColumnElement, and_, exists, false, func, not_, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -257,10 +257,10 @@ class SqlEntityStore:
             stmt = select(BusinessEntityRow)
             count_stmt = select(func.count()).select_from(BusinessEntityRow)
             if q and q.strip():
-                needle = f"%{q.strip()}%"
+                needle = f"%{_escape_like_literal(q.strip())}%"
                 filt = or_(
-                    BusinessEntityRow.table_name.ilike(needle),
-                    BusinessEntityRow.name.ilike(needle),
+                    BusinessEntityRow.table_name.ilike(needle, escape="\\"),
+                    BusinessEntityRow.name.ilike(needle, escape="\\"),
                 )
                 stmt = stmt.where(filt)
                 count_stmt = count_stmt.where(filt)
@@ -420,11 +420,16 @@ def _write_version_row(row: EntityVersionRow, version: EntityVersionRecord) -> N
     row.materialized_attributes = list(version.materialized_attributes)
     row.publish_status = version.publish_status
     row.latest_reconcile_job_id = version.latest_reconcile_job_id
+    row.dictionary_snapshots = dict(version.dictionary_snapshots)
     row.updated_at = version.updated_at
 
 
 _TABLE_NAME_UNIQUE = "uq_business_entities_table_name"
 _VERSION_ID_PK = "entity_versions_pkey"
+
+
+def _escape_like_literal(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _pgcode(exc: BaseException) -> str | None:
@@ -515,6 +520,7 @@ def _version_from_row(row: EntityVersionRow) -> EntityVersionRecord:
         latest_reconcile_job_id=row.latest_reconcile_job_id,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        dictionary_snapshots=_snapshots_from_row(row.dictionary_snapshots),
     )
 
 
@@ -527,9 +533,14 @@ def _version_to_row(record: EntityVersionRecord) -> EntityVersionRow:
         materialized_attributes=list(record.materialized_attributes),
         publish_status=record.publish_status,
         latest_reconcile_job_id=record.latest_reconcile_job_id,
+        dictionary_snapshots=dict(record.dictionary_snapshots),
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
+
+
+def _snapshots_from_row(raw: dict[str, Any]) -> dict[str, Any]:
+    return {str(key): dict(value) for key, value in raw.items()}
 
 
 _memory_singleton: MemoryEntityStore | None = None

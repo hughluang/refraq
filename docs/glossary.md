@@ -375,7 +375,7 @@ Avoid **Semantic Source**, **Join Origin**, treating origin as an audit log, or 
 ### Enum Catalog
 
 Discrete `{ code, label, description }` entries on a column when evidenced.
-Avoid unconstrained free-form maps without codes.
+Avoid unconstrained free-form maps without codes. Avoid **Dictionary**, which is an authored shared list referenced by an entity attribute.
 
 ### Semantic Source
 
@@ -447,17 +447,22 @@ Avoid treating it as a full platform SIEM or a substitute for application access
 
 A definition of a reusable business thing (material, supplier, inventory fact), identified by an immutable `table_name` that spans all its **Entity Version**s and is the stem view name in the entity database. Authoring one requires business meaning and not only a shape: name and description. Each attribute has one **Attribute Type** and that type's configuration, and may be marked `unique` and/or `indexed`. The Entity Table carries a platform `row_id` identity column; authors do not pick a business primary key. **Inbound Reference**s are derived and are not attributes.
 Permissions: `entity:read` / `entity:write` / `entity:drop_table`.
-Avoid calling it a **Catalog Object**, a Data Product, or a Serving output. Avoid putting source bindings, extract SQL, transforms, or lineage on the definition — those belong to a **Data Channel**. Avoid putting the `object_category` closed set on the Entity. Avoid treating `row_id` as a **Data Channel** upsert key. Avoid a link table or a relationship-entity subtype; a many-to-many is an ordinary Business Entity with two **Entity Reference**s. Avoid many-to-one, one-to-many, and many2one as names. Avoid **Join** and **Enum Catalog** as the home of entity references or enumerations. Avoid hierarchy and inheritance between Business Entities. Avoid typing an attribute with **Normalized Type**.
+Avoid calling it a **Catalog Object**, a Data Product, or a Serving output. Avoid putting source bindings, extract SQL, transforms, or lineage on the definition — those belong to a **Data Channel**. Avoid putting the `object_category` closed set on the Entity. Avoid treating `row_id` as a **Data Channel** upsert key. Avoid a link table or a relationship-entity subtype; a many-to-many is an ordinary Business Entity with two **Entity Reference**s. Avoid many-to-one, one-to-many, and many2one as names. Avoid **Join** and **Enum Catalog** as the home of entity references or dictionaries. Avoid hierarchy and inheritance between Business Entities. Avoid typing an attribute with **Normalized Type**.
 
 ### Attribute Type
 
-The closed set of classes that define one attribute of a **Business Entity**: `string`, `text`, `integer`, `decimal`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, `enumeration`, `reference`. Each class owns its configuration. `json` is a JSON document with an empty configuration; a JSON array is a value of that type. `required`, `unique`, and `indexed` are facts of every attribute.
-Avoid **Normalized Type**, **Semantic Type**, a JSON Schema or OpenAPI format, `array` as its own class, a unit or quantity on `decimal`, a cardinality on `reference`, and treating `enumeration` as a constraint on `string` or `integer`.
+The closed set of classes that define one attribute of a **Business Entity**: `string`, `text`, `integer`, `decimal`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, `dictionary`, `reference`. Each class owns its configuration. `json` is a JSON document with an empty configuration; a JSON array is a value of that type. `required`, `unique`, and `indexed` are facts of every attribute.
+Avoid **Normalized Type**, **Semantic Type**, a JSON Schema or OpenAPI format, `array` as its own class, a unit or quantity on `decimal`, a cardinality on `reference`, and treating `dictionary` as a constraint on `string` or `integer`.
 
-### Attribute Enumeration
+### Dictionary
 
-The inline closed code list that is the configuration of an `enumeration` **Attribute Type**. Each entry has a required string code and an optional label. The list belongs to that one attribute.
-Avoid **Enum Catalog**, a database enum type, **Normalized Type**, a shared code-list resource, declaring one on `string` or `integer`, and an integer code kind.
+A shared, operator-authored set of codes that a `dictionary` **Attribute Type** references by id. Codes are strings with an optional label. Publish snapshots the active codes into that version's CHECK. The list is not altered into a published table.
+Avoid **Enum Catalog**, a database enum type, **Normalized Type**, an inline list on the attribute, declaring one on `string` or `integer`, and an integer code kind.
+
+### Attribute Dictionary
+
+The binding from a `dictionary` attribute to one **Dictionary**. The attribute stores `dictionary_id` only. The codes live on the Dictionary, and a publish snapshot fixes the CHECK.
+Avoid **Enum Catalog**, a database enum type, **Normalized Type**, an inline `entries` list, declaring one on `string` or `integer`, and an integer code kind.
 
 ### Entity Reference
 

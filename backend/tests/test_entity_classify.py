@@ -6,7 +6,7 @@ import pytest
 
 from backend.entity.classify import DefinitionShape, classify_shapes
 from backend.entity.errors import EntityAttributeInvalid, EntityTableNameInvalid
-from backend.entity.records import AttributeRecord, EnumerationEntry
+from backend.entity.records import AttributeRecord
 from backend.entity.validate import (
     ATTRIBUTE_NAME_MAX_LEN,
     TABLE_NAME_MAX_LEN,
@@ -27,7 +27,8 @@ def _attr(
     max_length: int | None = None,
     precision: int | None = None,
     scale: int | None = None,
-    entries: tuple[EnumerationEntry, ...] | None = None,
+    dictionary_id: str | None = None,
+    codes: tuple[str, ...] | None = None,
     target_entity_id: str | None = None,
 ) -> AttributeRecord:
     return AttributeRecord(
@@ -40,7 +41,8 @@ def _attr(
         max_length=32 if attribute_type == "string" and max_length is None else max_length,
         precision=precision,
         scale=scale,
-        entries=entries,
+        dictionary_id=dictionary_id,
+        codes=codes,
         target_entity_id=target_entity_id,
     )
 
@@ -113,12 +115,13 @@ def test_widen_max_length_is_non_breaking_and_narrow_is_breaking() -> None:
     assert narrower.change_class == "breaking"
 
 
-def test_enumeration_code_add_is_non_breaking_and_label_is_unchanged() -> None:
+def test_enumeration_code_add_is_non_breaking_and_same_set_is_unchanged() -> None:
     before = _shape(
         _attr(
             "status",
-            "enumeration",
-            entries=(EnumerationEntry(code="draft", label="Draft"),),
+            "dictionary",
+            dictionary_id="cl_status",
+            codes=("draft",),
         )
     )
     added = classify_shapes(
@@ -126,38 +129,42 @@ def test_enumeration_code_add_is_non_breaking_and_label_is_unchanged() -> None:
         _shape(
             _attr(
                 "status",
-                "enumeration",
-                entries=(
-                    EnumerationEntry(code="draft", label="Draft"),
-                    EnumerationEntry(code="live", label="Live"),
-                ),
+                "dictionary",
+                dictionary_id="cl_status",
+                codes=("draft", "live"),
             )
         ),
     )
     assert added.change_class == "non_breaking"
-    assert added.changes[0].field == "attributes.status.config.entries"
+    assert added.changes[0].field == "attributes.status.config.dictionary"
+    assert added.changes[0].new_value["added"] == ["live"]
+    assert added.changes[0].new_value["removed"] == []
     removed = classify_shapes(
         before,
         _shape(
             _attr(
                 "status",
-                "enumeration",
-                entries=(EnumerationEntry(code="live", label="Live"),),
+                "dictionary",
+                dictionary_id="cl_status",
+                codes=("live",),
             )
         ),
     )
     assert removed.change_class == "breaking"
-    relabeled = classify_shapes(
+    assert removed.changes[0].new_value["removed"] == ["draft"]
+    same_codes = classify_shapes(
         before,
         _shape(
             _attr(
                 "status",
-                "enumeration",
-                entries=(EnumerationEntry(code="draft", label="New"),),
+                "dictionary",
+                dictionary_id="cl_other",
+                codes=("draft",),
             )
         ),
     )
-    assert relabeled.change_class == "unchanged"
+    assert same_codes.change_class == "unchanged"
+    assert same_codes.changes[0].new_value["added"] == []
 
 
 def test_relax_required_is_non_breaking() -> None:

@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 
 from celery import current_task
 
 from backend.core.time import utc_now
 from backend.entity.ddl import attr_wants_index
 from backend.entity.entity_db import entity_db_schema
-from backend.entity.errors import EntityTableInService
+from backend.entity.dictionary_binding import bind_publish, frozen_bindings_cover
+from backend.entity.errors import EntityAttributeInvalid, EntityTableInService
 from backend.entity.kinds import KIND_DROP, KIND_RECONCILE
 from backend.entity.lifecycle import PUBLISHED, PUBLISHING, UNPUBLISHED, is_deprecated
 from backend.entity.locks import try_acquire_entity_table_lock
@@ -67,7 +69,7 @@ def run_entity_table_job(job_id: str) -> dict[str, str]:
         )
     try:
         if current.kind == KIND_RECONCILE:
-            return _reconcile(job_id, version_id)
+            return _reconcile(job_id, version_id, current.input)
         if current.kind == KIND_DROP:
             return _drop(job_id, version_id)
         return _fail(job_id, "JOB_INPUT_INVALID", f"No handler for job kind: {current.kind}")
@@ -75,13 +77,25 @@ def run_entity_table_job(job_id: str) -> dict[str, str]:
         lock.release()
 
 
-def _reconcile(job_id: str, version_id: str) -> dict[str, str]:
+def _reconcile(
+    job_id: str, version_id: str, job_input: dict[str, Any]
+) -> dict[str, str]:
     version = get_entity_store().get_version(version_id)
     if version is None:
         return _fail(job_id, "ENTITY_VERSION_NOT_FOUND", "Entity Version not found")
     entity = get_entity_store().get_entity(version.entity_id)
     if entity is None:
         return _fail(job_id, "ENTITY_NOT_FOUND", "Business Entity not found")
+    bindings = frozen_bindings_cover(
+        version.attributes, job_input.get("dictionary_bindings")
+    )
+    if bindings is None:
+        _rollback_publish(version, accept_published=False)
+        return _fail(
+            job_id,
+            "JOB_INPUT_INVALID",
+            "dictionary_bindings do not cover the version's dictionary attributes",
+        )
     schema = entity_db_schema()
     stem = entity.table_name
     physical, comment = compose_physical_table_name(stem, version.version, version.id)
@@ -94,7 +108,11 @@ def _reconcile(job_id: str, version_id: str) -> dict[str, str]:
         and table_present(previous)
     ):
         expected_target = physical_table_name(previous, stem)
-    definition = list(version.attributes)
+    try:
+        definition, snapshots = bind_publish(list(version.attributes), bindings)
+    except EntityAttributeInvalid as exc:
+        _rollback_publish(version, accept_published=False)
+        return _fail(job_id, exc.code, exc.message)
     created = False
     published_saved = False
     try:
@@ -115,6 +133,7 @@ def _reconcile(job_id: str, version_id: str) -> dict[str, str]:
                 materialized_attributes=[
                     attribute_to_dict(attr) for attr in definition
                 ],
+                dictionary_snapshots=snapshots,
                 latest_reconcile_job_id=job_id,
                 updated_at=utc_now(),
             )
@@ -170,6 +189,7 @@ def _rollback_publish(version, *, accept_published: bool) -> None:
             fresh,
             publish_status=UNPUBLISHED,
             materialized_attributes=[],
+            dictionary_snapshots={},
             updated_at=utc_now(),
         )
     )

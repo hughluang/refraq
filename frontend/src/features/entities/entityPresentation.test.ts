@@ -88,8 +88,8 @@ describe("attributesFromDrafts", () => {
         }),
         draft({
           name: "status",
-          type: "enumeration",
-          enumeration_text: "ACTIVE|Active\nDONE",
+          type: "dictionary",
+          dictionary_id: "cl_status",
         }),
       ]),
     ).toEqual([
@@ -103,15 +103,13 @@ describe("attributesFromDrafts", () => {
         config: { precision: 10, scale: 2 },
       },
       {
-        type: "enumeration",
+        type: "dictionary",
         name: "status",
         required: false,
         unique: false,
         indexed: false,
         description: null,
-        config: {
-          entries: [{ code: "ACTIVE", label: "Active" }, { code: "DONE" }],
-        },
+        config: { dictionary_id: "cl_status" },
       },
     ]);
   });
@@ -154,30 +152,39 @@ describe("draftsFromVersion", () => {
     ]);
   });
 
-  it("round-trips an empty enumeration label separately from a bare code", () => {
+  it("keeps the linked code list summary on the draft", () => {
     const [drafted] = draftsFromVersion({
       attributes: [
         {
-          type: "enumeration",
+          type: "dictionary",
           name: "status",
           required: false,
           unique: false,
           indexed: false,
           description: null,
-          config: { entries: [{ code: "ACTIVE", label: "" }] },
+          config: { dictionary_id: "cl_status" },
+          dictionary: {
+            id: "cl_status",
+            name: "order_status",
+            display_name: "Order status",
+            deprecated: false,
+          },
+          behind: true,
         },
       ],
     } as EntityVersion);
-    expect(drafted.enumeration_text).toBe("ACTIVE|");
+    expect(drafted.dictionary_id).toBe("cl_status");
+    expect(drafted.dictionary_display_name).toBe("Order status");
+    expect(drafted.behind).toBe(true);
     expect(attributesFromDrafts([drafted])).toEqual([
       {
-        type: "enumeration",
+        type: "dictionary",
         name: "status",
         required: false,
         unique: false,
         indexed: false,
         description: null,
-        config: { entries: [{ code: "ACTIVE", label: "" }] },
+        config: { dictionary_id: "cl_status" },
       },
     ]);
   });

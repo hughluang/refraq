@@ -12,7 +12,7 @@ export const ATTRIBUTE_TYPES: AttributeType[] = [
   "timestamp",
   "time",
   "json",
-  "enumeration",
+  "dictionary",
   "reference",
 ];
 
@@ -26,7 +26,11 @@ export const EMPTY_ATTRIBUTE: {
   max_length: string;
   precision: string;
   scale: string;
-  enumeration_text: string;
+  dictionary_id: string;
+  dictionary_name: string;
+  dictionary_display_name: string;
+  dictionary_deprecated: boolean;
+  behind: boolean;
   target_entity_id: string;
   target_name: string;
   target_table_name: string;
@@ -40,7 +44,11 @@ export const EMPTY_ATTRIBUTE: {
   max_length: "",
   precision: "",
   scale: "",
-  enumeration_text: "",
+  dictionary_id: "",
+  dictionary_name: "",
+  dictionary_display_name: "",
+  dictionary_deprecated: false,
+  behind: false,
   target_entity_id: "",
   target_name: "",
   target_table_name: "",

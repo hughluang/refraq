@@ -35,6 +35,30 @@ vi.mock("@/features/entities/api", () => ({
   })),
 }));
 
+vi.mock("@/features/dictionaries/api", () => ({
+  listDictionaries: vi.fn(async () => ({
+    items: [],
+    total: 0,
+    limit: 200,
+    offset: 0,
+  })),
+  getDictionary: vi.fn(async () => ({
+    dictionary: {
+      id: "cl_status",
+      name: "order_status",
+      display_name: "Order status",
+      description: null,
+      revision: 1,
+      deprecated_at: null,
+      entry_count: 1,
+      entries: [{ code: "open", label: "Open", active: true }],
+      usages: [],
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    },
+  })),
+}));
+
 function stubDomApis() {
   Object.defineProperty(window, "matchMedia", {
     writable: true,
@@ -124,8 +148,9 @@ describe("AttributeEditor", () => {
       }),
       draft({
         name: "status",
-        type: "enumeration",
-        enumeration_text: "A\nB\nC",
+        type: "dictionary",
+        dictionary_id: "cl_status",
+        dictionary_display_name: "Order status",
         max_length: "",
       }),
     ]);
@@ -135,14 +160,12 @@ describe("AttributeEditor", () => {
     expect(
       screen.getByText("entities.attributes.config.decimal:10,2"),
     ).toBeTruthy();
-    expect(
-      screen.getByText("entities.attributes.config.enumeration:3"),
-    ).toBeTruthy();
+    expect(screen.getByText("Order status")).toBeTruthy();
     expect(
       screen.queryByRole("textbox", { name: "entities.fields.maxLength" }),
     ).toBeNull();
     expect(
-      screen.queryByRole("textbox", { name: "entities.fields.enumeration" }),
+      screen.queryByRole("combobox", { name: "entities.fields.dictionary" }),
     ).toBeNull();
     expect(
       screen.queryByRole("combobox", { name: "entities.attributes.drawer.type" }),

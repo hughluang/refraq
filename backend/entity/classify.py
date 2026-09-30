@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from backend.entity.records import AttributeRecord, EnumerationEntry, attribute_to_dict
+from backend.entity.records import AttributeRecord, attribute_to_dict
 
 ChangeClass = Literal["breaking", "non_breaking", "unchanged"]
 
@@ -127,8 +127,8 @@ def _config_changes(
         return _max_length_change(prefix, before, after)
     if before.type == "decimal":
         return _decimal_changes(prefix, before, after)
-    if before.type == "enumeration":
-        return _enumeration_changes(prefix, before.entries, after.entries)
+    if before.type == "dictionary":
+        return _dictionary_changes(prefix, before, after)
     if before.type == "reference":
         return _target_change(prefix, before, after)
     return []
@@ -192,69 +192,39 @@ def _target_change(
     ]
 
 
-def _enumeration_changes(
-    prefix: str,
-    before: tuple[EnumerationEntry, ...] | None,
-    after: tuple[EnumerationEntry, ...] | None,
+def _dictionary_changes(
+    prefix: str, before: AttributeRecord, after: AttributeRecord
 ) -> list[ShapeChange]:
-    before_codes = _enum_codes(before)
-    after_codes = _enum_codes(after)
-    before_labels = _enum_labels(before)
-    after_labels = _enum_labels(after)
-    found: list[ShapeChange] = []
+    before_codes = tuple(before.codes or ())
+    after_codes = tuple(after.codes or ())
     before_set = set(before_codes)
     after_set = set(after_codes)
-    if before_set != after_set:
-        only_added = before_set < after_set
-        found.append(
-            ShapeChange(
-                field=f"{prefix}.config.entries",
-                old_value=_enum_payload(before),
-                new_value=_enum_payload(after),
-                change_class="non_breaking" if only_added else "breaking",
-            )
-        )
-        return found
-    if before_labels != after_labels:
-        found.append(
-            ShapeChange(
-                field=f"{prefix}.config.entries",
-                old_value=_enum_payload(before),
-                new_value=_enum_payload(after),
-                change_class="unchanged",
-            )
-        )
-    return found
-
-
-def _enum_codes(
-    entries: tuple[EnumerationEntry, ...] | None,
-) -> tuple[str, ...]:
-    if entries is None:
-        return ()
-    return tuple(entry.code for entry in entries)
-
-
-def _enum_labels(
-    entries: tuple[EnumerationEntry, ...] | None,
-) -> tuple[tuple[str, str | None], ...]:
-    if entries is None:
-        return ()
-    return tuple(sorted((entry.code, entry.label) for entry in entries))
-
-
-def _enum_payload(
-    entries: tuple[EnumerationEntry, ...] | None,
-) -> list[dict[str, str | None]] | None:
-    if entries is None:
-        return None
+    added = sorted(after_set - before_set)
+    removed = sorted(before_set - after_set)
+    same_list = before.dictionary_id == after.dictionary_id
+    if before_set == after_set and same_list:
+        return []
+    if before_set == after_set:
+        change_class: ChangeClass = "unchanged"
+    elif not removed:
+        change_class = "non_breaking"
+    else:
+        change_class = "breaking"
     return [
-        (
-            {"code": entry.code, "label": entry.label}
-            if entry.label is not None
-            else {"code": entry.code}
+        ShapeChange(
+            field=f"{prefix}.config.dictionary",
+            old_value={
+                "dictionary_id": before.dictionary_id,
+                "codes": list(before_codes),
+            },
+            new_value={
+                "dictionary_id": after.dictionary_id,
+                "codes": list(after_codes),
+                "added": added,
+                "removed": removed,
+            },
+            change_class=change_class,
         )
-        for entry in entries
     ]
 
 

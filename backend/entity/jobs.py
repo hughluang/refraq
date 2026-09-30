@@ -7,6 +7,7 @@ from typing import Any
 
 from backend.admin.audit import persist_audit_event
 from backend.core.time import utc_now
+from backend.entity.dictionary_binding import freeze_publish_bindings
 from backend.entity.errors import EntityTableInService
 from backend.entity.kinds import ENTITY_TABLE_KINDS, KIND_DROP, KIND_RECONCILE
 from backend.entity.lifecycle import PUBLISHING, is_deprecated
@@ -72,7 +73,10 @@ def enqueue_publish(
         return inflight, False
     job = create_queued_job(
         kind=KIND_RECONCILE,
-        input={"entity_version_id": version.id},
+        input={
+            "entity_version_id": version.id,
+            "dictionary_bindings": freeze_publish_bindings(version.attributes),
+        },
         created_by=actor_user_id,
         summary=f"entity_reconcile · {entity.table_name}",
         trigger_kind="user",

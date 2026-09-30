@@ -9,19 +9,21 @@ export type AttributeType =
   | "timestamp"
   | "time"
   | "json"
-  | "enumeration"
+  | "dictionary"
   | "reference";
 
-export type EnumerationEntry = {
-  code: string;
-  label?: string | null;
+export type DictionaryRef = {
+  id: string;
+  name: string;
+  display_name: string;
+  deprecated: boolean;
 };
 
 export type AttributeConfig = {
   max_length?: number;
   precision?: number;
   scale?: number;
-  entries?: EnumerationEntry[];
+  dictionary_id?: string;
   target_entity_id?: string;
 };
 
@@ -40,6 +42,8 @@ export type EntityAttribute = {
   description: string | null;
   config: AttributeConfig;
   target?: ReferenceTarget | null;
+  dictionary?: DictionaryRef | null;
+  behind?: boolean;
 };
 
 export type EntityRecordFormValues = {
@@ -59,7 +63,11 @@ export type AttributeDraft = {
   max_length: string;
   precision: string;
   scale: string;
-  enumeration_text: string;
+  dictionary_id: string;
+  dictionary_name: string;
+  dictionary_display_name: string;
+  dictionary_deprecated: boolean;
+  behind: boolean;
   target_entity_id: string;
   target_name: string;
   target_table_name: string;

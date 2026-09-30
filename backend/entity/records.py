@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -10,16 +10,9 @@ __all__ = [
     "AttributeRecord",
     "BusinessEntityRecord",
     "EntityVersionRecord",
-    "EnumerationEntry",
     "attribute_from_dict",
     "attribute_to_dict",
 ]
-
-
-@dataclass(frozen=True, slots=True)
-class EnumerationEntry:
-    code: str
-    label: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,8 +26,10 @@ class AttributeRecord:
     max_length: int | None = None
     precision: int | None = None
     scale: int | None = None
-    entries: tuple[EnumerationEntry, ...] | None = None
+    dictionary_id: str | None = None
     target_entity_id: str | None = None
+    # Resolved for classify and DDL. Not stored on the attribute definition.
+    codes: tuple[str, ...] | None = None
 
 
 @dataclass
@@ -59,6 +54,7 @@ class EntityVersionRecord:
     latest_reconcile_job_id: str | None
     created_at: datetime
     updated_at: datetime
+    dictionary_snapshots: dict[str, Any] = field(default_factory=dict)
 
 
 def attribute_to_dict(attr: AttributeRecord) -> dict[str, Any]:
@@ -81,11 +77,6 @@ def attribute_from_dict(payload: dict[str, Any]) -> AttributeRecord:
     if not isinstance(config, dict):
         raise TypeError("attribute config must be an object")
     description = payload.get("description")
-    entries = (
-        _enumeration_from_payload(config.get("entries"))
-        if "entries" in config
-        else None
-    )
     return AttributeRecord(
         name=str(payload["name"]),
         type=str(payload["type"]),
@@ -96,7 +87,9 @@ def attribute_from_dict(payload: dict[str, Any]) -> AttributeRecord:
         max_length=_optional_int(config.get("max_length")) if "max_length" in config else None,
         precision=_optional_int(config.get("precision")) if "precision" in config else None,
         scale=_optional_int(config.get("scale")) if "scale" in config else None,
-        entries=entries,
+        dictionary_id=_optional_str(config.get("dictionary_id"))
+        if "dictionary_id" in config
+        else None,
         target_entity_id=(
             str(config["target_entity_id"])
             if config.get("target_entity_id") is not None
@@ -110,43 +103,19 @@ def _config_dict(attr: AttributeRecord) -> dict[str, Any]:
         return {"max_length": attr.max_length}
     if attr.type == "decimal":
         return {"precision": attr.precision, "scale": attr.scale}
-    if attr.type == "enumeration":
-        return {"entries": _entries_payload(attr.entries)}
+    if attr.type == "dictionary":
+        return {"dictionary_id": attr.dictionary_id}
     if attr.type == "reference":
         return {"target_entity_id": attr.target_entity_id}
     return {}
 
 
-def _entries_payload(
-    entries: tuple[EnumerationEntry, ...] | None,
-) -> list[dict[str, str | None]]:
-    if not entries:
-        return []
-    return [
-        (
-            {"code": entry.code, "label": entry.label}
-            if entry.label is not None
-            else {"code": entry.code}
-        )
-        for entry in entries
-    ]
-
-
-def _enumeration_from_payload(
-    raw: Any,
-) -> tuple[EnumerationEntry, ...] | None:
-    if raw is None:
+def _optional_str(value: Any) -> str | None:
+    if value is None:
         return None
-    entries: list[EnumerationEntry] = []
-    for item in raw:
-        if "label" not in item:
-            label: str | None = None
-        else:
-            label = item["label"]
-            if not isinstance(label, str):
-                raise TypeError("enumeration label must be a string")
-        entries.append(EnumerationEntry(code=str(item["code"]), label=label))
-    return tuple(entries)
+    if not isinstance(value, str):
+        raise TypeError("dictionary_id must be a string")
+    return value
 
 
 def _optional_int(value: Any) -> int | None:
