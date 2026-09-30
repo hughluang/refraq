@@ -14,8 +14,13 @@ const nextConfig = {
   async rewrites() {
     return [
       {
-        // ReDoc and Swagger UI (reached at /api/redoc and /api/docs) load the
-        // spec from root-absolute /openapi.json on this origin.
+        // Swagger UI on the web origin (canonical /docs, including
+        // /docs/oauth2-redirect). Spec stays same-origin; FastAPI loads
+        // Swagger assets from CDN.
+        source: "/docs/:path*",
+        destination: `${apiUpstream}/docs/:path*`,
+      },
+      {
         source: "/openapi.json",
         destination: `${apiUpstream}/openapi.json`,
       },

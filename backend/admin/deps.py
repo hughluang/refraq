@@ -6,7 +6,8 @@ from backend.core.time import utc_now
 from datetime import datetime
 from typing import Callable, Literal, TypedDict
 
-from fastapi import Cookie, Depends, Header, Request
+from fastapi import Cookie, Depends, Request, Security
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from backend.admin.errors import AuthForbidden, AuthPatInvalid, AuthUnauthenticated
 from backend.admin.permissions import Permission, permissions_include
@@ -122,12 +123,22 @@ def _user_from_bearer(
 def get_current_user(
     request: Request,
     refraq_sid: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
-    authorization: str | None = Header(default=None),
+    _bearer: HTTPAuthorizationCredentials | None = Security(
+        HTTPBearer(
+            auto_error=False,
+            description=(
+                "User PAT. Paste the token secret only; Swagger sends "
+                "Authorization: Bearer. Session cookie auth is unchanged."
+            ),
+        )
+    ),
     sessions: SessionStore = Depends(get_session_store),
     users: UserStore = Depends(get_user_store),
     tokens: TokenStore = Depends(get_token_store),
 ) -> UserRecord:
     """Resolve User from Session cookie (preferred) or User PAT Bearer."""
+    # `_bearer` registers the OpenAPI scheme; runtime still reads the raw header
+    # so empty/malformed Bearer values keep the same Problem Codes as before.
     session_user = _user_from_session(
         request=request,
         refraq_sid=refraq_sid,
@@ -136,6 +147,7 @@ def get_current_user(
     )
     if session_user is not None:
         return session_user
+    authorization = request.headers.get("Authorization")
     if authorization:
         return _user_from_bearer(
             request=request,

@@ -129,6 +129,11 @@ app = FastAPI(
     title="refraq Backend",
     version="0.1.2",
     lifespan=lifespan,
+    redoc_url=None,
+    # Try it out on the web origin must hit Next's `/api/:path*` rewrite.
+    # Do not set root_path="/api": FastAPI 0.141.1 would load the schema from
+    # /api/openapi.json, which Next does not rewrite (canonical is /openapi.json).
+    servers=[{"url": "/api"}],
 )
 
 

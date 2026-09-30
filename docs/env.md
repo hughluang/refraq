@@ -121,11 +121,15 @@ Image tags live in the stamped Release compose, not in `.env`. A leftover `REFRA
 - MCP process: `127.0.0.1:8001` (`python -m backend.metadata.mcp_http`)
 - browser API base URL: `/api` (same-origin)
 - browser MCP URL: `{origin}/mcp` (same-origin; Account Center copies this)
+- browser OpenAPI UI: `{origin}/docs` (Swagger UI; Next.js rewrite to the API)
+- browser OpenAPI spec: `{origin}/openapi.json` (same-origin rewrite; Swagger loads this path)
 - Next.js rewrite upstream: `http://127.0.0.1:8000` (dev)
 - Next.js `/mcp` stream upstream: `http://127.0.0.1:8001` (`REFRAQ_MCP_UPSTREAM`)
 - Next.js server-rendering API upstream: `http://127.0.0.1:8000` (dev)
 
-The browser talks to the backend through a Next.js rewrite so the session cookie is set on the frontend origin and `proxy.ts` can see `refraq_sid`. Server-only rendering code calls the same upstream directly through `REFRAQ_API_UPSTREAM`; it does not make a loopback request to the Next.js server. URLs emitted into HTML remain browser-facing same-origin paths and never expose this internal upstream.
+The browser talks to the backend through a Next.js rewrite so the session cookie is set on the frontend origin and `proxy.ts` can see `refraq_sid`. Server-only rendering code calls the same upstream directly through `REFRAQ_API_UPSTREAM`; it does not make a loopback request to the Next.js server. URLs emitted into HTML remain browser-facing same-origin paths and never expose this internal upstream. ReDoc is disabled. `/api/docs` may still reach Swagger via the generic `/api/:path*` rewrite; operators should use `/docs` and `/openapi.json` on the web origin.
+
+Swagger Try it out uses OpenAPI `servers: [{"url": "/api"}]` so browser calls go to `{origin}/api/...` (rewrite strips `/api` before the API process). Protected operations document HTTP Bearer for a User PAT via Authorize (`Authorization: Bearer`). Session cookie auth is unchanged: after Console login on the same origin, Try it out also sends `refraq_sid` on same-origin `/api` requests. Do not paste the HttpOnly session cookie into Authorize.
 
 Site compose exposes only the web service to browsers; the API stays on the internal network and must be named `api`. The MCP process is the same api image with `python -m backend.metadata.mcp_http`; compose names it `mcp` and does **not** publish its port. Web streams `{origin}/mcp` to `REFRAQ_MCP_UPSTREAM` (`http://mcp:8001` on site). Process `readyz` is compose-internal only. The copied Account Center URL is the Console origin plus `/mcp`; there is no second public MCP hostname. The host port defaults to `3001` (`REFRAQ_WEB_PORT`) so a local Console on `127.0.0.1:3000` can keep running. Bind local `next dev` to `127.0.0.1` so the office network cannot open the sandbox Console.
 

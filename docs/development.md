@@ -58,6 +58,7 @@ This document records the stable development conventions for contributors workin
 
 - Install dependencies: `npm install`
 - Run dev server: `npm run dev` (binds `127.0.0.1` so the sandbox Console is not reachable on the office network).
+- OpenAPI UI (Swagger): `http://127.0.0.1:3000/docs` (site default host port `3001` → `http://127.0.0.1:3001/docs`); spec at `/openapi.json` on the same origin. The OpenAPI `servers` entry is `/api` so Try it out targets the Next.js `/api` rewrite. Use **Authorize** and paste a User PAT (Bearer); a Console Session cookie on the same origin is also sent on Try it out once paths are `/api/...`.
 - Run lint: `npm run lint`
 - Run build: `npm run build`
 - Management Console content width: `docs/ui-console-layout.md` (section containers full width; internal controls own their own width)
