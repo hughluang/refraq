@@ -17,11 +17,16 @@ __all__ = [
     "EntityNeverPublished",
     "EntityNotFound",
     "EntityNotPublished",
+    "EntityNotServing",
     "EntityNotUnpublished",
     "EntityPublishEmpty",
     "EntityPublishing",
     "EntityReferenced",
     "EntityRequestInvalid",
+    "EntityRowConflict",
+    "EntityRowInvalid",
+    "EntityRowLimitExceeded",
+    "EntityRowNotFound",
     "EntityTableInService",
     "EntityTableNameDup",
     "EntityTableNameInvalid",
@@ -85,6 +90,46 @@ class EntityNotFound(AppError):
 
     def _default_message(self) -> str:
         return "Business Entity not found"
+
+
+class EntityNotServing(AppError):
+    code = "ENTITY_NOT_SERVING"
+    http_status = 422
+
+    def _default_message(self) -> str:
+        return "Business Entity has no serving head table"
+
+
+class EntityRowInvalid(AppError):
+    code = "ENTITY_ROW_INVALID"
+    http_status = 422
+
+    def _default_message(self) -> str:
+        return "Entity row values or filters are invalid"
+
+
+class EntityRowNotFound(AppError):
+    code = "ENTITY_ROW_NOT_FOUND"
+    http_status = 404
+
+    def _default_message(self) -> str:
+        return "Entity row not found"
+
+
+class EntityRowConflict(AppError):
+    code = "ENTITY_ROW_CONFLICT"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Entity row unique constraint conflict"
+
+
+class EntityRowLimitExceeded(AppError):
+    code = "ENTITY_ROW_LIMIT_EXCEEDED"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Conditional write matched more than the row write limit"
 
 
 class EntityVersionNotFound(AppError):

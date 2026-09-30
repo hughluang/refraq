@@ -103,10 +103,10 @@ class Settings(BaseSettings):
 
 
 def require_entity_database_url(url: str | None) -> str:
-    """Worker close path: persistent DDL must have a usable entity-database URL.
+    """Persistent API and worker require a usable entity-database URL to open the pool.
 
-    Not a Settings constructor rule. API, MCP, and Beat do not open the entity
-    pool and must still start without this variable.
+    Not a Settings constructor rule. MCP and Beat do not open the entity pool.
+    Persistent API startup fail-fasts when the variable is missing.
     """
     cleaned = (url or "").strip()
     if not cleaned:

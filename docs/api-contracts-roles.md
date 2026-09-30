@@ -77,12 +77,14 @@ Purpose: return the fixed Permission catalog for Role editing UIs.
     { "key": "model_services:write", "description": "Create, update, test, activate, close, open, clean, rebuild, and delete Model Services" },
     { "key": "entity:read", "description": "Read Business Entity definitions, versions, and attributes" },
     { "key": "entity:write", "description": "Create and save unpublished Business Entity definitions, publish, open versions, deprecate, and delete a never-published definition" },
-    { "key": "entity:drop_table", "description": "Enqueue an Entity Table drop" }
+    { "key": "entity:drop_table", "description": "Enqueue an Entity Table drop" },
+    { "key": "entity:data_read", "description": "Entity Data API schema, get, and query" },
+    { "key": "entity:data_write", "description": "Entity Data API write verbs (required together with entity:data_read)" }
   ]
 }
 ```
 
-Catalog meanings for metadata-phase keys: `docs/business-metadata.md` §6 and `docs/business-user-tokens.md`. Platform **Job** / **Scheduled Task** permission `jobs:run`: `docs/business-jobs.md`. Entity keys: `docs/business-entity.md` §6.
+Catalog meanings for metadata-phase keys: `docs/business-metadata.md` §6 and `docs/business-user-tokens.md`. Platform **Job** / **Scheduled Task** permission `jobs:run`: `docs/business-jobs.md`. Entity keys: `docs/business-entity.md` §6. Entity Data API keys: `docs/api-contracts-entity-data.md`.
 
 ## 4. `GET /roles`
 

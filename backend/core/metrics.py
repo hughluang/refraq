@@ -90,7 +90,7 @@ POOL_BUDGET = Gauge(
 )
 ENTITY_POOL_BUDGET = Gauge(
     "refraq_entity_runtime_pool_budget",
-    "pool_size + max_overflow for the entity database pool (worker only)",
+    "pool_size + max_overflow for the entity database pool (api and worker)",
     registry=REGISTRY,
 )
 NEIGHBOR = Histogram(
@@ -157,7 +157,7 @@ def bind_capacity_gauges() -> None:
     WORK_TOKENS.set(cap.thread_tokens)
     POOL_BUDGET.set(cap.pool_max_connections)
     ENTITY_POOL_BUDGET.set(
-        cap.entity_pool_max_connections if cap.role == "worker" else 0
+        cap.entity_pool_max_connections if cap.role in ("api", "worker") else 0
     )
 
 

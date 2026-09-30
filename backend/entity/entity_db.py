@@ -1,4 +1,9 @@
-"""Worker-only entity database engine. Never merged with the metadata engine."""
+"""Entity database engine and pool. Never merged with the metadata engine.
+
+Opened by the API process (Entity Data API action verbs) and by the worker
+(publish / drop). MCP and Beat do not open this pool. Schema discovery uses
+only the metadata store.
+"""
 
 from __future__ import annotations
 
@@ -6,9 +11,9 @@ from functools import lru_cache
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.pool import QueuePool
 
 from backend.core.config import get_settings, require_entity_database_url
+from backend.core.db import ObservedQueuePool
 from backend.core.runtime import get_runtime_capacity
 
 __all__ = [
@@ -17,6 +22,9 @@ __all__ = [
     "open_entity_pool_when_persistent",
     "reset_entity_engine",
 ]
+
+_LOCK_TIMEOUT_MS = 5000
+_IDLE_IN_TRANSACTION_MS = 60_000
 
 
 def entity_db_schema() -> str:
@@ -40,9 +48,9 @@ def open_entity_pool_when_persistent() -> None:
 def get_entity_engine() -> Engine:
     url = require_entity_database_url(get_settings().entity_database_url)
     cap = get_runtime_capacity()
-    return create_engine(
+    engine = create_engine(
         url,
-        poolclass=QueuePool,
+        poolclass=ObservedQueuePool,
         pool_size=cap.entity_pool_size,
         max_overflow=cap.entity_max_overflow,
         pool_timeout=cap.entity_pool_timeout_sec,
@@ -50,12 +58,21 @@ def get_entity_engine() -> Engine:
         pool_pre_ping=True,
         connect_args=_connect_args(url),
     )
+    return engine
 
 
 def _connect_args(database_url: str) -> dict[str, str]:
-    if database_url.startswith("postgresql"):
-        return {"options": "-c TimeZone=UTC"}
-    return {}
+    if not database_url.startswith("postgresql"):
+        return {}
+    options = [
+        "-c TimeZone=UTC",
+        f"-c lock_timeout={_LOCK_TIMEOUT_MS}",
+        f"-c idle_in_transaction_session_timeout={_IDLE_IN_TRANSACTION_MS}",
+    ]
+    cap = get_runtime_capacity()
+    if cap.statement_timeout_ms is not None:
+        options.append(f"-c statement_timeout={int(cap.statement_timeout_ms)}")
+    return {"options": " ".join(options)}
 
 
 def reset_entity_engine() -> None:

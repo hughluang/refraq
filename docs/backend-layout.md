@@ -44,9 +44,10 @@ backend/
     models.py errors.py sources/ catalog/ connectors/ structure_jobs/ join_detection_jobs/
     schemas/ routers/     # domain use-case HTTP
     mcp_catalog.py mcp_actor.py mcp_server.py mcp_http.py tasks.py
-  entity/                 # product domain: Business Entity / version / publish and drop Jobs
+  entity/                 # product domain: Business Entity / version / publish and drop Jobs / Entity Data API
     models.py errors.py tasks.py
-    schemas/ routers/
+    data/                 # Entity Data API core (not HTTP); routers/schemas stay sibling
+    schemas/ routers/     # definition + Entity Data API HTTP (published entity.routers.*)
   worker/                 # runtime: Celery app, Beat, Scheduled Task, system tasks, discovery
     models.py schedules.py scheduler.py …
     schemas/ routers/     # mechanism Scheduled Task HTTP (list/get/patch/delete); no Console pages
@@ -117,13 +118,13 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 
 ### `entity` published modules
 
-`entity` is a **product domain** package. It owns Business Entity definition, versioning, publish, and the Job kinds that create or drop an Entity Table.
+`entity` is a **product domain** package. It owns Business Entity definition, versioning, publish, the Job kinds that create or drop an Entity Table, and the **Entity Data API**. Core data-plane logic lives in `entity/data/`; HTTP and request shapes stay in `entity/routers/` and `entity/schemas/` alongside definition (not under `entity/data/`).
 
 | Module | Published for |
 |--------|----------------|
 | `backend.entity.errors` | Domain errors (subclass `AppError`, not `admin` concrete types) |
 | `backend.entity.tasks` | Job kind handler dispatch (`entity_reconcile`, `entity_table_drop`); discovered by `worker`. Not registered on `metadata.tasks` |
-| `backend.entity.routers.*` | Domain use-case HTTP; mounted by `main` |
+| `backend.entity.routers.*` | Domain use-case HTTP (definition and Entity Data API); mounted by `main` |
 
 ### `worker` published modules
 

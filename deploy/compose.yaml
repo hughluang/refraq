@@ -73,6 +73,7 @@ services:
       REFRAQ_STORE_BACKEND: persistent
       TZ: UTC
       DATABASE_URL: postgresql+psycopg://refraq:${POSTGRES_PASSWORD}@postgres:5432/refraq
+      ENTITY_DATABASE_URL: postgresql+psycopg://refraq:${POSTGRES_PASSWORD}@postgres:5432/refraq_entity
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/2
       REFRAQ_SECRETS_MASTER_KEY: ${REFRAQ_SECRETS_MASTER_KEY}
@@ -85,6 +86,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ensure-entity-db:
+        condition: service_completed_successfully
     healthcheck:
       test:
         [

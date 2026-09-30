@@ -2,16 +2,16 @@
 
 ## 1. Scope
 
-This document defines the **Business Entity** surface: how a reusable business thing is declared, what meaning its declaration must carry, how an unpublished version is saved, how **Publish** creates that version's **Entity Table**, how a published Entity is locked and iterated, how an Entity is deprecated, and how a never-published definition is deleted. It defines the authorization, Console, and audit rules for that surface. The surface is Console HTTP. The **MCP endpoint** does not expose Business Entity.
+This document defines the **Business Entity** definition surface: how a reusable business thing is declared, what meaning its declaration must carry, how an unpublished version is saved, how **Publish** creates that version's **Entity Table**, how a published Entity is locked and iterated, how an Entity is deprecated, and how a never-published definition is deleted. It defines the authorization, Console, and audit rules for that surface. The definition surface is Console HTTP. The **MCP endpoint** does not expose Business Entity.
 
-It does not define how rows reach an Entity Table. Mapping a source column onto an attribute, transforming values, moving rows, and recording lineage belong to a **Data Channel**, which is a separate domain. It also does not define a read path for Entity Table contents.
+Mapping a source column onto an attribute, transforming values, channel load, and recording lineage belong to a **Data Channel**. Synchronous head-table schema discovery and row read/write belong to the **Entity Data API** (`docs/api-contracts-entity-data.md`). Both may write the same head table; the platform does not tag row provenance.
 
 Related boundaries:
 
 - Sources, catalog, **Object Semantics**, **Normalized Type**, and read-only **Controlled Query**: `docs/business-metadata.md`. Sources stay read-only registered data origins; refraq does not create tables inside one.
 - Platform **Job**: `docs/business-jobs.md`. Platform **Scheduled Task**: `docs/business-scheduled-tasks.md`. Publish and table drop use the Job mechanism and do not make Entity a scheduling domain.
 - **Permission** and role grants: `docs/business-login-auth.md`.
-- HTTP contract: `docs/api-contracts-entity.md`.
+- Definition HTTP contract: `docs/api-contracts-entity.md`. Entity Data API: `docs/api-contracts-entity-data.md`.
 - Console shell and module registration: `docs/business-management-console.md`.
 - Problem Codes and error envelope: `docs/conventions-errors.md`. List envelopes: `docs/conventions-pagination.md`. **Instant** handling: `docs/conventions-time.md`.
 - Connection settings and variable ownership: `docs/env.md`.
@@ -154,7 +154,7 @@ Deprecate is allowed while the current version is still unpublished (for example
 
 Entity Tables live in an entity database that refraq owns, declared by its own connection setting separate from the metadata database (`docs/env.md` owns the variable). Keeping the two apart keeps the platform connection budget in `docs/business-metadata.md` honest about metadata volume, and leaves the entity database free to grow with business data.
 
-The connection setting is not required to point at a separate server or a separate database. The product always treats it as a separate engine, a separate pool, and a separate budget line, and never collapses two identical URLs onto one engine. The entity pool exists only in the worker role. API and MCP hold no entity-database connection.
+The connection setting is not required to point at a separate server or a separate database. The product always treats it as a separate engine, a separate pool, and a separate budget line, and never collapses two identical URLs onto one engine. The worker opens the entity pool for publish and drop Jobs. Persistent API opens a process-local entity pool for the **Entity Data API**. MCP does not open the entity pool.
 
 An Entity Table is never created inside a **Source**. A Source is a read-only registered data origin; the only caller SQL refraq sends to one is a single guarded read (**Controlled Query**, **Catalog Sample**).
 
@@ -166,7 +166,7 @@ Creating or saving a version has no cross-database side effect. The definition l
 
 The Job creates that version's physical table under the name in §4.3. It does not ALTER a published table's columns. Publishing a successor leaves the previous physical table in place and, after the version is `published`, replaces the stem view so it selects the new table. A name collision with a relation already present in the entity schema fails the Job with `ENTITY_TABLE_NAME_CONFLICT` and is never auto-suffixed around the collision.
 
-The product head is the latest published version that still has a table. That fact is metadata. The stem view is updated after `published` is stored. Until that update commits, SQL against the stem still reads the previous table. Product writes, including a later **Data Channel**, address the head's physical table and do not write a superseded version. Direct SQL against a physical table name is not revoked by this rule. Write admission itself belongs to **Data Channel** and is not implemented here.
+The product head is the latest published version that still has a table. That fact is metadata. The stem view is updated after `published` is stored. Until that update commits, SQL against the stem still reads the previous table. The **Entity Data API** exposes only the head: after a successor publish, its schema and row verbs move to the new empty table. Product writes from a **Data Channel** and from the Entity Data API address the head's physical table and do not write a superseded version. Direct SQL against a physical table name is not revoked by this rule. Channel write admission belongs to **Data Channel**.
 
 ### 4.3 Physical Naming And Collision
 
@@ -179,7 +179,7 @@ Reported names:
 - No table (`table_present` is false, including unpublished versions): the version's reported `table_name` is `null`.
 - A version that still has a table reports the composed physical name.
 
-Opening a new version does not move the view. The prior published version keeps its physical table until a successor publish marks the new version `published` and then replaces the view. A later **Data Channel** binds by **Entity Version** id and writes only when that version is the head.
+Opening a new version does not move the view. The prior published version keeps its physical table until a successor publish marks the new version `published` and then replaces the view. A **Data Channel** may bind by **Entity Version** id and write only when that version is the head. The **Entity Data API** always addresses the metadata head by `table_name`.
 
 All DDL is schema-qualified against the configured entity schema (`REFRAQ_ENTITY_DB_SCHEMA`, default `public`). The product uses that schema and never creates it. Emptiness and collision checks are evaluated in that schema so their meaning does not drift with a connection-level `search_path`.
 
@@ -210,8 +210,10 @@ It is refused while a **Data Channel** references any version, rejected with `EN
 | `entity:read` | Read Business Entity definitions, versions, and attributes, and read **Dictionaries** |
 | `entity:write` | Create and save unpublished definitions, publish, open versions, deprecate, and delete a never-published definition; create, update, and delete **Dictionaries** |
 | `entity:drop_table` | Enqueue an **Entity Table** drop (§5) |
+| `entity:data_read` | **Entity Data API** schema, get, and query (`docs/api-contracts-entity-data.md`) |
+| `entity:data_write` | Entity Data API write verbs; always required together with `entity:data_read` |
 
-`entity:drop_table` is in the Permission catalog and is not seeded onto the `operator` **Role**. It is not implied by `entity:write`.
+`entity:drop_table` is in the Permission catalog and is not seeded onto the `operator` **Role**. It is not implied by `entity:write`. `entity:data_read` and `entity:data_write` are not seeded onto `operator`, are held by `super_admin` by default, and are not implied by `entity:read` / `entity:write` (or the reverse).
 
 ## 7. Management Console
 
@@ -245,18 +247,18 @@ Persist a **Management Audit Event** for: Business Entity create, definition sav
 
 ## 9. Non-Goals
 
-1. Moving rows into an **Entity Table** — mapping, transform, lineage, cadence, and load runs belong to a **Data Channel**.
-2. Any read path for Entity Table contents, including row reads, row counts, and freshness observation.
-3. Serving delivery, consumer-facing contracts, and consumer-owned write targets.
-4. Composite unique constraints and composite indexes.
-5. ALTER of a published **Entity Table**, and any per-Entity schema-evolution policy switch.
-6. Dropping a non-empty **Entity Table**, cascading disposal, and reclaiming entity database storage.
-7. Consumer-reference graphs and undoing deprecate.
-8. Collecting Entity Tables as **Catalog Object**s, or registering the entity database as a **Source**.
-9. Creating tables inside a Source, or any write SQL against a Source.
-10. Entity-level ACL, per-attribute permissions, and masking.
-11. A hierarchy or inheritance between Business Entities. An **Inbound Reference** is not a saved relationship, and a many-to-many is not a link table or a relationship-entity subtype.
-12. Exposing Business Entity on the **MCP endpoint**.
+1. Moving rows into an **Entity Table** via channel load — mapping, transform, lineage, cadence, and load runs belong to a **Data Channel**.
+2. Serving delivery targets and Serving-layer delivery contracts.
+3. Composite unique constraints and composite indexes.
+4. ALTER of a published **Entity Table**, and any per-Entity schema-evolution policy switch.
+5. Dropping a non-empty **Entity Table**, cascading disposal, and reclaiming entity database storage.
+6. Serving-reference graphs and undoing deprecate.
+7. Collecting Entity Tables as **Catalog Object**s, or registering the entity database as a **Source**.
+8. Creating tables inside a Source, or any write SQL against a Source.
+9. Entity-level ACL, per-attribute permissions, and masking.
+10. A hierarchy or inheritance between Business Entities. An **Inbound Reference** is not a saved relationship, and a many-to-many is not a link table or a relationship-entity subtype.
+11. Exposing Business Entity definition or the **Entity Data API** on the **MCP endpoint**.
+12. A Management Console data page that calls the Entity Data API.
 13. **Semantic Type**, or a JSON Schema or OpenAPI format, as an **Attribute Type**.
 14. A unit or quantity on a `decimal` attribute. A later quantity is a new type or a composite value, not a `decimal` config key.
 15. A multi-value attribute, including a cardinality on `reference` config. A many-to-many stays two **Entity Reference**s on an ordinary Business Entity.
@@ -274,5 +276,6 @@ Persist a **Management Audit Event** for: Business Entity create, definition sav
 - `docs/conventions-time.md`
 - `docs/env.md`
 - `docs/api-contracts-entity.md`
+- `docs/api-contracts-entity-data.md`
 - `docs/ui-console-record-form.md`
 - `docs/glossary.md`

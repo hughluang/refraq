@@ -35,6 +35,8 @@ Permission = Literal[
     "entity:read",
     "entity:write",
     "entity:drop_table",
+    "entity:data_read",
+    "entity:data_write",
 ]
 
 ALL_PERMISSIONS: tuple[Permission, ...] = (
@@ -65,6 +67,8 @@ ALL_PERMISSIONS: tuple[Permission, ...] = (
     "entity:read",
     "entity:write",
     "entity:drop_table",
+    "entity:data_read",
+    "entity:data_write",
 )
 
 PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
@@ -95,6 +99,8 @@ PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
     "entity:read": "Read Business Entity definitions, versions, and attributes",
     "entity:write": "Create and save unpublished Business Entity definitions, publish, open versions, deprecate, and delete a never-published definition",
     "entity:drop_table": "Enqueue an Entity Table drop",
+    "entity:data_read": "Read Entity Data API schema, get, and query",
+    "entity:data_write": "Write Entity Data API rows (also requires entity:data_read)",
 }
 
 CATALOG_SET: frozenset[str] = frozenset(ALL_PERMISSIONS)

@@ -51,29 +51,29 @@ Runtime capacity (ADR 0040 / 0045) is also deployment env, not System Parameters
 
 `REFRAQ_ADMISSION_SLOTS` is the concurrent-people declaration for work that waits on an external system (ADR 0045). `REFRAQ_ADMISSION_ACTOR_SHARE` is one User's concurrent external waits (agent fan-out); it is clamped to the slot count and is 0 when slots is 0. `REFRAQ_ADMISSION_SLOTS=0` on api/mcp is honored: admitted work is refused immediately (`ADMISSION_CAPACITY_EXCEEDED`). Worker admission stays 0 regardless of the env keys. `REFRAQ_PEEK_SLOTS` is retired; leftover names are ignored and reported at startup. Tune slots from `/metrics` (`refraq_admission_slots_occupied`, `refraq_admission_slots_limit`, `refraq_admission_actor_share_limit`, `refraq_capacity_rejects_total`). Intranet `GET /metrics` (Prometheus text) is on the API and MCP processes, compose-internal and never published. The Console proxy returns 404 for `/api/metrics` so the `/api/:path*` rewrite cannot expose it. `/api/readyz` stays as today. `/healthz`, `/readyz`, and `/metrics` on the process bypass load-shed.
 
-The entity database is a second connection the worker opens. It is not constrained to a separate server or a separate database. The product always treats it as a separate engine, a separate pool, and a separate budget line, and must never collapse two identical URLs onto one engine — collapsing them would make the printed pool budget disagree with runtime. API and MCP hold no entity-database connection. There is no entity statement-timeout variable: the entity engine is used only by the worker, which by existing convention sets no statement timeout. The product uses `REFRAQ_ENTITY_DB_SCHEMA` (default `public`) and never creates that schema.
+The entity database is a second connection that the worker and persistent API open. It is not constrained to a separate server or a separate database. The product always treats it as a separate engine, a separate pool, and a separate budget line, and must never collapse two identical URLs onto one engine — collapsing them would make the printed pool budget disagree with runtime. MCP and Beat hold no entity-database connection. Persistent API uses the entity pool for the **Entity Data API** and applies `REFRAQ_DB_STATEMENT_TIMEOUT_MS` plus `lock_timeout` on those connections (`docs/api-contracts-entity-data.md`). The worker opens the same URL for publish and drop Jobs; by existing convention the worker sets no statement timeout on entity connections used for long DDL. The product uses `REFRAQ_ENTITY_DB_SCHEMA` (default `public`) and never creates that schema.
 
-Local `compose.yaml` and `deploy/compose.yaml` default `ENTITY_DATABASE_URL` to database `refraq_entity` on the same Postgres instance as `DATABASE_URL`. `POSTGRES_DB` only creates `refraq`; a one-shot `ensure-entity-db` service creates `refraq_entity` when missing, including on an already-initialized volume. The URLs may still be identical; the product does not require the split.
+Local `compose.yaml` and `deploy/compose.yaml` default `ENTITY_DATABASE_URL` to database `refraq_entity` on the same Postgres instance as `DATABASE_URL`. `POSTGRES_DB` only creates `refraq`; a one-shot `ensure-entity-db` service creates `refraq_entity` when missing, including on an already-initialized volume. The URLs may still be identical; the product does not require the split. `/readyz` does not probe the entity database.
 
 | Variable | api default | mcp default | worker default |
 | --- | --- | --- | --- |
-| `ENTITY_DATABASE_URL` | n/a (no entity pool) | n/a (no entity pool) | required to open the entity pool; may equal `DATABASE_URL` |
-| `REFRAQ_ENTITY_DB_POOL_SIZE` | n/a | n/a | 5 |
-| `REFRAQ_ENTITY_DB_MAX_OVERFLOW` | n/a | n/a | 5 |
-| `REFRAQ_ENTITY_DB_POOL_TIMEOUT_SEC` | n/a | n/a | 5 |
-| `REFRAQ_ENTITY_DB_POOL_RECYCLE_SEC` | n/a | n/a | 1800 |
-| `REFRAQ_ENTITY_DB_SCHEMA` | n/a | n/a | `public` |
+| `ENTITY_DATABASE_URL` | required to open the entity pool (fail-fast when persistent); may equal `DATABASE_URL` | n/a (no entity pool) | required to open the entity pool; may equal `DATABASE_URL` |
+| `REFRAQ_ENTITY_DB_POOL_SIZE` | 4 | n/a | 5 |
+| `REFRAQ_ENTITY_DB_MAX_OVERFLOW` | 0 | n/a | 5 |
+| `REFRAQ_ENTITY_DB_POOL_TIMEOUT_SEC` | 5 | n/a | 5 |
+| `REFRAQ_ENTITY_DB_POOL_RECYCLE_SEC` | 1800 | n/a | 1800 |
+| `REFRAQ_ENTITY_DB_SCHEMA` | `public` | n/a | `public` |
 
 Pool-budget line items (each line is `pool_size + max_overflow`):
 
 | Process role | Pools opened | This-process budget |
 | --- | --- | --- |
-| api | metadata (`REFRAQ_DB_*`) | that pool |
+| api | metadata (`REFRAQ_DB_*`) and entity (`REFRAQ_ENTITY_DB_*`) | the sum of both pools |
 | mcp | metadata (`REFRAQ_DB_*`) | that pool |
 | worker | metadata (`REFRAQ_DB_*`) and entity (`REFRAQ_ENTITY_DB_*`) | the sum of both pools |
 | beat | metadata (`REFRAQ_DB_*`) | that pool |
 
-The worker banner prints each pool separately; its "this process budget" number is their sum. Deploy constraint: the sum of every process-role budget across API + MCP + worker + Beat should stay at or below `0.8 ×` Postgres `max_connections`. That inequality is a printed deployment constraint, not a startup assertion — no process reads Postgres `max_connections`, and no process can see the other roles' pools. Admission slots are not part of that sum.
+Processes that open both pools (api and worker) print each pool separately; the "this process budget" number is their sum. Deploy constraint: the sum of every process-role budget across API + MCP + worker + Beat should stay at or below `0.8 ×` Postgres `max_connections`. That inequality is a printed deployment constraint, not a startup assertion — no process reads Postgres `max_connections`, and no process can see the other roles' pools. Admission slots are not part of that sum.
 
 Database supply is the other half of ADR 0040. Local `compose.yaml` and `deploy/compose.yaml` set `shm_size: 2gb` and start Postgres with `shared_buffers=1GB`, `effective_cache_size=3GB`, `work_mem=16MB`. These are Compose command flags, not `REFRAQ_*` process env and not System Parameters. Do not leave `shared_buffers` at the 128MB factory default: Catalog embeddings are toast-heavy and neighbor SQL is an exact scan. `effective_cache_size` is a planner hint (it does not allocate). Container `shm_size` must exceed `shared_buffers` or PostgreSQL will not start.
 
@@ -143,7 +143,7 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - `REFRAQ_STORE_BACKEND` (`persistent` default; `memory` tests only)
 - `TZ` (process timezone; default UTC in examples/images; not `APP_TIMEZONE`)
 - `DATABASE_URL` (required when `persistent`)
-- `ENTITY_DATABASE_URL` (entity-database connection; unprefixed because it is a connection setting. Required on the worker to open the entity pool; may equal `DATABASE_URL`. A persistent worker without it must fail fast. API and MCP do not open an entity pool)
+- `ENTITY_DATABASE_URL` (entity-database connection; unprefixed because it is a connection setting. Required on persistent API and on the worker to open the entity pool; may equal `DATABASE_URL`. A persistent API or worker without it must fail fast. MCP and Beat do not open an entity pool)
 - `REDIS_URL` (required when `persistent`)
 - `ADMIN_SESSION_SECRET` (reserved for future signed-cookie usage; v1 sessions are server-managed)
 - `INITIAL_ADMIN_ACCOUNT`
@@ -158,7 +158,7 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - `REFRAQ_INTEGRATION_CELERY_BROKER_URL` (integration only; default `redis://127.0.0.1:6379/3`)
 - `REFRAQ_PROCESS_ROLE` (`api` / `mcp` / `worker`; declared per process at the entry, not in a shared `.env`)
 - `REFRAQ_DB_POOL_SIZE`, `REFRAQ_DB_MAX_OVERFLOW`, `REFRAQ_DB_POOL_TIMEOUT_SEC`, `REFRAQ_DB_POOL_RECYCLE_SEC`, `REFRAQ_DB_STATEMENT_TIMEOUT_MS` (SQLAlchemy platform pool; role defaults in §2)
-- `REFRAQ_ENTITY_DB_POOL_SIZE`, `REFRAQ_ENTITY_DB_MAX_OVERFLOW`, `REFRAQ_ENTITY_DB_POOL_TIMEOUT_SEC`, `REFRAQ_ENTITY_DB_POOL_RECYCLE_SEC` (entity pool; worker only; role defaults in §2)
+- `REFRAQ_ENTITY_DB_POOL_SIZE`, `REFRAQ_ENTITY_DB_MAX_OVERFLOW`, `REFRAQ_ENTITY_DB_POOL_TIMEOUT_SEC`, `REFRAQ_ENTITY_DB_POOL_RECYCLE_SEC` (entity pool; api and worker; role defaults in §2)
 - `REFRAQ_ENTITY_DB_SCHEMA` (entity-table schema qualifier; default `public`; the product uses it and never creates it)
 - `REFRAQ_HTTP_MAX_INFLIGHT`, `REFRAQ_THREAD_TOKENS`, `REFRAQ_ADMISSION_SLOTS`, `REFRAQ_ADMISSION_ACTOR_SHARE` (API/MCP runtime capacity; ADR 0040 / 0045)
 - Postgres `shared_buffers` / `effective_cache_size` / `work_mem` / container `shm_size` (database supply; ADR 0040; set on the Compose `postgres` service, not as process env)
@@ -197,7 +197,7 @@ Session cookie `Secure` follows browser-facing HTTPS. The web `proxy.ts` hop for
 - Do not change API port in code and forget to update frontend env
 - The initial admin password is meant for first-time local development only; rotate it before any non-local site. Site compose reads a live `.env` outside the git tree; do not leave example secrets in a live stack.
 - Missing `DATABASE_URL` / `REDIS_URL` with `persistent` must fail fast; never silently fall back to memory
-- Missing `ENTITY_DATABASE_URL` on a persistent worker must fail fast; never silently fall back to an in-process recording table port. API and MCP do not open an entity pool and do not require the variable at process start. Beat does not open the entity pool.
+- Missing `ENTITY_DATABASE_URL` on a persistent API or persistent worker must fail fast; never silently fall back to an in-process recording table port. MCP and Beat do not open the entity pool and do not require the variable at process start. `/readyz` does not probe the entity database.
 - Settings dotenv load order: repo-root `.env` then `backend/.env` (later wins). Prefer `backend/.env` as the local canonical file
 - Integration tests must not reuse interactive `DATABASE_URL` / `REDIS_URL`; they use `REFRAQ_INTEGRATION_*` defaults so Compose live data stays intact
 
@@ -212,7 +212,7 @@ Platform async runtime (`docs/adr/0006-celery-platform-async-runtime.md`):
 - API process: create durable Job rows and enqueue via Celery after commit (`docs/api-contracts-jobs.md`)
 - Worker: `celery -A backend.worker.app worker` — concurrency is a deployment concern, not a **System Parameter** (`docs/business-system-parameters.md` §5.2). No flag is passed, so Celery's own default (one process per CPU) applies; a deployment that needs to pin capacity passes `--concurrency` on this command line, and sizes it together with the replica count. The local `.vscode` launch configuration pins `--pool=solo --concurrency=1` because a debugger needs a single process; it overrides no stored value
 - Beat (single replica): `celery -A backend.worker.app beat` — reads **Scheduled Task** rows from Postgres; do not run multiple Beat replicas. Loop `max_interval` and schedule reload `sync_every` are in-code constants (`BEAT_MAX_INTERVAL_SEC = 5`, `BEAT_SYNC_EVERY_SEC = 30`; `docs/business-system-parameters.md` §5.2). An overdue in-memory commitment is dispatched **once** until the next reload (or `BEAT_SYNC_EVERY_SEC` retry if the store row is still overdue); Beat does not tight-loop send while the worker consumes the tick. Occupancy lost-detection (`job_lost_detection_sec`, seed 60 → `JOB_WORKER_LOST`) is driven by the system reaper Scheduled Task on this Beat. Beat sync copies that same lost-detection value onto the reaper row's `interval_seconds` and does not recompute `next_run_at`, so tightening may wait for the current tick. If Beat is stopped, that reaping stops — starting only the API does not recover false `RUNNING` Jobs.
-- Worker and Beat share `DATABASE_URL`, `CELERY_BROKER_URL`, and (when decrypting secrets) `REFRAQ_SECRETS_MASTER_KEY`. The worker also opens `ENTITY_DATABASE_URL` as a separate engine and pool even when the URL equals `DATABASE_URL`. A persistent worker that cannot open that URL is not a healthy executor: startup fails, and `entity_reconcile` / `entity_table_drop` cannot succeed by falling back to an in-process recording port. Beat does not open the entity pool.
+- Worker and Beat share `DATABASE_URL`, `CELERY_BROKER_URL`, and (when decrypting secrets) `REFRAQ_SECRETS_MASTER_KEY`. The worker also opens `ENTITY_DATABASE_URL` as a separate engine and pool even when the URL equals `DATABASE_URL`. A persistent worker that cannot open that URL is not a healthy executor: startup fails, and `entity_reconcile` / `entity_table_drop` cannot succeed by falling back to an in-process recording port. Persistent API opens the same URL for the **Entity Data API**. Beat and MCP do not open the entity pool.
 - After Foundation Upgrade, restart worker and Beat. Code on disk does not change a live process's registered names; a leftover worker after a `task_name` revision yields Beat `NotRegistered` and structure clocks that never mint. Confirm with `celery -A backend.worker.app inspect registered` that registered names match Scheduled Task rows.
 - No Celery result backend; operator-visible status and run logs live on Postgres Job rows (`log_body`; later large attachments if needed)
 - Do not run long collection inside the interactive API request path (`docs/adr/0004-redis-queue-for-ingestion.md`)

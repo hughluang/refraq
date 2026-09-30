@@ -65,7 +65,7 @@ Rules:
 - Exactly one principal resolution path per request; do not mix partial credentials in conflicting ways.
 - HTTP MCP (`/mcp`) accepts **only** User PAT Bearer. A Session cookie is ignored and does not authenticate. Missing or invalid PAT is HTTP 401 before any protocol method.
 - MCP tools use the same Permission catalog as HTTP after the PAT is resolved.
-- Audit events for PAT create/deactivate/restore/delete and for actions performed via PAT record the User id (and token id where relevant, never plaintext).
+- Audit events for PAT create/deactivate/restore/delete and for actions performed via PAT record the User id (and token id where relevant, never plaintext). **Entity Data API** calls (Session or PAT) do not produce **Management Audit Event**s (`docs/api-contracts-entity-data.md`).
 
 ## 6. Non-Goals
 

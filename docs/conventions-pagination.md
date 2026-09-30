@@ -70,6 +70,10 @@ A **Top-K Read** is `{ "items": [...], "limit": L, "offset": O, "rank_mode": "ve
 
 It is admitted only for Catalog Search (ADR 0043). New endpoints must not choose a Top-K Read without an ADR that names the admission.
 
+### 4.2 Entity Data Keyset Page
+
+An **Entity Data Keyset Page** is `{ "items": [...], "limit": L, "next_after_row_id": null | N }`. It is admitted only for **Entity Data API** query keyset mode (`docs/api-contracts-entity-data.md`, ADR 0051). It is not a Cursor Page and not a serving opaque cursor. New endpoints must not reuse this envelope without an ADR that names the admission.
+
 ## 5. Whole-Set Read
 
 A Whole-Set Read is not a page. It is a composite configuration document bounded by platform definition, not by data volume. Keys are not `items`:
@@ -101,7 +105,7 @@ Pickers that need a closed option set (role Select, Source Select) fetch one pag
 
 1. A collection list that pages with `{ "items": [...] }` only.
 2. Returning `total` / `limit` / `offset` only “when pagination params are used”.
-3. A third envelope (`has_more` on a collection list, `total_count`, cursor without §4 admission, Top-K Read without §4.1 admission).
+3. A third envelope (`has_more` on a collection list, `total_count`, cursor without §4 admission, Top-K Read without §4.1 admission, Entity Data Keyset Page without §4.2 admission).
 4. Newest-first Offset Pages ordered by `created_at` without an `id` (or equivalent) tiebreaker.
 5. Computing Offset Page `total` by materializing every filtered row.
 6. A default `limit` with no documented max cap.

@@ -2,13 +2,14 @@
 
 ## 1. Purpose
 
-This document defines the HTTP contract for the **Business Entity** surface: request and response shapes, list envelopes, Problem Codes, publish, deprecate, and the enqueue of table-create and table-drop **Job**s.
+This document defines the HTTP contract for the **Business Entity** definition surface: request and response shapes, list envelopes, Problem Codes, publish, deprecate, and the enqueue of table-create and table-drop **Job**s. Paths address by opaque Entity `id`.
 
-It does not define how rows reach an **Entity Table**, and it does not define a read path for Entity Table contents. Mapping, transform, lineage, and write admission belong to a **Data Channel**.
+Head-table schema discovery and row read/write belong to the **Entity Data API** (`docs/api-contracts-entity-data.md`), addressed by `table_name`. Mapping, transform, lineage, and channel write admission belong to a **Data Channel**.
 
 Related boundaries:
 
 - Business rules: `docs/business-entity.md`
+- Entity Data API (head schema and rows): `docs/api-contracts-entity-data.md`
 - Problem Details and Problem Codes: `docs/conventions-errors.md`
 - **Offset Page** lists: `docs/conventions-pagination.md`
 - **Instant** wire form: `docs/conventions-time.md`
@@ -44,7 +45,7 @@ Each list endpoint declares its default and max `limit`. HTTP rejects out-of-ran
 | Entity Version | `0123456789abcdef` | 16 lowercase hexadecimal digits, no prefix |
 | Job | `job_01HZX` | Platform Job id (`docs/api-contracts-jobs.md`) |
 
-`table_name` is the immutable business identity. It is not an HTTP path substitute for `id`.
+`table_name` is the immutable business identity. On this definition surface it is not an HTTP path substitute for `id`. The **Entity Data API** addresses the same Entity by `table_name` only and never falls back to `id` (`docs/api-contracts-entity-data.md`).
 
 ## 3. Resource Shapes
 
@@ -463,7 +464,7 @@ Publish create and drop share one execution lock keyed per Entity (`entity_table
 
 Failures leave Job `result` null and carry `error_code` / `error_message`. Success writes the kind envelope and only then.
 
-The API and MCP processes hold no connection to the entity database. Only the worker opens that pool.
+The worker opens the entity pool for publish and drop Jobs. Persistent API also opens a process-local entity pool for the **Entity Data API** (`docs/api-contracts-entity-data.md`). MCP does not open the entity pool.
 
 ### 6.1 `POST /entities/{id}/versions/{version_id}/drop-table`
 
@@ -531,9 +532,9 @@ Persist a **Management Audit Event** for: Business Entity create, definition sav
 
 ## 9. Non-Goals
 
-1. Any **Data Channel** contract: mapping, transform, lineage, row movement, cadence, or write admission.
-2. Any read path for Entity Table contents, including row counts and freshness.
-3. Serving delivery, consumer targets, and consumer-facing contracts.
+1. Any **Data Channel** contract: mapping, transform, lineage, channel load cadence, or channel write admission.
+2. The **Entity Data API** (head schema and row verbs): `docs/api-contracts-entity-data.md`.
+3. Serving delivery targets and Serving-layer delivery contracts.
 4. Composite unique constraints, composite indexes, ALTER of a published table, and per-Entity evolution policy switches.
 5. Registering the entity database as a **Source**, or collecting Entity Tables as **Catalog Object**s.
 6. Entity-level ACL, attribute-level permissions, and masking.
@@ -545,6 +546,7 @@ Persist a **Management Audit Event** for: Business Entity create, definition sav
 ## 10. References
 
 - `docs/business-entity.md`
+- `docs/api-contracts-entity-data.md`
 - `docs/business-jobs.md`
 - `docs/business-login-auth.md`
 - `docs/api-contracts-jobs.md`

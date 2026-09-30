@@ -48,6 +48,10 @@ class EntityStore(Protocol):
 
     def get_entity(self, entity_id: str) -> BusinessEntityRecord | None: ...
 
+    def get_entity_by_table_name(
+        self, table_name: str
+    ) -> BusinessEntityRecord | None: ...
+
     def list_all_entities(self) -> list[BusinessEntityRecord]: ...
 
     def create_entity(
@@ -121,6 +125,15 @@ class MemoryEntityStore:
 
     def get_entity(self, entity_id: str) -> BusinessEntityRecord | None:
         with self._lock:
+            return self._entities.get(entity_id)
+
+    def get_entity_by_table_name(
+        self, table_name: str
+    ) -> BusinessEntityRecord | None:
+        with self._lock:
+            entity_id = self._by_table_name.get(table_name)
+            if entity_id is None:
+                return None
             return self._entities.get(entity_id)
 
     def list_all_entities(self) -> list[BusinessEntityRecord]:
@@ -286,6 +299,17 @@ class SqlEntityStore:
     def get_entity(self, entity_id: str) -> BusinessEntityRecord | None:
         with session_scope() as session:
             row = session.get(BusinessEntityRow, entity_id)
+            return _entity_from_row(row) if row else None
+
+    def get_entity_by_table_name(
+        self, table_name: str
+    ) -> BusinessEntityRecord | None:
+        with session_scope() as session:
+            row = session.execute(
+                select(BusinessEntityRow).where(
+                    BusinessEntityRow.table_name == table_name
+                )
+            ).scalar_one_or_none()
             return _entity_from_row(row) if row else None
 
     def list_all_entities(self) -> list[BusinessEntityRecord]:

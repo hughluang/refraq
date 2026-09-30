@@ -214,6 +214,9 @@ def test_role_defaults_and_actor_share() -> None:
     assert api.admission_actor_share == 8
     assert api.statement_timeout_ms == 30_000
     assert api.uvicorn_limit_concurrency == api.http_max_inflight + 32
+    assert api.entity_pool_size == 4
+    assert api.entity_max_overflow == 0
+    assert api.process_pool_budget == api.pool_max_connections + api.entity_pool_max_connections
 
     set_process_role("mcp")
     reset_runtime_capacity()
@@ -224,6 +227,9 @@ def test_role_defaults_and_actor_share() -> None:
     assert mcp.admission_slots == 16
     assert mcp.admission_actor_share == 8
     assert mcp.uvicorn_limit_concurrency is None
+    assert mcp.entity_pool_size == 1
+    assert mcp.entity_max_overflow == 0
+    assert mcp.process_pool_budget == mcp.pool_max_connections
 
     set_process_role("worker")
     reset_runtime_capacity()
@@ -233,6 +239,11 @@ def test_role_defaults_and_actor_share() -> None:
     assert worker.admission_actor_share == 0
     assert worker.statement_timeout_ms is None
     assert worker.http_max_inflight == 0
+    assert worker.entity_pool_size == 5
+    assert worker.entity_max_overflow == 5
+    assert worker.process_pool_budget == (
+        worker.pool_max_connections + worker.entity_pool_max_connections
+    )
 
     set_process_role("api")
     reset_runtime_capacity()
@@ -286,7 +297,46 @@ class _PersistentNoEntityUrl:
     entity_database_url = None
 
 
-def test_open_entity_pool_requires_url_when_persistent(
+def test_entity_engine_connect_args_include_timeouts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REFRAQ_PROCESS_ROLE", "api")
+    monkeypatch.setenv(
+        "ENTITY_DATABASE_URL", "postgresql+psycopg://u:p@127.0.0.1:5432/refraq_entity"
+    )
+    reset_runtime_capacity()
+    from backend.core.config import reset_settings_cache
+    from backend.entity import entity_db as entity_db_mod
+
+    reset_settings_cache()
+    entity_db_mod.reset_entity_engine()
+    captured: dict[str, object] = {}
+    real_create_engine = entity_db_mod.create_engine
+
+    def _capture(url: str, **kwargs: object):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return real_create_engine("sqlite://")
+
+    monkeypatch.setattr(entity_db_mod, "create_engine", _capture)
+    entity_db_mod.get_entity_engine()
+    connect_args = captured.get("connect_args")
+    assert isinstance(connect_args, dict)
+    options = str(connect_args.get("options") or "")
+    assert "lock_timeout=5000" in options
+    assert "idle_in_transaction_session_timeout=60000" in options
+    assert "statement_timeout=30000" in options
+    assert captured.get("poolclass") is not None
+    from backend.core.db import ObservedQueuePool
+
+    assert captured.get("poolclass") is ObservedQueuePool
+    assert captured.get("pool_size") == 4
+    assert captured.get("max_overflow") == 0
+    entity_db_mod.reset_entity_engine()
+    reset_settings_cache()
+    reset_runtime_capacity()
+
+
+def test_api_persistent_open_entity_pool_requires_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(

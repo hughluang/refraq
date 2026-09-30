@@ -71,9 +71,9 @@ class RuntimeCapacity:
 
     @property
     def process_pool_budget(self) -> int:
-        if self.role == "worker":
-            return self.pool_max_connections + self.entity_pool_max_connections
-        return self.pool_max_connections
+        if self.role == "mcp":
+            return self.pool_max_connections
+        return self.pool_max_connections + self.entity_pool_max_connections
 
 
 def _defaults_for(role: ProcessRole) -> dict[str, int]:
@@ -85,6 +85,8 @@ def _defaults_for(role: ProcessRole) -> dict[str, int]:
             "admission_slots": 16,
             "admission_actor_share": 8,
             "http_max_inflight": 16,
+            "entity_pool_size": 1,
+            "entity_max_overflow": 0,
         }
     if role == "worker":
         return {
@@ -94,6 +96,8 @@ def _defaults_for(role: ProcessRole) -> dict[str, int]:
             "admission_slots": 0,
             "admission_actor_share": 0,
             "http_max_inflight": 0,
+            "entity_pool_size": 5,
+            "entity_max_overflow": 5,
         }
     return {
         "pool_size": 8,
@@ -102,6 +106,8 @@ def _defaults_for(role: ProcessRole) -> dict[str, int]:
         "admission_slots": 32,
         "admission_actor_share": 8,
         "http_max_inflight": 32,
+        "entity_pool_size": 4,
+        "entity_max_overflow": 0,
     }
 
 
@@ -111,8 +117,14 @@ def _from_env(role: ProcessRole) -> RuntimeCapacity:
     max_overflow = max(0, _env_int("REFRAQ_DB_MAX_OVERFLOW", d["max_overflow"]))
     pool_timeout_sec = float(_env_int("REFRAQ_DB_POOL_TIMEOUT_SEC", 5))
     pool_recycle_sec = max(0, _env_int("REFRAQ_DB_POOL_RECYCLE_SEC", 1800))
-    entity_pool_size = max(1, _env_int("REFRAQ_ENTITY_DB_POOL_SIZE", 5))
-    entity_max_overflow = max(0, _env_int("REFRAQ_ENTITY_DB_MAX_OVERFLOW", 5))
+    entity_default_size = d["entity_pool_size"]
+    entity_default_overflow = d["entity_max_overflow"]
+    entity_pool_size = max(
+        1, _env_int("REFRAQ_ENTITY_DB_POOL_SIZE", entity_default_size)
+    )
+    entity_max_overflow = max(
+        0, _env_int("REFRAQ_ENTITY_DB_MAX_OVERFLOW", entity_default_overflow)
+    )
     entity_pool_timeout_sec = float(_env_int("REFRAQ_ENTITY_DB_POOL_TIMEOUT_SEC", 5))
     entity_pool_recycle_sec = max(0, _env_int("REFRAQ_ENTITY_DB_POOL_RECYCLE_SEC", 1800))
     if role == "worker":
@@ -202,7 +214,7 @@ def log_capacity_warnings(cap: RuntimeCapacity) -> None:
             cap.thread_tokens,
             cap.pool_max_connections,
         )
-    if cap.role == "worker":
+    if cap.role in ("api", "worker"):
         entity_banner = (
             "runtime capacity entity pool=%s+%s timeout=%ss recycle=%ss"
             % (

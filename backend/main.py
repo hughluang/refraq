@@ -66,6 +66,8 @@ from backend.metadata.routers.sources import router as sources_router
 from backend.metadata.routers.structure_diffs import router as structure_diffs_router
 from backend.metadata.routers.type_mappings import router as type_mappings_router
 from backend.metadata.type_mappings.seeds import ensure_product_type_mappings
+from backend.entity.routers.data import router as entity_data_router
+from backend.entity.routers.data import router as entity_data_router
 from backend.entity.routers.dictionaries import router as dictionaries_router
 from backend.entity.routers.entities import router as entities_router
 from backend.worker.api import ensure_system_schedules
@@ -108,11 +110,18 @@ def _bootstrap_site(target_settings: Settings) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    from backend.entity.entity_db import (
+        open_entity_pool_when_persistent,
+        reset_entity_engine,
+    )
+
     _bootstrap_site(settings)
     apply_http_runtime()
+    open_entity_pool_when_persistent()
     try:
         yield
     finally:
+        reset_entity_engine()
         reset_peek_bulkhead()
 
 
@@ -191,6 +200,7 @@ app.include_router(structure_diffs_router)
 app.include_router(metadata_query_router)
 app.include_router(metadata_mcp_router)
 app.include_router(entities_router)
+app.include_router(entity_data_router)
 app.include_router(dictionaries_router)
 app.include_router(jobs_mechanism_router)
 app.include_router(schedules_mechanism_router)

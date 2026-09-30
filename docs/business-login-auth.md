@@ -168,15 +168,16 @@ Fixed Permission catalog (Foundation + metadata foundation extensions):
 - `identity_providers:read` / `identity_providers:write`
 - `model_services:read` / `model_services:write`
 - `entity:read` / `entity:write` / `entity:drop_table`
+- `entity:data_read` / `entity:data_write`
 
 Rules:
 
 - New permissions enter the catalog in code/docs first; Role UI only checkboxes catalog entries
 - Free-form permission strings are rejected
 - Frontend checks are UX only; backend remains authoritative
-- Seeded `operator` keeps `console:access` + `dashboard:read` only (no `settings:*`, no metadata write/query/sample/token/audit, and no `entity:*` by default). `entity:drop_table` is not seeded onto `operator` and is not implied by `entity:write`.
+- Seeded `operator` keeps `console:access` + `dashboard:read` only (no `settings:*`, no metadata write/query/sample/token/audit, and no `entity:*` by default). `entity:drop_table`, `entity:data_read`, and `entity:data_write` are not seeded onto `operator`. `entity:drop_table` is not implied by `entity:write`. `entity:data_read` / `entity:data_write` are not implied by `entity:read` / `entity:write` (or the reverse).
 - `identity_providers:read` lists configured providers and the protocol spec; `identity_providers:write` creates, updates, tests, enables, disables, and deletes them. Neither permission grants Role or User permissions.
-- Entity permission meanings: `docs/business-entity.md` §6.
+- Entity permission meanings: `docs/business-entity.md` §6; Entity Data API: `docs/api-contracts-entity-data.md`.
 - An auto-provisioned provider default Role must not effectively contain `users:write`, `roles:write`, or `identity_providers:write`; the locked `super_admin` Role is therefore never valid as an auto-provisioning default.
 - Metadata permission meanings: `docs/business-metadata.md` §6; User PAT: `docs/business-user-tokens.md`
 - Session TTL used at login is the **effective** value of the `admin_session_ttl_hours` **System Parameter** (stored value, seeded 8; no env fallback); changing TTL does not rewrite existing sessions — see `docs/business-system-parameters.md` and `docs/api-contracts-settings.md`

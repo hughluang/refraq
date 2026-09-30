@@ -150,18 +150,19 @@ Responsibilities:
 - Stored publish status (`unpublished` / `publishing` / `published`) and Entity deprecate
 - Derived `table_present` from the stored attribute-set snapshot and the latest publish **Job**
 - Minting `entity_reconcile` (publish create) and `entity_table_drop` Jobs; own Celery task and kind dispatch (`entity/tasks.py`), discovered by `worker`. Not registered on `metadata.tasks`
-- Domain use-case HTTP under `entity/routers/` and shapes under `entity/schemas/`
+- **Entity Data API** core under `entity/data/` (head schema and row verbs; `docs/api-contracts-entity-data.md`)
+- Domain use-case HTTP under `entity/routers/` (definition plus `routers/data.py`) and shapes under `entity/schemas/` (including `schemas/data.py`)
 - Published API listed in `docs/backend-layout.md` §3
 
 Must not contain:
 
 - Owning the platform Job table (lives in `backend/jobs/`)
-- An entity-database engine or pool in the API or MCP process; that pool exists only in the worker
+- An entity-database engine or pool in the MCP process; persistent API may open the entity pool for Entity Data API; the worker opens it for publish and drop Jobs
 - Duplicating the **Normalized Type** closed set (import the published `metadata` leaf module)
-- Mapping, transform, lineage, row movement, or write admission (**Data Channel**)
-- A read path for Entity Table contents
+- Mapping, transform, lineage, or channel write admission (**Data Channel**)
 - Importing `worker.app`
 - Pre-scaffolded empty subpackages for Data Channel
+- MCP tools for Business Entity definition or Entity Data API
 
 ### `backend/worker/`
 

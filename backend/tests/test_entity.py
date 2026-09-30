@@ -429,6 +429,8 @@ def test_permissions_and_operator_has_no_entity_keys(client: TestClient) -> None
     assert "entity:read" not in operator.permissions
     assert "entity:write" not in operator.permissions
     assert "entity:drop_table" not in operator.permissions
+    assert "entity:data_read" not in operator.permissions
+    assert "entity:data_write" not in operator.permissions
 
     client.post("/auth/logout")
     assert (
