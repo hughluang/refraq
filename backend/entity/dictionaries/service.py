@@ -15,6 +15,7 @@ from backend.entity.dictionaries.rules import (
     require_dictionary_name,
     require_display_name,
 )
+from backend.entity.dictionaries.status import DictionaryListStatus
 from backend.entity.dictionaries.store import get_dictionary_store
 from backend.entity.errors import DictionaryInUse, DictionaryNotFound
 from backend.entity.ids import new_dictionary_id
@@ -45,10 +46,17 @@ class DictionaryUsage:
 
 
 def list_dictionaries(
-    *, q: str | None, limit: int, offset: int
+    *,
+    q: str | None,
+    statuses: list[DictionaryListStatus] | None,
+    limit: int,
+    offset: int,
 ) -> tuple[list[dict[str, Any]], int]:
     items, total = get_dictionary_store().list_dictionaries(
-        q=q, limit=limit, offset=offset
+        q=q,
+        statuses=None if statuses is None else frozenset(statuses),
+        limit=limit,
+        offset=offset,
     )
     return [dictionary_out(item, include_detail=False) for item in items], total
 

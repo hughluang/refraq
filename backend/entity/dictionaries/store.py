@@ -6,13 +6,14 @@ import threading
 from collections.abc import Callable
 from functools import lru_cache
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import ColumnElement, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.core.config import get_settings
 from backend.core.db import session_scope
 from backend.entity.dictionaries.records import DictionaryEntryRecord, DictionaryRecord
+from backend.entity.dictionaries.status import DictionaryListStatus
 from backend.entity.errors import DictionaryInvalid, DictionaryNameDup, DictionaryNotFound
 from backend.entity.models import DictionaryEntryRow, DictionaryRow
 
@@ -37,7 +38,12 @@ class MemoryDictionaryStore:
         self._lock = threading.Lock()
 
     def list_dictionaries(
-        self, *, q: str | None, limit: int, offset: int
+        self,
+        *,
+        q: str | None,
+        statuses: frozenset[DictionaryListStatus] | None,
+        limit: int,
+        offset: int,
     ) -> tuple[list[DictionaryRecord], int]:
         with self._lock:
             items = list(self._rows.values())
@@ -48,6 +54,8 @@ class MemoryDictionaryStore:
                 for item in items
                 if needle in item.name.lower() or needle in item.display_name.lower()
             ]
+        if statuses is not None:
+            items = [item for item in items if _memory_status_match(item, statuses)]
         items.sort(key=lambda item: (item.created_at, item.id), reverse=True)
         total = len(items)
         return items[offset : offset + limit], total
@@ -88,7 +96,12 @@ class MemoryDictionaryStore:
 
 class SqlDictionaryStore:
     def list_dictionaries(
-        self, *, q: str | None, limit: int, offset: int
+        self,
+        *,
+        q: str | None,
+        statuses: frozenset[DictionaryListStatus] | None,
+        limit: int,
+        offset: int,
     ) -> tuple[list[DictionaryRecord], int]:
         with session_scope() as session:
             stmt = select(DictionaryRow)
@@ -101,6 +114,10 @@ class SqlDictionaryStore:
                 )
                 stmt = stmt.where(filt)
                 count_stmt = count_stmt.where(filt)
+            if statuses is not None:
+                status_filt = _dictionary_status_filter(statuses)
+                stmt = stmt.where(status_filt)
+                count_stmt = count_stmt.where(status_filt)
             total = int(session.execute(count_stmt).scalar_one())
             rows = (
                 session.execute(
@@ -165,6 +182,26 @@ class SqlDictionaryStore:
             session.delete(row)
             session.flush()
             return True
+
+
+def _memory_status_match(
+    item: DictionaryRecord, statuses: frozenset[DictionaryListStatus]
+) -> bool:
+    if item.deprecated_at is not None:
+        return "deprecated" in statuses
+    return "available" in statuses
+
+
+def _dictionary_status_filter(
+    statuses: frozenset[DictionaryListStatus],
+) -> ColumnElement[bool]:
+    """SQL form of dictionary list status."""
+    clauses = []
+    if "deprecated" in statuses:
+        clauses.append(DictionaryRow.deprecated_at.is_not(None))
+    if "available" in statuses:
+        clauses.append(DictionaryRow.deprecated_at.is_(None))
+    return or_(*clauses)
 
 
 def _bound_patch(current: DictionaryRecord, updated: DictionaryRecord) -> DictionaryRecord:

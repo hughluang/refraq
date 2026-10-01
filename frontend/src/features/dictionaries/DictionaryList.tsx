@@ -1,6 +1,6 @@
 "use client";
 
-import { Anchor, Badge, Group, Table, Text, TextInput } from "@mantine/core";
+import { Anchor, Button, Group, MultiSelect, Table, Text, TextInput } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import Link from "next/link";
 import { useCallback, useState } from "react";
@@ -8,8 +8,14 @@ import { useCallback, useState } from "react";
 import { CreateListAction } from "@/components/access/CreateListAction";
 import { ListTable } from "@/components/display/ListTable";
 import { PageChrome } from "@/components/layout/PageChrome";
-import { listDictionaries } from "@/features/dictionaries/api";
 import { ModuleId } from "@/features/console/module-identity";
+import { listDictionaries } from "@/features/dictionaries/api";
+import { DictionaryStatusBadge } from "@/features/dictionaries/DictionaryStatusBadge";
+import {
+  DEFAULT_DICTIONARY_LIST_STATUSES,
+  dictionaryListIsFiltered,
+  type DictionaryListStatus,
+} from "@/features/dictionaries/dictionaryListFilter";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import type { PageQuery } from "@/lib/pagination";
@@ -20,21 +26,34 @@ export function DictionaryList() {
   const t = useTranslate();
   const formatInstant = useFormatInstant();
   const [q, setQ] = useState("");
+  const [statuses, setStatuses] = useState<DictionaryListStatus[]>([
+    ...DEFAULT_DICTIONARY_LIST_STATUSES,
+  ]);
 
   const fetchPage = useCallback(
-    (query: PageQuery) =>
-      listDictionaries({
+    (query: PageQuery) => {
+      if (statuses.length === 0) {
+        return {
+          items: [],
+          total: 0,
+          limit: query.limit,
+          offset: query.offset,
+        };
+      }
+      return listDictionaries({
         q: q.trim() || undefined,
+        status: statuses,
         ...query,
-      }),
-    [q],
+      });
+    },
+    [q, statuses],
   );
 
-  const filtered = q.trim() !== "";
+  const filtered = dictionaryListIsFiltered(q, statuses);
   const list = useConsolePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
-    resetDeps: [q],
+    resetDeps: [q, statuses],
     filtered,
   });
 
@@ -58,6 +77,40 @@ export function DictionaryList() {
           onChange={(event) => setQ(event.currentTarget.value)}
           w={280}
         />
+        <MultiSelect
+          placeholder={
+            statuses.length === 0 ? t("dictionaries.fields.status") : undefined
+          }
+          data={[
+            { value: "available", label: t("dictionaries.status.available") },
+            { value: "deprecated", label: t("dictionaries.status.deprecated") },
+          ]}
+          value={statuses}
+          onChange={(value) => setStatuses(value as DictionaryListStatus[])}
+          searchable={false}
+          clearable
+          w="max-content"
+          miw={280}
+          styles={{
+            root: { flexShrink: 0 },
+            wrapper: { width: "max-content" },
+            input: { width: "max-content", minWidth: 280 },
+            pillsList: { flexWrap: "nowrap" },
+            pill: { flexShrink: 0, maxWidth: "none" },
+          }}
+        />
+        {filtered ? (
+          <Button
+            variant="subtle"
+            size="xs"
+            onClick={() => {
+              setQ("");
+              setStatuses([...DEFAULT_DICTIONARY_LIST_STATUSES]);
+            }}
+          >
+            {t("common.filters.clear")}
+          </Button>
+        ) : null}
       </Group>
       <ListTable
         list={list}
@@ -69,7 +122,7 @@ export function DictionaryList() {
             <Table.Th>{t("dictionaries.fields.name")}</Table.Th>
             <Table.Th>{t("dictionaries.fields.displayName")}</Table.Th>
             <Table.Th>{t("dictionaries.fields.revision")}</Table.Th>
-            <Table.Th>{t("dictionaries.fields.deprecated")}</Table.Th>
+            <Table.Th>{t("dictionaries.fields.status")}</Table.Th>
             <Table.Th>{t("entities.fields.updatedAt")}</Table.Th>
           </Table.Tr>
         }
@@ -89,11 +142,7 @@ export function DictionaryList() {
             <Table.Td>{row.display_name}</Table.Td>
             <Table.Td>{row.revision}</Table.Td>
             <Table.Td>
-              {row.deprecated_at ? (
-                <Badge color="gray" variant="light">
-                  {t("dictionaries.fields.deprecated")}
-                </Badge>
-              ) : null}
+              <DictionaryStatusBadge deprecated={row.deprecated_at != null} />
             </Table.Td>
             <Table.Td>
               <Text size="sm" c="dimmed">

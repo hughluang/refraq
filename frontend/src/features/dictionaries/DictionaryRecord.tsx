@@ -13,6 +13,7 @@ import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageError } from "@/components/feedback/PageError";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { DictionaryFormFields } from "@/features/dictionaries/DictionaryFormFields";
+import { DictionaryStatusBadge } from "@/features/dictionaries/DictionaryStatusBadge";
 import {
   createDictionary,
   deleteDictionary,
@@ -450,11 +451,7 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
     <PageChrome
       title={title}
       titleExtra={
-        deprecated ? (
-          <Badge color="gray" variant="light">
-            {t("dictionaries.fields.deprecated")}
-          </Badge>
-        ) : undefined
+        deprecated ? <DictionaryStatusBadge deprecated /> : undefined
       }
       actions={headerActions}
     >

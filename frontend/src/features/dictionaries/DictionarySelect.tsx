@@ -8,6 +8,7 @@ import { FieldDisplay } from "@/components/form/FieldDisplay";
 import { SelectField } from "@/components/form/SelectField";
 import { getDictionary, listDictionaries } from "@/features/dictionaries/api";
 import { CreateDictionaryModal } from "@/features/dictionaries/CreateDictionaryModal";
+import { DictionaryStatusBadge } from "@/features/dictionaries/DictionaryStatusBadge";
 import type { Dictionary, DictionaryEntry } from "@/features/dictionaries/types";
 
 export type DictionarySelection = {
@@ -164,11 +165,7 @@ export function DictionarySelect({
             {t("entities.fields.openDictionary")}
           </Anchor>
         ) : null}
-        {deprecated ? (
-          <Badge color="gray" variant="light">
-            {t("dictionaries.fields.deprecated")}
-          </Badge>
-        ) : null}
+        {deprecated ? <DictionaryStatusBadge deprecated /> : null}
         {behind ? (
           <Badge color="orange" variant="light">
             {t("entities.attributes.behind")}

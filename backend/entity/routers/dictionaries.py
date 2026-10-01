@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query, Response, status
 
 from backend.admin.deps import get_actor_token_id, require_permission
@@ -28,10 +30,13 @@ router = APIRouter(tags=["dictionaries"])
 @router.get("/dictionaries", response_model=DictionaryListResponse)
 def http_list_dictionaries(
     q: str | None = Query(default=None),
+    status: list[Literal["available", "deprecated"]] | None = Query(default=None),
     page: PageParams = Depends(page_params(ENTITY_LIST)),
     _: UserRecord = Depends(require_permission("entity:read")),
 ) -> DictionaryListResponse:
-    items, total = list_dictionaries(q=q, limit=page.limit, offset=page.offset)
+    items, total = list_dictionaries(
+        q=q, statuses=status, limit=page.limit, offset=page.offset
+    )
     return DictionaryListResponse(
         items=[DictionaryOut.model_validate(item) for item in items],
         total=total,

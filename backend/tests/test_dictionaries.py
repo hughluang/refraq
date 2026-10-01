@@ -534,3 +534,68 @@ def test_delete_does_not_audit_when_the_row_is_already_gone(
         delete_dictionary(record.id, actor_user_id="user", actor_token_id=None)
     events, _cursor = get_audit_store().list_events(action="dictionary.delete")
     assert events == []
+
+
+def test_list_dictionaries_filters_by_status(client: TestClient) -> None:
+    live = _create_list(client, name="live_codes", display_name="Live codes")
+    retired = _create_list(client, name="retired_codes", display_name="Retired codes")
+    assert (
+        client.patch(
+            f"/dictionaries/{retired['id']}", json={"deprecated": True}
+        ).status_code
+        == 200
+    )
+
+    def listed(response):
+        assert response.status_code == 200, response.text
+        body = response.json()
+        return {item["id"] for item in body["items"]}, body["total"]
+
+    everything, total = listed(client.get("/dictionaries"))
+    assert total == 2
+    assert everything == {live["id"], retired["id"]}
+
+    available, available_total = listed(
+        client.get("/dictionaries", params=[("status", "available")])
+    )
+    assert available_total == 1
+    assert available == {live["id"]}
+
+    repeated, repeated_total = listed(
+        client.get(
+            "/dictionaries",
+            params=[("status", "available"), ("status", "available")],
+        )
+    )
+    assert repeated_total == 1
+    assert repeated == {live["id"]}
+
+    deprecated, deprecated_total = listed(
+        client.get("/dictionaries", params={"status": "deprecated"})
+    )
+    assert deprecated_total == 1
+    assert deprecated == {retired["id"]}
+
+    both, both_total = listed(
+        client.get(
+            "/dictionaries",
+            params=[("status", "available"), ("status", "deprecated")],
+        )
+    )
+    assert both_total == total
+    assert both == everything
+
+    named, named_total = listed(
+        client.get("/dictionaries", params=[("q", "Live"), ("status", "available")])
+    )
+    assert named_total == 1
+    assert named == {live["id"]}
+    missed, missed_total = listed(
+        client.get("/dictionaries", params=[("q", "Live"), ("status", "deprecated")])
+    )
+    assert missed_total == 0
+    assert missed == set()
+
+    invalid = client.get("/dictionaries", params={"status": "serving"})
+    assert invalid.status_code == 422
+    assert invalid.json()["code"] == "REQUEST_INVALID"

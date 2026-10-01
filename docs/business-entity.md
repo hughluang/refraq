@@ -227,6 +227,8 @@ The list shows entity status and the current version's publish status. The page 
 
 The Console list filters by entity status. The control opens on **Not in service** and **In service** and sends that selection as `status`. The list API applies an entity-status predicate only when `status` is present.
 
+The Dictionary list shows status: **Available** when `deprecated_at` is null, otherwise **Deprecated**. The list filters by that status. The control opens on **Available** and sends that selection as `status`. The list API applies a dictionary-status predicate only when `status` is present.
+
 The list's table name opens the record. A row offers the same lifecycle and standard verbs as the record header, under the same gates: Publish, Open new version, Deprecate, Edit, and Delete. Open new version from the list asks for confirmation, then opens the edit route. Publish, Deprecate, and Delete ask for confirmation and leave the operator on the list. The record header is unchanged, including Open new version without a confirmation. Drop table stays on the version row.
 
 `entities` is a record authoring surface (`docs/ui-console-record-form.md`). Create, show, and edit share one layout. Identity and attributes are authored on create and, while the current version is unpublished, on edit. Show renders the same fields in display mode. Visiting edit when authoring is refused redirects to show.

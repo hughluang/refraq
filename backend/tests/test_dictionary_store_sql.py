@@ -242,15 +242,21 @@ def _seed_literal_search(store: MemoryDictionaryStore | SqlDictionaryStore) -> N
 
 
 def _assert_literal_search(store: MemoryDictionaryStore | SqlDictionaryStore) -> None:
-    underscore, underscore_total = store.list_dictionaries(q="wild_", limit=50, offset=0)
+    underscore, underscore_total = store.list_dictionaries(
+        q="wild_", statuses=None, limit=50, offset=0
+    )
     assert underscore_total == 1
     assert [item.name for item in underscore] == ["wild_mark"]
 
-    percent, percent_total = store.list_dictionaries(q="%", limit=50, offset=0)
+    percent, percent_total = store.list_dictionaries(
+        q="%", statuses=None, limit=50, offset=0
+    )
     assert percent_total == 1
     assert [item.id for item in percent] == ["cl_pct"]
 
-    _unfiltered, unfiltered_total = store.list_dictionaries(q=None, limit=50, offset=0)
+    _unfiltered, unfiltered_total = store.list_dictionaries(
+        q=None, statuses=None, limit=50, offset=0
+    )
     assert unfiltered_total == 3
     assert percent_total != unfiltered_total
 
@@ -276,6 +282,32 @@ def _raising_scope(exc: IntegrityError):
     return session_scope
 
 
+def test_sql_list_filters_by_status(sql_store) -> None:
+    store, _probe = sql_store
+    store.create(_record("cl_live", "live_codes", ("open",)))
+    store.create(
+        _record("cl_old", "old_codes", ("open",), deprecated_at=_LATER)
+    )
+
+    available, available_total = store.list_dictionaries(
+        q=None, statuses=frozenset({"available"}), limit=50, offset=0
+    )
+    assert available_total == 1
+    assert [item.id for item in available] == ["cl_live"]
+
+    deprecated, deprecated_total = store.list_dictionaries(
+        q=None, statuses=frozenset({"deprecated"}), limit=50, offset=0
+    )
+    assert deprecated_total == 1
+    assert [item.id for item in deprecated] == ["cl_old"]
+
+    named, named_total = store.list_dictionaries(
+        q="live", statuses=frozenset({"deprecated"}), limit=50, offset=0
+    )
+    assert named_total == 0
+    assert named == []
+
+
 def _record(
     dictionary_id: str,
     name: str,
@@ -283,6 +315,7 @@ def _record(
     *,
     display_name: str = "Order status",
     revision: int = 1,
+    deprecated_at: datetime | None = None,
 ) -> DictionaryRecord:
     return DictionaryRecord(
         id=dictionary_id,
@@ -290,7 +323,7 @@ def _record(
         display_name=display_name,
         description=None,
         revision=revision,
-        deprecated_at=None,
+        deprecated_at=deprecated_at,
         entries=tuple(
             DictionaryEntryRecord(code=code, label=code, active=True, position=index)
             for index, code in enumerate(codes)

@@ -1,5 +1,6 @@
 import { apiClient } from "@/lib/api";
 
+import type { DictionaryListStatus } from "@/features/dictionaries/dictionaryListFilter";
 import type {
   Dictionary,
   DictionaryCreateBody,
@@ -8,12 +9,18 @@ import type {
 import type { OffsetPage } from "@/lib/pagination";
 
 function querySuffix(
-  params?: Record<string, string | number | undefined>,
+  params?: Record<string, string | number | readonly string[] | undefined>,
 ) {
   const qs = new URLSearchParams();
   if (params) {
     for (const [key, value] of Object.entries(params)) {
       if (value === undefined || value === "") continue;
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          qs.append(key, item);
+        }
+        continue;
+      }
       qs.set(key, String(value));
     }
   }
@@ -23,6 +30,7 @@ function querySuffix(
 
 export function listDictionaries(params?: {
   q?: string;
+  status?: readonly DictionaryListStatus[];
   limit?: number;
   offset?: number;
 }) {

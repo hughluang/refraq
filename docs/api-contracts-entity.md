@@ -345,7 +345,9 @@ Success `200`: `{ "entity": { … } }` with `deprecated_at` set.
 
 ### 4.8 Dictionary Endpoints
 
-`GET /dictionaries` is an **Offset Page** (`created_at DESC`, `id DESC`). Query params: `q` (literal substring of `name` or `display_name`), `limit` (default **50**, max **200**), `offset` (default **0**).
+`GET /dictionaries` is an **Offset Page** (`created_at DESC`, `id DESC`). Query params: `q` (literal substring of `name` or `display_name`), `status` (repeatable), `limit` (default **50**, max **200**), `offset` (default **0**).
+
+`status` is `available` or `deprecated`. Omit it to apply no dictionary-status predicate, so deprecated dictionaries stay in the page. Repeat it to keep dictionaries whose status is any listed value. Status is **deprecated** when `deprecated_at` is set; otherwise **available**. Both values match the omitted predicate. Duplicate values are one value. Any other value is `422 REQUEST_INVALID`. When `q` is also present, a dictionary must match both.
 
 `POST /dictionaries` body is `{ "name", "display_name", "description"?, "entries" }`. The response is `201` `{ "dictionary": { … } }` including entries and usages. `name` already registered is `409 DICTIONARY_NAME_DUP`. A body that includes `name` on `PATCH` is `422 REQUEST_INVALID` because `name` is not a patch field.
 
