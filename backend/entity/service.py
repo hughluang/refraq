@@ -1,4 +1,4 @@
-"""Business Entity definition, save, publish, and deprecate orchestration."""
+"""Business Entity definition, save, and deprecate orchestration."""
 
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ from backend.entity.errors import (
     EntityNotFound,
     EntityNotPublished,
     EntityNotUnpublished,
-    EntityPublishEmpty,
     EntityPublishing,
     EntityReferenced,
     EntityRequestInvalid,
@@ -36,7 +35,6 @@ from backend.entity.errors import (
 from backend.entity.ids import new_entity_id, new_version_id
 from backend.entity.lifecycle import (
     PUBLISHED,
-    PUBLISHING,
     UNPUBLISHED,
     EntityListStatus,
     any_publishing,
@@ -48,7 +46,6 @@ from backend.entity.present import (
     current_version_of,
     entity_out,
     inbound_references_for,
-    latest_published_of,
     version_out,
 )
 from backend.entity.records import (
@@ -527,45 +524,6 @@ def _assert_never_published(entity_id: str) -> None:
     _assert_not_publishing(versions)
     if ever_published(versions):
         raise EntityAlreadyPublished()
-
-
-def prepare_publish(entity_id: str, version_id: str) -> EntityVersionRecord:
-    """Validate publish and return the current unpublished version."""
-    entity = require_entity(entity_id)
-    version = require_version(entity_id, version_id)
-    versions = get_entity_store().list_all_versions(entity_id)
-    current = current_version_of(versions)
-    if current is None or current.id != version.id:
-        raise EntityVersionSuperseded()
-    _assert_not_deprecated(entity)
-    if current.publish_status == PUBLISHING:
-        return current
-    if current.publish_status != UNPUBLISHED:
-        raise EntityNotUnpublished()
-    if not current.attributes:
-        raise EntityPublishEmpty()
-    accepted = latest_published_of(versions)
-    if accepted is None or not _shape_unchanged(
-        accepted.attributes, current.attributes, versions=versions
-    ):
-        _require_writable_shape(
-            current.attributes, entity_id=entity.id, previous=current.attributes
-        )
-    require_attribute_dictionaries(
-        current.attributes, previous=current.attributes
-    )
-    return current
-
-
-def _shape_unchanged(
-    before: list[AttributeRecord],
-    after: list[AttributeRecord],
-    *,
-    versions: list[EntityVersionRecord],
-) -> bool:
-    return (
-        _classify(before, after, versions=versions).change_class == "unchanged"
-    )
 
 
 def _classify(

@@ -489,7 +489,7 @@ def test_revert_failure_is_logged_and_original_error_kept(
         raise RuntimeError("snapshot write failed")
 
     monkeypatch.setattr(
-        "backend.entity.align.attribute_to_dict", _snapshot_fails
+        "backend.entity.publish.attribute_to_dict", _snapshot_fails
     )
     entity = _create(client)
     version_id = entity["current_version"]["id"]
@@ -518,7 +518,7 @@ def test_revert_with_rows_logs_that_the_table_was_left(
         del attributes
         raise RuntimeError("snapshot write failed")
 
-    monkeypatch.setattr("backend.entity.align.attribute_to_dict", _snapshot_fails)
+    monkeypatch.setattr("backend.entity.publish.attribute_to_dict", _snapshot_fails)
     entity = _create(client)
     version_id = entity["current_version"]["id"]
     published = client.post(
@@ -536,6 +536,218 @@ def test_revert_with_rows_logs_that_the_table_was_left(
     assert bound.table_exists("public", physical) is True
     version = client.get(f"/entities/{entity['id']}/versions/{version_id}")
     assert version.json()["version"]["publish_status"] == "unpublished"
+
+
+def test_stem_view_failure_never_stores_published(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entity = _create(client)
+    version_id = entity["current_version"]["id"]
+    statuses: list[str] = []
+    store = get_entity_store()
+    original = store.save_version
+
+    def spy(version):
+        statuses.append(version.publish_status)
+        return original(version)
+
+    monkeypatch.setattr(store, "save_version", spy)
+
+    class _SwapFails(RecordingEntityTablePort):
+        def swap_stem_view(
+            self,
+            schema: str,
+            stem: str,
+            *,
+            physical: str,
+            expected_target: str | None,
+        ) -> None:
+            del schema, stem, physical, expected_target
+            raise RuntimeError("view swap failed")
+
+    failing = _SwapFails()
+    bind_entity_table_port(failing)
+    published = client.post(
+        f"/entities/{entity['id']}/versions/{version_id}/publish"
+    )
+    assert published.status_code == 201, published.text
+    job = get_job_store().get(published.json()["job"]["id"])
+    assert job is not None
+    assert job.status == "failed"
+    assert job.error_code == "JOB_EXECUTION_FAILED"
+    assert "published" not in statuses
+    assert statuses == ["publishing", "unpublished"]
+    physical, _comment = compose_physical_table_name("material", 1, version_id)
+    assert failing.table_exists("public", physical) is False
+    assert ("public", "material") not in failing._views
+    version = client.get(f"/entities/{entity['id']}/versions/{version_id}")
+    assert version.json()["version"]["publish_status"] == "unpublished"
+
+
+def test_metadata_failure_after_swap_restores_stem_view(
+    client: TestClient,
+    port: RecordingEntityTablePort,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.entity.records import attribute_to_dict
+
+    armed = {"on": False}
+    real = attribute_to_dict
+
+    def wrapped(attr):
+        if armed["on"]:
+            raise RuntimeError("snapshot write failed")
+        return real(attr)
+
+    monkeypatch.setattr("backend.entity.publish.attribute_to_dict", wrapped)
+    entity = _create(client)
+    version_id = entity["current_version"]["id"]
+    armed["on"] = True
+    failed = client.post(f"/entities/{entity['id']}/versions/{version_id}/publish")
+    assert failed.status_code == 201, failed.text
+    job = get_job_store().get(failed.json()["job"]["id"])
+    assert job is not None
+    assert job.status == "failed"
+    assert ("public", "material") not in port._views
+    failed_version = client.get(f"/entities/{entity['id']}/versions/{version_id}")
+    assert failed_version.json()["version"]["publish_status"] == "unpublished"
+
+    armed["on"] = False
+    succeeded = _publish(client, entity)
+    assert succeeded["job"]["status"] == "succeeded"
+    v1_physical, _comment = compose_physical_table_name("material", 1, version_id)
+    assert port._views[("public", "material")] == v1_physical
+
+    opened = client.post(f"/entities/{entity['id']}/versions", json={})
+    assert opened.status_code == 201, opened.text
+    v2 = opened.json()["version"]["id"]
+    armed["on"] = True
+    current = client.get(f"/entities/{entity['id']}").json()["entity"]
+    successor = _publish(client, current)
+    assert successor["job"]["status"] == "failed"
+    assert port._views[("public", "material")] == v1_physical
+    successor_version = client.get(f"/entities/{entity['id']}/versions/{v2}")
+    assert successor_version.json()["version"]["publish_status"] == "unpublished"
+    head = client.get(f"/entities/{entity['id']}/versions/{version_id}")
+    assert head.json()["version"]["publish_status"] == "published"
+
+
+def test_restore_view_failure_keeps_table_and_names_the_failure(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _DropViewFails(RecordingEntityTablePort):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reverts = 0
+
+        def drop_stem_view(self, schema: str, stem: str) -> None:
+            del schema, stem
+            raise RuntimeError("view restore failed")
+
+        def revert_physical_table(self, schema: str, table: str) -> None:
+            self.reverts += 1
+            super().revert_physical_table(schema, table)
+
+    failing = _DropViewFails()
+    bind_entity_table_port(failing)
+
+    def _snapshot_fails(attr: object) -> object:
+        del attr
+        raise RuntimeError("snapshot write failed")
+
+    monkeypatch.setattr("backend.entity.publish.attribute_to_dict", _snapshot_fails)
+    entity = _create(client)
+    version_id = entity["current_version"]["id"]
+    published = client.post(
+        f"/entities/{entity['id']}/versions/{version_id}/publish"
+    )
+    assert published.status_code == 201, published.text
+    job = get_job_store().get(published.json()["job"]["id"])
+    assert job is not None
+    assert job.status == "failed"
+    assert job.error_code == "JOB_EXECUTION_FAILED"
+    summary = job.error_summary or ""
+    assert "snapshot write failed" in summary
+    assert "restore view failed: view restore failed" in summary
+    physical, _comment = compose_physical_table_name("material", 1, version_id)
+    assert failing.table_exists("public", physical) is True
+    assert failing.reverts == 0
+    version = client.get(f"/entities/{entity['id']}/versions/{version_id}")
+    assert version.json()["version"]["publish_status"] == "unpublished"
+
+
+def test_successor_restore_swap_failure_leaves_new_table(
+    client: TestClient,
+    port: RecordingEntityTablePort,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.entity.records import attribute_to_dict
+
+    entity = _create(client)
+    version_id = entity["current_version"]["id"]
+    _publish(client, entity)
+    opened = client.post(f"/entities/{entity['id']}/versions", json={})
+    assert opened.status_code == 201, opened.text
+    v2 = opened.json()["version"]["id"]
+
+    class _SecondSwapFails(RecordingEntityTablePort):
+        def __init__(self) -> None:
+            super().__init__()
+            self.swaps = 0
+            self.reverts = 0
+
+        def swap_stem_view(
+            self,
+            schema: str,
+            stem: str,
+            *,
+            physical: str,
+            expected_target: str | None,
+        ) -> None:
+            self.swaps += 1
+            if self.swaps > 1:
+                raise RuntimeError("view restore failed")
+            super().swap_stem_view(
+                schema,
+                stem,
+                physical=physical,
+                expected_target=expected_target,
+            )
+
+        def revert_physical_table(self, schema: str, table: str) -> None:
+            self.reverts += 1
+            super().revert_physical_table(schema, table)
+
+    failing = _SecondSwapFails()
+    failing.statements = port.statements
+    failing._tables = port._tables
+    failing._views = port._views
+    bind_entity_table_port(failing)
+
+    armed = {"on": False}
+    real = attribute_to_dict
+
+    def wrapped(attr):
+        if armed["on"]:
+            raise RuntimeError("snapshot write failed")
+        return real(attr)
+
+    monkeypatch.setattr("backend.entity.publish.attribute_to_dict", wrapped)
+    armed["on"] = True
+    current = client.get(f"/entities/{entity['id']}").json()["entity"]
+    successor = _publish(client, current)
+    job = get_job_store().get(successor["job"]["id"])
+    assert job is not None
+    assert job.status == "failed"
+    assert "restore view failed: view restore failed" in (job.error_summary or "")
+    v2_physical, _comment = compose_physical_table_name("material", 2, v2)
+    assert failing._views[("public", "material")] == v2_physical
+    assert failing.table_exists("public", v2_physical) is True
+    assert failing.reverts == 0
+    successor_version = client.get(f"/entities/{entity['id']}/versions/{v2}")
+    assert successor_version.json()["version"]["publish_status"] == "unpublished"
+    head = client.get(f"/entities/{entity['id']}/versions/{version_id}")
+    assert head.json()["version"]["publish_status"] == "published"
 
 
 def test_save_refused_after_publish(client: TestClient) -> None:

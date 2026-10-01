@@ -1,16 +1,14 @@
-"""Mint entity_reconcile (publish) and entity_table_drop Jobs."""
+"""Mint entity_table_drop Jobs and dispatch entity table Jobs."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 from backend.admin.audit import persist_audit_event
-from backend.core.time import utc_now
-from backend.entity.dictionary_binding import freeze_publish_bindings
 from backend.entity.errors import EntityTableInService
-from backend.entity.kinds import ENTITY_TABLE_KINDS, KIND_DROP, KIND_RECONCILE
-from backend.entity.lifecycle import PUBLISHING, is_deprecated
+from backend.entity.kinds import ENTITY_TABLE_KINDS, KIND_DROP
+from backend.entity.lifecycle import is_deprecated
 from backend.entity.present import (
     latest_published_of,
     occupies_live_table,
@@ -18,7 +16,7 @@ from backend.entity.present import (
     table_present,
     version_out,
 )
-from backend.entity.service import prepare_publish, require_entity, require_version
+from backend.entity.service import require_entity, require_version
 from backend.entity.store import get_entity_store
 from backend.entity.tasks import run_job
 from backend.jobs.store import (
@@ -35,7 +33,6 @@ __all__ = [
     "EnqueueResult",
     "dispatch_entity_job",
     "enqueue_drop",
-    "enqueue_publish",
     "find_inflight_entity_table_job",
 ]
 
@@ -57,51 +54,6 @@ def find_inflight_entity_table_job(entity_version_id: str) -> JobRecord | None:
             if record.input.get("entity_version_id") == entity_version_id:
                 return record
     return None
-
-
-def enqueue_publish(
-    *,
-    entity_id: str,
-    version_id: str,
-    actor_user_id: str,
-    actor_token_id: str | None,
-) -> tuple[JobRecord, bool]:
-    entity = require_entity(entity_id)
-    version = prepare_publish(entity_id, version_id)
-    inflight = find_inflight_entity_table_job(version.id)
-    if inflight is not None:
-        return inflight, False
-    job = create_queued_job(
-        kind=KIND_RECONCILE,
-        input={
-            "entity_version_id": version.id,
-            "dictionary_bindings": freeze_publish_bindings(version.attributes),
-        },
-        created_by=actor_user_id,
-        summary=f"entity_reconcile · {entity.table_name}",
-        trigger_kind="user",
-        trigger_ref=actor_user_id,
-        log_body=format_job_log_line(level="info", message="queued entity table publish"),
-    )
-    get_entity_store().save_version(
-        replace(
-            version,
-            publish_status=PUBLISHING,
-            latest_reconcile_job_id=job.id,
-            updated_at=utc_now(),
-        )
-    )
-    dispatch_entity_job(job)
-    persist_audit_event(
-        actor_user_id=actor_user_id,
-        actor_token_id=actor_token_id,
-        resource_type="entity",
-        resource_id=entity.id,
-        action="entity.publish_enqueue",
-        result="success",
-        detail={"job_id": job.id, "version_id": version.id},
-    )
-    return job, True
 
 
 def enqueue_drop(

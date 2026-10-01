@@ -143,7 +143,7 @@ A config key that belongs to another type, an unknown config key, or a top-level
 
 `publish_status` is stored: `unpublished` | `publishing` | `published`. Create and open-version start `unpublished`. Publish is the only transition to `publishing` and then `published`. A failed publish Job returns the version to `unpublished`.
 
-`table_name` on a version is the physical table of that version, derived and never stored: `null` when `table_present` is false; otherwise the composed physical name. That name is the Entity stem, `__v`, the version number with no zero-padding, `__`, and the version id (16 lowercase hexadecimal digits, no prefix). Example: `material__v1__0123456789abcdef`. The application keeps the name within 63 characters by shortening the stem from the right when the suffix would not fit, and the suffix stays whole. When the stem is shortened, publish writes `COMMENT ON TABLE` set to the full stem. When the stem fits, publish writes no comment. An `encv_` prefix is not a version id and is not a physical table name. The Entity `table_name` is a view of the latest published version that still has a table. Publish creates the physical table, stores `published`, then replaces that view. The view may still point at the previous table until that replacement commits. A superseded version is not a product write target.
+`table_name` on a version is the physical table of that version, derived and never stored: `null` when `table_present` is false; otherwise the composed physical name. That name is the Entity stem, `__v`, the version number with no zero-padding, `__`, and the version id (16 lowercase hexadecimal digits, no prefix). Example: `material__v1__0123456789abcdef`. The application keeps the name within 63 characters by shortening the stem from the right when the suffix would not fit, and the suffix stays whole. When the stem is shortened, publish writes `COMMENT ON TABLE` set to the full stem. When the stem fits, publish writes no comment. An `encv_` prefix is not a version id and is not a physical table name. The Entity `table_name` is a view of the latest published version that still has a table. Publish creates the physical table, replaces that view, then stores `published`. The view may already select the new table before `published` is stored. A superseded version is not a product write target.
 
 `alignment` is derived from the stored attribute-set snapshot and the latest create Job:
 
@@ -415,7 +415,7 @@ Success `200`: `{ "version": { … } }`.
 
 ### 5.5 `POST /entities/{id}/versions/{version_id}/publish`
 
-Publishes the current `unpublished` version: set `publishing` and enqueue `entity_reconcile` to CREATE the version's physical table, store `published`, then replace the stem view so it selects that table. The previous physical table is not renamed. Acceptance freezes each dictionary attribute's active codes and deprecation into that Job's `dictionary_bindings`. Between acceptance and execution, a changed active code set or a Dictionary deprecated after acceptance fails the Job with `ENTITY_ATTRIBUTE_INVALID` and creates no table. The CHECK uses the frozen codes.
+Publishes the current `unpublished` version: set `publishing` and enqueue `entity_reconcile` to CREATE the version's physical table, replace the stem view so it selects that table, then store `published`. The previous physical table is not renamed. Acceptance freezes each dictionary attribute's active codes and deprecation into that Job's `dictionary_bindings`. Between acceptance and execution, a changed active code set or a Dictionary deprecated after acceptance fails the Job with `ENTITY_ATTRIBUTE_INVALID` and creates no table. The CHECK uses the frozen codes.
 
 Body is empty.
 
@@ -430,7 +430,7 @@ Enqueue is idempotent:
 - An in-flight create or drop Job for this version is returned as `200` with that Job. A second Job is not minted.
 - Otherwise the response is `201` `{ "job": { … } }`.
 
-A successful run writes `published`, the attribute-set snapshot, and the Job reference. A failed run returns the version to `unpublished` even when `published` was already stored, drops the new physical table only when it is still empty, leaves a nonempty new table in place, leaves the stem view unchanged when the replacement did not commit, leaves the definition in place, and records failure on the Job.
+A successful run writes `published`, the attribute-set snapshot, and the Job reference after the stem view selects the new table. A failed run returns the version to `unpublished`, drops the new physical table only when it is still empty, leaves a nonempty new table in place, puts the stem view back when this attempt moved it, leaves the definition in place, and records failure on the Job. When putting the view back fails, the Job summary includes that failure and the new physical table is left in place.
 
 Success envelope on the Job (`result` only when `succeeded`):
 

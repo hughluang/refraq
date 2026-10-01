@@ -10,7 +10,8 @@ from fastapi.responses import JSONResponse
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord, get_user_store
 from backend.core.pagination import ENTITY_LIST, PageParams, page_params
-from backend.entity.jobs import enqueue_drop, enqueue_publish
+from backend.entity.jobs import enqueue_drop
+from backend.entity.publish import accept
 from backend.entity.errors import EntityAttributeInvalid
 from backend.entity.records import AttributeRecord
 from backend.entity.schemas.entities import (
@@ -317,7 +318,7 @@ def http_publish(
     user: UserRecord = Depends(require_permission("entity:write")),
     actor_token_id: str | None = Depends(get_actor_token_id),
 ) -> Response | EntityJobEnqueueResponse:
-    job, minted = enqueue_publish(
+    job, minted = accept(
         entity_id=entity_id,
         version_id=version_id,
         actor_user_id=user.id,

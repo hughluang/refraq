@@ -55,6 +55,8 @@ class EntityTablePort(Protocol):
         expected_target: str | None,
     ) -> None: ...
 
+    def drop_stem_view(self, schema: str, stem: str) -> None: ...
+
     def revert_physical_table(self, schema: str, table: str) -> None: ...
 
 
@@ -117,6 +119,11 @@ class RecordingEntityTablePort:
                 self.statements.append(drop_view_sql(schema, stem))
             self.statements.append(create_view_sql(schema, stem, physical))
             self._views[(schema, stem)] = physical
+
+    def drop_stem_view(self, schema: str, stem: str) -> None:
+        with self._lock:
+            self.statements.append(drop_view_sql(schema, stem))
+            self._views.pop((schema, stem), None)
 
     def revert_physical_table(self, schema: str, table: str) -> None:
         with self._lock:
@@ -187,6 +194,11 @@ class PostgresEntityTablePort:
                     raise EntityTableNameConflict(stem)
                 conn.execute(text(drop_view_sql(schema, stem)))
             conn.execute(text(create_view_sql(schema, stem, physical)))
+
+    def drop_stem_view(self, schema: str, stem: str) -> None:
+        engine = get_entity_engine()
+        with engine.begin() as conn:
+            conn.execute(text(drop_view_sql(schema, stem)))
 
     def revert_physical_table(self, schema: str, table: str) -> None:
         engine = get_entity_engine()
