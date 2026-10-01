@@ -20,6 +20,7 @@ from backend.admin.errors import (
 )
 from backend.admin.security import verify_password
 from backend.admin.parameters import admin_session_ttl_hours
+from backend.admin.system_parameters import resolve_int
 from backend.admin.user_payload import build_current_user
 from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.session_store import SessionStore, get_session_store
@@ -58,7 +59,8 @@ def login(
         raise AuthConsoleAccessRequired()
 
     ttl_seconds = admin_session_ttl_hours() * 3600
-    session_id = sessions.create(record.id, ttl_seconds)
+    idle_seconds = resolve_int("admin_session_idle_minutes").value * 60
+    session_id = sessions.create(record.id, ttl_seconds, idle_seconds)
     cookie_attrs = session_cookie_attrs(request)
     response.set_cookie(
         key=SESSION_COOKIE_NAME,

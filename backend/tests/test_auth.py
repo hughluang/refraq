@@ -188,7 +188,7 @@ def test_me_with_expired_session_returns_unauthenticated(
 ) -> None:
     user_store, _, session_store = store_bundle
     users, _ = user_store.list_users()
-    sid = session_store.create(users[0].id, ttl_seconds=-1)
+    sid = session_store.create(users[0].id, ttl_seconds=-1, idle_seconds=60)
 
     response = client.get("/auth/me", cookies={"refraq_sid": sid})
 
@@ -214,6 +214,7 @@ def test_http_login_session_cookie_is_not_secure(client: TestClient) -> None:
     assert "Secure" not in cookie
     assert "HttpOnly" in cookie
     assert "Path=/" in cookie
+    assert "Max-Age=43200" in cookie
 
 
 def test_forwarded_https_login_session_cookie_is_secure(client: TestClient) -> None:
@@ -288,6 +289,6 @@ def test_healthz_remains_accessible(client: TestClient) -> None:
 
 def test_session_purge_is_lazy() -> None:
     store = MemorySessionStore()
-    sid = store.create("user_x", ttl_seconds=1)
+    sid = store.create("user_x", ttl_seconds=1, idle_seconds=1)
     time.sleep(1.1)
     assert store.get(sid) is None

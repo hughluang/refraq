@@ -116,7 +116,7 @@ Metadata foundation adds **User PAT** Bearer authentication for MCP and non-brow
 6. Backend derives current user from the session cookie
 7. Logout invalidates session and clears cookie
 
-Session expiry is absolute (set at creation; lookup does not renew TTL).
+Session expiry has two clocks frozen at creation. Lookup renews the idle deadline from the last authenticated request and does not move the absolute deadline. A legacy session value that is only a user id keeps its original absolute expiry and is not renewed.
 
 ## 5. Permission Model
 

@@ -86,6 +86,10 @@ export function usePagedList<T>({
         setLoading(false);
         return;
       }
+      if (result.kind === "redirect") {
+        setLoading(false);
+        return;
+      }
       setError(result.message);
       setErrorRequestId(result.requestId);
       onError?.(result.message);

@@ -12,12 +12,13 @@ import {
 import { useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { ApiError, isSessionExpiredError } from "@/lib/api";
+
 import { cancelJob, getJob, getJobLogs } from "@/features/jobs/api";
 import { formatJobTrigger } from "@/features/jobs/formatJobTrigger";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
 import type { Job } from "@/features/jobs/types";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
-import { ApiError } from "@/lib/api";
 import { formatJobDuration } from "@/lib/datetime";
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
@@ -52,6 +53,7 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
       setJob(jobRes.job);
       setLogBody(logsRes.body);
     } catch (err) {
+      if (isSessionExpiredError(err)) return;
       open?.({
         type: "error",
         message: err instanceof ApiError ? err.detail : String(err),

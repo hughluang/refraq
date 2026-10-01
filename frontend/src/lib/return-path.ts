@@ -47,3 +47,11 @@ export function loginRedirectWithFrom(): string {
   const from = resolveFromPath(path);
   return `/login?from=${encodeURIComponent(from)}`;
 }
+
+/** Login URL after a dead session. `from` stays the only return path. */
+export function loginRedirectAfterSessionExpiry(): string {
+  const base = loginRedirectWithFrom();
+  const url = new URL(base, "http://refraq.local");
+  url.searchParams.set("error", "AUTH_SESSION_EXPIRED");
+  return `${url.pathname}${url.search}`;
+}

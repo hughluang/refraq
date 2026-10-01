@@ -65,7 +65,7 @@ def test_reset_restores_seed_source() -> None:
     assert resolve_int("admin_session_ttl_hours").source == "user"
     reset_parameter("admin_session_ttl_hours", actor_user_id="user_1")
     resolved = resolve_int("admin_session_ttl_hours")
-    assert resolved.value == 8
+    assert resolved.value == 12
     assert resolved.source == "seed"
 
 
@@ -149,7 +149,7 @@ def test_unrecognised_source_takes_read_failure_path() -> None:
 
     clear_last_known()
     degraded = resolve_int("admin_session_ttl_hours")
-    assert degraded.value == 8
+    assert degraded.value == 12
     assert degraded.source == "seed"
     assert degraded.updated_at is None
 
@@ -419,7 +419,7 @@ def test_never_read_uses_code_seed_when_store_fails() -> None:
         with pytest.raises(ParameterReadFailed):
             read_stored_parameter("admin_session_ttl_hours")
         resolved = resolve_int("admin_session_ttl_hours")
-        assert resolved.value == 8
+        assert resolved.value == 12
         assert resolved.source == "seed"
         assert resolved.updated_at is None
     finally:

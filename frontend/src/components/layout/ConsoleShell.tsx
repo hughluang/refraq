@@ -33,7 +33,7 @@ import { LangSwitcher } from "@/components/LangSwitcher";
 import { fetchConsoleNavigation } from "@/features/console/api";
 import type { NavigationGroup } from "@/features/console/types";
 import { useBranding } from "@/features/branding/BrandingProvider";
-import { ApiError } from "@/lib/api";
+import { ApiError, isSessionExpiredError } from "@/lib/api";
 import { reloadIdentity } from "@/providers/auth-provider";
 import {
   isLocale,
@@ -90,6 +90,10 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
       const data = await fetchConsoleNavigation();
       setGroups(data.groups);
     } catch (error) {
+      if (isSessionExpiredError(error)) {
+        setNavLoading(false);
+        return;
+      }
       setGroups(null);
       const forbidden =
         error instanceof ApiError &&

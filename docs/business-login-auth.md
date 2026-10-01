@@ -90,8 +90,10 @@ Session rules:
 
 Recommended first-version session policy:
 
-- session duration: 8 hours
-- idle refresh is optional in v1
+- absolute lifetime: the effective `admin_session_ttl_hours` **System Parameter**, seeded 12 hours (range 1–168), measured from session creation. Requests do not move it
+- idle lifetime: the effective `admin_session_idle_minutes` **System Parameter**, seeded 30 minutes (range 5–120), measured from the last authenticated request. A request renews only this clock
+- both values are copied onto the **Session** at creation. Later parameter edits do not rewrite sessions already open
+- a session stored before this record shape (plain user id only) keeps its original absolute expiry and does not use the idle clock
 - multiple simultaneous sessions are allowed unless later restricted
 - Session cookie `Secure` follows browser-facing HTTPS stamped by the Console `/api` rewrite (`REFRAQ_BROWSER_FACING_PROTO` → `X-Forwarded-Proto`, then the request URL scheme), not `REFRAQ_ENV` and not client-supplied forwarded headers. HTTP self-deploy must keep the Session; set `REFRAQ_BROWSER_FACING_PROTO=https` when TLS terminates in front of the Console.
 - OIDC callback origin uses that proto plus `REFRAQ_BROWSER_FACING_HOST` (stamped as `X-Forwarded-Host`). When the host is unset, only a loopback Host is accepted so a client-supplied `Host` cannot become `redirect_uri`. Set the host on web and API for any non-loopback Console URL.
@@ -102,7 +104,7 @@ Frontend navigation around the session boundary:
 - successful login uses a hard (document) navigation to the validated `from` path
 - successful logout uses a hard (document) navigation to `/login`
 - the console client guard must not emit Refine's `to` query param after auth failure
-- when a session becomes invalid while a cookie may still be present, the client redirects to `/login` with a validated `from` path
+- when a session becomes invalid while a cookie may still be present, the client redirects to `/login` with a validated `from` path and `error=AUTH_SESSION_EXPIRED`
 - the Management Console may paint the AppShell before `GET /auth/me` returns: `proxy.ts` already gates on cookie presence, and `authProvider.check` is optimistic (does not await `/auth/me`)
 - only protected Console documents fetch Session identity; public pages such as `/login` and `/403` stay anonymous and must never hard-navigate to login on `401`
 - `GET /auth/me` is time-bounded; a timeout is a non-401 load-error terminal with retry, not a logout
@@ -110,7 +112,7 @@ Frontend navigation around the session boundary:
 - opening `/login` when `GET /auth/me` fails with a non-401 error (network / 5xx / timeout) is a load-error terminal with retry, not the login form and not a logout
 - the client ACL gate blocks page content until permissions and Module Identities are ready, so a no-permission route shows the forbidden terminal instead of module content or a data-fetch error
 - the client may keep a tab-scoped **User** display summary in `sessionStorage` for UX only (account / display name / locale / display timezone). This is not a **Session**; the Session remains the HttpOnly cookie. Permissions and role fields are not persisted there and must come from login or `/auth/me`
-- an invalid Session still yields `401` on API calls: the client clears the display summary and hard-navigates to `/login` with a validated `from` path
+- an invalid Session still yields `401` `AUTH_UNAUTHENTICATED` on API calls: the client clears the display summary and hard-navigates once to `/login` with a validated `from` path and `error=AUTH_SESSION_EXPIRED`. The login page states that the session ended. Other `401` codes (wrong password, invalid PAT) do not use this redirect. `/login` and `/403` never hard-navigate to login on `401`
 - losing `console:access` while a Session cookie remains (`403` on console navigation / module-identity APIs) is an explicit forbidden terminal state in the shell, not an infinite skeleton
 - a `GET /auth/me` failure that is not `401` (network / 5xx), while permissions have not yet loaded this tab, is an explicit load-error terminal in the shell with retry; it is not an infinite skeleton and not a logout
 
@@ -180,7 +182,7 @@ Rules:
 - Entity permission meanings: `docs/business-entity.md` §6; Entity Data API: `docs/api-contracts-entity-data.md`.
 - An auto-provisioned provider default Role must not effectively contain `users:write`, `roles:write`, or `identity_providers:write`; the locked `super_admin` Role is therefore never valid as an auto-provisioning default.
 - Metadata permission meanings: `docs/business-metadata.md` §6; User PAT: `docs/business-user-tokens.md`
-- Session TTL used at login is the **effective** value of the `admin_session_ttl_hours` **System Parameter** (stored value, seeded 8; no env fallback); changing TTL does not rewrite existing sessions — see `docs/business-system-parameters.md` and `docs/api-contracts-settings.md`
+- Session absolute lifetime and idle window used at login are the **effective** values of `admin_session_ttl_hours` (seeded 12) and `admin_session_idle_minutes` (seeded 30). There is no env fallback. Changing either parameter does not rewrite existing sessions — see `docs/business-system-parameters.md` and `docs/api-contracts-settings.md`
 
 ## 9. Route Protection Rule
 

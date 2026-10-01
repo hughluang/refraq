@@ -1,4 +1,8 @@
+import { isProtectedPath } from "@/lib/route-scope";
+
 const baseUrl = process.env.NEXT_PUBLIC_REFRAQ_API_BASE_URL || "/api";
+
+const SESSION_EXPIRY_SKIP_PATHS = new Set(["/auth/login", "/auth/logout"]);
 
 export class ApiError extends Error {
   readonly status: number;
@@ -61,6 +65,17 @@ async function parseError(response: Response): Promise<ApiError> {
   );
 }
 
+export function isSessionExpiredError(error: unknown): boolean {
+  return error instanceof ApiError && error.code === "AUTH_UNAUTHENTICATED";
+}
+
+function shouldRedirectSessionExpiry(path: string, error: ApiError): boolean {
+  if (error.code !== "AUTH_UNAUTHENTICATED") return false;
+  if (SESSION_EXPIRY_SKIP_PATHS.has(path)) return false;
+  if (typeof window === "undefined") return false;
+  return isProtectedPath(window.location.pathname);
+}
+
 export type ApiRequestInit = RequestInit & {
   timeoutMs?: number;
 };
@@ -90,7 +105,12 @@ export async function apiClient<T = unknown>(
   });
 
   if (!response.ok) {
-    throw await parseError(response);
+    const error = await parseError(response);
+    if (shouldRedirectSessionExpiry(normalizedPath, error)) {
+      const { expireClientSession } = await import("@/lib/session-expiry");
+      expireClientSession();
+    }
+    throw error;
   }
 
   if (response.status === 204) {

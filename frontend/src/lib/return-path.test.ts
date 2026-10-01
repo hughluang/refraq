@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { resolveFromPath } from "./return-path";
+import {
+  loginRedirectAfterSessionExpiry,
+  resolveFromPath,
+} from "./return-path";
 
 describe("resolveFromPath", () => {
   it("keeps same-origin relative paths", () => {
@@ -29,5 +32,20 @@ describe("resolveFromPath", () => {
     "/%zz",
   ])("rejects cross-origin or malformed value %j", (value) => {
     expect(resolveFromPath(value)).toBe("/console");
+  });
+});
+
+describe("loginRedirectAfterSessionExpiry", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the validated from path and adds the session-ended error", () => {
+    vi.stubGlobal("window", {
+      location: { pathname: "/console/jobs", search: "?open=1" },
+    });
+    expect(loginRedirectAfterSessionExpiry()).toBe(
+      "/login?from=%2Fconsole%2Fjobs%3Fopen%3D1&error=AUTH_SESSION_EXPIRED",
+    );
   });
 });

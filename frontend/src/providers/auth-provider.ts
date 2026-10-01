@@ -2,6 +2,7 @@ import type { AuthActionResponse, AuthProvider } from "@refinedev/core";
 
 import { useModuleIdentityStore } from "@/features/console/module-identity";
 import { apiClient, ApiError } from "@/lib/api";
+import { expireClientSession } from "@/lib/session-expiry";
 import { loginRedirectWithFrom } from "@/lib/return-path";
 import { isProtectedPath } from "@/lib/route-scope";
 import { translateKey } from "@/providers/i18n-runtime";
@@ -50,6 +51,10 @@ async function fetchMe(): Promise<CurrentUser> {
 
 function handleMeFailure(error: unknown): void {
   if (isApiError(error) && error.status === 401) {
+    if (error.code === "AUTH_UNAUTHENTICATED") {
+      expireClientSession();
+      return;
+    }
     clearClientSession();
     if (typeof window !== "undefined" && isProtectedDocument()) {
       window.location.assign(loginRedirectWithFrom());
@@ -234,6 +239,10 @@ export const authProvider: RefineAuth = {
 
   async onError(error) {
     if (isApiError(error)) {
+      if (error.code === "AUTH_UNAUTHENTICATED") {
+        expireClientSession();
+        return { logout: true };
+      }
       if (error.status === 401) {
         clearClientSession();
         return { redirectTo: loginRedirectWithFrom(), logout: true };

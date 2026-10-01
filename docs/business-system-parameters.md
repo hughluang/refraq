@@ -124,7 +124,8 @@ The mechanism stores keys and values and never names an occupancy window, a Beat
 | Key | Owner | Seed | Range | Operator action | Applies |
 | --- | --- | --- | --- | --- | --- |
 | `job_lost_detection_sec` | `jobs` | 60 | 15–3600 | No | Widening is live; tightening waits one old renew interval (`max(5, previous/3)` s) before the reaper cutoff shrinks. The hidden system reaper **Scheduled Task** interval is derived from this same value, so the operator's one field is the whole of lost-detection latency |
-| `admin_session_ttl_hours` | `admin` | 8 | 1–168 | No | New **Session**s only; existing sessions keep their `expires_at` |
+| `admin_session_ttl_hours` | `admin` | 12 | 1–168 | No | New **Session**s only; existing sessions keep the absolute deadline copied at creation. Requests do not extend it |
+| `admin_session_idle_minutes` | `admin` | 30 | 5–120 | No | New **Session**s only; existing sessions keep the idle window copied at creation. Authenticated requests renew this clock up to the absolute deadline |
 | `sso_pending_ttl_days` | `admin` | 7 | 1–30 | No | Only new pending federated identities; existing `expires_at` values do not change |
 | `query_timeout_sec` | `metadata` | 30 | 5–3600 | No | Next Controlled Query, Catalog Sample, and MCP `run_sql`. An in-flight peek keeps the value it started with. Console `/mcp` stream wait is the constraint maximum plus a 5s margin, not a second policy |
 | `query_max_rows` | `metadata` | 1000 | 100–10000 | No | Next Controlled Query / `run_sql` `max_rows` and Catalog Sample `offset + limit`. Request default 100 and Sample page size stay product constants |

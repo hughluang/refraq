@@ -109,6 +109,21 @@ describe("loadPagedGeneration", () => {
     await expect(pending).resolves.toEqual({ kind: "stale" });
   });
 
+  it("does not surface a session-expired error for a toast", async () => {
+    const result = await loadPagedGeneration({
+      started: 4,
+      currentGeneration: () => 4,
+      enabled: true,
+      fetch: () =>
+        Promise.reject(
+          new ApiError(401, "AUTH_UNAUTHENTICATED", "Not signed in or session expired"),
+        ),
+      page: 1,
+      pageSize: 50,
+    });
+    expect(result).toEqual({ kind: "redirect" });
+  });
+
   it("returns error detail and requestId", async () => {
     const result = await loadPagedGeneration({
       started: 3,

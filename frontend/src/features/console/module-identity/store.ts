@@ -4,7 +4,7 @@ import { create } from "zustand";
 
 import { fetchModuleIdentities } from "@/features/console/module-identity/api";
 import type { ModuleIdentity } from "@/features/console/module-identity/types";
-import { ApiError } from "@/lib/api";
+import { ApiError, isSessionExpiredError } from "@/lib/api";
 
 export type ModuleIdentityStatus = "idle" | "loading" | "ready" | "error";
 
@@ -36,6 +36,10 @@ export const useModuleIdentityStore = create<ModuleIdentityState>((set, get) => 
         errorKind: null,
       });
     } catch (error) {
+      if (isSessionExpiredError(error)) {
+        set({ status: "idle", modules: [], error: null, errorKind: null });
+        return;
+      }
       const forbidden =
         error instanceof ApiError &&
         error.status === 403 &&

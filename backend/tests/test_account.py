@@ -199,7 +199,7 @@ def test_change_password_keeps_current_session(client: TestClient, store_bundle)
     user_store, _, session_store, _ = store_bundle
     user = user_store.get_by_account("root")
     assert user is not None
-    other_sid = session_store.create(user.id, 3600)
+    other_sid = session_store.create(user.id, 3600, idle_seconds=3600)
     _login(client)
     current_sid = client.cookies.get("refraq_sid")
     assert current_sid
@@ -242,7 +242,7 @@ def test_oidc_user_cannot_change_local_password(
         role_id=operator.id,
         identity_source="oidc",
     )
-    session_id = session_store.create(user.id, 3600)
+    session_id = session_store.create(user.id, 3600, idle_seconds=3600)
     client.cookies.set("refraq_sid", session_id)
 
     response = client.post(

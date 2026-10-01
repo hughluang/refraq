@@ -271,7 +271,7 @@ def test_disable_revokes_target_sessions_and_requires_relogin(
     user_store, _, session_store = store_bundle
     users, _ = user_store.list_users()
     op = next(record for record in users if record.account == "op")
-    op_sid = session_store.create(op.id, ttl_seconds=3600)
+    op_sid = session_store.create(op.id, ttl_seconds=3600, idle_seconds=3600)
 
     assert client.get("/auth/me", cookies={"refraq_sid": op_sid}).status_code == 200
 

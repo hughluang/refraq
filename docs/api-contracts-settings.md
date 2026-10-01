@@ -22,8 +22,8 @@ Related: `docs/business-system-parameters.md`, `docs/adr/0028-system-parameters.
   "parameters": [
     {
       "key": "admin_session_ttl_hours",
-      "value": 8,
-      "seed": 8,
+      "value": 12,
+      "seed": 12,
       "source": "seed",
       "constraint": { "type": "integer", "minimum": 1, "maximum": 168 },
       "group": "session",
@@ -58,7 +58,8 @@ Items are ordered by group (`session`, `jobs`, `query`) then `key`.
 
 | Key | Seed | Constraint | Operator action | Applies |
 | --- | --- | --- | --- | --- |
-| `admin_session_ttl_hours` | 8 | integer 1–168 | No | New **Session**s only |
+| `admin_session_ttl_hours` | 12 | integer 1–168 | No | New **Session**s only. Absolute deadline from creation; requests do not extend it |
+| `admin_session_idle_minutes` | 30 | integer 5–120 | No | New **Session**s only. Idle window from the last authenticated request, capped by the absolute deadline |
 | `sso_pending_ttl_days` | 7 | integer 1–30 | No | New pending federated identities only |
 | `job_lost_detection_sec` | 60 | integer 15–3600 | No | Widen live; tighten waits `max(5, previous/3)` s before the reaper cutoff shrinks. The hidden system reaper **Scheduled Task** interval is derived from this value |
 | `query_timeout_sec` | 30 | integer 5–3600 | No | Next Controlled Query, Catalog Sample, and MCP `run_sql` |
@@ -106,7 +107,7 @@ Rules:
 - Unknown fields on the request object are rejected (schema extra forbid)
 - Empty `values` is rejected
 - Validation is all-or-nothing: one invalid key writes nothing
-- Changing `admin_session_ttl_hours` affects **only sessions created after** the patch
+- Changing `admin_session_ttl_hours` or `admin_session_idle_minutes` affects **only sessions created after** the patch. Each session keeps the absolute deadline and idle window copied at creation
 - A write that equals the seed still sets `source` to `user`
 
 ### Response: `200`

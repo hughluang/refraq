@@ -1,4 +1,4 @@
-import { ApiError } from "@/lib/api";
+import { ApiError, isSessionExpiredError } from "@/lib/api";
 import type { OffsetPage, PageQuery } from "@/lib/pagination";
 import { pageToOffset } from "@/lib/pagination";
 
@@ -10,7 +10,8 @@ export type PagedListLoadResult<T> =
   | { kind: "stale" }
   | { kind: "disabled" }
   | { kind: "ok"; page: OffsetPage<T> }
-  | { kind: "error"; message: string; requestId: string | null };
+  | { kind: "error"; message: string; requestId: string | null }
+  | { kind: "redirect" };
 
 export function listErrorMessage(err: unknown): string {
   return err instanceof ApiError ? err.detail : String(err);
@@ -53,6 +54,7 @@ function finishError(
   err: unknown,
 ): PagedListLoadResult<never> {
   if (started !== currentGeneration()) return { kind: "stale" };
+  if (isSessionExpiredError(err)) return { kind: "redirect" };
   return {
     kind: "error",
     message: listErrorMessage(err),

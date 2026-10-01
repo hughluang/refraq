@@ -65,6 +65,7 @@ from backend.admin.federation.service import (
 )
 from backend.admin.federation.spec import ProviderRecord
 from backend.admin.parameters import admin_session_ttl_hours
+from backend.admin.system_parameters import resolve_int
 from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.session_store import SessionStore, get_session_store
 from backend.admin.user_payload import build_user_summary
@@ -237,7 +238,8 @@ async def callback(
     except (AuthAccountDisabled, AuthConsoleAccessRequired) as exc:
         return _clear(_login_error(exc.code))
     ttl_seconds = admin_session_ttl_hours() * 3600
-    sid = sessions.create(user.id, ttl_seconds)
+    idle_seconds = resolve_int("admin_session_idle_minutes").value * 60
+    sid = sessions.create(user.id, ttl_seconds, idle_seconds)
     redirect = RedirectResponse(url=safe_from(handoff.return_to), status_code=302)
     redirect.delete_cookie(HANDOFF_COOKIE_NAME, **session_cookie_attrs(request))
     redirect.set_cookie(

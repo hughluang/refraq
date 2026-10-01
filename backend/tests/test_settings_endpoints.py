@@ -33,6 +33,7 @@ from backend.admin.user_store import (  # noqa: E402
 )
 
 REGISTERED_KEYS = {
+    "admin_session_idle_minutes",
     "admin_session_ttl_hours",
     "sso_pending_ttl_days",
     "job_lost_detection_sec",
@@ -41,6 +42,7 @@ REGISTERED_KEYS = {
 }
 
 CATALOG_KEY_ORDER = [
+    "admin_session_idle_minutes",
     "admin_session_ttl_hours",
     "sso_pending_ttl_days",
     "job_lost_detection_sec",
@@ -125,7 +127,7 @@ def test_get_settings_catalog_hides_secrets(client: TestClient) -> None:
     assert keys == REGISTERED_KEYS
     ttl = _by_key(body, "admin_session_ttl_hours")
     assert ttl["source"] == "seed"
-    assert ttl["value"] == 8
+    assert ttl["value"] == 12
     assert ttl["operator_action_required"] is False
     assert ttl["constraint"] == {"type": "integer", "minimum": 1, "maximum": 168}
     assert "value_type" not in ttl
@@ -166,11 +168,11 @@ def test_patch_and_reset(client: TestClient) -> None:
 def test_patch_seed_value_is_still_user(client: TestClient) -> None:
     _login_root(client)
     patched = client.patch(
-        "/settings", json={"values": {"admin_session_ttl_hours": 8}}
+        "/settings", json={"values": {"admin_session_ttl_hours": 12}}
     )
     assert patched.status_code == 200
     ttl = _by_key(patched.json(), "admin_session_ttl_hours")
-    assert ttl["value"] == 8
+    assert ttl["value"] == 12
     assert ttl["source"] == "user"
 
 
@@ -243,7 +245,7 @@ def test_ttl_write_affects_new_sessions_only(
     _login_root(client)
     first_sid = client.cookies.get("refraq_sid")
     assert first_sid
-    first_expiry = session_store._sessions[first_sid].expires_at  # noqa: SLF001
+    first_expiry = session_store._sessions[first_sid].absolute_expires_at  # noqa: SLF001
 
     assert (
         client.patch(
@@ -251,7 +253,7 @@ def test_ttl_write_affects_new_sessions_only(
         ).status_code
         == 200
     )
-    assert session_store._sessions[first_sid].expires_at == first_expiry  # noqa: SLF001
+    assert session_store._sessions[first_sid].absolute_expires_at == first_expiry  # noqa: SLF001
 
     client.post("/auth/logout")
     before = time.time()
@@ -261,8 +263,38 @@ def test_ttl_write_affects_new_sessions_only(
     )
     second_sid = client.cookies.get("refraq_sid")
     assert second_sid and second_sid != first_sid
-    second_expiry = session_store._sessions[second_sid].expires_at  # noqa: SLF001
+    second_expiry = session_store._sessions[second_sid].absolute_expires_at  # noqa: SLF001
     assert 7100 <= (second_expiry - before) <= 7300
+
+
+def test_idle_write_affects_new_sessions_only(
+    client: TestClient, store_bundle
+) -> None:
+    _, _, session_store = store_bundle
+    _login_root(client)
+    first_sid = client.cookies.get("refraq_sid")
+    assert first_sid
+    first = session_store._sessions[first_sid]  # noqa: SLF001
+    assert first.idle_seconds == 30 * 60
+    absolute = first.absolute_expires_at
+
+    assert (
+        client.patch(
+            "/settings", json={"values": {"admin_session_idle_minutes": 5}}
+        ).status_code
+        == 200
+    )
+    assert first.idle_seconds == 30 * 60
+    assert first.absolute_expires_at == absolute
+
+    client.post("/auth/logout")
+    assert (
+        client.post("/auth/login", json={"account": "root", "password": "s3cret"}).status_code
+        == 200
+    )
+    second_sid = client.cookies.get("refraq_sid")
+    assert second_sid and second_sid != first_sid
+    assert session_store._sessions[second_sid].idle_seconds == 5 * 60  # noqa: SLF001
 
 
 def test_patch_rejects_partial_map_without_writing(client: TestClient) -> None:
@@ -281,7 +313,7 @@ def test_patch_rejects_partial_map_without_writing(client: TestClient) -> None:
     )
     assert_problem(response, status=422, code="SYSTEM_PARAMETER_INVALID")
     catalog = client.get("/settings").json()
-    assert _by_key(catalog, "admin_session_ttl_hours")["value"] == 8
+    assert _by_key(catalog, "admin_session_ttl_hours")["value"] == 12
     assert _by_key(catalog, "admin_session_ttl_hours")["source"] == "seed"
     assert _by_key(catalog, "job_lost_detection_sec")["value"] == 60
     events_after, _ = get_audit_store().list_events(resource_type="system_parameter")
@@ -298,7 +330,7 @@ def test_patch_rejects_coerced_json_types(client: TestClient) -> None:
         response = client.patch("/settings", json=payload)
         assert_problem(response, status=422, code="SYSTEM_PARAMETER_INVALID")
     ttl = _by_key(client.get("/settings").json(), "admin_session_ttl_hours")
-    assert ttl["value"] == 8
+    assert ttl["value"] == 12
     assert ttl["source"] == "seed"
 
 
@@ -346,7 +378,7 @@ def test_reset_seed_key_still_records_change(client: TestClient) -> None:
     assert response.status_code == 200
     after = _by_key(response.json(), "admin_session_ttl_hours")
     assert after["source"] == "seed"
-    assert after["value"] == 8
+    assert after["value"] == 12
     events_after, _ = get_audit_store().list_events(
         resource_type="system_parameter", action="parameter.reset"
     )
