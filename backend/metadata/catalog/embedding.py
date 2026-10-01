@@ -12,7 +12,6 @@ from typing import Any
 from backend.admin.model_services import get_embedding_runtime
 from backend.admin.model_services.openai_compat import (
     EMBEDDING_OUTPUT_DIM,
-    TIMEOUT_SEC,
     post_openai_embeddings,
 )
 
@@ -116,7 +115,7 @@ def project_embedding(
     return [n / norm for n in truncated]
 
 
-def embed_texts(texts: list[str], *, timeout: int = TIMEOUT_SEC) -> list[list[float]]:
+def embed_texts(texts: list[str]) -> list[list[float]]:
     if not texts:
         return []
     if _override_embed is not None:
@@ -132,7 +131,7 @@ def embed_texts(texts: list[str], *, timeout: int = TIMEOUT_SEC) -> list[list[fl
         model=runtime.model,
         api_key=runtime.secret,
         texts=texts,
-        timeout=timeout,
+        timeout=runtime.timeout_sec,
     )
     return [project_embedding(vec, dim=EMBEDDING_OUTPUT_DIM) for vec in vectors]
 

@@ -79,6 +79,16 @@ class ModelServiceUnavailable(ModelServiceError):
         return "Embeddings endpoint cannot be reached"
 
 
+class ModelServiceTimeout(ModelServiceUnavailable):
+    """Client deadline elapsed on connect or read.
+
+    Same HTTP status as unreachable; the message names the deadline.
+    """
+
+    def _default_message(self) -> str:
+        return "Embeddings request timed out"
+
+
 class ModelServiceTestFailed(ModelServiceError):
     code = "MODEL_SERVICE_TEST_FAILED"
 

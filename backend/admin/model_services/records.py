@@ -17,6 +17,7 @@ class ModelServiceRecord:
     display_name: str
     url: str
     model: str
+    timeout_sec: int
     secret: str | None
     created_at: datetime
     updated_at: datetime
@@ -37,6 +38,7 @@ class EmbeddingRuntime:
     url: str
     model: str
     secret: str | None
+    timeout_sec: int
     closed: bool
     ready: bool
     generation: int

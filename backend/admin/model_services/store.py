@@ -137,6 +137,7 @@ class SqlModelServiceStore:
                         display_name=record.display_name,
                         url=record.url,
                         model=record.model,
+                        timeout_sec=record.timeout_sec,
                         secret_ciphertext=_encrypt(record.secret),
                         created_at=record.created_at,
                         updated_at=record.updated_at,
@@ -148,6 +149,7 @@ class SqlModelServiceStore:
                 row.display_name = record.display_name
                 row.url = record.url
                 row.model = record.model
+                row.timeout_sec = record.timeout_sec
                 row.secret_ciphertext = _encrypt(record.secret)
                 row.updated_at = record.updated_at
             session.flush()
@@ -206,6 +208,7 @@ def _row_to_record(row: ModelServiceRow) -> ModelServiceRecord:
         display_name=row.display_name,
         url=row.url,
         model=row.model,
+        timeout_sec=row.timeout_sec,
         secret=_decrypt(row.secret_ciphertext),
         created_at=row.created_at,
         updated_at=row.updated_at,

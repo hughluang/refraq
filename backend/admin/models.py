@@ -164,6 +164,7 @@ class ModelServiceRow(Base):
     display_name: Mapped[str] = mapped_column(String(128), nullable=False)
     url: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str] = mapped_column(String(256), nullable=False)
+    timeout_sec: Mapped[int] = mapped_column(Integer, nullable=False)
     secret_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)

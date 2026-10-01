@@ -18,7 +18,7 @@ from backend.metadata.catalog_embed_jobs.progress_log import (
     PROGRESS_EVERY,
     CatalogEmbedLog,
 )
-from backend.metadata.catalog_embed_jobs.runner import run_catalog_embed_job
+from backend.metadata.catalog_embed_jobs.runner import _deadline_stop, run_catalog_embed_job
 from backend.metadata.sources.service import require_source
 from backend.metadata.sources.store import SourceRecord, get_source_store
 
@@ -39,6 +39,31 @@ def _counts(*, written: int = 0, failed: int = 0, skipped: int = 0) -> Embedding
         objects_written=written,
         objects_failed=failed,
         objects_skipped=skipped,
+    )
+
+
+def test_deadline_stop_only_when_timeouts_exceed_writes() -> None:
+    assert (
+        _deadline_stop(
+            EmbeddingRefreshCounts(objects_written=3, timeout_failed=1),
+            dominant=None,
+        )
+        is None
+    )
+    assert (
+        _deadline_stop(
+            EmbeddingRefreshCounts(objects_written=2, timeout_failed=2),
+            dominant="timed out",
+        )
+        is None
+    )
+    over = EmbeddingRefreshCounts(objects_written=1, timeout_failed=2)
+    assert _deadline_stop(over, dominant=None) == (
+        "catalog_embed stopped: embedding timeouts exceed writes"
+    )
+    summary = _deadline_stop(over, dominant="timed out after 30s")
+    assert summary == (
+        "catalog_embed stopped: embedding timeouts exceed writes: timed out after 30s"
     )
 
 

@@ -9,6 +9,7 @@ import {
   Radio,
   Stack,
   Table,
+  Tabs,
   Text,
 } from "@mantine/core";
 import {
@@ -85,6 +86,7 @@ export function ModelServiceList() {
   const [deleting, setDeleting] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [activatingId, setActivatingId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<string | null>("configure");
   const openConfirm = useConfirmAction<true>();
   const closeConfirm = useConfirmAction<true>();
   const cleanupConfirm = useConfirmAction<true>();
@@ -287,193 +289,201 @@ export function ModelServiceList() {
     <PageChrome
       title={t("modelServices.title")}
       description={t("modelServices.description")}
-      actions={createAction}
     >
-      <Stack gap="md">
-        <Group justify="space-between" align="flex-start">
-          <Stack gap={4}>
-            <Text fw={600}>{t("modelServices.purpose.embedding")}</Text>
-            <Group gap="xs">
-              <Badge
-                color={purpose?.closed ? "gray" : "green"}
-                variant="light"
-              >
-                {purpose?.closed
-                  ? t("modelServices.status.closed")
-                  : t("modelServices.status.open")}
-              </Badge>
-              <Badge
-                color={indexColor(purpose?.index_status ?? "none")}
-                variant="light"
-              >
-                {t(
-                  `modelServices.index.${purpose?.index_status ?? "none"}`,
-                )}
-              </Badge>
-              <Text size="sm" c="dimmed">
-                {purpose?.in_use_id
-                  ? t("modelServices.inUse.current")
-                  : t("modelServices.inUse.none")}
-              </Text>
-            </Group>
-          </Stack>
-          {showActions ? (
-            <Group gap="xs">
-              {purpose?.closed ? (
-                <Button
-                  size="compact-sm"
-                  variant="light"
-                  disabled={!purpose.in_use_id}
-                  onClick={() => {
-                    setRebuildChoice("none");
-                    openConfirm.open(true);
-                  }}
-                >
-                  {t("modelServices.open")}
-                </Button>
-              ) : (
-                <Button
-                  size="compact-sm"
-                  variant="light"
-                  onClick={() => closeConfirm.open(true)}
-                >
-                  {t("modelServices.close")}
-                </Button>
-              )}
-              <Button
-                size="compact-sm"
-                variant="light"
-                disabled={!canCleanup}
-                onClick={() => cleanupConfirm.open(true)}
-              >
-                {t("modelServices.cleanup")}
-              </Button>
-              <Button
-                size="compact-sm"
-                variant="light"
-                loading={reindexing}
-                disabled={!purpose?.in_use_id}
-                onClick={() => reindexConfirm.open(true)}
-              >
-                {t("modelServices.reindex")}
-              </Button>
-            </Group>
-          ) : null}
-        </Group>
-        {purpose?.closed ? (
-          <Alert color="yellow" title={t("modelServices.closed.noteTitle")}>
-            {t("modelServices.closed.note")}
-          </Alert>
-        ) : null}
-
-        <ListTable
-          list={list}
-          columnCount={showActions ? 7 : 6}
-          emptyMessage={t("modelServices.empty")}
-          head={
-            <Table.Tr>
-              <Table.Th>{t("modelServices.fields.display_name")}</Table.Th>
-              <Table.Th>{t("modelServices.fields.protocol")}</Table.Th>
-              <Table.Th>{t("modelServices.fields.url")}</Table.Th>
-              <Table.Th>{t("modelServices.fields.model")}</Table.Th>
-              <Table.Th>{t("modelServices.fields.in_use")}</Table.Th>
-              <Table.Th>{t("modelServices.fields.has_secret")}</Table.Th>
-              {showActions ? (
-                <Table.Th>{t("modelServices.fields.actions")}</Table.Th>
-              ) : null}
-            </Table.Tr>
-          }
-        >
-          {items.map((row) => (
-            <Table.Tr key={row.id}>
-              <Table.Td>
-                <Text fw={600}>{row.display_name}</Text>
-              </Table.Td>
-              <Table.Td>{t(`modelServices.protocol.${row.protocol}`)}</Table.Td>
-              <Table.Td>
-                <Text size="sm" lineClamp={1}>
-                  {row.url}
-                </Text>
-              </Table.Td>
-              <Table.Td>{row.model}</Table.Td>
-              <Table.Td>
-                <Badge color={row.in_use ? "green" : "gray"} variant="light">
-                  {row.in_use
-                    ? t("modelServices.status.inUse")
-                    : t("modelServices.status.draft")}
-                </Badge>
-              </Table.Td>
-              <Table.Td>
-                {row.has_secret
-                  ? t("modelServices.status.secretSet")
-                  : t("modelServices.status.secretNone")}
-              </Table.Td>
-              {showActions ? (
-                <Table.Td>
-                  <Group gap="xs" wrap="wrap">
-                    <CanAccess
-                      resource={ModuleId.modelServices}
-                      action={ModuleAction.edit}
-                    >
-                      <Button
-                        size="compact-xs"
-                        variant="light"
-                        onClick={() => {
-                          setEditing(row);
-                          setFormOpen(true);
-                        }}
-                      >
-                        {t("actions.edit")}
-                      </Button>
-                    </CanAccess>
-                    <CanAccess
-                      resource={ModuleId.modelServices}
-                      action={ModuleAction.edit}
-                    >
-                      <Button
-                        size="compact-xs"
-                        variant="light"
-                        loading={testingId === row.id}
-                        onClick={() => void runTest(row)}
-                      >
-                        {t("modelServices.test")}
-                      </Button>
-                    </CanAccess>
-                    {!row.in_use ? (
-                      <CanAccess
-                        resource={ModuleId.modelServices}
-                        action={ModuleAction.edit}
-                      >
-                        <Button
-                          size="compact-xs"
-                          variant="light"
-                          loading={activatingId === row.id}
-                          onClick={() => void openActivate(row)}
+      <Tabs value={activeTab} onChange={setActiveTab}>
+        <Tabs.List>
+          <Tabs.Tab value="configure">
+            {t("modelServices.tabs.configure")}
+          </Tabs.Tab>
+          <Tabs.Tab value="status">{t("modelServices.tabs.status")}</Tabs.Tab>
+        </Tabs.List>
+        <Tabs.Panel value="configure" pt="md">
+          <Stack gap="md">
+            <Group justify="flex-end">{createAction}</Group>
+            <ListTable
+              list={list}
+              columnCount={showActions ? 7 : 6}
+              emptyMessage={t("modelServices.empty")}
+              head={
+                <Table.Tr>
+                  <Table.Th>{t("modelServices.fields.display_name")}</Table.Th>
+                  <Table.Th>{t("modelServices.fields.protocol")}</Table.Th>
+                  <Table.Th>{t("modelServices.fields.url")}</Table.Th>
+                  <Table.Th>{t("modelServices.fields.model")}</Table.Th>
+                  <Table.Th>{t("modelServices.fields.in_use")}</Table.Th>
+                  <Table.Th>{t("modelServices.fields.has_secret")}</Table.Th>
+                  {showActions ? (
+                    <Table.Th>{t("modelServices.fields.actions")}</Table.Th>
+                  ) : null}
+                </Table.Tr>
+              }
+            >
+              {items.map((row) => (
+                <Table.Tr key={row.id}>
+                  <Table.Td>
+                    <Text fw={600}>{row.display_name}</Text>
+                  </Table.Td>
+                  <Table.Td>{t(`modelServices.protocol.${row.protocol}`)}</Table.Td>
+                  <Table.Td>
+                    <Text size="sm" lineClamp={1}>
+                      {row.url}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>{row.model}</Table.Td>
+                  <Table.Td>
+                    <Badge color={row.in_use ? "green" : "gray"} variant="light">
+                      {row.in_use
+                        ? t("modelServices.status.inUse")
+                        : t("modelServices.status.draft")}
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td>
+                    {row.has_secret
+                      ? t("modelServices.status.secretSet")
+                      : t("modelServices.status.secretNone")}
+                  </Table.Td>
+                  {showActions ? (
+                    <Table.Td>
+                      <Group gap="xs" wrap="wrap">
+                        <CanAccess
+                          resource={ModuleId.modelServices}
+                          action={ModuleAction.edit}
                         >
-                          {t("modelServices.activate")}
-                        </Button>
-                      </CanAccess>
-                    ) : null}
-                    <CanAccess
-                      resource={ModuleId.modelServices}
-                      action={ModuleAction.delete}
+                          <Button
+                            size="compact-xs"
+                            variant="light"
+                            onClick={() => {
+                              setEditing(row);
+                              setFormOpen(true);
+                            }}
+                          >
+                            {t("actions.edit")}
+                          </Button>
+                        </CanAccess>
+                        <CanAccess
+                          resource={ModuleId.modelServices}
+                          action={ModuleAction.edit}
+                        >
+                          <Button
+                            size="compact-xs"
+                            variant="light"
+                            loading={testingId === row.id}
+                            onClick={() => void runTest(row)}
+                          >
+                            {t("modelServices.test")}
+                          </Button>
+                        </CanAccess>
+                        {!row.in_use ? (
+                          <CanAccess
+                            resource={ModuleId.modelServices}
+                            action={ModuleAction.edit}
+                          >
+                            <Button
+                              size="compact-xs"
+                              variant="light"
+                              loading={activatingId === row.id}
+                              onClick={() => void openActivate(row)}
+                            >
+                              {t("modelServices.activate")}
+                            </Button>
+                          </CanAccess>
+                        ) : null}
+                        <CanAccess
+                          resource={ModuleId.modelServices}
+                          action={ModuleAction.delete}
+                        >
+                          <Button
+                            size="compact-xs"
+                            variant="light"
+                            color="red"
+                            onClick={() => deleteConfirm.open(row)}
+                          >
+                            {t("actions.delete")}
+                          </Button>
+                        </CanAccess>
+                      </Group>
+                    </Table.Td>
+                  ) : null}
+                </Table.Tr>
+              ))}
+            </ListTable>
+          </Stack>
+        </Tabs.Panel>
+        <Tabs.Panel value="status" pt="md">
+          <Stack gap="md">
+            <Group justify="space-between" align="flex-start">
+              <Stack gap={4}>
+                <Text fw={600}>{t("modelServices.purpose.embedding")}</Text>
+                <Group gap="xs">
+                  <Badge
+                    color={purpose?.closed ? "gray" : "green"}
+                    variant="light"
+                  >
+                    {purpose?.closed
+                      ? t("modelServices.status.closed")
+                      : t("modelServices.status.open")}
+                  </Badge>
+                  <Badge
+                    color={indexColor(purpose?.index_status ?? "none")}
+                    variant="light"
+                  >
+                    {t(
+                      `modelServices.index.${purpose?.index_status ?? "none"}`,
+                    )}
+                  </Badge>
+                </Group>
+              </Stack>
+              {showActions ? (
+                <Group gap="xs">
+                  {purpose?.closed ? (
+                    <Button
+                      size="compact-sm"
+                      variant="light"
+                      disabled={!purpose.in_use_id}
+                      onClick={() => {
+                        setRebuildChoice("none");
+                        openConfirm.open(true);
+                      }}
                     >
-                      <Button
-                        size="compact-xs"
-                        variant="light"
-                        color="red"
-                        onClick={() => deleteConfirm.open(row)}
-                      >
-                        {t("actions.delete")}
-                      </Button>
-                    </CanAccess>
-                  </Group>
-                </Table.Td>
+                      {t("modelServices.open")}
+                    </Button>
+                  ) : (
+                    <Button
+                      size="compact-sm"
+                      variant="light"
+                      onClick={() => closeConfirm.open(true)}
+                    >
+                      {t("modelServices.close")}
+                    </Button>
+                  )}
+                  <Button
+                    size="compact-sm"
+                    variant="light"
+                    disabled={!canCleanup}
+                    onClick={() => cleanupConfirm.open(true)}
+                  >
+                    {t("modelServices.cleanup")}
+                  </Button>
+                  <Button
+                    size="compact-sm"
+                    variant="light"
+                    loading={reindexing}
+                    disabled={!purpose?.in_use_id}
+                    onClick={() => reindexConfirm.open(true)}
+                  >
+                    {t("modelServices.reindex")}
+                  </Button>
+                </Group>
               ) : null}
-            </Table.Tr>
-          ))}
-        </ListTable>
-      </Stack>
+            </Group>
+            {purpose?.closed ? (
+              <Alert color="yellow" title={t("modelServices.closed.noteTitle")}>
+                {t("modelServices.closed.note")}
+              </Alert>
+            ) : null}
+          </Stack>
+        </Tabs.Panel>
+      </Tabs>
 
       <Modal.Stack>
         <Modal
@@ -512,6 +522,11 @@ export function ModelServiceList() {
               <Text size="sm">
                 {t("modelServices.test.outputDim", {
                   dim: testResult.output_dim,
+                })}
+              </Text>
+              <Text size="sm" c="dimmed">
+                {t("modelServices.test.timeout", {
+                  sec: testResult.timeout_sec,
                 })}
               </Text>
               <Text size="sm" c="dimmed">

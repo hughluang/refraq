@@ -42,7 +42,7 @@ Permissions are `model_services:read` and `model_services:write`. Seeded Roles o
 
 Purpose says what the connection is for. Protocol says how to speak to it. Additional purposes and protocols are new values on the same object type.
 
-`openai_compat` posts `{ "model", "input": [string, …] }` to the configured **full** embeddings URL and reads `{ "data": [{ "index", "embedding" }] }`. A configured API key is sent as `Authorization: Bearer`. The product does not append `/v1/embeddings`. Probe, index batch, and query embed share one client timeout (`TIMEOUT_SEC`). Index and query vectors are projected to `EMBEDDING_OUTPUT_DIM` (1024) by prefix truncation and L2-normalize when the model returns a longer vector. Probe reports the native width and `elapsed_ms` as an observation, not a threshold.
+`openai_compat` posts `{ "model", "input": [string, …] }` to the configured **full** embeddings URL and reads `{ "data": [{ "index", "embedding" }] }`. A configured API key is sent as `Authorization: Bearer`. The product does not append `/v1/embeddings`. Probe, index batch, and query embed share the in-use Model Service `timeout_sec` (integer seconds, 15–300; existing rows are 30). A failed query embed waits that full interval. Changing `timeout_sec` on an in-use row applies on the next call and does not clear ready, cancel `catalog_embed`, or mint a rebuild. `TIMEOUT_SEC` remains the default of 30, not the live deadline. Index and query vectors are projected to `EMBEDDING_OUTPUT_DIM` (1024) by prefix truncation and L2-normalize when the model returns a longer vector. Probe reports the native width and `elapsed_ms` as an observation, not a threshold.
 
 Model and protocol are editable on a draft (not in use). They are immutable while the record is in use. Changing model or protocol means create another record, test it, and set it in use.
 
@@ -75,7 +75,7 @@ Delete of an in-use record removes the row and secret, leaves the purpose with n
 
 Set in use while closed still starts a rebuild. Incremental writes stay off until open.
 
-Display-name-only edits do not require a test. URL or secret changes require a test before save. An in-use URL change must not reuse a stored secret against the new URL.
+Display-name-only and timeout-only edits do not require a test and do not rebuild. URL or secret changes require a test before save. An in-use URL change must not reuse a stored secret against the new URL.
 
 ## 6. Rebuild Job
 
@@ -85,7 +85,7 @@ Rebuilds that start from set-in-use, in-use URL change, rebuild-now, or open wit
 
 After claim, the runner takes a site-wide **Kind execution lock** named `catalog_embed` (not per-**Source**). Contention ends that Job `failed` with `JOB_ALREADY_ACTIVE`.
 
-The Job rewrites object and column embedding rows for the current generation. Skip compares `(content_hash, generation)`: `content_hash` is the text sent to embed; generation is its own column. The Job result records attempted / written / failed / skipped counts per kind and, on success, `failure_reasons` (distinct embed error messages with counts). The run log reports per-Source planned totals, throttled written/failed/skipped heartbeats, and the same deduplicated embed failure reasons. Progress and reasons are not written onto public Job fields or purpose state. Observe remains `GET /jobs`. Per-row embed failures do not fail the Job when at least one vector was written. A run that writes no vectors against a non-empty catalog fails and does not set ready; its `error_summary` includes the dominant embed reason when one was recorded. Success writes the ready bit only when the Job’s service and generation are still current. Failure leaves the service in use and search lexical. The operator starts another rebuild without switching services. Vector Search does not scan rows for a partial index. Cooperative cancel is honored at embed-batch boundaries.
+The Job rewrites object and column embedding rows for the current generation. Skip compares `(content_hash, generation)`: `content_hash` is the text sent to embed; generation is its own column. The Job result records attempted / written / failed / skipped counts per kind and, on success, `failure_reasons` (distinct embed error messages with counts). The run log reports per-Source planned totals, throttled written/failed/skipped heartbeats, and the same deduplicated embed failure reasons. Progress and reasons are not written onto public Job fields or purpose state. Observe remains `GET /jobs`. Per-row embed failures do not fail the Job when at least one vector was written, except when client-deadline rows (connect or read) outnumber written rows: the Job then stops at the next batch boundary, fails, and does not set ready. A run that writes no vectors against a non-empty catalog fails and does not set ready; its `error_summary` includes the dominant embed reason when one was recorded. Success writes the ready bit only when the Job’s service and generation are still current. Failure leaves the service in use and search lexical. The operator starts another rebuild without switching services. Vector Search does not scan rows for a partial index. Cooperative cancel is honored at embed-batch boundaries.
 
 While a rebuild runs, structure-commit and semantics incremental writes (if the purpose is not closed) use the new wiring and the current generation. Search stays lexical until ready is set, so a half-written index is not a product state.
 
@@ -105,7 +105,13 @@ The API key is encrypted at rest, write-only, and never returned. Reads expose `
 
 Create, update, test, set-in-use, close, open, cleanup, rebuild-now, and delete produce **Management Audit Event**s (`resource_type` `model_service`). Audit detail must not include the API key.
 
-The Console Module `model-services` lives in the `settings` nav group. The page must show the closed-state note (structure and semantics edits during the closed window do not enter the index automatically) and the open confirmation as a choice, not an announcement. Set-in-use on a draft row is labeled **Enable**; its confirm title is **Enable this service?**. Status remains **In use**. **Enable** is not **open**. Enable runs the connectivity test first. Any Console action that mints `catalog_embed` (set in use, rebuild-now, open with full recompute) confirms before minting. An in-use URL save that mints stays a form submit and does not add a second confirm.
+The Console Module `model-services` lives in the `settings` nav group. The page title is Model services. Its description only registers endpoints; it does not mention closing vectors or one in-use service per purpose. Two tabs share that route: **Configure models** (default) and **Service status**. Tab choice is not in the URL; a refresh returns to Configure models.
+
+Configure models is the record list. Add, test, edit, delete, and set-in-use stay there. Set-in-use on a draft row is labeled **Enable**; its confirm title is **Enable this service?**. Status remains **In use**. **Enable** is not **open**. Enable runs the connectivity test first.
+
+Service status shows the Embedding purpose: the open/closed badge, the index-status badge, open / close / cleanup / rebuild-now, and, when closed, the closed-state note (structure and semantics edits during the closed window do not enter the index automatically). It does not name the in-use model and does not say whether an in-use service exists. Open and rebuild-now stay disabled when no service is in use. The open confirmation is a choice, not an announcement.
+
+Any Console action that mints `catalog_embed` (set in use, rebuild-now, open with full recompute) confirms before minting. An in-use URL save that mints stays a form submit and does not add a second confirm.
 
 ## 10. Non-Goals
 

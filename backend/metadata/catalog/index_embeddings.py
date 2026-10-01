@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
+from backend.admin.model_services.errors import ModelServiceTimeout
 from backend.core.time import utc_now
 from backend.metadata.catalog.embedding import (
     CatalogEmbeddingRecord,
@@ -43,6 +44,7 @@ class EmbeddingRefreshCounts:
     columns_written: int = 0
     columns_failed: int = 0
     columns_skipped: int = 0
+    timeout_failed: int = 0
 
     def plus(self, other: EmbeddingRefreshCounts) -> EmbeddingRefreshCounts:
         return EmbeddingRefreshCounts(
@@ -54,6 +56,7 @@ class EmbeddingRefreshCounts:
             columns_written=self.columns_written + other.columns_written,
             columns_failed=self.columns_failed + other.columns_failed,
             columns_skipped=self.columns_skipped + other.columns_skipped,
+            timeout_failed=self.timeout_failed + other.timeout_failed,
         )
 
     @property
@@ -122,7 +125,7 @@ def refresh_source_embeddings(
     *,
     force: bool = False,
     progress: EmbedRefreshProgress | None = None,
-    should_stop: Callable[[], bool] | None = None,
+    should_stop: Callable[[EmbeddingRefreshCounts], bool] | None = None,
 ) -> EmbeddingRefreshCounts:
     try:
         if not embedding_write_enabled(incremental=not force):
@@ -150,7 +153,7 @@ def _refresh_source_embeddings(
     source_id: str,
     *,
     progress: EmbedRefreshProgress | None = None,
-    should_stop: Callable[[], bool] | None = None,
+    should_stop: Callable[[EmbeddingRefreshCounts], bool] | None = None,
 ) -> EmbeddingRefreshCounts:
     store = get_catalog_store()
     objects, _total = store.list_objects(
@@ -167,6 +170,7 @@ def _refresh_source_embeddings(
     columns_written = 0
     columns_failed = 0
     columns_skipped = 0
+    timeout_failed = 0
     pending: list[tuple[str, str, str, str]] = []
     for index, obj in enumerate(objects, start=1):
         detail = store.get_object(obj.id)
@@ -204,13 +208,15 @@ def _refresh_source_embeddings(
             columns_written=columns_written,
             columns_failed=columns_failed,
             columns_skipped=columns_skipped,
+            timeout_failed=timeout_failed,
         )
 
     for start in range(0, total, _EMBED_BATCH):
-        if should_stop is not None and should_stop():
+        if should_stop is not None and should_stop(snapshot()):
             break
         chunk = pending[start : start + _EMBED_BATCH]
-        outcomes, fail_reason = _upsert_many(chunk)
+        outcomes, fail_reason, timeout_n = _upsert_many(chunk)
+        timeout_failed += timeout_n
         for (kind, _target_id, _locator, _text), outcome in zip(
             chunk, outcomes, strict=True
         ):
@@ -262,7 +268,7 @@ def _failed_source_counts(source_id: str) -> EmbeddingRefreshCounts:
 
 def _upsert_many(
     items: list[tuple[str, str, str, str]],
-) -> tuple[list[UpsertOutcome], str | None]:
+) -> tuple[list[UpsertOutcome], str | None, int]:
     store = get_catalog_store()
     generation = current_generation()
     outcomes: list[UpsertOutcome | None] = [None] * len(items)
@@ -271,6 +277,7 @@ def _upsert_many(
     existing_rows: list[CatalogEmbeddingRecord | None] = []
     digests: list[str] = []
     fail_reason: str | None = None
+    timeout_n = 0
     for item in items:
         _kind, target_id, _locator, text = item
         digest = content_hash(text)
@@ -294,6 +301,8 @@ def _upsert_many(
                 "embedding refresh batch failed n=%s", len(texts), exc_info=True
             )
             fail_reason = _reason_text(exc)
+            if isinstance(exc, ModelServiceTimeout):
+                timeout_n = len(to_embed)
             for idx in to_embed:
                 outcomes[idx] = "failed"
             vectors = []
@@ -322,7 +331,7 @@ def _upsert_many(
                 if outcomes[idx] is None:
                     outcomes[idx] = "failed"
     resolved = ["failed" if item is None else item for item in outcomes]
-    return resolved, fail_reason
+    return resolved, fail_reason, timeout_n
 
 
 def _upsert(kind: str, target_id: str, locator_key: str, text: str) -> UpsertOutcome:

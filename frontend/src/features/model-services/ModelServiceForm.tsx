@@ -2,6 +2,7 @@
 
 import { Button, Checkbox, Group, Stack, Text, TextInput } from "@mantine/core";
 
+import { NumberField } from "@/components/form/NumberField";
 import { TextField } from "@/components/form/TextField";
 import { useForm } from "@mantine/form";
 import { useTranslate } from "@refinedev/core";
@@ -24,6 +25,7 @@ export function emptyValues(): ModelServiceFormValues {
     display_name: "",
     url: "",
     model: "",
+    timeout_sec: 30,
     api_key: "",
     clear_api_key: false,
   };
@@ -37,6 +39,7 @@ export function valuesFromService(
     display_name: service.display_name,
     url: service.url,
     model: service.model,
+    timeout_sec: service.timeout_sec,
     api_key: "",
     clear_api_key: false,
   };
@@ -49,6 +52,7 @@ export function servicePayload(
     display_name: values.display_name.trim(),
     url: values.url.trim(),
     model: values.model.trim(),
+    timeout_sec: Number(values.timeout_sec),
   };
   if (values.clear_api_key) {
     payload.clear_api_key = true;
@@ -74,6 +78,13 @@ export function ModelServiceForm({
         value.trim() ? null : t("modelServices.validation.required"),
       model: (value) =>
         value.trim() ? null : t("modelServices.validation.required"),
+      timeout_sec: (value) => {
+        const seconds = Number(value);
+        if (!Number.isInteger(seconds) || seconds < 15 || seconds > 300) {
+          return t("modelServices.validation.timeout");
+        }
+        return null;
+      },
     },
   });
   const urlChanged = service != null && form.values.url.trim() !== service.url;
@@ -113,6 +124,16 @@ export function ModelServiceForm({
             wireLocked ? t("modelServices.fields.model.locked") : undefined
           }
           {...form.getInputProps("model")}
+        />
+        <NumberField
+          label={t("modelServices.fields.timeout_sec")}
+          description={t("modelServices.fields.timeout_sec.help")}
+          required
+          editable
+          min={15}
+          max={300}
+          allowDecimal={false}
+          {...form.getInputProps("timeout_sec")}
         />
         <TextInput
           label={t("modelServices.fields.api_key")}

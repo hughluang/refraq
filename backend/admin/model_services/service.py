@@ -19,6 +19,8 @@ from backend.admin.model_services.errors import (
 )
 from backend.admin.model_services.openai_compat import (
     EMBEDDING_OUTPUT_DIM,
+    TIMEOUT_SEC_MAX,
+    TIMEOUT_SEC_MIN,
     probe_embeddings,
 )
 from backend.admin.model_services.ports import catalog_embed_jobs
@@ -66,6 +68,14 @@ def _clean_model(value: str) -> str:
     if not text:
         raise ModelServiceInvalidConfig("Model is required")
     return text
+
+
+def _clean_timeout(value: int) -> int:
+    if value < TIMEOUT_SEC_MIN or value > TIMEOUT_SEC_MAX:
+        raise ModelServiceInvalidConfig(
+            "timeout_sec must be an integer from 15 to 300"
+        )
+    return value
 
 
 def _require(store: ModelServiceStore, service_id: str) -> ModelServiceRecord:
@@ -133,6 +143,7 @@ def get_embedding_runtime() -> EmbeddingRuntime | None:
         url=record.url,
         model=record.model,
         secret=record.secret,
+        timeout_sec=record.timeout_sec,
         closed=state.closed,
         ready=state.ready,
         generation=state.generation,
@@ -176,6 +187,7 @@ def create_service(
     display_name: str,
     url: str,
     model: str,
+    timeout_sec: int,
     api_key: str | None,
     actor_user_id: str,
     actor_token_id: str | None,
@@ -189,6 +201,7 @@ def create_service(
         display_name=_clean_name(display_name),
         url=_clean_url(url),
         model=_clean_model(model),
+        timeout_sec=_clean_timeout(timeout_sec),
         secret=api_key.strip() if api_key else None,
         created_at=now,
         updated_at=now,
@@ -211,6 +224,7 @@ def patch_service(
     url: str | None,
     model: str | None,
     protocol: str | None,
+    timeout_sec: int | None,
     api_key: str | None,
     clear_api_key: bool,
     actor_user_id: str,
@@ -237,15 +251,24 @@ def patch_service(
     else:
         next_secret = record.secret
     next_name = _clean_name(display_name) if display_name is not None else record.display_name
+    next_timeout = (
+        _clean_timeout(timeout_sec) if timeout_sec is not None else record.timeout_sec
+    )
     wire_changed = url_changed or next_secret != record.secret
     if wire_changed:
-        probe_embeddings(url=next_url, model=next_model, api_key=next_secret)
+        probe_embeddings(
+            url=next_url,
+            model=next_model,
+            api_key=next_secret,
+            timeout=next_timeout,
+        )
     updated = replace(
         record,
         display_name=next_name,
         url=next_url,
         model=next_model,
         protocol=next_protocol,
+        timeout_sec=next_timeout,
         secret=next_secret,
         updated_at=utc_now(),
     )
@@ -267,7 +290,10 @@ def test_service(*, service_id: str, actor_user_id: str, actor_token_id: str | N
     record = _require(store, service_id)
     started = time.perf_counter()
     dimension, model = probe_embeddings(
-        url=record.url, model=record.model, api_key=record.secret
+        url=record.url,
+        model=record.model,
+        api_key=record.secret,
+        timeout=record.timeout_sec,
     )
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     _audit(
@@ -275,7 +301,11 @@ def test_service(*, service_id: str, actor_user_id: str, actor_token_id: str | N
         actor_token_id=actor_token_id,
         resource_id=record.id,
         action="test",
-        detail={"dimension": dimension, "elapsed_ms": elapsed_ms},
+        detail={
+            "dimension": dimension,
+            "elapsed_ms": elapsed_ms,
+            "timeout_sec": record.timeout_sec,
+        },
     )
     return {
         "ok": True,
@@ -283,6 +313,7 @@ def test_service(*, service_id: str, actor_user_id: str, actor_token_id: str | N
         "elapsed_ms": elapsed_ms,
         "model": model,
         "output_dim": EMBEDDING_OUTPUT_DIM,
+        "timeout_sec": record.timeout_sec,
     }
 
 
@@ -291,7 +322,12 @@ def activate_service(
 ) -> ModelServiceRecord:
     store = get_model_service_store()
     record = _require(store, service_id)
-    probe_embeddings(url=record.url, model=record.model, api_key=record.secret)
+    probe_embeddings(
+        url=record.url,
+        model=record.model,
+        api_key=record.secret,
+        timeout=record.timeout_sec,
+    )
     state = store.get_purpose(record.purpose)
     _begin_rebuild(store, state, record, actor_user_id=actor_user_id)
     _audit(
@@ -369,7 +405,12 @@ def open_purpose(
     if not state.in_use_id:
         raise ModelServiceNotInUse()
     record = _require(store, state.in_use_id)
-    probe_embeddings(url=record.url, model=record.model, api_key=record.secret)
+    probe_embeddings(
+        url=record.url,
+        model=record.model,
+        api_key=record.secret,
+        timeout=record.timeout_sec,
+    )
     opened = store.save_purpose(
         PurposeState(
             purpose=state.purpose,

@@ -21,6 +21,7 @@ class ModelServiceCreateIn(BaseModel):
     display_name: str = Field(min_length=1, max_length=128)
     url: str = Field(min_length=1, max_length=2048)
     model: str = Field(min_length=1, max_length=256)
+    timeout_sec: int
     api_key: str | None = Field(default=None, max_length=4096)
 
 
@@ -29,6 +30,7 @@ class ModelServicePatchIn(BaseModel):
     url: str | None = Field(default=None, min_length=1, max_length=2048)
     model: str | None = Field(default=None, min_length=1, max_length=256)
     protocol: ProtocolName | None = None
+    timeout_sec: int | None = None
     api_key: str | None = Field(default=None, max_length=4096)
     clear_api_key: bool = False
 
@@ -44,6 +46,7 @@ class ModelServiceOut(BaseModel):
     display_name: str
     url: str
     model: str
+    timeout_sec: int
     has_secret: bool
     in_use: bool
     created_at: Instant
@@ -65,6 +68,7 @@ class ModelServiceTestOut(BaseModel):
     elapsed_ms: int
     model: str
     output_dim: int
+    timeout_sec: int
 
 
 class ModelServiceSpecOut(BaseModel):

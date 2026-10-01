@@ -10,6 +10,7 @@ export type ModelService = {
   display_name: string;
   url: string;
   model: string;
+  timeout_sec: number;
   has_secret: boolean;
   in_use: boolean;
   created_at: string;
@@ -29,6 +30,7 @@ export type ModelServiceFormValues = {
   display_name: string;
   url: string;
   model: string;
+  timeout_sec: number;
   api_key: string;
   clear_api_key: boolean;
 };
@@ -39,6 +41,7 @@ export type ModelServiceWrite = {
   display_name?: string;
   url?: string;
   model?: string;
+  timeout_sec?: number;
   api_key?: string;
   clear_api_key?: boolean;
 };
@@ -49,4 +52,5 @@ export type ModelServiceTestResult = {
   elapsed_ms: number;
   model: string;
   output_dim: number;
+  timeout_sec: number;
 };

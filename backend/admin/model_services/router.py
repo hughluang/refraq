@@ -54,6 +54,7 @@ def _out(record: ModelServiceRecord, *, in_use_id: str | None) -> ModelServiceOu
         display_name=record.display_name,
         url=record.url,
         model=record.model,
+        timeout_sec=record.timeout_sec,
         has_secret=bool(record.secret),
         in_use=in_use_id == record.id,
         created_at=record.created_at,
@@ -90,6 +91,7 @@ def get_spec(
                 {"name": "display_name", "type": "string", "required": True},
                 {"name": "url", "type": "string", "required": True},
                 {"name": "model", "type": "string", "required": True},
+                {"name": "timeout_sec", "type": "integer", "required": True},
                 {"name": "api_key", "type": "secret", "required": False},
             ]
         },
@@ -137,11 +139,12 @@ def post_service(
 ) -> ModelServiceOut:
     record = create_service(
         purpose=body.purpose,
-        protocol=body.protocol,
-        display_name=body.display_name,
-        url=body.url,
-        model=body.model,
-        api_key=body.api_key,
+            protocol=body.protocol,
+            display_name=body.display_name,
+            url=body.url,
+            model=body.model,
+            timeout_sec=body.timeout_sec,
+            api_key=body.api_key,
         actor_user_id=caller.id,
         actor_token_id=actor_token_id,
     )
@@ -175,6 +178,7 @@ async def patch_service_http(
             url=body.url,
             model=body.model,
             protocol=body.protocol,
+            timeout_sec=body.timeout_sec,
             api_key=body.api_key,
             clear_api_key=body.clear_api_key,
             actor_user_id=caller.id,

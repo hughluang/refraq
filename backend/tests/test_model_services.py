@@ -18,6 +18,7 @@ from backend.admin.model_services import (  # noqa: E402
     get_embedding_runtime,
     mark_embedding_ready,
 )
+from backend.admin.model_services.errors import ModelServiceTimeout  # noqa: E402
 from backend.admin.model_services.ports import (  # noqa: E402
     CatalogEmbedJobsPort,
     catalog_embed_jobs,
@@ -155,6 +156,7 @@ def _create(client: TestClient, **overrides: object) -> dict:
         "display_name": "Office TEI",
         "url": "http://embed.internal:8080/v1/embeddings",
         "model": "Qwen3-Embedding-8B",
+        "timeout_sec": 30,
         "api_key": "sk-test",
     }
     body.update(overrides)
@@ -180,6 +182,7 @@ def test_operator_lacks_write(client: TestClient) -> None:
             "display_name": "x",
             "url": "http://embed.example/v1/embeddings",
             "model": "m",
+            "timeout_sec": 30,
         },
     )
     assert denied.status_code == 403
@@ -213,6 +216,7 @@ def test_test_service_reports_probe_elapsed(client: TestClient) -> None:
     assert "within_search_timeout" not in body
     assert body["output_dim"] == 1024
     assert body["elapsed_ms"] >= 0
+    assert body["timeout_sec"] == 30
 
 
 def test_create_list_spec_and_secret_write_only(client: TestClient) -> None:
@@ -239,6 +243,7 @@ def test_reject_v1_base_url(client: TestClient) -> None:
             "display_name": "bad",
             "url": "http://embed.internal/v1",
             "model": "m",
+            "timeout_sec": 30,
         },
     )
     assert_problem(response, status=400, code="MODEL_SERVICE_INVALID_CONFIG")
@@ -264,6 +269,59 @@ def test_activate_mints_job_clears_ready_and_is_lexical(
     assert runtime.ready is False
     assert embedding_configured() is False
     assert embedding_write_enabled(incremental=True) is True
+
+
+def test_timeout_sec_is_required_and_bounded(client: TestClient) -> None:
+    _login(client)
+    missing = client.post(
+        "/model-services",
+        json={
+            "display_name": "Office TEI",
+            "url": "http://embed.internal:8080/v1/embeddings",
+            "model": "Qwen3-Embedding-8B",
+        },
+    )
+    assert missing.status_code == 422
+    for bad in (14, 301):
+        rejected = client.post(
+            "/model-services",
+            json={
+                "display_name": "Office TEI",
+                "url": "http://embed.internal:8080/v1/embeddings",
+                "model": "Qwen3-Embedding-8B",
+                "timeout_sec": bad,
+            },
+        )
+        assert_problem(rejected, status=400, code="MODEL_SERVICE_INVALID_CONFIG")
+
+
+def test_patch_timeout_does_not_rebuild(
+    client: TestClient, jobs: RecordingJobs
+) -> None:
+    _login(client)
+    created = _create(client, timeout_sec=30)
+    client.post(f"/model-services/{created['id']}/activate")
+    purpose_before = client.get("/model-services/purpose/embedding").json()
+    minted = len(jobs.minted)
+    updated = client.patch(
+        f"/model-services/{created['id']}",
+        json={"timeout_sec": 120},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["timeout_sec"] == 120
+    purpose_after = client.get("/model-services/purpose/embedding").json()
+    assert purpose_after["ready"] == purpose_before["ready"]
+    assert purpose_after["generation"] == purpose_before["generation"]
+    assert len(jobs.minted) == minted
+    kept = client.patch(
+        f"/model-services/{created['id']}",
+        json={"display_name": "Office TEI renamed"},
+    )
+    assert kept.status_code == 200
+    assert kept.json()["timeout_sec"] == 120
+    runtime = get_embedding_runtime()
+    assert runtime is not None
+    assert runtime.timeout_sec == 120
 
 
 def test_in_use_locks_model_and_protocol(client: TestClient, jobs: RecordingJobs) -> None:
@@ -699,6 +757,73 @@ def test_catalog_embed_partial_row_failure_still_ready(client: TestClient) -> No
     assert record.result["failure_reasons"] == [
         {"message": "column embed failed", "count": 8}
     ]
+    purpose = get_model_service_store().get_purpose("embedding")
+    assert purpose.ready is True
+    set_embed_fn_for_tests(None)
+
+
+def test_catalog_embed_timeouts_exceeding_writes_does_not_ready(
+    client: TestClient,
+) -> None:
+    # 8 objects × 4 columns = 40 pending items (two embed batches).
+    _seed_embed_target(object_count=8, columns_per_object=4)
+    reset_job_store()
+    bind_catalog_embed_jobs(CatalogEmbedJobs())
+
+    calls = {"n": 0}
+
+    def timed_out(_texts: list[str]) -> list[list[float]]:
+        calls["n"] += 1
+        raise ModelServiceTimeout(
+            "Embeddings request timed out after 30s calling http://embed.test/v1/embeddings"
+        )
+
+    set_embed_fn_for_tests(timed_out)
+    _login(client)
+    created = _create(client)
+    client.post(f"/model-services/{created['id']}/activate")
+    jobs, _ = get_job_store().list(kind="catalog_embed")
+    record = _finish_catalog_embed(jobs[0].id)
+    assert calls["n"] == 1
+    assert record.status == "failed"
+    assert record.error_code == "JOB_EXECUTION_FAILED"
+    assert record.error_summary is not None
+    assert "embedding timeouts exceed writes" in record.error_summary
+    assert "timed out" in record.error_summary
+    purpose = get_model_service_store().get_purpose("embedding")
+    assert purpose.ready is False
+    set_embed_fn_for_tests(None)
+
+
+def test_catalog_embed_timeout_while_ahead_still_ready(client: TestClient) -> None:
+    # First batch of 32 writes; the tail batch of 8 times out.
+    _seed_embed_target(object_count=8, columns_per_object=4)
+    reset_job_store()
+    bind_catalog_embed_jobs(CatalogEmbedJobs())
+
+    calls = {"n": 0}
+
+    def mostly_ok(texts: list[str]) -> list[list[float]]:
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise ModelServiceTimeout(
+                "Embeddings request timed out after 30s calling http://embed.test/v1/embeddings"
+            )
+        return [[1.0, 0.0] for _ in texts]
+
+    set_embed_fn_for_tests(mostly_ok)
+    _login(client)
+    created = _create(client)
+    client.post(f"/model-services/{created['id']}/activate")
+    jobs, _ = get_job_store().list(kind="catalog_embed")
+    record = _finish_catalog_embed(jobs[0].id)
+    assert calls["n"] == 2
+    assert record.status == "succeeded"
+    assert record.result is not None
+    written = record.result["objects_written"] + record.result["columns_written"]
+    failed = record.result["objects_failed"] + record.result["columns_failed"]
+    assert written == 32
+    assert failed == 8
     purpose = get_model_service_store().get_purpose("embedding")
     assert purpose.ready is True
     set_embed_fn_for_tests(None)

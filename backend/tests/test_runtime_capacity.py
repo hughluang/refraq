@@ -676,23 +676,31 @@ def test_embed_texts_projects_long_native_vectors(
 ) -> None:
     from backend.metadata.catalog import embedding as embedding_mod
 
-    monkeypatch.setattr(
-        embedding_mod,
-        "post_openai_embeddings",
-        lambda **_kw: [[3.0, 4.0] + [0.0] * 20],
-    )
+    captured: dict[str, object] = {}
+
+    def _post(**kw: object) -> list[list[float]]:
+        captured["timeout"] = kw.get("timeout")
+        return [[3.0, 4.0] + [0.0] * 20]
+
+    monkeypatch.setattr(embedding_mod, "post_openai_embeddings", _post)
     monkeypatch.setattr(
         embedding_mod,
         "get_embedding_runtime",
         lambda: type(
             "R",
             (),
-            {"url": "http://embed.test", "model": "m", "secret": None},
+            {
+                "url": "http://embed.test",
+                "model": "m",
+                "secret": None,
+                "timeout_sec": 45,
+            },
         )(),
     )
     embedding_mod.set_embed_fn_for_tests(None)
     monkeypatch.setattr(embedding_mod, "EMBEDDING_OUTPUT_DIM", 2)
     assert embedding_mod.embed_texts(["q"]) == [[0.6, 0.8]]
+    assert captured["timeout"] == 45
 
 
 def test_post_openai_embeddings_posts_model_and_input_only(
@@ -725,6 +733,91 @@ def test_post_openai_embeddings_posts_model_and_input_only(
     )
     assert vectors == [[0.1, 0.2]]
     assert captured["payload"] == {"model": "m", "input": ["q"]}
+
+
+def test_post_openai_embeddings_timeout_is_not_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import urllib.error
+
+    from backend.admin.model_services import openai_compat
+    from backend.admin.model_services.errors import (
+        ModelServiceTestFailed,
+        ModelServiceTimeout,
+        ModelServiceUnavailable,
+    )
+
+    def _urlopen(_req: object, timeout: int = 0) -> object:
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(openai_compat.urllib.request, "urlopen", _urlopen)
+    with pytest.raises(ModelServiceTimeout) as exc_info:
+        openai_compat.post_openai_embeddings(
+            url="http://embed.test/v1/embeddings",
+            model="m",
+            api_key=None,
+            texts=["q"],
+        )
+    message = str(exc_info.value)
+    assert "Cannot reach" not in message
+    assert "30s" in message
+    assert "http://embed.test/v1/embeddings" in message
+    assert exc_info.value.code == "MODEL_SERVICE_UNAVAILABLE"
+    assert exc_info.value.http_status == 503
+
+    def _refuse(_req: object, timeout: int = 0) -> object:
+        raise urllib.error.URLError("refused")
+
+    monkeypatch.setattr(openai_compat.urllib.request, "urlopen", _refuse)
+    with pytest.raises(ModelServiceUnavailable) as refused:
+        openai_compat.post_openai_embeddings(
+            url="http://embed.test/v1/embeddings",
+            model="m",
+            api_key=None,
+            texts=["q"],
+        )
+    assert not isinstance(refused.value, ModelServiceTimeout)
+    assert str(refused.value) == (
+        "Cannot reach embeddings URL http://embed.test/v1/embeddings"
+    )
+
+    def _connect_timeout(_req: object, timeout: int = 0) -> object:
+        raise urllib.error.URLError(TimeoutError("timed out"))
+
+    monkeypatch.setattr(openai_compat.urllib.request, "urlopen", _connect_timeout)
+    with pytest.raises(ModelServiceTimeout) as connect_timeout:
+        openai_compat.post_openai_embeddings(
+            url="http://embed.test/v1/embeddings",
+            model="m",
+            api_key=None,
+            texts=["q"],
+        )
+    connect_message = str(connect_timeout.value)
+    assert "Cannot reach" not in connect_message
+    assert "30s" in connect_message
+    assert "http://embed.test/v1/embeddings" in connect_message
+
+    class _Body:
+        def __enter__(self) -> "_Body":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b"not-json"
+
+    monkeypatch.setattr(
+        openai_compat.urllib.request, "urlopen", lambda *_a, **_k: _Body()
+    )
+    with pytest.raises(ModelServiceTestFailed) as bad_body:
+        openai_compat.post_openai_embeddings(
+            url="http://embed.test/v1/embeddings",
+            model="m",
+            api_key=None,
+            texts=["q"],
+        )
+    assert "Cannot reach" not in str(bad_body.value)
 
 
 def _seed_admin() -> None:

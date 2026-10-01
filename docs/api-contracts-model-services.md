@@ -25,6 +25,7 @@ All endpoints use JSON success and RFC 9457 Problem Details failures. They accep
   "display_name": "Office TEI",
   "url": "http://embed.internal:8080/v1/embeddings",
   "model": "Qwen3-Embedding-8B",
+  "timeout_sec": 30,
   "has_secret": true,
   "in_use": true,
   "created_at": "2026-09-01T09:00:00Z",
@@ -32,7 +33,7 @@ All endpoints use JSON success and RFC 9457 Problem Details failures. They accep
 }
 ```
 
-`url` is the full embeddings path. `has_secret` is whether an API key is stored. `in_use` is true when this row is the purpose’s current in-use service.
+`url` is the full embeddings path. `timeout_sec` is the shared client read timeout in integer seconds (15–300). Create requires it. Patch omits it to keep the stored value; null does not clear it. `has_secret` is whether an API key is stored. `in_use` is true when this row is the purpose’s current in-use service.
 
 ## 4. Purpose State Shape
 
@@ -73,15 +74,15 @@ Permission: `model_services:read`. Returns the record shape.
 
 ### `PATCH /model-services/{id}`
 
-Permission: `model_services:write`. Updates display name and, when the row is a draft, URL / model / protocol / secret. An in-use row rejects `model` or `protocol` changes with `MODEL_SERVICE_WIRE_IMMUTABLE`.
+Permission: `model_services:write`. Updates display name, `timeout_sec`, and, when the row is a draft, URL / model / protocol / secret. An in-use row rejects `model` or `protocol` changes with `MODEL_SERVICE_WIRE_IMMUTABLE`. `timeout_sec` outside 15–300 is `MODEL_SERVICE_INVALID_CONFIG`. An in-use `timeout_sec` change does not clear ready and does not mint `catalog_embed`.
 
 URL unchanged and `api_key` omitted: keep the stored secret. URL changed: the request must supply `api_key` or `clear_api_key: true`; the stored secret is not sent to the new URL. Secret or URL changes run the connectivity test before persist; failure does not save.
 
-An in-use URL change that passes the test clears ready, increments generation, cancels an in-flight `catalog_embed` Job, and mints a new one. Secret-only or display-name-only changes do not.
+An in-use URL change that passes the test clears ready, increments generation, cancels an in-flight `catalog_embed` Job, and mints a new one. Secret-only, display-name-only, or timeout-only changes do not.
 
 ### `POST /model-services/{id}/test`
 
-Permission: `model_services:write`. Posts a fixed short probe (`input` as a string array; no `dimensions`) to the stored full URL. Success: `{ "ok": true, "dimension": N, "elapsed_ms": N, "model": "…", "output_dim": 1024 }`. `dimension` is the native probe width. `output_dim` is `EMBEDDING_OUTPUT_DIM`, the stored and query width after prefix truncation and L2-normalize. `elapsed_ms` is how long this probe took; it is not a threshold. Probe, index batch, and query embed share the model API timeout (`TIMEOUT_SEC`). Failure: Problem Details with a classified code; `detail` may include the **actual request URL** and a truncated remote body. Does not change in-use, closed, or ready.
+Permission: `model_services:write`. Posts a fixed short probe (`input` as a string array; no `dimensions`) to the stored full URL. Success: `{ "ok": true, "dimension": N, "elapsed_ms": N, "model": "…", "output_dim": 1024, "timeout_sec": N }`. `dimension` is the native probe width. `output_dim` is `EMBEDDING_OUTPUT_DIM`, the stored and query width after prefix truncation and L2-normalize. `elapsed_ms` is how long this probe took; it is not a threshold. `timeout_sec` is the client read timeout this probe used. Probe, index batch, and query embed share the in-use record’s `timeout_sec`. Failure: Problem Details with a classified code; `detail` may include the **actual request URL** and a truncated remote body. Does not change in-use, closed, or ready.
 
 ### `POST /model-services/{id}/activate`
 
@@ -133,7 +134,7 @@ Permission: `model_services:write`. Rebuild-now for the current in-use service. 
 }
 ```
 
-`objects` / `columns` are the written counts (same as `objects_written` / `columns_written`). `failure_reasons` is `{ "message", "count" }` per distinct embed error, ordered by count descending; empty when no row failed. Per-row embed failures increment the failed counters and do not fail the Job when at least one vector was written. A run that writes no vectors against a non-empty catalog ends `failed` with `JOB_EXECUTION_FAILED` and does not set ready; `error_summary` includes the dominant embed reason when one was recorded. Failed or cancelled Jobs write no result and do not set ready. Platform observe remains `GET /jobs`. There is no `POST /jobs` create.
+`objects` / `columns` are the written counts (same as `objects_written` / `columns_written`). `failure_reasons` is `{ "message", "count" }` per distinct embed error, ordered by count descending; empty when no row failed. Per-row embed failures increment the failed counters and do not fail the Job when at least one vector was written, except when client-deadline rows (connect or read) outnumber written rows: the Job then stops, ends `failed` with `JOB_EXECUTION_FAILED`, and does not set ready. A run that writes no vectors against a non-empty catalog ends `failed` with `JOB_EXECUTION_FAILED` and does not set ready; `error_summary` includes the dominant embed reason when one was recorded. Failed or cancelled Jobs write no result and do not set ready. Platform observe remains `GET /jobs`. There is no `POST /jobs` create.
 
 ## 7. Errors
 
@@ -149,7 +150,7 @@ Permission: `model_services:write`. Rebuild-now for the current in-use service. 
 | `409` | `MODEL_SERVICE_NOT_IN_USE` | Open or reindex without an in-use service |
 | `409` | `MODEL_SERVICE_CLEANUP_FORBIDDEN` | Cleanup while open and an in-use service exists |
 | `409` | `MODEL_SERVICE_SECRET_REQUIRED` | URL changed without a new key or `clear_api_key` |
-| `503` | `MODEL_SERVICE_UNAVAILABLE` | Embeddings URL cannot be reached |
+| `503` | `MODEL_SERVICE_UNAVAILABLE` | Embeddings URL cannot be reached, or the client deadline elapsed (connect or read) |
 
 ## 8. Non-Goals
 

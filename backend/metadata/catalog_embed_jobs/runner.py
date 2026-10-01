@@ -48,6 +48,18 @@ def _catalog_has_embed_targets() -> bool:
     return False
 
 
+def _deadline_stop(
+    counts: EmbeddingRefreshCounts, *, dominant: str | None
+) -> str | None:
+    """Failure summary when client-deadline rows outnumber writes."""
+    if counts.timeout_failed <= counts.written:
+        return None
+    summary = "catalog_embed stopped: embedding timeouts exceed writes"
+    if dominant:
+        summary = f"{summary}: {dominant}"
+    return summary
+
+
 def _fail(job_id: str, *, error_code: str, error_summary: str) -> dict[str, str]:
     append_job_log(
         job_id,
@@ -99,6 +111,16 @@ def run_catalog_embed_job(job_id: str) -> dict[str, str]:
         sources, _ = get_source_store().list_sources(limit=None, offset=0)
         totals = EmbeddingRefreshCounts()
         progress = CatalogEmbedLog(job_id)
+
+        def _should_stop(current: EmbeddingRefreshCounts) -> bool:
+            if stopped_result(job_id) is not None:
+                return True
+            running = totals.plus(current)
+            return (
+                _deadline_stop(running, dominant=progress.dominant_reason())
+                is not None
+            )
+
         for source in sources:
             stopped = stopped_result(job_id)
             if stopped is not None:
@@ -109,14 +131,22 @@ def run_catalog_embed_job(job_id: str) -> dict[str, str]:
                 source.id,
                 force=True,
                 progress=progress,
-                should_stop=lambda: stopped_result(job_id) is not None,
+                should_stop=_should_stop,
             )
             stopped = stopped_result(job_id)
             if stopped is not None:
                 progress.flush_reason_counts()
                 return stopped
-            progress.finish_source(source_counts)
             totals = totals.plus(source_counts)
+            summary = _deadline_stop(totals, dominant=progress.dominant_reason())
+            if summary is not None:
+                progress.flush_reason_counts()
+                return _fail(
+                    job_id,
+                    error_code="JOB_EXECUTION_FAILED",
+                    error_summary=summary,
+                )
+            progress.finish_source(source_counts)
         result = {
             "schema": "catalog_embed.v1",
             "objects": totals.objects_written,
