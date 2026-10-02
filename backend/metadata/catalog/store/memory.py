@@ -39,16 +39,17 @@ from backend.metadata.catalog.structure_persist import (
     apply_structure_plan,
 )
 from backend.metadata.join_detection_jobs.reconcile import JoinDetectionPlan
+from backend.metadata.structure_diffs.store import (
+    MemoryStructureDiffStore,
+    StructureDiffRecord,
+    get_structure_diff_store,
+)
 
 
 class _MemoryStructureWrite:
     def __init__(self, store: MemoryCatalogStore, source_id: str) -> None:
         self._store = store
         self._source_id = source_id
-
-    @property
-    def session(self) -> None:
-        return None
 
     def load_baseline(
         self,
@@ -66,6 +67,9 @@ class _MemoryStructureWrite:
 
     def persist_plan(self, plan: StructureRefreshPlan) -> None:
         apply_structure_plan(_MemoryPersistPort(self._store), plan, now=utc_now())
+
+    def persist_structure_diff(self, record: StructureDiffRecord) -> None:
+        get_structure_diff_store().create(record)
 
     def persist_join_detection_plan(self, plan: JoinDetectionPlan) -> int:
         return apply_join_detection_plan(
@@ -284,8 +288,10 @@ class MemoryCatalogStore:
         """Catalog write unit (zero merge/origin rules).
 
         Same-kind runner serialization is the Kind execution lock (ADR 0032).
-        This in-process lock only keeps one persist atomic in memory tests.
+        This in-process lock keeps one persist atomic in memory tests, including
+        Structure Diff rows written through the same unit.
         """
+        diff_store = get_structure_diff_store()
         with self._lock:
             objects_backup = dict(self._objects)
             joins_backup = dict(self._joins)
@@ -293,6 +299,11 @@ class MemoryCatalogStore:
             join_changes_backup = list(self._join_changes)
             semantics_changes_backup = list(self._semantics_changes)
             embeddings_backup = dict(self._embeddings)
+            diff_backup = (
+                diff_store.capture_rows()
+                if isinstance(diff_store, MemoryStructureDiffStore)
+                else None
+            )
             write = _MemoryStructureWrite(self, source_id)
             try:
                 yield write
@@ -303,6 +314,8 @@ class MemoryCatalogStore:
                 self._join_changes = join_changes_backup
                 self._semantics_changes = semantics_changes_backup
                 self._embeddings = embeddings_backup
+                if diff_backup is not None:
+                    diff_store.restore_rows(diff_backup)
                 raise
 
     def recompute_locators_for_source(

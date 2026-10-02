@@ -30,6 +30,7 @@ from backend.metadata.catalog.records import (
     new_column_id,
     new_fk_id,
     new_index_id,
+    new_object_id,
 )
 
 
@@ -191,6 +192,7 @@ def build_structure_refresh_plan(
             name=incoming_obj.name,
         )
         if match is None:
+            object_id = incoming_obj.id or new_object_id()
             cols = []
             for col in incoming_obj.columns:
                 col_locator = _recompute_column_locator(
@@ -206,8 +208,9 @@ def build_structure_refresh_plan(
                 cols.append(
                     replace(
                         col,
+                        id=col.id or new_column_id(),
                         locator_key=col_locator,
-                        object_id=incoming_obj.id,
+                        object_id=object_id,
                     )
                 )
             fks = [
@@ -220,13 +223,14 @@ def build_structure_refresh_plan(
             ]
             inserted = replace(
                 incoming_obj,
+                id=object_id,
                 locator_key=obj_locator,
                 columns=cols,
                 foreign_keys=fks,
                 indexes=idxs,
             )
-            by_id[incoming_obj.id] = inserted
-            touched_ids.add(incoming_obj.id)
+            by_id[object_id] = inserted
+            touched_ids.add(object_id)
             continue
 
         new_cols = merge_columns_snapshot(

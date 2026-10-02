@@ -13,8 +13,6 @@ from backend.metadata.catalog.store import (
     CatalogIndexRecord,
     CatalogObjectRecord,
     CatalogWriteAborted,
-    new_column_id,
-    new_object_id,
 )
 from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
 from backend.metadata.connectors.base import CollectedStructure, ConnectorError
@@ -181,7 +179,7 @@ def _to_catalog_records(
     now = utc_now()
     out: list[CatalogObjectRecord] = []
     for obj in collected.objects:
-        object_id = new_object_id()
+        # Blank until the structure commit assigns ids after identity match.
         obj_locator = format_object_locator(
             engine=engine,
             kind=kind,
@@ -192,8 +190,8 @@ def _to_catalog_records(
         )
         columns = [
             CatalogColumnRecord(
-                id=new_column_id(),
-                object_id=object_id,
+                id="",
+                object_id="",
                 locator_key=format_column_locator(
                     engine=engine,
                     kind=kind,
@@ -241,7 +239,7 @@ def _to_catalog_records(
         ]
         out.append(
             CatalogObjectRecord(
-                id=object_id,
+                id="",
                 source_id=source_id,
                 locator_key=obj_locator,
                 object_type=obj.object_type,

@@ -8,8 +8,6 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Any, Protocol
 
-from sqlalchemy.orm import Session
-
 from backend.core.config import get_settings
 from backend.metadata.catalog.join_pair import Inserted, Occupied
 from backend.metadata.catalog.records import (
@@ -32,19 +30,23 @@ from backend.metadata.catalog.store.sql import SqlCatalogStore
 from backend.metadata.catalog.structure_merge import StructureRefreshPlan
 from backend.metadata.errors import CatalogObjectNotFound
 from backend.metadata.join_detection_jobs.reconcile import JoinDetectionPlan
+from backend.metadata.structure_diffs.store import StructureDiffRecord
 
 
 class StructureWrite(Protocol):
-    """Locked catalog write unit: load baseline, persist plan (no merge)."""
+    """Locked catalog write unit: load baseline, persist plan and Structure Diff.
 
-    @property
-    def session(self) -> Session | None: ...
+    ``load_baseline`` does not commit. Successful exit of ``catalog_write``
+    commits catalog rows and the Structure Diff together.
+    """
 
     def load_baseline(
         self,
     ) -> tuple[list[CatalogObjectRecord], list[CatalogJoinRecord]]: ...
 
     def persist_plan(self, plan: StructureRefreshPlan) -> None: ...
+
+    def persist_structure_diff(self, record: StructureDiffRecord) -> None: ...
 
     def persist_join_detection_plan(self, plan: JoinDetectionPlan) -> int: ...
 

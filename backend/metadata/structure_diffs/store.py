@@ -71,6 +71,15 @@ class MemoryStructureDiffStore:
             self._by_id[record.id] = record
             return record
 
+    def capture_rows(self) -> dict[str, StructureDiffRecord]:
+        """Copy used by the memory catalog write unit. Not part of the store port."""
+        with self._lock:
+            return dict(self._by_id)
+
+    def restore_rows(self, rows: dict[str, StructureDiffRecord]) -> None:
+        with self._lock:
+            self._by_id = dict(rows)
+
     def get(self, diff_id: str) -> StructureDiffRecord | None:
         with self._lock:
             return self._by_id.get(diff_id)

@@ -337,16 +337,16 @@ def test_mass_absent_apply_persists_structure_diff() -> None:
 def test_diff_persist_failure_leaves_catalog_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from backend.metadata.catalog.store.memory import _MemoryStructureWrite
+
     now = utc_now()
     table = _table(now=now)
 
-    def _boom(**_kwargs: object) -> None:
+    def _boom(self: object, record: object) -> None:
+        del self, record
         raise RuntimeError("diff persist failed")
 
-    monkeypatch.setattr(
-        "backend.metadata.catalog.structure_refresh.persist_structure_diff",
-        _boom,
-    )
+    monkeypatch.setattr(_MemoryStructureWrite, "persist_structure_diff", _boom)
     with pytest.raises(RuntimeError, match="diff persist failed"):
         apply_structure_snapshot(
             source=require_source("src_1"),
@@ -358,49 +358,3 @@ def test_diff_persist_failure_leaves_catalog_unchanged(
     diffs, total = get_structure_diff_store().list_for_source("src_1")
     assert total == 0
     assert diffs == []
-
-
-def test_diff_create_then_raise_rolls_back_catalog_and_diff(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Memory Diff is a separate dict; create-then-raise must undo both sides."""
-    from backend.metadata.structure_diffs.store import (
-        StructureDiffRecord,
-        new_structure_diff_id,
-    )
-
-    now = utc_now()
-    store = get_structure_diff_store()
-    # Many older Diffs must not block job_id compensation (no page scan).
-    for i in range(250):
-        store.create(
-            StructureDiffRecord(
-                id=new_structure_diff_id(),
-                source_id="src_1",
-                job_id=f"job_hist_{i}",
-                diff_class="unchanged",
-                counts=empty_counts(),
-                changes=[],
-                created_at=now,
-            )
-        )
-    table = _table(now=now)
-    real_create = store.create
-
-    def _create_then_raise(record: StructureDiffRecord, *, session=None):  # noqa: ANN001
-        real_create(record, session=session)
-        raise RuntimeError("diff create after-write failure")
-
-    monkeypatch.setattr(store, "create", _create_then_raise)
-    with pytest.raises(RuntimeError, match="diff create after-write failure"):
-        apply_structure_snapshot(
-            source=require_source("src_1"),
-            job_id="job_partial",
-            collected=[table],
-            schema_scope=None,
-        )
-    assert get_catalog_store().get_object("obj_orders") is None
-    diffs, total = store.list_for_source("src_1", limit=300)
-    assert total == 250
-    assert not any(d.job_id == "job_partial" for d in diffs)
-    assert store.delete_for_job("job_partial") == 0

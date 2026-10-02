@@ -784,6 +784,93 @@ def test_persist_stores_full_routine_identity_name(catalog_store) -> None:
 
     stored = catalog_store.get_object_by_locator(locator)
     assert stored is not None
+    assert stored.id == object_id
     assert stored.name == _LONG_ROUTINE_NAME
     assert stored.locator_key == locator
     assert stored.object_type == "function"
+
+
+def test_structure_commit_assigns_blank_ids_and_writes_diff(catalog_store) -> None:
+    from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
+    from backend.metadata.sources.service import require_source
+    from backend.metadata.structure_diffs.store import get_structure_diff_store
+
+    _seed_source()
+    collected = _object("orders", ready=False, business_name=None, columns=["id"])
+    collected = replace(
+        collected,
+        id="",
+        columns=[replace(col, id="", object_id="") for col in collected.columns],
+    )
+    job_id = f"job_{uuid.uuid4().hex[:12]}"
+    commit = apply_structure_snapshot(
+        source=require_source(SOURCE_ID),
+        job_id=job_id,
+        collected=[collected],
+        schema_scope=None,
+    )
+    stored = catalog_store.get_object_by_locator(collected.locator_key)
+    assert stored is not None
+    assert stored.id.startswith("obj_")
+    assert stored.columns[0].id.startswith("col_")
+    assert stored.columns[0].object_id == stored.id
+    diff = get_structure_diff_store().get(commit.structure_diff_id)
+    assert diff is not None
+    assert diff.job_id == job_id
+    assert diff.source_id == SOURCE_ID
+
+
+def test_structure_commit_failure_after_diff_leaves_both_unchanged(
+    catalog_store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.metadata.catalog.store.memory import _MemoryStructureWrite
+    from backend.metadata.catalog.store.sql import _SqlStructureWrite
+    from backend.metadata.catalog.structure_refresh import apply_structure_snapshot
+    from backend.metadata.sources.service import require_source
+    from backend.metadata.structure_diffs.store import (
+        StructureDiffRecord,
+        get_structure_diff_store,
+    )
+
+    _seed_source()
+    seeded = _object("orders", ready=False, business_name=None, columns=["id"])
+    apply_structure_snapshot(
+        source=require_source(SOURCE_ID),
+        job_id="job_seed",
+        collected=[seeded],
+        schema_scope=None,
+    )
+    _, objects_before = catalog_store.list_objects(SOURCE_ID)
+    _, diffs_before = get_structure_diff_store().list_for_source(SOURCE_ID)
+    assert objects_before == 1
+    assert diffs_before == 1
+
+    memory_persist = _MemoryStructureWrite.persist_structure_diff
+    sql_persist = _SqlStructureWrite.persist_structure_diff
+
+    def _after_memory(self: _MemoryStructureWrite, record: StructureDiffRecord) -> None:
+        memory_persist(self, record)
+        raise RuntimeError("after diff")
+
+    def _after_sql(self: _SqlStructureWrite, record: StructureDiffRecord) -> None:
+        sql_persist(self, record)
+        raise RuntimeError("after diff")
+
+    monkeypatch.setattr(_MemoryStructureWrite, "persist_structure_diff", _after_memory)
+    monkeypatch.setattr(_SqlStructureWrite, "persist_structure_diff", _after_sql)
+
+    extra = _object("customers", ready=False, business_name=None, columns=["id"])
+    with pytest.raises(RuntimeError, match="after diff"):
+        apply_structure_snapshot(
+            source=require_source(SOURCE_ID),
+            job_id="job_fail",
+            collected=[extra],
+            schema_scope=None,
+        )
+
+    objects, total = catalog_store.list_objects(SOURCE_ID)
+    assert total == objects_before
+    assert [o.name for o in objects if o.is_present] == ["orders"]
+    diffs, diff_total = get_structure_diff_store().list_for_source(SOURCE_ID)
+    assert diff_total == diffs_before
+    assert [d.job_id for d in diffs] == ["job_seed"]

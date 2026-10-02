@@ -33,6 +33,10 @@ from backend.metadata.catalog.structure_persist import (
     apply_join_detection_plan,
     apply_structure_plan,
 )
+from backend.metadata.structure_diffs.store import (
+    StructureDiffRecord,
+    get_structure_diff_store,
+)
 from backend.metadata.catalog.join_changes import (
     CatalogJoinChangeRecord,
     join_change_for_amend,
@@ -177,10 +181,6 @@ class _SqlStructureWrite:
         self._session = session
         self._source_id = source_id
 
-    @property
-    def session(self) -> Session:
-        return self._session
-
     def load_baseline(
         self,
     ) -> tuple[list[CatalogObjectRecord], list[CatalogJoinRecord]]:
@@ -200,13 +200,15 @@ class _SqlStructureWrite:
             self._session.scalars(_select_joins_for_source(self._source_id)).all()
         )
         existing_joins = [_row_to_join(j) for j in join_rows]
-        self._session.commit()
         return existing_objects, existing_joins
 
     def persist_plan(self, plan: StructureRefreshPlan) -> None:
         now = utc_now()
         apply_structure_plan(_SqlPersistPort(self._session, now=now), plan, now=now)
         self._session.flush()
+
+    def persist_structure_diff(self, record: StructureDiffRecord) -> None:
+        get_structure_diff_store().create(record, session=self._session)
 
     def persist_join_detection_plan(self, plan: JoinDetectionPlan) -> int:
         now = utc_now()
@@ -464,11 +466,12 @@ class SqlCatalogStore:
 
     @contextmanager
     def catalog_write(self, source_id: str) -> Iterator[_SqlStructureWrite]:
-        """Catalog write unit: load baseline, persist plan (no merge).
+        """Catalog write unit: load baseline, persist plan and Structure Diff.
 
         Same-kind runner serialization is the **Kind execution lock** (ADR 0032),
         not this write unit. Automatic join inserts use ON CONFLICT DO NOTHING.
-        Successful exit commits once (catalog plan + Diff rows on the same session).
+        ``load_baseline`` does not commit. Successful exit commits once
+        (catalog plan + Diff rows on the same session).
         """
         session = get_session_factory()()
         write = _SqlStructureWrite(session, source_id)

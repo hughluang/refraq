@@ -2,39 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-from sqlalchemy.orm import Session
-
-from backend.core.time import utc_now
 from backend.metadata.errors import SourceNotFound, StructureDiffNotFound
 from backend.metadata.sources.store import get_source_store
 from backend.metadata.structure_diffs.store import (
     StructureDiffRecord,
     get_structure_diff_store,
-    new_structure_diff_id,
 )
-
-
-def persist_structure_diff(
-    *,
-    source_id: str,
-    job_id: str,
-    diff_class: str,
-    counts: dict[str, int],
-    changes: list[dict[str, Any]],
-    session: Session | None = None,
-) -> StructureDiffRecord:
-    record = StructureDiffRecord(
-        id=new_structure_diff_id(),
-        source_id=source_id,
-        job_id=job_id,
-        diff_class=diff_class,
-        counts=dict(counts),
-        changes=list(changes),
-        created_at=utc_now(),
-    )
-    return get_structure_diff_store().create(record, session=session)
 
 
 def list_structure_diffs(
@@ -57,5 +30,4 @@ def get_structure_diff(diff_id: str) -> StructureDiffRecord:
 __all__ = [
     "get_structure_diff",
     "list_structure_diffs",
-    "persist_structure_diff",
 ]

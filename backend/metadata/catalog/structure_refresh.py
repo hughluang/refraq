@@ -1,4 +1,4 @@
-"""Source structure refresh: load → plan → persist catalog + Structure Diff."""
+"""Source structure refresh: one write unit for catalog and Structure Diff."""
 
 from __future__ import annotations
 
@@ -12,8 +12,10 @@ from backend.metadata.catalog.store import get_catalog_store
 from backend.metadata.catalog.structure_diff import StructureDiffFacts
 from backend.metadata.catalog.structure_merge import build_structure_refresh_plan
 from backend.metadata.sources.store import SourceRecord
-from backend.metadata.structure_diffs.service import persist_structure_diff
-from backend.metadata.structure_diffs.store import get_structure_diff_store
+from backend.metadata.structure_diffs.store import (
+    StructureDiffRecord,
+    new_structure_diff_id,
+)
 
 
 @dataclass(frozen=True)
@@ -39,41 +41,35 @@ def apply_structure_snapshot(
     Identity (engine / kind / key) is taken from ``source``. Identity match,
     FK/index merge, Join Origin, and Object Semantics survival live in
     ``structure_merge``. This module loads one baseline under a catalog write
-    unit, builds the plan, persists the delta and Structure Diff facts from
-    that same baseline, then returns the commit outcome.
+    unit, builds the plan, and persists the delta and Structure Diff in that
+    same unit. Embeddings refresh after the unit commits.
     """
-    try:
-        with get_catalog_store().catalog_write(source.id) as write:
-            existing_objects, existing_joins = write.load_baseline()
-            plan = build_structure_refresh_plan(
-                source_id=source.id,
-                job_id=job_id,
-                existing_objects=existing_objects,
-                existing_joins=existing_joins,
-                incoming=collected,
-                schema_scope=schema_scope,
-                engine=source.engine,
-                kind=source.kind,
-                source_key=source.key,
-                now=utc_now(),
-            )
-            write.persist_plan(plan)
-            record = persist_structure_diff(
-                source_id=source.id,
-                job_id=job_id,
-                diff_class=plan.diff.diff_class,
-                counts=plan.diff.counts,
-                changes=plan.diff.changes_document(),
-                session=write.session,
-            )
-        commit = StructureRefreshCommit(
-            facts=plan.diff, structure_diff_id=record.id
+    with get_catalog_store().catalog_write(source.id) as write:
+        existing_objects, existing_joins = write.load_baseline()
+        plan = build_structure_refresh_plan(
+            source_id=source.id,
+            job_id=job_id,
+            existing_objects=existing_objects,
+            existing_joins=existing_joins,
+            incoming=collected,
+            schema_scope=schema_scope,
+            engine=source.engine,
+            kind=source.kind,
+            source_key=source.key,
+            now=utc_now(),
         )
-        refresh_source_embeddings(source.id)
-        return commit
-    except Exception:
-        # Memory Diff store is a separate dict; undo any Diff that landed for
-        # this Job when the write unit rolls back catalog. SQL Diff rows share
-        # the write session and are already rolled back.
-        get_structure_diff_store().delete_for_job(job_id)
-        raise
+        write.persist_plan(plan)
+        record = StructureDiffRecord(
+            id=new_structure_diff_id(),
+            source_id=source.id,
+            job_id=job_id,
+            diff_class=plan.diff.diff_class,
+            counts=dict(plan.diff.counts),
+            changes=plan.diff.changes_document(),
+            created_at=utc_now(),
+        )
+        write.persist_structure_diff(record)
+    refresh_source_embeddings(source.id)
+    return StructureRefreshCommit(
+        facts=plan.diff, structure_diff_id=record.id
+    )
