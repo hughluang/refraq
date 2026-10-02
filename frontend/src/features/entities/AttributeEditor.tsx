@@ -17,7 +17,11 @@ import {
   type AttributeIssue,
   type AttributeIssueField,
 } from "@/features/entities/attributeDraftValidation";
-import { ATTRIBUTE_TYPES, EMPTY_ATTRIBUTE } from "@/features/entities/constants";
+import {
+  ATTRIBUTE_TYPE_CATALOG,
+  ATTRIBUTE_TYPES,
+} from "@/features/entities/attributeTypes.generated";
+import { EMPTY_ATTRIBUTE } from "@/features/entities/constants";
 import { physicalColumnType } from "@/features/entities/physicalType";
 import { referenceSummaryLabel } from "@/features/entities/entityPresentation";
 import { TargetEntityField } from "@/features/entities/TargetEntityField";
@@ -348,8 +352,8 @@ export function AttributeEditor({
                 editable
                 required
                 label={t("entities.fields.maxLength")}
-                min={1}
-                max={65535}
+                min={ATTRIBUTE_TYPE_CATALOG.string.config.max_length.minimum}
+                max={ATTRIBUTE_TYPE_CATALOG.string.config.max_length.maximum}
                 allowDecimal={false}
                 value={integerValue(draft.max_length)}
                 onChange={(value) =>
@@ -367,8 +371,8 @@ export function AttributeEditor({
                   editable
                   required
                   label={t("entities.fields.precision")}
-                  min={1}
-                  max={1000}
+                  min={ATTRIBUTE_TYPE_CATALOG.decimal.config.precision.minimum}
+                  max={ATTRIBUTE_TYPE_CATALOG.decimal.config.precision.maximum}
                   allowDecimal={false}
                   value={integerValue(draft.precision)}
                   onChange={(value) =>
@@ -383,8 +387,8 @@ export function AttributeEditor({
                   editable
                   required
                   label={t("entities.fields.scale")}
-                  min={0}
-                  max={1000}
+                  min={ATTRIBUTE_TYPE_CATALOG.decimal.config.scale.minimum}
+                  max={ATTRIBUTE_TYPE_CATALOG.decimal.config.scale.maximum}
                   allowDecimal={false}
                   value={integerValue(draft.scale)}
                   onChange={(value) =>

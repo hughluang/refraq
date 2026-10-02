@@ -20,12 +20,12 @@ from backend.admin.roles import create_role, seed_roles  # noqa: E402
 from backend.admin.role_store import get_role_store  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import get_user_store  # noqa: E402
+from backend.entity.attribute_type import resolve  # noqa: E402
 from backend.entity.data.capabilities import (  # noqa: E402
     FILTER_DEPTH_MAX,
     FILTER_IN_VALUES_MAX,
     FILTER_LEAVES_MAX,
     OFFSET_MAX,
-    OPERATORS_BY_TYPE,
     PAGE_LIMIT_DEFAULT,
     PAGE_LIMIT_MAX,
     ROW_WRITE_LIMIT,
@@ -136,11 +136,11 @@ def test_schema_returns_head_metadata_and_shared_limits(client: TestClient) -> N
     assert body["entity"]["writable"] is True
     assert "table_name" not in body["head"]
     assert body["row_id"]["type"] == "integer"
-    assert body["row_id"]["operators"] == list(OPERATORS_BY_TYPE["integer"])
+    assert body["row_id"]["operators"] == list(resolve("integer").operators)
     names = [item["name"] for item in body["attributes"]]
     assert names == ["sku", "active", "note"]
     by_name = {item["name"]: item for item in body["attributes"]}
-    assert by_name["sku"]["operators"] == list(OPERATORS_BY_TYPE["string"])
+    assert by_name["sku"]["operators"] == list(resolve("string").operators)
     assert by_name["sku"]["upsert_key"] is True
     assert by_name["active"]["upsert_key"] is True
     assert by_name["note"]["upsert_key"] is False

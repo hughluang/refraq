@@ -3,12 +3,8 @@ import {
   attributeNameError,
   type AttributeNameErrorReason,
 } from "@/features/entities/attributeNameValidation";
-import type { AttributeDraft } from "@/features/entities/types";
-
-export const STRING_MAX_LENGTH_MIN = 1;
-export const STRING_MAX_LENGTH_MAX = 65535;
-export const DECIMAL_PRECISION_MIN = 1;
-export const DECIMAL_PRECISION_MAX = 1000;
+import { ATTRIBUTE_TYPE_CATALOG } from "@/features/entities/attributeTypes.generated";
+import type { AttributeDraft, AttributeType } from "@/features/entities/types";
 
 export type AttributeIssueField =
   | "name"
@@ -59,90 +55,88 @@ function nameIssue(draft: AttributeDraft, names: readonly string[]): AttributeIs
   };
 }
 
-function stringIssues(draft: AttributeDraft): AttributeIssue[] {
-  const parsed = strictInt(draft.max_length);
-  if (parsed == null) {
-    return draft.max_length.trim() === ""
-      ? [
-          {
-            field: "max_length",
-            key: "entities.validation.attribute.maxLengthRequired",
-          },
-        ]
-      : [
-          {
-            field: "max_length",
-            key: "entities.validation.attribute.maxLengthRange",
-            values: { min: STRING_MAX_LENGTH_MIN, max: STRING_MAX_LENGTH_MAX },
-          },
-        ];
+type ConfigIssueField = Exclude<AttributeIssueField, "name">;
+
+type IntIssueField = "max_length" | "precision" | "scale";
+
+const REQUIRED_KEY: Record<ConfigIssueField, string> = {
+  max_length: "entities.validation.attribute.maxLengthRequired",
+  precision: "entities.validation.attribute.precisionRequired",
+  scale: "entities.validation.attribute.scaleRequired",
+  dictionary_id: "entities.validation.attribute.dictionaryRequired",
+  target_entity_id: "entities.validation.attribute.targetRequired",
+};
+
+const RANGE_KEY: Record<IntIssueField, string> = {
+  max_length: "entities.validation.attribute.maxLengthRange",
+  precision: "entities.validation.attribute.precisionRange",
+  scale: "entities.validation.attribute.scaleRange",
+};
+
+type CatalogField =
+  | {
+      readonly kind: "int";
+      readonly minimum: number;
+      readonly maximum: number;
+      readonly atMost: string | null;
+    }
+  | { readonly kind: "string" };
+
+function draftConfigText(draft: AttributeDraft, field: ConfigIssueField): string {
+  switch (field) {
+    case "max_length":
+      return draft.max_length;
+    case "precision":
+      return draft.precision;
+    case "scale":
+      return draft.scale;
+    case "dictionary_id":
+      return draft.dictionary_id;
+    case "target_entity_id":
+      return draft.target_entity_id;
   }
-  if (parsed < STRING_MAX_LENGTH_MIN || parsed > STRING_MAX_LENGTH_MAX) {
-    return [
-      {
-        field: "max_length",
-        key: "entities.validation.attribute.maxLengthRange",
-        values: { min: STRING_MAX_LENGTH_MIN, max: STRING_MAX_LENGTH_MAX },
-      },
-    ];
-  }
-  return [];
 }
 
-function decimalIssues(draft: AttributeDraft): AttributeIssue[] {
+function catalogFields(type: AttributeType): Array<[ConfigIssueField, CatalogField]> {
+  const config = ATTRIBUTE_TYPE_CATALOG[type].config as Readonly<
+    Record<string, CatalogField>
+  >;
+  return Object.entries(config) as Array<[ConfigIssueField, CatalogField]>;
+}
+
+function configIssues(draft: AttributeDraft): AttributeIssue[] {
   const issues: AttributeIssue[] = [];
-  const precisionText = draft.precision.trim();
-  const scaleText = draft.scale.trim();
-  const precision = strictInt(draft.precision);
-  const scale = strictInt(draft.scale);
-  if (precisionText === "") {
-    issues.push({
-      field: "precision",
-      key: "entities.validation.attribute.precisionRequired",
-    });
-  } else if (
-    precision == null ||
-    precision < DECIMAL_PRECISION_MIN ||
-    precision > DECIMAL_PRECISION_MAX
-  ) {
-    issues.push({
-      field: "precision",
-      key: "entities.validation.attribute.precisionRange",
-      values: { min: DECIMAL_PRECISION_MIN, max: DECIMAL_PRECISION_MAX },
-    });
-  }
-  if (scaleText === "") {
-    issues.push({
-      field: "scale",
-      key: "entities.validation.attribute.scaleRequired",
-    });
-  } else if (scale == null || precision == null || scale > precision) {
-    issues.push({
-      field: "scale",
-      key: "entities.validation.attribute.scaleRange",
-    });
+  for (const [name, field] of catalogFields(draft.type)) {
+    const text = draftConfigText(draft, name).trim();
+    if (field.kind === "string") {
+      if (text === "") {
+        issues.push({ field: name, key: REQUIRED_KEY[name] });
+      }
+      continue;
+    }
+    const intName = name as IntIssueField;
+    const parsed = strictInt(draftConfigText(draft, intName));
+    if (text === "") {
+      issues.push({ field: intName, key: REQUIRED_KEY[intName] });
+      continue;
+    }
+    const rangeKey = RANGE_KEY[intName];
+    if (field.atMost === "precision") {
+      const bound = strictInt(draftConfigText(draft, "precision"));
+      if (parsed == null || bound == null || parsed > bound) {
+        issues.push({ field: intName, key: rangeKey });
+      }
+      continue;
+    }
+    if (parsed == null || parsed < field.minimum || parsed > field.maximum) {
+      issues.push({
+        field: intName,
+        key: rangeKey,
+        values: { min: field.minimum, max: field.maximum },
+      });
+    }
   }
   return issues;
-}
-
-function dictionaryIssues(draft: AttributeDraft): AttributeIssue[] {
-  if (draft.dictionary_id.trim() !== "") return [];
-  return [
-    {
-      field: "dictionary_id",
-      key: "entities.validation.attribute.dictionaryRequired",
-    },
-  ];
-}
-
-function referenceIssues(draft: AttributeDraft): AttributeIssue[] {
-  if (draft.target_entity_id.trim() !== "") return [];
-  return [
-    {
-      field: "target_entity_id",
-      key: "entities.validation.attribute.targetRequired",
-    },
-  ];
 }
 
 /** Issues for one draft. `names` includes this draft's name. */
@@ -153,10 +147,7 @@ export function attributeDraftIssues(
   const issues: AttributeIssue[] = [];
   const name = nameIssue(draft, names);
   if (name) issues.push(name);
-  if (draft.type === "string") issues.push(...stringIssues(draft));
-  if (draft.type === "decimal") issues.push(...decimalIssues(draft));
-  if (draft.type === "dictionary") issues.push(...dictionaryIssues(draft));
-  if (draft.type === "reference") issues.push(...referenceIssues(draft));
+  issues.push(...configIssues(draft));
   return issues;
 }
 

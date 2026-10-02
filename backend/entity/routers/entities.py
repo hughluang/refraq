@@ -10,9 +10,9 @@ from fastapi.responses import JSONResponse
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord, get_user_store
 from backend.core.pagination import ENTITY_LIST, PageParams, page_params
+from backend.entity.attribute_type import resolve
 from backend.entity.jobs import enqueue_drop
 from backend.entity.publish import accept
-from backend.entity.errors import EntityAttributeInvalid
 from backend.entity.records import AttributeRecord
 from backend.entity.schemas.entities import (
     AttributeIn,
@@ -56,7 +56,7 @@ def _attrs(items: list[AttributeIn] | None) -> list[AttributeRecord] | None:
 
 def _record(item: AttributeIn) -> AttributeRecord:
     assert item.type is not None and item.config is not None
-    config = item.config
+    fields = resolve(item.type).parse_config(item.name, item.config)
     return AttributeRecord(
         name=item.name,
         type=item.type,
@@ -64,53 +64,8 @@ def _record(item: AttributeIn) -> AttributeRecord:
         unique=item.unique,
         indexed=item.indexed,
         description=item.description,
-        max_length=_config_int(item.name, "max_length", config.get("max_length"))
-        if "max_length" in config
-        else None,
-        precision=_config_int(item.name, "precision", config.get("precision"))
-        if "precision" in config
-        else None,
-        scale=_config_int(item.name, "scale", config.get("scale"))
-        if "scale" in config
-        else None,
-        dictionary_id=_config_dictionary_id(item.name, config.get("dictionary_id"))
-        if "dictionary_id" in config
-        else None,
-        target_entity_id=_optional_target(item.name, config.get("target_entity_id"))
-        if "target_entity_id" in config
-        else None,
+        **fields,
     )
-
-
-def _config_int(name: str, field: str, value: Any) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise EntityAttributeInvalid(
-            f"Attribute '{name}' {field} must be an integer"
-        )
-    return value
-
-
-def _optional_target(name: str, value: Any) -> str | None:
-    """JSON null matches a stored reference that has no target entity."""
-    if value is None:
-        return None
-    return _config_target(name, value)
-
-
-def _config_target(name: str, value: Any) -> str:
-    if not isinstance(value, str):
-        raise EntityAttributeInvalid(
-            f"Attribute '{name}' target_entity_id must be a string"
-        )
-    return value.strip()
-
-
-def _config_dictionary_id(name: str, value: Any) -> str:
-    if not isinstance(value, str):
-        raise EntityAttributeInvalid(
-            f"Attribute '{name}' dictionary_id must be a string"
-        )
-    return value.strip()
 
 
 def _present_job(record: JobRecord) -> Any:

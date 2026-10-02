@@ -1,16 +1,6 @@
-export type AttributeType =
-  | "string"
-  | "text"
-  | "integer"
-  | "decimal"
-  | "number"
-  | "boolean"
-  | "date"
-  | "timestamp"
-  | "time"
-  | "json"
-  | "dictionary"
-  | "reference";
+import type { AttributeType } from "@/features/entities/attributeTypes.generated";
+
+export type { AttributeType };
 
 export type DictionaryRef = {
   id: string;

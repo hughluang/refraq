@@ -145,6 +145,7 @@ Must not contain:
 Responsibilities:
 
 - **Business Entity** definition, **Entity Version**, and attributes
+- **Attribute Type** closed set, config, physical column, operators, encode/decode, and config-change class live in `entity/attribute_type`. Callers ask that module for the behavior and must not keep a parallel case
 - **Dictionary** definitions referenced by `dictionary` attributes, and the publish snapshot of active codes
 - Change classifier: a pure function of two definition shapes (`breaking` / `non_breaking` / `unchanged`); not a write gate
 - Stored publish status (`unpublished` / `publishing` / `published`) and Entity deprecate

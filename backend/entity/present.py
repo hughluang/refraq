@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.entity.attribute_type import resolve
 from backend.entity.dictionaries.store import get_dictionary_store
 from backend.entity.dictionary_binding import relevant_snapshot
 from backend.entity.lifecycle import ever_published
@@ -29,9 +30,10 @@ def attribute_payload(
 ) -> dict[str, Any]:
     """Stored attribute shape, plus read-only reference and dictionary fields."""
     payload = attribute_to_dict(attr)
-    if attr.type == "reference":
+    reads = resolve(attr.type).reads
+    if "target" in reads:
         payload["target"] = _reference_target(store, attr.target_entity_id)
-    if attr.type == "dictionary":
+    if "dictionary" in reads:
         payload.update(_dictionary_read(store, attr, version))
     return payload
 

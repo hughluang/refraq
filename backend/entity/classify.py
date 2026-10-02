@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
+from backend.entity.attribute_type import resolve
 from backend.entity.dictionaries.store import get_dictionary_store
 from backend.entity.errors import EntityAttributeInvalid
 from backend.entity.lifecycle import latest_published_of
@@ -71,7 +72,7 @@ def _bind_dictionary_codes(
     snapshots = published.dictionary_snapshots if published is not None else {}
     bound: list[AttributeRecord] = []
     for attr in attributes:
-        if attr.type != "dictionary":
+        if "dictionary" not in resolve(attr.type).reads:
             bound.append(attr)
             continue
         snapshot = snapshots.get(attr.name) if use_snapshot else None
@@ -143,7 +144,15 @@ def _attribute_changes(
             )
         )
         return found
-    found.extend(_config_changes(prefix, before, after))
+    found.extend(
+        ShapeChange(
+            field=f"{prefix}.{change.suffix}",
+            old_value=change.old_value,
+            new_value=change.new_value,
+            change_class=change.change_class,
+        )
+        for change in resolve(before.type).config_changes(before, after)
+    )
     if before.required != after.required:
         found.append(
             ShapeChange(
@@ -181,114 +190,6 @@ def _attribute_changes(
             )
         )
     return found
-
-
-def _config_changes(
-    prefix: str, before: AttributeRecord, after: AttributeRecord
-) -> list[ShapeChange]:
-    if before.type == "string":
-        return _max_length_change(prefix, before, after)
-    if before.type == "decimal":
-        return _decimal_changes(prefix, before, after)
-    if before.type == "dictionary":
-        return _dictionary_changes(prefix, before, after)
-    if before.type == "reference":
-        return _target_change(prefix, before, after)
-    return []
-
-
-def _max_length_change(
-    prefix: str, before: AttributeRecord, after: AttributeRecord
-) -> list[ShapeChange]:
-    if before.max_length == after.max_length:
-        return []
-    old = before.max_length
-    new = after.max_length
-    widening = old is not None and new is not None and new > old
-    return [
-        ShapeChange(
-            field=f"{prefix}.config.max_length",
-            old_value=old,
-            new_value=new,
-            change_class="non_breaking" if widening else "breaking",
-        )
-    ]
-
-
-def _decimal_changes(
-    prefix: str, before: AttributeRecord, after: AttributeRecord
-) -> list[ShapeChange]:
-    found: list[ShapeChange] = []
-    if before.precision != after.precision:
-        found.append(
-            ShapeChange(
-                field=f"{prefix}.config.precision",
-                old_value=before.precision,
-                new_value=after.precision,
-                change_class="breaking",
-            )
-        )
-    if before.scale != after.scale:
-        found.append(
-            ShapeChange(
-                field=f"{prefix}.config.scale",
-                old_value=before.scale,
-                new_value=after.scale,
-                change_class="breaking",
-            )
-        )
-    return found
-
-
-def _target_change(
-    prefix: str, before: AttributeRecord, after: AttributeRecord
-) -> list[ShapeChange]:
-    if before.target_entity_id == after.target_entity_id:
-        return []
-    return [
-        ShapeChange(
-            field=f"{prefix}.config.target_entity_id",
-            old_value=before.target_entity_id,
-            new_value=after.target_entity_id,
-            change_class="breaking",
-        )
-    ]
-
-
-def _dictionary_changes(
-    prefix: str, before: AttributeRecord, after: AttributeRecord
-) -> list[ShapeChange]:
-    before_codes = tuple(before.codes or ())
-    after_codes = tuple(after.codes or ())
-    before_set = set(before_codes)
-    after_set = set(after_codes)
-    added = sorted(after_set - before_set)
-    removed = sorted(before_set - after_set)
-    same_list = before.dictionary_id == after.dictionary_id
-    if before_set == after_set and same_list:
-        return []
-    if before_set == after_set:
-        change_class: ChangeClass = "unchanged"
-    elif not removed:
-        change_class = "non_breaking"
-    else:
-        change_class = "breaking"
-    return [
-        ShapeChange(
-            field=f"{prefix}.config.dictionary",
-            old_value={
-                "dictionary_id": before.dictionary_id,
-                "codes": list(before_codes),
-            },
-            new_value={
-                "dictionary_id": after.dictionary_id,
-                "codes": list(after_codes),
-                "added": added,
-                "removed": removed,
-            },
-            change_class=change_class,
-        )
-    ]
 
 
 def _roll_up(changes: list[ShapeChange]) -> ChangeClass:

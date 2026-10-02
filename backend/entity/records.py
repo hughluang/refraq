@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from backend.entity.attribute_type import resolve
+
 __all__ = [
     "AttributeRecord",
     "BusinessEntityRecord",
@@ -65,7 +67,7 @@ def attribute_to_dict(attr: AttributeRecord) -> dict[str, Any]:
         "unique": bool(attr.unique),
         "indexed": bool(attr.indexed),
         "description": attr.description,
-        "config": _config_dict(attr),
+        "config": resolve(attr.type).config_payload(attr),
     }
 
 
@@ -77,50 +79,13 @@ def attribute_from_dict(payload: dict[str, Any]) -> AttributeRecord:
     if not isinstance(config, dict):
         raise TypeError("attribute config must be an object")
     description = payload.get("description")
+    attribute_type = str(payload["type"])
     return AttributeRecord(
         name=str(payload["name"]),
-        type=str(payload["type"]),
+        type=attribute_type,
         required=bool(payload.get("required", False)),
         unique=bool(payload.get("unique", False)),
         indexed=bool(payload.get("indexed", False)),
         description=str(description) if isinstance(description, str) else None,
-        max_length=_optional_int(config.get("max_length")) if "max_length" in config else None,
-        precision=_optional_int(config.get("precision")) if "precision" in config else None,
-        scale=_optional_int(config.get("scale")) if "scale" in config else None,
-        dictionary_id=_optional_str(config.get("dictionary_id"))
-        if "dictionary_id" in config
-        else None,
-        target_entity_id=(
-            str(config["target_entity_id"])
-            if config.get("target_entity_id") is not None
-            else None
-        ),
+        **resolve(attribute_type).stored_fields(config),
     )
-
-
-def _config_dict(attr: AttributeRecord) -> dict[str, Any]:
-    if attr.type == "string":
-        return {"max_length": attr.max_length}
-    if attr.type == "decimal":
-        return {"precision": attr.precision, "scale": attr.scale}
-    if attr.type == "dictionary":
-        return {"dictionary_id": attr.dictionary_id}
-    if attr.type == "reference":
-        return {"target_entity_id": attr.target_entity_id}
-    return {}
-
-
-def _optional_str(value: Any) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise TypeError("dictionary_id must be a string")
-    return value
-
-
-def _optional_int(value: Any) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError("attribute config integer fields must be integers")
-    return value

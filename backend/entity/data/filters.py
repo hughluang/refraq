@@ -5,12 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from backend.entity.attribute_type import resolve
 from backend.entity.data.capabilities import (
     FILTER_DEPTH_MAX,
     FILTER_IN_VALUES_MAX,
     FILTER_LEAVES_MAX,
-    OPERATORS_BY_TYPE,
-    ROW_ID_OPERATORS,
 )
 from backend.entity.data.head import HeadTarget
 from backend.entity.data.values import encode_inbound
@@ -133,8 +132,7 @@ def _compile_leaf(
     if not isinstance(op, str) or not op:
         raise EntityRowInvalid("filter op must be a non-empty string")
     if field == "row_id":
-        attr_type = "integer"
-        allowed = ROW_ID_OPERATORS
+        allowed = resolve("integer").operators
         column = ident("row_id")
         attr = None
     else:
@@ -142,8 +140,7 @@ def _compile_leaf(
         attr = by_name.get(field)
         if attr is None:
             raise EntityRowInvalid(f"Unknown filter field '{field}'")
-        attr_type = attr.type
-        allowed = OPERATORS_BY_TYPE[attr_type]
+        allowed = resolve(attr.type).operators
         column = ident(field)
     if op not in allowed:
         raise EntityRowInvalid(
@@ -157,16 +154,14 @@ def _compile_leaf(
         raise EntityRowInvalid(f"Operator '{op}' requires value")
     raw = node["value"]
     if op == "in":
-        return _compile_in(
-            column, attr, attr_type, raw, target, counter, in_values
-        )
+        return _compile_in(column, attr, raw, target, counter, in_values)
     if op == "contains":
         return _compile_contains(column, attr, raw, counter)
     if op == "ne":
-        bound = _bound_value(attr, attr_type, raw, target)
+        bound = _bound_value(attr, raw, target)
         key = counter.add(bound)
         return f"{column} IS DISTINCT FROM :{key}"
-    bound = _bound_value(attr, attr_type, raw, target)
+    bound = _bound_value(attr, raw, target)
     key = counter.add(bound)
     sql_op = {"eq": "=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}[op]
     return f"{column} {sql_op} :{key}"
@@ -175,7 +170,6 @@ def _compile_leaf(
 def _compile_in(
     column: str,
     attr: AttributeRecord | None,
-    attr_type: str,
     raw: Any,
     target: HeadTarget,
     counter: _ParamCounter,
@@ -188,7 +182,7 @@ def _compile_in(
         raise EntityRowInvalid("in value count exceeds limit")
     keys: list[str] = []
     for item in raw:
-        bound = _bound_value(attr, attr_type, item, target)
+        bound = _bound_value(attr, item, target)
         keys.append(f":{counter.add(bound)}")
     return f"{column} IN ({', '.join(keys)})"
 
@@ -207,9 +201,15 @@ def _compile_contains(
     return f"{column} ILIKE :{key} ESCAPE '\\'"
 
 
+def _snapshot_codes(attr: AttributeRecord, target: HeadTarget) -> frozenset[str]:
+    snapshot = target.head.dictionary_snapshots.get(attr.name)
+    if not isinstance(snapshot, dict):
+        return frozenset()
+    return frozenset(str(code) for code in (snapshot.get("codes") or []))
+
+
 def _bound_value(
     attr: AttributeRecord | None,
-    attr_type: str,
     raw: Any,
     target: HeadTarget,
 ) -> Any:
@@ -217,21 +217,9 @@ def _bound_value(
         if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
             raise EntityRequestInvalid("row_id filter value must be an integer >= 1")
         return raw
-    if attr.type == "dictionary":
-        if not isinstance(raw, str):
-            raise EntityRowInvalid(
-                f"Attribute '{attr.name}' filter value must be a string"
-            )
-        snapshot = target.head.dictionary_snapshots.get(attr.name)
-        codes = {
-            str(code)
-            for code in (
-                (snapshot.get("codes") or []) if isinstance(snapshot, dict) else []
-            )
-        }
-        if raw not in codes:
-            raise EntityRowInvalid(
-                f"Attribute '{attr.name}' filter code is not in the head snapshot"
-            )
-        return raw
+    spec = resolve(attr.type)
+    if "dictionary" in spec.reads:
+        return spec.encode(
+            attr, raw, codes=_snapshot_codes(attr, target), as_filter=True
+        )
     return encode_inbound(attr, raw, target)

@@ -1,24 +1,10 @@
-import type { AttributeDraft, AttributeType } from "@/features/entities/types";
+import { ATTRIBUTE_TYPE_CATALOG } from "@/features/entities/attributeTypes.generated";
+import type { AttributeDraft } from "@/features/entities/types";
 
 /**
  * Postgres column type shown for an attribute draft.
- * Matches backend/entity/ddl.py `_physical_type` (type token only, not CHECK).
+ * Fills the physical template from the generated Attribute Type catalog.
  */
-const FIXED_COLUMN_TYPE: Record<
-  Exclude<AttributeType, "string" | "decimal">,
-  string
-> = {
-  text: "TEXT",
-  integer: "BIGINT",
-  number: "DOUBLE PRECISION",
-  boolean: "BOOLEAN",
-  date: "DATE",
-  timestamp: "TIMESTAMPTZ",
-  time: "TIME",
-  json: "JSONB",
-  dictionary: "VARCHAR(64)",
-  reference: "BIGINT",
-};
 
 function strictInt(value: string): number | null {
   const trimmed = value.trim();
@@ -27,18 +13,39 @@ function strictInt(value: string): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
+type SlotName = "max_length" | "precision" | "scale";
+
+function slotText(
+  attr: Pick<AttributeDraft, "max_length" | "precision" | "scale">,
+  name: SlotName,
+): string {
+  switch (name) {
+    case "max_length":
+      return attr.max_length;
+    case "precision":
+      return attr.precision;
+    case "scale":
+      return attr.scale;
+  }
+}
+
 export function physicalColumnType(
   attr: Pick<AttributeDraft, "type" | "max_length" | "precision" | "scale">,
 ): string {
-  if (attr.type === "string") {
-    const length = strictInt(attr.max_length);
-    return length == null ? "VARCHAR" : `VARCHAR(${length})`;
+  const physical = ATTRIBUTE_TYPE_CATALOG[attr.type].physical;
+  const names = [...physical.template.matchAll(/\{([a-z_]+)\}/g)].map(
+    (match) => match[1],
+  );
+  if (names.length === 0) return physical.template;
+  const filled = new Map<string, string>();
+  for (const name of names) {
+    const parsed = strictInt(slotText(attr, name as SlotName));
+    if (parsed == null) return physical.bare;
+    filled.set(name, String(parsed));
   }
-  if (attr.type === "decimal") {
-    const precision = strictInt(attr.precision);
-    const scale = strictInt(attr.scale);
-    if (precision == null || scale == null) return "NUMERIC";
-    return `NUMERIC(${precision},${scale})`;
+  let rendered = physical.template;
+  for (const [name, value] of filled) {
+    rendered = rendered.replace(`{${name}}`, value);
   }
-  return FIXED_COLUMN_TYPE[attr.type];
+  return rendered;
 }

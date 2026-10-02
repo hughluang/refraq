@@ -4,15 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.entity.attribute_type import resolve
 from backend.entity.data.capabilities import (
     FILTER_DEPTH_MAX,
     FILTER_IN_VALUES_MAX,
     FILTER_LEAVES_MAX,
     OFFSET_MAX,
-    OPERATORS_BY_TYPE,
     PAGE_LIMIT_DEFAULT,
     PAGE_LIMIT_MAX,
-    ROW_ID_OPERATORS,
     ROW_WRITE_LIMIT,
     upsert_key_for,
 )
@@ -43,7 +42,7 @@ def build_schema(target: HeadTarget) -> dict[str, Any]:
         },
         "row_id": {
             "type": "integer",
-            "operators": list(ROW_ID_OPERATORS),
+            "operators": list(resolve("integer").operators),
         },
         "attributes": attributes,
         "limits": {
@@ -62,11 +61,12 @@ def _attribute_out(
     store: EntityStore, attr: AttributeRecord, target: HeadTarget
 ) -> dict[str, Any]:
     payload = attribute_to_dict(attr)
-    payload["operators"] = list(OPERATORS_BY_TYPE[attr.type])
+    spec = resolve(attr.type)
+    payload["operators"] = list(spec.operators)
     payload["upsert_key"] = upsert_key_for(attr)
-    if attr.type == "reference":
+    if "target" in spec.reads:
         payload["target"] = _reference_target(store, attr.target_entity_id)
-    if attr.type == "dictionary":
+    if "dictionary" in spec.reads:
         payload["dictionary"] = _dictionary_link(attr)
         payload["codes"] = _codes_for(attr, target)
     return payload

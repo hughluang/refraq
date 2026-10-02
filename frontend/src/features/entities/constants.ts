@@ -1,21 +1,5 @@
 import type { AttributeType } from "@/features/entities/types";
 
-/** Closed Attribute Type set. Not the catalog Normalized Type vocabulary. */
-export const ATTRIBUTE_TYPES: AttributeType[] = [
-  "string",
-  "text",
-  "integer",
-  "decimal",
-  "number",
-  "boolean",
-  "date",
-  "timestamp",
-  "time",
-  "json",
-  "dictionary",
-  "reference",
-];
-
 export const EMPTY_ATTRIBUTE: {
   type: AttributeType;
   name: string;

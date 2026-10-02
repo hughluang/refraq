@@ -8,8 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_valid
 
 from backend.core.pagination import OffsetPage
 from backend.core.time import Instant
+from backend.entity.attribute_type import resolve
 from backend.entity.errors import EntityAttributeInvalid
-from backend.entity.validate import ATTRIBUTE_TYPES, CONFIG_KEYS
 from backend.jobs.schemas.jobs import JobOut
 
 _RETIRED_ATTRIBUTE_FIELDS = (
@@ -54,19 +54,12 @@ class AttributeIn(BaseModel):
 
     @model_validator(mode="after")
     def _require_type_and_config(self) -> AttributeIn:
-        if self.type not in ATTRIBUTE_TYPES:
-            shown = self.type or ""
-            raise EntityAttributeInvalid(
-                f"Attribute type '{shown}' is not in the closed set"
-                if shown
-                else "Attribute type is required"
-            )
+        spec = resolve(self.type or "")
         if not isinstance(self.config, dict):
             raise EntityAttributeInvalid(
                 f"Attribute '{self.name}' requires config"
             )
-        assert self.type is not None
-        unknown = set(self.config) - CONFIG_KEYS[self.type]
+        unknown = set(self.config) - spec.config_keys
         if unknown:
             listed = ", ".join(sorted(unknown))
             raise EntityAttributeInvalid(
@@ -103,9 +96,10 @@ class AttributeOut(BaseModel):
     @model_serializer(mode="wrap")
     def _omit_type_specific(self, handler: Any) -> dict[str, Any]:
         data = handler(self)
-        if data.get("type") != "reference":
+        reads = resolve(str(data.get("type") or "")).reads
+        if "target" not in reads:
             data.pop("target", None)
-        if data.get("type") != "dictionary":
+        if "dictionary" not in reads:
             data.pop("dictionary", None)
             data.pop("behind", None)
         return data
