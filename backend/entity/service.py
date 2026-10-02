@@ -8,15 +8,8 @@ from typing import Any, TypeVar
 
 from backend.admin.audit import persist_audit_event
 from backend.core.time import utc_now
-from backend.entity.classify import (
-    Classification,
-    DefinitionShape,
-    classify_shapes,
-)
-from backend.entity.dictionary_binding import (
-    bind_dictionary_codes,
-    require_attribute_dictionaries,
-)
+from backend.entity.classify import Classification, classify_shapes
+from backend.entity.dictionary_binding import require_attribute_dictionaries
 from backend.entity.errors import (
     EntityAlreadyDeprecated,
     EntityAlreadyPublished,
@@ -303,7 +296,7 @@ def patch_entity(
             validate_write=True,
             entity_id=entity.id,
         )
-        result = _classify(
+        result = classify_shapes(
             current.attributes, proposed.attributes, versions=versions
         )
         change_class = result.change_class
@@ -374,7 +367,9 @@ def classify_entity(
         validate_write=False,
         entity_id=entity.id,
     )
-    result = _classify(current.attributes, proposed.attributes, versions=versions)
+    result = classify_shapes(
+        current.attributes, proposed.attributes, versions=versions
+    )
     return _classification_out(result)
 
 
@@ -399,7 +394,7 @@ def patch_version(
         validate_write=True,
         entity_id=entity.id,
     )
-    result = _classify(
+    result = classify_shapes(
         version.attributes, proposed.attributes, versions=versions
     )
     now = utc_now()
@@ -443,7 +438,7 @@ def open_version(
     proposed_attributes = (
         list(current.attributes) if attributes is None else list(attributes)
     )
-    result = _classify(
+    result = classify_shapes(
         current.attributes, proposed_attributes, versions=versions
     )
     if result.change_class == "unchanged":
@@ -456,7 +451,7 @@ def open_version(
             entity_id=entity.id,
         )
         stored_attributes = list(overlaid.attributes)
-        result = _classify(
+        result = classify_shapes(
             current.attributes, stored_attributes, versions=versions
         )
     now = utc_now()
@@ -572,26 +567,6 @@ def _assert_never_published(entity_id: str) -> None:
     _assert_not_publishing(versions)
     if ever_published(versions):
         raise EntityAlreadyPublished()
-
-
-def _classify(
-    before: list[AttributeRecord],
-    after: list[AttributeRecord],
-    *,
-    versions: list[EntityVersionRecord],
-) -> Classification:
-    return classify_shapes(
-        DefinitionShape(
-            attributes=bind_dictionary_codes(
-                tuple(before), versions=versions, use_snapshot=True
-            )
-        ),
-        DefinitionShape(
-            attributes=bind_dictionary_codes(
-                tuple(after), versions=versions, use_snapshot=False
-            )
-        ),
-    )
 
 
 def _require_writable_shape(

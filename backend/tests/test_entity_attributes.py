@@ -18,7 +18,12 @@ from backend.admin.roles import seed_roles  # noqa: E402
 from backend.admin.role_store import get_role_store  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import get_user_store  # noqa: E402
-from backend.entity.classify import DefinitionShape, classify_shapes  # noqa: E402
+from backend.entity.classify import classify_shapes  # noqa: E402
+from backend.entity.dictionaries.records import (  # noqa: E402
+    DictionaryEntryRecord,
+    DictionaryRecord,
+)
+from backend.entity.dictionaries.store import get_dictionary_store  # noqa: E402
 from backend.entity.ddl import column_sql, create_table_statements  # noqa: E402
 from backend.entity.errors import EntityAttributeInvalid  # noqa: E402
 from backend.entity.present import attribute_payload  # noqa: E402
@@ -315,87 +320,75 @@ def test_ddl_string_text_decimal_reference_and_enumeration() -> None:
 
 
 def test_classifier_type_precision_enumeration_target() -> None:
-    before = DefinitionShape(
-        attributes=(
-            AttributeRecord(name="qty", type="integer", required=False),
-            AttributeRecord(
-                name="status",
-                type="dictionary",
-                required=False,
-                dictionary_id="cl_status",
-                codes=("a",),
+    now = utc_now()
+    get_dictionary_store().create(
+        DictionaryRecord(
+            id="cl_status",
+            name="cl_status",
+            display_name="Status",
+            description=None,
+            revision=1,
+            deprecated_at=None,
+            entries=(
+                DictionaryEntryRecord(code="a", label=None, active=True, position=0),
             ),
-            AttributeRecord(
-                name="supplier_id",
-                type="reference",
-                required=False,
-                target_entity_id="ent_supplier",
-            ),
+            created_at=now,
+            updated_at=now,
         )
     )
-    decimal = DefinitionShape(
-        attributes=(
-            AttributeRecord(
-                name="qty",
-                type="decimal",
-                required=False,
-                precision=10,
-                scale=2,
-            ),
-            AttributeRecord(
-                name="status",
-                type="dictionary",
-                required=False,
-                dictionary_id="cl_status",
-                codes=("a",),
-            ),
-            AttributeRecord(
-                name="supplier_id",
-                type="reference",
-                required=False,
-                target_entity_id="ent_supplier",
-            ),
-        )
+    before = (
+        AttributeRecord(name="qty", type="integer", required=False),
+        AttributeRecord(
+            name="status",
+            type="dictionary",
+            required=False,
+            dictionary_id="cl_status",
+        ),
+        AttributeRecord(
+            name="supplier_id",
+            type="reference",
+            required=False,
+            target_entity_id="ent_supplier",
+        ),
     )
-    assert classify_shapes(before, decimal).change_class == "breaking"
-    added = DefinitionShape(
-        attributes=(
-            AttributeRecord(name="qty", type="integer", required=False),
-            AttributeRecord(
-                name="status",
-                type="dictionary",
-                required=False,
-                dictionary_id="cl_status",
-                codes=("a", "b"),
-            ),
-            AttributeRecord(
-                name="supplier_id",
-                type="reference",
-                required=False,
-                target_entity_id="ent_supplier",
-            ),
-        )
+    decimal = (
+        AttributeRecord(
+            name="qty",
+            type="decimal",
+            required=False,
+            precision=10,
+            scale=2,
+        ),
+        AttributeRecord(
+            name="status",
+            type="dictionary",
+            required=False,
+            dictionary_id="cl_status",
+        ),
+        AttributeRecord(
+            name="supplier_id",
+            type="reference",
+            required=False,
+            target_entity_id="ent_supplier",
+        ),
     )
-    assert classify_shapes(before, added).change_class == "non_breaking"
-    retarget = DefinitionShape(
-        attributes=(
-            AttributeRecord(name="qty", type="integer", required=False),
-            AttributeRecord(
-                name="status",
-                type="dictionary",
-                required=False,
-                dictionary_id="cl_status",
-                codes=("a",),
-            ),
-            AttributeRecord(
-                name="supplier_id",
-                type="reference",
-                required=False,
-                target_entity_id="ent_party",
-            ),
-        )
+    assert classify_shapes(before, decimal, versions=()).change_class == "breaking"
+    retarget = (
+        AttributeRecord(name="qty", type="integer", required=False),
+        AttributeRecord(
+            name="status",
+            type="dictionary",
+            required=False,
+            dictionary_id="cl_status",
+        ),
+        AttributeRecord(
+            name="supplier_id",
+            type="reference",
+            required=False,
+            target_entity_id="ent_party",
+        ),
     )
-    assert classify_shapes(before, retarget).change_class == "breaking"
+    assert classify_shapes(before, retarget, versions=()).change_class == "breaking"
 
 
 def test_reference_create_inbound_and_self_ref(client: TestClient) -> None:

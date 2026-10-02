@@ -7,6 +7,7 @@ from typing import Any
 
 from backend.admin.audit import persist_audit_event
 from backend.core.time import utc_now
+from backend.entity.classify import classify_shapes
 from backend.entity.ddl import attr_wants_index
 from backend.entity.dictionary_binding import (
     bind_publish,
@@ -36,7 +37,6 @@ from backend.entity.records import (
 )
 from backend.entity.service import (
     _assert_not_deprecated,
-    _classify,
     _require_writable_shape,
     require_entity,
     require_version,
@@ -256,7 +256,9 @@ def _shape_unchanged(
     *,
     versions: list[EntityVersionRecord],
 ) -> bool:
-    return _classify(before, after, versions=versions).change_class == "unchanged"
+    return (
+        classify_shapes(before, after, versions=versions).change_class == "unchanged"
+    )
 
 
 def rollback_status(version: EntityVersionRecord) -> None:

@@ -1,26 +1,24 @@
-"""Change classifier: a pure function of two attribute sets."""
+"""Classify two attribute sets after binding dictionary codes."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
-from backend.entity.records import AttributeRecord, attribute_to_dict
+from backend.entity.dictionaries.store import get_dictionary_store
+from backend.entity.errors import EntityAttributeInvalid
+from backend.entity.lifecycle import latest_published_of
+from backend.entity.records import AttributeRecord, EntityVersionRecord, attribute_to_dict
 
 ChangeClass = Literal["breaking", "non_breaking", "unchanged"]
 
 __all__ = [
     "ChangeClass",
     "Classification",
-    "DefinitionShape",
     "ShapeChange",
     "classify_shapes",
 ]
-
-
-@dataclass(frozen=True, slots=True)
-class DefinitionShape:
-    attributes: tuple[AttributeRecord, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,10 +35,75 @@ class Classification:
     changes: tuple[ShapeChange, ...]
 
 
-def classify_shapes(before: DefinitionShape, after: DefinitionShape) -> Classification:
+def classify_shapes(
+    before: Sequence[AttributeRecord],
+    after: Sequence[AttributeRecord],
+    *,
+    versions: Sequence[EntityVersionRecord],
+) -> Classification:
+    """Baseline uses a published snapshot when one exists; the proposal uses live codes.
+
+    An unknown dictionary id is ``EntityAttributeInvalid``. Only active entries count.
+    """
+    version_list = list(versions)
+    return _compare_shapes(
+        _bind_dictionary_codes(
+            tuple(before), versions=version_list, use_snapshot=True
+        ),
+        _bind_dictionary_codes(
+            tuple(after), versions=version_list, use_snapshot=False
+        ),
+    )
+
+
+def _bind_dictionary_codes(
+    attributes: tuple[AttributeRecord, ...],
+    *,
+    versions: list[EntityVersionRecord],
+    use_snapshot: bool,
+) -> tuple[AttributeRecord, ...]:
+    """Fill ``codes`` for a classifier input.
+
+    ``use_snapshot`` is the baseline side: a published snapshot wins when one
+    exists for that attribute. The proposal side always uses live active codes.
+    """
+    published = latest_published_of(versions)
+    snapshots = published.dictionary_snapshots if published is not None else {}
+    bound: list[AttributeRecord] = []
+    for attr in attributes:
+        if attr.type != "dictionary":
+            bound.append(attr)
+            continue
+        snapshot = snapshots.get(attr.name) if use_snapshot else None
+        if isinstance(snapshot, dict) and snapshot.get("dictionary_id"):
+            codes = tuple(str(code) for code in (snapshot.get("codes") or ()))
+            bound.append(
+                replace(
+                    attr,
+                    dictionary_id=str(snapshot["dictionary_id"]),
+                    codes=codes,
+                )
+            )
+            continue
+        dictionary_id = attr.dictionary_id or ""
+        found = get_dictionary_store().get(dictionary_id)
+        if found is None:
+            raise EntityAttributeInvalid(
+                f"Attribute '{attr.name}' dictionary_id '{dictionary_id}'"
+                " does not name a dictionary"
+            )
+        codes = tuple(entry.code for entry in found.entries if entry.active)
+        bound.append(replace(attr, codes=codes))
+    return tuple(bound)
+
+
+def _compare_shapes(
+    before: tuple[AttributeRecord, ...],
+    after: tuple[AttributeRecord, ...],
+) -> Classification:
     changes: list[ShapeChange] = []
-    before_attrs = {attr.name: attr for attr in before.attributes}
-    after_attrs = {attr.name: attr for attr in after.attributes}
+    before_attrs = {attr.name: attr for attr in before}
+    after_attrs = {attr.name: attr for attr in after}
     for name in sorted(set(before_attrs) | set(after_attrs)):
         changes.extend(_attribute_changes(before_attrs.get(name), after_attrs.get(name)))
     return Classification(change_class=_roll_up(changes), changes=tuple(changes))

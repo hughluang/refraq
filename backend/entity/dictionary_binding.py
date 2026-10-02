@@ -1,4 +1,4 @@
-"""Resolve dictionary attributes against Dictionaries for save, classify, and publish."""
+"""Resolve dictionary attributes against Dictionaries for save and publish."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from backend.entity.lifecycle import latest_published_of
 from backend.entity.records import AttributeRecord, EntityVersionRecord
 
 __all__ = [
-    "bind_dictionary_codes",
     "bind_publish",
     "freeze_publish_bindings",
     "frozen_bindings_cover",
@@ -125,47 +124,6 @@ def bind_publish(
             "Dictionary changed after publish was accepted: " + "; ".join(mismatches)
         )
     return bound, snapshots
-
-
-def bind_dictionary_codes(
-    attributes: tuple[AttributeRecord, ...],
-    *,
-    versions: list[EntityVersionRecord],
-    use_snapshot: bool,
-) -> tuple[AttributeRecord, ...]:
-    """Fill ``codes`` for a classifier input.
-
-    ``use_snapshot`` is the baseline side: a published snapshot wins when one
-    exists for that attribute. The proposal side always uses live active codes.
-    """
-    published = latest_published_of(versions)
-    snapshots = published.dictionary_snapshots if published is not None else {}
-    bound: list[AttributeRecord] = []
-    for attr in attributes:
-        if attr.type != "dictionary":
-            bound.append(attr)
-            continue
-        snapshot = snapshots.get(attr.name) if use_snapshot else None
-        if isinstance(snapshot, dict) and snapshot.get("dictionary_id"):
-            codes = tuple(str(code) for code in (snapshot.get("codes") or ()))
-            bound.append(
-                replace(
-                    attr,
-                    dictionary_id=str(snapshot["dictionary_id"]),
-                    codes=codes,
-                )
-            )
-            continue
-        dictionary_id = attr.dictionary_id or ""
-        found = get_dictionary_store().get(dictionary_id)
-        if found is None:
-            raise EntityAttributeInvalid(
-                f"Attribute '{attr.name}' dictionary_id '{dictionary_id}'"
-                " does not name a dictionary"
-            )
-        codes = tuple(entry.code for entry in found.entries if entry.active)
-        bound.append(replace(attr, codes=codes))
-    return tuple(bound)
 
 
 def relevant_snapshot(
