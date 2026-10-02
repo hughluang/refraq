@@ -8,16 +8,15 @@ from typing import Any
 from backend.admin.audit import persist_audit_event
 from backend.entity.errors import EntityTableInService
 from backend.entity.kinds import ENTITY_TABLE_KINDS, KIND_DROP
-from backend.entity.lifecycle import is_deprecated
-from backend.entity.present import (
-    latest_published_of,
+from backend.entity.lifecycle import is_deprecated, latest_published_of
+from backend.entity.present import version_out
+from backend.entity.service import alignment_state, require_entity, require_version
+from backend.entity.store import get_entity_store
+from backend.entity.table_name import (
     occupies_live_table,
     physical_table_name,
     table_present,
-    version_out,
 )
-from backend.entity.service import require_entity, require_version
-from backend.entity.store import get_entity_store
 from backend.entity.tasks import run_job
 from backend.jobs.store import (
     JobRecord,
@@ -69,17 +68,19 @@ def enqueue_drop(
     latest = latest_published_of(versions)
     if occupies_live_table(version, latest) and not is_deprecated(entity):
         raise EntityTableInService()
+    physical = physical_table_name(version, entity.table_name)
     presented = version_out(
         version,
         entity=entity,
         include_attributes=True,
+        physical_table=physical,
+        alignment=alignment_state(version),
     )
     if not table_present(version):
         return EnqueueResult(job=None, version=presented, minted=False)
     inflight = find_inflight_entity_table_job(version.id)
     if inflight is not None:
         return EnqueueResult(job=inflight, version=None, minted=False)
-    physical = physical_table_name(version, entity.table_name)
     job = create_queued_job(
         kind=KIND_DROP,
         input={"entity_version_id": version.id},

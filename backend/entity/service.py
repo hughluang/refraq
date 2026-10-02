@@ -33,21 +33,18 @@ from backend.entity.errors import (
     EntityVersionSuperseded,
 )
 from backend.entity.ids import new_entity_id, new_version_id
+from backend.entity.inbound import inbound_references_for
 from backend.entity.lifecycle import (
     PUBLISHED,
     UNPUBLISHED,
     EntityListStatus,
     any_publishing,
+    current_version_of,
     ever_published,
     is_deprecated,
     status_filter_selection,
 )
-from backend.entity.present import (
-    current_version_of,
-    entity_out,
-    inbound_references_for,
-    version_out,
-)
+from backend.entity.present import entity_out, version_out
 from backend.entity.records import (
     AttributeRecord,
     BusinessEntityRecord,
@@ -55,14 +52,17 @@ from backend.entity.records import (
     attribute_to_dict,
 )
 from backend.entity.store import get_entity_store
+from backend.entity.table_name import physical_table_name, table_present
 from backend.entity.validate import (
     bind_reference_self,
     require_reference_targets,
     require_table_name,
     validate_shape,
 )
+from backend.jobs.store import get_job_store
 
 __all__ = [
+    "alignment_state",
     "classify_entity",
     "create_entity",
     "delete_entity",
@@ -106,10 +106,60 @@ def require_version(entity_id: str, version_id: str) -> EntityVersionRecord:
     return version
 
 
+def alignment_state(version: EntityVersionRecord) -> dict[str, Any]:
+    job_id = version.latest_reconcile_job_id
+    job = get_job_store().get(job_id) if job_id else None
+    return {
+        "table_present": table_present(version),
+        "latest_job_id": version.latest_reconcile_job_id,
+        "latest_job_status": job.status if job is not None else None,
+    }
+
+
+def _project_entity(
+    entity: BusinessEntityRecord,
+    current: EntityVersionRecord | None,
+    *,
+    include_inbound: bool,
+) -> dict[str, Any]:
+    physical = None
+    alignment = None
+    if current is not None:
+        physical = physical_table_name(current, entity.table_name)
+        alignment = alignment_state(current)
+    inbound = (
+        inbound_references_for(get_entity_store(), entity.id)
+        if include_inbound
+        else None
+    )
+    return entity_out(
+        entity,
+        current=current,
+        physical_table=physical,
+        alignment=alignment,
+        inbound_references=inbound,
+    )
+
+
+def _project_version(
+    version: EntityVersionRecord,
+    *,
+    entity: BusinessEntityRecord,
+    include_attributes: bool,
+) -> dict[str, Any]:
+    return version_out(
+        version,
+        entity=entity,
+        include_attributes=include_attributes,
+        physical_table=physical_table_name(version, entity.table_name),
+        alignment=alignment_state(version),
+    )
+
+
 def get_entity(entity_id: str) -> dict[str, Any]:
     entity = require_entity(entity_id)
     current = get_entity_store().current_version(entity.id)
-    return entity_out(entity, current=current, include_inbound_references=True)
+    return _project_entity(entity, current, include_inbound=True)
 
 
 def list_entities(
@@ -129,7 +179,7 @@ def list_entities(
     items = []
     for entity in records:
         current = store.current_version(entity.id)
-        items.append(entity_out(entity, current=current))
+        items.append(_project_entity(entity, current, include_inbound=False))
     return items, total
 
 
@@ -141,7 +191,7 @@ def list_versions(
         entity_id, limit=limit, offset=offset
     )
     return [
-        version_out(
+        _project_version(
             version,
             entity=entity,
             include_attributes=False,
@@ -153,7 +203,7 @@ def list_versions(
 def get_version(entity_id: str, version_id: str) -> dict[str, Any]:
     entity = require_entity(entity_id)
     version = require_version(entity_id, version_id)
-    return version_out(
+    return _project_version(
         version,
         entity=entity,
         include_attributes=True,
@@ -212,7 +262,7 @@ def create_entity(
         result="success",
         detail={"table_name": entity.table_name, "version_id": version.id},
     )
-    return entity_out(entity, current=version, include_inbound_references=True)
+    return _project_entity(entity, version, include_inbound=True)
 
 
 def patch_entity(
@@ -261,7 +311,7 @@ def patch_entity(
             attribute_to_dict(item) for item in current.attributes
         ]
     if not changed_fields and not shape_changed:
-        return entity_out(entity, current=current, include_inbound_references=True)
+        return _project_entity(entity, current, include_inbound=True)
     store = get_entity_store()
     saved_entity = entity
     saved_version = current
@@ -306,9 +356,7 @@ def patch_entity(
         result="success",
         detail=detail,
     )
-    return entity_out(
-        saved_entity, current=saved_version, include_inbound_references=True
-    )
+    return _project_entity(saved_entity, saved_version, include_inbound=True)
 
 
 def classify_entity(
@@ -370,7 +418,7 @@ def patch_version(
         result="success",
         detail={"class": result.change_class, "version_id": saved.id},
     )
-    return version_out(
+    return _project_version(
         saved,
         entity=entity,
         include_attributes=True,
@@ -437,7 +485,7 @@ def open_version(
         result="success",
         detail={"class": result.change_class, "version_id": saved.id},
     )
-    return version_out(
+    return _project_version(
         saved,
         entity=entity,
         include_attributes=True,
@@ -472,7 +520,7 @@ def deprecate_entity(
         result="success",
         detail={"table_name": entity.table_name},
     )
-    return entity_out(saved, current=current, include_inbound_references=True)
+    return _project_entity(saved, current, include_inbound=True)
 
 
 def delete_entity(

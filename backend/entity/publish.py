@@ -22,13 +22,12 @@ from backend.entity.errors import (
     EntityVersionSuperseded,
 )
 from backend.entity.kinds import KIND_RECONCILE
-from backend.entity.lifecycle import PUBLISHED, PUBLISHING, UNPUBLISHED
-from backend.entity.present import (
-    compose_physical_table_name,
+from backend.entity.lifecycle import (
+    PUBLISHED,
+    PUBLISHING,
+    UNPUBLISHED,
     current_version_of,
     latest_published_of,
-    physical_table_name,
-    table_present,
 )
 from backend.entity.records import (
     AttributeRecord,
@@ -43,6 +42,11 @@ from backend.entity.service import (
     require_version,
 )
 from backend.entity.store import get_entity_store
+from backend.entity.table_name import (
+    compose_physical_table_name,
+    physical_table_name,
+    table_present,
+)
 from backend.entity.table_port import (
     EntityTableHasRows,
     EntityTableNameConflict,

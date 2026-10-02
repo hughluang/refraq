@@ -15,7 +15,7 @@ os.environ.pop("REDIS_URL", None)
 os.environ.setdefault("CELERY_BROKER_URL", "memory://")
 
 from backend.admin.audit_store import get_audit_store  # noqa: E402
-from backend.entity.present import compose_physical_table_name  # noqa: E402
+from backend.entity.table_name import compose_physical_table_name  # noqa: E402
 from backend.admin.roles import create_role, seed_roles  # noqa: E402
 from backend.admin.role_store import get_role_store  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402

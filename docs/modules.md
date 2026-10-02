@@ -149,6 +149,8 @@ Responsibilities:
 - Change classifier: a pure function of two definition shapes (`breaking` / `non_breaking` / `unchanged`); not a write gate
 - Stored publish status (`unpublished` / `publishing` / `published`) and Entity deprecate
 - Derived `table_present` from the stored attribute-set snapshot and the latest publish **Job**
+- Physical Entity Table names and live-table occupancy in `entity/table_name.py`. Publish, drop, and Entity Data resolve physical names through `entity/table_name.py`. `entity/present.py` does not import it. Definition orchestration and drop enqueue pass the physical name and alignment into the projection
+- The current-version **Inbound Reference** scan in `entity/inbound.py`. Definition orchestration and drop enqueue pass that read into `entity/present.py`. Delete and deprecate use the scan directly. `entity/present.py` does not import `entity/inbound.py`
 - Minting `entity_reconcile` (publish create) and `entity_table_drop` Jobs; own Celery task and kind dispatch (`entity/tasks.py`), discovered by `worker`. Not registered on `metadata.tasks`
 - **Entity Data API** core under `entity/data/` (head schema and row verbs; `docs/api-contracts-entity-data.md`)
 - Domain use-case HTTP under `entity/routers/` (definition plus `routers/data.py`) and shapes under `entity/schemas/` (including `schemas/data.py`)
@@ -163,6 +165,7 @@ Must not contain:
 - Importing `worker.app`
 - Pre-scaffolded empty subpackages for Data Channel
 - MCP tools for Business Entity definition or Entity Data API
+- `entity/present.py` importing `entity/table_name.py` or `entity/inbound.py`
 
 ### `backend/worker/`
 

@@ -14,7 +14,7 @@ from backend.entity.errors import (
     EntityPublishing,
 )
 from backend.entity.lifecycle import PUBLISHING, is_deprecated, latest_published_of
-from backend.entity.present import physical_table_name, table_present
+from backend.entity.table_name import physical_table_name, table_present
 from backend.entity.records import (
     AttributeRecord,
     BusinessEntityRecord,

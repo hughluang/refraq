@@ -22,7 +22,7 @@ from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import get_user_store  # noqa: E402
 from backend.core.time import utc_now  # noqa: E402
 from backend.entity.jobs import find_inflight_entity_table_job  # noqa: E402
-from backend.entity.present import compose_physical_table_name  # noqa: E402
+from backend.entity.table_name import compose_physical_table_name  # noqa: E402
 from backend.entity.kinds import KIND_RECONCILE  # noqa: E402
 from backend.entity.lifecycle import PUBLISHING  # noqa: E402
 from backend.entity.locks import try_acquire_entity_table_lock  # noqa: E402

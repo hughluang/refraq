@@ -38,6 +38,14 @@ def latest_published_of(
     return max(published, key=lambda item: (item.version, item.id))
 
 
+def current_version_of(
+    versions: list[EntityVersionRecord],
+) -> EntityVersionRecord | None:
+    if not versions:
+        return None
+    return max(versions, key=lambda item: (item.version, item.id))
+
+
 def entity_list_status(
     entity: BusinessEntityRecord, versions: list[EntityVersionRecord]
 ) -> EntityListStatus:

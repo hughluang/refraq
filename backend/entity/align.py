@@ -10,15 +10,11 @@ from backend.core.time import utc_now
 from backend.entity.entity_db import entity_db_schema
 from backend.entity.errors import EntityTableInService
 from backend.entity.kinds import KIND_DROP, KIND_RECONCILE
-from backend.entity.lifecycle import is_deprecated
+from backend.entity.lifecycle import is_deprecated, latest_published_of
 from backend.entity.locks import try_acquire_entity_table_lock
-from backend.entity.present import (
-    latest_published_of,
-    occupies_live_table,
-    physical_table_name,
-)
 from backend.entity.publish import execute, rollback_status
 from backend.entity.store import get_entity_store
+from backend.entity.table_name import occupies_live_table, physical_table_name
 from backend.entity.table_port import (
     EntityTableHasRows,
     get_entity_table_port,

@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
-from backend.entity.present import compose_physical_table_name as compose_physical
+from backend.entity.table_name import compose_physical_table_name as compose_physical
 from backend.entity.records import AttributeRecord, attribute_to_dict
 from backend.entity.table_port import PostgresEntityTablePort
 
@@ -379,7 +379,7 @@ def test_type_roundtrip_create_and_create_many(data_client) -> None:
     from backend.entity.entity_db import get_entity_engine
     from backend.entity.ids import new_entity_id, new_version_id
     from backend.entity.lifecycle import PUBLISHED
-    from backend.entity.present import compose_physical_table_name as compose_physical
+    from backend.entity.table_name import compose_physical_table_name as compose_physical
     from backend.entity.records import BusinessEntityRecord, EntityVersionRecord
     from backend.entity.store import get_entity_store
     from backend.entity.table_port import PostgresEntityTablePort

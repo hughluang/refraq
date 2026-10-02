@@ -21,7 +21,8 @@ from backend.admin.user_store import get_user_store  # noqa: E402
 from backend.entity.classify import DefinitionShape, classify_shapes  # noqa: E402
 from backend.entity.ddl import column_sql, create_table_statements  # noqa: E402
 from backend.entity.errors import EntityAttributeInvalid  # noqa: E402
-from backend.entity.present import attribute_payload, compose_physical_table_name  # noqa: E402
+from backend.entity.present import attribute_payload  # noqa: E402
+from backend.entity.table_name import compose_physical_table_name  # noqa: E402
 from backend.core.time import utc_now  # noqa: E402
 from backend.entity.entity_db import entity_db_schema  # noqa: E402
 from backend.entity.ids import new_entity_id, new_version_id  # noqa: E402
