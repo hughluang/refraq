@@ -55,14 +55,12 @@ def embedding_configured() -> bool:
     )
 
 
-def embedding_write_enabled(*, incremental: bool) -> bool:
-    """True when vectors may be written (Job force ignores closed)."""
+def embedding_write_enabled() -> bool:
+    """True when an embedding runtime with a url is present."""
     if _override_embed is not None:
         return True
     runtime = get_embedding_runtime()
     if runtime is None or not runtime.url:
-        return False
-    if incremental and runtime.closed:
         return False
     return True
 

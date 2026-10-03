@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -30,7 +31,14 @@ from backend.admin.roles import seed_roles  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.session_store import MemorySessionStore, get_session_store  # noqa: E402
 from backend.admin.user_store import MemoryUserStore, get_user_store  # noqa: E402
-from backend.jobs.store import get_job_store, reset_job_store  # noqa: E402
+from backend.jobs.store import (  # noqa: E402
+    claim_queued,
+    create_queued_job,
+    get_job_store,
+    mark_failed,
+    mark_succeeded,
+    reset_job_store,
+)
 from backend.main import app  # noqa: E402
 from backend.core.time import utc_now  # noqa: E402
 from backend.metadata.catalog.embedding import (  # noqa: E402
@@ -57,40 +65,33 @@ from backend.worker.parameters import assemble_system_parameters  # noqa: E402
 
 class RecordingJobs(CatalogEmbedJobsPort):
     def __init__(self) -> None:
-        self.minted: list[dict[str, object]] = []
-        self.cancels = 0
+        self.triggered: list[dict[str, object]] = []
         self.clears = 0
         self._status: str | None = None
 
-    def mint(
-        self,
-        *,
-        service_id: str,
-        display_name: str,
-        generation: int,
-        actor_user_id: str,
+    def trigger_run(
+        self, *, actor_user_id: str, actor_token_id: str | None
     ) -> str:
-        self.minted.append(
+        self.triggered.append(
             {
-                "service_id": service_id,
-                "display_name": display_name,
-                "generation": generation,
                 "actor_user_id": actor_user_id,
+                "actor_token_id": actor_token_id,
             }
         )
         self._status = "queued"
-        return f"job_{len(self.minted)}"
+        return f"job_{len(self.triggered)}"
 
-    def cancel_active(self) -> None:
-        self.cancels += 1
-        if self._status in {"queued", "running"}:
-            self._status = "cancelled"
+    def has_active(self) -> bool:
+        return self._status in {"queued", "running"}
 
     def clear_index(self) -> None:
         self.clears += 1
 
-    def latest_status(self) -> str | None:
+    def latest_sweep_status(self) -> str | None:
         return self._status
+
+    def schedule_view(self):
+        return None
 
 
 @pytest.fixture
@@ -262,13 +263,13 @@ def test_activate_mints_job_clears_ready_and_is_lexical(
     assert purpose.json()["ready"] is False
     assert purpose.json()["index_status"] == "indexing"
     assert purpose.json()["generation"] == 1
-    assert len(jobs.minted) == 1
-    assert jobs.minted[0]["service_id"] == created["id"]
+    assert len(jobs.triggered) == 1
+    assert jobs.triggered[0]["actor_user_id"]
     runtime = get_embedding_runtime()
     assert runtime is not None
     assert runtime.ready is False
     assert embedding_configured() is False
-    assert embedding_write_enabled(incremental=True) is True
+    assert embedding_write_enabled() is True
 
 
 def test_timeout_sec_is_required_and_bounded(client: TestClient) -> None:
@@ -302,7 +303,7 @@ def test_patch_timeout_does_not_rebuild(
     created = _create(client, timeout_sec=30)
     client.post(f"/model-services/{created['id']}/activate")
     purpose_before = client.get("/model-services/purpose/embedding").json()
-    minted = len(jobs.minted)
+    minted = len(jobs.triggered)
     updated = client.patch(
         f"/model-services/{created['id']}",
         json={"timeout_sec": 120},
@@ -312,7 +313,7 @@ def test_patch_timeout_does_not_rebuild(
     purpose_after = client.get("/model-services/purpose/embedding").json()
     assert purpose_after["ready"] == purpose_before["ready"]
     assert purpose_after["generation"] == purpose_before["generation"]
-    assert len(jobs.minted) == minted
+    assert len(jobs.triggered) == minted
     kept = client.patch(
         f"/model-services/{created['id']}",
         json={"display_name": "Office TEI renamed"},
@@ -346,7 +347,7 @@ def test_url_change_requires_secret_and_rebuilds(
     _login(client)
     created = _create(client)
     client.post(f"/model-services/{created['id']}/activate")
-    jobs.minted.clear()
+    jobs.triggered.clear()
     denied = client.patch(
         f"/model-services/{created['id']}",
         json={"url": "http://embed.other:8080/v1/embeddings"},
@@ -364,7 +365,7 @@ def test_url_change_requires_secret_and_rebuilds(
     purpose = client.get("/model-services/purpose/embedding")
     assert purpose.json()["ready"] is False
     assert purpose.json()["generation"] == 2
-    assert len(jobs.minted) == 1
+    assert len(jobs.triggered) == 1
 
 
 def test_secret_only_keeps_hybrid_without_rebuild(
@@ -375,20 +376,20 @@ def test_secret_only_keeps_hybrid_without_rebuild(
     client.post(f"/model-services/{created['id']}/activate")
     store = get_model_service_store()
     mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
-    jobs.minted.clear()
+    jobs.triggered.clear()
     patched = client.patch(
         f"/model-services/{created['id']}",
         json={"api_key": "sk-rotated"},
     )
     assert patched.status_code == 200
     assert embedding_configured() is True
-    assert jobs.minted == []
+    assert jobs.triggered == []
     purpose = client.get("/model-services/purpose/embedding")
     assert purpose.json()["ready"] is True
     assert purpose.json()["generation"] == 1
 
 
-def test_close_is_lexical_and_stops_incremental_writes(
+def test_close_is_lexical(
     client: TestClient, jobs: RecordingJobs
 ) -> None:
     _login(client)
@@ -401,12 +402,10 @@ def test_close_is_lexical_and_stops_incremental_writes(
     assert closed.json()["closed"] is True
     assert closed.json()["ready"] is True
     assert embedding_configured() is False
-    assert embedding_write_enabled(incremental=True) is False
-    assert embedding_write_enabled(incremental=False) is True
-    assert jobs.cancels == 1
-    jobs.minted.clear()
+    assert len(jobs.triggered) == 1
+    jobs.triggered.clear()
     client.post(f"/model-services/{created['id']}/activate")
-    assert len(jobs.minted) == 1
+    assert len(jobs.triggered) == 1
     assert get_model_service_store().get_purpose("embedding").closed is True
 
 
@@ -418,7 +417,7 @@ def test_open_none_restores_hybrid_when_ready(
     client.post(f"/model-services/{created['id']}/activate")
     mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
     client.post("/model-services/purpose/embedding/close")
-    jobs.minted.clear()
+    jobs.triggered.clear()
     opened = client.post(
         "/model-services/purpose/embedding/open",
         json={"rebuild": "none"},
@@ -426,7 +425,7 @@ def test_open_none_restores_hybrid_when_ready(
     assert opened.status_code == 200
     assert opened.json()["closed"] is False
     assert opened.json()["ready"] is True
-    assert jobs.minted == []
+    assert jobs.triggered == []
     assert embedding_configured() is True
 
 
@@ -437,32 +436,29 @@ def test_open_none_without_ready_stays_lexical(
     created = _create(client)
     client.post(f"/model-services/{created['id']}/activate")
     client.post("/model-services/purpose/embedding/close")
-    jobs.minted.clear()
+    jobs.triggered.clear()
     opened = client.post(
         "/model-services/purpose/embedding/open",
         json={"rebuild": "none"},
     )
     assert opened.json()["ready"] is False
-    assert jobs.minted == []
+    assert jobs.triggered == []
     assert embedding_configured() is False
 
 
-def test_open_full_clears_ready_and_mints(client: TestClient, jobs: RecordingJobs) -> None:
+def test_open_does_not_mint(client: TestClient, jobs: RecordingJobs) -> None:
     _login(client)
     created = _create(client)
     client.post(f"/model-services/{created['id']}/activate")
     mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
     client.post("/model-services/purpose/embedding/close")
-    jobs.minted.clear()
-    opened = client.post(
-        "/model-services/purpose/embedding/open",
-        json={"rebuild": "full"},
-    )
+    jobs.triggered.clear()
+    opened = client.post("/model-services/purpose/embedding/open")
     assert opened.json()["closed"] is False
-    assert opened.json()["ready"] is False
-    assert opened.json()["generation"] == 2
-    assert len(jobs.minted) == 1
-    assert embedding_configured() is False
+    assert opened.json()["ready"] is True
+    assert opened.json()["generation"] == 1
+    assert jobs.triggered == []
+    assert embedding_configured() is True
 
 
 def test_open_without_in_use_rejected(client: TestClient) -> None:
@@ -483,40 +479,36 @@ def test_cleanup_forbidden_while_open_and_in_use(
     denied = client.post("/model-services/purpose/embedding/cleanup")
     assert_problem(denied, status=409, code="MODEL_SERVICE_CLEANUP_FORBIDDEN")
     client.post("/model-services/purpose/embedding/close")
-    jobs.cancels = 0
+    jobs._status = None
     cleaned = client.post("/model-services/purpose/embedding/cleanup")
     assert cleaned.status_code == 200
     assert cleaned.json()["ready"] is False
     assert jobs.clears == 1
-    assert jobs.cancels == 1
 
 
-def test_reindex_clears_ready_and_mints(client: TestClient, jobs: RecordingJobs) -> None:
+def test_cleanup_refused_while_embed_job_active(
+    client: TestClient, jobs: RecordingJobs
+) -> None:
     _login(client)
     created = _create(client)
     client.post(f"/model-services/{created['id']}/activate")
-    mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
-    jobs.minted.clear()
-    rebuilt = client.post("/model-services/purpose/embedding/reindex")
-    assert rebuilt.json()["ready"] is False
-    assert rebuilt.json()["generation"] == 2
-    assert len(jobs.minted) == 1
-    assert embedding_configured() is False
+    client.post("/model-services/purpose/embedding/close")
+    denied = client.post("/model-services/purpose/embedding/cleanup")
+    assert_problem(denied, status=409, code="MODEL_SERVICE_CLEANUP_BUSY")
+    assert jobs.clears == 0
 
 
-def test_delete_in_use_cancels_and_is_lexical(
+def test_delete_in_use_leaves_index_and_is_lexical(
     client: TestClient, jobs: RecordingJobs
 ) -> None:
     _login(client)
     created = _create(client)
     client.post(f"/model-services/{created['id']}/activate")
     mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
-    jobs.cancels = 0
     deleted = client.delete(f"/model-services/{created['id']}")
     assert deleted.status_code == 204
     purpose = client.get("/model-services/purpose/embedding")
     assert purpose.json()["in_use_id"] is None
-    assert jobs.cancels == 1
     assert jobs.clears == 0
     assert get_embedding_runtime() is None
     assert embedding_configured() is False
@@ -527,10 +519,8 @@ def test_delete_draft_does_not_cancel(client: TestClient, jobs: RecordingJobs) -
     in_use = _create(client, display_name="live")
     draft = _create(client, display_name="draft")
     client.post(f"/model-services/{in_use['id']}/activate")
-    jobs.cancels = 0
     deleted = client.delete(f"/model-services/{draft['id']}")
     assert deleted.status_code == 204
-    assert jobs.cancels == 0
     purpose = client.get("/model-services/purpose/embedding")
     assert purpose.json()["in_use_id"] == in_use["id"]
 
@@ -542,7 +532,7 @@ def test_display_name_only_skips_probe_and_rebuild(
     created = _create(client)
     client.post(f"/model-services/{created['id']}/activate")
     mark_embedding_ready(purpose="embedding", service_id=created["id"], generation=1)
-    jobs.minted.clear()
+    jobs.triggered.clear()
     called = {"n": 0}
 
     def boom(**kwargs):
@@ -557,7 +547,7 @@ def test_display_name_only_skips_probe_and_rebuild(
     assert patched.status_code == 200
     assert patched.json()["display_name"] == "Renamed"
     assert called["n"] == 0
-    assert jobs.minted == []
+    assert jobs.triggered == []
     assert embedding_configured() is True
 
 
@@ -684,6 +674,80 @@ def _seed_embed_target(
     )
 
 
+def _mint_catalog_embed(*, created_at, trigger_ref: str):
+    return create_queued_job(
+        kind="catalog_embed",
+        input={},
+        summary="catalog_embed",
+        trigger_kind="schedule",
+        trigger_ref=trigger_ref,
+        created_at=created_at,
+    )
+
+
+def _skip_catalog_embed(job_id: str) -> None:
+    assert claim_queued(job_id) is not None
+    marked = mark_succeeded(
+        job_id,
+        result={
+            "schema": "catalog_embed.v1",
+            "outcome": "skipped",
+            "reason": "already_active",
+        },
+    )
+    assert marked is not None
+    assert marked.status == "succeeded"
+
+
+def test_index_status_stays_indexing_when_a_later_job_skips(
+    client: TestClient,
+) -> None:
+    reset_job_store()
+    bind_catalog_embed_jobs(CatalogEmbedJobs())
+    earlier = utc_now() - timedelta(seconds=5)
+    sweep = _mint_catalog_embed(created_at=earlier, trigger_ref="sched_site")
+    assert claim_queued(sweep.id) is not None
+    skipped = _mint_catalog_embed(created_at=utc_now(), trigger_ref="sched_site")
+    _skip_catalog_embed(skipped.id)
+    _login(client)
+    purpose = client.get("/model-services/purpose/embedding")
+    assert purpose.status_code == 200
+    assert purpose.json()["index_status"] == "indexing"
+    assert purpose.json()["ready"] is False
+
+
+def test_index_status_stays_failed_when_a_later_job_skips(
+    client: TestClient,
+) -> None:
+    reset_job_store()
+    bind_catalog_embed_jobs(CatalogEmbedJobs())
+    earlier = utc_now() - timedelta(seconds=5)
+    sweep = _mint_catalog_embed(created_at=earlier, trigger_ref="sched_site")
+    failed = mark_failed(
+        sweep.id, error_code="JOB_EXECUTION_FAILED", error_summary="embed down"
+    )
+    assert failed is not None
+    assert failed.status == "failed"
+    skipped = _mint_catalog_embed(created_at=utc_now(), trigger_ref="sched_site")
+    _skip_catalog_embed(skipped.id)
+    _login(client)
+    purpose = client.get("/model-services/purpose/embedding")
+    assert purpose.status_code == 200
+    assert purpose.json()["index_status"] == "failed"
+
+
+def test_embed_schedule_omits_sweep_projection(client: TestClient) -> None:
+    bind_catalog_embed_jobs(CatalogEmbedJobs())
+    _login(client)
+    purpose = client.get("/model-services/purpose/embedding")
+    assert purpose.status_code == 200
+    embed = purpose.json()["embed_schedule"]
+    assert embed is not None
+    assert "last_sweep_job_id" not in embed
+    assert "last_sweep_job_status" not in embed
+    assert "last_sweep_job_finished_at" not in embed
+
+
 def test_real_catalog_embed_job_marks_ready(client: TestClient) -> None:
     reset_source_store()
     reset_catalog_store()
@@ -695,8 +759,8 @@ def test_real_catalog_embed_job_marks_ready(client: TestClient) -> None:
     assert activated.status_code == 200
     jobs, total = get_job_store().list(kind="catalog_embed")
     assert total == 1
-    assert jobs[0].trigger_kind == "user"
-    assert jobs[0].input["model_service_id"] == created["id"]
+    assert jobs[0].trigger_kind == "schedule"
+    assert jobs[0].input == {}
     record = _finish_catalog_embed(jobs[0].id)
     assert record.status == "succeeded"
     assert record.result is not None

@@ -167,7 +167,8 @@ def test_system_schedule_seed_includes_reaper() -> None:
     ensure_system_schedules()
     record = get_schedule_store().get_by_key(REAPER_SCHEDULE_KEY)
     assert record is not None
-    assert record.system is True
+    assert record.store_only is True
+    assert record.hidden is True
     assert record.enabled is True
     assert record.interval_seconds == 60
     assert record.task_name == "backend.worker.tasks.reap_stuck_jobs"

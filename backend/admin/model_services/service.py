@@ -8,6 +8,7 @@ from dataclasses import replace
 
 from backend.admin.audit import persist_audit_event
 from backend.admin.model_services.errors import (
+    ModelServiceCleanupBusy,
     ModelServiceCleanupForbidden,
     ModelServiceInvalidConfig,
     ModelServiceNotFound,
@@ -110,7 +111,9 @@ def _begin_rebuild(
     record: ModelServiceRecord,
     *,
     actor_user_id: str,
+    actor_token_id: str | None,
 ) -> PurposeState:
+    """Advance generation and ask the site schedule to run. Does not manage Jobs."""
     next_state = PurposeState(
         purpose=state.purpose,
         in_use_id=record.id,
@@ -119,13 +122,9 @@ def _begin_rebuild(
         generation=state.generation + 1,
     )
     store.save_purpose(next_state)
-    jobs = catalog_embed_jobs()
-    jobs.cancel_active()
-    jobs.mint(
-        service_id=record.id,
-        display_name=record.display_name,
-        generation=next_state.generation,
+    catalog_embed_jobs().trigger_run(
         actor_user_id=actor_user_id,
+        actor_token_id=actor_token_id,
     )
     return next_state
 
@@ -172,10 +171,10 @@ def index_status(purpose: str) -> str:
     state = store.get_purpose(purpose)
     if state.ready:
         return "ready"
-    latest = catalog_embed_jobs().latest_status()
-    if latest in {"queued", "running"}:
+    jobs = catalog_embed_jobs()
+    if jobs.has_active():
         return "indexing"
-    if latest == "failed":
+    if jobs.latest_sweep_status() == "failed":
         return "failed"
     return "none"
 
@@ -274,7 +273,13 @@ def patch_service(
     )
     saved = store.save(updated)
     if in_use and url_changed:
-        _begin_rebuild(store, state, saved, actor_user_id=actor_user_id)
+        _begin_rebuild(
+            store,
+            state,
+            saved,
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+        )
     _audit(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -329,7 +334,13 @@ def activate_service(
         timeout=record.timeout_sec,
     )
     state = store.get_purpose(record.purpose)
-    _begin_rebuild(store, state, record, actor_user_id=actor_user_id)
+    _begin_rebuild(
+        store,
+        state,
+        record,
+        actor_user_id=actor_user_id,
+        actor_token_id=actor_token_id,
+    )
     _audit(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -349,7 +360,6 @@ def delete_service(
     was_in_use = state.in_use_id == record.id
     store.delete(service_id)
     if was_in_use:
-        catalog_embed_jobs().cancel_active()
         store.save_purpose(
             PurposeState(
                 purpose=state.purpose,
@@ -394,12 +404,9 @@ def close_purpose(
 def open_purpose(
     *,
     purpose: str,
-    rebuild: str,
     actor_user_id: str,
     actor_token_id: str | None,
 ) -> PurposeState:
-    if rebuild not in {"none", "full"}:
-        raise ModelServiceInvalidConfig("rebuild must be none or full")
     store = get_model_service_store()
     state = store.get_purpose(_require_purpose(purpose))
     if not state.in_use_id:
@@ -420,14 +427,11 @@ def open_purpose(
             generation=state.generation,
         )
     )
-    if rebuild == "full":
-        opened = _begin_rebuild(store, opened, record, actor_user_id=actor_user_id)
     _audit(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
         resource_id=purpose,
         action="open",
-        detail={"rebuild": rebuild},
     )
     return opened
 
@@ -440,7 +444,8 @@ def cleanup_purpose(
     if not state.closed and state.in_use_id:
         raise ModelServiceCleanupForbidden()
     jobs = catalog_embed_jobs()
-    jobs.cancel_active()
+    if jobs.has_active():
+        raise ModelServiceCleanupBusy()
     jobs.clear_index()
     updated = store.save_purpose(
         PurposeState(
@@ -459,20 +464,3 @@ def cleanup_purpose(
     )
     return updated
 
-
-def reindex_purpose(
-    *, purpose: str, actor_user_id: str, actor_token_id: str | None
-) -> PurposeState:
-    store = get_model_service_store()
-    state = store.get_purpose(_require_purpose(purpose))
-    if not state.in_use_id:
-        raise ModelServiceNotInUse()
-    record = _require(store, state.in_use_id)
-    updated = _begin_rebuild(store, state, record, actor_user_id=actor_user_id)
-    _audit(
-        actor_user_id=actor_user_id,
-        actor_token_id=actor_token_id,
-        resource_id=purpose,
-        action="reindex",
-    )
-    return updated

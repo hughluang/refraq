@@ -647,6 +647,41 @@ class MemoryCatalogStore:
         with self._lock:
             return self._embeddings.get((kind, target_id))
 
+    def embedding_stamps(
+        self, keys: list[tuple[str, str]]
+    ) -> dict[tuple[str, str], tuple[str, str, int]]:
+        found: dict[tuple[str, str], tuple[str, str, int]] = {}
+        with self._lock:
+            for kind, target_id in keys:
+                record = self._embeddings.get((kind, target_id))
+                if record is None:
+                    continue
+                found[(kind, target_id)] = (
+                    record.id,
+                    record.content_hash,
+                    record.generation,
+                )
+        return found
+
+    def delete_orphan_embeddings(self) -> int:
+        with self._lock:
+            column_ids = {
+                col.id
+                for obj in self._objects.values()
+                for col in obj.columns
+            }
+            removed = 0
+            for key in list(self._embeddings):
+                kind, target_id = key
+                orphan = (kind == "object" and target_id not in self._objects) or (
+                    kind == "column" and target_id not in column_ids
+                )
+                if not orphan:
+                    continue
+                del self._embeddings[key]
+                removed += 1
+        return removed
+
     def _object_for_embedding(
         self, kind: str, target_id: str
     ) -> CatalogObjectRecord | None:

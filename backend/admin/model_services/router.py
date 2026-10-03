@@ -17,15 +17,16 @@ from backend.admin.model_services.records import (
     PurposeState,
 )
 from backend.admin.model_services.schemas import (
+    EmbedScheduleOut,
     ModelServiceCreateIn,
     ModelServiceList,
-    ModelServiceOpenIn,
     ModelServiceOut,
     ModelServicePatchIn,
     ModelServiceSpecOut,
     ModelServiceTestOut,
     PurposeStateOut,
 )
+from backend.admin.model_services.ports import catalog_embed_jobs
 from backend.admin.model_services.service import (
     activate_service,
     cleanup_purpose,
@@ -35,7 +36,6 @@ from backend.admin.model_services.service import (
     index_status,
     open_purpose,
     patch_service,
-    reindex_purpose,
     test_service,
 )
 from backend.admin.model_services.store import ModelServiceStore, get_model_service_store
@@ -63,6 +63,17 @@ def _out(record: ModelServiceRecord, *, in_use_id: str | None) -> ModelServiceOu
 
 
 def _purpose_out(state: PurposeState) -> PurposeStateOut:
+    view = catalog_embed_jobs().schedule_view()
+    embed_schedule = None
+    if view is not None:
+        embed_schedule = EmbedScheduleOut(
+            id=view.id,
+            enabled=view.enabled,
+            cron=view.cron,
+            interval_seconds=view.interval_seconds,
+            schedule_timezone=view.schedule_timezone,
+            next_run_at=view.next_run_at,
+        )
     return PurposeStateOut(
         purpose=state.purpose,
         closed=state.closed,
@@ -70,6 +81,7 @@ def _purpose_out(state: PurposeState) -> PurposeStateOut:
         in_use_id=state.in_use_id,
         generation=state.generation,
         index_status=index_status(state.purpose),  # type: ignore[arg-type]
+        embed_schedule=embed_schedule,
     )
 
 
@@ -257,7 +269,6 @@ def close_purpose_http(
 @router.post("/purpose/{purpose}/open")
 async def open_purpose_http(
     purpose: str,
-    body: ModelServiceOpenIn,
     caller: UserRecord = Depends(require_permission("model_services:write")),
     actor_token_id: str | None = Depends(get_actor_token_id),
 ) -> PurposeStateOut:
@@ -266,7 +277,6 @@ async def open_purpose_http(
             caller.id,
             lambda: open_purpose(
                 purpose=purpose,
-                rebuild=body.rebuild,
                 actor_user_id=caller.id,
                 actor_token_id=actor_token_id,
             ),
@@ -288,17 +298,3 @@ def cleanup_purpose_http(
         )
     )
 
-
-@router.post("/purpose/{purpose}/reindex")
-def reindex_purpose_http(
-    purpose: str,
-    caller: UserRecord = Depends(require_permission("model_services:write")),
-    actor_token_id: str | None = Depends(get_actor_token_id),
-) -> PurposeStateOut:
-    return _purpose_out(
-        reindex_purpose(
-            purpose=purpose,
-            actor_user_id=caller.id,
-            actor_token_id=actor_token_id,
-        )
-    )

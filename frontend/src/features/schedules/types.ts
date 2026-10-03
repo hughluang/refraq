@@ -22,6 +22,7 @@ export type ScheduledTask = {
   cron: string | null;
   schedule_timezone: string;
   running_timeout_sec: number | null;
+  deletable: boolean;
   last_run_at: string | null;
   next_run_at: string | null;
   last_job: ScheduleLastJob | null;

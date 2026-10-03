@@ -12,11 +12,16 @@ from backend.core.pagination import PageParams, page_params
 from backend.jobs.api import get_schedule_name_store, present_jobs
 from backend.jobs.schemas.jobs import JobListResponse
 from backend.jobs.store import JobStatus
+from backend.metadata.catalog_embed_jobs.schedule import (
+    is_catalog_embed_schedule,
+    run_catalog_embed_schedule_now,
+)
 from backend.metadata.source_jobs import run_source_schedule as enqueue_run_now
 from backend.metadata.source_schedules import (
     create_source_schedule as insert_source_schedule,
     list_jobs_for_schedule,
     list_source_schedules as list_source_schedule_rows,
+    require_runnable_schedule,
 )
 from backend.worker.schemas.schedules import ScheduleListResponse
 
@@ -79,11 +84,19 @@ def run_source_schedule(
     user: UserRecord = Depends(require_permission("jobs:run")),
     users: UserStore = Depends(get_user_store),
 ) -> JSONResponse:
-    job = enqueue_run_now(
-        schedule_id=schedule_id,
-        actor_user_id=user.id,
-        actor_token_id=get_actor_token_id(request),
-    )
+    record = require_runnable_schedule(schedule_id)
+    actor_token_id = get_actor_token_id(request)
+    if is_catalog_embed_schedule(record):
+        job = run_catalog_embed_schedule_now(
+            actor_user_id=user.id,
+            actor_token_id=actor_token_id,
+        )
+    else:
+        job = enqueue_run_now(
+            schedule_id=schedule_id,
+            actor_user_id=user.id,
+            actor_token_id=actor_token_id,
+        )
     return JSONResponse(
         status_code=status.HTTP_202_ACCEPTED,
         content={

@@ -31,6 +31,7 @@ class ScheduleOut(BaseModel):
     cron: str | None
     schedule_timezone: str
     running_timeout_sec: int | None = None
+    deletable: bool = True
     last_run_at: Instant | None
     next_run_at: Instant | None = None
     last_job: ScheduleLastJobOut | None = None

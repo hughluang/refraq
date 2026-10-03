@@ -885,6 +885,60 @@ class SqlCatalogStore:
             )
             return _row_to_embedding(row) if row is not None else None
 
+    def embedding_stamps(
+        self, keys: list[tuple[str, str]]
+    ) -> dict[tuple[str, str], tuple[str, str, int]]:
+        if not keys:
+            return {}
+        found: dict[tuple[str, str], tuple[str, str, int]] = {}
+        with session_scope() as session:
+            for start in range(0, len(keys), _STAMP_CHUNK):
+                chunk = keys[start : start + _STAMP_CHUNK]
+                kinds = [kind for kind, _target in chunk]
+                targets = [target for _kind, target in chunk]
+                rows = session.execute(
+                    text(
+                        """
+                        SELECT id, kind, target_id, content_hash, generation
+                        FROM catalog_embeddings
+                        WHERE (kind, target_id) IN (
+                            SELECT * FROM unnest(CAST(:kinds AS text[]), CAST(:targets AS text[]))
+                        )
+                        """
+                    ),
+                    {"kinds": kinds, "targets": targets},
+                ).all()
+                for row in rows:
+                    found[(str(row.kind), str(row.target_id))] = (
+                        str(row.id),
+                        str(row.content_hash),
+                        int(row.generation),
+                    )
+        return found
+
+    def delete_orphan_embeddings(self) -> int:
+        with session_scope() as session:
+            result = session.execute(
+                text(
+                    """
+                    DELETE FROM catalog_embeddings AS e
+                    WHERE (
+                        e.kind = 'object'
+                        AND NOT EXISTS (
+                            SELECT 1 FROM catalog_objects AS o WHERE o.id = e.target_id
+                        )
+                    ) OR (
+                        e.kind = 'column'
+                        AND NOT EXISTS (
+                            SELECT 1 FROM catalog_columns AS c WHERE c.id = e.target_id
+                        )
+                    )
+                    """
+                )
+            )
+            session.flush()
+            return int(result.rowcount or 0)
+
     def nearest_embeddings(
         self,
         *,

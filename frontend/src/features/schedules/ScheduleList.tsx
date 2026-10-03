@@ -29,8 +29,15 @@ function timezoneLabel(task: ScheduledTask): string {
   return task.schedule_timezone;
 }
 
-function targetLabel(task: ScheduledTask): string {
-  return task.target?.source_key || task.target?.source_id || "—";
+function targetLabel(
+  task: ScheduledTask,
+  siteLabel: string,
+): string {
+  return (
+    task.target?.source_key ||
+    task.target?.source_id ||
+    (task.work_kind === "catalog_embed" ? siteLabel : "—")
+  );
 }
 
 export function ScheduleList() {
@@ -94,7 +101,9 @@ export function ScheduleList() {
               </Badge>
             </Table.Td>
             <Table.Td>
-              <Text size="sm">{targetLabel(task)}</Text>
+              <Text size="sm">
+                {targetLabel(task, t("schedules.target.site"))}
+              </Text>
             </Table.Td>
             <Table.Td>
               <Text size="sm" ff="monospace">

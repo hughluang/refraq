@@ -11,7 +11,6 @@ from backend.core.time import Instant
 
 PurposeName = Literal["embedding"]
 ProtocolName = Literal["openai_compat"]
-RebuildChoice = Literal["none", "full"]
 IndexStatus = Literal["none", "indexing", "ready", "failed"]
 
 
@@ -35,10 +34,6 @@ class ModelServicePatchIn(BaseModel):
     clear_api_key: bool = False
 
 
-class ModelServiceOpenIn(BaseModel):
-    rebuild: RebuildChoice
-
-
 class ModelServiceOut(BaseModel):
     id: str
     purpose: str
@@ -53,6 +48,15 @@ class ModelServiceOut(BaseModel):
     updated_at: Instant
 
 
+class EmbedScheduleOut(BaseModel):
+    id: str
+    enabled: bool
+    cron: str | None
+    interval_seconds: int | None
+    schedule_timezone: str
+    next_run_at: Instant | None
+
+
 class PurposeStateOut(BaseModel):
     purpose: str
     closed: bool
@@ -60,6 +64,7 @@ class PurposeStateOut(BaseModel):
     in_use_id: str | None
     generation: int
     index_status: IndexStatus
+    embed_schedule: EmbedScheduleOut | None = None
 
 
 class ModelServiceTestOut(BaseModel):

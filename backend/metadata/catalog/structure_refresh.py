@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.core.time import utc_now
-from backend.metadata.catalog.index_embeddings import refresh_source_embeddings
 from backend.metadata.catalog.records import CatalogObjectRecord
 from backend.metadata.catalog.store import get_catalog_store
 from backend.metadata.catalog.structure_diff import StructureDiffFacts
@@ -42,7 +41,7 @@ def apply_structure_snapshot(
     FK/index merge, Join Origin, and Object Semantics survival live in
     ``structure_merge``. This module loads one baseline under a catalog write
     unit, builds the plan, and persists the delta and Structure Diff in that
-    same unit. Embeddings refresh after the unit commits.
+    same unit. Catalog embeddings are refreshed by the site catalog_embed Job.
     """
     with get_catalog_store().catalog_write(source.id) as write:
         existing_objects, existing_joins = write.load_baseline()
@@ -69,7 +68,6 @@ def apply_structure_snapshot(
             created_at=utc_now(),
         )
         write.persist_structure_diff(record)
-    refresh_source_embeddings(source.id)
     return StructureRefreshCommit(
         facts=plan.diff, structure_diff_id=record.id
     )

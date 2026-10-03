@@ -6,7 +6,6 @@ import {
   Button,
   Group,
   Modal,
-  Radio,
   Stack,
   Table,
   Tabs,
@@ -18,6 +17,7 @@ import {
   useNotification,
   useTranslate,
 } from "@refinedev/core";
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
@@ -34,7 +34,6 @@ import {
   getEmbeddingPurpose,
   openEmbeddingPurpose,
   patchModelService,
-  reindexEmbeddingPurpose,
   testModelService,
   listModelServices,
 } from "@/features/model-services/api";
@@ -47,7 +46,6 @@ import type {
   ModelServiceFormValues,
   ModelServiceTestResult,
   PurposeState,
-  RebuildChoice,
 } from "@/features/model-services/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
@@ -79,12 +77,10 @@ export function ModelServiceList() {
   const [testResult, setTestResult] = useState<ModelServiceTestResult | null>(
     null,
   );
-  const [rebuildChoice, setRebuildChoice] = useState<RebuildChoice>("none");
   const [opening, setOpening] = useState(false);
   const [closing, setClosing] = useState(false);
   const [cleaning, setCleaning] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [reindexing, setReindexing] = useState(false);
   const [activatingId, setActivatingId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string | null>("configure");
   const openConfirm = useConfirmAction<true>();
@@ -92,7 +88,10 @@ export function ModelServiceList() {
   const cleanupConfirm = useConfirmAction<true>();
   const deleteConfirm = useConfirmAction<ModelService>();
   const activateConfirm = useConfirmAction<ModelService>();
-  const reindexConfirm = useConfirmAction<true>();
+  const { data: canListSchedules } = useCan({
+    resource: ModuleId.schedules,
+    action: ModuleAction.list,
+  });
 
   const fetchPage = useCallback(
     (query: PageQuery) => listModelServices(query),
@@ -216,7 +215,7 @@ export function ModelServiceList() {
   const confirmOpen = async () => {
     setOpening(true);
     try {
-      await openEmbeddingPurpose(rebuildChoice);
+      await openEmbeddingPurpose();
       open?.({ type: "success", message: t("modelServices.open.success") });
       openConfirm.close();
       await refreshAll();
@@ -257,20 +256,6 @@ export function ModelServiceList() {
     }
   };
 
-  const confirmReindex = async () => {
-    setReindexing(true);
-    try {
-      await reindexEmbeddingPurpose();
-      open?.({ type: "success", message: t("modelServices.reindex.success") });
-      reindexConfirm.close();
-      await refreshAll();
-    } catch (err) {
-      notifyError(err, t("common.error.loadFailed"));
-    } finally {
-      setReindexing(false);
-    }
-  };
-
   const createAction = (
     <CreateListAction
       resource={ModuleId.modelServices}
@@ -284,6 +269,9 @@ export function ModelServiceList() {
   );
 
   const canCleanup = Boolean(purpose?.closed || !purpose?.in_use_id);
+  const showScheduleLink = Boolean(
+    canListSchedules?.can && purpose?.embed_schedule,
+  );
 
   return (
     <PageChrome
@@ -411,68 +399,68 @@ export function ModelServiceList() {
         </Tabs.Panel>
         <Tabs.Panel value="status" pt="md">
           <Stack gap="md">
-            <Group justify="space-between" align="flex-start">
-              <Stack gap={4}>
+            <Group justify="space-between" align="center">
+              <Group gap="xs" align="center">
                 <Text fw={600}>{t("modelServices.purpose.embedding")}</Text>
-                <Group gap="xs">
-                  <Badge
-                    color={purpose?.closed ? "gray" : "green"}
-                    variant="light"
-                  >
-                    {purpose?.closed
-                      ? t("modelServices.status.closed")
-                      : t("modelServices.status.open")}
-                  </Badge>
-                  <Badge
-                    color={indexColor(purpose?.index_status ?? "none")}
-                    variant="light"
-                  >
-                    {t(
-                      `modelServices.index.${purpose?.index_status ?? "none"}`,
-                    )}
-                  </Badge>
-                </Group>
-              </Stack>
-              {showActions ? (
-                <Group gap="xs">
-                  {purpose?.closed ? (
-                    <Button
-                      size="compact-sm"
-                      variant="light"
-                      disabled={!purpose.in_use_id}
-                      onClick={() => {
-                        setRebuildChoice("none");
-                        openConfirm.open(true);
-                      }}
-                    >
-                      {t("modelServices.open")}
-                    </Button>
-                  ) : (
-                    <Button
-                      size="compact-sm"
-                      variant="light"
-                      onClick={() => closeConfirm.open(true)}
-                    >
-                      {t("modelServices.close")}
-                    </Button>
+                <Badge
+                  color={purpose?.closed ? "gray" : "green"}
+                  variant="light"
+                >
+                  {purpose?.closed
+                    ? t("modelServices.status.closed")
+                    : t("modelServices.status.open")}
+                </Badge>
+                <Badge
+                  color={indexColor(purpose?.index_status ?? "none")}
+                  variant="light"
+                >
+                  {t(
+                    `modelServices.index.${purpose?.index_status ?? "none"}`,
                   )}
-                  <Button
-                    size="compact-sm"
-                    variant="light"
-                    disabled={!canCleanup}
-                    onClick={() => cleanupConfirm.open(true)}
-                  >
-                    {t("modelServices.cleanup")}
-                  </Button>
-                  <Button
-                    size="compact-sm"
-                    variant="light"
-                    loading={reindexing}
-                    disabled={!purpose?.in_use_id}
-                    onClick={() => reindexConfirm.open(true)}
-                  >
-                    {t("modelServices.reindex")}
-                  </Button>
+                </Badge>
+              </Group>
+              {showActions || showScheduleLink ? (
+                <Group gap="xs">
+                  {showActions ? (
+                    purpose?.closed ? (
+                      <Button
+                        size="compact-sm"
+                        variant="light"
+                        disabled={!purpose.in_use_id}
+                        onClick={() => openConfirm.open(true)}
+                      >
+                        {t("modelServices.open")}
+                      </Button>
+                    ) : (
+                      <Button
+                        size="compact-sm"
+                        variant="light"
+                        onClick={() => closeConfirm.open(true)}
+                      >
+                        {t("modelServices.close")}
+                      </Button>
+                    )
+                  ) : null}
+                  {showActions ? (
+                    <Button
+                      size="compact-sm"
+                      variant="light"
+                      disabled={!canCleanup}
+                      onClick={() => cleanupConfirm.open(true)}
+                    >
+                      {t("modelServices.cleanup")}
+                    </Button>
+                  ) : null}
+                  {showScheduleLink ? (
+                    <Button
+                      size="compact-sm"
+                      variant="default"
+                      component={Link}
+                      href="/console/schedules"
+                    >
+                      {t("schedules.title")}
+                    </Button>
+                  ) : null}
                 </Group>
               ) : null}
             </Group>
@@ -549,16 +537,6 @@ export function ModelServiceList() {
         />
 
         <ConfirmActionModal
-          stackId="model-service-reindex"
-          opened={reindexConfirm.opened}
-          onClose={reindexConfirm.close}
-          title={t("modelServices.reindex.confirmTitle")}
-          body={t("modelServices.reindex.confirmBody")}
-          loading={reindexing}
-          onConfirm={() => void confirmReindex()}
-        />
-
-        <ConfirmActionModal
           stackId="model-service-close"
           opened={closeConfirm.opened}
           onClose={closeConfirm.close}
@@ -576,25 +554,7 @@ export function ModelServiceList() {
           body={t("modelServices.open.confirmBody")}
           loading={opening}
           onConfirm={() => void confirmOpen()}
-        >
-          <Radio.Group
-            value={rebuildChoice}
-            onChange={(value) => setRebuildChoice(value as RebuildChoice)}
-          >
-            <Stack gap="xs">
-              <Radio
-                value="none"
-                label={t("modelServices.open.none")}
-                description={t("modelServices.open.noneHelp")}
-              />
-              <Radio
-                value="full"
-                label={t("modelServices.open.full")}
-                description={t("modelServices.open.fullHelp")}
-              />
-            </Stack>
-          </Radio.Group>
-        </ConfirmActionModal>
+        />
 
         <ConfirmActionModal
           stackId="model-service-cleanup"

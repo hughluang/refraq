@@ -9,6 +9,7 @@ __all__ = [
     "ScheduleNotFound",
     "ScheduleRunningTimeoutInvalid",
     "ScheduleSystemImmutable",
+    "ScheduleUndeletable",
 ]
 
 
@@ -25,7 +26,15 @@ class ScheduleSystemImmutable(AppError):
     http_status = 409
 
     def _default_message(self) -> str:
-        return "System Scheduled Tasks cannot be changed"
+        return "Locked Scheduled Tasks cannot be edited or run"
+
+
+class ScheduleUndeletable(AppError):
+    code = "SCHEDULE_UNDELETABLE"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Scheduled Task cannot be deleted"
 
 
 class ScheduleCadenceInvalid(AppError):

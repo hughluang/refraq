@@ -1,7 +1,15 @@
 export type ModelServicePurpose = "embedding";
 export type ModelServiceProtocol = "openai_compat";
-export type RebuildChoice = "none" | "full";
 export type IndexStatus = "none" | "indexing" | "ready" | "failed";
+
+export type EmbedSchedule = {
+  id: string;
+  enabled: boolean;
+  cron: string | null;
+  interval_seconds: number | null;
+  schedule_timezone: string;
+  next_run_at: string | null;
+};
 
 export type ModelService = {
   id: string;
@@ -24,6 +32,7 @@ export type PurposeState = {
   in_use_id: string | null;
   generation: number;
   index_status: IndexStatus;
+  embed_schedule: EmbedSchedule | null;
 };
 
 export type ModelServiceFormValues = {

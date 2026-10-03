@@ -874,3 +874,29 @@ def test_structure_commit_failure_after_diff_leaves_both_unchanged(
     diffs, diff_total = get_structure_diff_store().list_for_source(SOURCE_ID)
     assert diff_total == diffs_before
     assert [d.job_id for d in diffs] == ["job_seed"]
+
+
+def test_embedding_stamps_and_orphan_prune(catalog_store) -> None:
+    from backend.metadata.catalog.embedding import CatalogEmbeddingRecord
+
+    now = utc_now()
+    catalog_store.upsert_embedding(
+        CatalogEmbeddingRecord(
+            id="emb_orphan",
+            kind="object",
+            target_id="obj_missing",
+            locator_key="loc",
+            content_hash="abc",
+            embedding=[0.1, 0.2],
+            indexed_at=now,
+            generation=1,
+        )
+    )
+    stamps = catalog_store.embedding_stamps(
+        [("object", "obj_missing"), ("object", "absent")]
+    )
+    assert stamps[("object", "obj_missing")][1:] == ("abc", 1)
+    assert ("object", "absent") not in stamps
+    assert catalog_store.delete_orphan_embeddings() == 1
+    assert catalog_store.get_embedding(kind="object", target_id="obj_missing") is None
+    assert catalog_store.delete_orphan_embeddings() == 0

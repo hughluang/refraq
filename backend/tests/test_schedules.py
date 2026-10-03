@@ -176,7 +176,7 @@ def test_post_inserts_multiple_structure_schedules(client: TestClient) -> None:
     listed = client.get("/schedules")
     assert listed.status_code == 200
     items = listed.json()["items"]
-    assert len(items) == 4
+    assert len(items) == 5
     related = client.get(f"/sources/{source['id']}/schedules")
     assert related.status_code == 200
     assert len(related.json()["items"]) == 4
@@ -197,18 +197,24 @@ def test_system_schedules_excluded_and_immutable(client: TestClient) -> None:
     ensure_system_schedules()
     default_list = client.get("/schedules")
     assert default_list.status_code == 200
-    assert default_list.json()["items"] == []
+    visible = default_list.json()["items"]
+    assert [item["work_kind"] for item in visible] == ["catalog_embed"]
+    assert visible[0]["deletable"] is False
+    site_id = visible[0]["id"]
 
-    debug_list = client.get("/schedules?system=true")
+    debug_list = client.get("/schedules?hidden=true")
     assert debug_list.status_code == 200
     items = debug_list.json()["items"]
-    assert len(items) == 1
-    reaper_id = items[0]["id"]
-    assert items[0]["work_kind"] is None
+    reaper_rows = [item for item in items if item["work_kind"] is None]
+    assert len(reaper_rows) == 1
+    reaper_id = reaper_rows[0]["id"]
 
     stored = get_schedule_store().get_by_key(REAPER_SCHEDULE_KEY)
     assert stored is not None
-    assert stored.system is True
+    assert stored.hidden is True
+    assert stored.locked is True
+    assert stored.undeletable is True
+    assert stored.store_only is True
 
     patch = client.patch(f"/schedules/{reaper_id}", json={"enabled": False})
     assert patch.status_code == 409
@@ -216,7 +222,16 @@ def test_system_schedules_excluded_and_immutable(client: TestClient) -> None:
 
     delete = client.delete(f"/schedules/{reaper_id}")
     assert delete.status_code == 409
-    assert delete.json()["code"] == "SCHEDULE_SYSTEM_IMMUTABLE"
+    assert delete.json()["code"] == "SCHEDULE_UNDELETABLE"
+
+    site_delete = client.delete(f"/schedules/{site_id}")
+    assert site_delete.status_code == 409
+    assert site_delete.json()["code"] == "SCHEDULE_UNDELETABLE"
+    site_patch = client.patch(
+        f"/schedules/{site_id}", json={"name": "catalog embed renamed"}
+    )
+    assert site_patch.status_code == 200
+    assert site_patch.json()["schedule"]["name"] == "catalog embed renamed"
 
 
 def test_patch_and_delete_domain_schedule(client: TestClient) -> None:
@@ -244,6 +259,25 @@ def test_patch_and_delete_domain_schedule(client: TestClient) -> None:
     assert len(remaining) == 2
     assert remaining[0]["id"] != schedule_id
     assert remaining[1]["id"] != schedule_id
+
+
+def test_patch_blank_name_restores_catalog_embed_default(client: TestClient) -> None:
+    ensure_system_schedules()
+    listed = client.get("/schedules")
+    assert listed.status_code == 200
+    site = next(
+        item
+        for item in listed.json()["items"]
+        if item["work_kind"] == "catalog_embed"
+    )
+    renamed = client.patch(
+        f"/schedules/{site['id']}", json={"name": "custom embed"}
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["schedule"]["name"] == "custom embed"
+    blank = client.patch(f"/schedules/{site['id']}", json={"name": "   "})
+    assert blank.status_code == 200
+    assert blank.json()["schedule"]["name"] == "catalog embed"
 
 
 def test_patch_empty_name_restores_default(client: TestClient) -> None:
@@ -438,7 +472,6 @@ def _structure_record(*, source_id: str = "src_abc") -> ScheduledTaskRecord:
         task_name=STRUCTURE_ENQUEUE_TASK_NAME,
         args_json=[],
         kwargs_json={"source_id": source_id, "schedule_id": schedule_id},
-        system=False,
         schedule_timezone="UTC",
         last_run_at=now,
         created_at=now,
@@ -536,7 +569,7 @@ def test_hard_delete_source_cascades_structure_schedules(client: TestClient) -> 
         assert missing.json()["code"] == "SCHEDULE_NOT_FOUND"
     listed = client.get("/schedules")
     assert listed.status_code == 200
-    assert listed.json()["items"] == []
+    assert [item["work_kind"] for item in listed.json()["items"]] == ["catalog_embed"]
 
 
 def test_structure_mint_task_lives_on_fire_scheduled_structure() -> None:
@@ -592,7 +625,6 @@ def test_missing_source_tick_still_mints(monkeypatch: pytest.MonkeyPatch) -> Non
                 "source_id": "src_does_not_exist",
                 "schedule_id": "sched_orphan",
             },
-            system=False,
             schedule_timezone="UTC",
             owner_ref="metadata:source:src_does_not_exist",
             last_run_at=now,
@@ -823,8 +855,9 @@ def test_run_now_allowed_when_disabled(
 
 def test_run_now_rejects_system_schedule(client: TestClient) -> None:
     ensure_system_schedules()
-    items = client.get("/schedules?system=true").json()["items"]
-    reaper_id = items[0]["id"]
+    items = client.get("/schedules?hidden=true").json()["items"]
+    reaper = next(item for item in items if item["work_kind"] is None)
+    reaper_id = reaper["id"]
     ran = client.post(f"/schedules/{reaper_id}/run")
     assert ran.status_code == 409
     assert ran.json()["code"] == "SCHEDULE_SYSTEM_IMMUTABLE"
@@ -1016,7 +1049,7 @@ def test_sources_write_without_jobs_run_still_seeds(client: TestClient) -> None:
     source_id = resp.json()["source"]["id"]
     forbidden = client.get(f"/sources/{source_id}/schedules")
     assert forbidden.status_code == 403
-    records, _ = get_schedule_store().list(include_system=False)
+    records, _ = get_schedule_store().list(include_hidden=False)
     matches = [
         record
         for record in records
@@ -1047,7 +1080,7 @@ def test_seed_failure_does_not_leave_source(monkeypatch: pytest.MonkeyPatch) -> 
             access=_source_body("boom-src")["access"],
         )
     assert get_source_store().get_source_by_key("boom-src") is None
-    assert get_schedule_store().list(include_system=False) == ([], 0)
+    assert get_schedule_store().list(include_hidden=False) == ([], 0)
 
 
 def test_patch_inserts_when_zero_source_schedules(client: TestClient) -> None:

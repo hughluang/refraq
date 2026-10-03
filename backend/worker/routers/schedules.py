@@ -31,11 +31,11 @@ router = APIRouter(tags=["schedules"])
 @router.get("/schedules", response_model=ScheduleListResponse)
 def list_platform_schedules(
     _: UserRecord = Depends(require_permission("jobs:run")),
-    system: bool = Query(default=False),
+    hidden: bool = Query(default=False),
     page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
 ) -> ScheduleListResponse:
     records, total = get_schedule_store().list(
-        include_system=system, limit=page.limit, offset=page.offset
+        include_hidden=hidden, limit=page.limit, offset=page.offset
     )
     return ScheduleListResponse(
         items=[public_schedule(record) for record in records],

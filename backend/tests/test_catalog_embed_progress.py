@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from backend.admin.model_services.records import ModelServiceRecord, PurposeState
+from backend.admin.model_services.store import get_model_service_store
 from backend.core.time import utc_now
 from backend.jobs.store import (
     create_queued_job,
@@ -216,12 +218,38 @@ def _seed_source(*, object_count: int, columns_per_object: int) -> str:
     return source_id
 
 
-def _run_embed(*, embed_fn) -> object:
-    set_embed_fn_for_tests(embed_fn)
-    job = create_queued_job(
-        kind="catalog_embed",
-        input={"model_service_id": "msvc_test", "generation": 1},
+def _seed_embedding_runtime() -> None:
+    now = utc_now()
+    store = get_model_service_store()
+    store.save(
+        ModelServiceRecord(
+            id="msvc_test",
+            purpose="embedding",
+            protocol="openai_compat",
+            display_name="test",
+            url="http://embed.test/v1/embeddings",
+            model="m",
+            timeout_sec=30,
+            secret=None,
+            created_at=now,
+            updated_at=now,
+        )
     )
+    store.save_purpose(
+        PurposeState(
+            purpose="embedding",
+            in_use_id="msvc_test",
+            closed=False,
+            ready=False,
+            generation=1,
+        )
+    )
+
+
+def _run_embed(*, embed_fn) -> object:
+    _seed_embedding_runtime()
+    set_embed_fn_for_tests(embed_fn)
+    job = create_queued_job(kind="catalog_embed", input={})
     run_catalog_embed_job(job.id)
     record = get_job_store().get(job.id)
     assert record is not None
@@ -322,10 +350,8 @@ def test_partial_embed_failure_records_reason() -> None:
 def test_cancel_stops_at_batch_boundary() -> None:
     _seed_source(object_count=8, columns_per_object=4)
     calls = {"n": 0}
-    job = create_queued_job(
-        kind="catalog_embed",
-        input={"model_service_id": "msvc_test", "generation": 1},
-    )
+    _seed_embedding_runtime()
+    job = create_queued_job(kind="catalog_embed", input={})
 
     def embed(texts: list[str]) -> list[list[float]]:
         calls["n"] += 1
@@ -346,3 +372,83 @@ def test_cancel_stops_at_batch_boundary() -> None:
     assert "INFO embed-src 32/40 written=32 failed=0 skipped=0" in messages
     assert not any(line.startswith("INFO indexed ") for line in messages)
     assert not any(line.startswith("INFO finished embed-src") for line in messages)
+
+
+def test_refresh_stops_at_first_load_heartbeat() -> None:
+    from backend.metadata.catalog.index_embeddings import (
+        LOAD_EVERY,
+        refresh_source_embeddings,
+    )
+    from backend.metadata.catalog.store import get_catalog_store
+
+    source_id = _seed_source(object_count=LOAD_EVERY + 6, columns_per_object=0)
+    store = get_catalog_store()
+    calls = {"n": 0}
+    original = store.get_object
+
+    def counting(object_id: str):
+        calls["n"] += 1
+        return original(object_id)
+
+    store.get_object = counting  # type: ignore[method-assign]
+    embed_calls = {"n": 0}
+
+    def embed(texts: list[str]) -> list[list[float]]:
+        embed_calls["n"] += 1
+        return [[0.0] for _ in texts]
+
+    set_embed_fn_for_tests(embed)
+    try:
+        counts = refresh_source_embeddings(
+            source_id, should_stop=lambda _current: True
+        )
+    finally:
+        store.get_object = original  # type: ignore[method-assign]
+        set_embed_fn_for_tests(None)
+    assert calls["n"] == LOAD_EVERY
+    assert embed_calls["n"] == 0
+    assert counts.written == 0
+
+
+def test_cancel_during_load_releases_lock_without_writes() -> None:
+    from backend.metadata.catalog.index_embeddings import LOAD_EVERY
+    from backend.metadata.catalog.store import get_catalog_store
+    from backend.metadata.source_job_runner.kind_locks import (
+        try_acquire_named_execution_lock,
+    )
+
+    _seed_source(object_count=LOAD_EVERY + 4, columns_per_object=1)
+    _seed_embedding_runtime()
+    job = create_queued_job(kind="catalog_embed", input={})
+    store = get_catalog_store()
+    calls = {"n": 0}
+    original = store.get_object
+
+    def cancel_at_heartbeat(object_id: str):
+        calls["n"] += 1
+        if calls["n"] == LOAD_EVERY:
+            mark_cancelled(job.id)
+        return original(object_id)
+
+    store.get_object = cancel_at_heartbeat  # type: ignore[method-assign]
+    embed_calls = {"n": 0}
+
+    def embed(texts: list[str]) -> list[list[float]]:
+        embed_calls["n"] += 1
+        return [[1.0, 0.0] for _ in texts]
+
+    set_embed_fn_for_tests(embed)
+    try:
+        out = run_catalog_embed_job(job.id)
+    finally:
+        store.get_object = original  # type: ignore[method-assign]
+        set_embed_fn_for_tests(None)
+    record = get_job_store().get(job.id)
+    assert record is not None
+    assert out["status"] == "cancelled"
+    assert record.status == "cancelled"
+    assert record.result is None
+    assert embed_calls["n"] == 0
+    lock = try_acquire_named_execution_lock("catalog_embed")
+    assert lock is not None
+    lock.release()

@@ -1,62 +1,81 @@
-"""Mint, cancel, and index cleanup for catalog_embed Jobs."""
+"""Active-job probe and index cleanup for catalog_embed Jobs."""
 
 from __future__ import annotations
 
-from backend.core.config import get_settings
-from backend.jobs.api import revoke_queued_delivery
-from backend.jobs.store import (
-    TERMINAL,
-    create_queued_job,
-    format_job_log_line,
-    get_job_store,
-    mark_cancelled,
-)
+from backend.jobs.store import TERMINAL, get_job_store
 from backend.metadata.catalog.store import get_catalog_store
-from backend.metadata.source_jobs import dispatch_queued_job
 
 CATALOG_EMBED_KIND = "catalog_embed"
+_SWEEP_PAGE = 50
+
+
+def _is_skipped(result: object) -> bool:
+    return isinstance(result, dict) and result.get("outcome") == "skipped"
+
+
+def _latest_sweep():
+    """Newest catalog_embed Job that attempted a sweep.
+
+    A succeeded Job with result outcome ``skipped`` did not sweep. Failed and
+    cancelled Jobs leave result null and still count.
+    """
+    offset = 0
+    while True:
+        records, total = get_job_store().list(
+            kind=CATALOG_EMBED_KIND,
+            limit=_SWEEP_PAGE,
+            offset=offset,
+        )
+        for record in records:
+            if not _is_skipped(record.result):
+                return record
+        offset += len(records)
+        if not records or offset >= total:
+            return None
+    return None
 
 
 class CatalogEmbedJobs:
-    def mint(
-        self,
-        *,
-        service_id: str,
-        display_name: str,
-        generation: int,
-        actor_user_id: str,
+    def trigger_run(
+        self, *, actor_user_id: str, actor_token_id: str | None
     ) -> str:
-        queued_line = format_job_log_line(
-            level="info",
-            message=f"queued catalog embed generation {generation}",
+        from backend.metadata.catalog_embed_jobs.schedule import (
+            run_catalog_embed_schedule_now,
         )
-        job = create_queued_job(
-            kind=CATALOG_EMBED_KIND,
-            input={"model_service_id": service_id, "generation": generation},
-            created_by=actor_user_id,
-            summary=f"catalog_embed · {display_name}",
-            trigger_kind="user",
-            trigger_ref=actor_user_id,
-            log_body=queued_line,
+
+        job = run_catalog_embed_schedule_now(
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
         )
-        dispatch_queued_job(job)
         return job.id
 
-    def cancel_active(self) -> None:
+    def has_active(self) -> bool:
         records, _ = get_job_store().list(kind=CATALOG_EMBED_KIND)
-        settings = get_settings()
-        for record in records:
-            if record.status in TERMINAL:
-                continue
-            updated = mark_cancelled(record.id)
-            if updated is not None and updated.status == "cancelled":
-                revoke_queued_delivery(record.id, settings=settings)
+        return any(record.status not in TERMINAL for record in records)
 
     def clear_index(self) -> None:
         get_catalog_store().delete_embeddings()
 
-    def latest_status(self) -> str | None:
-        records, _ = get_job_store().list(kind=CATALOG_EMBED_KIND, limit=1, offset=0)
-        if not records:
+    def latest_sweep_status(self) -> str | None:
+        sweep = _latest_sweep()
+        if sweep is None:
             return None
-        return records[0].status
+        return sweep.status
+
+    def schedule_view(self):
+        from backend.admin.model_services.records import EmbedScheduleView
+        from backend.metadata.catalog_embed_jobs.schedule import (
+            ensure_catalog_embed_schedule,
+        )
+        from backend.metadata.source_schedules import public_schedule
+
+        record = ensure_catalog_embed_schedule()
+        public = public_schedule(record)
+        return EmbedScheduleView(
+            id=public.id,
+            enabled=public.enabled,
+            cron=public.cron,
+            interval_seconds=public.interval_seconds,
+            schedule_timezone=public.schedule_timezone,
+            next_run_at=public.next_run_at,
+        )

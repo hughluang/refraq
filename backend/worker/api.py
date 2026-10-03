@@ -18,6 +18,7 @@ from backend.worker.errors import (
     ScheduleNotFound,
     ScheduleRunningTimeoutInvalid,
     ScheduleSystemImmutable,
+    ScheduleUndeletable,
 )
 from backend.worker.models import REAPER_SCHEDULE_KEY, REAPER_TASK_NAME
 from backend.worker.schemas.schedules import ScheduleLastJobOut, ScheduleOut
@@ -60,7 +61,10 @@ def ensure_system_schedules() -> None:
                 task_name=REAPER_TASK_NAME,
                 args_json=[],
                 kwargs_json={},
-                system=True,
+                hidden=True,
+                locked=True,
+                undeletable=True,
+                store_only=True,
                 owner_ref=None,
                 last_run_at=now,
                 next_run_at=now,
@@ -147,6 +151,7 @@ def schedule_out(
         cron=record.cron,
         schedule_timezone=record.schedule_timezone,
         running_timeout_sec=record.running_timeout_sec,
+        deletable=not record.undeletable,
         last_run_at=record.last_run_at,
         next_run_at=record.next_run_at,
         last_job=last_job,
@@ -177,7 +182,7 @@ def patch_schedule(
     timeout_set: bool = False,
 ) -> ScheduledTaskRecord:
     record = get_schedule(schedule_id)
-    if record.system:
+    if record.locked:
         raise ScheduleSystemImmutable()
     if (
         cron_set
@@ -259,14 +264,14 @@ def _cancel_and_revoke_for_schedule(schedule_id: str) -> None:
 
 def delete_schedule(schedule_id: str) -> None:
     record = get_schedule(schedule_id)
-    if record.system:
-        raise ScheduleSystemImmutable()
+    if record.undeletable:
+        raise ScheduleUndeletable()
     _cancel_and_revoke_for_schedule(schedule_id)
     get_schedule_store().delete(schedule_id)
 
 
 def withdraw_schedules_by_owner_ref(owner_ref: str) -> int:
-    """Delete all non-system schedules with this opaque owner_ref; cancel unfinished Jobs."""
+    """Delete schedules with this opaque owner_ref and cancel unfinished Jobs."""
     if not owner_ref:
         return 0
     store = get_schedule_store()

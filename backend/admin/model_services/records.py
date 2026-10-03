@@ -33,6 +33,16 @@ class PurposeState:
 
 
 @dataclass(frozen=True)
+class EmbedScheduleView:
+    id: str
+    enabled: bool
+    cron: str | None
+    interval_seconds: int | None
+    schedule_timezone: str
+    next_run_at: datetime | None
+
+
+@dataclass(frozen=True)
 class EmbeddingRuntime:
     service_id: str
     url: str

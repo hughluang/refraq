@@ -63,6 +63,14 @@ class ModelServiceCleanupForbidden(ModelServiceError):
         return "Cleanup is allowed only when closed or when no service is in use"
 
 
+class ModelServiceCleanupBusy(ModelServiceError):
+    code = "MODEL_SERVICE_CLEANUP_BUSY"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Cleanup is refused while a catalog embed Job is still running"
+
+
 class ModelServiceSecretRequired(ModelServiceError):
     code = "MODEL_SERVICE_SECRET_REQUIRED"
     http_status = 409

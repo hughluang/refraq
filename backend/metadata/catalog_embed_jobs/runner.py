@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from celery import current_task
 
-from backend.admin.model_services import mark_embedding_ready
+from backend.admin.model_services import get_embedding_runtime, mark_embedding_ready
 from backend.jobs.store import (
     TERMINAL,
     append_job_log,
@@ -25,6 +25,7 @@ from backend.metadata.source_job_runner.kind_locks import try_acquire_named_exec
 from backend.metadata.sources.store import get_source_store
 
 _SUMMARY_MAX = 400
+_MAX_GENERATION_RESTARTS = 8
 
 
 def _claim_worker_id() -> str:
@@ -70,6 +71,36 @@ def _fail(job_id: str, *, error_code: str, error_summary: str) -> dict[str, str]
     return {"status": "failed", "error_code": error_code}
 
 
+def _empty_result(*, generation: int | None, outcome: str, reason: str | None) -> dict[str, object]:
+    return {
+        "schema": "catalog_embed.v1",
+        "outcome": outcome,
+        "reason": reason,
+        "objects": 0,
+        "columns": 0,
+        "objects_written": 0,
+        "columns_written": 0,
+        "objects_failed": 0,
+        "columns_failed": 0,
+        "objects_skipped": 0,
+        "columns_skipped": 0,
+        "objects_attempted": 0,
+        "columns_attempted": 0,
+        "generation": generation,
+        "failure_reasons": [],
+        "orphans_deleted": 0,
+    }
+
+
+def _skip(job_id: str, reason: str, *, generation: int | None = None) -> dict[str, str]:
+    mark_succeeded(
+        job_id,
+        result=_empty_result(generation=generation, outcome="skipped", reason=reason),
+    )
+    append_job_log(job_id, level="info", message=f"skipped: {reason}")
+    return {"status": "succeeded", "outcome": "skipped"}
+
+
 def run_catalog_embed_job(job_id: str) -> dict[str, str]:
     current = claim_queued(
         job_id, celery_task_id=job_id, claimed_by=_claim_worker_id()
@@ -86,40 +117,61 @@ def run_catalog_embed_job(job_id: str) -> dict[str, str]:
             error_summary=f"Unsupported job kind: {current.kind}",
         )
 
-    service_id = current.input.get("model_service_id")
-    generation = current.input.get("generation")
-    if not isinstance(service_id, str) or not isinstance(generation, int):
-        return _fail(
-            job_id,
-            error_code="JOB_INPUT_INVALID",
-            error_summary="catalog_embed requires model_service_id and generation",
-        )
-
-    append_job_log(job_id, level="info", message=f"indexing generation {generation}")
+    runtime = get_embedding_runtime()
+    if runtime is None or not runtime.url:
+        return _skip(job_id, "no_service")
+    if runtime.closed:
+        return _skip(job_id, "closed", generation=runtime.generation)
 
     lock = try_acquire_named_execution_lock("catalog_embed")
     if lock is None:
-        return _fail(
-            job_id,
-            error_code="JOB_ALREADY_ACTIVE",
-            error_summary="catalog_embed Kind execution lock is held",
-        )
+        return _skip(job_id, "already_active", generation=runtime.generation)
     try:
+        return _sweep(job_id, service_id=runtime.service_id, generation=runtime.generation)
+    except Exception as exc:  # noqa: BLE001
+        summary = str(exc)
+        if len(summary) > _SUMMARY_MAX:
+            summary = summary[:_SUMMARY_MAX] + "…"
+        record = get_job_store().get(job_id)
+        if record is not None and record.status not in TERMINAL:
+            return _fail(
+                job_id,
+                error_code="JOB_EXECUTION_FAILED",
+                error_summary=summary,
+            )
+        raise
+    finally:
+        lock.release()
+
+
+def _sweep(job_id: str, *, service_id: str, generation: int) -> dict[str, str]:
+    restarts = 0
+    while True:
+        append_job_log(job_id, level="info", message=f"indexing generation {generation}")
         stopped = stopped_result(job_id)
         if stopped is not None:
             return stopped
         sources, _ = get_source_store().list_sources(limit=None, offset=0)
         totals = EmbeddingRefreshCounts()
         progress = CatalogEmbedLog(job_id)
+        guard: dict[str, str] = {"action": ""}
 
         def _should_stop(current: EmbeddingRefreshCounts) -> bool:
             if stopped_result(job_id) is not None:
+                guard["action"] = "cancel"
+                return True
+            live = get_embedding_runtime()
+            if live is None or not live.url or live.closed:
+                guard["action"] = "abort"
+                return True
+            if live.generation != generation or live.service_id != service_id:
+                guard["action"] = "restart"
                 return True
             running = totals.plus(current)
-            return (
-                _deadline_stop(running, dominant=progress.dominant_reason())
-                is not None
-            )
+            if _deadline_stop(running, dominant=progress.dominant_reason()) is not None:
+                guard["action"] = "deadline"
+                return True
+            return False
 
         for source in sources:
             stopped = stopped_result(job_id)
@@ -129,26 +181,49 @@ def run_catalog_embed_job(job_id: str) -> dict[str, str]:
             progress.start_source(source.key)
             source_counts = refresh_source_embeddings(
                 source.id,
-                force=True,
                 progress=progress,
                 should_stop=_should_stop,
             )
-            stopped = stopped_result(job_id)
-            if stopped is not None:
+            if guard["action"] == "cancel":
                 progress.flush_reason_counts()
+                stopped = stopped_result(job_id)
+                assert stopped is not None
                 return stopped
-            totals = totals.plus(source_counts)
-            summary = _deadline_stop(totals, dominant=progress.dominant_reason())
-            if summary is not None:
+            if guard["action"] == "restart":
+                break
+            if guard["action"] == "abort":
                 progress.flush_reason_counts()
+                return _skip(job_id, "aborted", generation=generation)
+            if guard["action"] == "deadline":
+                progress.flush_reason_counts()
+                summary = _deadline_stop(
+                    totals.plus(source_counts), dominant=progress.dominant_reason()
+                )
+                assert summary is not None
                 return _fail(
                     job_id,
                     error_code="JOB_EXECUTION_FAILED",
                     error_summary=summary,
                 )
+            totals = totals.plus(source_counts)
             progress.finish_source(source_counts)
+
+        if guard["action"] == "restart":
+            restarts += 1
+            if restarts > _MAX_GENERATION_RESTARTS:
+                return _skip(job_id, "generation_changed", generation=generation)
+            live = get_embedding_runtime()
+            if live is None or not live.url or live.closed:
+                return _skip(job_id, "aborted", generation=generation)
+            service_id = live.service_id
+            generation = live.generation
+            continue
+
+        orphans = get_catalog_store().delete_orphan_embeddings()
         result = {
             "schema": "catalog_embed.v1",
+            "outcome": "completed",
+            "reason": None,
             "objects": totals.objects_written,
             "columns": totals.columns_written,
             "objects_written": totals.objects_written,
@@ -161,8 +236,12 @@ def run_catalog_embed_job(job_id: str) -> dict[str, str]:
             "columns_attempted": totals.columns_attempted,
             "generation": generation,
             "failure_reasons": progress.failure_reasons(),
+            "orphans_deleted": orphans,
         }
-        if totals.written == 0 and _catalog_has_embed_targets():
+        nothing_written = totals.written == 0 and (
+            totals.objects_failed + totals.columns_failed
+        ) > 0
+        if nothing_written and _catalog_has_embed_targets():
             summary = "catalog_embed wrote no vectors for a non-empty catalog"
             dominant = progress.dominant_reason()
             if dominant:
@@ -174,6 +253,14 @@ def run_catalog_embed_job(job_id: str) -> dict[str, str]:
                 error_code="JOB_EXECUTION_FAILED",
                 error_summary=summary,
             )
+        live = get_embedding_runtime()
+        if (
+            live is None
+            or live.closed
+            or live.service_id != service_id
+            or live.generation != generation
+        ):
+            return _skip(job_id, "aborted", generation=generation)
         mark_embedding_ready(
             purpose="embedding", service_id=service_id, generation=generation
         )
@@ -191,17 +278,3 @@ def run_catalog_embed_job(job_id: str) -> dict[str, str]:
             )
         append_job_log(job_id, level="info", message=indexed)
         return {"status": "succeeded"}
-    except Exception as exc:  # noqa: BLE001
-        summary = str(exc)
-        if len(summary) > _SUMMARY_MAX:
-            summary = summary[:_SUMMARY_MAX] + "…"
-        record = get_job_store().get(job_id)
-        if record is not None and record.status not in TERMINAL:
-            return _fail(
-                job_id,
-                error_code="JOB_EXECUTION_FAILED",
-                error_summary=summary,
-            )
-        raise
-    finally:
-        lock.release()

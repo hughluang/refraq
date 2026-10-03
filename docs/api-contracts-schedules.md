@@ -28,6 +28,7 @@ Create is domain-facade (`POST /sources/{id}/schedules`) plus the database Sourc
   "cron": "0 2 * * *",
   "schedule_timezone": "UTC",
   "running_timeout_sec": null,
+  "deletable": true,
   "last_run_at": "2026-08-13T10:00:00Z",
   "next_run_at": "2026-08-14T02:00:00Z",
   "last_job": {
@@ -43,8 +44,8 @@ Create is domain-facade (`POST /sources/{id}/schedules`) plus the database Sourc
 
 Rules:
 
-- Public fields never include `task_name`, `args_json`, `kwargs_json`, `system`, or `owner_ref`.
-- `work_kind` is the closed catalog of domain work (`structure` \| `join_detection`), filled by the Metadata facade. System / mechanism-only rows may return `work_kind` / `target` null.
+- Public fields never include `task_name`, `args_json`, `kwargs_json`, `hidden`, `locked`, `undeletable`, `store_only`, or `owner_ref`. `deletable` is the inverse of `undeletable`.
+- `work_kind` is the closed catalog of domain work (`structure` \| `join_detection` \| `catalog_embed`), filled by the Metadata facade. Store-only rows return `work_kind` / `target` null. `catalog_embed` returns `target` null.
 - `target` is facade projection of the work target (Source id/key for `structure` and `join_detection`), **not** proof that the schedule is owned by Source. `target.source_key` is present when the facade can resolve the Source; after Source hard-delete, matching schedules are withdrawn by `owner_ref` so orphans should not remain on product paths.
 - Cadence is exactly one of `interval_seconds` (positive int) or five-field `cron`. `schedule_timezone` is IANA; ignored for interval.
 - `running_timeout_sec` is the optional **Running Time Limit** (positive int seconds). Null / omit / seed = no control. Mint copies it onto the Job. PATCH of this field does not rewrite in-flight Jobs.
@@ -59,8 +60,8 @@ Rules:
 | --- | --- | --- | --- |
 | `POST` | `/sources/{id}/schedules` | `jobs:run` | Insert a Source-targeted schedule (`work_kind=structure` or `join_detection`) |
 | `GET` | `/sources/{id}/schedules` | `jobs:run` | List schedules whose target is this Source (both work kinds; **Offset Page**) |
-| `GET` | `/schedules` | `jobs:run` | Platform list (default excludes `system=true`; tests may pass `?system=true`; **Offset Page**) |
-| `GET` | `/schedules/{id}` | `jobs:run` | Get by id (system rows visible for debug) |
+| `GET` | `/schedules` | `jobs:run` | Platform list (default excludes `hidden`; tests may pass `?hidden=true`; **Offset Page**) |
+| `GET` | `/schedules/{id}` | `jobs:run` | Get by id (hidden rows visible for debug) |
 | `PATCH` | `/schedules/{id}` | `jobs:run` | Partial update: `enabled`, cadence, `schedule_timezone`, `name`, `running_timeout_sec` |
 | `DELETE` | `/schedules/{id}` | `jobs:run` | Delete definition; unfinished Jobs for this schedule immediately cancelled |
 | `POST` | `/schedules/{id}/run` | `jobs:run` | Mint a Job now (does not move `last_run_at` / `next_run_at`) |
@@ -93,11 +94,11 @@ Rules:
 
 ### `POST /schedules/{id}/run`
 
-Empty body. `202` `{ "job": { … } }` (Job shape). `trigger_kind=schedule`, `trigger_ref` = schedule id, `created_by_user_id` = operator, `scheduled_for` null. Disabled schedules are allowed. System schedules → `SCHEDULE_SYSTEM_IMMUTABLE`. Always mints a Job — Source busy / disabled is not a schedule HTTP conflict. Does not update `last_run_at` / `next_run_at`.
+Empty body. `202` `{ "job": { … } }` (Job shape). `trigger_kind=schedule`, `trigger_ref` = schedule id, `created_by_user_id` = operator, `scheduled_for` null. Disabled schedules are allowed. Locked schedules → `SCHEDULE_SYSTEM_IMMUTABLE`. Always mints a Job — Source busy / disabled is not a schedule HTTP conflict. Does not update `last_run_at` / `next_run_at`. The site `catalog_embed` schedule uses this same route.
 
 ### `PATCH /schedules/{id}` body
 
-Any subset of `enabled`, `name`, `cron`, `interval_seconds`, `schedule_timezone`, `running_timeout_sec`. Setting `cron` clears `interval_seconds` and vice versa. Sending both non-null is rejected. A present `schedule_timezone` (including empty or null) is validated as IANA; omission leaves the stored zone. Present `running_timeout_sec` null clears to no-control; omission leaves the stored value; a present non-positive value is rejected. Empty or whitespace `name` restores the default `structure · {source_key}` or `join_detection · {source_key}` for that schedule's work kind. System rows are rejected.
+Any subset of `enabled`, `name`, `cron`, `interval_seconds`, `schedule_timezone`, `running_timeout_sec`. Setting `cron` clears `interval_seconds` and vice versa. Sending both non-null is rejected. A present `schedule_timezone` (including empty or null) is validated as IANA; omission leaves the stored zone. Present `running_timeout_sec` null clears to no-control; omission leaves the stored value; a present non-positive value is rejected. Empty or whitespace `name` restores that work kind's default: `structure · {source_key}`, `join_detection · {source_key}`, or `catalog embed` for the site schedule. Locked rows are rejected.
 
 - `enabled=false` → `next_run_at` null immediately; already queued/running Jobs keep running.
 - `enabled=true` → recompute `next_run_at` from now (no pause catch-up).
@@ -105,7 +106,7 @@ Any subset of `enabled`, `name`, `cron`, `interval_seconds`, `schedule_timezone`
 
 ### `GET /schedules`
 
-**Offset Page** (newest first: `created_at DESC`, `id DESC`). Query params: `limit` (default **50**, max **200**), `offset` (default **0**), `system` (default `false`; `true` includes system rows for tests / debug).
+**Offset Page** (newest first: `created_at DESC`, `id DESC`). Query params: `limit` (default **50**, max **200**), `offset` (default **0**), `hidden` (default `false`; `true` includes hidden rows for tests / debug).
 
 Response: `{ "items": […], "total": N, "limit": L, "offset": O }`. `total` is the filtered set.
 
@@ -115,14 +116,15 @@ Same **Offset Page** envelope, defaults, max, and ordering. Scoped to schedules 
 
 ### `DELETE`
 
-`204` empty body. Unfinished Jobs for this schedule are immediately cancelled (queued also revoked). Historical Jobs remain.
+`204` empty body. Unfinished Jobs for this schedule are immediately cancelled (queued also revoked). Historical Jobs remain. An undeletable row is `SCHEDULE_UNDELETABLE`.
 
 ## 4. Errors
 
 | code | When |
 | --- | --- |
 | `SCHEDULE_NOT_FOUND` | No Scheduled Task for this id |
-| `SCHEDULE_SYSTEM_IMMUTABLE` | PATCH/DELETE/run-now of a `system=true` row |
+| `SCHEDULE_SYSTEM_IMMUTABLE` | PATCH or run-now of a locked row |
+| `SCHEDULE_UNDELETABLE` | DELETE of an undeletable row |
 | `SCHEDULE_CADENCE_INVALID` | Neither or both cadence fields; invalid cron; unknown IANA zone; non-positive interval |
 | `SCHEDULE_RUNNING_TIMEOUT_INVALID` | Present `running_timeout_sec` is not a positive integer |
 | `SCHEDULE_KIND_INVALID` | POST `kind` is not in the closed catalog |
@@ -133,7 +135,7 @@ Same **Offset Page** envelope, defaults, max, and ordering. Scoped to schedules 
 
 ## 5. Console
 
-- Module id `schedules` (`operations` group, list permission `jobs:run`): platform-wide domain schedules; edit cadence / enabled / delete; run-now; related Jobs. No system rows. No global create.
+- Module id `schedules` (`operations` group, list permission `jobs:run`): platform-wide domain schedules, including site `catalog_embed`; edit cadence / enabled; delete when `deletable`; run-now; related Jobs. No hidden rows. No global create. The site schedule's target is shown as the whole site.
 - Sources: related-schedules **workbench** at `/console/sources/:id/schedules` — toolbar create plus the same row actions as Operations (enable/disable, edit, delete, run-now, related Jobs). Console delete asks for confirmation; HTTP `DELETE` remains immediate.
 - Do not label `last_run_at` as Last run; show `last_job` for observation and `next_run_at` for commitment. Disabled → paused (not “unknown next”).
 - Create/edit may set optional **Running Time Limit**. Empty = no control. No new schedule-list column in this slice. Job detail may show the minted snapshot when non-null.

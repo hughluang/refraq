@@ -257,7 +257,7 @@ Avoid Celery result backend, **Management Audit Event** `result`, treating resul
 The platform **scheduling foundation**: a cadence intent stored in Postgres that commits a next-due Instant (`next_run_at`), consumes a due tick only by minting a domain **Job**, and can be paused or **withdrawn** by the calling domain via opaque **owner_ref**.
 Celery Beat reads these rows (single Beat replica). Distinct from any one **Job** instance.
 A platform mechanism like **Job**, not a product domain, not a Metadata business object, and **not owned by Source** (no Source FK; scheduler never parses Source).
-Operator-facing identity is a closed work kind plus target projected by a **domain facade** (`structure` and `join_detection` targeting a **Source**), not a Celery task name. Facades may register several schedules of each kind that *target* one Source; that target lives in facade/kwargs projection, not as schedule ownership.
+Operator-facing identity is a closed work kind plus target projected by a **domain facade** (`structure` and `join_detection` targeting a **Source**; `catalog_embed` with no Source target), not a Celery task name. Facades may register several schedules of each Source kind that *target* one Source; that target lives in facade/kwargs projection, not as schedule ownership. `catalog_embed` is one site schedule.
 Cron wall clock uses **Schedule Timezone**; `last_run_at` is the consumed-due cursor Instant; `next_run_at` is the stored commitment (null when paused). An optional **Running Time Limit** on the definition is copied onto each minted **Job**. Operator run-now enqueues without moving those fields. Observation “last run” joins related **Jobs**.
 Console operator copy, docs that name the row, and identifiers whose referent is this entity use **schedule**, not clock.
 Avoid storing product schedules only in Redis Beat state or static code when operators need to change them.
@@ -277,11 +277,11 @@ Avoid wall-clock, timeout, clock, a global env as the definition, a platform saf
 
 ### owner_ref
 
-Opaque string on a **Scheduled Task** written only by a domain facade (product HTTP cannot set it). Create and withdraw must use the same literal (Metadata structure: `metadata:source:{id}`). Null only for platform system rows. The scheduler stores and matches it; it does not parse domain meaning.
+Opaque string on a **Scheduled Task** written only by a domain facade (product HTTP cannot set it). Create and withdraw must use the same literal (Metadata structure: `metadata:source:{id}`; site embed: `admin:model_services:embedding`). Null only for store-only rows. The scheduler stores and matches it; it does not parse domain meaning.
 
 ### Withdraw (schedule)
 
-Caller asks the scheduler to delete all non-system definitions matching an **owner_ref** and immediately terminalize unfinished **Jobs** those schedules minted (`cancelled`). Historical Jobs remain. Distinct from pause (`enabled=false`) and from single-row `DELETE /schedules/{id}`.
+Caller asks the scheduler to delete matching definitions for an **owner_ref** and immediately terminalize unfinished **Jobs** those schedules minted (`cancelled`). Hidden, locked, and undeletable rows stay. Historical Jobs remain. Distinct from pause (`enabled=false`) and from single-row `DELETE /schedules/{id}`.
 Avoid “cascade from Source”, “wait for the worker”, or scanning kwargs for Source id.
 
 ### Instant

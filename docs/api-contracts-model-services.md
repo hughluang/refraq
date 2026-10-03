@@ -44,11 +44,19 @@ All endpoints use JSON success and RFC 9457 Problem Details failures. They accep
   "ready": true,
   "in_use_id": "msvc_ab12cd34ef56",
   "generation": 3,
-  "index_status": "ready"
+  "index_status": "ready",
+  "embed_schedule": {
+    "id": "sched_catalog_embed_site",
+    "enabled": true,
+    "cron": "0 3 * * *",
+    "interval_seconds": null,
+    "schedule_timezone": "UTC",
+    "next_run_at": "2026-08-14T03:00:00Z"
+  }
 }
 ```
 
-`index_status` is `none` | `indexing` | `ready` | `failed`, derived from the ready bit and the latest `catalog_embed` Job. It is not computed by scanning embedding rows. `in_use_id` is null when the purpose has no in-use service.
+`index_status` is `none` | `indexing` | `ready` | `failed`. It is `ready` when the ready bit is set. Otherwise a non-terminal `catalog_embed` Job makes it `indexing`. Otherwise it is `failed` when the latest sweep is `failed`, and `none` when there is no sweep or that sweep has another status. A sweep is a `catalog_embed` Job whose result `outcome` is not `skipped`. Failed and cancelled Jobs leave `result` null and count as sweeps. It is not computed by scanning embedding rows. `in_use_id` is null when the purpose has no in-use service. `embed_schedule` describes the site cadence that mints `catalog_embed`: id, enabled, cadence, and the next due Instant. Minted Jobs are observed on that schedule’s `last_job` and related Jobs, not on purpose state.
 
 ## 5. Endpoints
 
@@ -78,7 +86,7 @@ Permission: `model_services:write`. Updates display name, `timeout_sec`, and, wh
 
 URL unchanged and `api_key` omitted: keep the stored secret. URL changed: the request must supply `api_key` or `clear_api_key: true`; the stored secret is not sent to the new URL. Secret or URL changes run the connectivity test before persist; failure does not save.
 
-An in-use URL change that passes the test clears ready, increments generation, cancels an in-flight `catalog_embed` Job, and mints a new one. Secret-only, display-name-only, or timeout-only changes do not.
+An in-use URL change that passes the test clears ready, increments generation, and runs the site embed schedule now. Secret-only, display-name-only, or timeout-only changes do not. The call does not cancel an in-flight Job.
 
 ### `POST /model-services/{id}/test`
 
@@ -86,11 +94,11 @@ Permission: `model_services:write`. Posts a fixed short probe (`input` as a stri
 
 ### `POST /model-services/{id}/activate`
 
-Permission: `model_services:write`. Tests, then sets this row in use for its purpose. Another in-use row of the same purpose becomes a draft. Always clears ready, increments generation, cancels an in-flight `catalog_embed` Job, and mints a new one — including when the purpose is closed. Test failure leaves in-use unchanged.
+Permission: `model_services:write`. Tests, then sets this row in use for its purpose. Another in-use row of the same purpose becomes a draft. Always clears ready, increments generation, and runs the site embed schedule now — including when the purpose is closed. Test failure leaves in-use unchanged. The Job may skip while closed.
 
 ### `DELETE /model-services/{id}`
 
-Permission: `model_services:write`. Deletes the row and secret. If it was in use, the purpose has no in-use service, search is lexical, and an in-flight `catalog_embed` Job is cancelled. The index is not cleaned.
+Permission: `model_services:write`. Deletes the row and secret. If it was in use, the purpose has no in-use service and search is lexical. An in-flight `catalog_embed` Job is not cancelled. The index is not cleaned.
 
 ### `POST /model-services/purpose/{purpose}/close`
 
@@ -98,27 +106,21 @@ Permission: `model_services:write`. Sets `closed=true`. Search becomes lexical. 
 
 ### `POST /model-services/purpose/{purpose}/open`
 
-Permission: `model_services:write`. Body: `{ "rebuild": "none" | "full" }`. Tests the current in-use service, then sets `closed=false`. No in-use service → `MODEL_SERVICE_NOT_IN_USE`. Test failure leaves the purpose closed.
-
-`rebuild=none` does not mint a Job. Vector Search resumes only if ready is still true.
-
-`rebuild=full` clears ready, increments generation, cancels an in-flight same-kind Job, and mints `catalog_embed`.
+Permission: `model_services:write`. Empty body. Tests the current in-use service, then sets `closed=false`. No in-use service → `MODEL_SERVICE_NOT_IN_USE`. Test failure leaves the purpose closed. Does not mint a Job and does not change generation. Vector Search resumes only if ready is still true.
 
 ### `POST /model-services/purpose/{purpose}/cleanup`
 
-Permission: `model_services:write`. Allowed when `closed` or `in_use_id` is null. Otherwise `MODEL_SERVICE_CLEANUP_FORBIDDEN`. Cancels an in-flight `catalog_embed` Job, deletes that purpose’s catalog embedding rows, and clears ready. Does not mint a Job.
-
-### `POST /model-services/purpose/{purpose}/reindex`
-
-Permission: `model_services:write`. Rebuild-now for the current in-use service. No in-use → `MODEL_SERVICE_NOT_IN_USE`. Tests are not required. Clears ready, increments generation, cancels an in-flight same-kind Job, and mints `catalog_embed`. Allowed while closed.
+Permission: `model_services:write`. Allowed when `closed` or `in_use_id` is null. Otherwise `MODEL_SERVICE_CLEANUP_FORBIDDEN`. If a `catalog_embed` Job is non-terminal, `MODEL_SERVICE_CLEANUP_BUSY`. Deletes that purpose’s catalog embedding rows and clears ready. Does not mint a Job and does not cancel one.
 
 ## 6. `catalog_embed` Job
 
-`kind` is `catalog_embed`. `trigger_kind` is `user`; `trigger_ref` and `created_by` are the acting User. `input` is `{ "model_service_id": "…", "generation": N }`. **Job result** on success:
+`kind` is `catalog_embed`. `trigger_kind` is `schedule`; `trigger_ref` is the site schedule id. Run-now sets `created_by` to the acting User; a due tick leaves it null. `input` is `{}`. **Job result** on success:
 
 ```json
 {
   "schema": "catalog_embed.v1",
+  "outcome": "completed",
+  "reason": null,
   "objects": 12,
   "columns": 80,
   "objects_written": 12,
@@ -130,7 +132,8 @@ Permission: `model_services:write`. Rebuild-now for the current in-use service. 
   "objects_attempted": 12,
   "columns_attempted": 80,
   "generation": 3,
-  "failure_reasons": []
+  "failure_reasons": [],
+  "orphans_deleted": 0
 }
 ```
 
@@ -147,8 +150,9 @@ Permission: `model_services:write`. Rebuild-now for the current in-use service. 
 | `403` | `AUTH_FORBIDDEN` | Missing Model Service permission |
 | `404` | `MODEL_SERVICE_NOT_FOUND` | Record does not exist |
 | `409` | `MODEL_SERVICE_WIRE_IMMUTABLE` | PATCH changed model or protocol on an in-use row |
-| `409` | `MODEL_SERVICE_NOT_IN_USE` | Open or reindex without an in-use service |
+| `409` | `MODEL_SERVICE_NOT_IN_USE` | Open without an in-use service |
 | `409` | `MODEL_SERVICE_CLEANUP_FORBIDDEN` | Cleanup while open and an in-use service exists |
+| `409` | `MODEL_SERVICE_CLEANUP_BUSY` | Cleanup while a `catalog_embed` Job is non-terminal |
 | `409` | `MODEL_SERVICE_SECRET_REQUIRED` | URL changed without a new key or `clear_api_key` |
 | `503` | `MODEL_SERVICE_UNAVAILABLE` | Embeddings URL cannot be reached, or the client deadline elapsed (connect or read) |
 

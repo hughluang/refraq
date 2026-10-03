@@ -86,14 +86,16 @@ export function ScheduleRowActions({
         <Button size="xs" variant="light" onClick={onEdit}>
           {t("schedules.edit")}
         </Button>
-        <Button
-          size="xs"
-          variant="light"
-          color="red"
-          onClick={() => deleteConfirm.open(task)}
-        >
-          {t("schedules.delete")}
-        </Button>
+        {task.deletable !== false ? (
+          <Button
+            size="xs"
+            variant="light"
+            color="red"
+            onClick={() => deleteConfirm.open(task)}
+          >
+            {t("schedules.delete")}
+          </Button>
+        ) : null}
       </Group>
       <ConfirmActionModal
         opened={deleteConfirm.opened}

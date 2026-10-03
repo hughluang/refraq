@@ -147,6 +147,12 @@ class CatalogSemanticsStore(Protocol):
 
     def get_embedding(self, *, kind: str, target_id: str) -> Any | None: ...
 
+    def embedding_stamps(
+        self, keys: list[tuple[str, str]]
+    ) -> dict[tuple[str, str], tuple[str, str, int]]: ...
+
+    def delete_orphan_embeddings(self) -> int: ...
+
     def nearest_embeddings(
         self,
         *,

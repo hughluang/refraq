@@ -7,10 +7,6 @@ from typing import Any
 from backend.admin.audit import persist_audit_event
 from backend.core.time import utc_now
 from backend.metadata.business_domains.service import require_domain_by_code
-from backend.metadata.catalog.index_embeddings import (
-    refresh_column_embedding,
-    refresh_object_embedding,
-)
 from backend.metadata.catalog.refs import require_column
 from backend.metadata.catalog.semantics_changes import semantics_change_for_field
 from backend.metadata.catalog.store import (
@@ -158,7 +154,6 @@ def patch_object_semantics(
         semantic_source=semantic_source,
         actor_user_id=actor_user_id,
     )
-    refresh_object_embedding(updated)
     persist_audit_event(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -202,10 +197,6 @@ def patch_column_semantics(
         kwargs=kwargs,
         semantic_source=semantic_source,
         actor_user_id=actor_user_id,
-    )
-    parent = get_catalog_store().get_object(updated.object_id)
-    refresh_column_embedding(
-        updated, object_name=parent.name if parent is not None else None
     )
     persist_audit_event(
         actor_user_id=actor_user_id,

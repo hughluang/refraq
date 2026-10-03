@@ -133,12 +133,19 @@ def _schedule_label(spec: SourceWorkKindSpec, name: str | None, source_key: str)
 def schedule_label_for_record(
     record: ScheduledTaskRecord, name: str | None
 ) -> str | None:
-    """None means omit (leave stored name). Empty/whitespace restores the default when Source is resolvable; otherwise omit."""
+    """None means omit (leave stored name). Empty/whitespace restores the work-kind default when one exists; otherwise omit."""
     if name is None:
         return None
     stripped = name.strip()
     if stripped:
         return stripped
+    from backend.metadata.catalog_embed_jobs.schedule import (
+        DEFAULT_CATALOG_EMBED_NAME,
+        is_catalog_embed_schedule,
+    )
+
+    if is_catalog_embed_schedule(record):
+        return DEFAULT_CATALOG_EMBED_NAME
     spec = _spec_for_record(record)
     source_id = record.kwargs_json.get("source_id")
     if spec is None or not isinstance(source_id, str) or not source_id:
@@ -159,8 +166,14 @@ def public_schedule(
     """
     last_job = _last_job_for_schedule(record.id)
     projected = schedule_out(record, last_job=last_job)
-    if record.system:
+    if record.store_only:
         return projected
+    from backend.metadata.catalog_embed_jobs.schedule import is_catalog_embed_schedule
+
+    if is_catalog_embed_schedule(record):
+        return projected.model_copy(
+            update={"work_kind": "catalog_embed", "target": None}
+        )
     source_id = record.kwargs_json.get("source_id")
     if not isinstance(source_id, str) or not source_id:
         return projected
@@ -245,7 +258,6 @@ def _new_schedule_record(
         task_name=spec.task_name,
         args_json=[],
         kwargs_json={"source_id": source.id, "schedule_id": schedule_id},
-        system=False,
         schedule_timezone=schedule_timezone,
         owner_ref=source_owner_ref(source.id),
         last_run_at=now,
@@ -458,6 +470,6 @@ def list_jobs_for_schedule(
 
 def require_runnable_schedule(schedule_id: str) -> ScheduledTaskRecord:
     record = get_schedule(schedule_id)
-    if record.system:
+    if record.locked:
         raise ScheduleSystemImmutable()
     return record

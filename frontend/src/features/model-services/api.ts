@@ -5,7 +5,6 @@ import type {
   ModelServiceTestResult,
   ModelServiceWrite,
   PurposeState,
-  RebuildChoice,
 } from "@/features/model-services/types";
 
 function pageSuffix(params?: PageQuery): string {
@@ -72,22 +71,14 @@ export function closeEmbeddingPurpose() {
   });
 }
 
-export function openEmbeddingPurpose(rebuild: RebuildChoice) {
+export function openEmbeddingPurpose() {
   return apiClient<PurposeState>("/model-services/purpose/embedding/open", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ rebuild }),
   });
 }
 
 export function cleanupEmbeddingPurpose() {
   return apiClient<PurposeState>("/model-services/purpose/embedding/cleanup", {
-    method: "POST",
-  });
-}
-
-export function reindexEmbeddingPurpose() {
-  return apiClient<PurposeState>("/model-services/purpose/embedding/reindex", {
     method: "POST",
   });
 }

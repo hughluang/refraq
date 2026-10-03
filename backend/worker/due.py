@@ -95,7 +95,7 @@ def consume_due_tick(
         record = store.get_by_id(schedule_id, session=session)
         if record is None:
             return {"status": "missing"}
-        if not record.system:
+        if not record.store_only:
             return {"status": "missing_due_at"}
         if not record.enabled:
             return {"status": "disabled"}
@@ -136,7 +136,7 @@ def consume_due_tick(
             "cancel_immediately": True,
         }
 
-    if record.system:
+    if record.store_only:
         return {"status": "invalid_due_at_for_system"}
 
     # Premature delivery of a future commitment (Beat would not have sent yet).

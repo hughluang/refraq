@@ -201,12 +201,12 @@ def test_schedules_http_envelope_and_source_scope(client: TestClient) -> None:
     platform = client.get("/schedules")
     assert platform.status_code == 200
     body = platform.json()
-    assert body["total"] == 4
+    assert body["total"] == 5
     assert body["limit"] == 50
     page = client.get("/schedules?limit=1&offset=0")
     assert len(page.json()["items"]) == 1
-    assert page.json()["total"] == 4
-    with_system = client.get("/schedules?system=true")
+    assert page.json()["total"] == 5
+    with_system = client.get("/schedules?hidden=true")
     assert with_system.status_code == 200
     assert with_system.json()["total"] > body["total"]
     over = client.get("/schedules?limit=201")

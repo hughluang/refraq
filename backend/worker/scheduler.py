@@ -7,6 +7,7 @@ from datetime import timedelta
 from celery.beat import ScheduleEntry, Scheduler
 
 from backend.core.time import format_instant
+from backend.metadata.catalog_embed_jobs.schedule import ensure_catalog_embed_schedule
 from backend.worker.api import ensure_system_schedules
 from backend.worker.cron import CommitmentSchedule
 from backend.worker.parameters import BEAT_MAX_INTERVAL_SEC, BEAT_SYNC_EVERY_SEC
@@ -37,12 +38,14 @@ class DatabaseScheduler(Scheduler):
 
     def setup_schedule(self) -> None:
         ensure_system_schedules()
+        ensure_catalog_embed_schedule()
         super().setup_schedule()
         self.merge_inplace(self._load_entries())
         self._heap = None
 
     def sync(self) -> None:
         ensure_system_schedules()
+        ensure_catalog_embed_schedule()
         self.merge_inplace(self._load_entries())
         super().sync()
         self._heap = None
@@ -55,7 +58,7 @@ class DatabaseScheduler(Scheduler):
             schedule = CommitmentSchedule(record.next_run_at)
             kwargs = dict(record.kwargs_json)
             # System rows keep store-only consume (no Job); do not inject due_at.
-            if not record.system:
+            if not record.store_only:
                 kwargs["due_at"] = format_instant(
                     record.next_run_at, timespec="microseconds"
                 )

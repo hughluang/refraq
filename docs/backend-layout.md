@@ -104,7 +104,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 |--------|----------------|
 | `backend.metadata.errors` | Domain errors (subclass `AppError`, not `admin` concrete types) |
 | `backend.metadata.source_jobs` | Domain minting of structure and join-detection **Jobs** via **Scheduled Task** (due / run-now); Beat Celery entries (`fire_scheduled_structure`, `fire_scheduled_join_detection`). Does not enforce **Kind execution lock** at mint — that is Job execution |
-| `backend.metadata.catalog_embed_jobs` | `catalog_embed` mint / cancel / index cleanup / latest-job view bound into admin; Job runner |
+| `backend.metadata.catalog_embed_jobs` | Site embed schedule seed / run-now, active-job probe, index cleanup, latest-job view bound into admin; Job runner |
 | `backend.metadata.source_schedules` | Metadata facade onto platform schedules: operator projection (`public_schedule`: work_kind + target), opaque `owner_ref` register/withdraw, per-kind product-default seed on Source create / mutating Source update. Closed work kinds: `structure`, `join_detection`. Not schedule ownership by Source |
 | `backend.metadata.type_mappings.seeds` | Product Type Mapping seed occupy (`ensure_product_type_mappings`) for Foundation Upgrade / Site Bootstrap |
 | `backend.metadata.parameters` | Metadata-owned parameter specs and typed accessors (`query_timeout_sec`, `query_max_rows`) |
@@ -131,7 +131,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Module | Published for |
 |--------|----------------|
 | `backend.worker.parameters` | `assemble_system_parameters` (composition collects every package's published spec list and occupies seeds), Beat in-code constants, and the reaper interval derived from lost-detection |
-| `backend.worker.api` | Schedule seam policy (`schedule_out` mechanism fields only — no Source / structure shape — cadence / NotFound / system immutable, `ensure_system_schedules`); not a store re-export |
+| `backend.worker.api` | Schedule seam policy (`schedule_out` mechanism fields only — no Source / structure shape — cadence / NotFound / locked and undeletable, `ensure_system_schedules`); not a store re-export |
 | `backend.worker.due` | Due-tick consumption helpers (commitment → mint decision); used by domain Beat tasks |
 | `backend.worker.schedules` | Store port (`ScheduledTaskRecord`, get/list/upsert; `upsert` / `list` accept an optional SQLAlchemy session so a caller can join an existing transaction) used by the API seam and domain facades |
 | `backend.worker.errors` | Mechanism Scheduled Task errors |

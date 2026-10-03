@@ -4,22 +4,21 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from backend.admin.model_services.records import EmbedScheduleView
+
 
 class CatalogEmbedJobsPort(Protocol):
-    def mint(
-        self,
-        *,
-        service_id: str,
-        display_name: str,
-        generation: int,
-        actor_user_id: str,
+    def trigger_run(
+        self, *, actor_user_id: str, actor_token_id: str | None
     ) -> str: ...
 
-    def cancel_active(self) -> None: ...
+    def has_active(self) -> bool: ...
 
     def clear_index(self) -> None: ...
 
-    def latest_status(self) -> str | None: ...
+    def latest_sweep_status(self) -> str | None: ...
+
+    def schedule_view(self) -> EmbedScheduleView | None: ...
 
 
 _port: CatalogEmbedJobsPort | None = None

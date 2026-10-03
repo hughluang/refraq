@@ -29,7 +29,10 @@ class ScheduledTaskRecord:
     task_name: str
     args_json: list = field(default_factory=list)
     kwargs_json: dict = field(default_factory=dict)
-    system: bool = False
+    hidden: bool = False
+    locked: bool = False
+    undeletable: bool = False
+    store_only: bool = False
     schedule_timezone: str = "UTC"
     owner_ref: str | None = None
     last_run_at: datetime | None = None
@@ -57,7 +60,7 @@ class ScheduleStore(Protocol):
     def list(
         self,
         *,
-        include_system: bool = False,
+        include_hidden: bool = False,
         session: Session | None = None,
         limit: int | None = None,
         offset: int = 0,
@@ -120,7 +123,7 @@ class MemoryScheduleStore:
     def list(
         self,
         *,
-        include_system: bool = False,
+        include_hidden: bool = False,
         session: Session | None = None,
         limit: int | None = None,
         offset: int = 0,
@@ -128,8 +131,8 @@ class MemoryScheduleStore:
         del session
         with self._lock:
             items = list(self._by_key.values())
-        if not include_system:
-            items = [record for record in items if not record.system]
+        if not include_hidden:
+            items = [record for record in items if not record.hidden]
         items.sort(key=lambda record: (record.created_at, record.id), reverse=True)
         return apply_offset_page(items, limit=limit, offset=offset)
 
@@ -150,7 +153,7 @@ class MemoryScheduleStore:
             items = [
                 r
                 for r in self._by_key.values()
-                if not r.system and r.owner_ref == owner_ref
+                if not r.hidden and r.owner_ref == owner_ref
             ]
         items.sort(key=lambda record: (record.created_at, record.id), reverse=True)
         return apply_offset_page(items, limit=limit, offset=offset)
@@ -188,7 +191,10 @@ class MemoryScheduleStore:
                     task_name=record.task_name,
                     args_json=list(record.args_json),
                     kwargs_json=dict(record.kwargs_json),
-                    system=record.system,
+                    hidden=record.hidden,
+                    locked=record.locked,
+                    undeletable=record.undeletable,
+                    store_only=record.store_only,
                     schedule_timezone=record.schedule_timezone,
                     owner_ref=record.owner_ref,
                     last_run_at=last_run_at,
@@ -232,7 +238,10 @@ class SqlScheduleStore:
         row.task_name = record.task_name
         row.args_json = list(record.args_json)
         row.kwargs_json = dict(record.kwargs_json)
-        row.system = record.system
+        row.hidden = record.hidden
+        row.locked = record.locked
+        row.undeletable = record.undeletable
+        row.store_only = record.store_only
         row.owner_ref = record.owner_ref
         row.last_run_at = record.last_run_at
         row.next_run_at = record.next_run_at
@@ -280,25 +289,25 @@ class SqlScheduleStore:
     def list(
         self,
         *,
-        include_system: bool = False,
+        include_hidden: bool = False,
         session: Session | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> tuple[list[ScheduledTaskRecord], int]:
         if session is not None:
             return self.list_on(
-                session, include_system=include_system, limit=limit, offset=offset
+                session, include_hidden=include_hidden, limit=limit, offset=offset
             )
         with session_scope() as owned:
             return self.list_on(
-                owned, include_system=include_system, limit=limit, offset=offset
+                owned, include_hidden=include_hidden, limit=limit, offset=offset
             )
 
     def list_on(
         self,
         session: Session,
         *,
-        include_system: bool = False,
+        include_hidden: bool = False,
         limit: int | None = None,
         offset: int = 0,
     ) -> tuple[list[ScheduledTaskRecord], int]:
@@ -306,9 +315,9 @@ class SqlScheduleStore:
         stmt = select(ScheduledTaskRow).order_by(
             ScheduledTaskRow.created_at.desc(), ScheduledTaskRow.id.desc()
         )
-        if not include_system:
-            count_stmt = count_stmt.where(ScheduledTaskRow.system.is_(False))
-            stmt = stmt.where(ScheduledTaskRow.system.is_(False))
+        if not include_hidden:
+            count_stmt = count_stmt.where(ScheduledTaskRow.hidden.is_(False))
+            stmt = stmt.where(ScheduledTaskRow.hidden.is_(False))
         total = int(session.scalar(count_stmt) or 0)
         stmt = apply_sql_page(stmt, limit=limit, offset=offset)
         return [_row_to_schedule(row) for row in session.scalars(stmt).all()], total
@@ -346,7 +355,7 @@ class SqlScheduleStore:
         offset: int = 0,
     ) -> tuple[list[ScheduledTaskRecord], int]:
         pred = (
-            ScheduledTaskRow.system.is_(False),
+            ScheduledTaskRow.hidden.is_(False),
             ScheduledTaskRow.owner_ref == owner_ref,
         )
         total = int(
@@ -438,7 +447,10 @@ def _row_to_schedule(row: object) -> ScheduledTaskRecord:
         task_name=row.task_name,
         args_json=list(row.args_json or []),
         kwargs_json=dict(row.kwargs_json or {}),
-        system=row.system,
+        hidden=row.hidden,
+        locked=row.locked,
+        undeletable=row.undeletable,
+        store_only=row.store_only,
         schedule_timezone=getattr(row, "schedule_timezone", None) or "UTC",
         owner_ref=getattr(row, "owner_ref", None),
         last_run_at=row.last_run_at,

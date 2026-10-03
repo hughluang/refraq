@@ -70,6 +70,7 @@ from backend.entity.routers.data import router as entity_data_router
 from backend.entity.routers.data import router as entity_data_router
 from backend.entity.routers.dictionaries import router as dictionaries_router
 from backend.entity.routers.entities import router as entities_router
+from backend.metadata.catalog_embed_jobs.schedule import ensure_catalog_embed_schedule
 from backend.worker.api import ensure_system_schedules
 from backend.worker.parameters import assemble_system_parameters
 
@@ -87,6 +88,7 @@ def _bootstrap_site(target_settings: Settings) -> None:
     """Site Bootstrap: empty-store seed only. Does not run Foundation Upgrade."""
     assemble_system_parameters()
     ensure_system_schedules()
+    ensure_catalog_embed_schedule()
     if os.getenv("REFRAQ_SKIP_SEED") == "1":
         return
     roles = get_role_store()
