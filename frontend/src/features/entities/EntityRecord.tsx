@@ -688,7 +688,12 @@ export function EntityRecord(props: Props) {
             opened={publishConfirm.opened}
             onClose={publishConfirm.close}
             title={t("entities.publish.confirmTitle")}
-            body={t("entities.publish.confirmBody", { name: entity.name })}
+            body={t(
+              entity.ever_published
+                ? "entities.publish.confirmBodySuccessor"
+                : "entities.publish.confirmBody",
+              { name: entity.name },
+            )}
             loading={busy}
             confirmLabel={t("entities.publish")}
             onConfirm={() => void confirmPublish()}

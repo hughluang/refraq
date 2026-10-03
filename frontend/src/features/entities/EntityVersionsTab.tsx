@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Drawer, Group, Stack, Table, Text } from "@mantine/core";
+import { Badge, Button, Drawer, Group, Stack, Table, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useState } from "react";
 
@@ -102,7 +102,16 @@ export function EntityVersionsTab({
         <Table.Tbody>
           {versions.map((version) => (
             <Table.Tr key={version.id}>
-              <Table.Td>{version.version}</Table.Td>
+              <Table.Td>
+                <Group gap="xs" wrap="nowrap">
+                  <Text size="sm">{version.version}</Text>
+                  {isMetadataHead(versions, version) && !entity.deprecated_at ? (
+                    <Badge variant="light" color="green" tt="none">
+                      {t("entities.versions.serving")}
+                    </Badge>
+                  ) : null}
+                </Group>
+              </Table.Td>
               <Table.Td>
                 <Text ff="monospace" size="sm">
                   {version.table_name ?? "—"}

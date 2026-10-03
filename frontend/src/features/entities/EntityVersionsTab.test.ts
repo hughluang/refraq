@@ -1,7 +1,14 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -28,6 +35,7 @@ const LABELS: Record<string, string> = {
   "entities.status.unpublished": "Unpublished",
   "entities.attributeType.string": "String",
   "entities.attributes.config.maxLength": "Max length {{value}}",
+  "entities.versions.serving": "In use",
   "entities.versions.view": "View",
   "entities.drop": "Drop table",
   "form.value.yes": "Yes",
@@ -117,13 +125,14 @@ function renderTab(
     onViewError?: (err: unknown) => void;
     onDrop?: (version: EntityVersion) => void;
   },
+  subject: BusinessEntity = entity(),
 ) {
   return render(
     createElement(
       MantineProvider,
       { env: "test" },
       createElement(EntityVersionsTab, {
-        entity: entity(),
+        entity: subject,
         versions,
         canDropTable: false,
         busy: false,
@@ -199,6 +208,30 @@ describe("EntityVersionsTab", () => {
     expect(screen.getByText("VARCHAR(32)")).toBeTruthy();
     expect(getVersion).toHaveBeenCalledWith("ent_1", "encv_1");
     expect(screen.getAllByText("sku")).toHaveLength(1);
+  });
+
+  it("marks only the metadata head in use", () => {
+    renderTab([
+      version(),
+      version({
+        id: "encv_2",
+        version: 2,
+        table_name: "attrtype_probe__v2",
+        attribute_count: 4,
+      }),
+    ]);
+
+    const rows = screen.getAllByRole("row");
+    expect(within(rows[1]).queryByText("In use")).toBeNull();
+    expect(within(rows[2]).getByText("In use")).toBeTruthy();
+  });
+
+  it("does not mark a head in use after the entity is deprecated", () => {
+    renderTab([version()], undefined, {
+      ...entity(),
+      deprecated_at: "2026-09-11T00:00:00Z",
+    });
+    expect(screen.queryByText("In use")).toBeNull();
   });
 
   it("does not open the drawer when the version read fails", async () => {

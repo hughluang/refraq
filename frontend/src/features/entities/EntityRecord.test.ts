@@ -33,6 +33,8 @@ const LABELS: Record<string, string> = {
   "entities.publish.confirmTitle": "Publish this Business Entity?",
   "entities.publish.confirmBody":
     "Publish “{{name}}”. Creates this version's Entity Table and freezes the definition.",
+  "entities.publish.confirmBodySuccessor":
+    "Publish “{{name}}”. Creates this version's empty Entity Table and freezes the definition. After publish, the stem view and the Entity Data API read that new table. Rows on the previous version's table stay there and are not migrated.",
   "entities.publish.queued": "Publish job queued",
   "entities.deprecate": "Deprecate",
   "entities.deprecate.confirmTitle": "Deprecate this Business Entity?",
@@ -174,6 +176,24 @@ function publishedEntity(): BusinessEntity {
   };
 }
 
+function successorEntity(): BusinessEntity {
+  return {
+    ...unpublishedEntity(),
+    ever_published: true,
+    current_version: {
+      id: "encv_2",
+      version: 2,
+      publish_status: "unpublished",
+      table_name: null,
+      alignment: {
+        table_present: false,
+        latest_job_id: null,
+        latest_job_status: null,
+      },
+    },
+  };
+}
+
 function versionFor(entity: BusinessEntity): EntityVersion {
   const current = entity.current_version!;
   return {
@@ -218,9 +238,7 @@ async function renderRecord(entity: BusinessEntity) {
       createElement(EntityRecord, { mode: "show", entityId: entity.id }),
     ),
   );
-  await waitFor(() => {
-    expect(screen.getByRole("button", { name: /Publish|Deprecate/ })).not.toBeNull();
-  });
+  await screen.findByText("Material · material");
 }
 
 describe("EntityRecord lifecycle confirms", () => {
@@ -246,6 +264,7 @@ describe("EntityRecord lifecycle confirms", () => {
     expect(publishDialog.textContent).toContain(
       "Creates this version's Entity Table and freezes the definition.",
     );
+    expect(publishDialog.textContent).not.toContain("are not migrated");
 
     fireEvent.click(within(publishDialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => {
@@ -259,6 +278,20 @@ describe("EntityRecord lifecycle confirms", () => {
     await waitFor(() => {
       expect(publishVersion).toHaveBeenCalledWith("ent_1", "encv_1");
     });
+  });
+
+  it("tells a successor publish that the product entry reads the new empty table", async () => {
+    await renderRecord(successorEntity());
+
+    fireEvent.click(screen.getByRole("button", { name: "Publish" }));
+    const publishDialog = await screen.findByRole("dialog");
+    expect(publishDialog.textContent).toContain("stem view");
+    expect(publishDialog.textContent).toContain("Entity Data API");
+    expect(publishDialog.textContent).toContain("are not migrated");
+    expect(publishDialog.textContent).not.toContain(
+      "Creates this version's Entity Table and freezes the definition.",
+    );
+    expect(publishVersion).not.toHaveBeenCalled();
   });
 
   it("does not deprecate until the confirm modal is accepted", async () => {
