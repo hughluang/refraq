@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Group, Modal, Stack } from "@mantine/core";
+import { Button, Group, Modal, Stack, Text } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { useNotification, useTranslate } from "@refinedev/core";
 import { useEffect, useState } from "react";
@@ -20,7 +20,13 @@ import {
   isDailyCron,
   scheduleKindFromTask,
 } from "@/features/schedules/scheduleKindField";
+import {
+  formatScheduleNextRun,
+  nextRunPreview,
+  type CadenceKind as PreviewCadenceKind,
+} from "@/features/schedules/nextRunPreview";
 import type { ScheduledTask } from "@/features/schedules/types";
+import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { CronField } from "@/components/form/CronField";
 import type { PresetCron } from "@/components/form/cronPhrase";
 import { NumberField } from "@/components/form/NumberField";
@@ -37,22 +43,13 @@ const PRESETS = [
   { value: "interval", cron: "" },
 ] as const;
 
-const TIMEZONES = [
-  "UTC",
-  "Asia/Shanghai",
-  "America/Los_Angeles",
-  "America/New_York",
-  "Europe/London",
-];
-
-type CadenceKind = (typeof PRESETS)[number]["value"];
+type CadenceKind = PreviewCadenceKind;
 
 type FormValues = {
   kind: "structure" | "join_detection";
   cadence: CadenceKind;
   cron: string;
   interval_seconds: number | string;
-  schedule_timezone: string;
   running_timeout_sec: number | "";
   enabled: boolean;
   name: string;
@@ -98,7 +95,6 @@ function valuesFromTask(task: ScheduledTask | null): FormValues {
     cadence: inferCadence(task, kind),
     cron: task?.cron ?? defaultCron(kind),
     interval_seconds: task?.interval_seconds ?? 3600,
-    schedule_timezone: task?.schedule_timezone ?? "UTC",
     running_timeout_sec: timeoutFromTask(task?.running_timeout_sec),
     enabled: task?.enabled ?? true,
     name: task?.name ?? "",
@@ -112,6 +108,7 @@ type ScheduleFormModalProps = {
   sourceId?: string;
   sourceLabel?: string;
   schedule?: ScheduledTask | null;
+  cronTimezone: string;
 };
 
 export function ScheduleFormModal({
@@ -121,9 +118,11 @@ export function ScheduleFormModal({
   sourceId,
   sourceLabel,
   schedule,
+  cronTimezone,
 }: ScheduleFormModalProps) {
   const t = useTranslate();
   const { open } = useNotification();
+  const formatInstant = useFormatInstant();
   const [loading, setLoading] = useState(false);
   const form = useForm<FormValues>({
     initialValues: valuesFromTask(schedule ?? null),
@@ -146,7 +145,6 @@ export function ScheduleFormModal({
     }
     setLoading(true);
     try {
-      const timezone = form.values.schedule_timezone.trim() || "UTC";
       const name = form.values.name.trim();
       const running_timeout_sec = timeoutPayload(timeoutInput);
       const cadenceBody =
@@ -154,7 +152,6 @@ export function ScheduleFormModal({
           ? {
               interval_seconds: Number(form.values.interval_seconds),
               cron: null as string | null,
-              schedule_timezone: timezone,
               running_timeout_sec,
               enabled: form.values.enabled,
               name,
@@ -162,7 +159,6 @@ export function ScheduleFormModal({
           : {
               cron: form.values.cron.trim(),
               interval_seconds: null as number | null,
-              schedule_timezone: timezone,
               running_timeout_sec,
               enabled: form.values.enabled,
               name,
@@ -193,6 +189,41 @@ export function ScheduleFormModal({
   const title = sourceLabel
     ? `${t("schedules.form.title")} · ${sourceLabel}`
     : t("schedules.form.title");
+  const preview = nextRunPreview(schedule, {
+    cadence: form.values.cadence,
+    cron: form.values.cron,
+    interval_seconds: form.values.interval_seconds,
+  });
+  const nextRunNote =
+    preview === "recalculates"
+      ? t("schedules.form.nextRunRecalculates")
+      : preview === "saved" && schedule
+        ? schedule.enabled && schedule.next_run_at
+          ? t("schedules.form.nextRunSameAsList", {
+              instant: formatScheduleNextRun(
+                schedule,
+                formatInstant,
+                t("schedules.fields.nextRunPaused"),
+              ),
+            })
+          : t("schedules.form.nextRunStatusSameAsList", {
+              instant: formatScheduleNextRun(
+                schedule,
+                formatInstant,
+                t("schedules.fields.nextRunPaused"),
+              ),
+            })
+        : null;
+
+  function cadenceOptionLabel(preset: CadenceKind): string {
+    if (preset === "daily") {
+      return t(dailyPresetLabelKey(form.values.kind), { zone: cronTimezone });
+    }
+    if (preset === "hourly" || preset === "weekly") {
+      return t(`schedules.preset.${preset}`, { zone: cronTimezone });
+    }
+    return t(`schedules.preset.${preset}`);
+  }
 
   return (
     <Modal opened={opened} onClose={onClose} title={title} size="md">
@@ -229,10 +260,7 @@ export function ScheduleFormModal({
           label={t("schedules.fields.cadence")}
           data={PRESETS.map((preset) => ({
             value: preset.value,
-            label:
-              preset.value === "daily"
-                ? t(dailyPresetLabelKey(form.values.kind))
-                : t(`schedules.preset.${preset.value}`),
+            label: cadenceOptionLabel(preset.value),
           }))}
           value={form.values.cadence}
           onChange={(value) => {
@@ -254,6 +282,9 @@ export function ScheduleFormModal({
           <CronField
             editable
             label={t("schedules.fields.cron")}
+            description={t("schedules.fields.cronTimezoneHint", {
+              zone: cronTimezone,
+            })}
             value={form.values.cron}
             onChange={(cron) => form.setFieldValue("cron", cron)}
           />
@@ -261,16 +292,18 @@ export function ScheduleFormModal({
           <CronField
             editable={false}
             label={t("schedules.fields.cron")}
+            description={t("schedules.fields.cronTimezoneHint", {
+              zone: cronTimezone,
+            })}
+            zone={cronTimezone}
             value={displayedCron(form.values.cadence, form.values.kind)}
           />
         )}
-        <SelectField
-          editable
-          label={t("schedules.fields.timezone")}
-          data={TIMEZONES}
-          searchable
-          {...form.getInputProps("schedule_timezone")}
-        />
+        {nextRunNote ? (
+          <Text size="sm" c="dimmed">
+            {nextRunNote}
+          </Text>
+        ) : null}
         <NumberField
           editable
           label={t("schedules.fields.runningTimeout")}

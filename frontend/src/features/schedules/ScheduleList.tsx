@@ -11,8 +11,9 @@ import { listSchedules, patchSchedule } from "@/features/schedules/api";
 import { ScheduleFormModal } from "@/features/schedules/ScheduleFormModal";
 import { ScheduleJobsModal } from "@/features/schedules/ScheduleJobsModal";
 import { ScheduleRowActions } from "@/features/schedules/ScheduleRowActions";
+import { formatScheduleNextRun } from "@/features/schedules/nextRunPreview";
 import type { ScheduledTask } from "@/features/schedules/types";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useDisplayZoneId, useFormatInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { ApiError } from "@/lib/api";
 import type { PageQuery } from "@/lib/pagination";
@@ -22,11 +23,6 @@ const PAGE_SIZE = 50;
 function cadenceLabel(task: ScheduledTask): string {
   if (task.interval_seconds) return `${task.interval_seconds}s`;
   return task.cron ?? "—";
-}
-
-function timezoneLabel(task: ScheduledTask): string {
-  if (task.interval_seconds) return "—";
-  return task.schedule_timezone;
 }
 
 function targetLabel(
@@ -44,13 +40,16 @@ export function ScheduleList() {
   const t = useTranslate();
   const { open } = useNotification();
   const formatInstant = useFormatInstant();
+  const displayZone = useDisplayZoneId();
   const [editing, setEditing] = useState<ScheduledTask | null>(null);
   const [jobsTask, setJobsTask] = useState<ScheduledTask | null>(null);
+  const [cronTimezone, setCronTimezone] = useState<string | null>(null);
 
-  const fetchPage = useCallback(
-    (query: PageQuery) => listSchedules(query),
-    [],
-  );
+  const fetchPage = useCallback(async (query: PageQuery) => {
+    const page = await listSchedules(query);
+    setCronTimezone(page.cron_timezone);
+    return page;
+  }, []);
   const list = useConsolePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
@@ -69,7 +68,7 @@ export function ScheduleList() {
     >
       <ListTable
         list={list}
-        columnCount={9}
+        columnCount={8}
         emptyMessage={t("schedules.empty")}
         head={
           <Table.Tr>
@@ -77,9 +76,13 @@ export function ScheduleList() {
             <Table.Th>{t("schedules.fields.kind")}</Table.Th>
             <Table.Th>{t("schedules.fields.target")}</Table.Th>
             <Table.Th>{t("schedules.fields.cadence")}</Table.Th>
-            <Table.Th>{t("schedules.fields.timezone")}</Table.Th>
             <Table.Th>{t("schedules.fields.enabled")}</Table.Th>
-            <Table.Th>{t("schedules.fields.nextRun")}</Table.Th>
+            <Table.Th>
+              {t("schedules.fields.nextRunInZone", {
+                zone:
+                  displayZone ?? t("account.fields.displayTimezone.browser"),
+              })}
+            </Table.Th>
             <Table.Th>{t("schedules.fields.lastJob")}</Table.Th>
             <Table.Th />
           </Table.Tr>
@@ -110,7 +113,6 @@ export function ScheduleList() {
                 {cadenceLabel(task)}
               </Text>
             </Table.Td>
-            <Table.Td>{timezoneLabel(task)}</Table.Td>
             <Table.Td>
               <SwitchField
                 editable
@@ -133,11 +135,11 @@ export function ScheduleList() {
             </Table.Td>
             <Table.Td>
               <Text size="sm">
-                {!task.enabled
-                  ? t("schedules.fields.nextRunPaused")
-                  : task.next_run_at
-                    ? formatInstant(task.next_run_at)
-                    : "—"}
+                {formatScheduleNextRun(
+                  task,
+                  formatInstant,
+                  t("schedules.fields.nextRunPaused"),
+                )}
               </Text>
             </Table.Td>
             <Table.Td>
@@ -172,12 +174,15 @@ export function ScheduleList() {
           </Table.Tr>
         ))}
       </ListTable>
-      <ScheduleFormModal
-        opened={editing !== null}
-        schedule={editing}
-        onClose={() => setEditing(null)}
-        onSaved={() => void reload()}
-      />
+      {cronTimezone !== null ? (
+        <ScheduleFormModal
+          opened={editing !== null}
+          schedule={editing}
+          cronTimezone={cronTimezone}
+          onClose={() => setEditing(null)}
+          onSaved={() => void reload()}
+        />
+      ) : null}
       <ScheduleJobsModal
         scheduleId={jobsTask?.id ?? null}
         scheduleLabel={jobsTask?.name}

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord, UserStore, get_user_store
@@ -23,16 +23,18 @@ from backend.metadata.source_schedules import (
     list_source_schedules as list_source_schedule_rows,
     require_runnable_schedule,
 )
+from backend.worker.api import current_schedule_timezone
 from backend.worker.schemas.schedules import ScheduleListResponse
 
 router = APIRouter(tags=["schedules-catalog"])
 
 
 class CreateSourceScheduleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     kind: str
     cron: str | None = None
     interval_seconds: int | None = None
-    schedule_timezone: str = "UTC"
     enabled: bool = True
     name: str | None = None
     running_timeout_sec: int | None = None
@@ -50,7 +52,6 @@ def create_source_schedule(
         kind=payload.kind,
         cron=payload.cron,
         interval_seconds=payload.interval_seconds,
-        schedule_timezone=payload.schedule_timezone,
         enabled=payload.enabled,
         name=payload.name,
         running_timeout_sec=payload.running_timeout_sec,
@@ -73,7 +74,11 @@ def list_source_schedules(
         source_id, limit=page.limit, offset=page.offset
     )
     return ScheduleListResponse(
-        items=items, total=total, limit=page.limit, offset=page.offset
+        items=items,
+        total=total,
+        limit=page.limit,
+        offset=page.offset,
+        cron_timezone=current_schedule_timezone(),
     )
 
 
@@ -124,9 +129,7 @@ def list_schedule_jobs(
         offset=page.offset,
     )
     return JobListResponse(
-        items=present_jobs(
-            records, users=users, schedules=get_schedule_name_store()
-        ),
+        items=present_jobs(records, users=users, schedules=get_schedule_name_store()),
         total=total,
         limit=page.limit,
         offset=page.offset,

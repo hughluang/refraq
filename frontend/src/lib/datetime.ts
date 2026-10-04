@@ -1,6 +1,27 @@
+/** IANA zone the browser uses when Display Timezone is unset. Null when it cannot be read. */
+export function browserTimeZone(): string | null {
+  try {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return zone ? zone : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Zone named once on the schedule next-run column. Empty preference follows the browser. */
+export function displayZoneId(
+  preference: string | null | undefined,
+): string | null {
+  const zone = preference?.trim();
+  if (zone) return zone;
+  return browserTimeZone();
+}
+
 export type FormatInstantOptions = {
   /** IANA zone; null/undefined = browser default. */
   timeZone?: string | null;
+  /** Historical spellings of `timeZone`, tried in order when the browser rejects the current id. */
+  aliases?: readonly string[];
   locale?: string;
 };
 
@@ -16,13 +37,19 @@ export function formatInstant(
   if (Number.isNaN(date.getTime())) {
     return "—";
   }
-  const timeZone = options?.timeZone || undefined;
   const locale = options?.locale;
-  try {
-    return date.toLocaleString(locale, timeZone ? { timeZone } : undefined);
-  } catch {
-    return "—";
+  const timeZone = options?.timeZone || undefined;
+  if (!timeZone) {
+    return date.toLocaleString(locale);
   }
+  for (const zone of [timeZone, ...(options?.aliases ?? [])]) {
+    try {
+      return date.toLocaleString(locale, { timeZone: zone });
+    } catch {
+      continue;
+    }
+  }
+  return `${date.toLocaleString(locale, { timeZone: "UTC" })} UTC`;
 }
 
 type JobDurationFields = {

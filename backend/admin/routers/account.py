@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
 from fastapi import APIRouter, Depends, Request
 
 from backend.admin.deps import get_current_user
@@ -22,6 +20,7 @@ from backend.admin.user_payload import build_current_user
 from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.session_store import SessionStore, get_session_store
 from backend.admin.user_store import UserRecord, UserStore, get_user_store
+from backend.core.time_zones import canonical_zone_id
 from backend.admin.schemas.account import (
     ChangePasswordRequest,
     ChangePasswordResponse,
@@ -77,10 +76,10 @@ def update_profile(
     if set_display_timezone:
         display_timezone = _normalize_display_timezone(payload.display_timezone)
         if display_timezone is not None:
-            try:
-                ZoneInfo(display_timezone)
-            except (ZoneInfoNotFoundError, ValueError):
+            canonical = canonical_zone_id(display_timezone)
+            if canonical is None:
                 raise AccountInvalidDisplayTimezone()
+            display_timezone = canonical
 
     updated = users.update_profile(
         user.id,

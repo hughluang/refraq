@@ -131,7 +131,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Module | Published for |
 |--------|----------------|
 | `backend.worker.parameters` | `assemble_system_parameters` (composition collects every package's published spec list and occupies seeds), Beat in-code constants, and the reaper interval derived from lost-detection |
-| `backend.worker.api` | Schedule seam policy (`schedule_out` mechanism fields only — no Source / structure shape — cadence / NotFound / locked and undeletable, `ensure_system_schedules`); not a store re-export |
+| `backend.worker.api` | Schedule seam policy (`schedule_out` mechanism fields only — no Source / structure shape — cadence / NotFound / locked and undeletable, `ensure_system_schedules`, schedule timezone read `current_schedule_timezone`); not a store re-export |
 | `backend.worker.due` | Due-tick consumption helpers (commitment → mint decision); used by domain Beat tasks |
 | `backend.worker.schedules` | Store port (`ScheduledTaskRecord`, get/list/upsert; `upsert` / `list` accept an optional SQLAlchemy session so a caller can join an existing transaction) used by the API seam and domain facades |
 | `backend.worker.errors` | Mechanism Scheduled Task errors |
@@ -160,7 +160,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Outbound adapter families | Owning product domain (e.g. `metadata/connectors`: engine adapters + `runtime` invocation shell that binds an already-interpreted `SourceEndpoint`) |
 | Domain error types | That product domain (base in `core`) |
 | Site Branding singleton, assets, validation, cache policy, and HTTP | `admin/branding` language unit |
-| Config, engine, secrets crypto, Instant/Clock (`core.time`), Offset Page (`core.pagination`), upgrade orchestration, `AppError` / Problem Details, request-id helpers, process probes, runtime capacity (pool / limiter / admission / `/metrics`) | `core` (upgrade may call platform-kernel published API); time contract in [`docs/conventions-time.md`](conventions-time.md); errors in [`docs/conventions-errors.md`](conventions-errors.md); pagination in [`docs/conventions-pagination.md`](conventions-pagination.md); capacity in ADR 0040 / 0045 |
+| Config, engine, secrets crypto, Instant/Clock (`core.time`), shared IANA zone catalog (`core.time_zones`), Offset Page (`core.pagination`), upgrade orchestration, `AppError` / Problem Details, request-id helpers, process probes, runtime capacity (pool / limiter / admission / `/metrics`) | `core` (upgrade may call platform-kernel published API); time contract in [`docs/conventions-time.md`](conventions-time.md); errors in [`docs/conventions-errors.md`](conventions-errors.md); pagination in [`docs/conventions-pagination.md`](conventions-pagination.md); capacity in ADR 0040 / 0045 |
 | Celery app, Beat, **Scheduled Task**, system tasks, task registration | `worker` |
 | Domain async work units (`@shared_task` or equivalent) | Owning product domain; **discovered and registered by `worker`** |
 | Process probes (health/ready) | `core` (thin); not inside a product domain |

@@ -32,7 +32,7 @@ Platform system parameters remain under Console Module `settings` (`docs/api-con
 | display_name | Self-service editable |
 | email | Optional contact field: nullable, not unique, not verified, not used for login or mail |
 | locale | Persisted on the User; must be a supported Console locale code (`zh-CN`, `en-US`); applied on login / identity restore |
-| display_timezone | Optional IANA zone on the User for **Management Console** Instant formatting; `null` = follow browser; must be a `zoneinfo`-valid IANA id when set; does **not** change HTTP/MCP Instant wire (`Z`) |
+| display_timezone | Optional IANA zone on the User for **Management Console** Instant formatting; `null` = follow browser; must be a current id from the shared zone catalog, or a historical alias that is stored as that current id; does **not** change HTTP/MCP Instant wire (`Z`) |
 
 ## 4. Password Change
 

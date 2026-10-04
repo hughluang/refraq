@@ -127,7 +127,7 @@ def test_domain_entry_kwargs_include_due_at_system_does_not() -> None:
                 task_name=STRUCTURE_ENQUEUE_TASK_NAME,
                 args_json=[],
                 kwargs_json={"source_id": "src_x", "schedule_id": "sched_due_kw"},
-                schedule_timezone="UTC",
+                commitment_timezone="UTC",
                 owner_ref="metadata:source:src_x",
                 last_run_at=clock.now(),
                 next_run_at=due,

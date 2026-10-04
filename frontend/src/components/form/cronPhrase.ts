@@ -13,19 +13,30 @@ export type PresetCron =
 export function cronPhrase(
   cron: PresetCron,
   t: CronTranslate,
+  zone: string,
 ): { phrase: string; raw: string } {
   switch (cron) {
     case "0 * * * *":
-      return { phrase: t("form.cron.hourly", { minute: 0 }), raw: cron };
+      return {
+        phrase: t("form.cron.hourly", { minute: 0, zone }),
+        raw: cron,
+      };
     case "0 2 * * *":
-      return { phrase: t("form.cron.daily", { time: "02:00" }), raw: cron };
+      return {
+        phrase: t("form.cron.daily", { time: "02:00", zone }),
+        raw: cron,
+      };
     case "0 4 * * *":
-      return { phrase: t("form.cron.daily", { time: "04:00" }), raw: cron };
+      return {
+        phrase: t("form.cron.daily", { time: "04:00", zone }),
+        raw: cron,
+      };
     case "0 2 * * 1":
       return {
         phrase: t("form.cron.weekly", {
           weekday: t("form.cron.dow.1"),
           time: "02:00",
+          zone,
         }),
         raw: cron,
       };

@@ -20,7 +20,6 @@ export type ScheduledTask = {
   target: ScheduleTarget | null;
   interval_seconds: number | null;
   cron: string | null;
-  schedule_timezone: string;
   running_timeout_sec: number | null;
   deletable: boolean;
   last_run_at: string | null;
@@ -34,7 +33,6 @@ export type CreateScheduleBody = {
   kind: "structure" | "join_detection";
   cron?: string | null;
   interval_seconds?: number | null;
-  schedule_timezone: string;
   running_timeout_sec?: number | null;
   enabled: boolean;
   name?: string | null;
@@ -45,6 +43,5 @@ export type PatchScheduleBody = {
   name?: string | null;
   cron?: string | null;
   interval_seconds?: number | null;
-  schedule_timezone?: string;
   running_timeout_sec?: number | null;
 };

@@ -110,7 +110,7 @@ The mechanism stores keys and values and never names an occupancy window, a Beat
 | Field | Notes |
 | --- | --- |
 | `key` | Stable identifier; flat; does not encode the owner (§7) |
-| `constraint` | Typed authoring (`IntConstraint` in this slice) rendered onto the wire as a JSON Schema fragment under a closed profile (`type`, `minimum`, `maximum`, `enum`, `pattern`, `maxLength`). Bounds are optional. `title` / `description` are unused; naming and copy stay the i18n keys. Unlike Connector Specs (a literal document handed to an engine), parameter constraints are a closed profile, so construction itself forbids `if` / `$ref` / nesting |
+| `constraint` | Typed authoring (`IntConstraint` or `StringEnumConstraint`) rendered onto the wire as a JSON Schema fragment under a closed profile (`type`, `minimum`, `maximum`, `enum`, `pattern`, `maxLength`). Integer bounds are optional. A string enum lists the allowed values; the mechanism does not know what the values mean. `title` / `description` are unused; naming and copy stay the i18n keys. Unlike Connector Specs (a literal document handed to an engine), parameter constraints are a closed profile, so construction itself forbids `if` / `$ref` / nesting |
 | `seed` | Product default; installed by occupy. Null means not configured |
 | `owner` | Declaring package; code-side metadata, freely refactored |
 | `group` | Console grouping; code-side metadata |
@@ -124,6 +124,7 @@ The mechanism stores keys and values and never names an occupancy window, a Beat
 | Key | Owner | Seed | Range | Operator action | Applies |
 | --- | --- | --- | --- | --- | --- |
 | `job_lost_detection_sec` | `jobs` | 60 | 15–3600 | No | Widening is live; tightening waits one old renew interval (`max(5, previous/3)` s) before the reaper cutoff shrinks. The hidden system reaper **Scheduled Task** interval is derived from this same value, so the operator's one field is the whole of lost-detection latency |
+| `schedule_timezone` | `worker` | `UTC` | shared IANA zone id | No | The write realigns `next_run_at` for enabled cron schedules before the response and stores that zone on the commitment. Beat sync repeats the realign and is a no-op when commitments already match. Interval schedules ignore it. A Job already running keeps going. Paused cron rows wait until they are enabled |
 | `admin_session_ttl_hours` | `admin` | 12 | 1–168 | No | New **Session**s only; existing sessions keep the absolute deadline copied at creation. Requests do not extend it |
 | `admin_session_idle_minutes` | `admin` | 30 | 5–120 | No | New **Session**s only; existing sessions keep the idle window copied at creation. Authenticated requests renew this clock up to the absolute deadline |
 | `sso_pending_ttl_days` | `admin` | 7 | 1–30 | No | Only new pending federated identities; existing `expires_at` values do not change |
@@ -151,7 +152,7 @@ Admission was reopened to let more in, so the original six were re-tested rather
 
 - **Effective stored value** is the row. There is no environment baseline and no in-process overlay beside the store. A leftover environment variable whose name matches a registered key is ignored and reported at startup as dead.
 - **Catalog reads are strict.** `read_stored_parameter` returns the stored value untouched. A store error or unreadable row raises — Platform Settings must not present seed or last-known-good as if they were the stored catalog.
-- **Consumers read a safe value.** `resolve_int` admits the stored value against the constraint and otherwise falls back: nearest declared bound, else the seed. Unset stays unset — the consumer is not handed a substitute number for "not configured". On store error or unreadable row, `resolve_int` uses last-known-good, then the in-code seed (or unset). Never an environment variable.
+- **Consumers read a safe value.** `resolve_int` admits the stored value against the integer constraint and otherwise falls back: nearest declared bound, else the seed. Unset stays unset — the consumer is not handed a substitute number for "not configured". `resolve_str` admits a string enum and otherwise falls back to the seed. On store error or unreadable row, both use last-known-good, then the in-code seed (or unset). Never an environment variable.
 - **`source`** is `seed` until an operator writes the key, then `user`. Reset returns it to `seed`. Writing a value that equals the seed still makes the source `user`; source records provenance, not equality. An unrecognised stored `source` is a corrupt row: the catalog raises; consumers take the read-failure path (last known good, then seed).
 - **Reset** writes the seed back, including unset. It does not delete the row, so history and attribution stay intact.
 - **The row is a change record**, not only a slot: it keeps the current value, the previous value, the change Instant, and the acting **User**. A consumer whose apply needs a grace window (today `job_lost_detection_sec`) computes it from the previous value (after the same constraint fallback) and the change Instant, so the rule holds across processes and restarts. Deriving that from the audit trail is forbidden — audit is not a control-flow dependency.
@@ -182,7 +183,7 @@ Stated in advance so the design changes only for a named reason.
 - **Non-administrators must read a parameter**: add a visibility field to the spec. Default stays administrator-only.
 - **The set grows past roughly fifteen keys**: groups already exist in the spec, so the panel holds; revisit only the page layout.
 - **A registered key stops passing the intent test** (§2.1), or is found never to have passed it: retire it to the home §2 gives it and record the verdict in §5.2. Narrowing its range or rewriting its help text is not a fix.
-- **A parameter needs a value type other than integer:** extend `value` with that type, add a typed constraint class that renders a profile fragment, and ship the Console control in the same change. Do not register a key whose type the panel cannot edit.
+- **A parameter needs a value type other than integer or string enum:** extend `value` with that type, add a typed constraint class that renders a profile fragment, and ship the Console control in the same change. Do not register a key whose type the panel cannot edit.
 - **The mechanism starts naming domain concepts**: the §4 division has broken down. Fix the declaration ownership rather than splitting the package.
 - **The mechanism outgrows the platform kernel** (its own lifecycle, scopes, non-Console consumers): promote it to a platform primitive beside `jobs`. Not before.
 

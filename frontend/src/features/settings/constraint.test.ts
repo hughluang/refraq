@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { JsonSchemaProperty } from "@/lib/json-schema";
 import {
   admitIntegerDraft,
-  dirtyIntegerValues,
+  dirtyParameterValues,
+  enumSearchMissesCatalog,
   integerFallback,
   storedIntegerViolatesConstraint,
 } from "@/features/settings/constraint";
@@ -63,7 +64,27 @@ describe("storedIntegerViolatesConstraint", () => {
   });
 });
 
-describe("dirtyIntegerValues", () => {
+describe("enumSearchMissesCatalog", () => {
+  const allowed = ["UTC", "Asia/Shanghai"];
+
+  it("ignores an empty search and the selected value", () => {
+    expect(enumSearchMissesCatalog("", "UTC", allowed)).toBe(false);
+    expect(enumSearchMissesCatalog("UTC", "UTC", allowed)).toBe(false);
+  });
+
+  it("rejects text that is not an allowed choice", () => {
+    expect(enumSearchMissesCatalog("Calcutta", "Asia/Shanghai", allowed)).toBe(
+      true,
+    );
+    expect(enumSearchMissesCatalog("Asia/Calcutta", "UTC", allowed)).toBe(true);
+  });
+
+  it("does not treat another allowed choice as a miss", () => {
+    expect(enumSearchMissesCatalog("UTC", "Asia/Shanghai", allowed)).toBe(false);
+  });
+});
+
+describe("dirtyParameterValues", () => {
   const item = {
     key: "admin_session_ttl_hours",
     value: 8,
@@ -71,12 +92,12 @@ describe("dirtyIntegerValues", () => {
   };
 
   it("does not treat an empty or non-integer draft as dirty", () => {
-    expect(dirtyIntegerValues([item], { [item.key]: "" })).toEqual({});
-    expect(dirtyIntegerValues([item], { [item.key]: "12" })).toEqual({});
+    expect(dirtyParameterValues([item], { [item.key]: "" })).toEqual({});
+    expect(dirtyParameterValues([item], { [item.key]: "12" })).toEqual({});
   });
 
   it("includes an admitted draft that differs from the served value", () => {
-    expect(dirtyIntegerValues([item], { [item.key]: 12 })).toEqual({
+    expect(dirtyParameterValues([item], { [item.key]: 12 })).toEqual({
       [item.key]: 12,
     });
   });

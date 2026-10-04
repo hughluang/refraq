@@ -118,6 +118,7 @@ describe("form fields", () => {
         editable: false,
         label: "Cron",
         value: "0 2 * * *",
+        zone: "UTC",
       }),
     );
     expect(screen.queryByRole("textbox")).toBeNull();

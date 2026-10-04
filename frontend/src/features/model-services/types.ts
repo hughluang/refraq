@@ -7,7 +7,6 @@ export type EmbedSchedule = {
   enabled: boolean;
   cron: string | null;
   interval_seconds: number | null;
-  schedule_timezone: string;
   next_run_at: string | null;
 };
 

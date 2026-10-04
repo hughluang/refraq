@@ -201,7 +201,7 @@ class AccountInvalidDisplayTimezone(AuthError):
     http_status = 400
 
     def _default_message(self) -> str:
-        return "Invalid Display Timezone (IANA zone required)"
+        return "Invalid Display Timezone (current zone id or known alias required)"
 
 
 class AccountInvalidDisplayName(AuthError):

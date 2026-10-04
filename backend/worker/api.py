@@ -7,11 +7,12 @@ import uuid
 from dataclasses import replace
 from datetime import datetime
 
+from backend.admin.system_parameters import resolve_str
 from backend.core.config import get_settings
 from backend.core.time import utc_now
 from backend.jobs.api import revoke_queued_delivery
 from backend.jobs.store import cancel_unfinished_for_schedule
-from backend.worker.cron import compute_next_run_at, parse_cron_fields, validate_schedule_timezone
+from backend.worker.cron import compute_next_run_at, parse_cron_fields
 from backend.jobs.parameters import job_lost_detection_sec
 from backend.worker.errors import (
     ScheduleCadenceInvalid,
@@ -27,16 +28,22 @@ from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "current_schedule_timezone",
     "ensure_system_schedules",
     "delete_schedule",
     "get_schedule",
     "patch_schedule",
     "schedule_out",
+    "realign_cron_commitments",
     "validate_cadence",
     "validate_running_timeout",
     "withdraw_schedules_by_owner_ref",
     "initial_next_run_at",
 ]
+
+
+def current_schedule_timezone() -> str:
+    return resolve_str("schedule_timezone").value
 
 
 def ensure_system_schedules() -> None:
@@ -57,7 +64,7 @@ def ensure_system_schedules() -> None:
                 enabled=True,
                 interval_seconds=interval,
                 cron=None,
-                schedule_timezone="UTC",
+                commitment_timezone=current_schedule_timezone(),
                 task_name=REAPER_TASK_NAME,
                 args_json=[],
                 kwargs_json={},
@@ -87,7 +94,6 @@ def validate_cadence(
     *,
     cron: str | None,
     interval_seconds: int | None,
-    schedule_timezone: str,
 ) -> None:
     has_interval = interval_seconds is not None
     has_cron = bool(cron and str(cron).strip())
@@ -95,10 +101,6 @@ def validate_cadence(
         raise ScheduleCadenceInvalid(
             "exactly one of cron or interval_seconds is required"
         )
-    try:
-        validate_schedule_timezone(schedule_timezone)
-    except ValueError as exc:
-        raise ScheduleCadenceInvalid(str(exc)) from exc
     if has_cron:
         try:
             parse_cron_fields(str(cron).strip())
@@ -119,10 +121,10 @@ def validate_running_timeout(value: int | None) -> int | None:
 def initial_next_run_at(
     *,
     cron: str | None,
-    schedule_timezone: str,
     interval_seconds: int | None,
     enabled: bool,
     after: datetime | None = None,
+    schedule_timezone: str,
 ) -> datetime | None:
     if not enabled:
         return None
@@ -149,7 +151,6 @@ def schedule_out(
         target=None,
         interval_seconds=record.interval_seconds,
         cron=record.cron,
-        schedule_timezone=record.schedule_timezone,
         running_timeout_sec=record.running_timeout_sec,
         deletable=not record.undeletable,
         last_run_at=record.last_run_at,
@@ -174,11 +175,9 @@ def patch_schedule(
     name: str | None = None,
     cron: str | None = None,
     interval_seconds: int | None = None,
-    schedule_timezone: str | None = None,
     running_timeout_sec: int | None = None,
     cron_set: bool = False,
     interval_set: bool = False,
-    timezone_set: bool = False,
     timeout_set: bool = False,
 ) -> ScheduledTaskRecord:
     record = get_schedule(schedule_id)
@@ -202,15 +201,10 @@ def patch_schedule(
         next_interval = None
     if interval_set and next_interval is not None:
         next_cron = None
-    next_zone = (
-        (schedule_timezone or "").strip()
-        if timezone_set
-        else record.schedule_timezone
-    )
+    zone = current_schedule_timezone()
     validate_cadence(
         cron=next_cron,
         interval_seconds=next_interval,
-        schedule_timezone=next_zone,
     )
     next_timeout = (
         validate_running_timeout(running_timeout_sec)
@@ -219,20 +213,23 @@ def patch_schedule(
     )
     now = utc_now()
     next_enabled = record.enabled if enabled is None else enabled
-    cadence_changed = cron_set or interval_set or timezone_set
+    cadence_changed = cron_set or interval_set
     enabled_changed = enabled is not None and enabled != record.enabled
 
     if not next_enabled:
         next_run = None
-    elif next_enabled and (enabled_changed or cadence_changed):
+        next_commitment = record.commitment_timezone
+    elif enabled_changed or cadence_changed:
         next_run = compute_next_run_at(
             cron=next_cron,
-            schedule_timezone=next_zone,
+            schedule_timezone=zone,
             interval_seconds=next_interval,
             after=now,
         )
+        next_commitment = zone
     else:
         next_run = record.next_run_at
+        next_commitment = record.commitment_timezone
 
     updated = replace(
         record,
@@ -240,12 +237,44 @@ def patch_schedule(
         name=record.name if name is None else name.strip(),
         cron=next_cron,
         interval_seconds=next_interval,
-        schedule_timezone=next_zone,
+        commitment_timezone=next_commitment,
         running_timeout_sec=next_timeout,
         next_run_at=next_run,
         updated_at=now,
     )
     return get_schedule_store().upsert(updated)
+
+
+def realign_cron_commitments() -> int:
+    """Rewrite enabled cron commitments whose zone no longer matches the parameter.
+
+    Does not mint a Job. Interval rows are left alone. A second call is a no-op.
+    """
+    zone = current_schedule_timezone()
+    store = get_schedule_store()
+    now = utc_now()
+    changed = 0
+    for record in store.list_enabled():
+        if not record.cron or record.interval_seconds:
+            continue
+        if record.commitment_timezone == zone:
+            continue
+        next_run = compute_next_run_at(
+            cron=record.cron,
+            schedule_timezone=zone,
+            interval_seconds=None,
+            after=now,
+        )
+        store.upsert(
+            replace(
+                record,
+                next_run_at=next_run,
+                commitment_timezone=zone,
+                updated_at=now,
+            )
+        )
+        changed += 1
+    return changed
 
 
 def _cancel_and_revoke_for_schedule(schedule_id: str) -> None:

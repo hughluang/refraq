@@ -53,7 +53,6 @@ class EmbedScheduleOut(BaseModel):
     enabled: bool
     cron: str | None
     interval_seconds: int | None
-    schedule_timezone: str
     next_run_at: Instant | None
 
 

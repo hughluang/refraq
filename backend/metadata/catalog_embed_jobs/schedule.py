@@ -27,7 +27,7 @@ from backend.jobs.store import (
 )
 from backend.metadata.catalog_embed_jobs.jobs import CATALOG_EMBED_KIND
 from backend.metadata.source_jobs import dispatch_queued_job
-from backend.worker.api import initial_next_run_at
+from backend.worker.api import current_schedule_timezone, initial_next_run_at
 from backend.worker.due import commit_due_mint, consume_due_tick
 from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store
 
@@ -39,7 +39,6 @@ CATALOG_EMBED_ENQUEUE_TASK_NAME = (
     "backend.metadata.catalog_embed_jobs.schedule.fire_scheduled_catalog_embed"
 )
 DEFAULT_CATALOG_EMBED_CRON = "0 3 * * *"
-DEFAULT_CATALOG_EMBED_TIMEZONE = "UTC"
 DEFAULT_CATALOG_EMBED_NAME = "catalog embed"
 
 
@@ -51,12 +50,13 @@ def ensure_catalog_embed_schedule() -> ScheduledTaskRecord:
         return existing
     now = utc_now()
     schedule_id = f"sched_{uuid.uuid4().hex[:12]}"
+    zone = current_schedule_timezone()
     next_run = initial_next_run_at(
         cron=DEFAULT_CATALOG_EMBED_CRON,
-        schedule_timezone=DEFAULT_CATALOG_EMBED_TIMEZONE,
         interval_seconds=None,
         enabled=True,
         after=now,
+        schedule_timezone=zone,
     )
     return store.upsert(
         ScheduledTaskRecord(
@@ -66,7 +66,7 @@ def ensure_catalog_embed_schedule() -> ScheduledTaskRecord:
             enabled=True,
             interval_seconds=None,
             cron=DEFAULT_CATALOG_EMBED_CRON,
-            schedule_timezone=DEFAULT_CATALOG_EMBED_TIMEZONE,
+            commitment_timezone=zone,
             task_name=CATALOG_EMBED_ENQUEUE_TASK_NAME,
             args_json=[],
             kwargs_json={"schedule_id": schedule_id},

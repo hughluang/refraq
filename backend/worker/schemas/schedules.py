@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from backend.core.pagination import OffsetPage
 from backend.core.time import Instant
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class ScheduleTargetOut(BaseModel):
@@ -29,7 +29,6 @@ class ScheduleOut(BaseModel):
     target: ScheduleTargetOut | None
     interval_seconds: int | None
     cron: str | None
-    schedule_timezone: str
     running_timeout_sec: int | None = None
     deletable: bool = True
     last_run_at: Instant | None
@@ -40,7 +39,7 @@ class ScheduleOut(BaseModel):
 
 
 class ScheduleListResponse(OffsetPage[ScheduleOut]):
-    pass
+    cron_timezone: str
 
 
 class ScheduleResponse(BaseModel):
@@ -48,9 +47,10 @@ class ScheduleResponse(BaseModel):
 
 
 class SchedulePatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool | None = None
     name: str | None = None
     cron: str | None = None
     interval_seconds: int | None = None
-    schedule_timezone: str | None = None
     running_timeout_sec: int | None = None

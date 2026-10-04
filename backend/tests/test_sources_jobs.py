@@ -332,7 +332,6 @@ def test_structure_job_single_flight_at_execution(
             json={
                 "kind": "structure",
                 "cron": "0 2 * * *",
-                "schedule_timezone": "UTC",
                 "enabled": True,
             },
         )
@@ -371,7 +370,6 @@ def test_structure_job_input_only_source_id(
         json={
             "kind": "structure",
             "cron": "0 2 * * *",
-            "schedule_timezone": "UTC",
             "enabled": True,
         },
     )
@@ -898,7 +896,6 @@ def test_structure_job_http_run_writes_audit(client: TestClient, monkeypatch) ->
         json={
             "kind": "structure",
             "cron": "0 2 * * *",
-            "schedule_timezone": "UTC",
             "enabled": True,
         },
     )

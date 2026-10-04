@@ -13,19 +13,8 @@ from backend.worker.cron import (
     compute_next_run_at,
     current_cron_slot_instant,
 )
+from backend.worker.api import current_schedule_timezone
 from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store
-
-
-def next_after_mint(record: ScheduledTaskRecord, *, mint_at: datetime) -> datetime:
-    """Compute the next commitment Instant after consuming a due tick at mint_at."""
-    if record.interval_seconds and record.interval_seconds > 0:
-        return mint_at + timedelta(seconds=record.interval_seconds)
-    return compute_next_run_at(
-        cron=record.cron,
-        schedule_timezone=record.schedule_timezone,
-        interval_seconds=None,
-        after=mint_at,
-    )
 
 
 def _advance_cross_slot(
@@ -35,6 +24,7 @@ def _advance_cross_slot(
     session: Session | None,
     slot: datetime | None,
     last: datetime | None,
+    schedule_timezone: str,
 ) -> dict[str, Any]:
     """Skip a stale cron Instant without catch-up mint.
 
@@ -50,6 +40,7 @@ def _advance_cross_slot(
             replace(
                 record,
                 next_run_at=slot,
+                commitment_timezone=schedule_timezone,
                 updated_at=now,
             ),
             session=session,
@@ -57,7 +48,7 @@ def _advance_cross_slot(
         return consume_due_tick(record.id, due_at=slot, session=session)
     advanced = compute_next_run_at(
         cron=record.cron,
-        schedule_timezone=record.schedule_timezone,
+        schedule_timezone=schedule_timezone,
         interval_seconds=None,
         after=now,
     )
@@ -65,6 +56,7 @@ def _advance_cross_slot(
         replace(
             record,
             next_run_at=advanced,
+            commitment_timezone=schedule_timezone,
             updated_at=now,
         ),
         session=session,
@@ -106,7 +98,7 @@ def consume_due_tick(
             return {"status": "not_due"}
         advanced = compute_next_run_at(
             cron=record.cron,
-            schedule_timezone=record.schedule_timezone,
+            schedule_timezone=record.commitment_timezone,
             interval_seconds=record.interval_seconds,
             after=now,
         )
@@ -169,9 +161,10 @@ def consume_due_tick(
         }
 
     if record.cron:
+        zone = current_schedule_timezone()
         slot = current_cron_slot_instant(
             cron=record.cron,
-            schedule_timezone=record.schedule_timezone,
+            schedule_timezone=zone,
             now=now,
         )
         last = (
@@ -191,7 +184,12 @@ def consume_due_tick(
                 "cancel_immediately": not record.enabled,
             }
         return _advance_cross_slot(
-            record, now=now, session=session, slot=slot, last=last
+            record,
+            now=now,
+            session=session,
+            slot=slot,
+            last=last,
+            schedule_timezone=zone,
         )
 
     return {"status": "invalid_cadence"}
@@ -206,7 +204,18 @@ def commit_due_mint(
 ) -> ScheduledTaskRecord | None:
     """Consume the due event: write last_run_at and next from the live enabled flag."""
     consumed_at = mint_at or now
-    nxt = next_after_mint(record, mint_at=consumed_at)
+    seconds = record.interval_seconds
+    if seconds and seconds > 0:
+        zone = None
+        nxt = consumed_at + timedelta(seconds=seconds)
+    else:
+        zone = current_schedule_timezone()
+        nxt = compute_next_run_at(
+            cron=record.cron,
+            schedule_timezone=zone,
+            interval_seconds=None,
+            after=consumed_at,
+        )
     # Clamp interval next to >= wall-clock now on re-entry.
     if nxt < now:
         nxt = now
@@ -214,5 +223,6 @@ def commit_due_mint(
         record.id,
         last_run_at=consumed_at,
         next_if_enabled=nxt,
+        commitment_timezone=zone,
         session=session,
     )

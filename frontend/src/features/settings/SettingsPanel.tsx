@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
 import { NumberField } from "@/components/form/NumberField";
+import { SelectField } from "@/components/form/SelectField";
 import { PageError } from "@/components/feedback/PageError";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageChrome } from "@/components/layout/PageChrome";
@@ -28,8 +29,10 @@ import {
 } from "@/features/settings/api";
 import {
   admitIntegerDraft,
-  dirtyIntegerValues,
+  dirtyParameterValues,
+  enumSearchMissesCatalog,
   integerFallback,
+  isStringEnum,
   storedIntegerViolatesConstraint,
 } from "@/features/settings/constraint";
 import type { SystemParameter } from "@/features/settings/types";
@@ -54,6 +57,7 @@ export function SettingsPanel() {
   });
   const [parameters, setParameters] = useState<SystemParameter[]>([]);
   const [drafts, setDrafts] = useState<Record<string, number | string>>({});
+  const [enumSearch, setEnumSearch] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [resettingKey, setResettingKey] = useState<string | null>(null);
@@ -65,10 +69,17 @@ export function SettingsPanel() {
       Object.fromEntries(
         items.map((item) => [
           item.key,
-          typeof item.value === "number" ? item.value : "",
+          isStringEnum(item.constraint)
+            ? typeof item.value === "string"
+              ? item.value
+              : ""
+            : typeof item.value === "number"
+              ? item.value
+              : "",
         ]),
       ),
     );
+    setEnumSearch({});
   }, []);
 
   const load = useCallback(async () => {
@@ -92,7 +103,7 @@ export function SettingsPanel() {
   }, [load]);
 
   const dirtyValues = useMemo(
-    () => dirtyIntegerValues(parameters, drafts),
+    () => dirtyParameterValues(parameters, drafts),
     [drafts, parameters],
   );
 
@@ -185,19 +196,66 @@ export function SettingsPanel() {
                   .filter((item) => item.group === group)
                   .map((item) => {
                     const draft = drafts[item.key] ?? "";
-                    const admitted = admitIntegerDraft(draft, item.constraint);
-                    const servedViolates =
-                      storedIntegerViolatesConstraint(
-                        item.value,
-                        item.constraint,
+                    const selected =
+                      typeof draft === "string" ? draft : "";
+                    const enumConstraint = isStringEnum(item.constraint);
+                    const searchMisses =
+                      enumConstraint &&
+                      enumSearchMissesCatalog(
+                        enumSearch[item.key] ?? "",
+                        selected,
+                        item.constraint.enum,
                       );
-                    const effective = integerFallback(
-                      item.value,
-                      item.constraint,
-                      item.seed,
-                    );
+                    const admitted = enumConstraint
+                      ? null
+                      : admitIntegerDraft(draft, item.constraint);
+                    const servedViolates = enumConstraint
+                      ? typeof item.value === "string" &&
+                        !item.constraint.enum?.includes(item.value)
+                      : storedIntegerViolatesConstraint(
+                          item.value,
+                          item.constraint,
+                        );
+                    const effective = enumConstraint
+                      ? item.seed
+                      : integerFallback(
+                          item.value,
+                          item.constraint,
+                          item.seed,
+                        );
                     return (
                     <Stack key={item.key} gap="xs" p="sm">
+                      {enumConstraint ? (
+                        <SelectField
+                          label={t(item.label_key)}
+                          description={t(item.help_key)}
+                          data={item.constraint.enum ?? []}
+                          value={selected}
+                          searchable
+                          editable={Boolean(canWrite?.can)}
+                          error={
+                            searchMisses
+                              ? t("settings.validation.draft.not_allowed")
+                              : undefined
+                          }
+                          onSearchChange={(value) =>
+                            setEnumSearch((current) => ({
+                              ...current,
+                              [item.key]: value,
+                            }))
+                          }
+                          onChange={(value) => {
+                            setDrafts((current) => ({
+                              ...current,
+                              [item.key]: value ?? "",
+                            }));
+                            setEnumSearch((current) => ({
+                              ...current,
+                              [item.key]: "",
+                            }));
+                          }}
+                        />
+                      ) : (
                       <NumberField
                         label={t(item.label_key)}
                         description={t(item.help_key)}
@@ -213,7 +271,7 @@ export function SettingsPanel() {
                         max={item.constraint.maximum}
                         allowDecimal={false}
                         error={
-                          !admitted.ok && draft !== item.value
+                          admitted && !admitted.ok && draft !== item.value
                             ? t(draftReasonKey(admitted.reason), {
                                 min: item.constraint.minimum,
                                 max: item.constraint.maximum,
@@ -221,6 +279,7 @@ export function SettingsPanel() {
                             : undefined
                         }
                       />
+                      )}
                       {servedViolates ? (
                         <Alert color="yellow" title={t("settings.clamped.title")}>
                           {t("settings.clamped.body", { value: effective })}

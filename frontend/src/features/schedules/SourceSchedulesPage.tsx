@@ -15,9 +15,10 @@ import {
 import { ScheduleFormModal } from "@/features/schedules/ScheduleFormModal";
 import { ScheduleJobsModal } from "@/features/schedules/ScheduleJobsModal";
 import { ScheduleRowActions } from "@/features/schedules/ScheduleRowActions";
+import { formatScheduleNextRun } from "@/features/schedules/nextRunPreview";
 import type { ScheduledTask } from "@/features/schedules/types";
 import { getSource } from "@/features/sources/api/sources";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useDisplayZoneId, useFormatInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { ApiError } from "@/lib/api";
 import type { PageQuery } from "@/lib/pagination";
@@ -29,11 +30,6 @@ function cadenceLabel(task: ScheduledTask): string {
   return task.cron ?? "—";
 }
 
-function timezoneLabel(task: ScheduledTask): string {
-  if (task.interval_seconds) return "—";
-  return task.schedule_timezone;
-}
-
 type Props = {
   sourceId: string;
 };
@@ -42,14 +38,20 @@ export function SourceSchedulesPage({ sourceId }: Props) {
   const t = useTranslate();
   const { open } = useNotification();
   const formatInstant = useFormatInstant();
+  const displayZone = useDisplayZoneId();
 
   const [sourceLabel, setSourceLabel] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<ScheduledTask | null>(null);
   const [jobsTask, setJobsTask] = useState<ScheduledTask | null>(null);
+  const [cronTimezone, setCronTimezone] = useState<string | null>(null);
 
   const fetchPage = useCallback(
-    (query: PageQuery) => listSourceSchedules(sourceId, query),
+    async (query: PageQuery) => {
+      const page = await listSourceSchedules(sourceId, query);
+      setCronTimezone(page.cron_timezone);
+      return page;
+    },
     [sourceId],
   );
   const list = useConsolePagedList({
@@ -94,7 +96,11 @@ export function SourceSchedulesPage({ sourceId }: Props) {
             >
               {t("schedules.refresh")}
             </Button>
-            <Button size="sm" onClick={() => setCreating(true)}>
+            <Button
+              size="sm"
+              disabled={cronTimezone === null}
+              onClick={() => setCreating(true)}
+            >
               {t("schedules.create")}
             </Button>
           </Group>
@@ -102,16 +108,20 @@ export function SourceSchedulesPage({ sourceId }: Props) {
       >
         <ListTable
             list={list}
-            columnCount={8}
+            columnCount={7}
             emptyMessage={t("schedules.related.empty")}
             head={
               <Table.Tr>
                 <Table.Th>{t("schedules.fields.name")}</Table.Th>
                 <Table.Th>{t("schedules.fields.kind")}</Table.Th>
                 <Table.Th>{t("schedules.fields.cadence")}</Table.Th>
-                <Table.Th>{t("schedules.fields.timezone")}</Table.Th>
                 <Table.Th>{t("schedules.fields.enabled")}</Table.Th>
-                <Table.Th>{t("schedules.fields.nextRun")}</Table.Th>
+                <Table.Th>
+                  {t("schedules.fields.nextRunInZone", {
+                    zone:
+                      displayZone ?? t("account.fields.displayTimezone.browser"),
+                  })}
+                </Table.Th>
                 <Table.Th>{t("schedules.fields.lastJob")}</Table.Th>
                 <Table.Th />
               </Table.Tr>
@@ -137,7 +147,6 @@ export function SourceSchedulesPage({ sourceId }: Props) {
                     {cadenceLabel(task)}
                   </Text>
                 </Table.Td>
-                <Table.Td>{timezoneLabel(task)}</Table.Td>
                 <Table.Td>
                   <SwitchField
                     editable
@@ -162,11 +171,11 @@ export function SourceSchedulesPage({ sourceId }: Props) {
                 </Table.Td>
                 <Table.Td>
                   <Text size="sm">
-                    {!task.enabled
-                      ? t("schedules.fields.nextRunPaused")
-                      : task.next_run_at
-                        ? formatInstant(task.next_run_at)
-                        : "—"}
+                    {formatScheduleNextRun(
+                      task,
+                      formatInstant,
+                      t("schedules.fields.nextRunPaused"),
+                    )}
                   </Text>
                 </Table.Td>
                 <Table.Td>
@@ -203,20 +212,26 @@ export function SourceSchedulesPage({ sourceId }: Props) {
           </ListTable>
       </PageChrome>
       <Modal.Stack>
-        <ScheduleFormModal
-          opened={creating}
-          sourceId={sourceId}
-          sourceLabel={sourceLabel ?? undefined}
-          onClose={() => setCreating(false)}
-          onSaved={() => void reload()}
-        />
-        <ScheduleFormModal
-          opened={editing !== null}
-          schedule={editing}
-          sourceLabel={sourceLabel ?? undefined}
-          onClose={() => setEditing(null)}
-          onSaved={() => void reload()}
-        />
+        {cronTimezone !== null ? (
+          <ScheduleFormModal
+            opened={creating}
+            sourceId={sourceId}
+            sourceLabel={sourceLabel ?? undefined}
+            cronTimezone={cronTimezone}
+            onClose={() => setCreating(false)}
+            onSaved={() => void reload()}
+          />
+        ) : null}
+        {cronTimezone !== null ? (
+          <ScheduleFormModal
+            opened={editing !== null}
+            schedule={editing}
+            sourceLabel={sourceLabel ?? undefined}
+            cronTimezone={cronTimezone}
+            onClose={() => setEditing(null)}
+            onSaved={() => void reload()}
+          />
+        ) : null}
         <ScheduleJobsModal
           scheduleId={jobsTask?.id ?? null}
           scheduleLabel={jobsTask?.name}

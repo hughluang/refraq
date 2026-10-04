@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -63,9 +64,27 @@ class IntConstraint:
 
 
 @dataclass(frozen=True, slots=True)
+class StringEnumConstraint:
+    """Closed string enum. Values are supplied by the declaring package."""
+
+    values: tuple[str, ...]
+
+    def admit(self, value: object) -> bool:
+        return isinstance(value, str) and value in self.values
+
+    def fallback(self, value: object, seed: ParameterValue) -> ParameterValue:
+        if isinstance(value, str) and value in self.values:
+            return value
+        return seed
+
+    def to_json_schema(self) -> dict[str, object]:
+        return {"type": "string", "enum": list(self.values)}
+
+
+@dataclass(frozen=True, slots=True)
 class ParameterSpec:
     key: str
-    constraint: IntConstraint
+    constraint: IntConstraint | StringEnumConstraint
     seed: ParameterValue
     owner: str
     group: str
@@ -73,3 +92,4 @@ class ParameterSpec:
     apply_note_key: str
     label_key: str
     help_key: str
+    on_written: Callable[[], None] | None = None

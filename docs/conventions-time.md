@@ -9,7 +9,7 @@ Domain terms: root `CONTEXT.md`, [`docs/glossary.md`](glossary.md).
 | Concept | Meaning | Storage / wire |
 |---------|---------|----------------|
 | **Instant** | Absolute moment on the timeline | Aware UTC in process; `timestamptz` in Postgres; RFC 3339 with offset on the wire (outbound always `Z`) |
-| **Schedule Timezone** | IANA zone on a **Scheduled Task** that interprets **cron** wall-clock fields | Separate string column; **not** stored inside an Instant; **ignored** for `interval_seconds` |
+| **Schedule Timezone** | IANA zone that interprets **cron** wall-clock fields for every **Scheduled Task** | System Parameter `schedule_timezone` (seed `UTC`); **not** a field of one row and **not** stored inside an Instant; **ignored** for `interval_seconds` |
 
 Celery `timezone` / `enable_utc` is worker message time, **not** business Schedule Timezone.
 **Display Timezone** (User preference) formats Instants in the Management Console only; HTTP / MCP Instant JSON stays UTC `Z` (see §8).
@@ -44,8 +44,8 @@ Celery `timezone` / `enable_utc` is worker message time, **not** business Schedu
 
 ## 6. Scheduled Task wall clock
 
-- Every Scheduled Task has **Schedule Timezone** (IANA, default `"UTC"`).
-- **Cron** uses that zone for wall-clock interpretation (DST rules below).
+- **Schedule Timezone** is the System Parameter `schedule_timezone` (IANA, seed `"UTC"`). Every cron schedule uses that one zone (DST rules below).
+- The row stores `commitment_timezone`: the zone that produced the current `next_run_at`. It is not on the public wire. A successful write of the parameter realigns `next_run_at` for enabled cron rows whose commitment zone differs, before the response, and does not mint a Job. Beat sync repeats that realign and is a no-op when commitments already match. Enabling a paused cron row recomputes from the current zone.
 - **`interval_seconds`** is a UTC absolute interval and **ignores** Schedule Timezone. After downtime, interval schedules (including the system reaper) may fire one catch-up beat.
 - Product **cron** does **not** catch up missed slots. After downtime, the next fire is the next legal wall-clock slot at or after now (the current minute if it matches the expression and that slot Instant is later than `last_run_at`). "At or after now" is that matching wall-clock minute — the slot Instant is the minute's start, which may be earlier than `Clock.now()` — not "the next Instant strictly after now". A stale commitment must not skip that current slot; see `docs/business-scheduled-tasks.md` (rewrite `next_run_at` to the current-slot Instant and mint it in the same due handling via a second consume; do not mint the stale tick).
 - `last_run_at` and Job lifecycle stamps remain Instants. `last_run_at` is a consumed-fire cursor, not a stored next-run.
@@ -78,6 +78,10 @@ This matches Dagster’s **daily / weekly / monthly** DST handling. Dagster’s 
 
 **Display Timezone** is an optional IANA preference on a **User** (`users.display_timezone`). The **Management Console** uses it to format Instants for that operator (`null` = follow the browser). HTTP, MCP, and Job log Instant strings continue to use `format_instant` → UTC **`Z`**. Do not bind actor Display TZ into Instant serializers or MCP dumps.
 
+Display Timezone and **Schedule Timezone** share one catalog (`backend.core.time_zones`): zones named in tzdata `zone1970.tab`, plus `UTC`. Historical link names are aliases of that set, not extra choices. A **Display Timezone** write, and the upgrade fold of stored zones, store the current id (`Asia/Calcutta` is stored as `Asia/Kolkata`). `GET /time-zones` returns each id with its aliases (`docs/api-contracts-account.md`). The Schedule Timezone parameter enum is that same id list. A historical alias is not a member of the enum, and a settings write does not rewrite it.
+
+When the browser rejects the stored id, formatting tries each alias, then formats in UTC and labels the text `UTC`. It does not switch to the browser zone.
+
 ## 9. Deferred / do not reverse direction
 
 Product or ecosystem items that may land later must **not** rewrite Instant storage or the daily-for-all cron DST rule:
@@ -90,5 +94,5 @@ Product or ecosystem items that may land later must **not** rewrite Instant stor
 
 ## 10. Implementation entry
 
-Unique code entry: `backend.core.time` (Clock, `utc_now`, Instant field, `UtcDateTime`, format/parse helpers).
+Unique Instant entry: `backend.core.time` (Clock, `utc_now`, Instant field, `UtcDateTime`, format/parse helpers). Shared zone catalog: `backend.core.time_zones` (`iana_zone_ids`, `zone_aliases`, `canonical_zone_id`).
 See [`docs/modules.md`](modules.md) and [`docs/backend-layout.md`](backend-layout.md).

@@ -14,6 +14,7 @@ from backend.metadata.source_schedules import (
     schedule_label_for_record,
 )
 from backend.worker.api import (
+    current_schedule_timezone,
     delete_schedule,
     get_schedule,
     patch_schedule,
@@ -42,6 +43,7 @@ def list_platform_schedules(
         total=total,
         limit=page.limit,
         offset=page.offset,
+        cron_timezone=current_schedule_timezone(),
     )
 
 
@@ -68,11 +70,9 @@ def patch_platform_schedule(
         name=schedule_label_for_record(record, payload.name),
         cron=payload.cron,
         interval_seconds=payload.interval_seconds,
-        schedule_timezone=payload.schedule_timezone,
         running_timeout_sec=payload.running_timeout_sec,
         cron_set="cron" in fields,
         interval_set="interval_seconds" in fields,
-        timezone_set="schedule_timezone" in fields,
         timeout_set="running_timeout_sec" in fields,
     )
     persist_audit_event(

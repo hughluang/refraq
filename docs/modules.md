@@ -38,6 +38,7 @@ Responsibilities:
 - `core/db.py`: SQLAlchemy `DeclarativeBase`, engine, and session factory for Postgres (sessions pin `TimeZone=UTC`; pool sizing from `core/runtime.py`)
 - `core/runtime.py` / `core/bulkhead.py` / `core/admission.py` / `core/load_shed.py` / `core/metrics.py` / `core/http_runtime.py` / `core/worker_runtime.py`: process-role capacity, admission pool, HTTP load-shed, intranet `/metrics`, worker/beat capacity banner (ADR 0040 / 0045)
 - `core/time.py`: **unique Instant / Clock entry** — `Clock` / `utc_now`, Instant field type, `UtcDateTime`, format helpers; Schedule wall-clock DST helpers used by `worker`
+- `core/time_zones.py`: shared IANA zone catalog (`iana_zone_ids`, `zone_aliases`, `canonical_zone_id`) for **Display Timezone** and **Schedule Timezone**
 - `core/redis_client.py`: Redis client factory for Session storage
 - `core/secrets.py`: application secret encryption helpers
 - `core/errors.py`: `AppError` (code + http_status) and HTTP Problem Details serialization
@@ -174,6 +175,7 @@ Responsibilities:
 
 - Celery application factory and process entry (`celery -A backend.worker.app`)
 - `worker/parameters.py` (composition `assemble_system_parameters`, Beat in-code constants, reaper interval derived from lost-detection)
+- `worker/commitment_fold.py` (upgrade-only: one cron commitment zone becomes the initial `schedule_timezone` row)
 - **Scheduled Task** ORM, reaper schedule seed, trait flags (`hidden`, `locked`, `undeletable`, `store_only`), and Postgres-backed Beat scheduler
 - Mechanism Scheduled Task HTTP (`worker/routers/`: list/get/patch/delete)
 - Platform system tasks (for example stuck **Job** reaper)

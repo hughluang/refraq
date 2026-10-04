@@ -18,6 +18,8 @@ import { useChangeLanguage } from "next-i18next/client";
 import { useEffect, useMemo, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
+import { PageError } from "@/components/feedback/PageError";
+import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { SelectField } from "@/components/form/SelectField";
 import { TextField } from "@/components/form/TextField";
 import { PageChrome } from "@/components/layout/PageChrome";
@@ -29,10 +31,8 @@ import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { McpSection } from "@/features/account/McpSection";
 import { TokenList } from "@/features/tokens/TokenList";
 import { ApiError } from "@/lib/api";
-import {
-  FOLLOW_BROWSER_TIMEZONE,
-  listIanaTimeZones,
-} from "@/providers/display-timezone-catalog";
+import { FOLLOW_BROWSER_TIMEZONE } from "@/providers/display-timezone-catalog";
+import { useTimeZones } from "@/providers/time-zones";
 import {
   isLocale,
   LOCALE_COOKIE_NAME,
@@ -59,7 +59,15 @@ export function AccountPanel() {
   const changeLanguage = useChangeLanguage(LOCALE_COOKIE_NAME);
   const [savingProfile, setSavingProfile] = useState(false);
 
-  const catalogZones = useMemo(() => listIanaTimeZones(), []);
+  const {
+    items: timeZones,
+    loading: timeZonesLoading,
+    error: timeZonesError,
+  } = useTimeZones();
+  const catalogZones = useMemo(
+    () => timeZones.map((zone) => zone.id),
+    [timeZones],
+  );
   const catalogZoneSet = useMemo(() => new Set(catalogZones), [catalogZones]);
 
   const profileForm = useForm<ProfileForm>({
@@ -197,15 +205,24 @@ export function AccountPanel() {
                   editable
                   {...profileForm.getInputProps("locale")}
                 />
-                <SelectField
-                  label={t("account.fields.displayTimezone")}
-                  description={t("account.fields.displayTimezone.hint")}
-                  data={timezoneSelectData}
-                  searchable
-                  allowDeselect={false}
-                  editable
-                  {...profileForm.getInputProps("display_timezone")}
-                />
+                {timeZonesLoading ? (
+                  <PageBodySkeleton rows={1} />
+                ) : (
+                  <>
+                    {timeZonesError ? (
+                      <PageError message={timeZonesError} />
+                    ) : null}
+                    <SelectField
+                      label={t("account.fields.displayTimezone")}
+                      description={t("account.fields.displayTimezone.hint")}
+                      data={timezoneSelectData}
+                      searchable
+                      allowDeselect={false}
+                      editable
+                      {...profileForm.getInputProps("display_timezone")}
+                    />
+                  </>
+                )}
                 <Group justify="flex-end">
                   <Button type="submit" loading={savingProfile}>
                     {t("account.profile.save")}

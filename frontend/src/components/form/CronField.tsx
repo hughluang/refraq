@@ -25,13 +25,15 @@ type CronFieldProps = CronFieldShared &
     | {
         editable: false;
         value: PresetCron;
+        /** Schedule Timezone the wall-clock sentence names. */
+        zone: string;
       }
   );
 
 export function CronField(props: CronFieldProps) {
   const t = useTranslate();
   if (!props.editable) {
-    const { phrase, raw } = cronPhrase(props.value, t);
+    const { phrase, raw } = cronPhrase(props.value, t, props.zone);
     return (
       <FieldDisplay
         label={props.label}

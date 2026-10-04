@@ -6,13 +6,21 @@ import logging
 import os
 
 from backend.admin.parameters import ADMIN_PARAMETER_SPECS
-from backend.admin.system_parameters import list_registered_specs, occupy_registered_parameters, register_parameters
+from backend.admin.system_parameters import (
+    StringEnumConstraint,
+    ParameterSpec,
+    list_registered_specs,
+    occupy_registered_parameters,
+    register_parameters,
+)
+from backend.core.time_zones import iana_zone_ids
 from backend.jobs.parameters import JOBS_PARAMETER_SPECS
 from backend.metadata.parameters import METADATA_PARAMETER_SPECS
 
 __all__ = [
     "BEAT_MAX_INTERVAL_SEC",
     "BEAT_SYNC_EVERY_SEC",
+    "WORKER_PARAMETER_SPECS",
     "assemble_system_parameters",
 ]
 
@@ -22,7 +30,30 @@ logger = logging.getLogger(__name__)
 BEAT_SYNC_EVERY_SEC = 30
 BEAT_MAX_INTERVAL_SEC = 5
 
-_GROUP_ORDER = ("session", "jobs", "query")
+_GROUP_ORDER = ("session", "jobs", "schedules", "query")
+
+
+def _realign_schedule_timezone() -> None:
+    """Apply the stored zone to enabled cron commitments. Import is local to avoid a cycle."""
+    from backend.worker.api import realign_cron_commitments
+
+    realign_cron_commitments()
+
+
+WORKER_PARAMETER_SPECS: tuple[ParameterSpec, ...] = (
+    ParameterSpec(
+        key="schedule_timezone",
+        constraint=StringEnumConstraint(values=iana_zone_ids()),
+        seed="UTC",
+        owner="worker",
+        group="schedules",
+        operator_action_required=False,
+        apply_note_key="settings.parameter.schedule_timezone.apply",
+        label_key="settings.parameter.schedule_timezone.label",
+        help_key="settings.parameter.schedule_timezone.help",
+        on_written=_realign_schedule_timezone,
+    ),
+)
 
 
 def assemble_system_parameters() -> None:
@@ -31,6 +62,7 @@ def assemble_system_parameters() -> None:
         (
             *ADMIN_PARAMETER_SPECS,
             *JOBS_PARAMETER_SPECS,
+            *WORKER_PARAMETER_SPECS,
             *METADATA_PARAMETER_SPECS,
         ),
         group_order=_GROUP_ORDER,

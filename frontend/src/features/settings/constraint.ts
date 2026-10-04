@@ -65,20 +65,54 @@ export function storedIntegerViolatesConstraint(
   return false;
 }
 
-export function dirtyIntegerValues(
+export function isStringEnum(constraint: JsonSchemaProperty): boolean {
+  return Array.isArray(constraint.enum) && constraint.enum.length > 0;
+}
+
+/** True when the enum search text is not empty, not the selected value, and not an allowed choice. */
+export function enumSearchMissesCatalog(
+  search: string,
+  selected: string,
+  allowed: readonly string[] | undefined,
+): boolean {
+  if (search === "" || search === selected) {
+    return false;
+  }
+  return !allowed?.includes(search);
+}
+
+export function admitEnumDraft(
+  draft: number | string,
+  constraint: JsonSchemaProperty,
+): string | null {
+  if (
+    typeof draft === "string" &&
+    draft !== "" &&
+    constraint.enum?.includes(draft)
+  ) {
+    return draft;
+  }
+  return null;
+}
+
+export function dirtyParameterValues(
   parameters: Array<{
     key: string;
     value: unknown;
     constraint: JsonSchemaProperty;
   }>,
   drafts: Record<string, number | string>,
-): Record<string, number> {
-  const values: Record<string, number> = {};
+): Record<string, number | string> {
+  const values: Record<string, number | string> = {};
   for (const item of parameters) {
-    const admitted = admitIntegerDraft(
-      drafts[item.key] ?? "",
-      item.constraint,
-    );
+    if (isStringEnum(item.constraint)) {
+      const admitted = admitEnumDraft(drafts[item.key] ?? "", item.constraint);
+      if (admitted !== null && admitted !== item.value) {
+        values[item.key] = admitted;
+      }
+      continue;
+    }
+    const admitted = admitIntegerDraft(drafts[item.key] ?? "", item.constraint);
     if (!admitted.ok) {
       continue;
     }
@@ -88,3 +122,4 @@ export function dirtyIntegerValues(
   }
   return values;
 }
+

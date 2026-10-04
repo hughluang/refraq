@@ -29,6 +29,7 @@ from backend.admin.system_parameters import (
     reset_parameter_registry,
     reset_system_parameters,
     resolve_int,
+    resolve_str,
     set_parameter,
 )
 from backend.admin.system_parameters.store import MemoryParameterStore
@@ -44,7 +45,7 @@ from backend.jobs.store import (
 )
 from backend.worker.api import ensure_system_schedules
 from backend.worker.models import REAPER_SCHEDULE_KEY
-from backend.worker.parameters import assemble_system_parameters
+from backend.worker.parameters import WORKER_PARAMETER_SPECS, assemble_system_parameters
 from backend.worker.schedules import get_schedule_store
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -189,7 +190,12 @@ def test_registry_parity_across_composition() -> None:
     assemble_system_parameters()
     declared = {
         spec.key
-        for spec in (*ADMIN_PARAMETER_SPECS, *JOBS_PARAMETER_SPECS, *METADATA_PARAMETER_SPECS)
+        for spec in (
+            *ADMIN_PARAMETER_SPECS,
+            *JOBS_PARAMETER_SPECS,
+            *WORKER_PARAMETER_SPECS,
+            *METADATA_PARAMETER_SPECS,
+        )
     }
     assert {spec.key for spec in list_registered_specs()} == declared
     main_src = (BACKEND_ROOT / "main.py").read_text(encoding="utf-8")
@@ -424,3 +430,22 @@ def test_never_read_uses_code_seed_when_store_fails() -> None:
         assert resolved.updated_at is None
     finally:
         store.get = original_get  # type: ignore[method-assign]
+
+
+def test_resolve_str_admits_enum_and_falls_back_to_seed() -> None:
+    assemble_system_parameters()
+    spec = get_parameter_spec("schedule_timezone")
+    assert spec.constraint.admit("Asia/Shanghai") is True
+    assert spec.constraint.admit("Not/AZone") is False
+    assert spec.constraint.admit(1) is False
+    assert spec.constraint.fallback("Not/AZone", spec.seed) == "UTC"
+    fragment = spec.constraint.to_json_schema()
+    assert fragment["type"] == "string"
+    assert "UTC" in fragment["enum"]
+    assert "Europe/Kiev" not in fragment["enum"]
+    set_parameter("schedule_timezone", "Asia/Shanghai", actor_user_id="user_1")
+    resolved = resolve_str("schedule_timezone")
+    assert resolved.value == "Asia/Shanghai"
+    assert resolved.previous_value == "UTC"
+    assert resolved.source == "user"
+    reset_parameter("schedule_timezone", actor_user_id="user_1")

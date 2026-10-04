@@ -33,7 +33,7 @@ class ScheduledTaskRecord:
     locked: bool = False
     undeletable: bool = False
     store_only: bool = False
-    schedule_timezone: str = "UTC"
+    commitment_timezone: str = "UTC"
     owner_ref: str | None = None
     last_run_at: datetime | None = None
     next_run_at: datetime | None = None
@@ -85,6 +85,7 @@ class ScheduleStore(Protocol):
         *,
         last_run_at: datetime,
         next_if_enabled: datetime | None,
+        commitment_timezone: str | None = None,
         session: Session | None = None,
     ) -> ScheduledTaskRecord | None: ...
 
@@ -172,6 +173,7 @@ class MemoryScheduleStore:
         *,
         last_run_at: datetime,
         next_if_enabled: datetime | None,
+        commitment_timezone: str | None = None,
         session: Session | None = None,
     ) -> ScheduledTaskRecord | None:
         """Write last_run_at / next using the row's current enabled (not a stale snapshot)."""
@@ -195,7 +197,7 @@ class MemoryScheduleStore:
                     locked=record.locked,
                     undeletable=record.undeletable,
                     store_only=record.store_only,
-                    schedule_timezone=record.schedule_timezone,
+                    commitment_timezone=commitment_timezone or record.commitment_timezone,
                     owner_ref=record.owner_ref,
                     last_run_at=last_run_at,
                     next_run_at=next_if_enabled if record.enabled else None,
@@ -233,7 +235,7 @@ class SqlScheduleStore:
         row.enabled = record.enabled
         row.interval_seconds = record.interval_seconds
         row.cron = record.cron
-        row.schedule_timezone = record.schedule_timezone or "UTC"
+        row.commitment_timezone = record.commitment_timezone or "UTC"
         row.running_timeout_sec = record.running_timeout_sec
         row.task_name = record.task_name
         row.args_json = list(record.args_json)
@@ -389,6 +391,7 @@ class SqlScheduleStore:
         *,
         last_run_at: datetime,
         next_if_enabled: datetime | None,
+        commitment_timezone: str | None = None,
         session: Session | None = None,
     ) -> ScheduledTaskRecord | None:
         """Write last_run_at / next using the row's current enabled (not a stale snapshot)."""
@@ -398,6 +401,7 @@ class SqlScheduleStore:
                 schedule_id,
                 last_run_at=last_run_at,
                 next_if_enabled=next_if_enabled,
+                commitment_timezone=commitment_timezone,
             )
         with session_scope() as owned:
             return self._consume_due_cursor_on(
@@ -405,6 +409,7 @@ class SqlScheduleStore:
                 schedule_id,
                 last_run_at=last_run_at,
                 next_if_enabled=next_if_enabled,
+                commitment_timezone=commitment_timezone,
             )
 
     def _consume_due_cursor_on(
@@ -414,19 +419,23 @@ class SqlScheduleStore:
         *,
         last_run_at: datetime,
         next_if_enabled: datetime | None,
+        commitment_timezone: str | None = None,
     ) -> ScheduledTaskRecord | None:
         now = utc_now()
+        values: dict[str, object] = {
+            "last_run_at": last_run_at,
+            "next_run_at": case(
+                (ScheduledTaskRow.enabled.is_(True), next_if_enabled),
+                else_=None,
+            ),
+            "updated_at": now,
+        }
+        if commitment_timezone is not None:
+            values["commitment_timezone"] = commitment_timezone
         result = session.execute(
             update(ScheduledTaskRow)
             .where(ScheduledTaskRow.id == schedule_id)
-            .values(
-                last_run_at=last_run_at,
-                next_run_at=case(
-                    (ScheduledTaskRow.enabled.is_(True), next_if_enabled),
-                    else_=None,
-                ),
-                updated_at=now,
-            )
+            .values(**values)
         )
         session.flush()
         if result.rowcount == 0:  # type: ignore[attr-defined]
@@ -451,7 +460,7 @@ def _row_to_schedule(row: object) -> ScheduledTaskRecord:
         locked=row.locked,
         undeletable=row.undeletable,
         store_only=row.store_only,
-        schedule_timezone=getattr(row, "schedule_timezone", None) or "UTC",
+        commitment_timezone=getattr(row, "commitment_timezone", None) or "UTC",
         owner_ref=getattr(row, "owner_ref", None),
         last_run_at=row.last_run_at,
         next_run_at=getattr(row, "next_run_at", None),

@@ -49,6 +49,7 @@ from backend.admin.model_services.router import router as model_services_router
 from backend.admin.routers.console import router as console_router
 from backend.admin.routers.roles import router as roles_router
 from backend.admin.system_parameters.router import router as settings_router
+from backend.admin.routers.time_zones import router as time_zones_router
 from backend.admin.routers.tokens import router as tokens_router
 from backend.admin.routers.users import router as users_router
 from backend.admin.federation.router import router as federation_router
@@ -189,6 +190,7 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> object:
 app.include_router(health_router)
 app.include_router(auth_router_instance)
 app.include_router(account_router)
+app.include_router(time_zones_router)
 app.include_router(users_router)
 app.include_router(federation_router)
 app.include_router(roles_router)

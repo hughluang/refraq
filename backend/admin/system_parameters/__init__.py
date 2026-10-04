@@ -18,11 +18,13 @@ from backend.admin.system_parameters.registry import (
 from backend.admin.system_parameters.resolver import (
     ResolvedIntParameter,
     ResolvedParameter,
+    ResolvedStrParameter,
     clear_last_known,
     occupy_registered_parameters,
     read_stored_parameter,
     reset_parameter,
     resolve_int,
+    resolve_str,
     set_parameter,
     validate_parameter_write,
 )
@@ -32,6 +34,7 @@ from backend.admin.system_parameters.spec import (
     ParameterSource,
     ParameterSpec,
     ParameterValue,
+    StringEnumConstraint,
 )
 from backend.admin.system_parameters.store import (
     ParameterRecord,
@@ -50,6 +53,7 @@ def reset_system_parameters() -> None:
 __all__ = [
     "JSON_SCHEMA_PROFILE_KEYWORDS",
     "IntConstraint",
+    "StringEnumConstraint",
     "ParameterReadFailed",
     "ParameterRegistryFrozen",
     "ParameterSource",
@@ -59,6 +63,7 @@ __all__ = [
     "ParameterValueInvalid",
     "ResolvedIntParameter",
     "ResolvedParameter",
+    "ResolvedStrParameter",
     "UnregisteredParameter",
     "clear_last_known",
     "get_parameter_spec",
@@ -73,6 +78,7 @@ __all__ = [
     "reset_parameter_store",
     "reset_system_parameters",
     "resolve_int",
+    "resolve_str",
     "set_parameter",
     "validate_parameter_write",
 ]

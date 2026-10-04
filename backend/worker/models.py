@@ -24,7 +24,7 @@ class ScheduledTaskRow(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cron: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    schedule_timezone: Mapped[str] = mapped_column(
+    commitment_timezone: Mapped[str] = mapped_column(
         String(64), nullable=False, default="UTC"
     )
     running_timeout_sec: Mapped[int | None] = mapped_column(Integer, nullable=True)

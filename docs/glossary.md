@@ -85,7 +85,7 @@ Avoid treating the module as the parameter itself, or conflating it with user pr
 
 A named, site-wide configuration key that an operator can decide from the business, presented by **Platform Settings**.
 The product seeds a default stored row; that row is what the operator sees. Consumers derive a safe value from the declared constraint when the stored value sits outside it. Reset restores the seed default.
-A field of one **Scheduled Task** / **Source** / **User** is not a **System Parameter**. Occupancy lost-detection and session TTL are **System Parameter**s. Changing session TTL does not rewrite existing **Session**s. Widening lost-detection is live; tightening waits one old renew interval before the reaper cutoff shrinks. The hidden system reaper **Scheduled Task** interval is derived from lost-detection. Worker concurrency is a deployment concern. Beat loop / reload intervals are in-code constants (`docs/business-system-parameters.md` §5.2).
+A field of one **Scheduled Task** / **Source** / **User** is not a **System Parameter**. **Schedule Timezone** is the site-wide key `schedule_timezone`, not a field of one row. Occupancy lost-detection, session TTL, and **Schedule Timezone** are **System Parameter**s. Changing session TTL does not rewrite existing **Session**s. Widening lost-detection is live; tightening waits one old renew interval before the reaper cutoff shrinks. The hidden system reaper **Scheduled Task** interval is derived from lost-detection. Worker concurrency is a deployment concern. Beat loop / reload intervals are in-code constants (`docs/business-system-parameters.md` §5.2).
 Avoid env as the home of these keys; avoid Settings Override as a second entity; avoid Platform Parameter; avoid **Account Center** preferences; avoid treating the Console Module as the key; avoid moving **Running Time Limit** here; avoid editing the hidden system **Scheduled Task** as the reaper-interval UI; avoid putting an engineering tuning knob (pool size, loop interval, replica count) on this page.
 
 ### Settings Override
@@ -163,8 +163,8 @@ Avoid calling it a Client token, a Session id reused as Bearer, or a machine pri
 
 ### Display Timezone
 
-An optional IANA zone on a **User** that the **Management Console** uses to format **Instants** for that operator. `null` means follow the browser’s system timezone. Not part of Instant storage or HTTP/MCP Instant JSON (those stay UTC `Z`).
-Avoid Schedule Timezone, worker process timezone, or treating the preference as a second Instant type.
+An optional IANA zone on a **User** that the **Management Console** uses to format **Instants** for that operator. `null` means follow the browser’s system timezone. Not part of Instant storage or HTTP/MCP Instant JSON (those stay UTC `Z`). The stored id is a current name from the shared zone catalog; a historical alias is rewritten to that name on write.
+Avoid **Schedule Timezone**, worker process timezone, or treating the preference as a second Instant type.
 
 ### Account Center
 
@@ -292,8 +292,8 @@ Avoid wall-clock local time, treating cron hour/minute as a stored Instant, or e
 
 ### Schedule Timezone
 
-An IANA zone on a **Scheduled Task** that interprets **cron** wall-clock fields; ignored for interval schedules; not part of an **Instant** and not the Celery process timezone.
-Avoid storing the zone inside a timestamptz Instant, conflating with **Display Timezone**, or assuming interval schedules shift when the zone changes.
+The IANA zone that interprets **cron** wall-clock fields for every **Scheduled Task**. It is the System Parameter `schedule_timezone` (seed `UTC`), not a field of one row. Ignored for interval schedules. Not part of an **Instant** and not the Celery process timezone. The shared zone catalog is the same set **Display Timezone** stores.
+Avoid storing the zone inside a timestamptz Instant, a per-schedule zone, conflating with **Display Timezone**, or assuming interval schedules shift when the zone changes.
 Avoid calling **Running Time Limit** wall-clock.
 
 ### Operations Nav Group

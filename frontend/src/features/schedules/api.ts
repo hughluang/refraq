@@ -7,12 +7,16 @@ import type {
 } from "@/features/schedules/types";
 import type { OffsetPage } from "@/lib/pagination";
 
+export type ScheduleListPage = OffsetPage<ScheduledTask> & {
+  cron_timezone: string;
+};
+
 export function listSchedules(params?: { limit?: number; offset?: number }) {
   const qs = new URLSearchParams();
   if (params?.limit != null) qs.set("limit", String(params.limit));
   if (params?.offset != null) qs.set("offset", String(params.offset));
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
-  return apiClient<OffsetPage<ScheduledTask>>(`/schedules${suffix}`);
+  return apiClient<ScheduleListPage>(`/schedules${suffix}`);
 }
 
 export function listSourceSchedules(
@@ -23,7 +27,7 @@ export function listSourceSchedules(
   if (params?.limit != null) qs.set("limit", String(params.limit));
   if (params?.offset != null) qs.set("offset", String(params.offset));
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
-  return apiClient<OffsetPage<ScheduledTask>>(
+  return apiClient<ScheduleListPage>(
     `/sources/${sourceId}/schedules${suffix}`,
   );
 }

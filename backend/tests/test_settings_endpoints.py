@@ -37,6 +37,7 @@ REGISTERED_KEYS = {
     "admin_session_ttl_hours",
     "sso_pending_ttl_days",
     "job_lost_detection_sec",
+    "schedule_timezone",
     "query_max_rows",
     "query_timeout_sec",
 }
@@ -46,6 +47,7 @@ CATALOG_KEY_ORDER = [
     "admin_session_ttl_hours",
     "sso_pending_ttl_days",
     "job_lost_detection_sec",
+    "schedule_timezone",
     "query_max_rows",
     "query_timeout_sec",
 ]
@@ -398,3 +400,35 @@ def test_permissions_catalog_includes_settings(client: TestClient) -> None:
     keys = {item["key"] for item in response.json()["items"]}
     assert "settings:read" in keys
     assert "settings:write" in keys
+
+
+def test_patch_schedule_timezone(client: TestClient) -> None:
+    _login_root(client)
+    patched = client.patch(
+        "/settings", json={"values": {"schedule_timezone": "Asia/Shanghai"}}
+    )
+    assert patched.status_code == 200
+    item = _by_key(patched.json(), "schedule_timezone")
+    assert item["value"] == "Asia/Shanghai"
+    assert item["source"] == "user"
+    assert item["constraint"]["type"] == "string"
+    assert "Asia/Shanghai" in item["constraint"]["enum"]
+    rejected = client.patch(
+        "/settings", json={"values": {"schedule_timezone": "Not/AZone"}}
+    )
+    assert_problem(rejected, status=422, code="SYSTEM_PARAMETER_INVALID")
+
+
+def test_patch_schedule_timezone_rejects_alias(client: TestClient) -> None:
+    """A historical link is not an enum member and is not rewritten."""
+    _login_root(client)
+    before = client.get("/settings")
+    assert before.status_code == 200
+    stored = _by_key(before.json(), "schedule_timezone")["value"]
+    rejected = client.patch(
+        "/settings", json={"values": {"schedule_timezone": "Asia/Calcutta"}}
+    )
+    assert_problem(rejected, status=422, code="SYSTEM_PARAMETER_INVALID")
+    after = client.get("/settings")
+    assert after.status_code == 200
+    assert _by_key(after.json(), "schedule_timezone")["value"] == stored

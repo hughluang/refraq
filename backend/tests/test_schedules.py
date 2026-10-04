@@ -144,7 +144,6 @@ def _post_daily(client: TestClient, source_id: str, cron: str = "0 2 * * *") -> 
         json={
             "kind": "structure",
             "cron": cron,
-            "schedule_timezone": "UTC",
             "enabled": True,
         },
     )
@@ -287,7 +286,6 @@ def test_patch_empty_name_restores_default(client: TestClient) -> None:
         json={
             "kind": "structure",
             "cron": "0 2 * * *",
-            "schedule_timezone": "UTC",
             "enabled": True,
             "name": "custom schedule",
         },
@@ -316,7 +314,6 @@ def test_patch_empty_name_restores_join_detection_default(client: TestClient) ->
         json={
             "kind": "join_detection",
             "cron": "0 4 * * *",
-            "schedule_timezone": "UTC",
             "enabled": True,
             "name": "custom detection",
         },
@@ -393,7 +390,6 @@ def test_overlap_still_mints_when_source_busy(
         json={
             "kind": "structure",
             "interval_seconds": 3600,
-            "schedule_timezone": "UTC",
             "enabled": True,
         },
     )
@@ -435,7 +431,6 @@ def test_disabled_source_tick_still_mints(
         json={
             "kind": "structure",
             "interval_seconds": 3600,
-            "schedule_timezone": "UTC",
             "enabled": True,
         },
     )
@@ -472,7 +467,7 @@ def _structure_record(*, source_id: str = "src_abc") -> ScheduledTaskRecord:
         task_name=STRUCTURE_ENQUEUE_TASK_NAME,
         args_json=[],
         kwargs_json={"source_id": source_id, "schedule_id": schedule_id},
-        schedule_timezone="UTC",
+        commitment_timezone="UTC",
         last_run_at=now,
         created_at=now,
         updated_at=now,
@@ -540,7 +535,6 @@ def test_patch_cron_clears_interval_with_null(client: TestClient) -> None:
         json={
             "kind": "structure",
             "interval_seconds": 3600,
-            "schedule_timezone": "UTC",
             "enabled": True,
         },
     )
@@ -625,7 +619,7 @@ def test_missing_source_tick_still_mints(monkeypatch: pytest.MonkeyPatch) -> Non
                 "source_id": "src_does_not_exist",
                 "schedule_id": "sched_orphan",
             },
-            schedule_timezone="UTC",
+            commitment_timezone="UTC",
             owner_ref="metadata:source:src_does_not_exist",
             last_run_at=now,
             next_run_at=now - timedelta(minutes=1),
@@ -663,7 +657,6 @@ def test_create_schedule_running_timeout_snapshots_on_run_now(
         json={
             "kind": "structure",
             "cron": "0 2 * * *",
-            "schedule_timezone": "UTC",
             "enabled": True,
             "running_timeout_sec": 120,
         },
@@ -689,7 +682,6 @@ def test_due_mint_snapshots_running_timeout(
         json={
             "kind": "structure",
             "interval_seconds": 3600,
-            "schedule_timezone": "UTC",
             "enabled": True,
             "running_timeout_sec": 45,
         },
@@ -716,7 +708,6 @@ def test_create_rejects_zero_running_timeout(client: TestClient) -> None:
         json={
             "kind": "structure",
             "cron": "0 2 * * *",
-            "schedule_timezone": "UTC",
             "enabled": True,
             "running_timeout_sec": 0,
         },
@@ -734,7 +725,6 @@ def test_patch_running_timeout_omit_leaves_and_null_clears(
         json={
             "kind": "structure",
             "cron": "0 2 * * *",
-            "schedule_timezone": "UTC",
             "enabled": True,
             "running_timeout_sec": 90,
         },
@@ -763,7 +753,6 @@ def test_patch_running_timeout_does_not_rewrite_in_flight_job(
         json={
             "kind": "structure",
             "cron": "0 2 * * *",
-            "schedule_timezone": "UTC",
             "enabled": True,
             "running_timeout_sec": 60,
         },
@@ -795,16 +784,54 @@ def test_cadence_rejects_non_positive_interval(client: TestClient) -> None:
     assert "positive" in body["detail"]
 
 
-def test_patch_empty_timezone_rejected(client: TestClient) -> None:
+def test_patch_rejects_retired_schedule_timezone(client: TestClient) -> None:
+    source = _make_source(client, key="zone-patch-forbid")
+    created = _post_daily(client, source["id"])
+    assert created.status_code == 201, created.text
+    schedule = created.json()["schedule"]
+    patched = client.patch(
+        f"/schedules/{schedule['id']}",
+        json={"name": schedule["name"], "schedule_timezone": "Europe/Paris"},
+    )
+    assert patched.status_code == 422
+    assert patched.json()["code"] == "REQUEST_INVALID"
+    again = client.get(f"/schedules/{schedule['id']}")
+    assert again.status_code == 200
+    assert again.json()["schedule"]["updated_at"] == schedule["updated_at"]
+    assert again.json()["schedule"]["next_run_at"] == schedule["next_run_at"]
+    listed = client.get("/schedules")
+    assert listed.status_code == 200
+    assert listed.json()["cron_timezone"] == "UTC"
+
+
+def test_create_rejects_retired_schedule_timezone(client: TestClient) -> None:
+    source = _make_source(client, key="zone-create-forbid")
+    before = client.get(f"/sources/{source['id']}/schedules")
+    assert before.status_code == 200
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "structure",
+            "cron": "15 1 * * *",
+            "schedule_timezone": "Europe/Paris",
+        },
+    )
+    assert created.status_code == 422
+    assert created.json()["code"] == "REQUEST_INVALID"
+    after = client.get(f"/sources/{source['id']}/schedules")
+    assert after.status_code == 200
+    assert after.json()["total"] == before.json()["total"]
+    assert after.json()["cron_timezone"] == "UTC"
+    assert all(item["cron"] != "15 1 * * *" for item in after.json()["items"])
+
+
+def test_list_schedules_reports_cron_timezone(client: TestClient) -> None:
     source = _make_source(client)
     created = _post_daily(client, source["id"])
-    schedule_id = created.json()["schedule"]["id"]
-    patched = client.patch(
-        f"/schedules/{schedule_id}",
-        json={"schedule_timezone": ""},
-    )
-    assert patched.status_code == 400
-    assert patched.json()["code"] == "SCHEDULE_CADENCE_INVALID"
+    assert "schedule_timezone" not in created.json()["schedule"]
+    listed = client.get("/schedules")
+    assert listed.status_code == 200
+    assert listed.json()["cron_timezone"] == "UTC"
 
 
 def test_run_now_enqueues_without_moving_last_run(
@@ -994,8 +1021,8 @@ def test_source_create_seeds_default_source_schedules(client: TestClient) -> Non
     join_detection = by_kind["join_detection"]
     assert structure["cron"] == DEFAULT_STRUCTURE_CRON
     assert join_detection["cron"] == DEFAULT_JOIN_DETECTION_CRON
-    assert structure["schedule_timezone"] == "UTC"
-    assert join_detection["schedule_timezone"] == "UTC"
+    assert "schedule_timezone" not in structure
+    assert listed.json()["cron_timezone"] == "UTC"
     assert structure["enabled"] is True
     assert join_detection["enabled"] is True
     assert structure["name"] == "structure · seed-src"
@@ -1542,7 +1569,6 @@ def test_inflight_delete_mints_cancelled_job(
         json={
             "kind": "structure",
             "interval_seconds": 3600,
-            "schedule_timezone": "UTC",
             "enabled": True,
         },
     )
@@ -1680,7 +1706,6 @@ def test_missing_target_mints_cancelled_job(
         json={
             "kind": "structure",
             "interval_seconds": 3600,
-            "schedule_timezone": "UTC",
             "enabled": True,
         },
     )
@@ -1725,7 +1750,6 @@ def test_inflight_disable_mints_cancelled_job(
         json={
             "kind": "structure",
             "interval_seconds": 3600,
-            "schedule_timezone": "UTC",
             "enabled": True,
         },
     )
@@ -1820,7 +1844,6 @@ def test_interval_catchup_scheduled_for_and_next(
             json={
                 "kind": "structure",
                 "interval_seconds": 3600,
-                "schedule_timezone": "UTC",
                 "enabled": True,
             },
         )
@@ -1856,7 +1879,6 @@ def test_create_join_detection_schedule_and_run_now(
         json={
             "kind": "join_detection",
             "cron": "0 4 * * *",
-            "schedule_timezone": "UTC",
             "enabled": True,
         },
     )
@@ -1887,4 +1909,173 @@ def test_patch_restores_missing_kind_only(client: TestClient) -> None:
     kinds = {item["work_kind"] for item in after}
     assert kinds == {"structure", "join_detection"}
     assert by_kind["structure"]["id"] in {item["id"] for item in after}
+
+
+def test_realign_rewrites_enabled_cron_once_and_skips_interval(
+    client: TestClient,
+) -> None:
+    from dataclasses import replace
+    from zoneinfo import ZoneInfo
+
+    from backend.admin.system_parameters import set_parameter
+    from backend.jobs.store import get_job_store
+    from backend.worker.api import realign_cron_commitments
+
+    set_parameter("schedule_timezone", "Asia/Shanghai", actor_user_id=None)
+    realign_cron_commitments()
+    source = _make_source(client, key="zone-realign")
+    created = _post_daily(client, source["id"])
+    assert created.status_code == 201, created.text
+    schedule_id = created.json()["schedule"]["id"]
+    record = get_schedule_store().get_by_id(schedule_id)
+    assert record is not None
+    assert record.commitment_timezone == "Asia/Shanghai"
+    assert record.next_run_at is not None
+    local = record.next_run_at.astimezone(ZoneInfo("Asia/Shanghai"))
+    assert (local.hour, local.minute) == (2, 0)
+
+    interval = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={"kind": "structure", "interval_seconds": 3600, "enabled": True},
+    )
+    assert interval.status_code == 201, interval.text
+    interval_id = interval.json()["schedule"]["id"]
+    interval_row = get_schedule_store().get_by_id(interval_id)
+    assert interval_row is not None
+    sentinel = utc_now() - timedelta(days=3)
+    get_schedule_store().upsert(
+        replace(
+            interval_row,
+            commitment_timezone="Europe/Paris",
+            next_run_at=sentinel,
+        )
+    )
+    cron_row = get_schedule_store().get_by_id(schedule_id)
+    assert cron_row is not None
+    get_schedule_store().upsert(
+        replace(cron_row, commitment_timezone="Europe/Paris")
+    )
+    jobs_before, _ = get_job_store().list()
+    assert realign_cron_commitments() == 1
+    aligned = get_schedule_store().get_by_id(schedule_id)
+    assert aligned is not None
+    assert aligned.commitment_timezone == "Asia/Shanghai"
+    assert aligned.next_run_at is not None
+    aligned_local = aligned.next_run_at.astimezone(ZoneInfo("Asia/Shanghai"))
+    assert (aligned_local.hour, aligned_local.minute) == (2, 0)
+    skipped = get_schedule_store().get_by_id(interval_id)
+    assert skipped is not None
+    assert skipped.commitment_timezone == "Europe/Paris"
+    assert skipped.next_run_at == sentinel
+    assert realign_cron_commitments() == 0
+    jobs_after, _ = get_job_store().list()
+    assert len(jobs_after) == len(jobs_before)
+
+
+def test_schedule_timezone_write_realigns_enabled_cron_before_return(
+    client: TestClient,
+) -> None:
+    from zoneinfo import ZoneInfo
+
+    from backend.admin.system_parameters import reset_parameter
+    from backend.worker.api import realign_cron_commitments
+
+    source = _make_source(client, key="zone-write")
+    listed = client.get(f"/sources/{source['id']}/schedules")
+    assert listed.status_code == 200, listed.text
+    by_kind = {item["work_kind"]: item for item in listed.json()["items"]}
+    structure_id = by_kind["structure"]["id"]
+    join_id = by_kind["join_detection"]["id"]
+    paused = client.patch(f"/schedules/{join_id}", json={"enabled": False})
+    assert paused.status_code == 200, paused.text
+    interval = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={"kind": "structure", "interval_seconds": 3600, "enabled": True},
+    )
+    assert interval.status_code == 201, interval.text
+    interval_id = interval.json()["schedule"]["id"]
+    interval_before = get_schedule_store().get_by_id(interval_id)
+    assert interval_before is not None
+    try:
+        patched = client.patch(
+            "/settings",
+            json={"values": {"schedule_timezone": "Asia/Shanghai"}},
+        )
+        assert patched.status_code == 200, patched.text
+        cron = get_schedule_store().get_by_id(structure_id)
+        assert cron is not None
+        assert cron.commitment_timezone == "Asia/Shanghai"
+        assert cron.next_run_at is not None
+        local = cron.next_run_at.astimezone(ZoneInfo("Asia/Shanghai"))
+        assert (local.hour, local.minute) == (2, 0)
+        paused_row = get_schedule_store().get_by_id(join_id)
+        assert paused_row is not None
+        assert paused_row.commitment_timezone == "UTC"
+        assert paused_row.next_run_at is None
+        interval_after = get_schedule_store().get_by_id(interval_id)
+        assert interval_after is not None
+        assert interval_after.next_run_at == interval_before.next_run_at
+        assert interval_after.commitment_timezone == interval_before.commitment_timezone
+        assert realign_cron_commitments() == 0
+
+        reset = client.post(
+            "/settings/reset", json={"keys": ["schedule_timezone"]}
+        )
+        assert reset.status_code == 200, reset.text
+        restored = get_schedule_store().get_by_id(structure_id)
+        assert restored is not None
+        assert restored.commitment_timezone == "UTC"
+        assert restored.next_run_at is not None
+        utc_local = restored.next_run_at.astimezone(ZoneInfo("UTC"))
+        assert (utc_local.hour, utc_local.minute) == (2, 0)
+        still_paused = get_schedule_store().get_by_id(join_id)
+        assert still_paused is not None
+        assert still_paused.commitment_timezone == "UTC"
+        assert still_paused.next_run_at is None
+    finally:
+        reset_parameter("schedule_timezone", actor_user_id=None)
+
+
+def test_interval_due_keeps_commitment_timezone(client: TestClient) -> None:
+    from dataclasses import replace
+
+    from backend.admin.system_parameters import reset_parameter, set_parameter
+    from backend.worker.due import commit_due_mint, consume_due_tick
+
+    source = _make_source(client, key="zone-interval-due")
+    interval = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={"kind": "structure", "interval_seconds": 3600, "enabled": True},
+    )
+    assert interval.status_code == 201, interval.text
+    interval_id = interval.json()["schedule"]["id"]
+    before = get_schedule_store().get_by_id(interval_id)
+    assert before is not None
+    assert before.next_run_at is not None
+    reaper = get_schedule_store().get_by_key(REAPER_SCHEDULE_KEY)
+    assert reaper is not None
+    reaper_zone = reaper.commitment_timezone
+    try:
+        set_parameter("schedule_timezone", "Asia/Shanghai", actor_user_id=None)
+        row = get_schedule_store().get_by_id(interval_id)
+        assert row is not None
+        minted = commit_due_mint(row, now=utc_now())
+        assert minted is not None
+        assert minted.commitment_timezone == before.commitment_timezone
+        assert minted.next_run_at is not None
+        assert minted.next_run_at > before.next_run_at
+
+        due_reaper = get_schedule_store().get_by_key(REAPER_SCHEDULE_KEY)
+        assert due_reaper is not None
+        past = utc_now() - timedelta(seconds=1)
+        get_schedule_store().upsert(replace(due_reaper, next_run_at=past))
+        outcome = consume_due_tick(due_reaper.id)
+        assert outcome["status"] == "system"
+        after_reaper = get_schedule_store().get_by_key(REAPER_SCHEDULE_KEY)
+        assert after_reaper is not None
+        assert after_reaper.commitment_timezone == reaper_zone
+        assert after_reaper.next_run_at is not None
+        assert after_reaper.next_run_at > past
+    finally:
+        reset_parameter("schedule_timezone", actor_user_id=None)
 

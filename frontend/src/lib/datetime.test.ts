@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  browserTimeZone,
+  displayZoneId,
   formatDurationMs,
   formatInstant,
   formatJobDuration,
@@ -43,15 +45,67 @@ describe("formatInstant", () => {
     expect(shanghai).not.toBe(utc);
   });
 
-  it("returns em dash for invalid timeZone (not browser fallback)", () => {
+  it("tries aliases before labeling UTC", () => {
+    const value = "2026-08-11T14:20:38.000Z";
+    const viaAlias = formatInstant(value, {
+      timeZone: "Not/AZone",
+      aliases: ["UTC"],
+      locale: "en-US",
+    });
+    expect(viaAlias).toBe(
+      new Date(value).toLocaleString("en-US", { timeZone: "UTC" }),
+    );
+    expect(viaAlias.endsWith(" UTC")).toBe(false);
+  });
+
+  it("throws when a valid instant cannot be formatted for the locale", () => {
+    const value = "2026-08-11T14:20:38.000Z";
+    expect(() => formatInstant(value, { locale: "%%%" })).toThrow(RangeError);
+    expect(() =>
+      formatInstant(value, {
+        timeZone: "Not/AZone",
+        aliases: ["Also/Missing"],
+        locale: "%%%",
+      }),
+    ).toThrow(RangeError);
+  });
+
+  it("labels UTC when the zone and its aliases are unknown", () => {
     const value = "2026-08-11T14:20:38.000Z";
     const browser = formatInstant(value, { locale: "en-US" });
     const invalid = formatInstant(value, {
       timeZone: "Not/AZone",
+      aliases: ["Also/Missing"],
       locale: "en-US",
     });
-    expect(invalid).toBe("—");
+    const utc = new Date(value).toLocaleString("en-US", { timeZone: "UTC" });
+    expect(invalid).toBe(`${utc} UTC`);
     expect(invalid).not.toBe(browser);
+  });
+});
+
+describe("displayZoneId", () => {
+  it("keeps a stored preference and otherwise uses the browser zone", () => {
+    expect(displayZoneId("Asia/Shanghai")).toBe("Asia/Shanghai");
+    expect(displayZoneId("  UTC  ")).toBe("UTC");
+    expect(displayZoneId(null)).toBe(browserTimeZone());
+    expect(displayZoneId(undefined)).toBe(browserTimeZone());
+    expect(displayZoneId("")).toBe(browserTimeZone());
+    expect(displayZoneId("   ")).toBe(browserTimeZone());
+  });
+
+  it("does not label a missing browser zone as UTC", () => {
+    const original = Intl.DateTimeFormat;
+    Intl.DateTimeFormat = function DateTimeFormat() {
+      throw new Error("intl down");
+    } as unknown as typeof Intl.DateTimeFormat;
+    try {
+      expect(browserTimeZone()).toBeNull();
+      expect(displayZoneId(null)).toBeNull();
+      expect(displayZoneId(null)).not.toBe(displayZoneId("UTC"));
+    } finally {
+      Intl.DateTimeFormat = original;
+    }
   });
 });
 

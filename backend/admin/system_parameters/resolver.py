@@ -43,6 +43,16 @@ class ResolvedIntParameter:
     updated_by_user_id: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedStrParameter:
+    key: str
+    value: str
+    previous_value: str | None
+    source: ParameterSource
+    updated_at: datetime | None
+    updated_by_user_id: str | None
+
+
 def occupy_registered_parameters() -> None:
     """Insert a seed row when the key is missing. Never overwrite an existing row."""
     store = get_parameter_store()
@@ -97,6 +107,27 @@ def resolve_int(key: str) -> ResolvedIntParameter:
     )
 
 
+def resolve_str(key: str) -> ResolvedStrParameter:
+    """Admit the stored value against the string constraint; otherwise fall back.
+
+    Store failure and unreadable rows use last-known-good, then seed — never raise.
+    """
+    spec = get_parameter_spec(key)
+    raw = _read_for_consumer(spec)
+    value = _as_str(spec.constraint.fallback(raw.value, spec.seed), spec)
+    previous: str | None = None
+    if raw.previous_value is not None:
+        previous = _as_str(spec.constraint.fallback(raw.previous_value, spec.seed), spec)
+    return ResolvedStrParameter(
+        key=spec.key,
+        value=value,
+        previous_value=previous,
+        source=raw.source,
+        updated_at=raw.updated_at,
+        updated_by_user_id=raw.updated_by_user_id,
+    )
+
+
 def validate_parameter_write(key: str, value: object) -> ParameterValue:
     """Admit a write: registered key and declared constraint. Does not persist."""
     spec = get_parameter_spec(key)
@@ -127,6 +158,8 @@ def set_parameter(
     store.upsert(record)
     resolved = _from_record(record)
     _remember(resolved)
+    if spec.on_written is not None:
+        spec.on_written()
     return resolved
 
 
@@ -146,6 +179,8 @@ def reset_parameter(key: str, *, actor_user_id: str | None) -> ResolvedParameter
     store.upsert(record)
     resolved = _from_record(record)
     _remember(resolved)
+    if spec.on_written is not None:
+        spec.on_written()
     return resolved
 
 
@@ -179,6 +214,12 @@ def _record_is_readable(record: ParameterRecord) -> bool:
 def _as_int(value: ParameterValue, spec: ParameterSpec) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ParameterValueInvalid(f"{spec.key} did not resolve to an integer")
+    return value
+
+
+def _as_str(value: ParameterValue, spec: ParameterSpec) -> str:
+    if not isinstance(value, str):
+        raise ParameterValueInvalid(f"{spec.key} did not resolve to a string")
     return value
 
 

@@ -76,6 +76,5 @@ class CatalogEmbedJobs:
             enabled=public.enabled,
             cron=public.cron,
             interval_seconds=public.interval_seconds,
-            schedule_timezone=public.schedule_timezone,
             next_run_at=public.next_run_at,
         )

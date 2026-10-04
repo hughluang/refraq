@@ -50,7 +50,6 @@ All endpoints use JSON success and RFC 9457 Problem Details failures. They accep
     "enabled": true,
     "cron": "0 3 * * *",
     "interval_seconds": null,
-    "schedule_timezone": "UTC",
     "next_run_at": "2026-08-14T03:00:00Z"
   }
 }

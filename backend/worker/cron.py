@@ -7,19 +7,20 @@ Gap → next legal local time; ambiguous → fold=1 once for every cron expressi
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from celery.schedules import BaseSchedule, schedstate
 
 from backend.core.time import ensure_aware_utc, resolve_wall_time, utc_now
+from backend.core.time_zones import canonical_zone_id
 from backend.worker.parameters import BEAT_SYNC_EVERY_SEC
 
 
 def validate_schedule_timezone(name: str) -> ZoneInfo:
-    try:
-        return ZoneInfo(name)
-    except ZoneInfoNotFoundError as exc:
-        raise ValueError(f"unknown Schedule Timezone: {name!r}") from exc
+    canonical = canonical_zone_id(name)
+    if canonical is None:
+        raise ValueError(f"unknown Schedule Timezone: {name!r}")
+    return ZoneInfo(canonical)
 
 
 def _parse_field(field: str, minimum: int, maximum: int) -> set[int]:

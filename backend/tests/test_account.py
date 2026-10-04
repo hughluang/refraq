@@ -133,19 +133,58 @@ def test_update_profile_invalid_display_timezone(client: TestClient) -> None:
         "/account/profile", json={"display_timezone": "Not/AZone"}
     )
     assert response.status_code == 400
-    assert response.json()["code"] == "ACCOUNT_INVALID_DISPLAY_TIMEZONE"
+    body = response.json()
+    assert body["code"] == "ACCOUNT_INVALID_DISPLAY_TIMEZONE"
+    assert body["detail"] == (
+        "Invalid Display Timezone (current zone id or known alias required)"
+    )
+    assert "IANA zone required" not in body["detail"]
 
 
 def test_update_profile_display_timezone_path_value_error(
     client: TestClient,
 ) -> None:
-    """ZoneInfo raises ValueError for non-normalized relative paths."""
+    """A path-like zone id is not in the canonical set."""
     _login(client)
     response = client.patch(
         "/account/profile", json={"display_timezone": "../UTC"}
     )
     assert response.status_code == 400
-    assert response.json()["code"] == "ACCOUNT_INVALID_DISPLAY_TIMEZONE"
+    body = response.json()
+    assert body["code"] == "ACCOUNT_INVALID_DISPLAY_TIMEZONE"
+    assert body["detail"] == (
+        "Invalid Display Timezone (current zone id or known alias required)"
+    )
+    assert "IANA zone required" not in body["detail"]
+
+
+def test_update_profile_canonicalizes_display_timezone_alias(
+    client: TestClient, store_bundle
+) -> None:
+    user_store, _, _, _ = store_bundle
+    _login(client)
+    response = client.patch(
+        "/account/profile", json={"display_timezone": "Asia/Calcutta"}
+    )
+    assert response.status_code == 200
+    assert response.json()["user"]["display_timezone"] == "Asia/Kolkata"
+    stored = user_store.get_by_account("root")
+    assert stored is not None
+    assert stored.display_timezone == "Asia/Kolkata"
+
+
+def test_time_zones_lists_canonical_ids(client: TestClient) -> None:
+    _login(client)
+    response = client.get("/time-zones")
+    assert response.status_code == 200
+    items = response.json()["items"]
+    by_id = {item["id"]: item["aliases"] for item in items}
+    assert "UTC" in by_id
+    assert "Europe/Kyiv" in by_id
+    assert "Europe/Kiev" not in by_id
+    assert "Europe/Kiev" in by_id["Europe/Kyiv"]
+    assert "Factory" not in by_id
+    assert "US/Eastern" not in by_id
 
 
 def test_display_timezone_does_not_change_instant_wire(

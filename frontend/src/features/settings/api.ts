@@ -5,7 +5,7 @@ export function fetchPlatformSettings() {
   return apiClient<PlatformSettings>("/settings");
 }
 
-export function patchPlatformSettings(values: Record<string, number>) {
+export function patchPlatformSettings(values: Record<string, number | string>) {
   return apiClient<PlatformSettings>("/settings", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },

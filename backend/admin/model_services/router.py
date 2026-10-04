@@ -71,7 +71,6 @@ def _purpose_out(state: PurposeState) -> PurposeStateOut:
             enabled=view.enabled,
             cron=view.cron,
             interval_seconds=view.interval_seconds,
-            schedule_timezone=view.schedule_timezone,
             next_run_at=view.next_run_at,
         )
     return PurposeStateOut(

@@ -17,6 +17,7 @@ from backend.metadata.errors import (
 )
 from backend.metadata.sources.store import SourceRecord, get_source_store
 from backend.worker.api import (
+    current_schedule_timezone,
     get_schedule,
     initial_next_run_at,
     schedule_out,
@@ -34,9 +35,7 @@ from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store
 
 __all__ = [
     "DEFAULT_JOIN_DETECTION_CRON",
-    "DEFAULT_JOIN_DETECTION_SCHEDULE_TIMEZONE",
     "DEFAULT_STRUCTURE_CRON",
-    "DEFAULT_STRUCTURE_SCHEDULE_TIMEZONE",
     "JOIN_DETECTION_ENQUEUE_TASK_NAME",
     "SOURCE_WORK_KINDS",
     "STRUCTURE_ENQUEUE_TASK_NAME",
@@ -60,8 +59,6 @@ JOIN_DETECTION_ENQUEUE_TASK_NAME = (
 )
 DEFAULT_STRUCTURE_CRON = "0 2 * * *"
 DEFAULT_JOIN_DETECTION_CRON = "0 4 * * *"
-DEFAULT_STRUCTURE_SCHEDULE_TIMEZONE = "UTC"
-DEFAULT_JOIN_DETECTION_SCHEDULE_TIMEZONE = "UTC"
 
 
 @dataclass(frozen=True)
@@ -70,7 +67,6 @@ class SourceWorkKindSpec:
     task_name: str
     key_prefix: str
     default_cron: str
-    default_timezone: str
 
 
 SOURCE_WORK_KINDS: dict[str, SourceWorkKindSpec] = {
@@ -79,14 +75,12 @@ SOURCE_WORK_KINDS: dict[str, SourceWorkKindSpec] = {
         task_name=STRUCTURE_ENQUEUE_TASK_NAME,
         key_prefix="structure:",
         default_cron=DEFAULT_STRUCTURE_CRON,
-        default_timezone=DEFAULT_STRUCTURE_SCHEDULE_TIMEZONE,
     ),
     "join_detection": SourceWorkKindSpec(
         kind="join_detection",
         task_name=JOIN_DETECTION_ENQUEUE_TASK_NAME,
         key_prefix="join_detection:",
         default_cron=DEFAULT_JOIN_DETECTION_CRON,
-        default_timezone=DEFAULT_JOIN_DETECTION_SCHEDULE_TIMEZONE,
     ),
 }
 
@@ -233,7 +227,6 @@ def _new_schedule_record(
     *,
     cron: str | None,
     interval_seconds: int | None,
-    schedule_timezone: str,
     enabled: bool,
     name: str | None,
     running_timeout_sec: int | None = None,
@@ -241,12 +234,13 @@ def _new_schedule_record(
     cron_value = cron.strip() if cron else None
     now = utc_now()
     schedule_id = f"sched_{uuid.uuid4().hex[:12]}"
+    zone = current_schedule_timezone()
     next_run = initial_next_run_at(
         cron=cron_value,
-        schedule_timezone=schedule_timezone,
         interval_seconds=interval_seconds if not cron_value else None,
         enabled=enabled,
         after=now,
+        schedule_timezone=zone,
     )
     return ScheduledTaskRecord(
         id=schedule_id,
@@ -258,7 +252,7 @@ def _new_schedule_record(
         task_name=spec.task_name,
         args_json=[],
         kwargs_json={"source_id": source.id, "schedule_id": schedule_id},
-        schedule_timezone=schedule_timezone,
+        commitment_timezone=zone,
         owner_ref=source_owner_ref(source.id),
         last_run_at=now,
         next_run_at=next_run,
@@ -276,7 +270,6 @@ def _default_schedule_record(
         spec,
         cron=spec.default_cron,
         interval_seconds=None,
-        schedule_timezone=spec.default_timezone,
         enabled=True,
         name=None,
     )
@@ -309,7 +302,6 @@ def create_source_schedule(
     kind: str,
     cron: str | None,
     interval_seconds: int | None,
-    schedule_timezone: str,
     enabled: bool,
     name: str | None,
     running_timeout_sec: int | None = None,
@@ -321,7 +313,6 @@ def create_source_schedule(
     validate_cadence(
         cron=cron.strip() if cron else None,
         interval_seconds=interval_seconds,
-        schedule_timezone=schedule_timezone,
     )
     timeout = validate_running_timeout(running_timeout_sec)
     record = _new_schedule_record(
@@ -329,7 +320,6 @@ def create_source_schedule(
         spec,
         cron=cron,
         interval_seconds=interval_seconds,
-        schedule_timezone=schedule_timezone,
         enabled=enabled,
         name=name,
         running_timeout_sec=timeout,
@@ -358,7 +348,6 @@ def _seed_default_schedule(
     validate_cadence(
         cron=spec.default_cron,
         interval_seconds=None,
-        schedule_timezone=spec.default_timezone,
     )
     record = _default_schedule_record(source, spec)
     stored = get_schedule_store().upsert(record, session=session)

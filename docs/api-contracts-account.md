@@ -30,7 +30,7 @@ Purpose: update the caller’s `display_name`, `email`, `locale`, and/or `displa
 - At least one of `display_name`, `email`, `locale`, `display_timezone` must be present.
 - `email` may be `null` or `""` to clear; empty string is stored as null.
 - `locale` must be a supported code (`zh-CN`, `en-US`).
-- `display_timezone` may be `null` or `""` to clear (follow browser in Console); when set, must be a valid IANA zone id.
+- `display_timezone` may be `null` or `""` to clear (follow browser in Console). When set, it must be a current id from `GET /time-zones` or one of that id's `aliases`. The stored and returned value is the current id (`Asia/Calcutta` is stored as `Asia/Kolkata`).
 
 ### Success Response: `200`
 
@@ -60,7 +60,7 @@ Shape matches Current User Summary (`docs/api-contracts-auth.md`) including `ema
 | --- | --- | --- |
 | `400` | `ACCOUNT_PROFILE_EMPTY` | No updatable fields provided |
 | `400` | `ACCOUNT_INVALID_LOCALE` | `locale` not in the supported catalog |
-| `400` | `ACCOUNT_INVALID_DISPLAY_TIMEZONE` | `display_timezone` is not a valid IANA zone |
+| `400` | `ACCOUNT_INVALID_DISPLAY_TIMEZONE` | `display_timezone` is not a current zone id or a known alias |
 | `400` | `ACCOUNT_INVALID_DISPLAY_NAME` | `display_name` empty or too long |
 | `401` | auth codes | Missing/invalid Session or PAT |
 
@@ -98,7 +98,33 @@ Side effects: password hash updated; all other Sessions for this User are delete
 
 Password change requires a valid **Session** cookie (not PAT-only) so the current session id can be retained under S1.
 
-## 5. Non-Goals
+## 5. `GET /time-zones`
+
+Purpose: the shared IANA zone catalog used by **Display Timezone** and by the `schedule_timezone` **System Parameter** enum.
+
+Permission: `console:access`.
+
+### Success Response: `200`
+
+```json
+{
+  "items": [
+    { "id": "Europe/Kyiv", "aliases": ["Europe/Kiev"] },
+    { "id": "UTC", "aliases": ["Etc/UTC", "Zulu"] }
+  ]
+}
+```
+
+`id` values are the zones in tzdata `zone1970.tab` plus `UTC`, sorted. `aliases` are historical link names that resolve to that id. `Factory`, `localtime`, and POSIX aliases such as `US/Eastern` are not ids.
+
+### Failure Responses
+
+| Status | Code | When |
+| --- | --- | --- |
+| `401` | auth codes | Missing/invalid Session or PAT |
+| `403` | `AUTH_FORBIDDEN` | Authenticated but lacking `console:access` |
+
+## 6. Non-Goals
 
 - Forgot-password / reset links
 - Email verification

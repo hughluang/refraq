@@ -191,7 +191,6 @@ def test_schedule_jobs_pushdown_and_pages(client: TestClient) -> None:
         json={
             "kind": "structure",
             "cron": "0 2 * * *",
-            "schedule_timezone": "UTC",
             "enabled": True,
         },
     )
