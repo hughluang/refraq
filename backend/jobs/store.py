@@ -126,6 +126,29 @@ class MemoryJobStore:
                 return items[start:], total
             return items[start : start + max(0, limit)], total
 
+    def recent_by_trigger_refs(
+        self,
+        *,
+        trigger_kind: str,
+        trigger_refs: Sequence[str],
+        per_ref: int,
+    ) -> dict[str, list[JobRecord]]:
+        """Newest-first Jobs per trigger_ref, at most ``per_ref`` each."""
+        wanted = set(trigger_refs)
+        grouped: dict[str, list[JobRecord]] = {ref: [] for ref in wanted}
+        with self._lock:
+            items = [
+                r
+                for r in self._by_id.values()
+                if r.trigger_kind == trigger_kind and r.trigger_ref in wanted
+            ]
+        items.sort(key=lambda r: (r.created_at, r.id), reverse=True)
+        for record in items:
+            bucket = grouped[record.trigger_ref]  # type: ignore[index]
+            if len(bucket) < per_ref:
+                bucket.append(record)
+        return grouped
+
     def claim_queued(
         self,
         job_id: str,
@@ -325,6 +348,44 @@ class SqlJobStore:
                 stmt = stmt.limit(limit)
             rows = session.scalars(stmt).all()
             return [_row_to_job(row) for row in rows], total
+
+    def recent_by_trigger_refs(
+        self,
+        *,
+        trigger_kind: str,
+        trigger_refs: Sequence[str],
+        per_ref: int,
+    ) -> dict[str, list[JobRecord]]:
+        """Newest-first Jobs per trigger_ref, at most ``per_ref`` each (one query)."""
+        grouped: dict[str, list[JobRecord]] = {ref: [] for ref in trigger_refs}
+        if not grouped:
+            return grouped
+        rank = (
+            func.row_number()
+            .over(
+                partition_by=JobRow.trigger_ref,
+                order_by=(JobRow.created_at.desc(), JobRow.id.desc()),
+            )
+            .label("rn")
+        )
+        ranked = (
+            select(JobRow.id.label("job_id"), rank)
+            .where(
+                JobRow.trigger_kind == trigger_kind,
+                JobRow.trigger_ref.in_(list(grouped)),
+            )
+            .subquery()
+        )
+        stmt = (
+            select(JobRow)
+            .join(ranked, ranked.c.job_id == JobRow.id)
+            .where(ranked.c.rn <= per_ref)
+            .order_by(JobRow.created_at.desc(), JobRow.id.desc())
+        )
+        with session_scope() as session:
+            for row in session.scalars(stmt).all():
+                grouped[row.trigger_ref].append(_row_to_job(row))  # type: ignore[index]
+        return grouped
 
     def claim_queued(
         self,

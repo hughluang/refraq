@@ -3,11 +3,12 @@ export type ScheduleTarget = {
   source_key: string | null;
 };
 
-export type ScheduleLastJob = {
+export type ScheduleRecentJob = {
   id: string;
   status: string;
-  finished_at: string | null;
   created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
   error_code: string | null;
 };
 
@@ -24,7 +25,8 @@ export type ScheduledTask = {
   deletable: boolean;
   last_run_at: string | null;
   next_run_at: string | null;
-  last_job: ScheduleLastJob | null;
+  /** Latest Jobs of this schedule, oldest first; the last element is the last run. */
+  recent_jobs: ScheduleRecentJob[];
   created_at: string;
   updated_at: string;
 };

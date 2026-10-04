@@ -15,6 +15,7 @@ import {
 import { ScheduleFormModal } from "@/features/schedules/ScheduleFormModal";
 import { ScheduleIdentityCell } from "@/features/schedules/ScheduleIdentityCell";
 import { ScheduleJobsModal } from "@/features/schedules/ScheduleJobsModal";
+import { ScheduleRunStrip } from "@/features/schedules/ScheduleRunStrip";
 import { ScheduleRowActions } from "@/features/schedules/ScheduleRowActions";
 import { formatScheduleNextRun } from "@/features/schedules/nextRunPreview";
 import { scheduleIdentityLabel } from "@/features/schedules/scheduleIdentity";
@@ -123,7 +124,7 @@ export function SourceSchedulesPage({ sourceId }: Props) {
                       displayZone ?? t("account.fields.displayTimezone.browser"),
                   })}
                 </Table.Th>
-                <Table.Th>{t("schedules.fields.lastJob")}</Table.Th>
+                <Table.Th>{t("schedules.fields.recentRuns")}</Table.Th>
                 <Table.Th />
               </Table.Tr>
             }
@@ -170,25 +171,10 @@ export function SourceSchedulesPage({ sourceId }: Props) {
                   </Text>
                 </Table.Td>
                 <Table.Td>
-                  {task.last_job ? (
-                    <>
-                      <Text size="sm">
-                        {task.last_job.finished_at
-                          ? formatInstant(task.last_job.finished_at)
-                          : task.last_job.created_at
-                            ? formatInstant(task.last_job.created_at)
-                            : "—"}
-                      </Text>
-                      <Text size="xs" c="dimmed">
-                        {task.last_job.status}
-                        {task.last_job.error_code
-                          ? ` · ${task.last_job.error_code}`
-                          : ""}
-                      </Text>
-                    </>
-                  ) : (
-                    <Text size="sm">—</Text>
-                  )}
+                  <ScheduleRunStrip
+                    jobs={task.recent_jobs}
+                    onOpenJobs={() => setJobsTask(task)}
+                  />
                 </Table.Td>
                 <Table.Td>
                   <ScheduleRowActions

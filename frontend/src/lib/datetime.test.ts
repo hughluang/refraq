@@ -6,6 +6,7 @@ import {
   formatDurationMs,
   formatInstant,
   formatJobDuration,
+  runDurationMs,
 } from "@/lib/datetime";
 
 describe("formatInstant", () => {
@@ -178,5 +179,40 @@ describe("formatJobDuration", () => {
         finished_at: null,
       }),
     ).toBe("—");
+  });
+});
+
+describe("runDurationMs", () => {
+  const started = "2026-10-04T10:00:00Z";
+  const now = Date.parse("2026-10-04T10:01:00Z");
+
+  it("uses finished minus started", () => {
+    expect(
+      runDurationMs(
+        { status: "succeeded", started_at: started, finished_at: "2026-10-04T10:00:10Z" },
+        now,
+      ),
+    ).toBe(10_000);
+  });
+
+  it("uses now for running jobs", () => {
+    expect(
+      runDurationMs({ status: "running", started_at: started, finished_at: null }, now),
+    ).toBe(60_000);
+  });
+
+  it("is null when not started", () => {
+    expect(
+      runDurationMs({ status: "queued", started_at: null, finished_at: null }, now),
+    ).toBeNull();
+  });
+
+  it("is null when finish precedes start", () => {
+    expect(
+      runDurationMs(
+        { status: "failed", started_at: started, finished_at: "2026-10-04T09:59:00Z" },
+        now,
+      ),
+    ).toBeNull();
   });
 });

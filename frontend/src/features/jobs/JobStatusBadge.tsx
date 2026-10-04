@@ -2,7 +2,7 @@
 
 import { Badge } from "@mantine/core";
 
-const STATUS_COLOR: Record<string, string> = {
+export const JOB_STATUS_COLOR: Record<string, string> = {
   queued: "blue",
   running: "yellow",
   succeeded: "green",
@@ -15,5 +15,5 @@ type Props = {
 };
 
 export function JobStatusBadge({ status }: Props) {
-  return <Badge color={STATUS_COLOR[status] ?? "gray"}>{status}</Badge>;
+  return <Badge color={JOB_STATUS_COLOR[status] ?? "gray"}>{status}</Badge>;
 }

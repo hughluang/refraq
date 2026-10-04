@@ -12,11 +12,12 @@ class ScheduleTargetOut(BaseModel):
     source_key: str | None = None
 
 
-class ScheduleLastJobOut(BaseModel):
+class ScheduleRecentJobOut(BaseModel):
     id: str
     status: str
-    finished_at: Instant | None = None
     created_at: Instant | None = None
+    started_at: Instant | None = None
+    finished_at: Instant | None = None
     error_code: str | None = None
 
 
@@ -33,7 +34,7 @@ class ScheduleOut(BaseModel):
     deletable: bool = True
     last_run_at: Instant | None
     next_run_at: Instant | None = None
-    last_job: ScheduleLastJobOut | None = None
+    recent_jobs: list[ScheduleRecentJobOut] = []
     created_at: Instant
     updated_at: Instant
 

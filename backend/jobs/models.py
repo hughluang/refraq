@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Integer, String, Text
+from sqlalchemy import Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -14,6 +14,9 @@ from backend.core.time import UtcDateTime
 
 class JobRow(Base):
     __tablename__ = "jobs"
+    __table_args__ = (
+        Index("ix_jobs_trigger", "trigger_kind", "trigger_ref", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     kind: Mapped[str] = mapped_column(String(64), nullable=False)

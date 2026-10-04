@@ -339,7 +339,7 @@
   "schedules.fields.nextRun": "下次运行",
   "schedules.fields.nextRunInZone": "下次运行 · {{zone}}",
   "schedules.fields.nextRunPaused": "已暂停",
-  "schedules.fields.lastJob": "上次运行",
+  "schedules.fields.recentRuns": "最近运行",
   "schedules.fields.lastRun": "到期游标",
   "schedules.preset.hourly": "每小时（{{zone}}）",
   "schedules.preset.daily": "每天",

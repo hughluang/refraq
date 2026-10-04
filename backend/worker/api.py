@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import datetime
 
@@ -22,7 +23,7 @@ from backend.worker.errors import (
     ScheduleUndeletable,
 )
 from backend.worker.models import REAPER_SCHEDULE_KEY, REAPER_TASK_NAME
-from backend.worker.schemas.schedules import ScheduleLastJobOut, ScheduleOut
+from backend.worker.schemas.schedules import ScheduleOut, ScheduleRecentJobOut
 from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store
 
 logger = logging.getLogger(__name__)
@@ -139,7 +140,7 @@ def initial_next_run_at(
 def schedule_out(
     record: ScheduledTaskRecord,
     *,
-    last_job: ScheduleLastJobOut | None = None,
+    recent_jobs: Sequence[ScheduleRecentJobOut] = (),
 ) -> ScheduleOut:
     """Map a mechanism Scheduled Task record to HTTP fields (no domain work_kind)."""
     return ScheduleOut(
@@ -155,7 +156,7 @@ def schedule_out(
         deletable=not record.undeletable,
         last_run_at=record.last_run_at,
         next_run_at=record.next_run_at,
-        last_job=last_job,
+        recent_jobs=list(recent_jobs),
         created_at=record.created_at,
         updated_at=record.updated_at,
     )

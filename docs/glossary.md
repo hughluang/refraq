@@ -258,7 +258,7 @@ The platform **scheduling foundation**: a cadence intent stored in Postgres that
 Celery Beat reads these rows (single Beat replica). Distinct from any one **Job** instance.
 A platform mechanism like **Job**, not a product domain, not a Metadata business object, and **not owned by Source** (no Source FK; scheduler never parses Source).
 Operator-facing identity is a closed work kind plus target projected by a **domain facade** (`structure` and `join_detection` targeting a **Source**; `catalog_embed` with no Source target), not a Celery task name. Facades may register several schedules of each Source kind that *target* one Source; that target lives in facade/kwargs projection, not as schedule ownership. `catalog_embed` is one site schedule.
-Cron wall clock uses **Schedule Timezone**; `last_run_at` is the consumed-due cursor Instant; `next_run_at` is the stored commitment (null when paused). An optional **Running Time Limit** on the definition is copied onto each minted **Job**. Operator run-now enqueues without moving those fields. Observation “last run” joins related **Jobs**.
+Cron wall clock uses **Schedule Timezone**; `last_run_at` is the consumed-due cursor Instant; `next_run_at` is the stored commitment (null when paused). An optional **Running Time Limit** on the definition is copied onto each minted **Job**. Operator run-now enqueues without moving those fields. Observation “recent runs” joins the latest related **Jobs**.
 Console operator copy, docs that name the row, and identifiers whose referent is this entity use **schedule**, not clock.
 Avoid storing product schedules only in Redis Beat state or static code when operators need to change them.
 Avoid treating Celery `timezone` as the business schedule zone.

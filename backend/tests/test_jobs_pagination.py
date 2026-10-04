@@ -111,6 +111,28 @@ def test_store_pages_and_orders_by_created_at_then_id() -> None:
     assert [row.id for row in page2] == ["job_b", "job_a"]
 
 
+def test_store_recent_by_trigger_refs_groups_and_caps() -> None:
+    reset_job_store()
+    store = get_job_store()
+    for i in range(5):
+        store.create(
+            _record(
+                f"a{i}",
+                trigger_kind="schedule",
+                trigger_ref="s_a",
+                created_at=STAMP.replace(minute=i),
+            )
+        )
+    store.create(_record("b0", trigger_kind="schedule", trigger_ref="s_b"))
+    store.create(_record("u0", trigger_kind="user", trigger_ref="s_a"))
+    got = store.recent_by_trigger_refs(
+        trigger_kind="schedule", trigger_refs=["s_a", "s_b", "s_none"], per_ref=3
+    )
+    assert [r.id for r in got["s_a"]] == ["a4", "a3", "a2"]
+    assert [r.id for r in got["s_b"]] == ["b0"]
+    assert got["s_none"] == []
+
+
 def test_store_total_respects_filters() -> None:
     reset_job_store()
     store = get_job_store()

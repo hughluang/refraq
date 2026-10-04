@@ -30,12 +30,16 @@ Create is domain-facade (`POST /sources/{id}/schedules`) plus the database Sourc
   "deletable": true,
   "last_run_at": "2026-08-13T10:00:00Z",
   "next_run_at": "2026-08-14T02:00:00Z",
-  "last_job": {
-    "id": "job_01HZX",
-    "status": "succeeded",
-    "finished_at": "2026-08-13T10:05:00Z",
-    "error_code": null
-  },
+  "recent_jobs": [
+    {
+      "id": "job_01HZX",
+      "status": "succeeded",
+      "created_at": "2026-08-13T10:00:00Z",
+      "started_at": "2026-08-13T10:00:01Z",
+      "finished_at": "2026-08-13T10:05:00Z",
+      "error_code": null
+    }
+  ],
   "created_at": "2026-08-13T10:00:00Z",
   "updated_at": "2026-08-13T10:00:00Z"
 }
@@ -50,7 +54,7 @@ Rules:
 - `running_timeout_sec` is the optional **Running Time Limit** (positive int seconds). Null / omit / seed = no control. Mint copies it onto the Job. PATCH of this field does not rewrite in-flight Jobs.
 - `last_run_at` is the Instant cursor of the last **consumed due** mint (Clock Instant). Operator run-now does not change it. Cron cross-slot skip does not change it. It is not Console “last run”.
 - `next_run_at` is the stored commitment Instant. Null when `enabled=false`. Due is `enabled` and `next_run_at <= now`. GET returns the stored value; it is not computed on read.
-- `last_job` is an observation join to the latest Job with `trigger_kind=schedule` and `trigger_ref` = this schedule id (any status). Null when none. Not cached on the schedule row.
+- `recent_jobs` is an observation join to the latest 20 Jobs with `trigger_kind=schedule` and `trigger_ref` = this schedule id (any status), ordered by `created_at` oldest first, so the last element is the last run. Empty array when none. Not cached on the schedule row. List endpoints load it for the whole page in one query.
 - Several schedules of each kind may target one Source. Keys `structure:{source_id}:{schedule_id}` and `join_detection:{source_id}:{schedule_id}` are Metadata facade naming conventions (unique per row), not a schedule-table Source FK.
 
 ## 3. Endpoints
@@ -137,8 +141,8 @@ Same **Offset Page** envelope, including `cron_timezone`, defaults, max, and ord
 
 - Module id `schedules` (`operations` group, list permission `jobs:run`): platform-wide domain schedules, including site `catalog_embed`; edit cadence / enabled; delete when `deletable`; run-now; related Jobs. No hidden rows. No global create. The list identity column is the raw work kind. The platform list appends the Source key in that same cell (`{work_kind} · {source_key}`, or `source_id` when the key is absent). `catalog_embed` shows only `catalog_embed`. The Source workbench shows only the work kind. A custom name appears on a second line only when it differs from the work-kind default (`structure · {source_key}`, `join_detection · {source_key}`, or `catalog embed`). The list does not show the schedule id.
 - Sources: related-schedules **workbench** at `/console/sources/:id/schedules` — toolbar create plus the same row actions as Operations (enable/disable, edit, delete, run-now, related Jobs). Console delete asks for confirmation; HTTP `DELETE` remains immediate.
-- Do not label `last_run_at` as Last run; show `last_job` for observation and `next_run_at` for commitment. Disabled → paused (not “unknown next”).
-- Create/edit may set optional **Running Time Limit**. Empty = no control. No schedule-list timezone column. Preset wall-clock sentences (the cadence option and the read-only cron phrase) include `cron_timezone` in the same sentence. Custom cron keeps that zone on the field description and does not write it into the expression. When editing a saved schedule whose cadence expression is unchanged, the form shows that row's next-run text with the same **Display Timezone** formatting as the list and states that it is the list's next run. A changed cadence says the list recalculates on save and does not invent a time. Create does not predict a next run. The next-run column header names the **Display Timezone** once (the browser zone when the preference is null). Cell text and last-job times do not repeat the zone. Job detail may show the minted Running Time Limit snapshot when non-null.
+- Do not label `last_run_at` as Last run; the list shows a Recent runs strip from `recent_jobs` for observation (one bar per Job, colored by status, height by duration, hover for details, click opens related Jobs) and `next_run_at` for commitment. Disabled → paused (not “unknown next”).
+- Create/edit may set optional **Running Time Limit**. Empty = no control. No schedule-list timezone column. Preset wall-clock sentences (the cadence option and the read-only cron phrase) include `cron_timezone` in the same sentence. Custom cron keeps that zone on the field description and does not write it into the expression. When editing a saved schedule whose cadence expression is unchanged, the form shows that row's next-run text with the same **Display Timezone** formatting as the list and states that it is the list's next run. A changed cadence says the list recalculates on save and does not invent a time. Create does not predict a next run. The next-run column header names the **Display Timezone** once (the browser zone when the preference is null). Cell text and recent-run times do not repeat the zone. Job detail may show the minted Running Time Limit snapshot when non-null.
 
 ## 6. Non-Goals
 

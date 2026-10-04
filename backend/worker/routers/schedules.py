@@ -11,6 +11,8 @@ from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
 from backend.metadata.source_schedules import (
     public_schedule,
+    public_schedules,
+    recent_jobs_by_schedule,
     schedule_label_for_record,
 )
 from backend.worker.api import (
@@ -24,9 +26,17 @@ from backend.worker.schemas.schedules import (
     SchedulePatchRequest,
     ScheduleResponse,
 )
-from backend.worker.schedules import get_schedule_store
+from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store
 
 router = APIRouter(tags=["schedules"])
+
+
+def _schedule_response(record: ScheduledTaskRecord) -> ScheduleResponse:
+    return ScheduleResponse(
+        schedule=public_schedule(
+            record, recent_jobs=recent_jobs_by_schedule([record.id])[record.id]
+        )
+    )
 
 
 @router.get("/schedules", response_model=ScheduleListResponse)
@@ -39,7 +49,7 @@ def list_platform_schedules(
         include_hidden=hidden, limit=page.limit, offset=page.offset
     )
     return ScheduleListResponse(
-        items=[public_schedule(record) for record in records],
+        items=public_schedules(records),
         total=total,
         limit=page.limit,
         offset=page.offset,
@@ -52,7 +62,7 @@ def get_platform_schedule(
     schedule_id: str,
     _: UserRecord = Depends(require_permission("jobs:run")),
 ) -> ScheduleResponse:
-    return ScheduleResponse(schedule=public_schedule(get_schedule(schedule_id)))
+    return _schedule_response(get_schedule(schedule_id))
 
 
 @router.patch("/schedules/{schedule_id}", response_model=ScheduleResponse)
@@ -84,7 +94,7 @@ def patch_platform_schedule(
         result="success",
         detail={},
     )
-    return ScheduleResponse(schedule=public_schedule(updated))
+    return _schedule_response(updated)
 
 
 @router.delete("/schedules/{schedule_id}", status_code=status.HTTP_204_NO_CONTENT)

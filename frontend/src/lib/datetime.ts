@@ -80,29 +80,30 @@ export function formatDurationMs(ms: number): string {
 }
 
 /**
- * Job run duration from started/finished timestamps.
- * Running jobs use `now - started_at`; queued / no start → "—".
+ * Job run time in ms. Finished jobs use `finished_at - started_at`; running jobs
+ * use `now - started_at`. Null when not started, unparsable, negative, or not
+ * running without a finish.
  */
+export function runDurationMs(job: JobDurationFields, now: number): number | null {
+  if (!job.started_at) return null;
+  const start = Date.parse(job.started_at);
+  if (Number.isNaN(start)) return null;
+  let ms: number;
+  if (job.finished_at) {
+    ms = Date.parse(job.finished_at) - start;
+  } else if (job.status === "running") {
+    ms = now - start;
+  } else {
+    return null;
+  }
+  return Number.isFinite(ms) && ms >= 0 ? ms : null;
+}
+
+/** Job run duration text; queued / no start → "—". */
 export function formatJobDuration(
   job: JobDurationFields,
   now: Date = new Date(),
 ): string {
-  if (!job.started_at) {
-    return "—";
-  }
-  const start = new Date(job.started_at).getTime();
-  if (Number.isNaN(start)) {
-    return "—";
-  }
-  if (job.finished_at) {
-    const end = new Date(job.finished_at).getTime();
-    if (Number.isNaN(end)) {
-      return "—";
-    }
-    return formatDurationMs(end - start);
-  }
-  if (job.status === "running") {
-    return formatDurationMs(now.getTime() - start);
-  }
-  return "—";
+  const ms = runDurationMs(job, now.getTime());
+  return ms === null ? "—" : formatDurationMs(ms);
 }

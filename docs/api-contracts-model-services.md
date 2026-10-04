@@ -55,7 +55,7 @@ All endpoints use JSON success and RFC 9457 Problem Details failures. They accep
 }
 ```
 
-`index_status` is `none` | `indexing` | `ready` | `failed`. It is `ready` when the ready bit is set. Otherwise a non-terminal `catalog_embed` Job makes it `indexing`. Otherwise it is `failed` when the latest sweep is `failed`, and `none` when there is no sweep or that sweep has another status. A sweep is a `catalog_embed` Job whose result `outcome` is not `skipped`. Failed and cancelled Jobs leave `result` null and count as sweeps. It is not computed by scanning embedding rows. `in_use_id` is null when the purpose has no in-use service. `embed_schedule` describes the site cadence that mints `catalog_embed`: id, enabled, cadence, and the next due Instant. Minted Jobs are observed on that schedule’s `last_job` and related Jobs, not on purpose state.
+`index_status` is `none` | `indexing` | `ready` | `failed`. It is `ready` when the ready bit is set. Otherwise a non-terminal `catalog_embed` Job makes it `indexing`. Otherwise it is `failed` when the latest sweep is `failed`, and `none` when there is no sweep or that sweep has another status. A sweep is a `catalog_embed` Job whose result `outcome` is not `skipped`. Failed and cancelled Jobs leave `result` null and count as sweeps. It is not computed by scanning embedding rows. `in_use_id` is null when the purpose has no in-use service. `embed_schedule` describes the site cadence that mints `catalog_embed`: id, enabled, cadence, and the next due Instant. Minted Jobs are observed on that schedule’s `recent_jobs` and related Jobs, not on purpose state.
 
 ## 5. Endpoints
 

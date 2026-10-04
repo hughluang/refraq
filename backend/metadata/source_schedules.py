@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
@@ -27,8 +28,8 @@ from backend.worker.api import (
 )
 from backend.worker.errors import ScheduleSystemImmutable
 from backend.worker.schemas.schedules import (
-    ScheduleLastJobOut,
     ScheduleOut,
+    ScheduleRecentJobOut,
     ScheduleTargetOut,
 )
 from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store
@@ -45,6 +46,8 @@ __all__ = [
     "list_jobs_for_schedule",
     "list_source_schedules",
     "public_schedule",
+    "public_schedules",
+    "recent_jobs_by_schedule",
     "require_runnable_schedule",
     "schedule_label_for_record",
     "seed_default_source_schedules",
@@ -57,6 +60,7 @@ STRUCTURE_ENQUEUE_TASK_NAME = "backend.metadata.source_jobs.fire_scheduled_struc
 JOIN_DETECTION_ENQUEUE_TASK_NAME = (
     "backend.metadata.source_jobs.fire_scheduled_join_detection"
 )
+RECENT_JOBS_LIMIT = 20
 DEFAULT_STRUCTURE_CRON = "0 2 * * *"
 DEFAULT_JOIN_DETECTION_CRON = "0 4 * * *"
 
@@ -151,15 +155,17 @@ def schedule_label_for_record(
 
 
 def public_schedule(
-    record: ScheduledTaskRecord, *, source_key: str | None = None
+    record: ScheduledTaskRecord,
+    *,
+    source_key: str | None = None,
+    recent_jobs: list[ScheduleRecentJobOut],
 ) -> ScheduleOut:
     """Project a mechanism record as an operator Scheduled Task.
 
     Source shape lives here: system rows stay mechanism-null; a string
     ``source_id`` in kwargs becomes ``work_kind`` plus target.
     """
-    last_job = _last_job_for_schedule(record.id)
-    projected = schedule_out(record, last_job=last_job)
+    projected = schedule_out(record, recent_jobs=recent_jobs)
     if record.store_only:
         return projected
     from backend.metadata.catalog_embed_jobs.schedule import is_catalog_embed_schedule
@@ -187,22 +193,42 @@ def public_schedule(
     )
 
 
-def _last_job_for_schedule(schedule_id: str) -> ScheduleLastJobOut | None:
-    jobs, _ = get_job_store().list(
+def recent_jobs_by_schedule(
+    schedule_ids: Sequence[str],
+) -> dict[str, list[ScheduleRecentJobOut]]:
+    """Latest Jobs per schedule (oldest first), one store query for the whole page."""
+    grouped = get_job_store().recent_by_trigger_refs(
         trigger_kind="schedule",
-        trigger_ref=schedule_id,
-        limit=1,
+        trigger_refs=schedule_ids,
+        per_ref=RECENT_JOBS_LIMIT,
     )
-    if not jobs:
-        return None
-    latest = jobs[0]
-    return ScheduleLastJobOut(
-        id=latest.id,
-        status=latest.status,
-        finished_at=latest.finished_at,
-        created_at=latest.created_at,
-        error_code=latest.error_code,
-    )
+    return {
+        schedule_id: [
+            ScheduleRecentJobOut(
+                id=job.id,
+                status=job.status,
+                created_at=job.created_at,
+                started_at=job.started_at,
+                finished_at=job.finished_at,
+                error_code=job.error_code,
+            )
+            for job in reversed(grouped[schedule_id])
+        ]
+        for schedule_id in schedule_ids
+    }
+
+
+def public_schedules(
+    records: Sequence[ScheduledTaskRecord], *, source_key: str | None = None
+) -> list[ScheduleOut]:
+    """Project a page of records with one batched recent-Jobs query."""
+    recent = recent_jobs_by_schedule([record.id for record in records])
+    return [
+        public_schedule(
+            record, source_key=source_key, recent_jobs=recent[record.id]
+        )
+        for record in records
+    ]
 
 
 def delete_source_schedules_by_source_id(source_id: str) -> None:
@@ -334,7 +360,11 @@ def create_source_schedule(
         result="success",
         detail=_schedule_create_detail(source_id, spec.kind),
     )
-    return public_schedule(stored, source_key=source.key)
+    return public_schedule(
+        stored,
+        source_key=source.key,
+        recent_jobs=recent_jobs_by_schedule([stored.id])[stored.id],
+    )
 
 
 def _seed_default_schedule(
@@ -361,7 +391,11 @@ def _seed_default_schedule(
         detail=_schedule_create_detail(source.id, spec.kind),
         session=session,
     )
-    return public_schedule(stored, source_key=source.key)
+    return public_schedule(
+        stored,
+        source_key=source.key,
+        recent_jobs=recent_jobs_by_schedule([stored.id])[stored.id],
+    )
 
 
 def seed_default_source_schedules(
@@ -435,7 +469,7 @@ def list_source_schedules(
     records, total = get_schedule_store().list_by_owner_ref(
         source_owner_ref(source_id), limit=limit, offset=offset
     )
-    return [public_schedule(record, source_key=source.key) for record in records], total
+    return public_schedules(records, source_key=source.key), total
 
 
 def list_jobs_for_schedule(

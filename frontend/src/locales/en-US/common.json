@@ -339,7 +339,7 @@
   "schedules.fields.nextRun": "Next run",
   "schedules.fields.nextRunInZone": "Next run · {{zone}}",
   "schedules.fields.nextRunPaused": "Paused",
-  "schedules.fields.lastJob": "Last run",
+  "schedules.fields.recentRuns": "Recent runs",
   "schedules.fields.lastRun": "Due cursor",
   "schedules.preset.hourly": "Hourly ({{zone}})",
   "schedules.preset.daily": "Daily",

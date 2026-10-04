@@ -67,14 +67,12 @@ class CatalogEmbedJobs:
         from backend.metadata.catalog_embed_jobs.schedule import (
             ensure_catalog_embed_schedule,
         )
-        from backend.metadata.source_schedules import public_schedule
 
         record = ensure_catalog_embed_schedule()
-        public = public_schedule(record)
         return EmbedScheduleView(
-            id=public.id,
-            enabled=public.enabled,
-            cron=public.cron,
-            interval_seconds=public.interval_seconds,
-            next_run_at=public.next_run_at,
+            id=record.id,
+            enabled=record.enabled,
+            cron=record.cron,
+            interval_seconds=record.interval_seconds,
+            next_run_at=record.next_run_at,
         )

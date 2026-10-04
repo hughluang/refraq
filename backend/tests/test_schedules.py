@@ -501,7 +501,7 @@ def test_public_schedule_projects_structure_target(client: TestClient) -> None:
     mechanism = schedule_out(record)
     assert mechanism.work_kind is None
     assert mechanism.target is None
-    projected = public_schedule(record)
+    projected = public_schedule(record, recent_jobs=[])
     assert projected.work_kind == "structure"
     assert projected.target is not None
     assert projected.target.source_id == source["id"]
@@ -511,7 +511,7 @@ def test_public_schedule_projects_structure_target(client: TestClient) -> None:
 def test_public_schedule_missing_source_id_is_not_structure() -> None:
     record = _structure_record()
     record.kwargs_json = {"schedule_id": record.id}
-    projected = public_schedule(record)
+    projected = public_schedule(record, recent_jobs=[])
     assert projected.work_kind is None
     assert projected.target is None
 
@@ -1544,13 +1544,50 @@ def test_schedule_last_job_observation(
     source = _make_source(client, key="last-job")
     created = _post_daily(client, source["id"])
     schedule = created.json()["schedule"]
-    assert schedule["last_job"] is None
+    assert schedule["recent_jobs"] == []
     assert schedule["next_run_at"] is not None
     ran = client.post(f"/schedules/{schedule['id']}/run")
     assert ran.status_code == 202
     refreshed = client.get(f"/schedules/{schedule['id']}").json()["schedule"]
-    assert refreshed["last_job"] is not None
-    assert refreshed["last_job"]["id"] == ran.json()["job"]["id"]
+    assert len(refreshed["recent_jobs"]) == 1
+    assert refreshed["recent_jobs"][0]["id"] == ran.json()["job"]["id"]
+    assert "started_at" in refreshed["recent_jobs"][0]
+
+
+def test_recent_jobs_capped_oldest_first_and_scoped(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import timedelta
+
+    from backend.jobs.store import create_queued_job
+
+    source = _make_source(client, key="recent-jobs")
+    schedule = _post_daily(client, source["id"]).json()["schedule"]
+    other = _post_daily(client, source["id"]).json()["schedule"]
+    base = utc_now() - timedelta(hours=2)
+    ids = []
+    for i in range(25):
+        job = create_queued_job(
+            kind="structure",
+            input={"source_id": source["id"]},
+            trigger_kind="schedule",
+            trigger_ref=schedule["id"],
+            created_at=base + timedelta(minutes=i),
+        )
+        ids.append(job.id)
+    create_queued_job(
+        kind="structure",
+        input={"source_id": source["id"]},
+        trigger_kind="schedule",
+        trigger_ref=other["id"],
+        created_at=base,
+    )
+    got = client.get(f"/schedules/{schedule['id']}").json()["schedule"]
+    assert [j["id"] for j in got["recent_jobs"]] == ids[-20:]
+    listed = client.get(f"/sources/{source['id']}/schedules").json()["items"]
+    by_id = {item["id"]: item for item in listed}
+    assert len(by_id[schedule["id"]]["recent_jobs"]) == 20
+    assert len(by_id[other["id"]]["recent_jobs"]) == 1
 
 
 def test_inflight_delete_mints_cancelled_job(

@@ -71,14 +71,14 @@ Rules:
 - Product cron does **not** catch up missed slots beyond the current-slot rule above. Interval may fire one catch-up beat while enabled.
 - MCP does not expose Scheduled Task CRUD or run-now in this slice.
 - Platform operational work and domain cadences share the same **Scheduled Task** table.
-- Operator management is of the **definition** plus run-now; fired work is observed as **Jobs**, including `GET /schedules/{id}/jobs`. Observation "last run" joins the latest related Job; it is not `last_run_at`.
+- Operator management is of the **definition** plus run-now; fired work is observed as **Jobs**, including `GET /schedules/{id}/jobs`. Observation "recent runs" joins the latest related Jobs (newest is the last run); it is not `last_run_at`.
 
 ## 4. Console
 
 - Module id `schedules` lives in the **Operations** nav group (`operations`), list permission `jobs:run`: platform-wide domain schedules, including the site `catalog_embed` schedule; edit cadence / enabled; delete when `deletable`; run-now; related Jobs. No hidden rows. No global create.
 - Source “related schedules” is a **Source-scoped workbench** at `/console/sources/:id/schedules` (not a sidebar module, not registered as `sources.show`): toolbar create plus the same row actions (enable/disable, edit, delete, run-now, related Jobs). `jobs:run` gates the surface.
 - Console delete asks for confirmation; HTTP `DELETE` remains immediate.
-- Screen copy uses **schedule**. Do not label `last_run_at` as "Last run". Disabled rows show paused, not "unknown next".
+- Screen copy uses **schedule**. Do not label `last_run_at` as "Last run"; the list shows a Recent runs strip of the latest related Jobs. Disabled rows show paused, not "unknown next".
 - Create/edit may set optional **Running Time Limit**. Empty = no control. No new schedule-list column in this slice.
 
 ## 5. Non-Goals
