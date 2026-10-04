@@ -328,8 +328,6 @@
   "schedules.workKind.structure": "结构采集",
   "schedules.workKind.join_detection": "Join 检测",
   "schedules.workKind.catalog_embed": "目录向量",
-  "schedules.target.site": "全站",
-  "schedules.fields.target": "目标",
   "schedules.fields.cadence": "节奏",
   "schedules.fields.cron": "Cron",
   "schedules.fields.cronTimezoneHint": "按 {{zone}} 解释（系统参数）。",

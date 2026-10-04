@@ -13,9 +13,11 @@ import {
   patchSchedule,
 } from "@/features/schedules/api";
 import { ScheduleFormModal } from "@/features/schedules/ScheduleFormModal";
+import { ScheduleIdentityCell } from "@/features/schedules/ScheduleIdentityCell";
 import { ScheduleJobsModal } from "@/features/schedules/ScheduleJobsModal";
 import { ScheduleRowActions } from "@/features/schedules/ScheduleRowActions";
 import { formatScheduleNextRun } from "@/features/schedules/nextRunPreview";
+import { scheduleIdentityLabel } from "@/features/schedules/scheduleIdentity";
 import type { ScheduledTask } from "@/features/schedules/types";
 import { getSource } from "@/features/sources/api/sources";
 import { useDisplayZoneId, useFormatInstant } from "@/hooks/useFormatInstant";
@@ -108,11 +110,10 @@ export function SourceSchedulesPage({ sourceId }: Props) {
       >
         <ListTable
             list={list}
-            columnCount={7}
+            columnCount={6}
             emptyMessage={t("schedules.related.empty")}
             head={
               <Table.Tr>
-                <Table.Th>{t("schedules.fields.name")}</Table.Th>
                 <Table.Th>{t("schedules.fields.kind")}</Table.Th>
                 <Table.Th>{t("schedules.fields.cadence")}</Table.Th>
                 <Table.Th>{t("schedules.fields.enabled")}</Table.Th>
@@ -130,17 +131,7 @@ export function SourceSchedulesPage({ sourceId }: Props) {
             {items.map((task) => (
               <Table.Tr key={task.id}>
                 <Table.Td>
-                  <Text size="sm">{task.name}</Text>
-                  <Text size="xs" c="dimmed" ff="monospace">
-                    {task.id}
-                  </Text>
-                </Table.Td>
-                <Table.Td>
-                  <Text size="sm">
-                    {task.work_kind
-                      ? t(`schedules.workKind.${task.work_kind}`)
-                      : "—"}
-                  </Text>
+                  <ScheduleIdentityCell task={task} scope="source" />
                 </Table.Td>
                 <Table.Td>
                   <Text size="sm" ff="monospace">
@@ -234,7 +225,9 @@ export function SourceSchedulesPage({ sourceId }: Props) {
         ) : null}
         <ScheduleJobsModal
           scheduleId={jobsTask?.id ?? null}
-          scheduleLabel={jobsTask?.name}
+          scheduleLabel={
+            jobsTask ? scheduleIdentityLabel(jobsTask, "source") : undefined
+          }
           opened={jobsTask !== null}
           onClose={() => setJobsTask(null)}
         />

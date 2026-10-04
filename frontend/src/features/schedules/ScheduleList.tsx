@@ -1,6 +1,6 @@
 "use client";
 
-import { Badge, Button, Table, Text } from "@mantine/core";
+import { Button, Table, Text } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
@@ -9,9 +9,11 @@ import { SwitchField } from "@/components/form/SwitchField";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { listSchedules, patchSchedule } from "@/features/schedules/api";
 import { ScheduleFormModal } from "@/features/schedules/ScheduleFormModal";
+import { ScheduleIdentityCell } from "@/features/schedules/ScheduleIdentityCell";
 import { ScheduleJobsModal } from "@/features/schedules/ScheduleJobsModal";
 import { ScheduleRowActions } from "@/features/schedules/ScheduleRowActions";
 import { formatScheduleNextRun } from "@/features/schedules/nextRunPreview";
+import { scheduleIdentityLabel } from "@/features/schedules/scheduleIdentity";
 import type { ScheduledTask } from "@/features/schedules/types";
 import { useDisplayZoneId, useFormatInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
@@ -23,17 +25,6 @@ const PAGE_SIZE = 50;
 function cadenceLabel(task: ScheduledTask): string {
   if (task.interval_seconds) return `${task.interval_seconds}s`;
   return task.cron ?? "—";
-}
-
-function targetLabel(
-  task: ScheduledTask,
-  siteLabel: string,
-): string {
-  return (
-    task.target?.source_key ||
-    task.target?.source_id ||
-    (task.work_kind === "catalog_embed" ? siteLabel : "—")
-  );
 }
 
 export function ScheduleList() {
@@ -68,13 +59,11 @@ export function ScheduleList() {
     >
       <ListTable
         list={list}
-        columnCount={8}
+        columnCount={6}
         emptyMessage={t("schedules.empty")}
         head={
           <Table.Tr>
-            <Table.Th>{t("schedules.fields.name")}</Table.Th>
             <Table.Th>{t("schedules.fields.kind")}</Table.Th>
-            <Table.Th>{t("schedules.fields.target")}</Table.Th>
             <Table.Th>{t("schedules.fields.cadence")}</Table.Th>
             <Table.Th>{t("schedules.fields.enabled")}</Table.Th>
             <Table.Th>
@@ -91,22 +80,7 @@ export function ScheduleList() {
         {items.map((task) => (
           <Table.Tr key={task.id}>
             <Table.Td>
-              <Text size="sm">{task.name}</Text>
-              <Text size="xs" c="dimmed" ff="monospace">
-                {task.id}
-              </Text>
-            </Table.Td>
-            <Table.Td>
-              <Badge variant="light">
-                {task.work_kind
-                  ? t(`schedules.workKind.${task.work_kind}`)
-                  : "—"}
-              </Badge>
-            </Table.Td>
-            <Table.Td>
-              <Text size="sm">
-                {targetLabel(task, t("schedules.target.site"))}
-              </Text>
+              <ScheduleIdentityCell task={task} scope="platform" />
             </Table.Td>
             <Table.Td>
               <Text size="sm" ff="monospace">
@@ -185,7 +159,9 @@ export function ScheduleList() {
       ) : null}
       <ScheduleJobsModal
         scheduleId={jobsTask?.id ?? null}
-        scheduleLabel={jobsTask?.name}
+        scheduleLabel={
+          jobsTask ? scheduleIdentityLabel(jobsTask, "platform") : undefined
+        }
         opened={jobsTask !== null}
         onClose={() => setJobsTask(null)}
       />
