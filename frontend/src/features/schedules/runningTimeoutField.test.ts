@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  MAX_CADENCE_SECONDS,
   isAllowedTimeoutInput,
   timeoutFromTask,
   timeoutPayload,
@@ -39,5 +40,11 @@ describe("isAllowedTimeoutInput", () => {
     expect(isAllowedTimeoutInput(1.5)).toBe(false);
     expect(isAllowedTimeoutInput(Number.NaN)).toBe(false);
     expect(isAllowedTimeoutInput(Number.POSITIVE_INFINITY)).toBe(false);
+  });
+
+  it("accepts the cadence horizon and rejects one second past it", () => {
+    expect(MAX_CADENCE_SECONDS).toBe(252460800);
+    expect(isAllowedTimeoutInput(252460800)).toBe(true);
+    expect(isAllowedTimeoutInput(252460801)).toBe(false);
   });
 });

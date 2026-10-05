@@ -46,6 +46,19 @@ export function createSourceSchedule(
   );
 }
 
+export type CronPreview = {
+  cron_timezone: string;
+  next_run_ats: string[];
+};
+
+export function previewCron(cron: string) {
+  return apiClient<CronPreview>("/schedules/cron-preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cron }),
+  });
+}
+
 export function patchSchedule(scheduleId: string, body: PatchScheduleBody) {
   return apiClient<{ schedule: ScheduledTask }>(`/schedules/${scheduleId}`, {
     method: "PATCH",

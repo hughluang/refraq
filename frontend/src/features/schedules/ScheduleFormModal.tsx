@@ -1,104 +1,84 @@
 "use client";
 
-import { Button, Group, Modal, Stack, Text } from "@mantine/core";
+import {
+  Button,
+  Group,
+  Input,
+  Modal,
+  SegmentedControl,
+  Skeleton,
+  Stack,
+  Text,
+} from "@mantine/core";
 import { useForm } from "@mantine/form";
-import { useNotification, useTranslate } from "@refinedev/core";
-import { useEffect, useState } from "react";
+import { useGetLocale, useNotification, useTranslate } from "@refinedev/core";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
 
-import {
-  createSourceSchedule,
-  patchSchedule,
-} from "@/features/schedules/api";
-import {
-  isAllowedTimeoutInput,
-  timeoutFromTask,
-  timeoutPayload,
-} from "@/features/schedules/runningTimeoutField";
-import {
-  dailyPresetLabelKey,
-  defaultCron,
-  isDailyCron,
-  scheduleKindFromTask,
-} from "@/features/schedules/scheduleKindField";
-import {
-  formatScheduleNextRun,
-  nextRunPreview,
-  type CadenceKind as PreviewCadenceKind,
-} from "@/features/schedules/nextRunPreview";
-import type { ScheduledTask } from "@/features/schedules/types";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { CronField } from "@/components/form/CronField";
-import type { PresetCron } from "@/components/form/cronPhrase";
+import { DEFAULT_DAILY_CRON } from "@/components/form/cronBuilder";
 import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
 import { SwitchField } from "@/components/form/SwitchField";
 import { TextField } from "@/components/form/TextField";
+import {
+  createSourceSchedule,
+  patchSchedule,
+  previewCron,
+} from "@/features/schedules/api";
+import { describeCron } from "@/features/schedules/cronDescription";
+import {
+  INTERVAL_UNITS,
+  intervalToSeconds,
+  isAllowedInterval,
+  isPositiveInteger,
+  splitIntervalSeconds,
+  type IntervalUnit,
+} from "@/features/schedules/intervalUnits";
+import {
+  MAX_CADENCE_SECONDS,
+  isAllowedTimeoutInput,
+  timeoutFromTask,
+  timeoutPayload,
+} from "@/features/schedules/runningTimeoutField";
+import { scheduleKindFromTask } from "@/features/schedules/scheduleKindField";
+import type { ScheduledTask } from "@/features/schedules/types";
+import { useDisplayZoneId, useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
 
-const PRESETS = [
-  { value: "hourly", cron: "0 * * * *" },
-  { value: "daily", cron: "" },
-  { value: "weekly", cron: "0 2 * * 1" },
-  { value: "custom", cron: "" },
-  { value: "interval", cron: "" },
-] as const;
-
-type CadenceKind = PreviewCadenceKind;
+type CadenceMode = "clock" | "interval";
 
 type FormValues = {
   kind: "structure" | "join_detection";
-  cadence: CadenceKind;
+  cadence: CadenceMode;
   cron: string;
-  interval_seconds: number | string;
+  intervalAmount: number | string;
+  intervalUnit: IntervalUnit;
   running_timeout_sec: number | "";
   enabled: boolean;
   name: string;
 };
 
-function displayedCron(
-  cadence: "hourly" | "daily" | "weekly",
-  kind: FormValues["kind"],
-): PresetCron {
-  if (cadence === "daily") return defaultCron(kind);
-  if (cadence === "hourly") return "0 * * * *";
-  return "0 2 * * 1";
-}
-
-function presetCron(
-  cadence: CadenceKind,
-  kind: FormValues["kind"],
-): PresetCron | null {
-  if (cadence === "custom" || cadence === "interval") return null;
-  return displayedCron(cadence, kind);
-}
-
-function inferCadence(
-  task: ScheduledTask | null,
-  kind: ReturnType<typeof scheduleKindFromTask>,
-): CadenceKind {
-  if (!task) return "daily";
-  if (task.interval_seconds) return "interval";
-  if (isDailyCron(task.cron, kind)) return "daily";
-  const match = PRESETS.find(
-    (preset) =>
-      preset.value !== "custom" &&
-      preset.value !== "daily" &&
-      preset.cron === task.cron,
-  );
-  return match?.value ?? "custom";
-}
-
 function valuesFromTask(task: ScheduledTask | null): FormValues {
-  const kind = scheduleKindFromTask(task?.work_kind);
+  const seconds = task?.interval_seconds;
+  const split =
+    seconds != null
+      ? splitIntervalSeconds(seconds)
+      : { amount: 1, unit: "hours" as const };
   return {
-    kind,
-    cadence: inferCadence(task, kind),
-    cron: task?.cron ?? defaultCron(kind),
-    interval_seconds: task?.interval_seconds ?? 3600,
+    kind: scheduleKindFromTask(task?.work_kind),
+    cadence: seconds != null ? "interval" : "clock",
+    cron: task?.cron?.trim() || DEFAULT_DAILY_CRON,
+    intervalAmount: split.amount,
+    intervalUnit: split.unit,
     running_timeout_sec: timeoutFromTask(task?.running_timeout_sec),
     enabled: task?.enabled ?? true,
     name: task?.name ?? "",
   };
+}
+
+function isCadenceRejected(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 400;
 }
 
 type ScheduleFormModalProps = {
@@ -121,21 +101,107 @@ export function ScheduleFormModal({
   cronTimezone,
 }: ScheduleFormModalProps) {
   const t = useTranslate();
+  const title = sourceLabel
+    ? `${t("schedules.form.title")} · ${sourceLabel}`
+    : t("schedules.form.title");
+
+  return (
+    <Modal opened={opened} onClose={onClose} title={title} size="lg">
+      {opened ? (
+        <ScheduleForm
+          key={schedule?.id ?? `create:${sourceId ?? ""}`}
+          onClose={onClose}
+          onSaved={onSaved}
+          sourceId={sourceId}
+          schedule={schedule ?? null}
+          cronTimezone={cronTimezone}
+        />
+      ) : null}
+    </Modal>
+  );
+}
+
+function ScheduleForm({
+  onClose,
+  onSaved,
+  sourceId,
+  schedule,
+  cronTimezone,
+}: {
+  onClose: () => void;
+  onSaved: () => void;
+  sourceId?: string;
+  schedule: ScheduledTask | null;
+  cronTimezone: string;
+}) {
+  const t = useTranslate();
+  const locale = useGetLocale()() ?? "en-US";
   const { open } = useNotification();
   const formatInstant = useFormatInstant();
-  const [loading, setLoading] = useState(false);
+  const displayZone = useDisplayZoneId();
+  const [saving, setSaving] = useState(false);
   const form = useForm<FormValues>({
-    initialValues: valuesFromTask(schedule ?? null),
+    initialValues: valuesFromTask(schedule),
   });
+  const cron = form.values.cron.trim();
+  const [debouncedCron, setDebouncedCron] = useState(cron);
+  const skipDebounce = useRef(true);
 
   useEffect(() => {
-    if (!opened) return;
-    form.setValues(valuesFromTask(schedule ?? null));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when the modal target changes
-  }, [opened, sourceId, schedule?.id]);
+    if (skipDebounce.current) {
+      skipDebounce.current = false;
+      setDebouncedCron(cron);
+      return;
+    }
+    const timer = window.setTimeout(() => setDebouncedCron(cron), 400);
+    return () => window.clearTimeout(timer);
+  }, [cron]);
+
+  const clock = form.values.cadence === "clock";
+  const preview = useQuery({
+    queryKey: ["schedules", "cron-preview", debouncedCron],
+    queryFn: () => previewCron(debouncedCron),
+    enabled: clock,
+    retry: false,
+    staleTime: 0,
+  });
+
+  const debouncing = clock && cron !== debouncedCron;
+  const inFlight = clock && preview.isFetching;
+  const previewPaused = clock && preview.fetchStatus === "paused";
+  const showSkeleton = debouncing || inFlight;
+  const settled = clock && !debouncing && !preview.isFetching && !previewPaused;
+  const rejected = settled && preview.isError && isCadenceRejected(preview.error);
+  const previewFailed =
+    !debouncing &&
+    !inFlight &&
+    (previewPaused ||
+      (clock && preview.isError && !isCadenceRejected(preview.error)));
+  const previewReady = settled && preview.isSuccess;
+  const intervalAmountOk = isPositiveInteger(form.values.intervalAmount);
+  const intervalValid = isAllowedInterval(
+    form.values.intervalAmount,
+    form.values.intervalUnit,
+  );
+  const canSave = clock ? previewReady : intervalValid;
+  const sentence =
+    previewReady && preview.data
+      ? describeCron(debouncedCron, locale, cronTimezone, t)
+      : null;
 
   async function handleSave() {
     const timeoutInput = form.values.running_timeout_sec;
+    if (
+      typeof timeoutInput === "number" &&
+      Number.isInteger(timeoutInput) &&
+      timeoutInput > MAX_CADENCE_SECONDS
+    ) {
+      form.setFieldError(
+        "running_timeout_sec",
+        t("schedules.validation.runningTimeoutMax"),
+      );
+      return;
+    }
     if (!isAllowedTimeoutInput(timeoutInput)) {
       form.setFieldError(
         "running_timeout_sec",
@@ -143,21 +209,25 @@ export function ScheduleFormModal({
       );
       return;
     }
-    setLoading(true);
+    if (!canSave) return;
+    setSaving(true);
     try {
       const name = form.values.name.trim();
       const running_timeout_sec = timeoutPayload(timeoutInput);
       const cadenceBody =
         form.values.cadence === "interval"
           ? {
-              interval_seconds: Number(form.values.interval_seconds),
+              interval_seconds: intervalToSeconds(
+                Number(form.values.intervalAmount),
+                form.values.intervalUnit,
+              ),
               cron: null as string | null,
               running_timeout_sec,
               enabled: form.values.enabled,
               name,
             }
           : {
-              cron: form.values.cron.trim(),
+              cron,
               interval_seconds: null as number | null,
               running_timeout_sec,
               enabled: form.values.enabled,
@@ -182,169 +252,192 @@ export function ScheduleFormModal({
         message: err instanceof ApiError ? err.detail : String(err),
       });
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
-  }
-
-  const title = sourceLabel
-    ? `${t("schedules.form.title")} · ${sourceLabel}`
-    : t("schedules.form.title");
-  const preview = nextRunPreview(schedule, {
-    cadence: form.values.cadence,
-    cron: form.values.cron,
-    interval_seconds: form.values.interval_seconds,
-  });
-  const nextRunNote =
-    preview === "recalculates"
-      ? t("schedules.form.nextRunRecalculates")
-      : preview === "saved" && schedule
-        ? schedule.enabled && schedule.next_run_at
-          ? t("schedules.form.nextRunSameAsList", {
-              instant: formatScheduleNextRun(
-                schedule,
-                formatInstant,
-                t("schedules.fields.nextRunPaused"),
-              ),
-            })
-          : t("schedules.form.nextRunStatusSameAsList", {
-              instant: formatScheduleNextRun(
-                schedule,
-                formatInstant,
-                t("schedules.fields.nextRunPaused"),
-              ),
-            })
-        : null;
-
-  function cadenceOptionLabel(preset: CadenceKind): string {
-    if (preset === "daily") {
-      return t(dailyPresetLabelKey(form.values.kind), { zone: cronTimezone });
-    }
-    if (preset === "hourly" || preset === "weekly") {
-      return t(`schedules.preset.${preset}`, { zone: cronTimezone });
-    }
-    return t(`schedules.preset.${preset}`);
   }
 
   return (
-    <Modal opened={opened} onClose={onClose} title={title} size="md">
-      <Stack gap="sm">
-        {schedule ? null : (
-          <SelectField
-            editable
-            label={t("schedules.fields.kind")}
-            data={[
-              {
-                value: "structure",
-                label: t("schedules.workKind.structure"),
-              },
-              {
-                value: "join_detection",
-                label: t("schedules.workKind.join_detection"),
-              },
-            ]}
-            value={form.values.kind}
-            onChange={(value) => {
-              const kind =
-                value === "join_detection" ? "join_detection" : "structure";
-              const next: Partial<FormValues> = { kind };
-              if (form.values.cadence === "daily") {
-                next.cron = defaultCron(kind);
-              }
-              form.setValues(next);
-            }}
-          />
-        )}
+    <Stack gap="sm">
+      {schedule ? null : (
         <SelectField
           editable
-          allowDeselect={false}
-          label={t("schedules.fields.cadence")}
-          data={PRESETS.map((preset) => ({
-            value: preset.value,
-            label: cadenceOptionLabel(preset.value),
-          }))}
+          label={t("schedules.fields.kind")}
+          data={[
+            {
+              value: "structure",
+              label: t("schedules.workKind.structure"),
+            },
+            {
+              value: "join_detection",
+              label: t("schedules.workKind.join_detection"),
+            },
+          ]}
+          value={form.values.kind}
+          onChange={(value) => {
+            form.setFieldValue(
+              "kind",
+              value === "join_detection" ? "join_detection" : "structure",
+            );
+          }}
+        />
+      )}
+      <Input.Wrapper label={t("schedules.fields.cadence")}>
+        <SegmentedControl
+          fullWidth
+          mt={4}
           value={form.values.cadence}
           onChange={(value) => {
-            const cadence = value as CadenceKind;
-            const next: Partial<FormValues> = { cadence };
-            const preset = presetCron(cadence, form.values.kind);
-            if (preset != null) next.cron = preset;
-            form.setValues(next);
+            const cadence: CadenceMode = value === "interval" ? "interval" : "clock";
+            if (cadence === "clock" && !form.values.cron.trim()) {
+              form.setFieldValue("cron", DEFAULT_DAILY_CRON);
+            }
+            form.setFieldValue("cadence", cadence);
           }}
+          data={[
+            { value: "clock", label: t("schedules.cadence.clock") },
+            { value: "interval", label: t("schedules.cadence.interval") },
+          ]}
         />
-        {form.values.cadence === "interval" ? (
+      </Input.Wrapper>
+      <Text size="xs" c="dimmed">
+        {clock
+          ? t("schedules.cadence.clockHint")
+          : t("schedules.cadence.intervalHint")}
+      </Text>
+      {clock ? (
+        <CronField
+          label={t("schedules.fields.cron")}
+          description={t("schedules.fields.cronTimezoneHint", {
+            zone: cronTimezone,
+          })}
+          error={rejected ? t("schedules.validation.cron") : undefined}
+          value={form.values.cron}
+          onChange={(next) => form.setFieldValue("cron", next)}
+        />
+      ) : (
+        <Group align="flex-start" grow>
           <NumberField
             editable
-            label={t("schedules.fields.intervalSeconds")}
+            label={t("schedules.interval.amount")}
             min={1}
-            {...form.getInputProps("interval_seconds")}
+            allowDecimal={false}
+            allowNegative={false}
+            value={form.values.intervalAmount}
+            error={
+              intervalValid
+                ? undefined
+                : intervalAmountOk
+                  ? t("schedules.validation.intervalMax")
+                  : t("schedules.validation.interval")
+            }
+            onChange={(value) => {
+              if (typeof value === "number" || typeof value === "string") {
+                form.setFieldValue("intervalAmount", value);
+              }
+            }}
           />
-        ) : form.values.cadence === "custom" ? (
-          <CronField
+          <SelectField
             editable
-            label={t("schedules.fields.cron")}
-            description={t("schedules.fields.cronTimezoneHint", {
-              zone: cronTimezone,
-            })}
-            value={form.values.cron}
-            onChange={(cron) => form.setFieldValue("cron", cron)}
+            allowDeselect={false}
+            label={t("schedules.interval.unit")}
+            data={INTERVAL_UNITS.map((unit) => ({
+              value: unit,
+              label: t(`schedules.interval.unit.${unit}`),
+            }))}
+            value={form.values.intervalUnit}
+            onChange={(value) => {
+              if (
+                value === "seconds" ||
+                value === "minutes" ||
+                value === "hours" ||
+                value === "days"
+              ) {
+                form.setFieldValue("intervalUnit", value);
+              }
+            }}
           />
-        ) : (
-          <CronField
-            editable={false}
-            label={t("schedules.fields.cron")}
-            description={t("schedules.fields.cronTimezoneHint", {
-              zone: cronTimezone,
-            })}
-            zone={cronTimezone}
-            value={displayedCron(form.values.cadence, form.values.kind)}
-          />
-        )}
-        {nextRunNote ? (
-          <Text size="sm" c="dimmed">
-            {nextRunNote}
-          </Text>
-        ) : null}
-        <NumberField
-          editable
-          label={t("schedules.fields.runningTimeout")}
-          description={t("schedules.fields.runningTimeoutHelp")}
-          min={1}
-          allowDecimal={false}
-          allowNegative={false}
-          value={form.values.running_timeout_sec}
-          error={form.errors.running_timeout_sec}
-          onChange={(value) => {
-            if (value === "" || value == null) {
-              form.setFieldValue("running_timeout_sec", "");
-              return;
-            }
-            if (typeof value === "number") {
-              form.setFieldValue("running_timeout_sec", value);
-            }
-          }}
-        />
-        <TextField
-          editable
-          label={t("schedules.fields.name")}
-          {...form.getInputProps("name")}
-        />
-        <SwitchField
-          editable
-          label={t("schedules.fields.enabled")}
-          checked={form.values.enabled}
-          onChange={(event) =>
-            form.setFieldValue("enabled", event.currentTarget.checked)
-          }
-        />
-        <Group justify="flex-end">
-          <Button variant="default" onClick={onClose} disabled={loading}>
-            {t("common.cancel")}
-          </Button>
-          <Button loading={loading} onClick={() => void handleSave()}>
-            {t("common.save")}
-          </Button>
         </Group>
-      </Stack>
-    </Modal>
+      )}
+      {clock && showSkeleton ? <Skeleton height={96} radius="sm" /> : null}
+      {clock && previewFailed ? (
+        <Stack gap="xs">
+          <Text size="sm">{t("schedules.form.previewFailed")}</Text>
+          <Group>
+            <Button
+              variant="light"
+              size="xs"
+              onClick={() => void preview.refetch()}
+            >
+              {t("schedules.form.previewRetry")}
+            </Button>
+          </Group>
+        </Stack>
+      ) : null}
+      {previewReady && preview.data ? (
+        <Stack gap={4}>
+          {sentence ? <Text size="sm">{sentence}</Text> : null}
+          <Text size="sm" fw={500}>
+            {t("schedules.form.previewTitle", {
+              zone:
+                displayZone ?? t("account.fields.displayTimezone.browser"),
+            })}
+          </Text>
+          {preview.data.next_run_ats.map((instant) => (
+            <Text key={instant} size="sm">
+              {formatInstant(instant)}
+            </Text>
+          ))}
+          {form.values.enabled ? null : (
+            <Text size="sm" c="dimmed">
+              {t("schedules.form.previewWhenEnabled")}
+            </Text>
+          )}
+        </Stack>
+      ) : null}
+      <NumberField
+        editable
+        label={t("schedules.fields.runningTimeout")}
+        description={t("schedules.fields.runningTimeoutHelp")}
+        min={1}
+        allowDecimal={false}
+        allowNegative={false}
+        value={form.values.running_timeout_sec}
+        error={form.errors.running_timeout_sec}
+        onChange={(value) => {
+          if (value === "" || value == null) {
+            form.setFieldValue("running_timeout_sec", "");
+            return;
+          }
+          if (typeof value === "number") {
+            form.setFieldValue("running_timeout_sec", value);
+          }
+        }}
+      />
+      <TextField
+        editable
+        label={t("schedules.fields.name")}
+        {...form.getInputProps("name")}
+      />
+      <SwitchField
+        editable
+        label={t("schedules.fields.enabled")}
+        checked={form.values.enabled}
+        onChange={(event) =>
+          form.setFieldValue("enabled", event.currentTarget.checked)
+        }
+      />
+      <Group justify="flex-end">
+        <Button variant="default" onClick={onClose} disabled={saving}>
+          {t("common.cancel")}
+        </Button>
+        <Button
+          loading={saving || showSkeleton}
+          disabled={!canSave}
+          onClick={() => void handleSave()}
+        >
+          {t("common.save")}
+        </Button>
+      </Group>
+    </Stack>
   );
 }

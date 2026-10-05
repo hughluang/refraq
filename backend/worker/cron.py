@@ -6,7 +6,8 @@ Gap → next legal local time; ambiguous → fold=1 once for every cron expressi
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+import re
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from celery.schedules import BaseSchedule, schedstate
@@ -23,31 +24,71 @@ def validate_schedule_timezone(name: str) -> ZoneInfo:
     return ZoneInfo(canonical)
 
 
+_NUMBER = re.compile(r"-?\d+")
+_FIRE_HORIZON_YEARS = 8
+# 2922 days is 8 * 365.25, the same horizon as the cron fire window above.
+# Interval and running-timeout writes share this ceiling, under the Integer max.
+MAX_CADENCE_SECONDS = 2922 * 86400
+
+
+def _parse_number(token: str) -> int:
+    text = token.strip()
+    if not _NUMBER.fullmatch(text):
+        raise ValueError(f"invalid cron number: {token!r}")
+    return int(text)
+
+
+def _require_in_range(value: int, minimum: int, maximum: int, field: str) -> None:
+    if value < minimum or value > maximum:
+        raise ValueError(
+            f"cron value {value} is outside {minimum}-{maximum} in {field!r}"
+        )
+
+
+def _parse_part(part: str, minimum: int, maximum: int, field: str) -> set[int]:
+    step = 1
+    base = part
+    stepped = "/" in part
+    if stepped:
+        base, step_text = part.split("/", 1)
+        if not base.strip() or not step_text.strip() or "/" in step_text:
+            raise ValueError(f"invalid cron step in {field!r}")
+        step = _parse_number(step_text)
+        if step < 1:
+            raise ValueError(f"cron step must be >= 1 in {field!r}")
+    base = base.strip()
+    if base == "*":
+        start, end = minimum, maximum
+    elif "-" in base:
+        if base.startswith("-"):
+            raise ValueError(f"invalid cron range in {field!r}")
+        start_text, end_text = base.split("-", 1)
+        if not start_text.strip() or not end_text.strip():
+            raise ValueError(f"invalid cron range in {field!r}")
+        start = _parse_number(start_text)
+        end = _parse_number(end_text)
+        if start > end:
+            raise ValueError(
+                f"cron range start {start} is greater than end {end} in {field!r}"
+            )
+    else:
+        start = _parse_number(base)
+        end = maximum if stepped else start
+    _require_in_range(start, minimum, maximum, field)
+    _require_in_range(end, minimum, maximum, field)
+    return set(range(start, end + 1, step))
+
+
 def _parse_field(field: str, minimum: int, maximum: int) -> set[int]:
-    """Parse one cron field into a set of allowed integers (*, n, a-b, */n, lists)."""
+    """Parse one cron field (``*``, ``n``, ``a-b``, ``*/n``, ``a-b/n``, ``n/step``, lists)."""
+    if not field.strip():
+        raise ValueError("empty cron field")
     values: set[int] = set()
     for part in field.split(","):
         part = part.strip()
-        if part == "*":
-            values.update(range(minimum, maximum + 1))
-            continue
-        if "/" in part:
-            base, step_s = part.split("/", 1)
-            step = int(step_s)
-            if base == "*":
-                start, end = minimum, maximum
-            elif "-" in base:
-                start_s, end_s = base.split("-", 1)
-                start, end = int(start_s), int(end_s)
-            else:
-                start, end = int(base), maximum
-            values.update(range(start, end + 1, step))
-            continue
-        if "-" in part:
-            start_s, end_s = part.split("-", 1)
-            values.update(range(int(start_s), int(end_s) + 1))
-            continue
-        values.add(int(part))
+        if not part:
+            raise ValueError(f"empty cron list item in {field!r}")
+        values.update(_parse_part(part, minimum, maximum, field))
     return values
 
 
@@ -56,10 +97,13 @@ def parse_cron_fields(expr: str) -> tuple[set[int], set[int], set[int], set[int]
     if len(parts) != 5:
         raise ValueError(f"cron must have 5 fields, got {expr!r}")
     minute, hour, day_of_month, month, day_of_week = parts
-    # Cron day-of-week: 0-6 or 7=Sunday; accept both.
+    if day_of_month != "*" and day_of_week != "*":
+        raise ValueError("day-of-month and day-of-week cannot both be restricted")
+    # Cron day-of-week: 0 or 7 is Sunday.
     dow = _parse_field(day_of_week, 0, 7)
     if 7 in dow:
         dow.add(0)
+        dow.discard(7)
     return (
         _parse_field(minute, 0, 59),
         _parse_field(hour, 0, 23),
@@ -69,17 +113,67 @@ def parse_cron_fields(expr: str) -> tuple[set[int], set[int], set[int], set[int]
     )
 
 
+def _cron_weekday(day: date) -> int:
+    """Cron weekday for a calendar date. Monday=1 … Saturday=6, Sunday=0."""
+    return (day.weekday() + 1) % 7
+
+
 def _local_matches(naive: datetime, fields: tuple[set[int], set[int], set[int], set[int], set[int]]) -> bool:
     minutes, hours, doms, months, dows = fields
-    # Python weekday: Monday=0 … Sunday=6; cron often Sunday=0.
-    cron_dow = (naive.weekday() + 1) % 7
     return (
         naive.minute in minutes
         and naive.hour in hours
         and naive.day in doms
         and naive.month in months
-        and cron_dow in dows
+        and _cron_weekday(naive.date()) in dows
     )
+
+
+def _plus_years(moment: datetime, years: int) -> datetime:
+    try:
+        return moment.replace(year=moment.year + years)
+    except ValueError:
+        return moment.replace(year=moment.year + years, day=28)
+
+
+def first_cron_fire_after(
+    fields: tuple[set[int], set[int], set[int], set[int], set[int]],
+    tz: ZoneInfo,
+    after: datetime,
+) -> datetime | None:
+    """First legal fire strictly after ``after``, or None when none exists within 8 years.
+
+    Walks calendar days (month, day, weekday), then hour and minute on a matching day.
+    Each candidate wall time goes through ``resolve_wall_time`` (gap rolls forward,
+    ambiguous local time uses fold=1).
+    """
+    after = ensure_aware_utc(after)
+    minutes, hours, doms, months, dows = fields
+    local_after = after.astimezone(tz)
+    limit = ensure_aware_utc(_plus_years(local_after, _FIRE_HORIZON_YEARS))
+    day = local_after.date()
+    last_day = limit.astimezone(tz).date()
+    ordered_hours = sorted(hours)
+    ordered_minutes = sorted(minutes)
+    while day <= last_day:
+        if day.month in months and day.day in doms and _cron_weekday(day) in dows:
+            for hour in ordered_hours:
+                for minute in ordered_minutes:
+                    resolved = resolve_wall_time(
+                        day.year,
+                        day.month,
+                        day.day,
+                        hour,
+                        minute,
+                        0,
+                        tz,
+                    )
+                    if resolved > after:
+                        if resolved <= limit:
+                            return resolved
+                        return None
+        day += timedelta(days=1)
+    return None
 
 
 class ZoneCronSchedule:
@@ -93,28 +187,12 @@ class ZoneCronSchedule:
 
     def _next_fire_after(self, last_run_at: datetime | None) -> datetime:
         start = last_run_at if last_run_at is not None else utc_now() - timedelta(seconds=1)
-        start = ensure_aware_utc(start)
-        cursor_local = start.astimezone(self._tz).replace(second=0, microsecond=0) + timedelta(
-            minutes=1
-        )
-        for _ in range(60 * 24 * 8):
-            naive = cursor_local.replace(tzinfo=None)
-            if _local_matches(naive, self._fields):
-                resolved = resolve_wall_time(
-                    naive.year,
-                    naive.month,
-                    naive.day,
-                    naive.hour,
-                    naive.minute,
-                    0,
-                    self._tz,
-                )
-                if resolved > start:
-                    return resolved
-            cursor_local = cursor_local + timedelta(minutes=1)
-        raise RuntimeError(
-            f"no cron fire found for {self.cron_expr!r} in {self.schedule_timezone}"
-        )
+        found = first_cron_fire_after(self._fields, self._tz, start)
+        if found is None:
+            raise RuntimeError(
+                f"no cron fire found for {self.cron_expr!r} in {self.schedule_timezone}"
+            )
+        return found
 
 
 def compute_next_run_at(

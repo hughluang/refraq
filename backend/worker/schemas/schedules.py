@@ -55,3 +55,14 @@ class SchedulePatchRequest(BaseModel):
     cron: str | None = None
     interval_seconds: int | None = None
     running_timeout_sec: int | None = None
+
+
+class CronPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cron: str
+
+
+class CronPreviewResponse(BaseModel):
+    cron_timezone: str
+    next_run_ats: list[Instant]

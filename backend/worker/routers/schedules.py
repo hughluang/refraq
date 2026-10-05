@@ -20,8 +20,11 @@ from backend.worker.api import (
     delete_schedule,
     get_schedule,
     patch_schedule,
+    preview_cron_runs,
 )
 from backend.worker.schemas.schedules import (
+    CronPreviewRequest,
+    CronPreviewResponse,
     ScheduleListResponse,
     SchedulePatchRequest,
     ScheduleResponse,
@@ -55,6 +58,15 @@ def list_platform_schedules(
         offset=page.offset,
         cron_timezone=current_schedule_timezone(),
     )
+
+
+@router.post("/schedules/cron-preview", response_model=CronPreviewResponse)
+def preview_platform_cron(
+    payload: CronPreviewRequest,
+    _: UserRecord = Depends(require_permission("jobs:run")),
+) -> CronPreviewResponse:
+    zone, instants = preview_cron_runs(payload.cron)
+    return CronPreviewResponse(cron_timezone=zone, next_run_ats=instants)
 
 
 @router.get("/schedules/{schedule_id}", response_model=ScheduleResponse)

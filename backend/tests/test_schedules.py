@@ -644,6 +644,120 @@ def test_cadence_invalid(client: TestClient) -> None:
     assert resp.json()["code"] == "SCHEDULE_CADENCE_INVALID"
 
 
+def test_create_rejects_cron_that_never_fires(client: TestClient) -> None:
+    source = _make_source(client, key="never-fire")
+    resp = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={"kind": "structure", "cron": "0 0 30 2 *"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "SCHEDULE_CADENCE_INVALID"
+
+
+def test_cron_preview_returns_next_five_fires(client: TestClient) -> None:
+    clock = FixedClock(parse_instant("2026-04-01T00:00:00Z"))
+    set_clock(clock)
+    try:
+        before = client.get("/schedules").json()["total"]
+        resp = client.post("/schedules/cron-preview", json={"cron": "0 2 * * *"})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["cron_timezone"] == "UTC"
+        assert body["next_run_ats"] == [
+            "2026-04-01T02:00:00Z",
+            "2026-04-02T02:00:00Z",
+            "2026-04-03T02:00:00Z",
+            "2026-04-04T02:00:00Z",
+            "2026-04-05T02:00:00Z",
+        ]
+        assert client.get("/schedules").json()["total"] == before
+    finally:
+        reset_clock()
+
+
+@pytest.mark.parametrize(
+    "cron",
+    [
+        "60 * * * *",
+        "*/0 * * * *",
+        "0 0 * * 5-3",
+        "0 0 30 2 *",
+        "0 2 1 * 1",
+        "-1 * * * *",
+    ],
+)
+def test_cron_preview_rejects_invalid_expressions(client: TestClient, cron: str) -> None:
+    resp = client.post("/schedules/cron-preview", json={"cron": cron})
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "SCHEDULE_CADENCE_INVALID"
+
+
+def test_cron_preview_rejects_unknown_field(client: TestClient) -> None:
+    resp = client.post(
+        "/schedules/cron-preview",
+        json={"cron": "0 2 * * *", "zone": "UTC"},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["code"] == "REQUEST_INVALID"
+
+
+def test_cron_preview_requires_jobs_run(client: TestClient) -> None:
+    from backend.admin.roles import create_role
+    from backend.admin.role_store import get_role_store
+    from backend.admin.security import hash_password
+    from backend.admin.user_store import get_user_store
+
+    role = create_role(
+        get_role_store(),
+        key="src_writer_preview",
+        name="Source writer",
+        permissions=["console:access", "sources:read", "sources:write"],
+    )
+    get_user_store().create_user(
+        account="preview-writer",
+        display_name="Writer",
+        password_hash=hash_password("writer-pass"),
+        role_id=role.id,
+    )
+    login = client.post(
+        "/auth/login",
+        json={"account": "preview-writer", "password": "writer-pass"},
+    )
+    assert login.status_code == 200, login.text
+    resp = client.post("/schedules/cron-preview", json={"cron": "0 2 * * *"})
+    assert resp.status_code == 403
+
+
+def test_cron_preview_matches_zone_schedule_across_dst(client: TestClient) -> None:
+    from zoneinfo import ZoneInfo
+
+    from backend.admin.system_parameters import reset_parameter, set_parameter
+    from backend.worker.cron import ZoneCronSchedule
+
+    set_parameter("schedule_timezone", "America/Los_Angeles", actor_user_id=None)
+    clock = FixedClock(parse_instant("2025-03-09T09:45:00Z"))
+    set_clock(clock)
+    try:
+        resp = client.post("/schedules/cron-preview", json={"cron": "45 * * * *"})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["cron_timezone"] == "America/Los_Angeles"
+        schedule = ZoneCronSchedule("45 * * * *", schedule_timezone="America/Los_Angeles")
+        cursor = clock.now()
+        expected: list[str] = []
+        for _ in range(5):
+            cursor = schedule._next_fire_after(cursor)
+            expected.append(format_instant(cursor))
+        assert body["next_run_ats"] == expected
+        first = parse_instant(body["next_run_ats"][0]).astimezone(
+            ZoneInfo("America/Los_Angeles")
+        )
+        assert (first.hour, first.minute, first.fold) == (3, 0, 0)
+    finally:
+        reset_clock()
+        reset_parameter("schedule_timezone", actor_user_id=None)
+
+
 def test_create_schedule_running_timeout_snapshots_on_run_now(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -782,6 +896,131 @@ def test_cadence_rejects_non_positive_interval(client: TestClient) -> None:
     body = resp.json()
     assert body["code"] == "SCHEDULE_CADENCE_INVALID"
     assert "positive" in body["detail"]
+
+
+def test_create_and_patch_accept_interval_at_horizon(client: TestClient) -> None:
+    from backend.worker.cron import MAX_CADENCE_SECONDS
+
+    source = _make_source(client, key="interval-horizon")
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={"kind": "structure", "interval_seconds": MAX_CADENCE_SECONDS},
+    )
+    assert created.status_code == 201, created.text
+    schedule_id = created.json()["schedule"]["id"]
+    assert created.json()["schedule"]["interval_seconds"] == 252460800
+    patched = client.patch(
+        f"/schedules/{schedule_id}",
+        json={"interval_seconds": MAX_CADENCE_SECONDS},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["schedule"]["interval_seconds"] == 252460800
+
+
+def test_create_and_patch_reject_interval_past_horizon(client: TestClient) -> None:
+    from backend.worker.cron import MAX_CADENCE_SECONDS
+
+    source = _make_source(client, key="interval-over")
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={"kind": "structure", "interval_seconds": 3600},
+    )
+    assert created.status_code == 201, created.text
+    schedule_id = created.json()["schedule"]["id"]
+    over = MAX_CADENCE_SECONDS + 1
+    rejected_create = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={"kind": "structure", "interval_seconds": over},
+    )
+    assert rejected_create.status_code == 400
+    assert rejected_create.json()["code"] == "SCHEDULE_CADENCE_INVALID"
+    rejected_patch = client.patch(
+        f"/schedules/{schedule_id}",
+        json={"interval_seconds": over},
+    )
+    assert rejected_patch.status_code == 400
+    assert rejected_patch.json()["code"] == "SCHEDULE_CADENCE_INVALID"
+    stored = client.get(f"/schedules/{schedule_id}").json()["schedule"]
+    assert stored["interval_seconds"] == 3600
+
+
+def test_create_rejects_thirty_thousand_day_interval(client: TestClient) -> None:
+    source = _make_source(client, key="interval-overflow")
+    resp = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={"kind": "structure", "interval_seconds": 30000 * 86400},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "SCHEDULE_CADENCE_INVALID"
+
+
+def test_create_and_patch_accept_running_timeout_at_horizon(client: TestClient) -> None:
+    from backend.worker.cron import MAX_CADENCE_SECONDS
+
+    source = _make_source(client, key="timeout-horizon")
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "structure",
+            "cron": "0 2 * * *",
+            "running_timeout_sec": MAX_CADENCE_SECONDS,
+        },
+    )
+    assert created.status_code == 201, created.text
+    schedule_id = created.json()["schedule"]["id"]
+    assert created.json()["schedule"]["running_timeout_sec"] == 252460800
+    patched = client.patch(
+        f"/schedules/{schedule_id}",
+        json={"running_timeout_sec": MAX_CADENCE_SECONDS},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["schedule"]["running_timeout_sec"] == 252460800
+
+
+def test_create_and_patch_reject_running_timeout_past_horizon(
+    client: TestClient,
+) -> None:
+    from backend.worker.cron import MAX_CADENCE_SECONDS
+
+    source = _make_source(client, key="timeout-over")
+    created = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "structure",
+            "cron": "0 2 * * *",
+            "running_timeout_sec": 90,
+        },
+    )
+    assert created.status_code == 201, created.text
+    schedule_id = created.json()["schedule"]["id"]
+    over = MAX_CADENCE_SECONDS + 1
+    rejected_create = client.post(
+        f"/sources/{source['id']}/schedules",
+        json={
+            "kind": "structure",
+            "cron": "0 3 * * *",
+            "running_timeout_sec": over,
+        },
+    )
+    assert rejected_create.status_code == 400
+    assert rejected_create.json()["code"] == "SCHEDULE_RUNNING_TIMEOUT_INVALID"
+    rejected_patch = client.patch(
+        f"/schedules/{schedule_id}",
+        json={"running_timeout_sec": over},
+    )
+    assert rejected_patch.status_code == 400
+    assert rejected_patch.json()["code"] == "SCHEDULE_RUNNING_TIMEOUT_INVALID"
+    stored = client.get(f"/schedules/{schedule_id}").json()["schedule"]
+    assert stored["running_timeout_sec"] == 90
+
+
+def test_cron_preview_blank_does_not_use_write_shape(client: TestClient) -> None:
+    for cron in ("", "   "):
+        resp = client.post("/schedules/cron-preview", json={"cron": cron})
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["code"] == "SCHEDULE_CADENCE_INVALID"
+        assert "interval_seconds" not in body["detail"]
 
 
 def test_patch_rejects_retired_schedule_timezone(client: TestClient) -> None:

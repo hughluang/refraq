@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Table, Text } from "@mantine/core";
+import { Button, Table, Text, Tooltip } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
@@ -8,6 +8,7 @@ import { ListTable } from "@/components/display/ListTable";
 import { SwitchField } from "@/components/form/SwitchField";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { listSchedules, patchSchedule } from "@/features/schedules/api";
+import { ScheduleCadence } from "@/features/schedules/ScheduleCadence";
 import { ScheduleFormModal } from "@/features/schedules/ScheduleFormModal";
 import { ScheduleIdentityCell } from "@/features/schedules/ScheduleIdentityCell";
 import { ScheduleJobsModal } from "@/features/schedules/ScheduleJobsModal";
@@ -22,11 +23,6 @@ import { ApiError } from "@/lib/api";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
-
-function cadenceLabel(task: ScheduledTask): string {
-  if (task.interval_seconds) return `${task.interval_seconds}s`;
-  return task.cron ?? "—";
-}
 
 export function ScheduleList() {
   const t = useTranslate();
@@ -84,9 +80,7 @@ export function ScheduleList() {
               <ScheduleIdentityCell task={task} scope="platform" />
             </Table.Td>
             <Table.Td>
-              <Text size="sm" ff="monospace">
-                {cadenceLabel(task)}
-              </Text>
+              <ScheduleCadence task={task} cronTimezone={cronTimezone} />
             </Table.Td>
             <Table.Td>
               <SwitchField

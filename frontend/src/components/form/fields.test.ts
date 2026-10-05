@@ -111,18 +111,27 @@ describe("form fields", () => {
     expect(screen.getByText("form.value.yes")).toBeTruthy();
   });
 
-  it("shows a cron sentence beside the expression", async () => {
+  it("uses the builder for a daily cron and the raw field when it cannot", async () => {
     const { CronField } = await import("@/components/form/CronField");
     mount(
       createElement(CronField, {
-        editable: false,
         label: "Cron",
         value: "0 2 * * *",
-        zone: "UTC",
+        onChange: () => {},
       }),
     );
-    expect(screen.queryByRole("textbox")).toBeNull();
-    expect(screen.getByText(/form\.cron\.daily/)).toBeTruthy();
-    expect(screen.getByText(/0 2 \* \* \*/)).toBeTruthy();
+    expect((screen.getByRole("switch") as HTMLInputElement).checked).toBe(false);
+    expect(screen.queryByDisplayValue("0 2 * * *")).toBeNull();
+
+    cleanup();
+    mount(
+      createElement(CronField, {
+        label: "Cron",
+        value: "0 2 1 * 1",
+        onChange: () => {},
+      }),
+    );
+    expect((screen.getByRole("switch") as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByRole("textbox").getAttribute("value")).toBe("0 2 1 * 1");
   });
 });

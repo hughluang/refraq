@@ -27,8 +27,8 @@ A form field has two presentations, chosen inside the field component by `editab
 
 | `editable` | Presentation |
 | --- | --- |
-| `true` | The matching editor (text, number, select, tags, switch, segmented control, cron expression). Required markers and errors appear only here. |
-| `false` | Display for that value's shape: plain text (empty is an em dash), the option label, yes/no, the current segmented label, or a cron phrase with the expression beside it. |
+| `true` | The matching editor (text, number, select, tags, switch, segmented control, cron builder). Required markers and errors appear only here. |
+| `false` | Display for that value's shape: plain text (empty is an em dash), the option label, yes/no, or the current segmented label. |
 
 `editable={false}` covers show, missing write permission, a key that is immutable after create, and a field that is temporarily not authorable inside an otherwise editable form. Save and connectivity tests keep the fields editable; the busy state stays on the button.
 

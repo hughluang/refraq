@@ -13,7 +13,14 @@ from backend.core.config import get_settings
 from backend.core.time import utc_now
 from backend.jobs.api import revoke_queued_delivery
 from backend.jobs.store import cancel_unfinished_for_schedule
-from backend.worker.cron import compute_next_run_at, parse_cron_fields
+from backend.worker.cron import (
+    MAX_CADENCE_SECONDS,
+    ZoneCronSchedule,
+    compute_next_run_at,
+    first_cron_fire_after,
+    parse_cron_fields,
+    validate_schedule_timezone,
+)
 from backend.jobs.parameters import job_lost_detection_sec
 from backend.worker.errors import (
     ScheduleCadenceInvalid,
@@ -36,6 +43,7 @@ __all__ = [
     "patch_schedule",
     "schedule_out",
     "realign_cron_commitments",
+    "preview_cron_runs",
     "validate_cadence",
     "validate_running_timeout",
     "withdraw_schedules_by_owner_ref",
@@ -91,6 +99,17 @@ def ensure_system_schedules() -> None:
         )
 
 
+def validate_cron(text: str) -> None:
+    """Parse a cron expression and require a fire within the 8-year horizon."""
+    try:
+        fields = parse_cron_fields(text)
+    except ValueError as exc:
+        raise ScheduleCadenceInvalid(str(exc)) from exc
+    zone = validate_schedule_timezone(current_schedule_timezone())
+    if first_cron_fire_after(fields, zone, utc_now()) is None:
+        raise ScheduleCadenceInvalid("cron expression does not fire within 8 years")
+
+
 def validate_cadence(
     *,
     cron: str | None,
@@ -103,18 +122,37 @@ def validate_cadence(
             "exactly one of cron or interval_seconds is required"
         )
     if has_cron:
-        try:
-            parse_cron_fields(str(cron).strip())
-        except ValueError as exc:
-            raise ScheduleCadenceInvalid(str(exc)) from exc
-    elif interval_seconds is not None and interval_seconds < 1:
+        validate_cron(str(cron).strip())
+        return
+    if interval_seconds is None or interval_seconds < 1:
         raise ScheduleCadenceInvalid("interval_seconds must be positive")
+    if interval_seconds > MAX_CADENCE_SECONDS:
+        raise ScheduleCadenceInvalid("interval_seconds exceeds the 8 year horizon")
+
+
+def preview_cron_runs(cron: str) -> tuple[str, list[datetime]]:
+    """Next 5 cron fires from now in the current Schedule Timezone.
+
+    Validates the cron expression only. Read-only: no row write and no audit.
+    """
+    text = str(cron).strip()
+    if not text:
+        raise ScheduleCadenceInvalid("cron is required")
+    validate_cron(text)
+    zone_name = current_schedule_timezone()
+    schedule = ZoneCronSchedule(text, schedule_timezone=zone_name)
+    instants: list[datetime] = []
+    cursor = utc_now()
+    for _ in range(5):
+        cursor = schedule._next_fire_after(cursor)
+        instants.append(cursor)
+    return zone_name, instants
 
 
 def validate_running_timeout(value: int | None) -> int | None:
     if value is None:
         return None
-    if value < 1:
+    if value < 1 or value > MAX_CADENCE_SECONDS:
         raise ScheduleRunningTimeoutInvalid()
     return value
 

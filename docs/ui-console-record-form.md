@@ -43,7 +43,7 @@ A domain lifecycle command that is not a field write (publish, open version, dep
 
 ### 3.1 Controls
 
-Show, missing write permission, an identity key that is immutable after create, and a field that is temporarily not authorable on an otherwise editable form all use the same field component in **display mode** (`editable={false}`). Edit mode (`editable={true}`) is the matching input. Display mode follows the value's shape (plain text, option label, yes/no, segmented label, or a cron phrase). It is not a `disabled` or `readOnly` input. There is no third presentation (`locked`, `disabled`, or `readOnly`) for a field the actor cannot change.
+Show, missing write permission, an identity key that is immutable after create, and a field that is temporarily not authorable on an otherwise editable form all use the same field component in **display mode** (`editable={false}`). Edit mode (`editable={true}`) is the matching input. Display mode follows the value's shape (plain text, option label, yes/no, or segmented label). It is not a `disabled` or `readOnly` input. There is no third presentation (`locked`, `disabled`, or `readOnly`) for a field the actor cannot change.
 
 Create, show, and edit still share one layout. The branch is inside the field component. Do not replace that layout with a second page tree.
 
