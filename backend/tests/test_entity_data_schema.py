@@ -527,6 +527,68 @@ def test_schema_names_business_key_and_reference_operators(client: TestClient) -
     assert default_key.json()["code"] == "ENTITY_ROW_INVALID"
 
 
+def test_schema_reference_business_key_comes_from_snapshot(
+    client: TestClient,
+) -> None:
+    now = datetime.now(timezone.utc)
+    supplier = BusinessEntityRecord(
+        id=new_entity_id(),
+        table_name="renamed_supplier",
+        name="Supplier",
+        description="Party",
+        deprecated_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    supplier_attrs = [
+        AttributeRecord(
+            name="code",
+            type="string",
+            required=True,
+            unique=True,
+            business_key=True,
+            max_length=16,
+        )
+    ]
+    get_entity_store().create_entity(
+        supplier,
+        EntityVersionRecord(
+            id=new_version_id(),
+            entity_id=supplier.id,
+            version=1,
+            attributes=list(supplier_attrs),
+            materialized_attributes=[
+                attribute_to_dict(item) for item in supplier_attrs
+            ],
+            publish_status=PUBLISHED,
+            latest_reconcile_job_id=None,
+            created_at=now,
+            updated_at=now,
+        ),
+    )
+    ref = AttributeRecord(
+        name="supplier_code",
+        type="reference",
+        required=False,
+        target_entity_id=supplier.id,
+    )
+    linked = _seed_serving(table_name="frozen_link", attributes=[ref])
+    version = get_entity_store().current_version(linked.id)
+    assert version is not None
+    version.reference_snapshots = {
+        "supplier_code": {
+            "attribute": "legacy_code",
+            "type": "string",
+            "max_length": 16,
+        }
+    }
+    get_entity_store().save_version(version)
+    response = client.post("/entities/frozen_link/schema", json={})
+    assert response.status_code == 200, response.text
+    by_name = {item["name"]: item for item in response.json()["attributes"]}
+    assert by_name["supplier_code"]["target"]["business_key"] == "legacy_code"
+
+
 def test_reference_encoding_and_filters_follow_snapshot_type() -> None:
     from backend.entity.data.filters import compile_filters
     from backend.entity.data.head import HeadTarget

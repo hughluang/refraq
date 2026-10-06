@@ -76,6 +76,19 @@ class ReferenceTargetOut(BaseModel):
     business_key: str | None = None
 
 
+class ReferenceSnapshotOut(BaseModel):
+    attribute: str
+    type: str
+    max_length: int | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_length(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        if data.get("max_length") is None:
+            data.pop("max_length", None)
+        return data
+
+
 class DictionaryRefOut(BaseModel):
     id: str
     name: str
@@ -93,6 +106,7 @@ class AttributeOut(BaseModel):
     description: str | None = None
     config: dict[str, Any]
     target: ReferenceTargetOut | None = None
+    reference_snapshot: ReferenceSnapshotOut | None = None
     dictionary: DictionaryRefOut | None = None
     behind: bool | None = None
 
@@ -102,6 +116,7 @@ class AttributeOut(BaseModel):
         reads = resolve(str(data.get("type") or "")).reads
         if "target" not in reads:
             data.pop("target", None)
+            data.pop("reference_snapshot", None)
         if "dictionary" not in reads:
             data.pop("dictionary", None)
             data.pop("behind", None)

@@ -724,6 +724,7 @@ def test_attribute_payload_omits_target_from_storage() -> None:
         ),
     )
     assert missing["target"] is None
+    assert missing["reference_snapshot"] is None
     plain = attribute_payload(
         store,
         AttributeRecord(name="sku", type="string", required=False, max_length=32),
@@ -1037,6 +1038,118 @@ def test_publish_snapshots_target_business_key_and_blocks_key_change(
     )
     assert widened.status_code == 409
     assert widened.json()["code"] == "ENTITY_REFERENCED"
+
+
+def _integer_key() -> dict:
+    return {
+        "name": "code",
+        "type": "integer",
+        "required": True,
+        "unique": True,
+        "business_key": True,
+        "config": {},
+    }
+
+
+def _publish_current(client: TestClient, entity: dict) -> None:
+    published = client.post(
+        f"/entities/{entity['id']}/versions/{entity['current_version']['id']}/publish"
+    )
+    assert published.status_code == 201, published.text
+    assert published.json()["job"]["status"] == "succeeded"
+
+
+def test_serving_head_blocks_key_change_after_draft_drops_reference(
+    client: TestClient,
+) -> None:
+    supplier = client.post(
+        "/entities",
+        json=_create(
+            table_name="key_target",
+            name="Target",
+            attributes=[_business_key()],
+        ),
+    )
+    assert supplier.status_code == 201, supplier.text
+    supplier_entity = supplier.json()["entity"]
+    material = client.post(
+        "/entities",
+        json=_create(
+            table_name="key_referrer",
+            name="Referrer",
+            attributes=[
+                _reference(config={"target_entity_id": supplier_entity["id"]})
+            ],
+        ),
+    )
+    assert material.status_code == 201, material.text
+    material_entity = material.json()["entity"]
+    _publish_current(client, material_entity)
+
+    published = client.get(
+        f"/entities/{material_entity['id']}/versions/"
+        f"{material_entity['current_version']['id']}"
+    )
+    assert published.status_code == 200, published.text
+    snapshot = published.json()["version"]["attributes"][0]["reference_snapshot"]
+    assert snapshot == {"attribute": "code", "type": "string", "max_length": 32}
+
+    opened = client.post(f"/entities/{material_entity['id']}/versions", json={})
+    assert opened.status_code == 201, opened.text
+    draft_id = opened.json()["version"]["id"]
+    cleared = client.patch(
+        f"/entities/{material_entity['id']}/versions/{draft_id}",
+        json={"attributes": [_value(name="sku")]},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["version"]["attributes"][0].get("reference_snapshot") is None
+
+    blocked = client.patch(
+        f"/entities/{supplier_entity['id']}/versions/"
+        f"{supplier_entity['current_version']['id']}",
+        json={"attributes": [_integer_key()]},
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["code"] == "ENTITY_REFERENCED"
+    assert "key_referrer.supplier_id" in blocked.json()["detail"]
+
+    republished = client.post(
+        f"/entities/{material_entity['id']}/versions/{draft_id}/publish"
+    )
+    assert republished.status_code == 201, republished.text
+    assert republished.json()["job"]["status"] == "succeeded"
+    allowed = client.patch(
+        f"/entities/{supplier_entity['id']}/versions/"
+        f"{supplier_entity['current_version']['id']}",
+        json={"attributes": [_integer_key()]},
+    )
+    assert allowed.status_code == 200, allowed.text
+
+
+def test_own_serving_head_does_not_block_dropping_self_reference(
+    client: TestClient,
+) -> None:
+    created = client.post(
+        "/entities",
+        json=_create(
+            table_name="self_key",
+            name="Node",
+            attributes=[
+                _business_key(),
+                _reference(name="parent_id", config={"target_entity_id": "self"}),
+            ],
+        ),
+    )
+    assert created.status_code == 201, created.text
+    entity = created.json()["entity"]
+    _publish_current(client, entity)
+    opened = client.post(f"/entities/{entity['id']}/versions", json={})
+    assert opened.status_code == 201, opened.text
+    changed = client.patch(
+        f"/entities/{entity['id']}/versions/{opened.json()['version']['id']}",
+        json={"attributes": [_integer_key()]},
+    )
+    assert changed.status_code == 200, changed.text
 
 
 def test_first_publish_requires_reference_target(client: TestClient) -> None:

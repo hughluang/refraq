@@ -30,8 +30,23 @@ function slotText(
 }
 
 export function physicalColumnType(
-  attr: Pick<AttributeDraft, "type" | "max_length" | "precision" | "scale">,
+  attr: Pick<
+    AttributeDraft,
+    | "type"
+    | "max_length"
+    | "precision"
+    | "scale"
+    | "reference_key_type"
+    | "reference_max_length"
+  >,
 ): string {
+  if (attr.type === "reference") {
+    if (attr.reference_key_type === "integer") return "BIGINT";
+    if (attr.reference_key_type === "string") {
+      const length = strictInt(attr.reference_max_length);
+      if (length != null) return `VARCHAR(${length})`;
+    }
+  }
   const physical = ATTRIBUTE_TYPE_CATALOG[attr.type].physical;
   const names = [...physical.template.matchAll(/\{([a-z_]+)\}/g)].map(
     (match) => match[1],

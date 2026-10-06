@@ -33,6 +33,26 @@ describe("physicalColumnType", () => {
     ).toBe("NUMERIC(10,0)");
   });
 
+  it("renders a frozen reference column from the snapshot", () => {
+    expect(
+      physicalColumnType(
+        draft({
+          type: "reference",
+          reference_key_type: "string",
+          reference_max_length: "16",
+        }),
+      ),
+    ).toBe("VARCHAR(16)");
+    expect(
+      physicalColumnType(
+        draft({ type: "reference", reference_key_type: "integer" }),
+      ),
+    ).toBe("BIGINT");
+    expect(physicalColumnType(draft({ type: "reference" }))).toBe(
+      "VARCHAR | BIGINT",
+    );
+  });
+
   it("uses the fixed column type for every other attribute type", () => {
     const fixed: Record<Exclude<AttributeType, "string" | "decimal">, string> =
       {

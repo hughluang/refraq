@@ -69,7 +69,7 @@ def _attribute_out(
     payload["operators"] = _operators(attr, target)
     payload["upsert_key"] = upsert_key_for(attr)
     if "target" in spec.reads:
-        payload["target"] = _reference_target(store, attr.target_entity_id)
+        payload["target"] = _reference_target(store, attr, target)
     if "dictionary" in spec.reads:
         payload["dictionary"] = _dictionary_link(attr)
         payload["codes"] = _codes_for(attr, target)
@@ -83,24 +83,20 @@ def _operators(attr: AttributeRecord, target: HeadTarget) -> list[str]:
 
 
 def _reference_target(
-    store: EntityStore, entity_id: str | None
+    store: EntityStore, attr: AttributeRecord, head: HeadTarget
 ) -> dict[str, str | None] | None:
+    entity_id = attr.target_entity_id
     if not entity_id:
         return None
     entity = store.get_entity(entity_id)
     if entity is None:
         return None
-    current = store.current_version(entity.id)
-    key_name: str | None = None
-    if current is not None:
-        key = business_key_attr(current.attributes)
-        if key is not None:
-            key_name = key.name
+    snap = head.head.reference_snapshots[attr.name]
     return {
         "entity_id": entity.id,
         "name": entity.name,
         "table_name": entity.table_name,
-        "business_key": key_name,
+        "business_key": snap["attribute"],
     }
 
 

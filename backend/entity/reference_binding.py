@@ -7,8 +7,10 @@ from typing import Any
 
 from backend.entity.errors import EntityAttributeInvalid, EntityReferenced
 from backend.entity.inbound import inbound_references_for
+from backend.entity.lifecycle import latest_published_of
 from backend.entity.records import AttributeRecord
 from backend.entity.store import EntityStore
+from backend.entity.table_name import table_present
 
 __all__ = [
     "bind_reference_publish",
@@ -44,13 +46,84 @@ def require_business_key_stable(
     before: list[AttributeRecord] | tuple[AttributeRecord, ...],
     after: list[AttributeRecord] | tuple[AttributeRecord, ...],
 ) -> None:
-    """Refuse a Business Key change while an inbound reference exists."""
+    """Refuse a Business Key change while a reference binding still serves."""
     if _business_key_signature(before) == _business_key_signature(after):
         return
-    if inbound_references_for(store, entity_id):
-        raise EntityReferenced(
-            "Business Key cannot change while an inbound reference exists"
+    bound = _bound_references(store, entity_id, replacing=after)
+    if not bound:
+        return
+    listed = ", ".join(
+        f"{item['table_name']}.{item['attribute_name']}" for item in bound
+    )
+    raise EntityReferenced(
+        "Business Key cannot change while a reference binding exists: " + listed
+    )
+
+
+def _bound_references(
+    store: EntityStore,
+    target_id: str,
+    *,
+    replacing: list[AttributeRecord] | tuple[AttributeRecord, ...],
+) -> list[dict[str, str]]:
+    """Current-version references, plus other entities' serving heads.
+
+    ``replacing`` is the shape being saved for ``target_id``. That entity's
+    stored current version is not a binding this write would leave behind, and
+    its own serving head retires on the successor publish.
+    """
+    found: dict[tuple[str, str], dict[str, str]] = {}
+    for item in _current_references(store, target_id, replacing=replacing):
+        found[(item["table_name"], item["attribute_name"])] = item
+    for entity in store.list_all_entities():
+        if entity.id == target_id:
+            continue
+        head = latest_published_of(store.list_all_versions(entity.id))
+        if head is None or not table_present(head):
+            continue
+        for attr in head.attributes:
+            if attr.type != "reference" or attr.target_entity_id != target_id:
+                continue
+            if attr.name not in head.reference_snapshots:
+                continue
+            found[(entity.table_name, attr.name)] = {
+                "entity_id": entity.id,
+                "table_name": entity.table_name,
+                "attribute_name": attr.name,
+            }
+    return sorted(
+        found.values(),
+        key=lambda item: (item["table_name"], item["attribute_name"]),
+    )
+
+
+def _current_references(
+    store: EntityStore,
+    target_id: str,
+    *,
+    replacing: list[AttributeRecord] | tuple[AttributeRecord, ...],
+) -> list[dict[str, str]]:
+    """Inbound references, with ``target_id`` judged by the shape being saved."""
+    others = [
+        item
+        for item in inbound_references_for(store, target_id)
+        if item["entity_id"] != target_id
+    ]
+    entity = store.get_entity(target_id)
+    if entity is None:
+        return others
+    for attr in replacing:
+        if attr.type != "reference" or attr.target_entity_id != target_id:
+            continue
+        others.append(
+            {
+                "entity_id": entity.id,
+                "table_name": entity.table_name,
+                "attribute_name": attr.name,
+            }
         )
+    others.sort(key=lambda item: (item["table_name"], item["attribute_name"]))
+    return others
 
 
 def freeze_reference_bindings(

@@ -19,6 +19,8 @@ export const EMPTY_ATTRIBUTE: {
   target_entity_id: string;
   target_name: string;
   target_table_name: string;
+  reference_key_type: "" | "string" | "integer";
+  reference_max_length: string;
 } = {
   type: "string",
   name: "",
@@ -38,6 +40,8 @@ export const EMPTY_ATTRIBUTE: {
   target_entity_id: "",
   target_name: "",
   target_table_name: "",
+  reference_key_type: "",
+  reference_max_length: "",
 };
 
 export const DROP_TABLE_PERMISSION = "entity:drop_table";

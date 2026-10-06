@@ -34,6 +34,7 @@ def attribute_payload(
     reads = resolve(attr.type).reads
     if "target" in reads:
         payload["target"] = _reference_target(store, attr.target_entity_id)
+        payload["reference_snapshot"] = _reference_snapshot(version, attr.name)
     if "dictionary" in reads:
         payload.update(_dictionary_read(store, attr, version))
     return payload
@@ -64,6 +65,23 @@ def _dictionary_read(
         if snapshot is not None:
             behind = int(snapshot.get("revision") or 0) < revision
     return {"dictionary": linked, "behind": behind}
+
+
+def _reference_snapshot(
+    version: EntityVersionRecord | None, name: str
+) -> dict[str, Any] | None:
+    if version is None:
+        return None
+    snap = version.reference_snapshots.get(name)
+    if not isinstance(snap, dict):
+        return None
+    frozen: dict[str, Any] = {
+        "attribute": snap.get("attribute"),
+        "type": snap.get("type"),
+    }
+    if "max_length" in snap:
+        frozen["max_length"] = snap["max_length"]
+    return frozen
 
 
 def _reference_target(

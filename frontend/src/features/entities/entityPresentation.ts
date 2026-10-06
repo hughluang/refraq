@@ -55,6 +55,15 @@ export function draftsFromVersion(version: EntityVersion): AttributeDraft[] {
       target_entity_id: config.target_entity_id ?? "",
       target_name: item.target?.name ?? "",
       target_table_name: item.target?.table_name ?? "",
+      reference_key_type:
+        item.reference_snapshot?.type === "string" ||
+        item.reference_snapshot?.type === "integer"
+          ? item.reference_snapshot.type
+          : "",
+      reference_max_length:
+        item.reference_snapshot?.max_length != null
+          ? String(item.reference_snapshot.max_length)
+          : "",
     };
   });
 }

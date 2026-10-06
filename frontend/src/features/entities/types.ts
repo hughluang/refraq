@@ -24,6 +24,12 @@ export type ReferenceTarget = {
   business_key: string | null;
 };
 
+export type ReferenceSnapshot = {
+  attribute: string;
+  type: "string" | "integer";
+  max_length?: number;
+};
+
 export type EntityAttribute = {
   name: string;
   type: AttributeType;
@@ -34,6 +40,7 @@ export type EntityAttribute = {
   description: string | null;
   config: AttributeConfig;
   target?: ReferenceTarget | null;
+  reference_snapshot?: ReferenceSnapshot | null;
   dictionary?: DictionaryRef | null;
   behind?: boolean;
 };
@@ -64,6 +71,8 @@ export type AttributeDraft = {
   target_entity_id: string;
   target_name: string;
   target_table_name: string;
+  reference_key_type: "" | "string" | "integer";
+  reference_max_length: string;
 };
 
 export type InboundReference = {

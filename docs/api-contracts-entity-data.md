@@ -173,7 +173,7 @@ Rules:
 - `row_id` is separate from `attributes`.
 - Top-level `business_key` is the head attribute name marked `business_key`, or `null` when the head has none.
 - Attribute objects keep the definition attribute keys (`docs/api-contracts-entity.md` §3.1): `name`, `type`, `required`, `unique`, `indexed`, `business_key`, `description`, `config`.
-- Additional keys: `operators`; `upsert_key` (true when `unique` and type is not `number` or `json`, **including** `boolean`); for `dictionary`, `dictionary` plus `codes` as `[{ "code", "label", "writable" }]`; for `reference`, `target` as on definition reads, and `operators` are the operators of the snapshotted target Business Key type (`string` or `integer`).
+- Additional keys: `operators`; `upsert_key` (true when `unique` and type is not `number` or `json`, **including** `boolean`); for `dictionary`, `dictionary` plus `codes` as `[{ "code", "label", "writable" }]`; for `reference`, `target` as on definition reads except that `target.business_key` is the attribute name stored in the head reference snapshot, and `operators` are the operators of the snapshotted target Business Key type (`string` or `integer`).
 - `limits.row_write_max` is 1000 and is shared by `create-many` and conditional writes.
 
 ## 6. Row Write And Read Bodies
