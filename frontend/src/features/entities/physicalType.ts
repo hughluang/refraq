@@ -43,7 +43,7 @@ export function physicalColumnType(
     if (parsed == null) return physical.bare;
     filled.set(name, String(parsed));
   }
-  let rendered = physical.template;
+  let rendered: string = physical.template;
   for (const [name, value] of filled) {
     rendered = rendered.replace(`{${name}}`, value);
   }
