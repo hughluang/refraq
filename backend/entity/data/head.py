@@ -21,6 +21,7 @@ from backend.entity.records import (
     EntityVersionRecord,
     attribute_from_dict,
 )
+from backend.entity.reference_binding import frozen_reference_bindings_cover
 from backend.entity.store import get_entity_store
 
 __all__ = [
@@ -59,6 +60,13 @@ def resolve_head(table_name: str, *, for_write: bool) -> HeadTarget:
     attributes = tuple(
         attribute_from_dict(item) for item in head.materialized_attributes
     )
+    if (
+        frozen_reference_bindings_cover(list(attributes), head.reference_snapshots)
+        is None
+    ):
+        raise EntityNotServing(
+            "Serving head predates reference snapshots; publish a new version"
+        )
     schema = entity_db_schema()
     return HeadTarget(
         entity=entity,

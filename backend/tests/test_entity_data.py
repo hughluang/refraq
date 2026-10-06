@@ -476,6 +476,13 @@ def test_business_key_addressing_reference_and_upsert_default(data_client) -> No
     assert contains.status_code == 200, contains.text
     assert contains.json()["total"] == 1
 
+    blank_match = client.post(
+        f"/entities/{material_stem}/query",
+        json={"filters": {"field": "sku", "op": "eq", "value": ""}},
+    )
+    assert blank_match.status_code == 200, blank_match.text
+    assert blank_match.json()["total"] == 0
+
     upserted = client.post(
         f"/entities/{material_stem}/upsert",
         json={"values": {"sku": "M1", "supplier_code": "S2"}},

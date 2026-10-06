@@ -3,7 +3,8 @@
 Revision ID: 0049_entity_reference_snapshots
 Revises: 0048_schedule_start_at
 
-Existing versions have no reference snapshot. The next publish writes one.
+Existing versions have no reference snapshot. A head that declares a
+reference is refused with ENTITY_NOT_SERVING until the next publish writes one.
 """
 
 from __future__ import annotations

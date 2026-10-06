@@ -17,6 +17,7 @@ __all__ = [
     "encode_inbound",
     "encode_inbound_map",
     "reference_value_attr",
+    "require_business_key_value",
     "writable_dictionary_codes",
 ]
 
@@ -38,6 +39,7 @@ def encode_inbound_map(
         raise EntityRowInvalid("values must not be empty")
     encoded: dict[str, Any] = {}
     for name, raw in values.items():
+        require_business_key_value(by_name[name], raw)
         encoded[name] = encode_inbound(by_name[name], raw, target)
     if not partial:
         for attr in target.attributes:
@@ -50,6 +52,19 @@ def encode_inbound_map(
                     f"Attribute '{attr.name}' is required"
                 )
     return encoded
+
+
+def require_business_key_value(attr: AttributeRecord, raw: Any) -> None:
+    """A string Business Key must not be empty or whitespace."""
+    if (
+        attr.business_key
+        and attr.type == "string"
+        and isinstance(raw, str)
+        and not raw.strip()
+    ):
+        raise EntityRowInvalid(
+            f"Attribute '{attr.name}' business key must not be blank"
+        )
 
 
 def encode_inbound(

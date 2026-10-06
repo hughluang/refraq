@@ -44,7 +44,7 @@ A single Entity Table may reach on the order of 10 million rows. This API is the
 - Path `{table_name}` is the Entity stem. The service resolves head metadata and addresses the head physical table; it does not read or write through the stem view for mutations.
 - Platform `row_id` is server-issued. Clients must not submit it on create. An **Entity Reference** stores the target **Business Key** value without existence checks, foreign keys, or cascades. Encoding follows the reference snapshot frozen at publish.
 - Dictionary codes: writable = head snapshot ∩ Dictionary active set; filterable = full snapshot codes. Schema exposes `codes[].writable`.
-- Deprecated Entity → `422 ENTITY_DEPRECATED`. No head table → `422 ENTITY_NOT_SERVING`. While any version is `publishing`, schema and reads succeed with `entity.writable=false`; writes → `422 ENTITY_PUBLISHING`.
+- Deprecated Entity → `422 ENTITY_DEPRECATED`. No head table, or a head whose reference attributes lack a reference snapshot, → `422 ENTITY_NOT_SERVING`. While any version is `publishing`, schema and reads succeed with `entity.writable=false`; writes → `422 ENTITY_PUBLISHING`.
 
 ### 2.5 Explicit Non-Goals (Surface)
 
@@ -179,7 +179,7 @@ Rules:
 ## 6. Row Write And Read Bodies
 
 - `values` / `set` keys are head attribute names. Present `row_id` or an unknown name → `422 ENTITY_ROW_INVALID`. `update` with `values: {}` or empty `set` → `422`.
-- `get` / `update` / `delete` address one row by exactly one of `row_id` or `business_key`. Both, or neither, → `422 REQUEST_INVALID`. `business_key` when the head has no Business Key, or a value that does not match the Business Key type, → `422 REQUEST_INVALID`. Malformed `row_id` → `422 REQUEST_INVALID`. Missing row → `404 ENTITY_ROW_NOT_FOUND`.
+- `get` / `update` / `delete` address one row by exactly one of `row_id` or `business_key`. Both, or neither, → `422 REQUEST_INVALID`. `business_key` when the head has no Business Key, a value that does not match the Business Key type, or a blank or whitespace-only string, → `422 REQUEST_INVALID`. Malformed `row_id` → `422 REQUEST_INVALID`. Missing row → `404 ENTITY_ROW_NOT_FOUND`.
 - `update` and `update-where` must not change the Business Key attribute. A present key for that attribute, including a value equal to the current one, → `422 ENTITY_ROW_INVALID`.
 - `fields` is query-only and may include `row_id`. Empty `fields` → `422`. Write responses and get always return the full row.
 - Write responses do not carry `head.version_id`. Callers that need drift detection call schema again.
@@ -245,7 +245,7 @@ Type whitelist (`operators` is the sole source of truth):
 | integer | JSON integer (reject bool, fractional, out of BIGINT) | number |
 | reference | the snapshotted target Business Key type: `string` rules or `integer` rules | same as that type |
 | row_id | filter and single-row bodies; integer ≥ 1 | number |
-| business_key | single-row bodies and the default upsert key; encoded as the head Business Key attribute | not a column; the attribute value is returned under that attribute's name |
+| business_key | single-row bodies and the default upsert key; encoded as the head Business Key attribute. A string value must not be blank or whitespace-only | not a column; the attribute value is returned under that attribute's name |
 | decimal | number or decimal string; over precision/scale → 422 | decimal string |
 | number | JSON number (reject bool, NaN, Inf) | number; NaN/Inf on read → null |
 | boolean | only `true` / `false` | boolean |
@@ -268,9 +268,9 @@ Order: route (unknown segment / method) → authentication → permission → `t
 | `table_name` not registered | 404 | `ENTITY_NOT_FOUND` |
 | Unknown third segment | 404 | `HTTP_NOT_FOUND` |
 | Non-POST | 405 | `HTTP_METHOD_NOT_ALLOWED` |
-| Deprecated / publishing write / no head table | 422 | `ENTITY_DEPRECATED` / `ENTITY_PUBLISHING` / `ENTITY_NOT_SERVING` |
-| Body structure / bounds / mutually exclusive keys / unknown top-level keys | 422 | `REQUEST_INVALID` |
-| Attribute / filter / code / empty conditional filters | 422 | `ENTITY_ROW_INVALID` |
+| Deprecated / publishing write / no head table / missing reference snapshot | 422 | `ENTITY_DEPRECATED` / `ENTITY_PUBLISHING` / `ENTITY_NOT_SERVING` |
+| Body structure / bounds / mutually exclusive keys / unknown top-level keys / blank `business_key` locator | 422 | `REQUEST_INVALID` |
+| Attribute / filter / code / blank Business Key value / empty conditional filters | 422 | `ENTITY_ROW_INVALID` |
 | Unknown `row_id` or `business_key` | 404 | `ENTITY_ROW_NOT_FOUND` |
 | Unique conflict (including in-batch) | 409 | `ENTITY_ROW_CONFLICT` |
 | Conditional write matched more than 1000 rows | 409 | `ENTITY_ROW_LIMIT_EXCEEDED` |

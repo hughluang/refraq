@@ -231,6 +231,72 @@ def test_schema_deprecated_and_not_serving(client: TestClient) -> None:
     assert missing.json()["code"] == "ENTITY_NOT_SERVING"
 
 
+def test_missing_reference_snapshot_is_not_serving(client: TestClient) -> None:
+    ref = AttributeRecord(
+        name="supplier_id",
+        type="reference",
+        required=False,
+        target_entity_id="ent_supplier",
+    )
+    _seed_serving(table_name="legacy_ref", attributes=[ref])
+    for path, body in (
+        ("/entities/legacy_ref/schema", {}),
+        ("/entities/legacy_ref/create", {"values": {"supplier_id": 1}}),
+        ("/entities/legacy_ref/query", {}),
+    ):
+        response = client.post(path, json=body)
+        assert response.status_code == 422, response.text
+        assert response.json()["code"] == "ENTITY_NOT_SERVING"
+
+
+def test_blank_string_business_key_is_rejected(client: TestClient) -> None:
+    key = AttributeRecord(
+        name="code",
+        type="string",
+        required=True,
+        unique=True,
+        business_key=True,
+        max_length=32,
+    )
+    _seed_serving(table_name="keyed", attributes=[key])
+    for value in ("", "  "):
+        created = client.post(
+            "/entities/keyed/create", json={"values": {"code": value}}
+        )
+        assert created.status_code == 422, created.text
+        assert created.json()["code"] == "ENTITY_ROW_INVALID"
+        upserted = client.post(
+            "/entities/keyed/upsert", json={"values": {"code": value}}
+        )
+        assert upserted.status_code == 422, upserted.text
+        assert upserted.json()["code"] == "ENTITY_ROW_INVALID"
+    located = client.post("/entities/keyed/get", json={"business_key": ""})
+    assert located.status_code == 422, located.text
+    assert located.json()["code"] == "REQUEST_INVALID"
+
+    from backend.entity.data.filters import compile_filters
+    from backend.entity.data.head import HeadTarget
+    from backend.entity.ddl import qualified_table
+
+    stored = get_entity_store().get_entity_by_table_name("keyed")
+    assert stored is not None
+    version = get_entity_store().current_version(stored.id)
+    assert version is not None
+    compiled = compile_filters(
+        {"field": "code", "op": "eq", "value": ""},
+        HeadTarget(
+            entity=stored,
+            head=version,
+            attributes=tuple(version.attributes),
+            physical_table="keyed__v1__x",
+            qualified_table=qualified_table("public", "keyed__v1__x"),
+            writable=True,
+        ),
+    )
+    assert compiled is not None
+    assert "" in compiled.params.values()
+
+
 def test_schema_publishing_sets_writable_false(client: TestClient) -> None:
     _seed_serving(publishing=True)
     response = client.post("/entities/material/schema", json={})

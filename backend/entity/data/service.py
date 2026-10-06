@@ -10,7 +10,11 @@ from backend.entity.data.head import HeadTarget, resolve_head
 from backend.entity.data.paging import resolve_keyset_query, resolve_offset_query
 from backend.entity.data.schema import build_schema
 from backend.entity.data import sql as data_sql
-from backend.entity.data.values import encode_inbound, encode_inbound_map
+from backend.entity.data.values import (
+    encode_inbound,
+    encode_inbound_map,
+    require_business_key_value,
+)
 from backend.entity.errors import (
     EntityRequestInvalid,
     EntityRowConflict,
@@ -315,6 +319,7 @@ def _locator(
     if marked is None:
         raise EntityRequestInvalid("business_key is not declared on this entity")
     try:
+        require_business_key_value(marked, body.get("business_key"))
         encoded = encode_inbound(marked, body.get("business_key"), target)
     except EntityRowInvalid as exc:
         raise EntityRequestInvalid(exc.message) from exc
