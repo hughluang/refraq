@@ -6,6 +6,7 @@ export const EMPTY_ATTRIBUTE: {
   required: boolean;
   unique: boolean;
   indexed: boolean;
+  business_key: boolean;
   description: string;
   max_length: string;
   precision: string;
@@ -24,6 +25,7 @@ export const EMPTY_ATTRIBUTE: {
   required: false,
   unique: false,
   indexed: false,
+  business_key: false,
   description: "",
   max_length: "",
   precision: "",

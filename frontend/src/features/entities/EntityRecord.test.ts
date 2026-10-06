@@ -208,6 +208,7 @@ function versionFor(entity: BusinessEntity): EntityVersion {
         required: true,
         unique: true,
         indexed: false,
+        business_key: false,
         description: null,
         config: { max_length: 64 },
       },

@@ -24,6 +24,7 @@ class AttributeRecord:
     required: bool = False
     unique: bool = False
     indexed: bool = False
+    business_key: bool = False
     description: str | None = None
     max_length: int | None = None
     precision: int | None = None
@@ -32,6 +33,9 @@ class AttributeRecord:
     target_entity_id: str | None = None
     # Resolved for classify and DDL. Not stored on the attribute definition.
     codes: tuple[str, ...] | None = None
+    # Stamped from the reference snapshot for DDL and row encoding. Not stored.
+    reference_key_type: str | None = None
+    reference_max_length: int | None = None
 
 
 @dataclass
@@ -57,6 +61,7 @@ class EntityVersionRecord:
     created_at: datetime
     updated_at: datetime
     dictionary_snapshots: dict[str, Any] = field(default_factory=dict)
+    reference_snapshots: dict[str, Any] = field(default_factory=dict)
 
 
 def attribute_to_dict(attr: AttributeRecord) -> dict[str, Any]:
@@ -66,6 +71,7 @@ def attribute_to_dict(attr: AttributeRecord) -> dict[str, Any]:
         "required": attr.required,
         "unique": bool(attr.unique),
         "indexed": bool(attr.indexed),
+        "business_key": bool(attr.business_key),
         "description": attr.description,
         "config": resolve(attr.type).config_payload(attr),
     }
@@ -86,6 +92,7 @@ def attribute_from_dict(payload: dict[str, Any]) -> AttributeRecord:
         required=bool(payload.get("required", False)),
         unique=bool(payload.get("unique", False)),
         indexed=bool(payload.get("indexed", False)),
+        business_key=bool(payload.get("business_key", False)),
         description=str(description) if isinstance(description, str) else None,
         **resolve(attribute_type).stored_fields(config),
     )

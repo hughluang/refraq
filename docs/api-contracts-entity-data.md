@@ -42,13 +42,13 @@ A single Entity Table may reach on the order of 10 million rows. This API is the
 
 - Only the metadata **head** (latest published version that still has a table) is visible. After a successor publish, schema and row verbs move to the new empty table; prior rows are not migrated.
 - Path `{table_name}` is the Entity stem. The service resolves head metadata and addresses the head physical table; it does not read or write through the stem view for mutations.
-- Platform `row_id` is server-issued. Clients must not submit it on create. An **Entity Reference** stores a target `row_id` without existence checks, foreign keys, or cascades.
+- Platform `row_id` is server-issued. Clients must not submit it on create. An **Entity Reference** stores the target **Business Key** value without existence checks, foreign keys, or cascades. Encoding follows the reference snapshot frozen at publish.
 - Dictionary codes: writable = head snapshot ∩ Dictionary active set; filterable = full snapshot codes. Schema exposes `codes[].writable`.
 - Deprecated Entity → `422 ENTITY_DEPRECATED`. No head table → `422 ENTITY_NOT_SERVING`. While any version is `publishing`, schema and reads succeed with `entity.writable=false`; writes → `422 ENTITY_PUBLISHING`.
 
 ### 2.5 Explicit Non-Goals (Surface)
 
-No soft delete, aggregates, partial success / 207, top-level array bodies, client-chosen sort, composite unique keys, per-Entity ACL, serving opaque cursor / by-keys / MQ, a separate `query-capabilities` verb, get-by-business-key, kebab `table_name` aliases, Job-backed load or full export, row-level **Management Audit Event**, ETag, Idempotency-Key, or a single batch larger than 1000. Calls on this API (including via PAT) do not produce Management Audit Events.
+No soft delete, aggregates, partial success / 207, top-level array bodies, client-chosen sort, composite unique keys, per-Entity ACL, serving opaque cursor / by-keys / MQ, a separate `query-capabilities` verb, kebab `table_name` aliases, Job-backed load or full export, row-level **Management Audit Event**, ETag, Idempotency-Key, or a single batch larger than 1000. Calls on this API (including via PAT) do not produce Management Audit Events. Point get by the head **Business Key** is in scope (§6).
 
 ## 3. Cross-Cutting Rules
 
@@ -98,13 +98,13 @@ Core logic lives under `backend/entity/data/` (capabilities, head, schema, value
 | schema | `POST /entities/{table_name}/schema` | `{}` | `200` schema document | `entity:data_read` | no |
 | create | `POST /entities/{table_name}/create` | `{ "values": {…} }` | `201 { "row": {…} }` | data_read + data_write | yes |
 | create-many | `POST /entities/{table_name}/create-many` | `{ "items": [ { "values": {…} }, … ] }` length 1–1000 | `201 { "rows": […] }` same order as `items` | data_read + data_write | yes |
-| get | `POST /entities/{table_name}/get` | `{ "row_id": N }` | `200 { "row": {…} }` | `entity:data_read` | yes |
-| update | `POST /entities/{table_name}/update` | `{ "row_id": N, "values": {…} }` | `200 { "row": {…} }` | data_read + data_write | yes |
-| delete | `POST /entities/{table_name}/delete` | `{ "row_id": N }` | `204` empty body | data_read + data_write | yes |
+| get | `POST /entities/{table_name}/get` | `{ "row_id": N }` or `{ "business_key": v }` | `200 { "row": {…} }` | `entity:data_read` | yes |
+| update | `POST /entities/{table_name}/update` | `{ "row_id": N, "values": {…} }` or `{ "business_key": v, "values": {…} }` | `200 { "row": {…} }` | data_read + data_write | yes |
+| delete | `POST /entities/{table_name}/delete` | `{ "row_id": N }` or `{ "business_key": v }` | `204` empty body | data_read + data_write | yes |
 | query | `POST /entities/{table_name}/query` | Offset or keyset (§7) | `200` Offset Page or Entity Data Keyset Page | `entity:data_read` | yes |
 | update-where | `POST /entities/{table_name}/update-where` | `{ "filters": …, "set": {…} }` | `200 { "affected": N }` | data_read + data_write | yes |
 | delete-where | `POST /entities/{table_name}/delete-where` | `{ "filters": … }` | `200 { "affected": N }` | data_read + data_write | yes |
-| upsert | `POST /entities/{table_name}/upsert` | `{ "key": "…", "values": {…} }` | insert `201` / update `200` `{ "row": {…} }` | data_read + data_write | yes |
+| upsert | `POST /entities/{table_name}/upsert` | `{ "key"?: "…", "values": {…} }` | insert `201` / update `200` `{ "row": {…} }` | data_read + data_write | yes |
 
 Verb names are lowercase kebab. Qualifiers use a base verb plus a suffix (`-where`, `-many`). Keep `create-many` (not `batch-create` / `bulk-create`): same style as `*-where`, and it does not imply Job or ETL.
 
@@ -139,6 +139,7 @@ Schema is read-only metadata plus Dictionary; it does not open an entity-databas
     "type": "integer",
     "operators": ["eq", "ne", "in", "gt", "gte", "lt", "lte", "is_null"]
   },
+  "business_key": "sku",
   "attributes": [
     {
       "name": "sku",
@@ -146,6 +147,7 @@ Schema is read-only metadata plus Dictionary; it does not open an entity-databas
       "required": true,
       "unique": true,
       "indexed": false,
+      "business_key": true,
       "description": "SKU code",
       "config": { "max_length": 32 },
       "operators": ["eq", "ne", "in", "contains", "is_null"],
@@ -169,14 +171,16 @@ Rules:
 - `entity.id` is for correlation, not the routing entry. Path addressing stays `table_name`.
 - `head` does not expose the physical table name.
 - `row_id` is separate from `attributes`.
-- Attribute objects keep the first seven keys aligned with definition attribute shape (`docs/api-contracts-entity.md` §3.1): `name`, `type`, `required`, `unique`, `indexed`, `description`, `config`.
-- Additional keys: `operators`; `upsert_key` (true when `unique` and type is not `number` or `json`, **including** `boolean`); for `dictionary`, `dictionary` plus `codes` as `[{ "code", "label", "writable" }]`; for `reference`, `target` as on definition reads.
+- Top-level `business_key` is the head attribute name marked `business_key`, or `null` when the head has none.
+- Attribute objects keep the definition attribute keys (`docs/api-contracts-entity.md` §3.1): `name`, `type`, `required`, `unique`, `indexed`, `business_key`, `description`, `config`.
+- Additional keys: `operators`; `upsert_key` (true when `unique` and type is not `number` or `json`, **including** `boolean`); for `dictionary`, `dictionary` plus `codes` as `[{ "code", "label", "writable" }]`; for `reference`, `target` as on definition reads, and `operators` are the operators of the snapshotted target Business Key type (`string` or `integer`).
 - `limits.row_write_max` is 1000 and is shared by `create-many` and conditional writes.
 
 ## 6. Row Write And Read Bodies
 
 - `values` / `set` keys are head attribute names. Present `row_id` or an unknown name → `422 ENTITY_ROW_INVALID`. `update` with `values: {}` or empty `set` → `422`.
-- `get` / `update` / `delete` `row_id`: malformed → `422 REQUEST_INVALID`; missing row → `404 ENTITY_ROW_NOT_FOUND`.
+- `get` / `update` / `delete` address one row by exactly one of `row_id` or `business_key`. Both, or neither, → `422 REQUEST_INVALID`. `business_key` when the head has no Business Key, or a value that does not match the Business Key type, → `422 REQUEST_INVALID`. Malformed `row_id` → `422 REQUEST_INVALID`. Missing row → `404 ENTITY_ROW_NOT_FOUND`.
+- `update` and `update-where` must not change the Business Key attribute. A present key for that attribute, including a value equal to the current one, → `422 ENTITY_ROW_INVALID`.
 - `fields` is query-only and may include `row_id`. Empty `fields` → `422`. Write responses and get always return the full row.
 - Write responses do not carry `head.version_id`. Callers that need drift detection call schema again.
 
@@ -187,19 +191,19 @@ Rules:
 - One transaction: all succeed or none. Structural errors may list multiple `details`. Semantic failures pick the lowest index. Duplicate unique values inside the batch → `409 ENTITY_ROW_CONFLICT` before SQL when both indices are known; conflict with an existing row → `409` naming the attribute.
 - Empty `items` or length above 1000 → `422 REQUEST_INVALID` (not `ENTITY_ROW_LIMIT_EXCEEDED`).
 
-### 6.2 update And delete By row_id
+### 6.2 update And delete By Locator
 
-- `update`: omitted attribute keys keep prior values; explicit JSON `null` clears to SQL NULL. Unique conflict → `409 ENTITY_ROW_CONFLICT`.
+- `update`: omitted attribute keys keep prior values; explicit JSON `null` clears to SQL NULL. The Business Key attribute cannot appear in `values`. Unique conflict → `409 ENTITY_ROW_CONFLICT`.
 - `delete`: `204` with empty body.
 
 ### 6.3 upsert
 
-- `key` must name an attribute with `upsert_key: true` on schema. `values[key]` is required and non-null. The key column is not changeable on update. Concurrent same-key upserts settle to one insert and the rest updates; same-key concurrency does not produce `409`. Other-column unique conflicts → `409 ENTITY_ROW_CONFLICT`.
+- `key`, when present, must name an attribute with `upsert_key: true` on schema. When omitted, `key` is the head Business Key. Omitted `key` when the head has no Business Key → `422 REQUEST_INVALID`. `values[key]` is required and non-null. The key column is not changeable on update: `values` must not repeat it except as the match value already required by `values[key]`. Concurrent same-key upserts settle to one insert and the rest updates; same-key concurrency does not produce `409`. Other-column unique conflicts → `409 ENTITY_ROW_CONFLICT`.
 - Implementation uses row lock plus `INSERT … ON CONFLICT DO NOTHING` then `SELECT`, not `ON CONFLICT DO UPDATE`.
 
 ### 6.4 Conditional Writes
 
-- `update-where` / `delete-where`: empty filters, `[]`, or a tree with no leaf → `422 ENTITY_ROW_INVALID`.
+- `update-where` / `delete-where`: empty filters, `[]`, or a tree with no leaf → `422 ENTITY_ROW_INVALID`. `set` must not name the Business Key attribute (`422 ENTITY_ROW_INVALID`).
 - Match with `SELECT … LIMIT 1001 FOR UPDATE`. Hitting 1001 → `409 ENTITY_ROW_LIMIT_EXCEEDED`. Otherwise mutate by the locked id list. Share `ROW_WRITE_LIMIT = 1000` with `create-many`. Batch update/delete/upsert of arbitrary id lists is out of scope.
 
 ## 7. Query
@@ -224,7 +228,8 @@ Type whitelist (`operators` is the sole source of truth):
 | Types | Operators |
 | --- | --- |
 | string, text | eq, ne, in, contains, is_null |
-| integer, number, decimal, date, timestamp, time, reference, row_id | eq, ne, in, gt, gte, lt, lte, is_null |
+| integer, number, decimal, date, timestamp, time, row_id | eq, ne, in, gt, gte, lt, lte, is_null |
+| reference | operators of the snapshotted target Business Key type (`string` or `integer`) |
 | boolean | eq, ne, is_null |
 | dictionary | eq, ne, in, is_null |
 | json | eq, ne, is_null |
@@ -237,8 +242,10 @@ Type whitelist (`operators` is the sole source of truth):
 | --- | --- | --- |
 | string | string ≤ `max_length` | string |
 | text | string | string |
-| integer / reference | JSON integer (reject bool, fractional, out of BIGINT) | number |
+| integer | JSON integer (reject bool, fractional, out of BIGINT) | number |
+| reference | the snapshotted target Business Key type: `string` rules or `integer` rules | same as that type |
 | row_id | filter and single-row bodies; integer ≥ 1 | number |
+| business_key | single-row bodies and the default upsert key; encoded as the head Business Key attribute | not a column; the attribute value is returned under that attribute's name |
 | decimal | number or decimal string; over precision/scale → 422 | decimal string |
 | number | JSON number (reject bool, NaN, Inf) | number; NaN/Inf on read → null |
 | boolean | only `true` / `false` | boolean |
@@ -264,7 +271,7 @@ Order: route (unknown segment / method) → authentication → permission → `t
 | Deprecated / publishing write / no head table | 422 | `ENTITY_DEPRECATED` / `ENTITY_PUBLISHING` / `ENTITY_NOT_SERVING` |
 | Body structure / bounds / mutually exclusive keys / unknown top-level keys | 422 | `REQUEST_INVALID` |
 | Attribute / filter / code / empty conditional filters | 422 | `ENTITY_ROW_INVALID` |
-| Unknown `row_id` | 404 | `ENTITY_ROW_NOT_FOUND` |
+| Unknown `row_id` or `business_key` | 404 | `ENTITY_ROW_NOT_FOUND` |
 | Unique conflict (including in-batch) | 409 | `ENTITY_ROW_CONFLICT` |
 | Conditional write matched more than 1000 rows | 409 | `ENTITY_ROW_LIMIT_EXCEEDED` |
 | Entity pool checkout timeout / memory-mode row verb | 503 + `Retry-After` | `PLATFORM_CAPACITY_EXCEEDED` |

@@ -45,7 +45,7 @@ describe("physicalColumnType", () => {
         time: "TIME",
         json: "JSONB",
         dictionary: "VARCHAR(64)",
-        reference: "BIGINT",
+        reference: "VARCHAR | BIGINT",
       };
     for (const [type, column] of Object.entries(fixed)) {
       expect(physicalColumnType(draft({ type: type as AttributeType }))).toBe(

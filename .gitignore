@@ -25,6 +25,9 @@ next-env.d.ts
 # local clones of third-party reference projects; not part of the committed baseline
 external/
 
+# local port remap; not part of the committed baseline
+compose.override.yaml
+
 # local-only AI collaboration drafts; not part of the committed baseline
 CONTEXT.md
 docs/adr/

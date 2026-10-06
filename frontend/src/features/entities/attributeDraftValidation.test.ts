@@ -12,8 +12,12 @@ function draft(overrides: Partial<AttributeDraft> = {}): AttributeDraft {
   return { ...EMPTY_ATTRIBUTE, ...overrides };
 }
 
-function fields(item: AttributeDraft, names: readonly string[]) {
-  return attributeDraftIssues(item, names).map((issue) => issue.field);
+function fields(
+  item: AttributeDraft,
+  names: readonly string[],
+  siblings: readonly AttributeDraft[] = [],
+) {
+  return attributeDraftIssues(item, names, siblings).map((issue) => issue.field);
 }
 
 describe("attributeDraftIssues", () => {
@@ -75,6 +79,44 @@ describe("attributeDraftIssues", () => {
         ["status"],
       ),
     ).toEqual([]);
+  });
+
+  it("requires a single string or integer business key that is unique and required", () => {
+    expect(
+      fields(
+        draft({
+          name: "code",
+          max_length: "8",
+          business_key: true,
+        }),
+        ["code"],
+      ),
+    ).toEqual(["business_key"]);
+    expect(
+      fields(
+        draft({
+          name: "code",
+          max_length: "8",
+          required: true,
+          unique: true,
+          business_key: true,
+        }),
+        ["code"],
+      ),
+    ).toEqual([]);
+    expect(
+      fields(
+        draft({
+          name: "flag",
+          type: "boolean",
+          required: true,
+          unique: true,
+          business_key: true,
+        }),
+        ["flag"],
+        [draft({ name: "code", business_key: true, max_length: "8" })],
+      ),
+    ).toEqual(["business_key", "business_key"]);
   });
 
   it("requires a reference target and ignores config on plain types", () => {

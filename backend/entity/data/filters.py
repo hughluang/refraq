@@ -12,7 +12,7 @@ from backend.entity.data.capabilities import (
     FILTER_LEAVES_MAX,
 )
 from backend.entity.data.head import HeadTarget
-from backend.entity.data.values import encode_inbound
+from backend.entity.data.values import encode_inbound, reference_value_attr
 from backend.entity.ddl import ident
 from backend.entity.errors import EntityRequestInvalid, EntityRowInvalid
 from backend.entity.records import AttributeRecord
@@ -140,7 +140,7 @@ def _compile_leaf(
         attr = by_name.get(field)
         if attr is None:
             raise EntityRowInvalid(f"Unknown filter field '{field}'")
-        allowed = resolve(attr.type).operators
+        allowed = _operators(attr, target)
         column = ident(field)
     if op not in allowed:
         raise EntityRowInvalid(
@@ -199,6 +199,12 @@ def _compile_contains(
         raise EntityRowInvalid("contains value must not contain NUL")
     key = counter.add(f"%{escape_like(raw)}%")
     return f"{column} ILIKE :{key} ESCAPE '\\'"
+
+
+def _operators(attr: AttributeRecord, target: HeadTarget) -> tuple[str, ...]:
+    if attr.type != "reference":
+        return resolve(attr.type).operators
+    return resolve(reference_value_attr(attr, target).type).operators
 
 
 def _snapshot_codes(attr: AttributeRecord, target: HeadTarget) -> frozenset[str]:

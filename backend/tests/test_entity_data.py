@@ -332,6 +332,167 @@ def test_create_get_update_delete_query_and_upsert(data_client) -> None:
     assert client.post(f"/entities/{stem}/get", json={"row_id": row_id}).status_code == 404
 
 
+def test_business_key_addressing_reference_and_upsert_default(data_client) -> None:
+    client, _stem, _physical, _entity_id = data_client
+    from backend.entity.ids import new_entity_id, new_version_id
+    from backend.entity.lifecycle import PUBLISHED
+    from backend.entity.records import BusinessEntityRecord, EntityVersionRecord
+    from backend.entity.store import get_entity_store
+    from backend.entity.table_port import PostgresEntityTablePort
+
+    now = datetime.now(timezone.utc)
+    supplier_id = new_entity_id()
+    supplier_version = new_version_id()
+    supplier_stem = f"sup_{uuid.uuid4().hex[:10]}"
+    supplier_physical, _ = compose_physical(supplier_stem, 1, supplier_version)
+    supplier_attrs = [
+        AttributeRecord(
+            name="code",
+            type="string",
+            required=True,
+            unique=True,
+            business_key=True,
+            max_length=16,
+        )
+    ]
+    material_stem = f"lnk_{uuid.uuid4().hex[:10]}"
+    material_version = new_version_id()
+    material_physical, _ = compose_physical(material_stem, 1, material_version)
+    material_id = new_entity_id()
+    material_attrs = [
+        AttributeRecord(
+            name="sku",
+            type="string",
+            required=True,
+            unique=True,
+            business_key=True,
+            max_length=32,
+        ),
+        AttributeRecord(
+            name="supplier_code",
+            type="reference",
+            required=False,
+            target_entity_id=supplier_id,
+            reference_key_type="string",
+            reference_max_length=16,
+        ),
+    ]
+    store = get_entity_store()
+    store.create_entity(
+        BusinessEntityRecord(
+            id=supplier_id,
+            table_name=supplier_stem,
+            name="Supplier",
+            description="Party",
+            deprecated_at=None,
+            created_at=now,
+            updated_at=now,
+        ),
+        EntityVersionRecord(
+            id=supplier_version,
+            entity_id=supplier_id,
+            version=1,
+            attributes=list(supplier_attrs),
+            materialized_attributes=[
+                attribute_to_dict(item) for item in supplier_attrs
+            ],
+            publish_status=PUBLISHED,
+            latest_reconcile_job_id=None,
+            created_at=now,
+            updated_at=now,
+        ),
+    )
+    store.create_entity(
+        BusinessEntityRecord(
+            id=material_id,
+            table_name=material_stem,
+            name="Linked",
+            description="Has a reference",
+            deprecated_at=None,
+            created_at=now,
+            updated_at=now,
+        ),
+        EntityVersionRecord(
+            id=material_version,
+            entity_id=material_id,
+            version=1,
+            attributes=list(material_attrs),
+            materialized_attributes=[
+                attribute_to_dict(item) for item in material_attrs
+            ],
+            publish_status=PUBLISHED,
+            latest_reconcile_job_id=None,
+            reference_snapshots={
+                "supplier_code": {
+                    "attribute": "code",
+                    "type": "string",
+                    "max_length": 16,
+                }
+            },
+            created_at=now,
+            updated_at=now,
+        ),
+    )
+    port = PostgresEntityTablePort()
+    port.create_physical_table("public", supplier_physical, supplier_attrs)
+    port.swap_stem_view(
+        "public", supplier_stem, physical=supplier_physical, expected_target=None
+    )
+    port.create_physical_table("public", material_physical, material_attrs)
+    port.swap_stem_view(
+        "public", material_stem, physical=material_physical, expected_target=None
+    )
+
+    created = client.post(
+        f"/entities/{material_stem}/create",
+        json={"values": {"sku": "M1", "supplier_code": "S1"}},
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["row"]["supplier_code"] == "S1"
+
+    by_key = client.post(
+        f"/entities/{material_stem}/get", json={"business_key": "M1"}
+    )
+    assert by_key.status_code == 200, by_key.text
+    assert by_key.json()["row"]["sku"] == "M1"
+
+    blocked = client.post(
+        f"/entities/{material_stem}/update",
+        json={"business_key": "M1", "values": {"sku": "M2"}},
+    )
+    assert blocked.status_code == 422
+    assert blocked.json()["code"] == "ENTITY_ROW_INVALID"
+
+    contains = client.post(
+        f"/entities/{material_stem}/query",
+        json={
+            "filters": {
+                "field": "supplier_code",
+                "op": "contains",
+                "value": "S",
+            }
+        },
+    )
+    assert contains.status_code == 200, contains.text
+    assert contains.json()["total"] == 1
+
+    upserted = client.post(
+        f"/entities/{material_stem}/upsert",
+        json={"values": {"sku": "M1", "supplier_code": "S2"}},
+    )
+    assert upserted.status_code == 200, upserted.text
+    assert upserted.json()["row"]["supplier_code"] == "S2"
+
+    from backend.entity.entity_db import get_entity_engine
+
+    engine = get_entity_engine()
+    with engine.begin() as conn:
+        conn.execute(text(f'DROP VIEW IF EXISTS "public"."{supplier_stem}"'))
+        conn.execute(text(f'DROP TABLE IF EXISTS "public"."{supplier_physical}"'))
+        conn.execute(text(f'DROP VIEW IF EXISTS "public"."{material_stem}"'))
+        conn.execute(text(f'DROP TABLE IF EXISTS "public"."{material_physical}"'))
+
+
 def test_pat_data_read_can_schema_and_query(data_client) -> None:
     client, stem, _physical, _entity_id = data_client
     client.post(

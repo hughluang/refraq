@@ -125,6 +125,18 @@ def _version(entity_id: str, number: int) -> EntityVersionRecord:
     )
 
 
+def test_reference_snapshots_round_trip(entity_store) -> None:
+    entity = _entity(_table_name())
+    version = _version(entity.id, 1)
+    version.reference_snapshots = {
+        "parent": {"attribute": "code", "type": "string", "max_length": 8}
+    }
+    entity_store.create_entity(entity, version)
+    loaded = entity_store.get_version(version.id)
+    assert loaded is not None
+    assert loaded.reference_snapshots == version.reference_snapshots
+
+
 def test_create_entity_persists_and_is_readable(entity_store) -> None:
     table_name = _table_name()
     entity = _entity(table_name)

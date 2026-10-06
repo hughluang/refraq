@@ -16,8 +16,10 @@ from backend.entity.data.capabilities import (
     upsert_key_for,
 )
 from backend.entity.data.head import HeadTarget
+from backend.entity.data.values import reference_value_attr
 from backend.entity.dictionaries.store import get_dictionary_store
 from backend.entity.records import AttributeRecord, attribute_to_dict
+from backend.entity.reference_binding import business_key_attr
 from backend.entity.store import EntityStore, get_entity_store
 
 __all__ = ["build_schema"]
@@ -28,6 +30,7 @@ def build_schema(target: HeadTarget) -> dict[str, Any]:
     attributes = [
         _attribute_out(store, attr, target) for attr in target.attributes
     ]
+    key = business_key_attr(target.attributes)
     return {
         "entity": {
             "id": target.entity.id,
@@ -44,6 +47,7 @@ def build_schema(target: HeadTarget) -> dict[str, Any]:
             "type": "integer",
             "operators": list(resolve("integer").operators),
         },
+        "business_key": key.name if key is not None else None,
         "attributes": attributes,
         "limits": {
             "page_limit_default": PAGE_LIMIT_DEFAULT,
@@ -62,7 +66,7 @@ def _attribute_out(
 ) -> dict[str, Any]:
     payload = attribute_to_dict(attr)
     spec = resolve(attr.type)
-    payload["operators"] = list(spec.operators)
+    payload["operators"] = _operators(attr, target)
     payload["upsert_key"] = upsert_key_for(attr)
     if "target" in spec.reads:
         payload["target"] = _reference_target(store, attr.target_entity_id)
@@ -72,18 +76,31 @@ def _attribute_out(
     return payload
 
 
+def _operators(attr: AttributeRecord, target: HeadTarget) -> list[str]:
+    if attr.type == "reference":
+        return list(resolve(reference_value_attr(attr, target).type).operators)
+    return list(resolve(attr.type).operators)
+
+
 def _reference_target(
     store: EntityStore, entity_id: str | None
-) -> dict[str, str] | None:
+) -> dict[str, str | None] | None:
     if not entity_id:
         return None
     entity = store.get_entity(entity_id)
     if entity is None:
         return None
+    current = store.current_version(entity.id)
+    key_name: str | None = None
+    if current is not None:
+        key = business_key_attr(current.attributes)
+        if key is not None:
+            key_name = key.name
     return {
         "entity_id": entity.id,
         "name": entity.name,
         "table_name": entity.table_name,
+        "business_key": key_name,
     }
 
 

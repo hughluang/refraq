@@ -171,6 +171,15 @@ def _attribute_changes(
                 change_class="non_breaking",
             )
         )
+    if before.business_key != after.business_key:
+        found.append(
+            ShapeChange(
+                field=f"{prefix}.business_key",
+                old_value=before.business_key,
+                new_value=after.business_key,
+                change_class="breaking",
+            )
+        )
     if before.indexed != after.indexed:
         found.append(
             ShapeChange(

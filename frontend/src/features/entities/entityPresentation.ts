@@ -42,6 +42,7 @@ export function draftsFromVersion(version: EntityVersion): AttributeDraft[] {
       required: item.required,
       unique: item.unique,
       indexed: item.indexed,
+      business_key: item.business_key,
       description: item.description ?? "",
       max_length: config.max_length != null ? String(config.max_length) : "",
       precision: config.precision != null ? String(config.precision) : "",
@@ -67,6 +68,7 @@ export function attributesFromDrafts(
     required: item.required,
     unique: item.unique,
     indexed: item.indexed,
+    business_key: item.business_key,
     description: item.description.trim() || null,
     config: configFromDraft(item),
   }));

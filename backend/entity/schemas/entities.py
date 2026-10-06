@@ -32,6 +32,7 @@ class AttributeIn(BaseModel):
     required: bool = False
     unique: bool = False
     indexed: bool = False
+    business_key: bool = False
     description: str | None = None
     config: dict[str, Any] | None = None
 
@@ -72,6 +73,7 @@ class ReferenceTargetOut(BaseModel):
     entity_id: str
     name: str
     table_name: str
+    business_key: str | None = None
 
 
 class DictionaryRefOut(BaseModel):
@@ -87,6 +89,7 @@ class AttributeOut(BaseModel):
     required: bool
     unique: bool = False
     indexed: bool = False
+    business_key: bool = False
     description: str | None = None
     config: dict[str, Any]
     target: ReferenceTargetOut | None = None

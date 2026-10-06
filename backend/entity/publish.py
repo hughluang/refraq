@@ -30,6 +30,12 @@ from backend.entity.lifecycle import (
     current_version_of,
     latest_published_of,
 )
+from backend.entity.reference_binding import (
+    bind_reference_publish,
+    freeze_reference_bindings,
+    frozen_reference_bindings_cover,
+    require_business_key_stable,
+)
 from backend.entity.records import (
     AttributeRecord,
     EntityVersionRecord,
@@ -90,6 +96,11 @@ def accept(
         input={
             "entity_version_id": version.id,
             "dictionary_bindings": freeze_publish_bindings(version.attributes),
+            "reference_bindings": freeze_reference_bindings(
+                get_entity_store(),
+                version.attributes,
+                entity_id=entity.id,
+            ),
         },
         created_by=actor_user_id,
         summary=f"entity_reconcile · {entity.table_name}",
@@ -130,12 +141,15 @@ def execute(job_id: str, job_input: dict[str, Any]) -> dict[str, str]:
     bindings = frozen_bindings_cover(
         version.attributes, job_input.get("dictionary_bindings")
     )
-    if bindings is None:
+    reference_bindings = frozen_reference_bindings_cover(
+        version.attributes, job_input.get("reference_bindings")
+    )
+    if bindings is None or reference_bindings is None:
         rollback_status(version)
         return _fail(
             job_id,
             "JOB_INPUT_INVALID",
-            "dictionary_bindings do not cover the version's dictionary attributes",
+            "publish bindings do not cover the version's dictionary and reference attributes",
         )
     schema = entity_db_schema()
     stem = entity.table_name
@@ -151,6 +165,12 @@ def execute(job_id: str, job_input: dict[str, Any]) -> dict[str, str]:
         expected_target = physical_table_name(previous, stem)
     try:
         definition, snapshots = bind_publish(list(version.attributes), bindings)
+        definition, reference_snapshots = bind_reference_publish(
+            get_entity_store(),
+            definition,
+            reference_bindings,
+            entity_id=entity.id,
+        )
     except EntityAttributeInvalid as exc:
         rollback_status(version)
         return _fail(job_id, exc.code, exc.message)
@@ -182,6 +202,7 @@ def execute(job_id: str, job_input: dict[str, Any]) -> dict[str, str]:
                     attribute_to_dict(attr) for attr in definition
                 ],
                 dictionary_snapshots=snapshots,
+                reference_snapshots=reference_snapshots,
                 latest_reconcile_job_id=job_id,
                 updated_at=utc_now(),
             )
@@ -247,6 +268,13 @@ def _prepare(entity_id: str, version_id: str) -> EntityVersionRecord:
             current.attributes, entity_id=entity.id, previous=current.attributes
         )
     require_attribute_dictionaries(current.attributes, previous=current.attributes)
+    if accepted is not None:
+        require_business_key_stable(
+            get_entity_store(),
+            entity.id,
+            accepted.attributes,
+            current.attributes,
+        )
     return current
 
 
@@ -271,6 +299,7 @@ def rollback_status(version: EntityVersionRecord) -> None:
             publish_status=UNPUBLISHED,
             materialized_attributes=[],
             dictionary_snapshots={},
+            reference_snapshots={},
             updated_at=utc_now(),
         )
     )

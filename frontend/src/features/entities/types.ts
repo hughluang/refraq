@@ -21,6 +21,7 @@ export type ReferenceTarget = {
   entity_id: string;
   name: string;
   table_name: string;
+  business_key: string | null;
 };
 
 export type EntityAttribute = {
@@ -29,6 +30,7 @@ export type EntityAttribute = {
   required: boolean;
   unique: boolean;
   indexed: boolean;
+  business_key: boolean;
   description: string | null;
   config: AttributeConfig;
   target?: ReferenceTarget | null;
@@ -49,6 +51,7 @@ export type AttributeDraft = {
   required: boolean;
   unique: boolean;
   indexed: boolean;
+  business_key: boolean;
   description: string;
   max_length: string;
   precision: string;

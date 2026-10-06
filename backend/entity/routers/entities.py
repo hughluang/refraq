@@ -63,6 +63,7 @@ def _record(item: AttributeIn) -> AttributeRecord:
         required=item.required,
         unique=item.unique,
         indexed=item.indexed,
+        business_key=item.business_key,
         description=item.description,
         **fields,
     )

@@ -44,6 +44,9 @@ class EntityVersionRow(Base):
     publish_status: Mapped[str] = mapped_column(String(16), nullable=False)
     latest_reconcile_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     dictionary_snapshots: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    reference_snapshots: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 

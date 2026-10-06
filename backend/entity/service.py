@@ -27,6 +27,7 @@ from backend.entity.errors import (
 )
 from backend.entity.ids import new_entity_id, new_version_id
 from backend.entity.inbound import inbound_references_for
+from backend.entity.reference_binding import require_business_key_stable
 from backend.entity.lifecycle import (
     PUBLISHED,
     UNPUBLISHED,
@@ -584,6 +585,7 @@ def _require_writable_shape(
         entity_id=entity_id,
     )
     require_attribute_dictionaries(attrs, previous=previous)
+    require_business_key_stable(get_entity_store(), entity_id, previous, attrs)
     return attrs
 
 

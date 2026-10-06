@@ -374,6 +374,181 @@ def test_schema_dictionary_codes_writable_intersection(client: TestClient) -> No
     assert "hold" not in codes
 
 
+def test_schema_names_business_key_and_reference_operators(client: TestClient) -> None:
+    now = datetime.now(timezone.utc)
+    supplier = BusinessEntityRecord(
+        id=new_entity_id(),
+        table_name="supplier",
+        name="Supplier",
+        description="Party",
+        deprecated_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    supplier_attrs = [
+        AttributeRecord(
+            name="code",
+            type="string",
+            required=True,
+            unique=True,
+            business_key=True,
+            max_length=16,
+        )
+    ]
+    get_entity_store().create_entity(
+        supplier,
+        EntityVersionRecord(
+            id=new_version_id(),
+            entity_id=supplier.id,
+            version=1,
+            attributes=list(supplier_attrs),
+            materialized_attributes=[attribute_to_dict(item) for item in supplier_attrs],
+            publish_status=PUBLISHED,
+            latest_reconcile_job_id=None,
+            created_at=now,
+            updated_at=now,
+        ),
+    )
+    ref = AttributeRecord(
+        name="supplier_code",
+        type="reference",
+        required=False,
+        target_entity_id=supplier.id,
+    )
+    sku = AttributeRecord(
+        name="sku",
+        type="string",
+        required=True,
+        unique=True,
+        business_key=True,
+        max_length=32,
+    )
+    linked = _seed_serving(table_name="linked", attributes=[sku, ref])
+    version = get_entity_store().current_version(linked.id)
+    assert version is not None
+    version.reference_snapshots = {
+        "supplier_code": {"attribute": "code", "type": "string", "max_length": 16}
+    }
+    get_entity_store().save_version(version)
+    response = client.post("/entities/linked/schema", json={})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["business_key"] == "sku"
+    by_name = {item["name"]: item for item in body["attributes"]}
+    assert by_name["sku"]["business_key"] is True
+    assert by_name["supplier_code"]["operators"] == list(resolve("string").operators)
+    assert by_name["supplier_code"]["target"]["business_key"] == "code"
+
+    both = client.post(
+        "/entities/linked/get",
+        json={"row_id": 1, "business_key": "A"},
+    )
+    assert both.status_code == 422
+    assert both.json()["code"] == "REQUEST_INVALID"
+    neither = client.post("/entities/linked/get", json={})
+    assert neither.status_code == 422
+    changed = client.post(
+        "/entities/linked/update",
+        json={"row_id": 1, "values": {"sku": "B"}},
+    )
+    assert changed.status_code == 422
+    assert changed.json()["code"] == "ENTITY_ROW_INVALID"
+    default_key = client.post(
+        "/entities/linked/upsert",
+        json={"values": {"qty": 1}},
+    )
+    assert default_key.status_code == 422
+    assert default_key.json()["code"] == "ENTITY_ROW_INVALID"
+
+
+def test_reference_encoding_and_filters_follow_snapshot_type() -> None:
+    from backend.entity.data.filters import compile_filters
+    from backend.entity.data.head import HeadTarget
+    from backend.entity.data.values import decode_row, encode_inbound
+    from backend.entity.ddl import qualified_table
+
+    now = datetime.now(timezone.utc)
+    ref = AttributeRecord(
+        name="supplier_code",
+        type="reference",
+        required=False,
+        target_entity_id="ent_supplier",
+    )
+    entity = BusinessEntityRecord(
+        id=new_entity_id(),
+        table_name="linked_values",
+        name="Linked",
+        description="Reference values",
+        deprecated_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    head = EntityVersionRecord(
+        id=new_version_id(),
+        entity_id=entity.id,
+        version=1,
+        attributes=[ref],
+        materialized_attributes=[attribute_to_dict(ref)],
+        publish_status=PUBLISHED,
+        latest_reconcile_job_id=None,
+        created_at=now,
+        updated_at=now,
+        reference_snapshots={
+            "supplier_code": {"attribute": "code", "type": "string", "max_length": 4}
+        },
+    )
+    target = HeadTarget(
+        entity=entity,
+        head=head,
+        attributes=(ref,),
+        physical_table="linked_values__v1__x",
+        qualified_table=qualified_table("public", "linked_values__v1__x"),
+        writable=True,
+    )
+    assert encode_inbound(ref, "AB", target) == "AB"
+    decoded = decode_row(["supplier_code"], ("AB",), target)
+    assert decoded == {"supplier_code": "AB"}
+    compiled = compile_filters(
+        {"field": "supplier_code", "op": "contains", "value": "A"},
+        target,
+    )
+    assert compiled is not None
+    assert "ILIKE" in compiled.sql
+    with pytest.raises(Exception):
+        encode_inbound(ref, "ABCDE", target)
+
+    integer_head = EntityVersionRecord(
+        id=head.id,
+        entity_id=entity.id,
+        version=1,
+        attributes=[ref],
+        materialized_attributes=[attribute_to_dict(ref)],
+        publish_status=PUBLISHED,
+        latest_reconcile_job_id=None,
+        created_at=now,
+        updated_at=now,
+        reference_snapshots={
+            "supplier_code": {"attribute": "num", "type": "integer"}
+        },
+    )
+    integer_target = HeadTarget(
+        entity=entity,
+        head=integer_head,
+        attributes=(ref,),
+        physical_table=target.physical_table,
+        qualified_table=target.qualified_table,
+        writable=True,
+    )
+    assert encode_inbound(ref, 7, integer_target) == 7
+    from backend.entity.errors import EntityRowInvalid
+
+    with pytest.raises(EntityRowInvalid):
+        compile_filters(
+            {"field": "supplier_code", "op": "contains", "value": "7"},
+            integer_target,
+        )
+
+
 def test_unauthenticated_schema_is_401() -> None:
     with TestClient(app) as anon:
         response = anon.post("/entities/material/schema", json={})

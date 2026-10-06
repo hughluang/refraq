@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import os
 
 import pytest
@@ -296,6 +297,15 @@ def test_ddl_string_text_decimal_reference_and_enumeration() -> None:
         required=False,
         indexed=True,
         target_entity_id="ent_supplier",
+        reference_key_type="integer",
+    )
+    string_ref = AttributeRecord(
+        name="supplier_code",
+        type="reference",
+        required=False,
+        target_entity_id="ent_supplier",
+        reference_key_type="string",
+        reference_max_length=16,
     )
     enum_attr = AttributeRecord(
         name="status",
@@ -308,6 +318,7 @@ def test_ddl_string_text_decimal_reference_and_enumeration() -> None:
     assert column_sql(text_attr, table="material").split()[1] == "TEXT"
     assert "NUMERIC(12,2)" in column_sql(decimal_attr, table="material")
     assert "BIGINT" in column_sql(ref, table="material")
+    assert "VARCHAR(16)" in column_sql(string_ref, table="material")
     enum_sql = column_sql(enum_attr, table="material")
     assert "VARCHAR(64)" in enum_sql
     assert "CHECK" in enum_sql
@@ -663,6 +674,7 @@ def test_self_reference_is_stored_as_entity_id(client: TestClient) -> None:
         "entity_id": entity["id"],
         "name": "Node",
         "table_name": "node",
+        "business_key": None,
     }
     classified = client.post(
         f"/entities/{entity['id']}/classify",
@@ -777,7 +789,12 @@ def _plant_snapshot(
         port.create_physical_table(
             entity_db_schema(),
             physical,
-            list(attributes),
+            [
+                replace(attr, reference_key_type="integer")
+                if attr.type == "reference" and attr.reference_key_type is None
+                else attr
+                for attr in attributes
+            ],
         )
         port.swap_stem_view(
             entity_db_schema(),
@@ -834,7 +851,7 @@ def test_open_version_copies_accepted_reference_without_target(
     assert _parent_target(echoed.json()["version"]) is None
 
 
-def test_publish_unchanged_successor_keeps_accepted_reference(
+def test_publish_unchanged_successor_refuses_reference_without_target(
     client: TestClient,
 ) -> None:
     entity_id, _version_id = _plant_snapshot(
@@ -846,11 +863,9 @@ def test_publish_unchanged_successor_keeps_accepted_reference(
     assert opened.status_code == 201, opened.text
     version_id = opened.json()["version"]["id"]
     published = client.post(f"/entities/{entity_id}/versions/{version_id}/publish")
-    assert published.status_code == 201, published.text
-    assert published.json()["job"]["status"] == "succeeded"
-    saved = client.get(f"/entities/{entity_id}/versions/{version_id}")
-    assert saved.status_code == 200, saved.text
-    assert _parent_target(saved.json()["version"]) is None
+    assert published.status_code == 422, published.text
+    assert published.json()["code"] == "ENTITY_ATTRIBUTE_INVALID"
+    assert "target_entity_id" in published.json()["detail"]
 
 
 def test_changed_shape_still_requires_reference_target(client: TestClient) -> None:
@@ -877,6 +892,151 @@ def test_changed_shape_still_requires_reference_target(client: TestClient) -> No
     assert published.status_code == 422
     assert published.json()["code"] == "ENTITY_ATTRIBUTE_INVALID"
     assert "target_entity_id" in published.json()["detail"]
+
+
+def _business_key(**overrides: object) -> dict:
+    body: dict = {
+        "name": "code",
+        "type": "string",
+        "required": True,
+        "unique": True,
+        "business_key": True,
+        "config": {"max_length": 32},
+    }
+    body.update(overrides)
+    return body
+
+
+def test_business_key_shape_rules() -> None:
+    accepted = validate_shape(
+        attributes=[
+            AttributeRecord(
+                name="code",
+                type="string",
+                required=True,
+                unique=True,
+                business_key=True,
+                max_length=8,
+            )
+        ]
+    )
+    assert accepted[0].business_key is True
+    with pytest.raises(EntityAttributeInvalid, match="at most one"):
+        validate_shape(
+            attributes=[
+                AttributeRecord(
+                    name="code",
+                    type="string",
+                    required=True,
+                    unique=True,
+                    business_key=True,
+                    max_length=8,
+                ),
+                AttributeRecord(
+                    name="alt",
+                    type="integer",
+                    required=True,
+                    unique=True,
+                    business_key=True,
+                ),
+            ]
+        )
+    with pytest.raises(EntityAttributeInvalid, match="string or integer"):
+        validate_shape(
+            attributes=[
+                AttributeRecord(
+                    name="flag",
+                    type="boolean",
+                    required=True,
+                    unique=True,
+                    business_key=True,
+                )
+            ]
+        )
+    with pytest.raises(EntityAttributeInvalid, match="unique and required"):
+        validate_shape(
+            attributes=[
+                AttributeRecord(
+                    name="code",
+                    type="string",
+                    required=True,
+                    unique=False,
+                    business_key=True,
+                    max_length=8,
+                )
+            ]
+        )
+
+
+def test_publish_snapshots_target_business_key_and_blocks_key_change(
+    client: TestClient,
+) -> None:
+    supplier = client.post(
+        "/entities",
+        json=_create(
+            table_name="supplier",
+            name="Supplier",
+            attributes=[_business_key()],
+        ),
+    )
+    assert supplier.status_code == 201, supplier.text
+    supplier_id = supplier.json()["entity"]["id"]
+    missing_key = client.post(
+        "/entities",
+        json=_create(
+            table_name="bare_target",
+            name="Bare",
+            attributes=[_value(name="sku")],
+        ),
+    )
+    assert missing_key.status_code == 201, missing_key.text
+    bare_id = missing_key.json()["entity"]["id"]
+    referring_bare = client.post(
+        "/entities",
+        json=_create(
+            table_name="needs_key",
+            attributes=[_reference(config={"target_entity_id": bare_id})],
+        ),
+    )
+    assert referring_bare.status_code == 201, referring_bare.text
+    bare_publish = client.post(
+        f"/entities/{referring_bare.json()['entity']['id']}/versions/"
+        f"{referring_bare.json()['entity']['current_version']['id']}/publish"
+    )
+    assert bare_publish.status_code == 422
+    assert bare_publish.json()["code"] == "ENTITY_ATTRIBUTE_INVALID"
+    assert "business_key" in bare_publish.json()["detail"]
+
+    material = client.post(
+        "/entities",
+        json=_create(
+            table_name="material_ref",
+            attributes=[_reference(config={"target_entity_id": supplier_id})],
+        ),
+    )
+    assert material.status_code == 201, material.text
+    material_body = material.json()["entity"]
+    published = client.post(
+        f"/entities/{material_body['id']}/versions/"
+        f"{material_body['current_version']['id']}/publish"
+    )
+    assert published.status_code == 201, published.text
+    assert published.json()["job"]["status"] == "succeeded"
+    stored = get_entity_store().get_version(material_body["current_version"]["id"])
+    assert stored is not None
+    assert stored.reference_snapshots["supplier_id"] == {
+        "attribute": "code",
+        "type": "string",
+        "max_length": 32,
+    }
+
+    widened = client.patch(
+        f"/entities/{supplier_id}/versions/"
+        f"{supplier.json()['entity']['current_version']['id']}",
+        json={"attributes": [_business_key(config={"max_length": 64})]},
+    )
+    assert widened.status_code == 409
+    assert widened.json()["code"] == "ENTITY_REFERENCED"
 
 
 def test_first_publish_requires_reference_target(client: TestClient) -> None:

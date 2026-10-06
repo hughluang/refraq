@@ -58,6 +58,7 @@ Each list endpoint declares its default and max `limit`. HTTP rejects out-of-ran
   "required": true,
   "unique": true,
   "indexed": false,
+  "business_key": true,
   "description": "SKU code",
   "config": { "max_length": 32 }
 }
@@ -70,6 +71,7 @@ Each list endpoint declares its default and max `limit`. HTTP rejects out-of-ran
   "required": true,
   "unique": false,
   "indexed": false,
+  "business_key": false,
   "description": null,
   "config": { "dictionary_id": "dct_01HZX" },
   "dictionary": {
@@ -89,23 +91,27 @@ Each list endpoint declares its default and max `limit`. HTTP rejects out-of-ran
   "required": false,
   "unique": false,
   "indexed": false,
+  "business_key": false,
   "description": "Supplying party",
   "config": { "target_entity_id": "ent_01HZX" },
   "target": {
     "entity_id": "ent_01HZX",
     "name": "Supplier",
-    "table_name": "supplier"
+    "table_name": "supplier",
+    "business_key": "code"
   }
 }
 ```
 
 `type` is required and is one **Attribute Type**: `string`, `text`, `integer`, `decimal`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, `dictionary`, or `reference`. Any other type, including `many2one`, `one2many`, and `array`, is `ENTITY_ATTRIBUTE_INVALID`. `inverse_attribute` is not a field. `kind` is not a field.
 
-`config` is a required object. `string` requires `max_length`, an integer from 1 through 65535, and no other key. `text`, `integer`, `number`, `boolean`, `date`, `timestamp`, `time`, and `json` require `{}`. `json` is a JSON document, including a JSON array, with no schema, path, or format key. The published column is `JSONB`. `decimal` requires `precision` (1–1000) and `scale` (0–`precision`) and no other key. `dictionary` requires `dictionary_id`, the id of an existing **Dictionary**, and no other key (§3.5). `entries` is rejected. A version read that includes attributes adds `dictionary` and `behind` on a `dictionary` attribute only. `dictionary` is `{ "id", "name", "display_name", "deprecated" }` when the id names a Dictionary, otherwise `null`. `behind` is a boolean (§3.5). Other attribute types omit both. Neither is stored on the attribute or accepted on write. `reference` requires `target_entity_id` and no other key. On write, `target_entity_id` is `self` or the id of an existing Business Entity that is not deprecated. `self` means the entity of this request. Create allocates that id and replaces `self` before the entity is stored. Save and classify replace `self` with the entity id in the path. The stored value is always that entity's id. A read never returns `self`. The target may be unpublished, and it may be this entity. A version read that includes attributes adds `target` on a `reference` attribute only: `{ "entity_id", "name", "table_name" }` when the id names an entity, otherwise `null`. Other attribute types omit `target`. `target` is not stored and is rejected on write as an extra field. The example above is a read. Writers omit `target` and may send `"target_entity_id": "self"`. The published column is `BIGINT` and stores the target live table's `row_id`. The contract does not create a foreign key. A stored `row_id` may not resolve.
+`config` is a required object. `string` requires `max_length`, an integer from 1 through 65535, and no other key. `text`, `integer`, `number`, `boolean`, `date`, `timestamp`, `time`, and `json` require `{}`. `json` is a JSON document, including a JSON array, with no schema, path, or format key. The published column is `JSONB`. `decimal` requires `precision` (1–1000) and `scale` (0–`precision`) and no other key. `dictionary` requires `dictionary_id`, the id of an existing **Dictionary**, and no other key (§3.5). `entries` is rejected. A version read that includes attributes adds `dictionary` and `behind` on a `dictionary` attribute only. `dictionary` is `{ "id", "name", "display_name", "deprecated" }` when the id names a Dictionary, otherwise `null`. `behind` is a boolean (§3.5). Other attribute types omit both. Neither is stored on the attribute or accepted on write. `reference` requires `target_entity_id` and no other key. On write, `target_entity_id` is `self` or the id of an existing Business Entity that is not deprecated. `self` means the entity of this request. Create allocates that id and replaces `self` before the entity is stored. Save and classify replace `self` with the entity id in the path. The stored value is always that entity's id. A read never returns `self`. The target may be unpublished, and it may be this entity. A version read that includes attributes adds `target` on a `reference` attribute only: `{ "entity_id", "name", "table_name", "business_key" }` when the id names an entity, otherwise `null`. `business_key` is the name of the target current version's Business Key attribute, or `null` when that version has none. Other attribute types omit `target`. `target` is not stored and is rejected on write as an extra field. The example above is a read. Writers omit `target` and may send `"target_entity_id": "self"`. The published column stores the target **Business Key** value. Its type is `VARCHAR(max_length)` when that key is `string` and `BIGINT` when it is `integer`, taken from the reference snapshot frozen at publish (`docs/business-entity.md` §2.6). The contract does not create a foreign key. A stored value may not resolve. Save does not require the target to declare a Business Key. Publish does.
 
 A config key that belongs to another type, an unknown config key, or a top-level `kind`, `normalized_type`, `precision`, `scale`, `target_table_name`, `enumeration`, or `entries` is `ENTITY_ATTRIBUTE_INVALID`.
 
-`required`, `unique`, and `indexed` default to `false` when omitted. `unique` is a single-column UNIQUE constraint. `indexed` is a non-unique btree; when `unique` is true, publish does not also create a non-unique index for that column. On a reference, `unique` means at most one row points at a given target `row_id`. A `number` attribute may be unique or indexed; it is a poor business key because the value is approximate and may be NaN.
+`required`, `unique`, `indexed`, and `business_key` default to `false` when omitted. `unique` is a single-column UNIQUE constraint. `indexed` is a non-unique btree; when `unique` is true, publish does not also create a non-unique index for that column. On a reference, `unique` means at most one row points at a given target business-key value. A `number` attribute may be unique or indexed; it is a poor business key because the value is approximate and may be NaN.
+
+`business_key: true` marks the version's **Business Key**. At most one attribute in the version may set it. That attribute's `type` must be `string` or `integer`, and the body must set `unique: true` and `required: true`. The service does not imply those flags. A second business key, a business key of another type, or a business key that is not unique or not required is `ENTITY_ATTRIBUTE_INVALID`. While a current version (including this entity's own) has an **Entity Reference** aimed at this entity, a save or publish that removes the Business Key, moves it to another attribute, or changes its type or `string` `max_length` is `409 ENTITY_REFERENCED`. A historical version does not count.
 
 `name` uses the same character set as `table_name` (lowercase ASCII letters, digits, and underscores; starts with a letter) and is at most 63 characters so it can be a physical column name. A name outside those constraints, the reserved name `row_id`, or a duplicate within the version is `ENTITY_ATTRIBUTE_INVALID` (Problem `detail` names the concrete rule). Names are unique within one **Entity Version**. The Entity Table always carries a platform `row_id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY` that is not an attribute. An **Inbound Reference** is not an attribute and is not accepted inside `attributes`.
 
@@ -124,6 +130,7 @@ A config key that belongs to another type, an unknown config key, or a top-level
       "required": true,
       "unique": true,
       "indexed": false,
+      "business_key": true,
       "description": "SKU code",
       "config": { "max_length": 32 }
     }
@@ -207,9 +214,9 @@ List items use this shape. Entity detail (`GET /entities/{id}`) adds `inbound_re
 
 The classifier is a pure function of two resolved attribute sets. Dictionary codes are resolved first: a published snapshot supplies the baseline when one exists, and the named **Dictionary** supplies the active codes. It is a read tool. It does not gate save or publish. **Inbound Reference**s are not an input.
 
-Compared as today: adding an attribute is `non_breaking` when the added attribute is not required and `breaking` when it is; removing an attribute is `breaking`; changing `required` from false to true is `breaking` and from true to false is `non_breaking`; `unique` and `indexed` changes are `non_breaking`; a description change is `unchanged`. An **Attribute Type** change is `breaking`, including `string` to `text`, `integer` to `number`, and `integer` to `decimal`. There is no `unknown` promotion.
+Compared as today: adding an attribute is `non_breaking` when the added attribute is not required and `breaking` when it is; removing an attribute is `breaking`; changing `required` from false to true is `breaking` and from true to false is `non_breaking`; `unique` and `indexed` changes are `non_breaking`; a description change is `unchanged`. An **Attribute Type** change is `breaking`, including `string` to `text`, `integer` to `number`, and `integer` to `decimal`. There is no `unknown` promotion. A change of `business_key` on an attribute is `breaking`, including moving the mark to another attribute and clearing it. Changing the type or `string` `max_length` of the attribute that carries `business_key` is `breaking` by the type and `max_length` rules as well.
 
-Widening `config.max_length` on `string` is `non_breaking`. Narrowing it is `breaking`. Those classes are not an `ALTER` of a published column. A change of `precision` or `scale` is `breaking`. For a dictionary, the baseline is the last published snapshot's codes when one exists for that attribute, otherwise the active codes of the Dictionary named by the saved attribute. The proposal is the active codes of the Dictionary named by the proposed attribute. Additions only are `non_breaking`. A code that leaves the active set is `breaking`. An equal set is `unchanged`, including a label-only change and a switch to another Dictionary with the same codes. The dictionary change's `new_value` carries `added` and `removed` code arrays. Those classes are not an `ALTER` of a published CHECK. A change of `target_entity_id` is `breaking`.
+Widening `config.max_length` on `string` is `non_breaking`. Narrowing it is `breaking`. Those classes are not an `ALTER` of a published column. A change of `precision` or `scale` is `breaking`. For a dictionary, the baseline is the last published snapshot's codes when one exists for that attribute, otherwise the active codes of the Dictionary named by the saved attribute. The proposal is the active codes of the Dictionary named by the proposed attribute. Additions only are `non_breaking`. A code that leaves the active set is `breaking`. An equal set is `unchanged`, including a label-only change and a switch to another Dictionary with the same codes. The dictionary change's `new_value` carries `added` and `removed` code arrays. Those classes are not an `ALTER` of a published CHECK. A change of `target_entity_id` is `breaking`. A change of `business_key` is `breaking`.
 
 ### 3.5 Dictionary
 
@@ -339,7 +346,7 @@ Success `200`: the Classification Result shape. This call does not persist, does
 
 Marks the Entity deprecated. Body is empty.
 
-Refused when the Entity has never been published (`422 ENTITY_NEVER_PUBLISHED`), is already deprecated (`422 ENTITY_ALREADY_DEPRECATED`), any version is `publishing` (`422 ENTITY_PUBLISHING`), or a current version, including this entity's own, has an **Entity Reference** whose target is this entity (`409 ENTITY_REFERENCED`). A historical version does not count. Publishing a new version of a referenced entity is not refused by that reference.
+Refused when the Entity has never been published (`422 ENTITY_NEVER_PUBLISHED`), is already deprecated (`422 ENTITY_ALREADY_DEPRECATED`), any version is `publishing` (`422 ENTITY_PUBLISHING`), or a current version, including this entity's own, has an **Entity Reference** whose target is this entity (`409 ENTITY_REFERENCED`). A historical version does not count. Publishing a new version of a referenced entity is not refused by that reference unless the publish changes the **Business Key** (§3.1).
 
 Success `200`: `{ "entity": { … } }` with `deprecated_at` set.
 
@@ -415,7 +422,7 @@ Success `200`: `{ "version": { … } }`.
 
 ### 5.5 `POST /entities/{id}/versions/{version_id}/publish`
 
-Publishes the current `unpublished` version: set `publishing` and enqueue `entity_reconcile` to CREATE the version's physical table, replace the stem view so it selects that table, then store `published`. The previous physical table is not renamed. Acceptance freezes each dictionary attribute's active codes and deprecation into that Job's `dictionary_bindings`. Between acceptance and execution, a changed active code set or a Dictionary deprecated after acceptance fails the Job with `ENTITY_ATTRIBUTE_INVALID` and creates no table. The CHECK uses the frozen codes.
+Publishes the current `unpublished` version: set `publishing` and enqueue `entity_reconcile` to CREATE the version's physical table, replace the stem view so it selects that table, then store `published`. The previous physical table is not renamed. Acceptance freezes each dictionary attribute's active codes and deprecation into that Job's `dictionary_bindings`. It also freezes each reference attribute's target **Business Key** (attribute name, type, and `max_length` when `string`) into `reference_bindings`. Between acceptance and execution, a changed active code set, a Dictionary deprecated after acceptance, or a target Business Key that no longer matches the freeze fails the Job with `ENTITY_ATTRIBUTE_INVALID` and creates no table. The CHECK uses the frozen codes. The reference column uses the frozen key.
 
 Body is empty.
 
@@ -423,7 +430,7 @@ Body is empty.
 - Non-current target is `422 ENTITY_VERSION_SUPERSEDED`.
 - Non-unpublished is `422 ENTITY_NOT_UNPUBLISHED`.
 - Deprecated Entity is `422 ENTITY_DEPRECATED`.
-- The first publish of an Entity, and a publish whose shape is not `unchanged` relative to the latest published shape, apply the attribute write rules. Failure is `422 ENTITY_ATTRIBUTE_INVALID` and does not enqueue. An `unchanged` successor of an already published shape is enqueued as stored. Publish does not rewrite that shape.
+- The first publish of an Entity, and a publish whose shape is not `unchanged` relative to the latest published shape, apply the attribute write rules. Failure is `422 ENTITY_ATTRIBUTE_INVALID` and does not enqueue. A reference whose target current version has no Business Key is that failure. An `unchanged` successor of an already published shape is enqueued as stored and still freezes reference keys from the targets' current versions. Publish does not rewrite that shape. A publish that changes this entity's Business Key while an **Inbound Reference** exists is `409 ENTITY_REFERENCED`.
 
 Enqueue is idempotent:
 
@@ -498,7 +505,7 @@ Kernel codes (`REQUEST_INVALID`, `AUTH_UNAUTHENTICATED`, and the other codes in 
 | `ENTITY_VERSION_NOT_FOUND` | 404 | Unknown version id, or the version is not under the given entity |
 | `ENTITY_TABLE_NAME_INVALID` | 422 | `table_name` charset, length, or reserved physical table name (stem, `__v`, digits, `__`, 16 lowercase hexadecimal digits) is outside the rule |
 | `ENTITY_TABLE_NAME_DUP` | 409 | `table_name` already registered |
-| `ENTITY_ATTRIBUTE_INVALID` | 422 | Attribute `name` charset, length, reserved (`row_id`), or duplicate within the version; `type` missing or outside the **Attribute Type** closed set; `config` missing, carrying another type's key, or an unknown key; `string` `max_length` outside 1–65535; `decimal` precision or scale outside the rule; dictionary `dictionary_id` missing or unknown, or the Dictionary has no active code at publish; `entries` on an attribute; `target_entity_id` missing, unknown, or naming a deprecated entity; or a retired top-level field (`kind`, `normalized_type`, `precision`, `scale`, `target_table_name`, `enumeration`). `detail` names the concrete rule (and the value when safe to show) |
+| `ENTITY_ATTRIBUTE_INVALID` | 422 | Attribute `name` charset, length, reserved (`row_id`), or duplicate within the version; `type` missing or outside the **Attribute Type** closed set; `config` missing, carrying another type's key, or an unknown key; `string` `max_length` outside 1–65535; `decimal` precision or scale outside the rule; dictionary `dictionary_id` missing or unknown, or the Dictionary has no active code at publish; `entries` on an attribute; `target_entity_id` missing, unknown, or naming a deprecated entity; `business_key` on a type other than `string` or `integer`, without `unique` and `required`, or on more than one attribute; a `reference` whose target current version has no Business Key at publish; or a retired top-level field (`kind`, `normalized_type`, `precision`, `scale`, `target_table_name`, `enumeration`). `detail` names the concrete rule (and the value when safe to show) |
 | `DICTIONARY_NOT_FOUND` | 404 | Unknown Dictionary id |
 | `DICTIONARY_NAME_DUP` | 409 | Dictionary `name` already registered |
 | `DICTIONARY_INVALID` | 422 | Dictionary `name`, `display_name`, or entry shape outside the rule; duplicate code; or removal of a code that a publish snapshot contains. `detail` names the concrete rule |
@@ -512,7 +519,7 @@ Kernel codes (`REQUEST_INVALID`, `AUTH_UNAUTHENTICATED`, and the other codes in 
 | `ENTITY_NEVER_PUBLISHED` | 422 | Deprecate while the Entity has never been published |
 | `ENTITY_ALREADY_DEPRECATED` | 422 | Deprecate when already deprecated |
 | `ENTITY_ALREADY_PUBLISHED` | 409 | Delete after the Entity has been published, while no version is `publishing` |
-| `ENTITY_REFERENCED` | 409 | Deprecate, or delete of a never-published definition, while a current version (including this entity's own) has an **Entity Reference** aimed at this entity |
+| `ENTITY_REFERENCED` | 409 | Deprecate, delete of a never-published definition, or a save or publish that changes the **Business Key** (removed, moved, type, or `string` `max_length`), while a current version (including this entity's own) has an **Entity Reference** aimed at this entity |
 | `ENTITY_VERSION_SUPERSEDED` | 422 | Save or publish targeted a superseded version |
 | `ENTITY_TABLE_IN_SERVICE` | 422 | Table drop targeted the table still in service: the metadata head of an Entity that is not deprecated. Opening a newer unpublished version does not take that table out of service |
 
@@ -520,7 +527,7 @@ Job-terminal codes (successful GET of a failed Job; not Problem Details on the e
 
 | Problem Code | When |
 | --- | --- |
-| `ENTITY_ATTRIBUTE_INVALID` | Publish execution found an active code set different from acceptance, or a Dictionary deprecated after acceptance. The version returns to `unpublished` and no physical table is created |
+| `ENTITY_ATTRIBUTE_INVALID` | Publish execution found an active code set different from acceptance, a Dictionary deprecated after acceptance, or a target Business Key that no longer matches the frozen reference binding. The version returns to `unpublished` and no physical table is created |
 | `ENTITY_TABLE_NAME_CONFLICT` | Publish found the physical table name or the stem view's name already present in `REFRAQ_ENTITY_DB_SCHEMA` |
 | `ENTITY_TABLE_NOT_EMPTY` | Drop found rows in the same transaction |
 | `JOB_ALREADY_ACTIVE` | Runner could not take `entity_table:{entity_id}` |

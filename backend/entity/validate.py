@@ -86,6 +86,7 @@ def validate_shape(
             )
         seen.add(name)
         cleaned_attrs.append(_validate_attribute(attr, name=name))
+    _require_business_key(cleaned_attrs)
     return cleaned_attrs
 
 
@@ -103,6 +104,7 @@ def _validate_attribute(
         required=bool(attr.required),
         unique=bool(attr.unique),
         indexed=bool(attr.indexed),
+        business_key=bool(attr.business_key),
     )
     return resolve(attribute_type).clean(prepared)
 
@@ -144,6 +146,23 @@ def require_reference_targets(
             raise EntityAttributeInvalid(
                 f"Attribute target_entity_id '{target_entity_id}' names a deprecated entity"
             )
+
+
+def _require_business_key(attributes: list[AttributeRecord]) -> None:
+    marked = [attr for attr in attributes if attr.business_key]
+    if len(marked) > 1:
+        raise EntityAttributeInvalid("A version has at most one business_key")
+    if not marked:
+        return
+    attr = marked[0]
+    if attr.type not in ("string", "integer"):
+        raise EntityAttributeInvalid(
+            f"Attribute '{attr.name}' business_key requires type string or integer"
+        )
+    if not attr.unique or not attr.required:
+        raise EntityAttributeInvalid(
+            f"Attribute '{attr.name}' business_key requires unique and required"
+        )
 
 
 def _clean_description(description: str | None) -> str | None:

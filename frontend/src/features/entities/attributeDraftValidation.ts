@@ -12,7 +12,8 @@ export type AttributeIssueField =
   | "precision"
   | "scale"
   | "dictionary_id"
-  | "target_entity_id";
+  | "target_entity_id"
+  | "business_key";
 
 export type AttributeIssue = {
   field: AttributeIssueField;
@@ -55,7 +56,7 @@ function nameIssue(draft: AttributeDraft, names: readonly string[]): AttributeIs
   };
 }
 
-type ConfigIssueField = Exclude<AttributeIssueField, "name">;
+type ConfigIssueField = Exclude<AttributeIssueField, "name" | "business_key">;
 
 type IntIssueField = "max_length" | "precision" | "scale";
 
@@ -139,15 +140,44 @@ function configIssues(draft: AttributeDraft): AttributeIssue[] {
   return issues;
 }
 
+function businessKeyIssues(
+  draft: AttributeDraft,
+  siblings: readonly AttributeDraft[],
+): AttributeIssue[] {
+  if (!draft.business_key) return [];
+  const issues: AttributeIssue[] = [];
+  if (draft.type !== "string" && draft.type !== "integer") {
+    issues.push({
+      field: "business_key",
+      key: "entities.validation.attribute.businessKeyType",
+    });
+  }
+  if (!draft.unique || !draft.required) {
+    issues.push({
+      field: "business_key",
+      key: "entities.validation.attribute.businessKeyFlags",
+    });
+  }
+  if (siblings.some((item) => item.business_key)) {
+    issues.push({
+      field: "business_key",
+      key: "entities.validation.attribute.businessKeyDuplicate",
+    });
+  }
+  return issues;
+}
+
 /** Issues for one draft. `names` includes this draft's name. */
 export function attributeDraftIssues(
   draft: AttributeDraft,
   names: readonly string[],
+  siblings: readonly AttributeDraft[],
 ): AttributeIssue[] {
   const issues: AttributeIssue[] = [];
   const name = nameIssue(draft, names);
   if (name) issues.push(name);
   issues.push(...configIssues(draft));
+  issues.push(...businessKeyIssues(draft, siblings));
   return issues;
 }
 

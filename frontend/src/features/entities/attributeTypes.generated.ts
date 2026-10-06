@@ -73,7 +73,7 @@ export const ATTRIBUTE_TYPE_CATALOG = {
     config: {
       target_entity_id: { kind: "string" },
     },
-    physical: { template: "BIGINT", bare: "BIGINT" },
+    physical: { template: "VARCHAR | BIGINT", bare: "VARCHAR | BIGINT" },
   },
 } as const satisfies Record<
   AttributeType,

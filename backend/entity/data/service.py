@@ -6,16 +6,17 @@ from typing import Any
 
 from backend.entity.data.capabilities import ROW_WRITE_LIMIT, upsert_key_for
 from backend.entity.data.filters import compile_filters
-from backend.entity.data.head import resolve_head
+from backend.entity.data.head import HeadTarget, resolve_head
 from backend.entity.data.paging import resolve_keyset_query, resolve_offset_query
 from backend.entity.data.schema import build_schema
 from backend.entity.data import sql as data_sql
-from backend.entity.data.values import encode_inbound_map
+from backend.entity.data.values import encode_inbound, encode_inbound_map
 from backend.entity.errors import (
     EntityRequestInvalid,
     EntityRowConflict,
     EntityRowInvalid,
 )
+from backend.entity.reference_binding import business_key_attr
 
 __all__ = [
     "create_many_rows",
@@ -79,32 +80,30 @@ def create_many_rows(table_name: str, body: dict[str, Any]) -> list[dict[str, An
 
 def get_row(table_name: str, body: dict[str, Any]) -> dict[str, Any]:
     target = resolve_head(table_name, for_write=False)
-    _forbid_keys(body, allowed={"row_id"}, verb="get")
-    row_id = _require_row_id(body.get("row_id"))
+    column, value = _locator(body, target, verb="get")
     with data_sql.entity_connection() as conn:
-        return data_sql.select_by_id(conn, target, row_id)
+        return data_sql.select_by_column(conn, target, column, value)
 
 
 def update_row(table_name: str, body: dict[str, Any]) -> dict[str, Any]:
     target = resolve_head(table_name, for_write=True)
     if "filters" in body:
         raise EntityRequestInvalid("update must not include filters")
-    _forbid_keys(body, allowed={"row_id", "values"}, verb="update")
-    row_id = _require_row_id(body.get("row_id"))
+    column, value = _locator(body, target, verb="update", extra={"values"})
     values_raw = _require_object(body.get("values"), "values")
     if not values_raw:
         raise EntityRowInvalid("values must not be empty")
+    _reject_business_key_write(values_raw, target)
     encoded = encode_inbound_map(values_raw, target, partial=True)
     with data_sql.entity_connection() as conn:
-        return data_sql.update_by_id(conn, target, row_id, encoded)
+        return data_sql.update_by_column(conn, target, column, value, encoded)
 
 
 def delete_row(table_name: str, body: dict[str, Any]) -> None:
     target = resolve_head(table_name, for_write=True)
-    _forbid_keys(body, allowed={"row_id"}, verb="delete")
-    row_id = _require_row_id(body.get("row_id"))
+    column, value = _locator(body, target, verb="delete")
     with data_sql.entity_connection() as conn:
-        data_sql.delete_by_id(conn, target, row_id)
+        data_sql.delete_by_column(conn, target, column, value)
 
 
 def query_rows(table_name: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -174,6 +173,7 @@ def update_where_rows(table_name: str, body: dict[str, Any]) -> dict[str, Any]:
     set_raw = _require_object(body.get("set"), "set")
     if not set_raw:
         raise EntityRowInvalid("set must not be empty")
+    _reject_business_key_write(set_raw, target)
     compiled = compile_filters(body.get("filters"), target, require_leaf=True)
     assert compiled is not None
     encoded = encode_inbound_map(set_raw, target, partial=True)
@@ -197,9 +197,17 @@ def delete_where_rows(table_name: str, body: dict[str, Any]) -> dict[str, Any]:
 def upsert_one(table_name: str, body: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     target = resolve_head(table_name, for_write=True)
     _forbid_keys(body, allowed={"key", "values"}, verb="upsert")
-    key_name = body.get("key")
-    if not isinstance(key_name, str) or not key_name:
-        raise EntityRequestInvalid("key must be a non-empty string")
+    if "key" not in body:
+        marked = business_key_attr(target.attributes)
+        if marked is None:
+            raise EntityRequestInvalid(
+                "key is required when the entity has no business_key"
+            )
+        key_name = marked.name
+    else:
+        key_name = body.get("key")
+        if not isinstance(key_name, str) or not key_name:
+            raise EntityRequestInvalid("key must be a non-empty string")
     values_raw = _require_object(body.get("values"), "values")
     by_name = {attr.name: attr for attr in target.attributes}
     attr = by_name.get(key_name)
@@ -282,3 +290,42 @@ def _require_row_id(raw: Any) -> int:
     if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
         raise EntityRequestInvalid("row_id must be an integer >= 1")
     return raw
+
+
+def _locator(
+    body: dict[str, Any],
+    target: HeadTarget,
+    *,
+    verb: str,
+    extra: set[str] | None = None,
+) -> tuple[str, Any]:
+    allowed = {"row_id", "business_key"}
+    if extra:
+        allowed |= extra
+    _forbid_keys(body, allowed=allowed, verb=verb)
+    has_row = "row_id" in body
+    has_key = "business_key" in body
+    if has_row == has_key:
+        raise EntityRequestInvalid(
+            "exactly one of row_id or business_key is required"
+        )
+    if has_row:
+        return "row_id", _require_row_id(body.get("row_id"))
+    marked = business_key_attr(target.attributes)
+    if marked is None:
+        raise EntityRequestInvalid("business_key is not declared on this entity")
+    try:
+        encoded = encode_inbound(marked, body.get("business_key"), target)
+    except EntityRowInvalid as exc:
+        raise EntityRequestInvalid(exc.message) from exc
+    if encoded is None:
+        raise EntityRequestInvalid("business_key must not be null")
+    return marked.name, encoded
+
+
+def _reject_business_key_write(values: dict[str, Any], target: HeadTarget) -> None:
+    marked = business_key_attr(target.attributes)
+    if marked is not None and marked.name in values:
+        raise EntityRowInvalid(
+            f"Attribute '{marked.name}' is the business key and cannot be changed"
+        )

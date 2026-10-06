@@ -273,6 +273,7 @@ function VersionShape({
                 <Table.Th>{t("entities.fields.required")}</Table.Th>
                 <Table.Th>{t("entities.fields.unique")}</Table.Th>
                 <Table.Th>{t("entities.fields.indexed")}</Table.Th>
+                <Table.Th>{t("entities.fields.businessKey")}</Table.Th>
                 <Table.Th>{t("entities.fields.attributeDescription")}</Table.Th>
               </Table.Tr>
             </Table.Thead>
@@ -310,6 +311,9 @@ function VersionShape({
                     </Table.Td>
                     <Table.Td>
                       <Text size="sm">{yesNo(attr.indexed)}</Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="sm">{yesNo(attr.business_key)}</Text>
                     </Table.Td>
                     <Table.Td>
                       <Text size="sm">{attr.description}</Text>

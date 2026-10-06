@@ -98,11 +98,12 @@ def test_physical_sql_and_dictionary_check_predicate() -> None:
         "time": "TIME",
         "json": "JSONB",
         "dictionary": "VARCHAR(64)",
-        "reference": "BIGINT",
     }
     for name, sql in fixed.items():
         assert resolve(name).physical_sql(_attr(name)) == sql
         assert resolve(name).physical_template == sql
+    assert resolve("reference").physical_template == "VARCHAR | BIGINT"
+    assert resolve("reference").physical_bare == "VARCHAR | BIGINT"
     predicate = resolve("dictionary").check_predicate(
         _attr("dictionary", codes=("a", "o'b")),
         column='"status"',

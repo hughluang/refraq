@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from dataclasses import replace
+
 from backend.entity.attribute_type import resolve
 from backend.entity.data.head import HeadTarget
 from backend.entity.dictionaries.store import get_dictionary_store
@@ -14,6 +16,7 @@ __all__ = [
     "decode_row",
     "encode_inbound",
     "encode_inbound_map",
+    "reference_value_attr",
     "writable_dictionary_codes",
 ]
 
@@ -58,6 +61,8 @@ def encode_inbound(
         raise EntityRowInvalid(
             f"Attribute '{attr.name}' must not contain NUL"
         )
+    if attr.type == "reference":
+        return _encode_reference(attr, raw, target)
     spec = resolve(attr.type)
     codes = (
         writable_dictionary_codes(attr, target)
@@ -79,7 +84,7 @@ def decode_row(
             out["row_id"] = int(value) if value is not None else None
             continue
         attr = by_name[col]
-        out[col] = _decode_value(attr, value)
+        out[col] = _decode_value(attr, value, target)
     return out
 
 
@@ -97,7 +102,22 @@ def writable_dictionary_codes(
     return frozenset(snap & active)
 
 
-def _decode_value(attr: AttributeRecord, value: Any) -> Any:
+def _encode_reference(attr: AttributeRecord, raw: Any, target: HeadTarget) -> Any:
+    proxy = reference_value_attr(attr, target)
+    return resolve(proxy.type).encode(proxy, raw)
+
+
+def _decode_value(attr: AttributeRecord, value: Any, target: HeadTarget) -> Any:
     if value is None:
         return None
+    if attr.type == "reference":
+        proxy = reference_value_attr(attr, target)
+        return resolve(proxy.type).decode(proxy, value)
     return resolve(attr.type).decode(attr, value)
+
+
+def reference_value_attr(attr: AttributeRecord, target: HeadTarget) -> AttributeRecord:
+    snap = target.head.reference_snapshots[attr.name]
+    if snap["type"] == "string":
+        return replace(attr, type="string", max_length=snap["max_length"])
+    return replace(attr, type="integer")

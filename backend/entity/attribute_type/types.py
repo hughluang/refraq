@@ -461,14 +461,20 @@ class _Reference(_AttributeType):
             config_keys=frozenset({"target_entity_id"}),
             operators=_CMP,
             reads=frozenset({"target"}),
-            physical_template="BIGINT",
-            physical_bare="BIGINT",
+            physical_template="VARCHAR | BIGINT",
+            physical_bare="VARCHAR | BIGINT",
             config_limits=(
                 _ConfigLimit("target_entity_id", "string", None, None, None),
             ),
             encode=encode_bigint,
             decode=decode_bigint,
         )
+
+    def physical_sql(self, attr: Any) -> str:
+        length = attr.reference_max_length
+        return {"string": f"VARCHAR({length})", "integer": "BIGINT"}[
+            attr.reference_key_type
+        ]
 
     def clean(self, attr: Any) -> Any:
         _reject_foreign(attr, self.name, self.config_keys)

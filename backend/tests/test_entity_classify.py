@@ -28,6 +28,7 @@ def _attr(
     required: bool = True,
     unique: bool = False,
     indexed: bool = False,
+    business_key: bool = False,
     description: str | None = None,
     max_length: int | None = None,
     precision: int | None = None,
@@ -42,6 +43,7 @@ def _attr(
         required=required,
         unique=unique,
         indexed=indexed,
+        business_key=business_key,
         description=description,
         max_length=32 if attribute_type == "string" and max_length is None else max_length,
         precision=precision,
@@ -317,6 +319,20 @@ def test_table_name_length_boundary() -> None:
     with pytest.raises(EntityTableNameInvalid):
         require_table_name("material__v1__0123456789abcdef")
     require_table_name("encv_0123456789ab")
+
+
+def test_business_key_change_is_breaking() -> None:
+    before = (_attr("sku", unique=True, business_key=True),)
+    cleared = (_attr("sku", unique=True, business_key=False),)
+    result = classify_shapes(before, cleared, versions=())
+    assert result.change_class == "breaking"
+    assert result.changes[0].field == "attributes.sku.business_key"
+    moved = (
+        _attr("sku", unique=True, business_key=False),
+        _attr("code", required=False, unique=True, business_key=True),
+    )
+    moved_result = classify_shapes(before, moved, versions=())
+    assert moved_result.change_class == "breaking"
 
 
 def test_row_id_is_reserved() -> None:

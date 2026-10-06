@@ -27,6 +27,7 @@ from backend.entity.errors import (
 )
 
 __all__ = [
+    "delete_by_column",
     "delete_by_id",
     "delete_where",
     "entity_connection",
@@ -34,7 +35,9 @@ __all__ = [
     "query_keyset",
     "query_offset",
     "require_entity_capacity",
+    "select_by_column",
     "select_by_id",
+    "update_by_column",
     "update_by_id",
     "update_where",
     "upsert_row",
@@ -77,6 +80,20 @@ def insert_one(
     return decode_row(_column_names(target), tuple(row), target)
 
 
+def select_by_column(
+    conn: Connection, target: HeadTarget, column: str, value: Any
+) -> dict[str, Any]:
+    returning = _returning_cols(target)
+    sql = (
+        f"SELECT {returning} FROM {target.qualified_table} "
+        f"WHERE {ident(column)} = :_locator"
+    )
+    row = conn.execute(text(sql), {"_locator": value}).one_or_none()
+    if row is None:
+        raise EntityRowNotFound()
+    return decode_row(_column_names(target), tuple(row), target)
+
+
 def select_by_id(
     conn: Connection, target: HeadTarget, row_id: int
 ) -> dict[str, Any]:
@@ -86,6 +103,27 @@ def select_by_id(
         f"WHERE {ident('row_id')} = :row_id"
     )
     row = conn.execute(text(sql), {"row_id": row_id}).one_or_none()
+    if row is None:
+        raise EntityRowNotFound()
+    return decode_row(_column_names(target), tuple(row), target)
+
+
+def update_by_column(
+    conn: Connection,
+    target: HeadTarget,
+    column: str,
+    value: Any,
+    values: dict[str, Any],
+) -> dict[str, Any]:
+    assigns = ", ".join(f"{ident(name)} = :{name}" for name in values)
+    returning = _returning_cols(target)
+    params = dict(values)
+    params["_locator"] = value
+    sql = (
+        f"UPDATE {target.qualified_table} SET {assigns} "
+        f"WHERE {ident(column)} = :_locator RETURNING {returning}"
+    )
+    row = conn.execute(text(sql), params).one_or_none()
     if row is None:
         raise EntityRowNotFound()
     return decode_row(_column_names(target), tuple(row), target)
@@ -109,6 +147,18 @@ def update_by_id(
     if row is None:
         raise EntityRowNotFound()
     return decode_row(_column_names(target), tuple(row), target)
+
+
+def delete_by_column(
+    conn: Connection, target: HeadTarget, column: str, value: Any
+) -> None:
+    sql = (
+        f"DELETE FROM {target.qualified_table} "
+        f"WHERE {ident(column)} = :_locator"
+    )
+    result = conn.execute(text(sql), {"_locator": value})
+    if result.rowcount == 0:
+        raise EntityRowNotFound()
 
 
 def delete_by_id(conn: Connection, target: HeadTarget, row_id: int) -> None:

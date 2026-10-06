@@ -445,7 +445,7 @@ Avoid treating it as a full platform SIEM or a substitute for application access
 
 ### Business Entity
 
-A definition of a reusable business thing (material, supplier, inventory fact), identified by an immutable `table_name` that spans all its **Entity Version**s and is the stem view name in the entity database. Authoring one requires business meaning and not only a shape: name and description. Each attribute has one **Attribute Type** and that type's configuration, and may be marked `unique` and/or `indexed`. The Entity Table carries a platform `row_id` identity column; authors do not pick a business primary key. **Inbound Reference**s are derived and are not attributes.
+A definition of a reusable business thing (material, supplier, inventory fact), identified by an immutable `table_name` that spans all its **Entity Version**s and is the stem view name in the entity database. Authoring one requires business meaning and not only a shape: name and description. Each attribute has one **Attribute Type** and that type's configuration, and may be marked `unique`, `indexed`, and, for at most one attribute, the version's **Business Key**. The Entity Table carries a platform `row_id` identity column that is not that business identity. **Inbound Reference**s are derived and are not attributes.
 Permissions: `entity:read` / `entity:write` / `entity:drop_table` (definition); `entity:data_read` / `entity:data_write` (**Entity Data API**).
 Avoid calling it a **Catalog Object**, a Data Product, or a Serving output. Avoid putting source bindings, extract SQL, transforms, or lineage on the definition — those belong to a **Data Channel**. Avoid putting the `object_category` closed set on the Entity. Avoid treating `row_id` as a **Data Channel** upsert key. Avoid a link table or a relationship-entity subtype; a many-to-many is an ordinary Business Entity with two **Entity Reference**s. Avoid many-to-one, one-to-many, and many2one as names. Avoid **Join** and **Enum Catalog** as the home of entity references or dictionaries. Avoid hierarchy and inheritance between Business Entities. Avoid typing an attribute with **Normalized Type**.
 
@@ -456,7 +456,7 @@ Avoid naming it Entity Consumer API, Entity Row API, a "consume" service, or Ser
 
 ### Attribute Type
 
-The closed set of classes that define one attribute of a **Business Entity**: `string`, `text`, `integer`, `decimal`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, `dictionary`, `reference`. Each class owns its configuration. `json` is a JSON document with an empty configuration; a JSON array is a value of that type. `required`, `unique`, and `indexed` are facts of every attribute.
+The closed set of classes that define one attribute of a **Business Entity**: `string`, `text`, `integer`, `decimal`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, `dictionary`, `reference`. Each class owns its configuration. `json` is a JSON document with an empty configuration; a JSON array is a value of that type. `required`, `unique`, `indexed`, and `business_key` are facts of every attribute.
 Avoid **Normalized Type**, **Semantic Type**, a JSON Schema or OpenAPI format, `array` as its own class, a unit or quantity on `decimal`, a cardinality on `reference`, and treating `dictionary` as a constraint on `string` or `integer`.
 
 ### Dictionary
@@ -471,8 +471,13 @@ Avoid **Enum Catalog**, a database enum type, **Normalized Type**, an inline `en
 
 ### Entity Reference
 
-An attribute whose **Attribute Type** is `reference`. It names a target Business Entity by entity id and stores that target's live-table `row_id`. The target may be the same entity. A stored `row_id` may not resolve. It is not a **Normalized Type** and not a database foreign key.
-Avoid many-to-one, many2one, **Join**, **Inbound Reference** as something the author saves, a `kind` beside the type, and a foreign key constraint.
+An attribute whose **Attribute Type** is `reference`. It names a target Business Entity by entity id and stores that target's **Business Key** value, snapshotted at publish. The target may be the same entity. A stored value may not resolve. It is not a **Normalized Type** and not a database foreign key.
+Avoid many-to-one, many2one, **Join**, **Inbound Reference** as something the author saves, a `kind` beside the type, storing `row_id`, and a foreign key constraint.
+
+### Business Key
+
+The single attribute of an **Entity Version** marked `business_key`. It is `string` or `integer`, and the author sets `unique` and `required` on it. An **Entity Reference** stores that value. The **Entity Data API** may address a row by it. A version may declare none. `row_id` is not a Business Key.
+Avoid a second business key on the same version, a composite key, treating `row_id` as the business identity, and implying `unique` or `required` when the flag is set.
 
 ### Inbound Reference
 
@@ -486,7 +491,7 @@ Avoid treating a version as a byte-exact frozen shape, ALTERing a published tabl
 
 ### Entity Table
 
-The physical table refraq creates from a **Business Entity** definition, in the refraq-owned entity database declared separately from the metadata database. The Entity `table_name` is a view of the latest published version that still has a table. Each version's physical table name is the stem, `__v`, the version number, `__`, and that version's 16-hexadecimal-digit id, and is not renamed when a successor publishes. The application keeps that name within 63 characters by shortening the stem from the right when the suffix would not fit, and writes a table comment of the full stem only then. `table_name` is character-set and length constrained to the engine identifier limit. A superseded version is not a product write target. Every table carries `row_id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY`; each attribute becomes one remaining column, with optional UNIQUE constraints and non-unique indexes. An **Inbound Reference** is not a column.
+The physical table refraq creates from a **Business Entity** definition, in the refraq-owned entity database declared separately from the metadata database. The Entity `table_name` is a view of the latest published version that still has a table. Each version's physical table name is the stem, `__v`, the version number, `__`, and that version's 16-hexadecimal-digit id, and is not renamed when a successor publishes. The application keeps that name within 63 characters by shortening the stem from the right when the suffix would not fit, and writes a table comment of the full stem only then. `table_name` is character-set and length constrained to the engine identifier limit. A superseded version is not a product write target. Every table carries `row_id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY`; each attribute becomes one remaining column, with optional UNIQUE constraints and non-unique indexes. An **Entity Reference** column follows the snapshotted target **Business Key** (`VARCHAR(max_length)` or `BIGINT`). An **Inbound Reference** is not a column.
 Created empty by **Publish**; rows arrive from a **Data Channel** and/or the **Entity Data API**. The definition lands before the table exists: publish is an explicit **Job** and no transaction spans the two databases. Publish status is stored; `table_present` is derived from the attribute-set snapshot. Dropping one is a destructive act behind `entity:drop_table`, permitted on a published version that is not the metadata head, or on the head after the Entity is deprecated, and is refused while the table holds rows.
 Avoid creating it inside a **Source** (Sources stay read-only origins), placing it in the metadata database, collecting it as a Catalog Object, auto-suffixing around a name collision, reading an empty table as a failed publish, or using `row_id` as a **Data Channel** upsert key.
 

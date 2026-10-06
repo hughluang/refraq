@@ -107,6 +107,7 @@ export function AttributeEditor({
       issues: attributeDraftIssues(
         draft,
         form.values.attributes.map((item) => item.name),
+        form.values.attributes.filter((_, index) => index !== reveal.index),
       ),
     });
   }, [editable, reveal]);
@@ -137,9 +138,11 @@ export function AttributeEditor({
 
   const confirmDrawer = () => {
     if (!drawer) return;
+    const siblings = attributes.filter((_, index) => index !== drawer.index);
     const issues = attributeDraftIssues(
       drawer.draft,
       namesFor(attributes, drawer.draft, drawer.index),
+      siblings,
     );
     if (issues.length > 0) {
       changeDrawer({ ...drawer, issues });
@@ -222,6 +225,7 @@ export function AttributeEditor({
               <Table.Th>{t("entities.fields.required")}</Table.Th>
               <Table.Th>{t("entities.fields.unique")}</Table.Th>
               <Table.Th>{t("entities.fields.indexed")}</Table.Th>
+              <Table.Th>{t("entities.fields.businessKey")}</Table.Th>
               <Table.Th>{t("entities.fields.attributeDescription")}</Table.Th>
               {editable ? <Table.Th>{t("actions.delete")}</Table.Th> : null}
             </Table.Tr>
@@ -271,6 +275,11 @@ export function AttributeEditor({
                   <Table.Td>
                     <Text size="sm">
                       {attr.indexed ? t("form.value.yes") : t("form.value.no")}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm">
+                      {attr.business_key ? t("form.value.yes") : t("form.value.no")}
                     </Text>
                   </Table.Td>
                   <Table.Td>
@@ -449,6 +458,16 @@ export function AttributeEditor({
               onChange={(event) =>
                 updateDraft({ indexed: event.currentTarget.checked })
               }
+            />
+            <SwitchField
+              editable
+              label={t("entities.fields.businessKey")}
+              description={t("entities.fields.businessKeyHint")}
+              checked={draft.business_key}
+              onChange={(event) =>
+                updateDraft({ business_key: event.currentTarget.checked })
+              }
+              error={issueMessage("business_key")}
             />
             <TextField
               editable

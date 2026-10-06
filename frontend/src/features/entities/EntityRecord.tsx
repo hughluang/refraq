@@ -134,6 +134,7 @@ export function EntityRecord(props: Props) {
     const issue = attributeDraftIssues(
       draft,
       values.attributes.map((item) => item.name),
+      values.attributes.filter((_, itemIndex) => itemIndex !== index),
     ).find((item) => item.field === field);
     if (!issue) return null;
     return issue.values ? t(issue.key, issue.values) : t(issue.key);

@@ -14,6 +14,7 @@ from backend.entity.records import (
     EntityVersionRecord,
     attribute_to_dict,
 )
+from backend.entity.reference_binding import business_key_attr
 from backend.entity.store import EntityStore, get_entity_store
 
 __all__ = [
@@ -67,16 +68,23 @@ def _dictionary_read(
 
 def _reference_target(
     store: EntityStore, entity_id: str | None
-) -> dict[str, str] | None:
+) -> dict[str, str | None] | None:
     if not entity_id:
         return None
     entity = store.get_entity(entity_id)
     if entity is None:
         return None
+    current = store.current_version(entity.id)
+    key_name: str | None = None
+    if current is not None:
+        key = business_key_attr(current.attributes)
+        if key is not None:
+            key_name = key.name
     return {
         "entity_id": entity.id,
         "name": entity.name,
         "table_name": entity.table_name,
+        "business_key": key_name,
     }
 
 
