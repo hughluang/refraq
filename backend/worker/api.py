@@ -6,7 +6,7 @@ import logging
 import uuid
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from backend.admin.system_parameters import resolve_str
 from backend.core.config import get_settings
@@ -17,6 +17,7 @@ from backend.worker.cron import (
     MAX_CADENCE_SECONDS,
     ZoneCronSchedule,
     compute_next_run_at,
+    cron_search_after,
     first_cron_fire_after,
     parse_cron_fields,
     validate_schedule_timezone,
@@ -26,6 +27,7 @@ from backend.worker.errors import (
     ScheduleCadenceInvalid,
     ScheduleNotFound,
     ScheduleRunningTimeoutInvalid,
+    ScheduleStartAtInvalid,
     ScheduleSystemImmutable,
     ScheduleUndeletable,
 )
@@ -46,6 +48,7 @@ __all__ = [
     "preview_cron_runs",
     "validate_cadence",
     "validate_running_timeout",
+    "validate_start_at",
     "withdraw_schedules_by_owner_ref",
     "initial_next_run_at",
 ]
@@ -99,14 +102,18 @@ def ensure_system_schedules() -> None:
         )
 
 
-def validate_cron(text: str) -> None:
-    """Parse a cron expression and require a fire within the 8-year horizon."""
+def validate_cron(text: str, *, start_at: datetime | None = None) -> None:
+    """Parse a cron expression and require a fire within the 8-year horizon.
+
+    With ``start_at``, the horizon is searched from the first slot it admits.
+    """
     try:
         fields = parse_cron_fields(text)
     except ValueError as exc:
         raise ScheduleCadenceInvalid(str(exc)) from exc
     zone = validate_schedule_timezone(current_schedule_timezone())
-    if first_cron_fire_after(fields, zone, utc_now()) is None:
+    cursor = cron_search_after(utc_now(), start_at)
+    if first_cron_fire_after(fields, zone, cursor) is None:
         raise ScheduleCadenceInvalid("cron expression does not fire within 8 years")
 
 
@@ -114,6 +121,7 @@ def validate_cadence(
     *,
     cron: str | None,
     interval_seconds: int | None,
+    start_at: datetime | None = None,
 ) -> None:
     has_interval = interval_seconds is not None
     has_cron = bool(cron and str(cron).strip())
@@ -122,7 +130,7 @@ def validate_cadence(
             "exactly one of cron or interval_seconds is required"
         )
     if has_cron:
-        validate_cron(str(cron).strip())
+        validate_cron(str(cron).strip(), start_at=start_at)
         return
     if interval_seconds is None or interval_seconds < 1:
         raise ScheduleCadenceInvalid("interval_seconds must be positive")
@@ -130,19 +138,22 @@ def validate_cadence(
         raise ScheduleCadenceInvalid("interval_seconds exceeds the 8 year horizon")
 
 
-def preview_cron_runs(cron: str) -> tuple[str, list[datetime]]:
-    """Next 5 cron fires from now in the current Schedule Timezone.
+def preview_cron_runs(
+    cron: str, *, start_at: datetime | None = None
+) -> tuple[str, list[datetime]]:
+    """Next 5 cron fires from now (not before ``start_at``) in the current Schedule Timezone.
 
-    Validates the cron expression only. Read-only: no row write and no audit.
+    Validates the cron expression and start time only. Read-only: no row write and no audit.
     """
     text = str(cron).strip()
     if not text:
         raise ScheduleCadenceInvalid("cron is required")
-    validate_cron(text)
+    start = validate_start_at(start_at)
+    validate_cron(text, start_at=start)
     zone_name = current_schedule_timezone()
     schedule = ZoneCronSchedule(text, schedule_timezone=zone_name)
     instants: list[datetime] = []
-    cursor = utc_now()
+    cursor = cron_search_after(utc_now(), start)
     for _ in range(5):
         cursor = schedule._next_fire_after(cursor)
         instants.append(cursor)
@@ -157,6 +168,15 @@ def validate_running_timeout(value: int | None) -> int | None:
     return value
 
 
+def validate_start_at(value: datetime | None) -> datetime | None:
+    """Past values are kept as the anchor; only the 8-year future horizon is enforced."""
+    if value is None:
+        return None
+    if value > utc_now() + timedelta(seconds=MAX_CADENCE_SECONDS):
+        raise ScheduleStartAtInvalid()
+    return value
+
+
 def initial_next_run_at(
     *,
     cron: str | None,
@@ -164,6 +184,7 @@ def initial_next_run_at(
     enabled: bool,
     after: datetime | None = None,
     schedule_timezone: str,
+    start_at: datetime | None = None,
 ) -> datetime | None:
     if not enabled:
         return None
@@ -172,6 +193,7 @@ def initial_next_run_at(
         schedule_timezone=schedule_timezone,
         interval_seconds=interval_seconds,
         after=utc_now() if after is None else after,
+        start_at=start_at,
     )
 
 
@@ -191,6 +213,7 @@ def schedule_out(
         interval_seconds=record.interval_seconds,
         cron=record.cron,
         running_timeout_sec=record.running_timeout_sec,
+        start_at=record.start_at,
         deletable=not record.undeletable,
         last_run_at=record.last_run_at,
         next_run_at=record.next_run_at,
@@ -215,9 +238,11 @@ def patch_schedule(
     cron: str | None = None,
     interval_seconds: int | None = None,
     running_timeout_sec: int | None = None,
+    start_at: datetime | None = None,
     cron_set: bool = False,
     interval_set: bool = False,
     timeout_set: bool = False,
+    start_at_set: bool = False,
 ) -> ScheduledTaskRecord:
     record = get_schedule(schedule_id)
     if record.locked:
@@ -241,9 +266,11 @@ def patch_schedule(
     if interval_set and next_interval is not None:
         next_cron = None
     zone = current_schedule_timezone()
+    next_start = validate_start_at(start_at) if start_at_set else record.start_at
     validate_cadence(
         cron=next_cron,
         interval_seconds=next_interval,
+        start_at=next_start,
     )
     next_timeout = (
         validate_running_timeout(running_timeout_sec)
@@ -252,7 +279,7 @@ def patch_schedule(
     )
     now = utc_now()
     next_enabled = record.enabled if enabled is None else enabled
-    cadence_changed = cron_set or interval_set
+    cadence_changed = cron_set or interval_set or start_at_set
     enabled_changed = enabled is not None and enabled != record.enabled
 
     if not next_enabled:
@@ -264,6 +291,7 @@ def patch_schedule(
             schedule_timezone=zone,
             interval_seconds=next_interval,
             after=now,
+            start_at=next_start,
         )
         next_commitment = zone
     else:
@@ -278,6 +306,7 @@ def patch_schedule(
         interval_seconds=next_interval,
         commitment_timezone=next_commitment,
         running_timeout_sec=next_timeout,
+        start_at=next_start,
         next_run_at=next_run,
         updated_at=now,
     )
@@ -303,6 +332,7 @@ def realign_cron_commitments() -> int:
             schedule_timezone=zone,
             interval_seconds=None,
             after=now,
+            start_at=record.start_at,
         )
         store.upsert(
             replace(

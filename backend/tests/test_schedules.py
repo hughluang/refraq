@@ -2355,3 +2355,260 @@ def test_interval_due_keeps_commitment_timezone(client: TestClient) -> None:
     finally:
         reset_parameter("schedule_timezone", actor_user_id=None)
 
+
+
+def _post_schedule(client: TestClient, source_id: str, **body) -> dict:
+    resp = client.post(
+        f"/sources/{source_id}/schedules",
+        json={"kind": "structure", "enabled": True, **body},
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["schedule"]
+
+
+def _stub_structure_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "backend.metadata.structure_jobs.service.run_structure_job",
+        lambda job_id: {"status": "succeeded"},
+    )
+
+
+def test_interval_future_start_at_is_first_fire(client: TestClient) -> None:
+    clock = FixedClock(parse_instant("2026-10-06T08:00:00Z"))
+    set_clock(clock)
+    try:
+        source = _make_source(client, key="start-int-future")
+        schedule = _post_schedule(
+            client,
+            source["id"],
+            interval_seconds=21600,
+            start_at="2026-10-12T00:00:00Z",
+        )
+        assert schedule["start_at"] == "2026-10-12T00:00:00Z"
+        assert schedule["next_run_at"] == "2026-10-12T00:00:00Z"
+    finally:
+        reset_clock()
+
+
+def test_interval_past_start_at_aligns_to_grid(client: TestClient) -> None:
+    clock = FixedClock(parse_instant("2026-10-06T08:20:00Z"))
+    set_clock(clock)
+    try:
+        source = _make_source(client, key="start-int-past")
+        schedule = _post_schedule(
+            client,
+            source["id"],
+            interval_seconds=21600,
+            start_at="2026-10-05T00:00:00Z",
+        )
+        assert schedule["start_at"] == "2026-10-05T00:00:00Z"
+        assert schedule["next_run_at"] == "2026-10-06T12:00:00Z"
+    finally:
+        reset_clock()
+
+
+def test_interval_start_at_mint_skips_missed_grid_points(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_structure_runner(monkeypatch)
+    clock = FixedClock(parse_instant("2026-10-06T08:00:00Z"))
+    set_clock(clock)
+    try:
+        source = _make_source(client, key="start-int-mint")
+        schedule = _post_schedule(
+            client,
+            source["id"],
+            interval_seconds=3600,
+            start_at="2026-10-06T09:00:00Z",
+        )
+        schedule_id = schedule["id"]
+        clock.set(parse_instant("2026-10-06T11:30:00Z"))
+        result = _fire(schedule_id)
+        assert result["status"] == "queued"
+        jobs = _structure_jobs()
+        assert len(jobs) == 1
+        assert jobs[0].scheduled_for == parse_instant("2026-10-06T09:00:00Z")
+        refreshed = get_schedule_store().get_by_id(schedule_id)
+        assert refreshed is not None
+        assert refreshed.next_run_at == parse_instant("2026-10-06T12:00:00Z")
+    finally:
+        reset_clock()
+
+
+def test_cron_start_at_is_inclusive_lower_bound(client: TestClient) -> None:
+    clock = FixedClock(parse_instant("2026-10-06T08:00:00Z"))
+    set_clock(clock)
+    try:
+        source = _make_source(client, key="start-cron")
+        exact = _post_schedule(
+            client, source["id"], cron="0 0 * * *", start_at="2026-10-12T00:00:00Z"
+        )
+        assert exact["next_run_at"] == "2026-10-12T00:00:00Z"
+        rounded = _post_schedule(
+            client, source["id"], cron="0 0 * * *", start_at="2026-10-12T00:00:30Z"
+        )
+        assert rounded["next_run_at"] == "2026-10-13T00:00:00Z"
+        past = _post_schedule(
+            client, source["id"], cron="0 0 * * *", start_at="2026-01-01T00:00:00Z"
+        )
+        assert past["next_run_at"] == "2026-10-07T00:00:00Z"
+    finally:
+        reset_clock()
+
+
+def test_patch_start_at_omit_leaves_null_clears_value_rewrites(
+    client: TestClient,
+) -> None:
+    clock = FixedClock(parse_instant("2026-10-06T08:00:00Z"))
+    set_clock(clock)
+    try:
+        source = _make_source(client, key="start-patch")
+        schedule = _post_schedule(
+            client,
+            source["id"],
+            interval_seconds=3600,
+            start_at="2026-10-12T00:00:00Z",
+        )
+        schedule_id = schedule["id"]
+
+        omitted = client.patch(f"/schedules/{schedule_id}", json={"name": "renamed"})
+        assert omitted.status_code == 200, omitted.text
+        assert omitted.json()["schedule"]["start_at"] == "2026-10-12T00:00:00Z"
+        assert omitted.json()["schedule"]["next_run_at"] == "2026-10-12T00:00:00Z"
+
+        moved = client.patch(
+            f"/schedules/{schedule_id}", json={"start_at": "2026-10-19T00:00:00Z"}
+        )
+        assert moved.status_code == 200, moved.text
+        assert moved.json()["schedule"]["next_run_at"] == "2026-10-19T00:00:00Z"
+
+        cleared = client.patch(f"/schedules/{schedule_id}", json={"start_at": None})
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["schedule"]["start_at"] is None
+        assert cleared.json()["schedule"]["next_run_at"] == "2026-10-06T09:00:00Z"
+    finally:
+        reset_clock()
+
+
+def test_start_at_kept_across_pause_and_cadence_change(client: TestClient) -> None:
+    clock = FixedClock(parse_instant("2026-10-06T08:00:00Z"))
+    set_clock(clock)
+    try:
+        source = _make_source(client, key="start-keep")
+        schedule = _post_schedule(
+            client,
+            source["id"],
+            interval_seconds=21600,
+            start_at="2026-10-01T00:00:00Z",
+        )
+        schedule_id = schedule["id"]
+        assert schedule["next_run_at"] == "2026-10-06T12:00:00Z"
+
+        paused = client.patch(f"/schedules/{schedule_id}", json={"enabled": False})
+        assert paused.json()["schedule"]["next_run_at"] is None
+        clock.set(parse_instant("2026-10-06T13:10:00Z"))
+        resumed = client.patch(f"/schedules/{schedule_id}", json={"enabled": True})
+        assert resumed.json()["schedule"]["start_at"] == "2026-10-01T00:00:00Z"
+        assert resumed.json()["schedule"]["next_run_at"] == "2026-10-06T18:00:00Z"
+
+        recadenced = client.patch(
+            f"/schedules/{schedule_id}", json={"interval_seconds": 43200}
+        )
+        assert recadenced.json()["schedule"]["start_at"] == "2026-10-01T00:00:00Z"
+        assert recadenced.json()["schedule"]["next_run_at"] == "2026-10-07T00:00:00Z"
+
+        to_cron = client.patch(f"/schedules/{schedule_id}", json={"cron": "30 * * * *"})
+        assert to_cron.json()["schedule"]["start_at"] == "2026-10-01T00:00:00Z"
+        assert to_cron.json()["schedule"]["next_run_at"] == "2026-10-06T13:30:00Z"
+    finally:
+        reset_clock()
+
+
+def test_start_at_beyond_horizon_rejected(client: TestClient) -> None:
+    clock = FixedClock(parse_instant("2026-10-06T00:00:00Z"))
+    set_clock(clock)
+    try:
+        source = _make_source(client, key="start-horizon")
+        limit = format_instant(clock.now() + timedelta(seconds=252460800))
+        beyond = format_instant(clock.now() + timedelta(seconds=252460801))
+        ok = client.post(
+            f"/sources/{source['id']}/schedules",
+            json={"kind": "structure", "interval_seconds": 60, "start_at": limit},
+        )
+        assert ok.status_code == 201, ok.text
+        rejected = client.post(
+            f"/sources/{source['id']}/schedules",
+            json={"kind": "structure", "interval_seconds": 60, "start_at": beyond},
+        )
+        assert rejected.status_code == 400
+        assert rejected.json()["code"] == "SCHEDULE_START_AT_INVALID"
+        patched = client.patch(
+            f"/schedules/{ok.json()['schedule']['id']}", json={"start_at": beyond}
+        )
+        assert patched.status_code == 400
+        assert patched.json()["code"] == "SCHEDULE_START_AT_INVALID"
+        preview = client.post(
+            "/schedules/cron-preview",
+            json={"cron": "0 2 * * *", "start_at": beyond},
+        )
+        assert preview.status_code == 400
+        assert preview.json()["code"] == "SCHEDULE_START_AT_INVALID"
+    finally:
+        reset_clock()
+
+
+def test_cron_preview_honors_start_at(client: TestClient) -> None:
+    clock = FixedClock(parse_instant("2026-10-06T08:00:00Z"))
+    set_clock(clock)
+    try:
+        resp = client.post(
+            "/schedules/cron-preview",
+            json={"cron": "0 0 * * 1", "start_at": "2026-10-12T00:00:00Z"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["next_run_ats"] == [
+            "2026-10-12T00:00:00Z",
+            "2026-10-19T00:00:00Z",
+            "2026-10-26T00:00:00Z",
+            "2026-11-02T00:00:00Z",
+            "2026-11-09T00:00:00Z",
+        ]
+    finally:
+        reset_clock()
+
+
+def test_cron_stale_delivery_before_start_at_does_not_mint(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    _stub_structure_runner(monkeypatch)
+    clock = FixedClock(parse_instant("2026-10-06T02:00:05Z"))
+    set_clock(clock)
+    try:
+        source = _make_source(client, key="start-stale")
+        schedule = _post_schedule(client, source["id"], cron="0 2 * * *")
+        schedule_id = schedule["id"]
+        record = get_schedule_store().get_by_id(schedule_id)
+        assert record is not None
+        slot = parse_instant("2026-10-06T02:00:00Z")
+        get_schedule_store().upsert(
+            replace(
+                record,
+                next_run_at=slot,
+                last_run_at=parse_instant("2026-10-05T02:00:00Z"),
+            )
+        )
+        stale = _due_at(schedule_id)
+        moved = client.patch(
+            f"/schedules/{schedule_id}", json={"start_at": "2026-10-12T00:00:00Z"}
+        )
+        assert moved.status_code == 200, moved.text
+        result = _fire(schedule_id, due_at=stale)
+        assert result["status"] == "skip_cross_slot"
+        assert _structure_jobs() == []
+        refreshed = get_schedule_store().get_by_id(schedule_id)
+        assert refreshed is not None
+        assert refreshed.next_run_at == parse_instant("2026-10-12T02:00:00Z")
+    finally:
+        reset_clock()

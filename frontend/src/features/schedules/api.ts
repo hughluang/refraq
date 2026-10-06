@@ -51,11 +51,11 @@ export type CronPreview = {
   next_run_ats: string[];
 };
 
-export function previewCron(cron: string) {
+export function previewCron(cron: string, startAt: string | null = null) {
   return apiClient<CronPreview>("/schedules/cron-preview", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ cron }),
+    body: JSON.stringify({ cron, start_at: startAt }),
   });
 }
 

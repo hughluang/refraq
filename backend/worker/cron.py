@@ -195,22 +195,59 @@ class ZoneCronSchedule:
         return found
 
 
+def cron_start_floor(start_at: datetime) -> datetime:
+    """First minute boundary at or after ``start_at``: the earliest cron slot it admits."""
+    start = ensure_aware_utc(start_at)
+    floor = start.replace(second=0, microsecond=0)
+    return floor if floor == start else floor + timedelta(minutes=1)
+
+
+def cron_search_after(after: datetime, start_at: datetime | None) -> datetime:
+    """Cursor for a strictly-after cron search that never yields a slot before ``start_at``."""
+    after = ensure_aware_utc(after)
+    if start_at is None:
+        return after
+    bound = cron_start_floor(start_at) - timedelta(microseconds=1)
+    return bound if bound > after else after
+
+
+def next_interval_grid_point(
+    start_at: datetime, interval_seconds: int, *, after: datetime
+) -> datetime:
+    """First ``start_at + k * interval`` (k >= 0) strictly after ``after``."""
+    start = ensure_aware_utc(start_at)
+    after = ensure_aware_utc(after)
+    if start > after:
+        return start
+    step = timedelta(seconds=interval_seconds)
+    return start + step * ((after - start) // step + 1)
+
+
 def compute_next_run_at(
     *,
     cron: str | None,
     schedule_timezone: str,
     interval_seconds: int | None,
     after: datetime,
+    start_at: datetime | None = None,
 ) -> datetime:
-    """Next legal fire Instant strictly after ``after`` (Clock Instant)."""
+    """Next legal fire Instant strictly after ``after`` (Clock Instant).
+
+    With ``start_at``, interval fires on the ``start_at + k * interval`` grid and
+    cron never fires before the first minute at or after ``start_at``.
+    """
     after = ensure_aware_utc(after)
     if interval_seconds and interval_seconds > 0:
-        nxt = after + timedelta(seconds=interval_seconds)
         now = utc_now()
+        if start_at is not None:
+            return next_interval_grid_point(
+                start_at, interval_seconds, after=max(after, now)
+            )
+        nxt = after + timedelta(seconds=interval_seconds)
         return nxt if nxt >= now else now
     if cron:
         return ZoneCronSchedule(cron, schedule_timezone=schedule_timezone)._next_fire_after(
-            after
+            cron_search_after(after, start_at)
         )
     raise ValueError("exactly one of cron or interval_seconds is required")
 

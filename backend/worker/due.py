@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session
 from backend.core.time import ensure_aware_utc, utc_now
 from backend.worker.cron import (
     compute_next_run_at,
+    cron_start_floor,
     current_cron_slot_instant,
+    next_interval_grid_point,
 )
 from backend.worker.api import current_schedule_timezone
 from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store
@@ -51,6 +53,7 @@ def _advance_cross_slot(
         schedule_timezone=schedule_timezone,
         interval_seconds=None,
         after=now,
+        start_at=record.start_at,
     )
     get_schedule_store().upsert(
         replace(
@@ -101,6 +104,7 @@ def consume_due_tick(
             schedule_timezone=record.commitment_timezone,
             interval_seconds=record.interval_seconds,
             after=now,
+            start_at=record.start_at,
         )
         store.upsert(
             replace(
@@ -167,6 +171,13 @@ def consume_due_tick(
             schedule_timezone=zone,
             now=now,
         )
+        # A slot before the start anchor is not legal yet (start_at may have moved later).
+        if (
+            slot is not None
+            and record.start_at is not None
+            and slot < cron_start_floor(record.start_at)
+        ):
+            slot = None
         last = (
             ensure_aware_utc(record.last_run_at) if record.last_run_at is not None else None
         )
@@ -205,7 +216,10 @@ def commit_due_mint(
     """Consume the due event: write last_run_at and next from the live enabled flag."""
     consumed_at = mint_at or now
     seconds = record.interval_seconds
-    if seconds and seconds > 0:
+    if seconds and seconds > 0 and record.start_at is not None:
+        zone = None
+        nxt = next_interval_grid_point(record.start_at, seconds, after=now)
+    elif seconds and seconds > 0:
         zone = None
         nxt = consumed_at + timedelta(seconds=seconds)
     else:
@@ -215,6 +229,7 @@ def commit_due_mint(
             schedule_timezone=zone,
             interval_seconds=None,
             after=consumed_at,
+            start_at=record.start_at,
         )
     # Clamp interval next to >= wall-clock now on re-entry.
     if nxt < now:

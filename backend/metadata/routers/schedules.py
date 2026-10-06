@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord, UserStore, get_user_store
 from backend.core.pagination import PageParams, page_params
+from backend.core.time import Instant
 from backend.jobs.api import get_schedule_name_store, present_jobs
 from backend.jobs.schemas.jobs import JobListResponse
 from backend.jobs.store import JobStatus
@@ -38,6 +39,7 @@ class CreateSourceScheduleRequest(BaseModel):
     enabled: bool = True
     name: str | None = None
     running_timeout_sec: int | None = None
+    start_at: Instant | None = None
 
 
 @router.post("/sources/{source_id}/schedules", status_code=status.HTTP_201_CREATED)
@@ -55,6 +57,7 @@ def create_source_schedule(
         enabled=payload.enabled,
         name=payload.name,
         running_timeout_sec=payload.running_timeout_sec,
+        start_at=payload.start_at,
         actor_user_id=user.id,
         actor_token_id=get_actor_token_id(request),
     )

@@ -8,6 +8,7 @@ __all__ = [
     "ScheduleCadenceInvalid",
     "ScheduleNotFound",
     "ScheduleRunningTimeoutInvalid",
+    "ScheduleStartAtInvalid",
     "ScheduleSystemImmutable",
     "ScheduleUndeletable",
 ]
@@ -51,3 +52,11 @@ class ScheduleRunningTimeoutInvalid(AppError):
 
     def _default_message(self) -> str:
         return "Running Time Limit must be a positive number of seconds"
+
+
+class ScheduleStartAtInvalid(AppError):
+    code = "SCHEDULE_START_AT_INVALID"
+    http_status = 400
+
+    def _default_message(self) -> str:
+        return "Start time must fall within 8 years from now"

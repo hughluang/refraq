@@ -10,6 +10,7 @@ import {
   Stack,
   Text,
 } from "@mantine/core";
+import { DateTimePicker } from "@mantine/dates";
 import { useForm } from "@mantine/form";
 import { useGetLocale, useNotification, useTranslate } from "@refinedev/core";
 import { useQuery } from "@tanstack/react-query";
@@ -42,6 +43,11 @@ import {
   timeoutPayload,
 } from "@/features/schedules/runningTimeoutField";
 import { scheduleKindFromTask } from "@/features/schedules/scheduleKindField";
+import {
+  isAllowedStartAt,
+  startAtToWall,
+  wallToStartAt,
+} from "@/features/schedules/startAtField";
 import type { ScheduledTask } from "@/features/schedules/types";
 import { useDisplayZoneId, useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
@@ -55,11 +61,16 @@ type FormValues = {
   intervalAmount: number | string;
   intervalUnit: IntervalUnit;
   running_timeout_sec: number | "";
+  /** Wall time in the Schedule Timezone; null = start immediately. */
+  startWall: string | null;
   enabled: boolean;
   name: string;
 };
 
-function valuesFromTask(task: ScheduledTask | null): FormValues {
+function valuesFromTask(
+  task: ScheduledTask | null,
+  cronTimezone: string,
+): FormValues {
   const seconds = task?.interval_seconds;
   const split =
     seconds != null
@@ -72,6 +83,7 @@ function valuesFromTask(task: ScheduledTask | null): FormValues {
     intervalAmount: split.amount,
     intervalUnit: split.unit,
     running_timeout_sec: timeoutFromTask(task?.running_timeout_sec),
+    startWall: startAtToWall(task?.start_at, cronTimezone),
     enabled: task?.enabled ?? true,
     name: task?.name ?? "",
   };
@@ -141,9 +153,10 @@ function ScheduleForm({
   const displayZone = useDisplayZoneId();
   const [saving, setSaving] = useState(false);
   const form = useForm<FormValues>({
-    initialValues: valuesFromTask(schedule),
+    initialValues: valuesFromTask(schedule, cronTimezone),
   });
   const cron = form.values.cron.trim();
+  const startAt = wallToStartAt(form.values.startWall, cronTimezone);
   const [debouncedCron, setDebouncedCron] = useState(cron);
   const skipDebounce = useRef(true);
 
@@ -158,10 +171,11 @@ function ScheduleForm({
   }, [cron]);
 
   const clock = form.values.cadence === "clock";
+  const startTooFar = !isAllowedStartAt(startAt);
   const preview = useQuery({
-    queryKey: ["schedules", "cron-preview", debouncedCron],
-    queryFn: () => previewCron(debouncedCron),
-    enabled: clock,
+    queryKey: ["schedules", "cron-preview", debouncedCron, startAt],
+    queryFn: () => previewCron(debouncedCron, startAt),
+    enabled: clock && !startTooFar,
     retry: false,
     staleTime: 0,
   });
@@ -183,7 +197,7 @@ function ScheduleForm({
     form.values.intervalAmount,
     form.values.intervalUnit,
   );
-  const canSave = clock ? previewReady : intervalValid;
+  const canSave = !startTooFar && (clock ? previewReady : intervalValid);
   const sentence =
     previewReady && preview.data
       ? describeCron(debouncedCron, locale, t)
@@ -223,6 +237,7 @@ function ScheduleForm({
               ),
               cron: null as string | null,
               running_timeout_sec,
+              start_at: startAt,
               enabled: form.values.enabled,
               name,
             }
@@ -230,6 +245,7 @@ function ScheduleForm({
               cron,
               interval_seconds: null as number | null,
               running_timeout_sec,
+              start_at: startAt,
               enabled: form.values.enabled,
               name,
             };
@@ -358,6 +374,16 @@ function ScheduleForm({
           />
         </Group>
       )}
+      <DateTimePicker
+        label={t("schedules.fields.startAt")}
+        description={t("schedules.fields.startAtHint", { zone: cronTimezone })}
+        placeholder={t("schedules.fields.startAtPlaceholder")}
+        clearable
+        valueFormat="YYYY-MM-DD HH:mm"
+        value={form.values.startWall}
+        error={startTooFar ? t("schedules.validation.startAtMax") : undefined}
+        onChange={(value) => form.setFieldValue("startWall", value || null)}
+      />
       {clock && showSkeleton ? <Skeleton height={96} radius="sm" /> : null}
       {clock && previewFailed ? (
         <Stack gap="xs">

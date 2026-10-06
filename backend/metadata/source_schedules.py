@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy.orm import Session
 
@@ -24,6 +25,7 @@ from backend.worker.api import (
     schedule_out,
     validate_cadence,
     validate_running_timeout,
+    validate_start_at,
     withdraw_schedules_by_owner_ref,
 )
 from backend.worker.errors import ScheduleSystemImmutable
@@ -256,6 +258,7 @@ def _new_schedule_record(
     enabled: bool,
     name: str | None,
     running_timeout_sec: int | None = None,
+    start_at: datetime | None = None,
 ) -> ScheduledTaskRecord:
     cron_value = cron.strip() if cron else None
     now = utc_now()
@@ -267,6 +270,7 @@ def _new_schedule_record(
         enabled=enabled,
         after=now,
         schedule_timezone=zone,
+        start_at=start_at,
     )
     return ScheduledTaskRecord(
         id=schedule_id,
@@ -283,6 +287,7 @@ def _new_schedule_record(
         last_run_at=now,
         next_run_at=next_run,
         running_timeout_sec=running_timeout_sec,
+        start_at=start_at,
         created_at=now,
         updated_at=now,
     )
@@ -331,14 +336,17 @@ def create_source_schedule(
     enabled: bool,
     name: str | None,
     running_timeout_sec: int | None = None,
+    start_at: datetime | None = None,
     actor_user_id: str | None,
     actor_token_id: str | None,
 ) -> ScheduleOut:
     spec = _spec_for_kind(kind)
     source = _require_database_source(source_id)
+    start = validate_start_at(start_at)
     validate_cadence(
         cron=cron.strip() if cron else None,
         interval_seconds=interval_seconds,
+        start_at=start,
     )
     timeout = validate_running_timeout(running_timeout_sec)
     record = _new_schedule_record(
@@ -349,6 +357,7 @@ def create_source_schedule(
         enabled=enabled,
         name=name,
         running_timeout_sec=timeout,
+        start_at=start,
     )
     stored = get_schedule_store().upsert(record)
     persist_audit_event(

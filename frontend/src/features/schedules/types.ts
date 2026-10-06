@@ -22,6 +22,8 @@ export type ScheduledTask = {
   interval_seconds: number | null;
   cron: string | null;
   running_timeout_sec: number | null;
+  /** Schedule Start Instant; null means start immediately. */
+  start_at: string | null;
   deletable: boolean;
   last_run_at: string | null;
   next_run_at: string | null;
@@ -36,6 +38,7 @@ export type CreateScheduleBody = {
   cron?: string | null;
   interval_seconds?: number | null;
   running_timeout_sec?: number | null;
+  start_at?: string | null;
   enabled: boolean;
   name?: string | null;
 };
@@ -46,4 +49,5 @@ export type PatchScheduleBody = {
   cron?: string | null;
   interval_seconds?: number | null;
   running_timeout_sec?: number | null;
+  start_at?: string | null;
 };

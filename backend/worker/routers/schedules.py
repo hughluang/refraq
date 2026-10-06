@@ -65,7 +65,7 @@ def preview_platform_cron(
     payload: CronPreviewRequest,
     _: UserRecord = Depends(require_permission("jobs:run")),
 ) -> CronPreviewResponse:
-    zone, instants = preview_cron_runs(payload.cron)
+    zone, instants = preview_cron_runs(payload.cron, start_at=payload.start_at)
     return CronPreviewResponse(cron_timezone=zone, next_run_ats=instants)
 
 
@@ -93,9 +93,11 @@ def patch_platform_schedule(
         cron=payload.cron,
         interval_seconds=payload.interval_seconds,
         running_timeout_sec=payload.running_timeout_sec,
+        start_at=payload.start_at,
         cron_set="cron" in fields,
         interval_set="interval_seconds" in fields,
         timeout_set="running_timeout_sec" in fields,
+        start_at_set="start_at" in fields,
     )
     persist_audit_event(
         actor_user_id=user.id,

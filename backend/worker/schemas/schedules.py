@@ -31,6 +31,7 @@ class ScheduleOut(BaseModel):
     interval_seconds: int | None
     cron: str | None
     running_timeout_sec: int | None = None
+    start_at: Instant | None = None
     deletable: bool = True
     last_run_at: Instant | None
     next_run_at: Instant | None = None
@@ -55,12 +56,14 @@ class SchedulePatchRequest(BaseModel):
     cron: str | None = None
     interval_seconds: int | None = None
     running_timeout_sec: int | None = None
+    start_at: Instant | None = None
 
 
 class CronPreviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     cron: str
+    start_at: Instant | None = None
 
 
 class CronPreviewResponse(BaseModel):
