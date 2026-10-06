@@ -17,12 +17,13 @@ import { ScheduleFormModal } from "@/features/schedules/ScheduleFormModal";
 import { ScheduleIdentityCell } from "@/features/schedules/ScheduleIdentityCell";
 import { ScheduleJobsModal } from "@/features/schedules/ScheduleJobsModal";
 import { ScheduleRunStrip } from "@/features/schedules/ScheduleRunStrip";
+import { ScheduleTableHead } from "@/features/schedules/ScheduleTableHead";
 import { ScheduleRowActions } from "@/features/schedules/ScheduleRowActions";
 import { formatScheduleNextRun } from "@/features/schedules/nextRunPreview";
 import { scheduleIdentityLabel } from "@/features/schedules/scheduleIdentity";
 import type { ScheduledTask } from "@/features/schedules/types";
 import { getSource } from "@/features/sources/api/sources";
-import { useDisplayZoneId, useFormatInstant } from "@/hooks/useFormatInstant";
+import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { ApiError } from "@/lib/api";
 import type { PageQuery } from "@/lib/pagination";
@@ -37,7 +38,6 @@ export function SourceSchedulesPage({ sourceId }: Props) {
   const t = useTranslate();
   const { open } = useNotification();
   const formatInstant = useFormatInstant();
-  const displayZone = useDisplayZoneId();
 
   const [sourceLabel, setSourceLabel] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -109,21 +109,7 @@ export function SourceSchedulesPage({ sourceId }: Props) {
             list={list}
             columnCount={6}
             emptyMessage={t("schedules.related.empty")}
-            head={
-              <Table.Tr>
-                <Table.Th>{t("schedules.fields.kind")}</Table.Th>
-                <Table.Th>{t("schedules.fields.cadence")}</Table.Th>
-                <Table.Th>{t("schedules.fields.enabled")}</Table.Th>
-                <Table.Th>
-                  {t("schedules.fields.nextRunInZone", {
-                    zone:
-                      displayZone ?? t("account.fields.displayTimezone.browser"),
-                  })}
-                </Table.Th>
-                <Table.Th>{t("schedules.fields.recentRuns")}</Table.Th>
-                <Table.Th />
-              </Table.Tr>
-            }
+            head={<ScheduleTableHead />}
           >
             {items.map((task) => (
               <Table.Tr key={task.id}>

@@ -186,7 +186,7 @@ function ScheduleForm({
   const canSave = clock ? previewReady : intervalValid;
   const sentence =
     previewReady && preview.data
-      ? describeCron(debouncedCron, locale, cronTimezone, t)
+      ? describeCron(debouncedCron, locale, t)
       : null;
 
   async function handleSave() {

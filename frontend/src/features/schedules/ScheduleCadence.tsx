@@ -3,6 +3,7 @@
 import { Text, Tooltip } from "@mantine/core";
 import { useGetLocale, useTranslate } from "@refinedev/core";
 
+import { describeIntervalSeconds } from "@/features/schedules/cronCadence";
 import { describeCron } from "@/features/schedules/cronDescription";
 import type { ScheduledTask } from "@/features/schedules/types";
 
@@ -17,11 +18,13 @@ export function ScheduleCadence({ task, cronTimezone }: Props) {
   const locale = useGetLocale()() ?? "en-US";
 
   if (task.interval_seconds) {
-    return <Text size="sm">{`${task.interval_seconds}s`}</Text>;
+    return (
+      <Text size="sm">{describeIntervalSeconds(task.interval_seconds, t)}</Text>
+    );
   }
   if (!task.cron) return <Text size="sm">—</Text>;
 
-  const friendly = describeCron(task.cron, locale, cronTimezone, t);
+  const friendly = describeCron(task.cron, locale, t);
   if (friendly === null) {
     return (
       <Text size="sm" ff="monospace">
@@ -33,7 +36,7 @@ export function ScheduleCadence({ task, cronTimezone }: Props) {
     <Tooltip
       label={
         <Text size="xs" ff="monospace">
-          {task.cron}
+          {cronTimezone ? `${task.cron} (${cronTimezone})` : task.cron}
         </Text>
       }
     >

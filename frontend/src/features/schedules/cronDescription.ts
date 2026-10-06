@@ -1,9 +1,9 @@
 import cronstrue from "cronstrue/i18n";
 
-export type CronTranslate = (
-  key: string,
-  options?: Record<string, string | number>,
-) => string;
+import {
+  describeCronCadence,
+  type CronTranslate,
+} from "@/features/schedules/cronCadence";
 
 function cronstrueLocale(locale: string): string {
   return locale === "zh-CN" ? "zh_CN" : "en";
@@ -13,12 +13,17 @@ function cronstrueLocale(locale: string): string {
 export function describeCron(
   cron: string,
   locale: string,
-  zone: string | null,
   t: CronTranslate,
 ): string | null {
-  let text: string;
   try {
-    text = cronstrue.toString(cron, {
+    cronstrue.toString(cron, { throwExceptionOnParseError: true });
+  } catch {
+    return null;
+  }
+  const own = describeCronCadence(cron, locale, t);
+  if (own !== null) return own;
+  try {
+    return cronstrue.toString(cron, {
       locale: cronstrueLocale(locale),
       use24HourTimeFormat: true,
       throwExceptionOnParseError: true,
@@ -26,5 +31,4 @@ export function describeCron(
   } catch {
     return null;
   }
-  return zone ? t("schedules.cadence.withZone", { text, zone }) : text;
 }
