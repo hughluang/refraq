@@ -66,8 +66,28 @@ jobs:
             --output docker-compose.yaml
           cp deploy/.env.example .env.example
 
+      - name: Build release body
+        run: |
+          notes=".github/release-notes/${GITHUB_REF_NAME}.md"
+          : > release-body.md
+          if [ -f "$notes" ]; then
+            cat "$notes" >> release-body.md
+            printf '\n' >> release-body.md
+          fi
+          cat >> release-body.md <<'FOOTER'
+          ## Upgrade
+
+          - Download only `docker-compose.yaml` from this release and overwrite the site compose. Do not overwrite the live `.env`; diff `.env.example` and add any new keys by hand.
+          - Run `docker compose pull && docker compose up -d`. Never run `docker compose down -v` unless the site data should be destroyed.
+          - Migrations run automatically on API start. Rolling back to an older compose after new migrations is not supported.
+
+          Release assets: `docker-compose.yaml`, `.env.example`.
+
+          FOOTER
+
       - uses: softprops/action-gh-release@v2
         with:
+          body_path: release-body.md
           files: |
             docker-compose.yaml
             .env.example
