@@ -5,6 +5,8 @@ import { create } from "zustand";
 import { fetchModuleIdentities } from "@/features/console/module-identity/api";
 import type { ModuleIdentity } from "@/features/console/module-identity/types";
 import { ApiError, isSessionExpiredError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
+import { translateKey } from "@/providers/i18n-runtime";
 
 export type ModuleIdentityStatus = "idle" | "loading" | "ready" | "error";
 
@@ -48,7 +50,7 @@ export const useModuleIdentityStore = create<ModuleIdentityState>((set, get) => 
         status: "error",
         modules: [],
         error:
-          error instanceof ApiError ? error.detail : "module_identity_load_failed",
+          problemMessage(translateKey, error, "module_identity_load_failed"),
         errorKind: forbidden ? "forbidden" : "failed",
       });
     }

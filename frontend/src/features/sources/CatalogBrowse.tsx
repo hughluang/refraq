@@ -32,7 +32,7 @@ import {
 import type { Source } from "@/features/sources/types";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useSearchDebounce } from "@/hooks/useSearchDebounce";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 100;
@@ -84,7 +84,7 @@ export function CatalogBrowse() {
         setSourceId(data.items[0].id);
       }
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : String(err));
+      setError(problemMessage(t, err, String(err)));
     } finally {
       setLoading(false);
     }

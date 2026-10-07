@@ -1,6 +1,8 @@
 import { ApiError, isSessionExpiredError } from "@/lib/api";
 import type { OffsetPage, PageQuery } from "@/lib/pagination";
 import { pageToOffset } from "@/lib/pagination";
+import { problemMessage } from "@/lib/problem";
+import { translateKey } from "@/providers/i18n-runtime";
 
 export type PagedListFetch<T> = (
   query: PageQuery,
@@ -14,7 +16,7 @@ export type PagedListLoadResult<T> =
   | { kind: "redirect" };
 
 export function listErrorMessage(err: unknown): string {
-  return err instanceof ApiError ? err.detail : String(err);
+  return problemMessage(translateKey, err, String(err));
 }
 
 export function listErrorRequestId(err: unknown): string | null {

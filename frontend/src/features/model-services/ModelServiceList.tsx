@@ -49,7 +49,7 @@ import type {
 } from "@/features/model-services/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
@@ -107,7 +107,7 @@ export function ModelServiceList() {
   const notifyError = (err: unknown, fallback: string) => {
     open?.({
       type: "error",
-      message: err instanceof ApiError ? err.detail : fallback,
+      message: problemMessage(t, err, fallback),
     });
   };
 

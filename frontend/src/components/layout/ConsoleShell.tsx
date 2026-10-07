@@ -34,6 +34,8 @@ import { fetchConsoleNavigation } from "@/features/console/api";
 import type { NavigationGroup } from "@/features/console/types";
 import { useBranding } from "@/features/branding/BrandingProvider";
 import { ApiError, isSessionExpiredError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
+import { translateKey } from "@/providers/i18n-runtime";
 import { reloadIdentity } from "@/providers/auth-provider";
 import {
   isLocale,
@@ -100,7 +102,7 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
         error.status === 403;
       setNavErrorKind(forbidden ? "forbidden" : "failed");
       setNavError(
-        error instanceof ApiError ? error.detail : "navigation_load_failed",
+        problemMessage(translateKey, error, "navigation_load_failed"),
       );
     } finally {
       setNavLoading(false);

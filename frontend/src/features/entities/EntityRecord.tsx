@@ -78,7 +78,7 @@ import { LEAVE_GUARD_ALLOW } from "@/hooks/leaveGuard";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { useLeaveGuard } from "@/hooks/useLeaveGuard";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 
 export type { EntityRecordMode };
 
@@ -213,7 +213,7 @@ export function EntityRecord(props: Props) {
       });
       form.resetDirty();
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : String(err));
+      setError(problemMessage(t, err, String(err)));
       setEntity(null);
     } finally {
       setLoading(false);
@@ -259,7 +259,7 @@ export function EntityRecord(props: Props) {
   const notifyError = (err: unknown, fallback: string) => {
     open?.({
       type: "error",
-      message: err instanceof ApiError ? err.detail : fallback,
+      message: problemMessage(t, err, fallback),
     });
   };
 

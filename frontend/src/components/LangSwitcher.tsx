@@ -5,7 +5,7 @@ import { useGetIdentity, useNotification } from "@refinedev/core";
 import { useChangeLanguage, useT } from "next-i18next/client";
 
 import { patchAccountProfile } from "@/features/account/api";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 import {
   getDefaultLocale,
   getLocaleNativeLabel,
@@ -62,9 +62,7 @@ export function LangSwitcher() {
           type: "error",
           message: t("layout.language"),
           description:
-            err instanceof ApiError
-              ? err.detail
-              : t("account.profile.error"),
+            problemMessage(t, err, t("account.profile.error")),
         });
         return;
       }

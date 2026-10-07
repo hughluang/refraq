@@ -718,6 +718,7 @@
   "entities.access.overLimit": "This policy exceeds the profile combination limit.",
   "entities.access.broken": "Broken",
   "entities.access.combinations": "{{count}} of {{limit}} combinations",
+  "entities.access.views.noHead": "No serving table. Access views are not generated.",
   "entities.access.views.ready": "Views are ready.",
   "entities.access.views.pending": "Views are generating.",
   "entities.access.views.failed": "The latest view job failed. Data requests stay pending.",
@@ -1154,5 +1155,10 @@
   "modelServices.fields.in_use": "In use",
   "modelServices.fields.has_secret": "API key",
   "modelServices.fields.actions": "Actions",
-  "modelServices.validation.required": "Required"
+  "modelServices.validation.required": "Required",
+  "problems.USER_GROUP_KEY_DUPLICATE": "User Group key already exists",
+  "problems.SUBJECT_ATTRIBUTE_KEY_DUPLICATE": "Subject Attribute key already exists",
+  "problems.ENTITY_DEPRECATED": "A deprecated Business Entity is closed",
+  "problems.ENTITY_NOT_SERVING": "Business Entity has no serving head table",
+  "problems.ENTITY_PUBLISHING": "A publishing version refuses writes"
 }

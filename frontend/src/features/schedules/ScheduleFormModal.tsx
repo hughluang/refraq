@@ -51,6 +51,7 @@ import {
 import type { ScheduledTask } from "@/features/schedules/types";
 import { useDisplayZoneId, useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 
 type CadenceMode = "clock" | "interval";
 
@@ -265,7 +266,7 @@ function ScheduleForm({
     } catch (err) {
       open?.({
         type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
+        message: problemMessage(t, err, String(err)),
       });
     } finally {
       setSaving(false);

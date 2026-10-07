@@ -22,7 +22,7 @@ import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import type { RoleRow } from "@/features/roles/types";
 import type { UserCreateValues } from "@/features/users/types";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 
 export function UserCreateForm() {
   const t = useTranslate();
@@ -42,7 +42,7 @@ export function UserCreateForm() {
     errorNotification: (error) => ({
       message: t("users.title"),
       description:
-        error instanceof ApiError ? error.detail : t("common.error.loadFailed"),
+        problemMessage(t, error, t("common.error.loadFailed")),
       type: "error",
     }),
   });

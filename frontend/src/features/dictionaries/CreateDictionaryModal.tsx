@@ -13,7 +13,7 @@ import {
   entriesFromForm,
 } from "@/features/dictionaries/dictionaryForm";
 import type { DictionaryFormValues } from "@/features/dictionaries/types";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 
 export type CreatedDictionary = {
   id: string;
@@ -63,7 +63,7 @@ export function CreateDictionaryModal({ opened, onClose, onCreated }: Props) {
       form.resetDirty();
       onClose();
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : String(err));
+      setError(problemMessage(t, err, String(err)));
     } finally {
       setBusy(false);
     }

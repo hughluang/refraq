@@ -27,7 +27,7 @@ import { subjectKeyError, subjectNameError } from "@/features/subjects/rules";
 import type { SubjectAttribute, SubjectValueType } from "@/features/subjects/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
@@ -85,7 +85,7 @@ export function SubjectAttributeList() {
     open?.({
       type: "error",
       message: t("subjectAttributes.title"),
-      description: err instanceof ApiError ? err.detail : t("common.error.loadFailed"),
+      description: problemMessage(t, err, t("common.error.loadFailed")),
     });
   }
 

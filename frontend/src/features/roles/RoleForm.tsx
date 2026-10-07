@@ -23,7 +23,8 @@ import type {
   RoleFormValues,
   RoleRow,
 } from "@/features/roles/types";
-import { apiClient, ApiError } from "@/lib/api";
+import { apiClient } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 
 type RoleFormProps = {
   mode: "create" | "edit";
@@ -76,9 +77,7 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
       } catch (error) {
         if (!cancelled) {
           setCatalogError(
-            error instanceof ApiError
-              ? error.detail
-              : t("common.error.loadFailed"),
+            problemMessage(t, error, t("common.error.loadFailed")),
           );
         }
       }
@@ -116,9 +115,7 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
           errorNotification: (error) => ({
             message: t("roles.title"),
             description:
-              error instanceof ApiError
-                ? error.detail
-                : t("common.error.loadFailed"),
+              problemMessage(t, error, t("common.error.loadFailed")),
             type: "error",
           }),
         },
@@ -144,9 +141,7 @@ export function RoleForm({ mode, roleId }: RoleFormProps) {
         errorNotification: (error) => ({
           message: t("roles.title"),
           description:
-            error instanceof ApiError
-              ? error.detail
-              : t("common.error.loadFailed"),
+            problemMessage(t, error, t("common.error.loadFailed")),
           type: "error",
         }),
       },

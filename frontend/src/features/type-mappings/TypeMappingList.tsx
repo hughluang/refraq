@@ -9,7 +9,7 @@ import { SelectField } from "@/components/form/SelectField";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
 import { listTypeMappings, patchTypeMapping } from "./api";
@@ -80,7 +80,7 @@ export function TypeMappingList() {
     } catch (err) {
       open?.({
         type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
+        message: problemMessage(t, err, String(err)),
       });
     } finally {
       setBusyId(null);

@@ -39,7 +39,7 @@ import type { UserRow, UserStatus } from "@/features/users/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 import {
   claimPendingFederatedIdentity,
   listPendingFederatedIdentities,
@@ -105,7 +105,7 @@ export function UserList() {
   const notifyError = (err: unknown, fallback: string) => {
     open?.({
       type: "error",
-      message: err instanceof ApiError ? err.detail : fallback,
+      message: problemMessage(t, err, fallback),
     });
   };
 
@@ -132,9 +132,7 @@ export function UserList() {
         errorNotification: (err) => ({
           message: t("users.title"),
           description:
-            err instanceof ApiError
-              ? err.detail
-              : t("users.status.update.error"),
+            problemMessage(t, err, t("users.status.update.error")),
           type: "error",
         }),
       },

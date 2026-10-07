@@ -19,7 +19,7 @@ import { entityRecordHeaderActions } from "@/features/entities/entityRecordActio
 import { canAuthor, isPublishing } from "@/features/entities/publishStatus";
 import type { BusinessEntity } from "@/features/entities/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 
 type Props = {
   entity: BusinessEntity;
@@ -51,7 +51,7 @@ export function EntityRowActions({ entity, canWrite, onChanged }: Props) {
   const notifyError = (err: unknown, fallback: string) => {
     open?.({
       type: "error",
-      message: err instanceof ApiError ? err.detail : fallback,
+      message: problemMessage(t, err, fallback),
     });
   };
 

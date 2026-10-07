@@ -9,7 +9,8 @@ import {
   mcpClientConfig,
   type McpCatalog,
 } from "@/features/account/mcp-api";
-import { apiClient, ApiError } from "@/lib/api";
+import { apiClient } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 import { copyText } from "@/lib/copy-text";
 
 export function McpSection() {
@@ -30,7 +31,7 @@ export function McpSection() {
       .catch((err: unknown) => {
         if (!cancelled) {
           setLoadError(
-            err instanceof ApiError ? err.detail : t("account.mcp.error"),
+            problemMessage(t, err, t("account.mcp.error")),
           );
         }
       });

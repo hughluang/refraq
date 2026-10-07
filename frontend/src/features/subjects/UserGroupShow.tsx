@@ -30,7 +30,7 @@ import type { SubjectAttribute, UserGroup } from "@/features/subjects/types";
 import { listUsers } from "@/features/users/api";
 import type { UserRow } from "@/features/users/types";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
@@ -71,7 +71,7 @@ export function UserGroupShow({ groupId }: Props) {
     open?.({
       type: "error",
       message: t("userGroups.title"),
-      description: err instanceof ApiError ? err.detail : t("common.error.loadFailed"),
+      description: problemMessage(t, err, t("common.error.loadFailed")),
     });
   }
 
@@ -100,7 +100,7 @@ export function UserGroupShow({ groupId }: Props) {
         setError(null);
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof ApiError ? err.detail : t("common.error.loadFailed"));
+          setError(problemMessage(t, err, t("common.error.loadFailed")));
         }
       } finally {
         if (!cancelled) setLoading(false);

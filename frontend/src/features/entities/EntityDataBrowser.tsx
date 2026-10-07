@@ -25,6 +25,7 @@ import type { DataSchema } from "@/features/entities/accessTypes";
 import { listRoles } from "@/features/roles/api";
 import { listUserGroups } from "@/features/subjects/api";
 import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 
 type Props = {
   tableName: string;
@@ -47,7 +48,7 @@ export function EntityDataBrowser({ tableName, physicalHidden }: Props) {
     const problem = classifyAccessProblem(err.code);
     if (problem === "pending") return t("entities.data.pending");
     if (problem === "combination_limit") return t("entities.access.overLimit");
-    return err.detail;
+    return problemMessage(t, err, err.detail);
   };
 
   const load = async () => {

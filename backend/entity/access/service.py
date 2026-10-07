@@ -113,7 +113,7 @@ def summary(entity_id: str) -> dict[str, Any]:
     head, compiled, revision = _live(entity_id)
     return {
         "entity_id": entity_id,
-        "head_version_id": head.version_id,
+        "head_version_id": None if head.physical is None else head.version_id,
         "policy_revision": revision,
         "views": _views(entity_id, head, compiled, revision),
         "ladders": _ladder_outs(head),

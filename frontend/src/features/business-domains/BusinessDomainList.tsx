@@ -29,7 +29,7 @@ import type { BusinessDomain } from "@/features/business-domains/types";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 100;
@@ -97,7 +97,7 @@ export function BusinessDomainList() {
     } catch (err) {
       open?.({
         type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
+        message: problemMessage(t, err, String(err)),
       });
     } finally {
       setBusy(false);
@@ -121,7 +121,7 @@ export function BusinessDomainList() {
     } catch (err) {
       open?.({
         type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
+        message: problemMessage(t, err, String(err)),
       });
     } finally {
       setBusy(false);
@@ -143,7 +143,7 @@ export function BusinessDomainList() {
     } catch (err) {
       open?.({
         type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
+        message: problemMessage(t, err, String(err)),
       });
     } finally {
       setBusy(false);

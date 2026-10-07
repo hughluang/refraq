@@ -19,7 +19,7 @@ import { listRoles } from "@/features/roles/api";
 import type { RoleRow } from "@/features/roles/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
@@ -54,9 +54,7 @@ export function RoleList() {
         errorNotification: (err) => ({
           message: t("roles.title"),
           description:
-            err instanceof ApiError
-              ? err.detail
-              : t("roles.delete.error"),
+            problemMessage(t, err, t("roles.delete.error")),
           type: "error",
         }),
       },

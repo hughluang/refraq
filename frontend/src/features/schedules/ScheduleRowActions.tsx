@@ -11,7 +11,7 @@ import {
 } from "@/features/schedules/api";
 import type { ScheduledTask } from "@/features/schedules/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 
 type Props = {
   task: ScheduledTask;
@@ -45,7 +45,7 @@ export function ScheduleRowActions({
     } catch (err) {
       open?.({
         type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
+        message: problemMessage(t, err, String(err)),
       });
     } finally {
       setDeleting(false);
@@ -71,7 +71,7 @@ export function ScheduleRowActions({
             } catch (err) {
               open?.({
                 type: "error",
-                message: err instanceof ApiError ? err.detail : String(err),
+                message: problemMessage(t, err, String(err)),
               });
             } finally {
               setRunning(false);

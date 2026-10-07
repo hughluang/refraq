@@ -205,6 +205,7 @@ def test_schema_deprecated_and_not_serving(client: TestClient) -> None:
     deprecated = client.post("/entities/gone/schema", json={})
     assert deprecated.status_code == 422
     assert deprecated.json()["code"] == "ENTITY_DEPRECATED"
+    assert deprecated.json()["detail"] == "A deprecated Business Entity is closed"
 
     now = datetime.now(timezone.utc)
     entity = BusinessEntityRecord(

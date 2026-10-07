@@ -37,7 +37,7 @@ import {
 } from "@/features/settings/constraint";
 import type { SystemParameter } from "@/features/settings/types";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 
 function groupLabelKey(group: string): string {
   return `settings.group.${group}`;
@@ -91,7 +91,7 @@ export function SettingsPanel() {
     } catch (err) {
       setParameters([]);
       setError(
-        err instanceof ApiError ? err.detail : t("common.error.loadFailed"),
+        problemMessage(t, err, t("common.error.loadFailed")),
       );
     } finally {
       setLoading(false);
@@ -135,7 +135,7 @@ export function SettingsPanel() {
         type: "error",
         message: t("settings.title"),
         description:
-          err instanceof ApiError ? err.detail : t("common.error"),
+          problemMessage(t, err, t("common.error")),
       });
     } finally {
       setSaving(false);
@@ -157,7 +157,7 @@ export function SettingsPanel() {
         type: "error",
         message: t("settings.title"),
         description:
-          err instanceof ApiError ? err.detail : t("common.error"),
+          problemMessage(t, err, t("common.error")),
       });
     } finally {
       setResettingKey(null);

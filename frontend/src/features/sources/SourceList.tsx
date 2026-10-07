@@ -42,7 +42,7 @@ import type {
 } from "@/features/sources/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 100;
@@ -149,7 +149,7 @@ export function SourceList() {
     } catch (err) {
       open?.({
         type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
+        message: problemMessage(t, err, String(err)),
       });
     }
   };
@@ -181,16 +181,14 @@ export function SourceList() {
         open?.({
           type: "error",
           message:
-            err instanceof ApiError
-              ? err.detail
-              : t("sources.access.reenterHint"),
+            problemMessage(t, err, t("sources.access.reenterHint")),
         });
       }
       setModalOpen(true);
     } catch (err) {
       open?.({
         type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
+        message: problemMessage(t, err, String(err)),
       });
     }
   };
@@ -249,7 +247,7 @@ export function SourceList() {
     } catch (err) {
       open?.({
         type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
+        message: problemMessage(t, err, String(err)),
       });
     } finally {
       setTesting(false);
@@ -272,7 +270,7 @@ export function SourceList() {
       open?.({
         type: "error",
         message:
-          err instanceof ApiError ? err.detail : t("sources.delete.error"),
+          problemMessage(t, err, t("sources.delete.error")),
       });
     } finally {
       setDeleting(false);
@@ -452,7 +450,7 @@ export function SourceList() {
               } catch (err) {
                 open?.({
                   type: "error",
-                  message: err instanceof ApiError ? err.detail : String(err),
+                  message: problemMessage(t, err, String(err)),
                 });
               } finally {
                 setBusy(false);

@@ -31,7 +31,7 @@ import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { LEAVE_GUARD_ALLOW } from "@/hooks/leaveGuard";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useLeaveGuard } from "@/hooks/useLeaveGuard";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 
 const DICTIONARY_FORM_ID = "dictionary-record-form";
 
@@ -88,7 +88,7 @@ function DictionaryCreateForm() {
     } catch (err) {
       open?.({
         type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
+        message: problemMessage(t, err, String(err)),
       });
     } finally {
       setBusy(false);
@@ -163,7 +163,7 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
       form.resetDirty();
     } catch (err) {
       setRecord(null);
-      setError(err instanceof ApiError ? err.detail : String(err));
+      setError(problemMessage(t, err, String(err)));
     } finally {
       setLoading(false);
     }
@@ -182,7 +182,7 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
   const notifyError = (err: unknown, fallback: string) => {
     open?.({
       type: "error",
-      message: err instanceof ApiError ? err.detail : fallback,
+      message: problemMessage(t, err, fallback),
     });
   };
 

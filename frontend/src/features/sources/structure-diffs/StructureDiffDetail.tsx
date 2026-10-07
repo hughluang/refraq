@@ -24,7 +24,7 @@ import {
 } from "@/features/sources/structure-diffs/groupChanges";
 import type { StructureDiff } from "@/features/sources/types";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 
 type Props = {
   sourceId: string;
@@ -69,7 +69,7 @@ export function StructureDiffDetail({ sourceId, diffId }: Props) {
       }
       setDiff(diffRes.structure_diff);
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : String(err));
+      setError(problemMessage(t, err, String(err)));
       setDiff(null);
     } finally {
       setLoading(false);

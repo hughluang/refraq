@@ -100,6 +100,15 @@ function serializeLeaf(node: RuleLeaf): Record<string, unknown> {
   return { [node.op]: body };
 }
 
+/** No serving table is not "views are ready", even when generation state is ready. */
+export function viewsStatusKey(input: {
+  head_version_id: string | null;
+  views: { state: "ready" | "pending" | "failed" };
+}): string {
+  if (input.head_version_id == null) return "entities.access.views.noHead";
+  return `entities.access.views.${input.views.state}`;
+}
+
 export function classifyAccessProblem(code: string | null | undefined): AccessProblem {
   if (code === "ENTITY_ACCESS_PENDING") return "pending";
   if (code === "ENTITY_ACCESS_COMBINATION_LIMIT") return "combination_limit";

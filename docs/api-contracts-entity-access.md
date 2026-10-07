@@ -170,7 +170,7 @@ A rule that fails type checking, names an unknown attribute or Subject Attribute
 }
 ```
 
-`views.state` is `ready` (views match `policy_revision`), `pending` (regeneration queued or running), or `failed` (the latest regeneration Job failed; data requests stay pending). `head_version_id` is `null` and the lists may still be edited when the Entity has no serving head; ladders and profiles then reference the attributes of the latest published version.
+`views.state` is `ready` (views match `policy_revision`), `pending` (regeneration queued or running), or `failed` (the latest regeneration Job failed; data requests stay pending). `head_version_id` is `null` and the lists may still be edited when the Entity has no serving head; ladders and profiles then reference the attributes of the latest published version. When `head_version_id` is null, `ready` means there is no serving table to compile. It does not mean profile views exist.
 
 ## 4. Management Endpoints
 

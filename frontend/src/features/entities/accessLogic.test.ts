@@ -11,6 +11,7 @@ import {
   presentCell,
   serializeRule,
   validateLadder,
+  viewsStatusKey,
   withheldNames,
   type RuleLeaf,
   type RuleNode,} from "@/features/entities/accessLogic";
@@ -75,6 +76,20 @@ describe("row rule editor", () => {
         { is_null: { attr: "att_sku", subject_attr: "region" } },
       ],
     });
+  });
+});
+
+describe("views status", () => {
+  it("does not call a missing serving table ready", () => {
+    expect(
+      viewsStatusKey({ head_version_id: null, views: { state: "ready" } }),
+    ).toBe("entities.access.views.noHead");
+    expect(
+      viewsStatusKey({ head_version_id: "ver_1", views: { state: "ready" } }),
+    ).toBe("entities.access.views.ready");
+    expect(
+      viewsStatusKey({ head_version_id: "ver_1", views: { state: "pending" } }),
+    ).toBe("entities.access.views.pending");
   });
 });
 

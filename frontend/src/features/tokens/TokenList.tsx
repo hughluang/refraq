@@ -36,7 +36,7 @@ import type { TokenMetadata, TokenStatus } from "@/features/tokens/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 import { copyText } from "@/lib/copy-text";
 import type { PageQuery } from "@/lib/pagination";
 
@@ -122,7 +122,7 @@ export function TokenList() {
         type: "error",
         message: t("tokens.title"),
         description:
-          err instanceof ApiError ? err.detail : t("tokens.create.error"),
+          problemMessage(t, err, t("tokens.create.error")),
       });
     } finally {
       setCreating(false);
@@ -147,7 +147,7 @@ export function TokenList() {
         type: "error",
         message: t("tokens.title"),
         description:
-          err instanceof ApiError ? err.detail : t("tokens.deactivate.error"),
+          problemMessage(t, err, t("tokens.deactivate.error")),
       });
     } finally {
       setActionBusy(false);
@@ -169,7 +169,7 @@ export function TokenList() {
         type: "error",
         message: t("tokens.title"),
         description:
-          err instanceof ApiError ? err.detail : t("tokens.restore.error"),
+          problemMessage(t, err, t("tokens.restore.error")),
       });
     } finally {
       setActionBusy(false);
@@ -194,7 +194,7 @@ export function TokenList() {
         type: "error",
         message: t("tokens.title"),
         description:
-          err instanceof ApiError ? err.detail : t("tokens.delete.error"),
+          problemMessage(t, err, t("tokens.delete.error")),
       });
     } finally {
       setActionBusy(false);

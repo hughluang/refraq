@@ -12,7 +12,8 @@ import {
 import { useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ApiError, isSessionExpiredError } from "@/lib/api";
+import { isSessionExpiredError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 
 import { cancelJob, getJob, getJobLogs } from "@/features/jobs/api";
 import { formatJobTrigger } from "@/features/jobs/formatJobTrigger";
@@ -56,7 +57,7 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
       if (isSessionExpiredError(err)) return;
       open?.({
         type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
+        message: problemMessage(t, err, String(err)),
       });
     } finally {
       setLoading(false);
@@ -225,7 +226,7 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
                       open?.({
                         type: "error",
                         message:
-                          err instanceof ApiError ? err.detail : String(err),
+                          problemMessage(t, err, String(err)),
                       });
                     } finally {
                       setBusy(false);

@@ -27,7 +27,7 @@ import {
 import type { SubjectAttribute, SubjectValues, UserGroup } from "@/features/subjects/types";
 import { listUsers } from "@/features/users/api";
 import type { UserRow } from "@/features/users/types";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 
 type Props = { userId: string };
 
@@ -54,7 +54,7 @@ export function UserShow({ userId }: Props) {
     open?.({
       type: "error",
       message: t("users.title"),
-      description: err instanceof ApiError ? err.detail : t("common.error.loadFailed"),
+      description: problemMessage(t, err, t("common.error.loadFailed")),
     });
   }
 
@@ -86,7 +86,7 @@ export function UserShow({ userId }: Props) {
         setError(null);
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof ApiError ? err.detail : t("common.error.loadFailed"));
+          setError(problemMessage(t, err, t("common.error.loadFailed")));
         }
       } finally {
         if (!cancelled) setLoading(false);

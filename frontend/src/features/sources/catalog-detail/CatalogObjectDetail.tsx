@@ -35,7 +35,7 @@ import { OverviewTab } from "@/features/sources/catalog-detail/OverviewTab";
 import { isSampleEligible } from "@/features/sources/catalog-detail/catalogObjectKind";
 import { SampleTab } from "@/features/sources/catalog-detail/SampleTab";
 import type { CatalogObject } from "@/features/sources/types";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 import { copyText } from "@/lib/copy-text";
 
 type CatalogObjectDetailProps = {
@@ -86,7 +86,7 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
           setReloadEpoch((n) => n + 1);
         }
       } catch (err) {
-        setError(err instanceof ApiError ? err.detail : String(err));
+        setError(problemMessage(t, err, String(err)));
         if (!refresh) {
           setObject(null);
         }

@@ -519,7 +519,7 @@ Kernel codes (`REQUEST_INVALID`, `AUTH_UNAUTHENTICATED`, and the other codes in 
 | `ENTITY_NOT_PUBLISHED` | 422 | Open version while the current version is not `published` |
 | `ENTITY_PUBLISHING` | 422 | A write while any version is `publishing` |
 | `ENTITY_PUBLISH_EMPTY` | 422 | Publish with an empty attribute list |
-| `ENTITY_DEPRECATED` | 422 | A write on a deprecated Entity |
+| `ENTITY_DEPRECATED` | 422 | A deprecated Business Entity is closed |
 | `ENTITY_NEVER_PUBLISHED` | 422 | Deprecate while the Entity has never been published |
 | `ENTITY_ALREADY_DEPRECATED` | 422 | Deprecate when already deprecated |
 | `ENTITY_ALREADY_PUBLISHED` | 409 | Delete after the Entity has been published, while no version is `publishing` |

@@ -30,7 +30,7 @@ import { PasswordSection } from "@/features/account/PasswordSection";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { McpSection } from "@/features/account/McpSection";
 import { TokenList } from "@/features/tokens/TokenList";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 import { FOLLOW_BROWSER_TIMEZONE } from "@/providers/display-timezone-catalog";
 import { useTimeZones } from "@/providers/time-zones";
 import {
@@ -144,7 +144,7 @@ export function AccountPanel() {
         type: "error",
         message: t("account.title"),
         description:
-          err instanceof ApiError ? err.detail : t("account.profile.error"),
+          problemMessage(t, err, t("account.profile.error")),
       });
     } finally {
       setSavingProfile(false);

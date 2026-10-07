@@ -1,6 +1,6 @@
 "use client";
 
-import { useCan, useNotification } from "@refinedev/core";
+import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useEffect, useMemo, useState } from "react";
 
 import { runObjectSample } from "@/features/sources/api/sample";
@@ -21,6 +21,7 @@ import {
 } from "@/features/sources/catalog-detail/sampleFilters";
 import type { CatalogObject, SampleResult } from "@/features/sources/types";
 import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 
 const DEFAULT_FILTER: SampleFilter = {
   column: null,
@@ -31,6 +32,7 @@ const DEFAULT_FILTER: SampleFilter = {
 export const DEFAULT_SAMPLE_LIMIT = 50;
 
 export function useCatalogSample(object: CatalogObject) {
+  const t = useTranslate();
   const { open } = useNotification();
   const { data: canSampleData, isLoading: canSampleQueryLoading } = useCan({
     resource: ModuleId.catalog,
@@ -111,7 +113,7 @@ export function useCatalogSample(object: CatalogObject) {
       }
       open?.({
         type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
+        message: problemMessage(t, err, String(err)),
       });
     } finally {
       setRunning(false);

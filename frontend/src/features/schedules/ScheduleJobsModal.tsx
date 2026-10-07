@@ -12,7 +12,7 @@ import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
 import { listScheduleJobs } from "@/features/schedules/api";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 import { formatJobDuration } from "@/lib/datetime";
 import type { PageQuery } from "@/lib/pagination";
 
@@ -144,9 +144,7 @@ export function ScheduleJobsModal({
                             open?.({
                               type: "error",
                               message:
-                                err instanceof ApiError
-                                  ? err.detail
-                                  : String(err),
+                                problemMessage(t, err, String(err)),
                             });
                           }
                         }}

@@ -39,6 +39,7 @@ import {
   presentCell,
   serializeRule,
   validateLadder,
+  viewsStatusKey,
   withheldNames,
   type LadderLevel,
   type RuleLeaf,
@@ -52,6 +53,7 @@ import { listRoles } from "@/features/roles/api";
 import { listSubjectAttributes, listUserGroups } from "@/features/subjects/api";
 import { listUsers } from "@/features/users/api";
 import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 
 const EMPTY_RULE: RuleNode = { kind: "and", children: [] };
 const ACTIONS = ["read", "write", "export", "mcp_query"] as const;
@@ -72,7 +74,7 @@ function problemText(
     const kind = classifyAccessProblem(err.code);
     if (kind === "pending") return t("entities.access.pending");
     if (kind === "combination_limit") return t("entities.access.overLimit");
-    return err.detail;
+    return problemMessage(t, err, err.detail);
   }
   return String(err);
 }
@@ -247,7 +249,7 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
       {optionsError ? <Alert color="red">{optionsError}</Alert> : null}
       <Alert color={over || summary.views.state !== "ready" ? "yellow" : "gray"}>
         <Text>
-          {t(`entities.access.views.${summary.views.state}`)}{" "}
+          {t(viewsStatusKey(summary))}{" "}
           {t("entities.access.combinations", {
             count: summary.views.combinations,
             limit: summary.views.combination_limit,

@@ -30,7 +30,8 @@ from backend.entity.access.facts import (
     ProfileSpec,
 )
 from backend.entity.access.records import ProfileRecord
-from backend.entity.access.service import create_grant, create_profile
+from backend.entity.access.reconcile import enqueue_stale_view_jobs
+from backend.entity.access.service import create_grant, create_profile, summary
 from backend.tests.entity_access_oracle import (
     install_signing_keys,
     require_subject_view,
@@ -610,6 +611,31 @@ def _dropped_head_entity(table_name: str = "customer") -> BusinessEntityRecord:
     )
     get_entity_store().create_entity(entity, version)
     return entity
+
+
+def test_dropped_table_summary_has_no_serving_head_and_is_not_queued() -> None:
+    entity = _dropped_head_entity()
+    now = utc_now()
+    get_access_store().insert_profile(
+        ProfileRecord(
+            id="eap_sales",
+            entity_id=entity.id,
+            key="sales",
+            name="Sales",
+            description=None,
+            columns=[{"attribute_id": "att_name", "level": "clear"}],
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    get_access_store().set_revision(entity.id, 3)
+    body = summary(entity.id)
+    assert body["head_version_id"] is None
+    assert body["views"]["state"] == "ready"
+    assert [item["attribute_name"] for item in body["ladders"]] == ["name"]
+    assert enqueue_stale_view_jobs() == 0
+    jobs, _total = get_job_store().list(kind="entity_access_views")
+    assert jobs == []
 
 
 def test_published_version_with_dropped_table_loads_without_a_table() -> None:

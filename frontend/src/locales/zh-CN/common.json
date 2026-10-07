@@ -718,6 +718,7 @@
   "entities.access.overLimit": "该策略超过了档位组合上限。",
   "entities.access.broken": "已损坏",
   "entities.access.combinations": "组合 {{count}} / {{limit}}",
+  "entities.access.views.noHead": "没有在役数据表，不生成访问视图。",
   "entities.access.views.ready": "视图已就绪。",
   "entities.access.views.pending": "视图正在生成。",
   "entities.access.views.failed": "最近一次视图作业失败。数据请求仍处于等待。",
@@ -1154,5 +1155,10 @@
   "modelServices.fields.in_use": "在用",
   "modelServices.fields.has_secret": "API 密钥",
   "modelServices.fields.actions": "操作",
-  "modelServices.validation.required": "必填"
+  "modelServices.validation.required": "必填",
+  "problems.USER_GROUP_KEY_DUPLICATE": "用户组键已存在",
+  "problems.SUBJECT_ATTRIBUTE_KEY_DUPLICATE": "主体属性键已存在",
+  "problems.ENTITY_DEPRECATED": "该业务实体已关闭",
+  "problems.ENTITY_NOT_SERVING": "该业务实体没有在役数据表",
+  "problems.ENTITY_PUBLISHING": "正在发布的版本拒绝写入"
 }

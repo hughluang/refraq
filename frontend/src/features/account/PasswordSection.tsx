@@ -14,7 +14,7 @@ import { useNotification, useTranslate } from "@refinedev/core";
 import { useState } from "react";
 
 import { changeAccountPassword } from "@/features/account/api";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 
 type PasswordForm = {
   current_password: string;
@@ -70,7 +70,7 @@ export function PasswordSection() {
         type: "error",
         message: t("account.title"),
         description:
-          err instanceof ApiError ? err.detail : t("account.password.error"),
+          problemMessage(t, err, t("account.password.error")),
       });
     } finally {
       setSavingPassword(false);

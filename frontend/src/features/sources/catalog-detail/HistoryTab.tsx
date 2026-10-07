@@ -8,7 +8,7 @@ import { PageError } from "@/components/feedback/PageError";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { listSemanticsChanges } from "@/features/sources/api/catalog";
 import type { SemanticsChange } from "@/features/sources/types";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 
 type HistoryTabProps = {
   objectId: string;
@@ -42,7 +42,7 @@ export function HistoryTab({ objectId, listEnabled }: HistoryTabProps) {
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(err instanceof ApiError ? err.detail : String(err));
+          setError(problemMessage(t, err, String(err)));
         }
       })
       .finally(() => {

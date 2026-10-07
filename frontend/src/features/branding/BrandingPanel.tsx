@@ -57,7 +57,7 @@ import {
   ModuleAction,
   ModuleId,
 } from "@/features/console/module-identity";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 import {
   getDefaultLocale,
   LOCALE_CATALOG,
@@ -177,7 +177,7 @@ export function BrandingPanel() {
       applyBranding(await fetchPublicBranding());
     } catch (err) {
       setError(
-        err instanceof ApiError ? err.detail : t("common.error.loadFailed"),
+        problemMessage(t, err, t("common.error.loadFailed")),
       );
     } finally {
       setLoading(false);
@@ -257,7 +257,7 @@ export function BrandingPanel() {
       notify?.({
         type: "error",
         message: t("branding.title"),
-        description: err instanceof ApiError ? err.detail : t("common.error"),
+        description: problemMessage(t, err, t("common.error")),
       });
       await load();
     } finally {
@@ -279,7 +279,7 @@ export function BrandingPanel() {
       notify?.({
         type: "error",
         message: t("branding.title"),
-        description: err instanceof ApiError ? err.detail : t("common.error"),
+        description: problemMessage(t, err, t("common.error")),
       });
     } finally {
       setResetting(false);

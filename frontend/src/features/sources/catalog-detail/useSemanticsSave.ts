@@ -4,7 +4,7 @@ import { useNotification, useTranslate } from "@refinedev/core";
 import { useState } from "react";
 
 import type { CatalogObject } from "@/features/sources/types";
-import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 
 export function useSemanticsSave(onSaved: (object: CatalogObject) => void) {
   const t = useTranslate();
@@ -23,7 +23,7 @@ export function useSemanticsSave(onSaved: (object: CatalogObject) => void) {
     } catch (err) {
       open?.({
         type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
+        message: problemMessage(t, err, String(err)),
       });
       return undefined;
     } finally {

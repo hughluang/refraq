@@ -205,7 +205,7 @@ class EntityDeprecated(AppError):
     http_status = 422
 
     def _default_message(self) -> str:
-        return "A deprecated Business Entity refuses writes"
+        return "A deprecated Business Entity is closed"
 
 
 class EntityNeverPublished(AppError):
