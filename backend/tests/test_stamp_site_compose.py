@@ -35,6 +35,22 @@ def test_template_is_not_a_live_site_pin() -> None:
     assert "REFRAQ_VERSION" not in env_text
 
 
+def test_template_postgres_cluster_lives_on_named_volume() -> None:
+    text = TEMPLATE.read_text(encoding="utf-8")
+    mounts = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip().startswith("- refraq_pg:")
+    ]
+    assert mounts == ["- refraq_pg:/var/lib/postgresql"]
+    assert "refraq_pg:/var/lib/postgresql/data" not in text
+    assert "PGDATA:" not in text
+    assert "entrypoint:" not in text
+    assert ".refraq-copy-incomplete" not in text
+    assert "ENTITY_OWNER_PASSWORD:?set ENTITY_OWNER_PASSWORD" in text
+    assert "ENTITY_READER_PASSWORD:?set ENTITY_READER_PASSWORD" in text
+
+
 def test_template_isolates_entity_database() -> None:
     text = TEMPLATE.read_text(encoding="utf-8")
     assert "5432/refraq_entity" in text

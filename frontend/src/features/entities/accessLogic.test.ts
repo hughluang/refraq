@@ -462,7 +462,7 @@ describe("access orientation", () => {
   it("derives a key from a name and leaves a name with no letters blank", () => {
     expect(accessKeyFromName("All clear")).toBe("all_clear");
     expect(accessKeyFromName("1 region")).toBe("p_1_region");
-    expect(accessKeyFromName("财务")).toBe("");
+    expect(accessKeyFromName("\u8d22\u52a1")).toBe("");
     expect(accessKeyFromName("   ")).toBe("");
   });
 });

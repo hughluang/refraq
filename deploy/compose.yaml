@@ -24,9 +24,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: refraq
       TZ: UTC
-    # PG18+ images keep PGDATA at /var/lib/postgresql/18/docker and declare
-    # VOLUME /var/lib/postgresql. Mounting the old .../data path leaves the
-    # real data in an anonymous volume.
+    # Named volume refraq_pg holds the PG18 cluster at the image VOLUME
+    # /var/lib/postgresql. Default PGDATA is /var/lib/postgresql/18/docker.
+    # /var/lib/postgresql/data is not the data directory.
     volumes:
       - refraq_pg:/var/lib/postgresql
     healthcheck:
