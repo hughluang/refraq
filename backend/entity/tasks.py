@@ -4,15 +4,28 @@ from __future__ import annotations
 
 import logging
 
+from datetime import timedelta
+
 from celery import shared_task
 
+from backend.core.time import utc_now
+from backend.entity.access.store import get_access_store
 from backend.entity.align import run_entity_table_job
+from backend.entity.parameters import access_log_retention_days
 from backend.entity.entity_db import open_entity_pool_when_persistent, reset_entity_engine
 from backend.jobs.store import TERMINAL, append_job_log, get_job_store, mark_failed
 
 logger = logging.getLogger(__name__)
 
 _SUMMARY_MAX = 400
+ACCESS_LOG_SCHEDULE_KEY = "entity_access_log_retention"
+ACCESS_LOG_TASK_NAME = "backend.worker.tasks.purge_access_logs"
+
+
+def purge_expired_access_logs() -> int:
+    """Delete access-log rows older than the retention parameter."""
+    cutoff = utc_now() - timedelta(days=access_log_retention_days())
+    return get_access_store().delete_logs_before(cutoff)
 
 
 def init_worker_entity_pool() -> None:

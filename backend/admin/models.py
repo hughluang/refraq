@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -182,3 +182,62 @@ class ModelServicePurposeRow(Base):
     closed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ready: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class UserGroupRow(Base):
+    __tablename__ = "user_groups"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    key: Mapped[str] = mapped_column(String(63), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
+class UserGroupMemberRow(Base):
+    __tablename__ = "user_group_members"
+
+    group_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("user_groups.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
+class SubjectAttributeDefRow(Base):
+    __tablename__ = "subject_attribute_defs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    key: Mapped[str] = mapped_column(String(63), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    value_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    dictionary_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    multi_value: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
+class SubjectAttributeValueRow(Base):
+    __tablename__ = "subject_attribute_values"
+    __table_args__ = (
+        Index("ix_subject_attribute_values_subject", "subject_type", "subject_id"),
+    )
+
+    definition_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("subject_attribute_defs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    subject_type: Mapped[str] = mapped_column(String(16), primary_key=True)
+    subject_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(256), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

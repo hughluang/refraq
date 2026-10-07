@@ -219,7 +219,9 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
 | Module id | Group | `routes.list` | `actions.list` (nav) | Other routes / actions |
 | --- | --- | --- | --- | --- |
 | `dashboard` | `workbench` | `/console` | `dashboard:read` | — |
-| `users` | `admin` | `/console/users` | `users:read` | create/edit/delete → `users:write`; create route `/console/users/new` |
+| `users` | `admin` | `/console/users` | `users:read` | create/edit/delete → `users:write`; create route `/console/users/new`; show `/console/users/:id` → `users:read` |
+| `user-groups` | `admin` | `/console/user-groups` | `users:read` | create/edit/delete → `users:write`; show `/console/user-groups/:id` → `users:read` |
+| `subject-attributes` | `admin` | `/console/subject-attributes` | `users:read` | create/edit/delete → `users:write` |
 | `roles` | `admin` | `/console/roles` | `roles:read` | create/edit/delete → `roles:write`; create `/console/roles/new`; edit `/console/roles/:id` |
 | `identity-providers` | `admin` | `/console/identity-providers` | `identity_providers:read` | create/edit/delete/test → `identity_providers:write` |
 | `tokens` | `admin` (identity only; **not** in navigation) | `null` (UI in Account Center) | `tokens:read` | create/edit/delete → `tokens:write`; see `docs/business-account.md` |

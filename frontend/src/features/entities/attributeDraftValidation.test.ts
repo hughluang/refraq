@@ -117,6 +117,18 @@ describe("attributeDraftIssues", () => {
         [draft({ name: "code", business_key: true, max_length: "8" })],
       ),
     ).toEqual(["business_key", "business_key"]);
+    expect(
+      fields(
+        draft({
+          name: "owner",
+          type: "user",
+          required: true,
+          unique: true,
+          business_key: true,
+        }),
+        ["owner"],
+      ),
+    ).toEqual(["business_key"]);
   });
 
   it("requires a reference target and ignores config on plain types", () => {
@@ -159,6 +171,7 @@ describe("attributeConfigSummary", () => {
       ),
     ).toBeNull();
     expect(attributeConfigSummary(draft({ type: "text" }))).toBeNull();
+    expect(attributeConfigSummary(draft({ type: "user" }))).toBeNull();
     expect(attributeConfigSummary(draft({ max_length: "" }))).toBeNull();
   });
 });

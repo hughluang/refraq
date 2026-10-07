@@ -1,4 +1,8 @@
-"""Entity Data API integration tests against a real Postgres head table."""
+"""Entity Data API integration tests against a real Postgres head table.
+
+Each test runs on a throwaway bootstrapped entity database: writes use the owner
+pool, reads use the ``refraq_reader`` pool through the seeded profile views.
+"""
 
 from __future__ import annotations
 
@@ -9,18 +13,15 @@ from datetime import datetime, timezone
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import make_url
 
 from backend.entity.table_name import compose_physical_table_name as compose_physical
 from backend.entity.records import AttributeRecord, attribute_to_dict
+from backend.entity.access.seed import prepare_legacy_entity
 from backend.entity.table_port import PostgresEntityTablePort
+from backend.tests.entity_pg import bootstrapped_entity_database
 
 pytestmark = pytest.mark.integration
 
-INTEGRATION_DATABASE_URL = os.getenv(
-    "REFRAQ_INTEGRATION_DATABASE_URL",
-    "postgresql+psycopg://refraq:refraq@127.0.0.1:5432/refraq_test",
-)
 _MAINTENANCE_DATABASE_URL = os.getenv(
     "REFRAQ_INTEGRATION_MAINTENANCE_DATABASE_URL",
     "postgresql+psycopg://refraq:refraq@127.0.0.1:5432/refraq",
@@ -38,31 +39,15 @@ def _postgres_available() -> bool:
         return False
 
 
-def _ensure_db(database_url: str) -> None:
-    url = make_url(database_url)
-    admin = create_engine(
-        url.set(database=make_url(_MAINTENANCE_DATABASE_URL).database),
-        isolation_level="AUTOCOMMIT",
-    )
-    try:
-        with admin.connect() as conn:
-            exists = conn.execute(
-                text("SELECT 1 FROM pg_database WHERE datname = :name"),
-                {"name": url.database},
-            ).scalar()
-            if not exists:
-                conn.execute(text(f'CREATE DATABASE "{url.database}"'))
-    finally:
-        admin.dispose()
-
-
 @pytest.fixture()
 def data_client(monkeypatch: pytest.MonkeyPatch):
     if not _postgres_available():
         pytest.skip("Postgres not available (start: docker compose up -d)")
+    with bootstrapped_entity_database(_MAINTENANCE_DATABASE_URL, "refraq_edata") as urls:
+        yield from _serve(monkeypatch, urls)
 
-    _ensure_db(INTEGRATION_DATABASE_URL)
 
+def _serve(monkeypatch: pytest.MonkeyPatch, urls):
     os.environ["REFRAQ_STORE_BACKEND"] = "memory"
     os.environ["REFRAQ_SECRETS_MASTER_KEY"] = "test-secrets-master-key"
     os.environ["CELERY_TASK_ALWAYS_EAGER"] = "1"
@@ -70,26 +55,38 @@ def data_client(monkeypatch: pytest.MonkeyPatch):
     os.environ.pop("REDIS_URL", None)
     os.environ.setdefault("CELERY_BROKER_URL", "memory://")
 
-    monkeypatch.setenv("ENTITY_DATABASE_URL", INTEGRATION_DATABASE_URL)
+    monkeypatch.setenv("ENTITY_DATABASE_URL", urls.owner_url)
+    monkeypatch.setenv("ENTITY_READER_DATABASE_URL", urls.reader_url)
     monkeypatch.setenv("REFRAQ_STORE_BACKEND", "memory")
 
-    from backend.core.config import reset_settings_cache
-    from backend.entity.entity_db import get_entity_engine, reset_entity_engine
+    from backend.core.config import get_settings, reset_settings_cache
+    from backend.entity.access import enforce
+    from backend.entity.entity_db import (
+        get_entity_engine,
+        get_entity_reader_engine,
+        reset_entity_engine,
+    )
     from backend.entity.data import sql as data_sql
     from backend.admin.roles import create_role, seed_roles
     from backend.admin.role_store import get_role_store
     from backend.admin.security import hash_password
     from backend.admin.user_store import get_user_store
+    from backend.entity.access.seed import prepare_legacy_entity
     from backend.entity.ids import new_entity_id, new_version_id
     from backend.entity.lifecycle import PUBLISHED
     from backend.entity.records import BusinessEntityRecord, EntityVersionRecord
     from backend.entity.store import get_entity_store, reset_entity_store
+    from backend.entity.table_port import bind_entity_table_port
     from backend.main import app
 
     reset_settings_cache()
     reset_entity_engine()
     reset_entity_store()
     monkeypatch.setattr(data_sql, "require_entity_capacity", get_entity_engine)
+    monkeypatch.setattr(data_sql, "require_entity_reader_capacity", get_entity_reader_engine)
+    signing = get_settings().model_copy(update={"store_backend": "persistent"})
+    monkeypatch.setattr(enforce, "get_settings", lambda: signing)
+    bind_entity_table_port(PostgresEntityTablePort())
 
     roles = get_role_store()
     seed_roles(roles)
@@ -155,26 +152,22 @@ def data_client(monkeypatch: pytest.MonkeyPatch):
     get_entity_store().create_entity(entity, version)
 
     port = PostgresEntityTablePort()
-    schema = "public"
+    schema = "entity_data"
     port.create_physical_table(schema, physical, attrs)
     port.swap_stem_view(schema, stem, physical=physical, expected_target=None)
+    prepare_legacy_entity(entity.id)
 
-    with TestClient(app) as client:
-        login = client.post(
-            "/auth/login", json={"account": "admin", "password": "secret"}
-        )
-        assert login.status_code == 200, login.text
-        yield client, stem, physical, entity.id
-
-    from backend.entity.entity_db import get_entity_engine
-
-    engine = get_entity_engine()
-    with engine.begin() as conn:
-        conn.execute(text(f'DROP VIEW IF EXISTS "{schema}"."{stem}"'))
-        conn.execute(text(f'DROP TABLE IF EXISTS "{schema}"."{physical}"'))
-    reset_entity_engine()
-    reset_entity_store()
-    reset_settings_cache()
+    try:
+        with TestClient(app) as client:
+            login = client.post(
+                "/auth/login", json={"account": "admin", "password": "secret"}
+            )
+            assert login.status_code == 200, login.text
+            yield client, stem, physical, entity.id
+    finally:
+        reset_entity_engine()
+        reset_entity_store()
+        reset_settings_cache()
 
 
 def test_create_get_update_delete_query_and_upsert(data_client) -> None:
@@ -434,14 +427,16 @@ def test_business_key_addressing_reference_and_upsert_default(data_client) -> No
         ),
     )
     port = PostgresEntityTablePort()
-    port.create_physical_table("public", supplier_physical, supplier_attrs)
+    port.create_physical_table("entity_data", supplier_physical, supplier_attrs)
     port.swap_stem_view(
-        "public", supplier_stem, physical=supplier_physical, expected_target=None
+        "entity_data", supplier_stem, physical=supplier_physical, expected_target=None
     )
-    port.create_physical_table("public", material_physical, material_attrs)
+    port.create_physical_table("entity_data", material_physical, material_attrs)
     port.swap_stem_view(
-        "public", material_stem, physical=material_physical, expected_target=None
+        "entity_data", material_stem, physical=material_physical, expected_target=None
     )
+    prepare_legacy_entity(supplier_id)
+    prepare_legacy_entity(material_id)
 
     created = client.post(
         f"/entities/{material_stem}/create",
@@ -490,15 +485,6 @@ def test_business_key_addressing_reference_and_upsert_default(data_client) -> No
     assert upserted.status_code == 200, upserted.text
     assert upserted.json()["row"]["supplier_code"] == "S2"
 
-    from backend.entity.entity_db import get_entity_engine
-
-    engine = get_entity_engine()
-    with engine.begin() as conn:
-        conn.execute(text(f'DROP VIEW IF EXISTS "public"."{supplier_stem}"'))
-        conn.execute(text(f'DROP TABLE IF EXISTS "public"."{supplier_physical}"'))
-        conn.execute(text(f'DROP VIEW IF EXISTS "public"."{material_stem}"'))
-        conn.execute(text(f'DROP TABLE IF EXISTS "public"."{material_physical}"'))
-
 
 def test_pat_data_read_can_schema_and_query(data_client) -> None:
     client, stem, _physical, _entity_id = data_client
@@ -544,7 +530,6 @@ def test_pat_data_read_can_schema_and_query(data_client) -> None:
 
 def test_type_roundtrip_create_and_create_many(data_client) -> None:
     client, _stem, _physical, _entity_id = data_client
-    from backend.entity.entity_db import get_entity_engine
     from backend.entity.ids import new_entity_id, new_version_id
     from backend.entity.lifecycle import PUBLISHED
     from backend.entity.table_name import compose_physical_table_name as compose_physical
@@ -588,41 +573,152 @@ def test_type_roundtrip_create_and_create_many(data_client) -> None:
     )
     get_entity_store().create_entity(entity, version)
     port = PostgresEntityTablePort()
-    port.create_physical_table("public", physical, attrs)
-    try:
-        created = client.post(
-            f"/entities/{stem2}/create",
-            json={
-                "values": {
-                    "code": "R1",
-                    "amount": "12.50",
-                    "ratio": 1.5,
-                    "on_date": "2024-01-02",
-                    "at_time": "13:45:01",
-                    "payload": {"a": [1, True]},
-                }
-            },
-        )
-        assert created.status_code == 201, created.text
-        row = created.json()["row"]
-        assert row["amount"] == "12.50"
-        assert row["ratio"] == 1.5
-        assert row["on_date"] == "2024-01-02"
-        assert row["at_time"].startswith("13:45:01")
-        assert row["payload"] == {"a": [1, True]}
+    port.create_physical_table("entity_data", physical, attrs)
+    prepare_legacy_entity(entity.id)
+    created = client.post(
+        f"/entities/{stem2}/create",
+        json={
+            "values": {
+                "code": "R1",
+                "amount": "12.50",
+                "ratio": 1.5,
+                "on_date": "2024-01-02",
+                "at_time": "13:45:01",
+                "payload": {"a": [1, True]},
+            }
+        },
+    )
+    assert created.status_code == 201, created.text
+    row = created.json()["row"]
+    assert row["amount"] == "12.50"
+    assert row["ratio"] == 1.5
+    assert row["on_date"] == "2024-01-02"
+    assert row["at_time"].startswith("13:45:01")
+    assert row["payload"] == {"a": [1, True]}
 
-        many = client.post(
-            f"/entities/{stem2}/create-many",
-            json={
-                "items": [
-                    {"values": {"code": "R2", "amount": 3, "ratio": 0.25}},
-                    {"values": {"code": "R3", "payload": None}},
-                ]
-            },
-        )
-        assert many.status_code == 201, many.text
-        assert [item["code"] for item in many.json()["rows"]] == ["R2", "R3"]
-    finally:
-        engine = get_entity_engine()
-        with engine.begin() as conn:
-            conn.execute(text(f'DROP TABLE IF EXISTS "public"."{physical}"'))
+    many = client.post(
+        f"/entities/{stem2}/create-many",
+        json={
+            "items": [
+                {"values": {"code": "R2", "amount": 3, "ratio": 0.25}},
+                {"values": {"code": "R3", "payload": None}},
+            ]
+        },
+    )
+    assert many.status_code == 201, many.text
+    assert [item["code"] for item in many.json()["rows"]] == ["R2", "R3"]
+
+
+def test_reads_need_the_reader_role_and_a_signed_context(data_client) -> None:
+    client, stem, _physical, entity_id = data_client
+    from sqlalchemy.exc import ProgrammingError
+
+    from backend.entity.access.store import get_access_store
+    from backend.entity.entity_db import get_entity_engine, get_entity_reader_engine
+
+    created = client.post(f"/entities/{stem}/create", json={"values": {"sku": "V1"}})
+    assert created.status_code == 201, created.text
+    row_id = created.json()["row"]["row_id"]
+    got = client.post(f"/entities/{stem}/get", json={"row_id": row_id})
+    assert got.status_code == 200, got.text
+    views = {item.view_name for item in get_access_store().bindings(entity_id)}
+    assert views
+    view = sorted(views)[0]
+    with get_entity_engine().connect() as conn:
+        with pytest.raises(ProgrammingError, match="permission denied"):
+            conn.execute(text(f'SELECT 1 FROM "entity_access"."{view}"'))
+    with get_entity_reader_engine().connect() as conn:
+        for name in views:
+            seen = conn.execute(text(f'SELECT count(*) FROM "entity_access"."{name}"'))
+            assert seen.scalar_one() == 0
+
+
+def test_masked_writer_never_sees_the_raw_value(data_client) -> None:
+    client, stem, _physical, entity_id = data_client
+    from backend.admin.roles import create_role
+    from backend.admin.role_store import get_role_store
+    from backend.admin.security import hash_password
+    from backend.admin.user_store import get_user_store
+    from backend.entity.access.plan import load_head
+    from backend.entity.access.service import create_grant, create_profile, put_ladder
+    from backend.entity.access.views import rebuild_entity_views
+
+    raw = "card-1234-5678"
+    created = client.post(
+        f"/entities/{stem}/create", json={"values": {"sku": "M1", "note": raw}}
+    )
+    assert created.status_code == 201, created.text
+    row_id = created.json()["row"]["row_id"]
+
+    role = create_role(
+        get_role_store(),
+        key="masked_writer",
+        name="Masked writer",
+        permissions=["console:access", "entity:data_read", "entity:data_write"],
+    )
+    masker = get_user_store().create_user(
+        account="masker",
+        display_name="Masker",
+        password_hash=hash_password("secret"),
+        role_id=role.id,
+        status="active",
+    )
+    ids = {attr.name: attr.attribute_id for attr in load_head(entity_id).attributes}
+    put_ladder(
+        entity_id,
+        ids["note"],
+        [
+            {"key": "clear", "mode": "clear"},
+            {"key": "last4", "mode": {"type": "partial", "keep_first": 0, "keep_last": 4}},
+        ],
+        actor_user_id=masker.id,
+        actor_token_id=None,
+    )
+    profile = create_profile(
+        entity_id,
+        key="masked_note",
+        name="Masked note",
+        description=None,
+        columns=[
+            {"attribute_id": ids["sku"], "level": "clear"},
+            {"attribute_id": ids["qty"], "level": "clear"},
+            {"attribute_id": ids["flag"], "level": "clear"},
+            {"attribute_id": ids["note"], "level": "last4"},
+        ],
+        actor_user_id=masker.id,
+        actor_token_id=None,
+    )
+    create_grant(
+        entity_id,
+        subject={"type": "user", "id": masker.id},
+        profile_id=profile["profile"]["id"],
+        row_rule=None,
+        actions=["read", "write"],
+        status="active",
+        valid_until=None,
+        actor_user_id=masker.id,
+        actor_token_id=None,
+    )
+    rebuild_entity_views(entity_id)
+
+    client.post("/auth/logout")
+    login = client.post("/auth/login", json={"account": "masker", "password": "secret"})
+    assert login.status_code == 200, login.text
+
+    updated = client.post(
+        f"/entities/{stem}/update", json={"row_id": row_id, "values": {"qty": 5}}
+    )
+    assert updated.status_code == 200, updated.text
+    row = updated.json()["row"]
+    assert row["qty"] == 5
+    assert row["note"] != raw
+    assert row["note"].endswith("5678")
+    assert raw not in updated.text
+    got = client.post(f"/entities/{stem}/get", json={"row_id": row_id})
+    assert got.status_code == 200, got.text
+    assert raw not in got.text
+    denied = client.post(
+        f"/entities/{stem}/update", json={"row_id": row_id, "values": {"note": "x"}}
+    )
+    assert denied.status_code == 403, denied.text
+

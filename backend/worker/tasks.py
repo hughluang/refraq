@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from celery import shared_task
 
+from backend.entity.tasks import ACCESS_LOG_SCHEDULE_KEY, purge_expired_access_logs
 from backend.jobs.store import reap_stuck_running_jobs
 from backend.worker.due import consume_due_tick
 from backend.worker.models import REAPER_SCHEDULE_KEY
@@ -17,3 +18,11 @@ def reap_stuck_jobs() -> dict[str, int]:
         consume_due_tick(record.id)
     count = reap_stuck_running_jobs()
     return {"reaped": count}
+
+
+@shared_task(name="backend.worker.tasks.purge_access_logs")
+def purge_access_logs() -> dict[str, int]:
+    record = get_schedule_store().get_by_key(ACCESS_LOG_SCHEDULE_KEY)
+    if record is not None:
+        consume_due_tick(record.id)
+    return {"deleted": purge_expired_access_logs()}

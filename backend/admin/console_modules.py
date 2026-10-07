@@ -67,7 +67,43 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         routes=ModuleRoutes(
             list="/console/users",
             create="/console/users/new",
+            show="/console/users/:id",
         ),
+        actions=ModuleActions(
+            list="users:read",
+            create="users:write",
+            edit="users:write",
+            delete="users:write",
+            show="users:read",
+        ),
+        group_order=20,
+        module_order=10,
+    ),
+    ConsoleModuleSeed(
+        id="user-groups",
+        group_id="admin",
+        group_label_key="layout.navGroup.admin",
+        label_key="userGroups.title",
+        routes=ModuleRoutes(
+            list="/console/user-groups",
+            show="/console/user-groups/:id",
+        ),
+        actions=ModuleActions(
+            list="users:read",
+            create="users:write",
+            edit="users:write",
+            delete="users:write",
+            show="users:read",
+        ),
+        group_order=20,
+        module_order=11,
+    ),
+    ConsoleModuleSeed(
+        id="subject-attributes",
+        group_id="admin",
+        group_label_key="layout.navGroup.admin",
+        label_key="subjectAttributes.title",
+        routes=ModuleRoutes(list="/console/subject-attributes"),
         actions=ModuleActions(
             list="users:read",
             create="users:write",
@@ -75,7 +111,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
             delete="users:write",
         ),
         group_order=20,
-        module_order=10,
+        module_order=12,
     ),
     ConsoleModuleSeed(
         id="identity-providers",

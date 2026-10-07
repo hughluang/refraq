@@ -60,6 +60,11 @@ def _bind_entity_database(monkeypatch: pytest.MonkeyPatch) -> None:
                     conn.execute(text(f'CREATE DATABASE "{url.database}"'))
         finally:
             admin.dispose()
+    from backend.entity.entity_db import get_entity_engine
+    from backend.tests.entity_pg import ensure_entity_ddl_targets
+
+    with get_entity_engine().begin() as conn:
+        ensure_entity_ddl_targets(conn)
 
 
 def _relation_present(schema: str, name: str) -> bool:
@@ -97,7 +102,7 @@ def test_generated_ddl_accepted_by_postgres(monkeypatch: pytest.MonkeyPatch) -> 
     _bind_entity_database(monkeypatch)
     port = PostgresEntityTablePort()
     table = f"entity_ddl_{uuid.uuid4().hex[:10]}"
-    schema = "public"
+    schema = "entity_data"
     port.create_physical_table(
         schema,
         table,
@@ -135,7 +140,7 @@ def test_drop_head_removes_view_then_table(monkeypatch: pytest.MonkeyPatch) -> N
 
     _bind_entity_database(monkeypatch)
     port = PostgresEntityTablePort()
-    schema = "public"
+    schema = "entity_data"
     suffix = uuid.uuid4().hex[:10]
     table = f"entity_head_{suffix}"
     view = f"entity_stem_{suffix}"
@@ -162,7 +167,7 @@ def test_drop_head_keeps_view_when_table_has_rows(
 
     _bind_entity_database(monkeypatch)
     port = PostgresEntityTablePort()
-    schema = "public"
+    schema = "entity_data"
     suffix = uuid.uuid4().hex[:10]
     table = f"entity_head_{suffix}"
     view = f"entity_stem_{suffix}"
@@ -255,7 +260,7 @@ def test_open_insert_keeps_rows_across_empty_drop(
 
     _bind_entity_database(monkeypatch)
     port = PostgresEntityTablePort()
-    schema = "public"
+    schema = "entity_data"
     suffix = uuid.uuid4().hex[:10]
     table = f"entity_race_{suffix}"
     view = f"entity_stem_{suffix}"

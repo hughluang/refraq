@@ -44,6 +44,10 @@ class CreateUserResponse(BaseModel):
     user: UserSummary
 
 
+class GetUserResponse(BaseModel):
+    user: UserSummary
+
+
 class UpdateStatusRequest(BaseModel):
     # Validated against active|disabled in the router for USER_INVALID_STATUS.
     status: str

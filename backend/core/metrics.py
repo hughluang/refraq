@@ -90,7 +90,7 @@ POOL_BUDGET = Gauge(
 )
 ENTITY_POOL_BUDGET = Gauge(
     "refraq_entity_runtime_pool_budget",
-    "pool_size + max_overflow for the entity database pool (api and worker)",
+    "sum of entity pools this process opens; each uses REFRAQ_ENTITY_DB_*",
     registry=REGISTRY,
 )
 NEIGHBOR = Histogram(
@@ -156,9 +156,7 @@ def bind_capacity_gauges() -> None:
     POOL_MAX_OVERFLOW.set(cap.max_overflow)
     WORK_TOKENS.set(cap.thread_tokens)
     POOL_BUDGET.set(cap.pool_max_connections)
-    ENTITY_POOL_BUDGET.set(
-        cap.entity_pool_max_connections if cap.role in ("api", "worker") else 0
-    )
+    ENTITY_POOL_BUDGET.set(cap.entity_pool_count * cap.entity_pool_max_connections)
 
 
 def metrics_response() -> Response:

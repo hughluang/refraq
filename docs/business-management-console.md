@@ -46,14 +46,15 @@ The side nav carries only module structural navigation and **renders exactly the
 | Group | Group id | Modules |
 | --- | --- | --- |
 | Workbench | `workbench` | Home (`dashboard`) |
-| Administration | `admin` | Users, Roles, Identity Providers (`identity-providers`) |
+| Administration | `admin` | Users, Roles, User Groups (`user-groups`), Subject Attributes (`subject-attributes`), Identity Providers (`identity-providers`) |
 | Metadata | `metadata` | Sources (`sources`), Catalog (`catalog`), Business Domains (`business-domains`), Type Mappings (`type-mappings`) |
 | Entity | `entity` | Entities (`entities`) |
 | Operations | `operations` | Jobs (`jobs`), Schedules (`schedules`) |
 | Platform settings | `settings` | System parameters (`settings`), Site branding (`branding`), Model Services (`model-services`) |
 
 - The `entity` group sits after `metadata` and before `operations`. The `operations` group sits after `entity` and before `settings`. Module field details: `docs/business-metadata.md`, `docs/business-entity.md`, `docs/business-user-tokens.md`, `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`.
-- Module `entities` is registered under nav group `entity`. It is not mounted under `metadata`.
+- Module `entities` is registered under nav group `entity`. It is not mounted under `metadata`. Its record carries the access control tab and the data page (`docs/business-entity-access.md` §19); they are tabs of that module, not modules of their own.
+- Modules `user-groups` and `subject-attributes` map list/show to `users:read` and create/edit/delete to `users:write`.
 - About is a top-bar user-menu utility, not structural navigation. It carries **Brand Attribution**, is not a Console Module, and is never permission-filtered.
 - Data products and Governance groups (and any persona composer) are reserved for later and not implemented. The hide-vs-empty policy for empty future groups is deferred.
 
@@ -80,7 +81,7 @@ flowchart TB
 
   subgraph SideNav["Side nav · structural navigation"]
     G1["Workbench"]
-    G2["Administration · users/roles/identity-providers"]
+    G2["Administration · users/roles/user-groups/subject-attributes/identity-providers"]
     G3["Metadata · sources/catalog/domains/type-mappings"]
     G4["Entity · entities"]
     G5["Operations · jobs/schedules"]

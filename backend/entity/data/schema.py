@@ -16,7 +16,7 @@ from backend.entity.data.capabilities import (
     upsert_key_for,
 )
 from backend.entity.data.head import HeadTarget
-from backend.entity.data.values import reference_value_attr
+from backend.entity.data.values import reference_snapshot, reference_value_attr
 from backend.entity.dictionaries.store import get_dictionary_store
 from backend.entity.records import AttributeRecord, attribute_to_dict
 from backend.entity.reference_binding import business_key_attr
@@ -91,7 +91,7 @@ def _reference_target(
     entity = store.get_entity(entity_id)
     if entity is None:
         return None
-    snap = head.head.reference_snapshots[attr.name]
+    snap = reference_snapshot(attr, head)
     return {
         "entity_id": entity.id,
         "name": entity.name,

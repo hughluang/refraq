@@ -27,6 +27,7 @@ from backend.entity.attribute_type.codec import (
     encode_text,
     encode_time,
     encode_timestamp,
+    encode_user,
 )
 from backend.entity.errors import EntityAttributeInvalid
 
@@ -590,6 +591,15 @@ _TYPES: tuple[_AttributeType, ...] = (
     ),
     _Dictionary(),
     _Reference(),
+    _AttributeType(
+        name="user",
+        operators=_EQ_NE_IN_NULL,
+        reads=frozenset({"user"}),
+        physical_template="VARCHAR(64)",
+        physical_bare="VARCHAR(64)",
+        encode=encode_user,
+        decode=decode_text,
+    ),
 )
 _BY_NAME = {item.name: item for item in _TYPES}
 

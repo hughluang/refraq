@@ -35,6 +35,7 @@ Permission = Literal[
     "entity:read",
     "entity:write",
     "entity:drop_table",
+    "entity:access_manage",
     "entity:data_read",
     "entity:data_write",
 ]
@@ -67,6 +68,7 @@ ALL_PERMISSIONS: tuple[Permission, ...] = (
     "entity:read",
     "entity:write",
     "entity:drop_table",
+    "entity:access_manage",
     "entity:data_read",
     "entity:data_write",
 )
@@ -99,6 +101,7 @@ PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
     "entity:read": "Read Business Entity definitions, versions, and attributes",
     "entity:write": "Create and save unpublished Business Entity definitions, publish, open versions, deprecate, and delete a never-published definition",
     "entity:drop_table": "Enqueue an Entity Table drop",
+    "entity:access_manage": "Manage Entity access ladders, profiles, grants, and restrictions",
     "entity:data_read": "Read Entity Data API schema, get, and query",
     "entity:data_write": "Write Entity Data API rows (also requires entity:data_read)",
 }
@@ -127,4 +130,11 @@ def normalize_permissions(permissions: list[str]) -> list[str]:
 def permissions_include(permissions: list[str] | tuple[str, ...], permission: str) -> bool:
     return permission in permissions
 
-GRANTING_PERMISSIONS: frozenset[str] = frozenset({"users:write", "roles:write", "identity_providers:write"})
+GRANTING_PERMISSIONS: frozenset[str] = frozenset(
+    {
+        "users:write",
+        "roles:write",
+        "identity_providers:write",
+        "entity:access_manage",
+    }
+)

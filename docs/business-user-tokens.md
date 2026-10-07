@@ -65,20 +65,29 @@ Rules:
 - Exactly one principal resolution path per request; do not mix partial credentials in conflicting ways.
 - HTTP MCP (`/mcp`) accepts **only** User PAT Bearer. A Session cookie is ignored and does not authenticate. Missing or invalid PAT is HTTP 401 before any protocol method.
 - MCP tools use the same Permission catalog as HTTP after the PAT is resolved.
-- Audit events for PAT create/deactivate/restore/delete and for actions performed via PAT record the User id (and token id where relevant, never plaintext). **Entity Data API** calls (Session or PAT) do not produce **Management Audit Event**s (`docs/api-contracts-entity-data.md`).
+- Audit events for PAT create/deactivate/restore/delete and for actions performed via PAT record the User id (and token id where relevant, never plaintext). **Entity Data API** calls (Session or PAT) do not produce **Management Audit Event**s; each call that reaches the access decision appends an Entity Access Log record carrying the User id and, for PAT calls, the token id (`docs/business-entity-access.md` §16).
 
-## 6. Non-Goals
+## 6. Relation To Entity Access Control
+
+- A PAT resolves to its User; Entity data access is then the User's effective **Access Grant**s through the User directly, the User's Role, and the User's **User Group**s (`docs/business-entity-access.md` §9.2). A PAT reaches exactly the Entity rows, columns, and cells its User reaches.
+- A PAT does not carry its own grants and does not narrow them. A request may narrow per call with the Entity Data API `narrow` key; that only reduces.
+- Deactivating or deleting a PAT stops its access immediately; it does not change the User's grants.
+- Binding a token to a subset of the User's identities is outside this document (§7).
+
+## 7. Non-Goals
 
 - OAuth2 / OIDC authorization code flows
 - Refresh-token pairs as a separate product surface
 - Client credentials / machine tokens
 - Admin listing of all users’ plaintext-capable tokens
 - Scope narrowing UI (may be added later; v1 = Role permissions)
+- Binding a PAT to a subset of its User's Roles, User Groups, or Entity grants
 - Hard-delete or admin restore of soft-deleted PATs
 
-## 7. References
+## 8. References
 
 - `docs/api-contracts-tokens.md`
 - `docs/api-contracts-auth.md` (Session remains cookie-based)
 - `docs/business-account.md`
 - `docs/business-metadata.md`
+- `docs/business-entity-access.md`

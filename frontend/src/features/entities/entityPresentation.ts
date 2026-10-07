@@ -111,6 +111,20 @@ export function referenceOptionLabel(input: {
   return `${title}（${tableName}）`;
 }
 
+/** Label for a stored User id on a display surface. A missing User stays the id. */
+export function userAttributeLabel(input: {
+  userId: string;
+  account?: string | null;
+  displayName?: string | null;
+}): string {
+  const account = input.account?.trim() ?? "";
+  const displayName = input.displayName?.trim() ?? "";
+  if (displayName && account && displayName !== account) {
+    return `${displayName} (${account})`;
+  }
+  return displayName || account || input.userId;
+}
+
 export function referenceSummaryLabel(input: {
   targetEntityId: string;
   selfEntityId: string | null;

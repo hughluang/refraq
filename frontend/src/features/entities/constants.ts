@@ -45,3 +45,5 @@ export const EMPTY_ATTRIBUTE: {
 };
 
 export const DROP_TABLE_PERMISSION = "entity:drop_table";
+export const ACCESS_MANAGE_PERMISSION = "entity:access_manage";
+export const DATA_READ_PERMISSION = "entity:data_read";

@@ -53,6 +53,8 @@ from backend.admin.routers.time_zones import router as time_zones_router
 from backend.admin.routers.tokens import router as tokens_router
 from backend.admin.routers.users import router as users_router
 from backend.admin.federation.router import router as federation_router
+from backend.admin.subjects import bind_dictionary_codes
+from backend.admin.subjects.router import router as subjects_router
 from backend.jobs.api import bind_schedule_name_store
 from backend.jobs.routers.jobs import router as jobs_mechanism_router
 from backend.metadata.catalog_embed_jobs import CatalogEmbedJobs
@@ -67,8 +69,14 @@ from backend.metadata.routers.sources import router as sources_router
 from backend.metadata.routers.structure_diffs import router as structure_diffs_router
 from backend.metadata.routers.type_mappings import router as type_mappings_router
 from backend.metadata.type_mappings.seeds import ensure_product_type_mappings
+from backend.entity.entity_db import (
+    open_entity_pool_when_persistent,
+    reset_entity_engine,
+)
+from backend.entity.access.reconcile import enqueue_stale_view_jobs
+from backend.entity.routers.access import router as entity_access_router
 from backend.entity.routers.data import router as entity_data_router
-from backend.entity.routers.data import router as entity_data_router
+from backend.entity.dictionaries.active_codes import DictionaryActiveCodes
 from backend.entity.routers.dictionaries import router as dictionaries_router
 from backend.entity.routers.entities import router as entities_router
 from backend.metadata.catalog_embed_jobs.schedule import ensure_catalog_embed_schedule
@@ -79,6 +87,8 @@ from backend.worker.parameters import assemble_system_parameters
 # Composition injects the Scheduled Task name adapter so jobs never imports worker.
 bind_schedule_name_store(get_schedule_store)
 bind_catalog_embed_jobs(CatalogEmbedJobs())
+# Composition injects Dictionary codes so admin never imports entity.
+bind_dictionary_codes(DictionaryActiveCodes())
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -113,14 +123,13 @@ def _bootstrap_site(target_settings: Settings) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    from backend.entity.entity_db import (
-        open_entity_pool_when_persistent,
-        reset_entity_engine,
-    )
-
     _bootstrap_site(settings)
     apply_http_runtime()
     open_entity_pool_when_persistent()
+    try:
+        enqueue_stale_view_jobs()
+    except Exception:
+        logger.exception("entity access view reconciliation failed")
     try:
         yield
     finally:
@@ -191,8 +200,10 @@ app.include_router(health_router)
 app.include_router(auth_router_instance)
 app.include_router(account_router)
 app.include_router(time_zones_router)
-app.include_router(users_router)
+# Federation's literal /users/pending-federated-identities must precede GET /users/{user_id}.
 app.include_router(federation_router)
+app.include_router(users_router)
+app.include_router(subjects_router)
 app.include_router(roles_router)
 app.include_router(console_router)
 app.include_router(settings_router)
@@ -209,6 +220,7 @@ app.include_router(structure_diffs_router)
 app.include_router(metadata_query_router)
 app.include_router(metadata_mcp_router)
 app.include_router(entities_router)
+app.include_router(entity_access_router)
 app.include_router(entity_data_router)
 app.include_router(dictionaries_router)
 app.include_router(jobs_mechanism_router)

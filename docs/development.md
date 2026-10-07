@@ -33,7 +33,7 @@ This document records the stable development conventions for contributors workin
 
 ### Dependencies (Postgres + Redis)
 
-- Start: `docker compose up -d` (Postgres image is `pgvector/pgvector:pg18`; `pg_trgm` and `pgvector` are required — `docs/env.md`). Compose also ensures database `refraq_entity` for `ENTITY_DATABASE_URL`.
+- Start: `docker compose up -d` (Postgres image is `pgvector/pgvector:pg18`; `pg_trgm` and `pgvector` are required — `docs/env.md`). Local compose creates database `refraq_entity` when it is missing. Then run `python -m backend.entity.bootstrap` with `ENTITY_ADMIN_DATABASE_URL`, `ENTITY_DATABASE_URL`, and `ENTITY_READER_DATABASE_URL` so the non-superuser roles exist before a persistent API or worker starts. Site compose runs that bootstrap inside `ensure-entity-db`.
 - Stop: `docker compose down`
 - A leftover PG16 volume or container data directory cannot start under PG18. Dump, replace the image, restore (`scripts/upgrade_platform_postgres_to_pg18.sh`), then Foundation Upgrade.
 

@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 SENTINEL = "__REFRAQ_RELEASE_TAG__"
-EXPECTED_SENTINEL_COUNT = 5
+EXPECTED_SENTINEL_COUNT = 6
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 PRODUCT_IMAGE_RE = re.compile(
     r"ghcr\.io/hughluang/refraq-(?:api|web):(\S+)"

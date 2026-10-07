@@ -19,6 +19,7 @@ from backend.admin.system_parameters import reset_system_parameters
 from backend.admin.branding.service import reset_branding_cache
 from backend.admin.branding.store import reset_branding_store
 from backend.admin.model_services import reset_model_service_store
+from backend.admin.subjects import reset_subject_store
 from backend.core.config import reset_settings_cache
 from backend.core.db import reset_db_singletons
 from backend.core.bulkhead import reset_peek_bulkhead
@@ -42,6 +43,8 @@ from backend.metadata.source_job_runner import reset_kind_execution_locks_for_te
 from backend.metadata.sources.store import reset_source_store
 from backend.metadata.structure_diffs.store import reset_structure_diff_store
 from backend.metadata.type_mappings.store import reset_type_mapping_store
+from backend.entity.access.enforce import reset_signing_ring
+from backend.entity.access.store import reset_access_store
 from backend.entity.dictionaries.store import reset_dictionary_store
 from backend.entity.locks import reset_entity_table_locks_for_tests
 from backend.entity.store import reset_entity_store
@@ -70,6 +73,7 @@ def _reset_foundation_singletons() -> None:
     reset_branding_store()
     reset_branding_cache()
     reset_model_service_store()
+    reset_subject_store()
     reset_provider_store()
     reset_binding_store()
     reset_pending_store()
@@ -87,6 +91,8 @@ def _reset_foundation_singletons() -> None:
     reset_type_mapping_store()
     reset_schedule_store()
     reset_entity_store()
+    reset_access_store()
+    reset_signing_ring()
     reset_dictionary_store()
     reset_entity_table_port()
     reset_entity_table_locks_for_tests()
@@ -102,6 +108,7 @@ def _reset_foundation_singletons() -> None:
     reset_branding_store()
     reset_branding_cache()
     reset_model_service_store()
+    reset_subject_store()
     reset_provider_store()
     reset_binding_store()
     reset_pending_store()
@@ -119,6 +126,7 @@ def _reset_foundation_singletons() -> None:
     reset_type_mapping_store()
     reset_schedule_store()
     reset_entity_store()
+    reset_access_store()
     reset_dictionary_store()
     reset_entity_table_port()
     reset_entity_table_locks_for_tests()

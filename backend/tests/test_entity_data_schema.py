@@ -39,6 +39,7 @@ from backend.entity.records import (  # noqa: E402
     EntityVersionRecord,
     attribute_to_dict,
 )
+from backend.entity.access.seed import prepare_legacy_entity  # noqa: E402
 from backend.entity.store import get_entity_store  # noqa: E402
 from backend.main import app  # noqa: E402
 
@@ -110,6 +111,7 @@ def _seed_serving(
     )
     store = get_entity_store()
     store.create_entity(entity, version)
+    prepare_legacy_entity(entity.id)
     if publishing:
         store.create_version(
             EntityVersionRecord(
@@ -227,8 +229,8 @@ def test_schema_deprecated_and_not_serving(client: TestClient) -> None:
     )
     get_entity_store().create_entity(entity, version)
     missing = client.post("/entities/draft_only/schema", json={})
-    assert missing.status_code == 422
-    assert missing.json()["code"] == "ENTITY_NOT_SERVING"
+    assert missing.status_code == 404
+    assert missing.json()["code"] == "ENTITY_NOT_FOUND"
 
 
 def test_missing_reference_snapshot_is_not_serving(client: TestClient) -> None:
@@ -430,6 +432,7 @@ def test_schema_dictionary_codes_writable_intersection(client: TestClient) -> No
         },
     )
     get_entity_store().create_entity(entity, version)
+    prepare_legacy_entity(entity.id)
     response = client.post("/entities/ticket/schema", json={})
     assert response.status_code == 200, response.text
     codes = {

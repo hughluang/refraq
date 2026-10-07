@@ -1,4 +1,9 @@
-"""Entity-database SQL for Entity Data API action verbs."""
+"""Entity-database SQL for Entity Data API action verbs.
+
+Reads select the caller's profile view on the reader connection. Writes run on the
+owner connection against the physical table and return only ``row_id``; the caller
+presents written rows through its read view.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +22,7 @@ from backend.entity.data.filters import CompiledFilter
 from backend.entity.data.head import HeadTarget
 from backend.entity.data.values import decode_row
 from backend.entity.ddl import ident
-from backend.entity.entity_db import get_entity_engine
+from backend.entity.entity_db import get_entity_engine, get_entity_reader_engine
 from backend.entity.errors import (
     EntityNotServing,
     EntityRowConflict,
@@ -27,20 +32,18 @@ from backend.entity.errors import (
 )
 
 __all__ = [
-    "delete_by_column",
-    "delete_by_id",
-    "delete_where",
+    "delete_ids",
     "entity_connection",
-    "insert_one",
+    "entity_read_connection",
+    "insert_row",
     "query_keyset",
     "query_offset",
     "require_entity_capacity",
+    "require_entity_reader_capacity",
     "select_by_column",
-    "select_by_id",
-    "update_by_column",
-    "update_by_id",
-    "update_where",
-    "upsert_row",
+    "select_ids",
+    "select_matching",
+    "update_ids",
 ]
 
 
@@ -55,8 +58,20 @@ def require_entity_capacity() -> Engine:
         raise mapped or PlatformCapacityExceeded() from exc
 
 
+def require_entity_reader_capacity() -> Engine:
+    settings = get_settings()
+    if settings.store_backend == "memory":
+        raise PlatformCapacityExceeded()
+    try:
+        return get_entity_reader_engine()
+    except PoolTimeoutError as exc:
+        mapped = map_platform_db_error(exc)
+        raise mapped or PlatformCapacityExceeded() from exc
+
+
 @contextmanager
 def entity_connection() -> Iterator[Connection]:
+    """Owner connection for writes. Reads use ``entity_read_connection``."""
     engine = require_entity_capacity()
     try:
         with engine.begin() as conn:
@@ -65,28 +80,54 @@ def entity_connection() -> Iterator[Connection]:
         raise _translate(exc) from exc
 
 
-def insert_one(
-    conn: Connection, target: HeadTarget, values: dict[str, Any]
-) -> dict[str, Any]:
+@contextmanager
+def entity_read_connection(ctx: str | None) -> Iterator[Connection]:
+    """``refraq_reader`` connection with the signed access context set for this transaction.
+
+    Profile views are granted only to the reader role; the owner cannot select them.
+    """
+    engine = require_entity_reader_capacity()
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("SELECT set_config('app.ctx', :token, true)"),
+                {"token": ctx or ""},
+            )
+            yield conn
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
+def _read_from(target: HeadTarget) -> str:
+    return target.read_relation or target.qualified_table
+
+
+def insert_row(conn: Connection, target: HeadTarget, values: dict[str, Any]) -> int:
     columns = list(values.keys())
     col_sql = ", ".join(ident(name) for name in columns)
     param_sql = ", ".join(f":{name}" for name in columns)
-    returning = _returning_cols(target)
     sql = (
         f"INSERT INTO {target.qualified_table} ({col_sql}) "
-        f"VALUES ({param_sql}) RETURNING {returning}"
+        f"VALUES ({param_sql}) RETURNING {ident('row_id')}"
     )
-    row = conn.execute(text(sql), values).one()
-    return decode_row(_column_names(target), tuple(row), target)
+    return int(conn.execute(text(sql), values).scalar_one())
 
 
 def select_by_column(
-    conn: Connection, target: HeadTarget, column: str, value: Any
+    conn: Connection,
+    target: HeadTarget,
+    column: str,
+    value: Any,
+    *,
+    lock: bool = False,
 ) -> dict[str, Any]:
+    """One row by locator. ``lock`` takes ``FOR UPDATE`` on the physical table."""
     returning = _returning_cols(target)
+    relation = target.qualified_table if lock else _read_from(target)
     sql = (
-        f"SELECT {returning} FROM {target.qualified_table} "
+        f"SELECT {returning} FROM {relation} "
         f"WHERE {ident(column)} = :_locator"
+        + (" FOR UPDATE" if lock else "")
     )
     row = conn.execute(text(sql), {"_locator": value}).one_or_none()
     if row is None:
@@ -94,81 +135,72 @@ def select_by_column(
     return decode_row(_column_names(target), tuple(row), target)
 
 
-def select_by_id(
-    conn: Connection, target: HeadTarget, row_id: int
-) -> dict[str, Any]:
+def select_ids(
+    conn: Connection, target: HeadTarget, row_ids: list[int]
+) -> dict[int, dict[str, Any]]:
+    """Rows by id from the read relation; ids the relation does not show are absent."""
+    if not row_ids:
+        return {}
     returning = _returning_cols(target)
     sql = (
-        f"SELECT {returning} FROM {target.qualified_table} "
-        f"WHERE {ident('row_id')} = :row_id"
+        f"SELECT {returning} FROM {_read_from(target)} "
+        f"WHERE {ident('row_id')} = ANY(:ids)"
     )
-    row = conn.execute(text(sql), {"row_id": row_id}).one_or_none()
-    if row is None:
-        raise EntityRowNotFound()
-    return decode_row(_column_names(target), tuple(row), target)
+    rows = conn.execute(text(sql), {"ids": list(row_ids)}).all()
+    names = _column_names(target)
+    decoded = [decode_row(names, tuple(row), target) for row in rows]
+    return {int(row["row_id"]): row for row in decoded}
 
 
-def update_by_column(
+def update_ids(
     conn: Connection,
     target: HeadTarget,
-    column: str,
-    value: Any,
+    row_ids: list[int],
     values: dict[str, Any],
-) -> dict[str, Any]:
+) -> int:
+    if not row_ids:
+        return 0
     assigns = ", ".join(f"{ident(name)} = :{name}" for name in values)
-    returning = _returning_cols(target)
     params = dict(values)
-    params["_locator"] = value
+    params["ids"] = row_ids
     sql = (
         f"UPDATE {target.qualified_table} SET {assigns} "
-        f"WHERE {ident(column)} = :_locator RETURNING {returning}"
+        f"WHERE {ident('row_id')} = ANY(:ids)"
     )
-    row = conn.execute(text(sql), params).one_or_none()
-    if row is None:
-        raise EntityRowNotFound()
-    return decode_row(_column_names(target), tuple(row), target)
+    result = conn.execute(text(sql), params)
+    return int(result.rowcount or 0)
 
 
-def update_by_id(
+def delete_ids(conn: Connection, target: HeadTarget, row_ids: list[int]) -> int:
+    if not row_ids:
+        return 0
+    result = conn.execute(
+        text(
+            f"DELETE FROM {target.qualified_table} "
+            f"WHERE {ident('row_id')} = ANY(:ids)"
+        ),
+        {"ids": row_ids},
+    )
+    return int(result.rowcount or 0)
+
+
+def select_matching(
     conn: Connection,
     target: HeadTarget,
-    row_id: int,
-    values: dict[str, Any],
-) -> dict[str, Any]:
-    assigns = ", ".join(f"{ident(name)} = :{name}" for name in values)
+    compiled: CompiledFilter,
+) -> list[dict[str, Any]]:
+    """Physical rows matching a filter, locked for write attribution. Owner connection."""
+    where_sql, params = _where(compiled)
     returning = _returning_cols(target)
-    params = dict(values)
-    params["row_id"] = row_id
     sql = (
-        f"UPDATE {target.qualified_table} SET {assigns} "
-        f"WHERE {ident('row_id')} = :row_id RETURNING {returning}"
+        f"SELECT {returning} FROM {target.qualified_table}{where_sql} "
+        f"ORDER BY {ident('row_id')} ASC LIMIT {ROW_WRITE_LIMIT + 1} FOR UPDATE"
     )
-    row = conn.execute(text(sql), params).one_or_none()
-    if row is None:
-        raise EntityRowNotFound()
-    return decode_row(_column_names(target), tuple(row), target)
-
-
-def delete_by_column(
-    conn: Connection, target: HeadTarget, column: str, value: Any
-) -> None:
-    sql = (
-        f"DELETE FROM {target.qualified_table} "
-        f"WHERE {ident(column)} = :_locator"
-    )
-    result = conn.execute(text(sql), {"_locator": value})
-    if result.rowcount == 0:
-        raise EntityRowNotFound()
-
-
-def delete_by_id(conn: Connection, target: HeadTarget, row_id: int) -> None:
-    sql = (
-        f"DELETE FROM {target.qualified_table} "
-        f"WHERE {ident('row_id')} = :row_id"
-    )
-    result = conn.execute(text(sql), {"row_id": row_id})
-    if result.rowcount == 0:
-        raise EntityRowNotFound()
+    rows = conn.execute(text(sql), params).all()
+    if len(rows) > ROW_WRITE_LIMIT:
+        raise EntityRowLimitExceeded()
+    names = _column_names(target)
+    return [decode_row(names, tuple(row), target) for row in rows]
 
 
 def query_offset(
@@ -184,7 +216,7 @@ def query_offset(
     where_sql, params = _where(compiled)
     select_cols = ", ".join(ident(name) for name in fields)
     sql = (
-        f"SELECT {select_cols} FROM {target.qualified_table}{where_sql} "
+        f"SELECT {select_cols} FROM {_read_from(target)}{where_sql} "
         f"ORDER BY {ident('row_id')} ASC LIMIT :_limit OFFSET :_offset"
     )
     params = dict(params)
@@ -194,7 +226,7 @@ def query_offset(
     items = [decode_row(fields, tuple(row), target) for row in rows]
     total: int | None = None
     if include_total:
-        count_sql = f"SELECT count(*) FROM {target.qualified_table}{where_sql}"
+        count_sql = f"SELECT count(*) FROM {_read_from(target)}{where_sql}"
         count_params = {k: v for k, v in params.items() if not k.startswith("_")}
         total = int(conn.execute(text(count_sql), count_params).scalar_one())
     return items, total
@@ -222,7 +254,7 @@ def query_keyset(
         )
     select_cols = ", ".join(ident(name) for name in fields)
     sql = (
-        f"SELECT {select_cols} FROM {target.qualified_table}{where_sql} "
+        f"SELECT {select_cols} FROM {_read_from(target)}{where_sql} "
         f"ORDER BY {ident('row_id')} ASC LIMIT :_limit"
     )
     params["_limit"] = limit + 1
@@ -233,117 +265,6 @@ def query_keyset(
     if len(rows) > limit:
         next_after = int(items[-1]["row_id"])
     return items, next_after
-
-
-def update_where(
-    conn: Connection,
-    target: HeadTarget,
-    *,
-    compiled: CompiledFilter,
-    values: dict[str, Any],
-) -> int:
-    ids = _lock_matching_ids(conn, target, compiled)
-    if not ids:
-        return 0
-    assigns = ", ".join(f"{ident(name)} = :{name}" for name in values)
-    params = dict(values)
-    id_keys = []
-    for index, row_id in enumerate(ids):
-        key = f"_id{index}"
-        params[key] = row_id
-        id_keys.append(f":{key}")
-    sql = (
-        f"UPDATE {target.qualified_table} SET {assigns} "
-        f"WHERE {ident('row_id')} IN ({', '.join(id_keys)})"
-    )
-    result = conn.execute(text(sql), params)
-    return int(result.rowcount or 0)
-
-
-def delete_where(
-    conn: Connection,
-    target: HeadTarget,
-    *,
-    compiled: CompiledFilter,
-) -> int:
-    ids = _lock_matching_ids(conn, target, compiled)
-    if not ids:
-        return 0
-    params: dict[str, Any] = {}
-    id_keys = []
-    for index, row_id in enumerate(ids):
-        key = f"_id{index}"
-        params[key] = row_id
-        id_keys.append(f":{key}")
-    sql = (
-        f"DELETE FROM {target.qualified_table} "
-        f"WHERE {ident('row_id')} IN ({', '.join(id_keys)})"
-    )
-    result = conn.execute(text(sql), params)
-    return int(result.rowcount or 0)
-
-
-def upsert_row(
-    conn: Connection,
-    target: HeadTarget,
-    *,
-    key_name: str,
-    key_value: Any,
-    values: dict[str, Any],
-) -> tuple[dict[str, Any], bool]:
-    """FOR UPDATE + INSERT ON CONFLICT DO NOTHING then SELECT/UPDATE.
-
-    Returns (row, created).
-    """
-    lock_sql = (
-        f"SELECT {ident('row_id')} FROM {target.qualified_table} "
-        f"WHERE {ident(key_name)} = :key FOR UPDATE"
-    )
-    existing = conn.execute(text(lock_sql), {"key": key_value}).one_or_none()
-    if existing is not None:
-        row_id = int(existing[0])
-        if not values:
-            return select_by_id(conn, target, row_id), False
-        updated = update_by_id(conn, target, row_id, values)
-        return updated, False
-
-    insert_values = dict(values)
-    insert_values[key_name] = key_value
-    columns = list(insert_values.keys())
-    col_sql = ", ".join(ident(name) for name in columns)
-    param_sql = ", ".join(f":{name}" for name in columns)
-    insert_sql = (
-        f"INSERT INTO {target.qualified_table} ({col_sql}) "
-        f"VALUES ({param_sql}) "
-        f"ON CONFLICT ({ident(key_name)}) DO NOTHING "
-        f"RETURNING {ident('row_id')}"
-    )
-    inserted = conn.execute(text(insert_sql), insert_values).one_or_none()
-    if inserted is not None:
-        return select_by_id(conn, target, int(inserted[0])), True
-    # Concurrent insert won; lock and update.
-    existing = conn.execute(text(lock_sql), {"key": key_value}).one_or_none()
-    if existing is None:
-        raise EntityRowConflict()
-    row_id = int(existing[0])
-    if not values:
-        return select_by_id(conn, target, row_id), False
-    return update_by_id(conn, target, row_id, values), False
-
-
-def _lock_matching_ids(
-    conn: Connection, target: HeadTarget, compiled: CompiledFilter
-) -> list[int]:
-    where_sql, params = _where(compiled)
-    sql = (
-        f"SELECT {ident('row_id')} FROM {target.qualified_table}{where_sql} "
-        f"ORDER BY {ident('row_id')} ASC "
-        f"LIMIT {ROW_WRITE_LIMIT + 1} FOR UPDATE"
-    )
-    rows = conn.execute(text(sql), params).all()
-    if len(rows) > ROW_WRITE_LIMIT:
-        raise EntityRowLimitExceeded()
-    return [int(row[0]) for row in rows]
 
 
 def _where(compiled: CompiledFilter | None) -> tuple[str, dict[str, Any]]:

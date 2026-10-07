@@ -84,10 +84,10 @@ def http_list_entities(
         default=None
     ),
     page: PageParams = Depends(page_params(ENTITY_LIST)),
-    _: UserRecord = Depends(require_permission("entity:read")),
+    user: UserRecord = Depends(require_permission("entity:read")),
 ) -> BusinessEntityListResponse:
     items, total = list_entities(
-        q=q, statuses=status, limit=page.limit, offset=page.offset
+        q=q, statuses=status, limit=page.limit, offset=page.offset, user=user
     )
     return BusinessEntityListResponse(
         items=[BusinessEntityOut.model_validate(item) for item in items],
@@ -123,10 +123,10 @@ def http_create_entity(
 @router.get("/entities/{entity_id}", response_model=BusinessEntityResponse)
 def http_get_entity(
     entity_id: str,
-    _: UserRecord = Depends(require_permission("entity:read")),
+    user: UserRecord = Depends(require_permission("entity:read")),
 ) -> BusinessEntityResponse:
     return BusinessEntityResponse(
-        entity=BusinessEntityOut.model_validate(get_entity(entity_id))
+        entity=BusinessEntityOut.model_validate(get_entity(entity_id, user=user))
     )
 
 
@@ -198,9 +198,11 @@ def http_classify_entity(
 def http_list_versions(
     entity_id: str,
     page: PageParams = Depends(page_params(ENTITY_LIST)),
-    _: UserRecord = Depends(require_permission("entity:read")),
+    user: UserRecord = Depends(require_permission("entity:read")),
 ) -> EntityVersionListResponse:
-    items, total = list_versions(entity_id, limit=page.limit, offset=page.offset)
+    items, total = list_versions(
+        entity_id, limit=page.limit, offset=page.offset, user=user
+    )
     return EntityVersionListResponse(
         items=[EntityVersionOut.model_validate(item) for item in items],
         total=total,
@@ -236,10 +238,12 @@ def http_open_version(
 def http_get_version(
     entity_id: str,
     version_id: str,
-    _: UserRecord = Depends(require_permission("entity:read")),
+    user: UserRecord = Depends(require_permission("entity:read")),
 ) -> EntityVersionResponse:
     return EntityVersionResponse(
-        version=EntityVersionOut.model_validate(get_version(entity_id, version_id))
+        version=EntityVersionOut.model_validate(
+            get_version(entity_id, version_id, user=user)
+        )
     )
 
 

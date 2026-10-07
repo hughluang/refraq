@@ -2,19 +2,33 @@ export const ENTITY_DETAIL_TABS = [
   "overview",
   "attributes",
   "versions",
+  "access",
+  "data",
 ] as const;
 
 export type EntityDetailTab = (typeof ENTITY_DETAIL_TABS)[number];
 
 export function parseEntityDetailTab(raw: string | null): EntityDetailTab {
-  if (raw === "attributes" || raw === "versions" || raw === "overview") {
+  if (
+    raw === "attributes" ||
+    raw === "versions" ||
+    raw === "overview" ||
+    raw === "access" ||
+    raw === "data"
+  ) {
     return raw;
   }
   return "overview";
 }
 
 export function isEntityDetailTab(raw: string | null): raw is EntityDetailTab {
-  return raw === "overview" || raw === "attributes" || raw === "versions";
+  return (
+    raw === "overview" ||
+    raw === "attributes" ||
+    raw === "versions" ||
+    raw === "access" ||
+    raw === "data"
+  );
 }
 
 export function entityDetailHref(

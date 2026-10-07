@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from backend.entity.attribute_type import resolve
+from backend.entity.data.values import user_display_labels
 from backend.entity.dictionaries.store import get_dictionary_store
 from backend.entity.dictionary_binding import relevant_snapshot
-from backend.entity.lifecycle import ever_published
+from backend.entity.lifecycle import PUBLISHED, ever_published, latest_published_of
 from backend.entity.records import (
     AttributeRecord,
     BusinessEntityRecord,
@@ -19,8 +20,22 @@ from backend.entity.store import EntityStore, get_entity_store
 
 __all__ = [
     "entity_out",
+    "present_user_value",
     "version_out",
 ]
+
+
+def present_user_value(user_id: str | None) -> dict[str, str] | None:
+    """Display surface for one stored User id.
+
+    A missing or disabled-then-deleted User keeps the id and omits the names.
+    """
+    if not user_id:
+        return None
+    found = user_display_labels([user_id]).get(user_id)
+    if found is None:
+        return {"id": user_id}
+    return {"id": user_id, **found}
 
 
 def attribute_payload(
@@ -28,9 +43,11 @@ def attribute_payload(
     attr: AttributeRecord,
     *,
     version: EntityVersionRecord | None = None,
+    attribute_id: str | None = None,
 ) -> dict[str, Any]:
     """Stored attribute shape, plus read-only reference and dictionary fields."""
     payload = attribute_to_dict(attr)
+    payload["attribute_id"] = attribute_id
     reads = resolve(attr.type).reads
     if "target" in reads:
         payload["target"] = _reference_target(store, attr.target_entity_id)
@@ -106,6 +123,22 @@ def _reference_target(
     }
 
 
+def _attribute_ids(
+    store: EntityStore, version: EntityVersionRecord
+) -> dict[str, str]:
+    """Published versions report their stored ids; drafts borrow the head's by name."""
+    if version.publish_status == PUBLISHED:
+        source: list[AttributeRecord] = version.attributes
+    else:
+        latest = latest_published_of(store.list_all_versions(version.entity_id))
+        source = latest.attributes if latest is not None else []
+    return {
+        attr.name: attr.attribute_id
+        for attr in source
+        if attr.attribute_id is not None
+    }
+
+
 def entity_out(
     entity: BusinessEntityRecord,
     *,
@@ -148,6 +181,7 @@ def version_out(
     include_attributes: bool,
     physical_table: str | None,
     alignment: dict[str, Any],
+    attribute_names: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "id": version.id,
@@ -159,12 +193,18 @@ def version_out(
         "created_at": version.created_at,
         "updated_at": version.updated_at,
     }
+    shown = version.attributes
+    if attribute_names is not None:
+        shown = [attr for attr in version.attributes if attr.name in attribute_names]
     if include_attributes:
         store = get_entity_store()
+        ids = _attribute_ids(store, version)
         payload["attributes"] = [
-            attribute_payload(store, attr, version=version)
-            for attr in version.attributes
+            attribute_payload(
+                store, attr, version=version, attribute_id=ids.get(attr.name)
+            )
+            for attr in shown
         ]
     else:
-        payload["attribute_count"] = len(version.attributes)
+        payload["attribute_count"] = len(shown)
     return payload

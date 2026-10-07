@@ -13,6 +13,7 @@ export const ATTRIBUTE_TYPES = [
   "json",
   "dictionary",
   "reference",
+  "user",
 ] as const;
 
 export type AttributeType = (typeof ATTRIBUTE_TYPES)[number];
@@ -74,6 +75,10 @@ export const ATTRIBUTE_TYPE_CATALOG = {
       target_entity_id: { kind: "string" },
     },
     physical: { template: "VARCHAR | BIGINT", bare: "VARCHAR | BIGINT" },
+  },
+  user: {
+    config: {},
+    physical: { template: "VARCHAR(64)", bare: "VARCHAR(64)" },
   },
 } as const satisfies Record<
   AttributeType,

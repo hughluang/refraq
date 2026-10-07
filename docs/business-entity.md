@@ -2,7 +2,7 @@
 
 ## 1. Scope
 
-This document defines the **Business Entity** definition surface: how a reusable business thing is declared, what meaning its declaration must carry, how an unpublished version is saved, how **Publish** creates that version's **Entity Table**, how a published Entity is locked and iterated, how an Entity is deprecated, and how a never-published definition is deleted. It defines the authorization, Console, and audit rules for that surface. The definition surface is Console HTTP. The **MCP endpoint** does not expose Business Entity.
+This document defines the **Business Entity** definition surface: how a reusable business thing is declared, what meaning its declaration must carry, how an unpublished version is saved, how **Publish** creates that version's **Entity Table**, how a published Entity is locked and iterated, how an Entity is deprecated, and how a never-published definition is deleted. It defines the authorization, Console, and audit rules for that surface. The definition surface is Console HTTP. The Metadata **MCP endpoint** does not expose Business Entity. Who may read or write which rows and attributes of Entity data is **Entity Access Control** (`docs/business-entity-access.md`).
 
 Mapping a source column onto an attribute, transforming values, channel load, and recording lineage belong to a **Data Channel**. Synchronous head-table schema discovery and row read/write belong to the **Entity Data API** (`docs/api-contracts-entity-data.md`). Both may write the same head table; the platform does not tag row provenance.
 
@@ -11,6 +11,7 @@ Related boundaries:
 - Sources, catalog, **Object Semantics**, **Normalized Type**, and read-only **Controlled Query**: `docs/business-metadata.md`. Sources stay read-only registered data origins; refraq does not create tables inside one.
 - Platform **Job**: `docs/business-jobs.md`. Platform **Scheduled Task**: `docs/business-scheduled-tasks.md`. Publish and table drop use the Job mechanism and do not make Entity a scheduling domain.
 - **Permission** and role grants: `docs/business-login-auth.md`.
+- Row, column, and cell access to Entity data, definition visibility, and the entity database roles that enforce them: `docs/business-entity-access.md`, `docs/api-contracts-entity-access.md`.
 - Definition HTTP contract: `docs/api-contracts-entity.md`. Entity Data API: `docs/api-contracts-entity-data.md`.
 - Console shell and module registration: `docs/business-management-console.md`.
 - Problem Codes and error envelope: `docs/conventions-errors.md`. List envelopes: `docs/conventions-pagination.md`. **Instant** handling: `docs/conventions-time.md`.
@@ -47,13 +48,13 @@ The definition carries no source binding, extract SQL, transform, dependency gra
 
 A version may declare no attributes while unpublished. Each attribute has one **Attribute Type** and a `config` object for that type. Attributes share one name namespace inside an **Entity Version**. There is no `kind`.
 
-The closed set is `string`, `text`, `integer`, `decimal`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, `dictionary`, and `reference`. It is not the **Normalized Type** set. Normalized Type stays the catalog column vocabulary assigned by **Type Mapping**. **Semantic Type**, a JSON Schema or OpenAPI format, a unit, a quantity, a multi-value, a file, a localized label, and `array` are not members and are not config keys. A JSON array is a value of `json`, not its own type. A unit or quantity, if added later, is a new type or a composite value, not a key of `decimal` config. A multi-value is not a cardinality on `reference` config. A dictionary is not a constraint on `string` or `integer`.
+The closed set is `string`, `text`, `integer`, `decimal`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, `dictionary`, `reference`, and `user`. It is not the **Normalized Type** set. Normalized Type stays the catalog column vocabulary assigned by **Type Mapping**. **Semantic Type**, a JSON Schema or OpenAPI format, a unit, a quantity, a multi-value, a file, a localized label, and `array` are not members and are not config keys. A JSON array is a value of `json`, not its own type. A unit or quantity, if added later, is a new type or a composite value, not a key of `decimal` config. A multi-value is not a cardinality on `reference` config. A dictionary is not a constraint on `string` or `integer`.
 
-Every attribute also declares whether it is `required`, whether it is `unique`, whether it is `indexed`, whether it is the version's **Business Key** (`business_key`), and an optional `description`. `required`, `unique`, `indexed`, and `business_key` default to false. A `number` attribute may be unique or indexed. It is a poor business key: the value is approximate and may be NaN. A **Business Key** is defined in §2.6.
+Every attribute also declares whether it is `required`, whether it is `unique`, whether it is `indexed`, whether it is the version's **Business Key** (`business_key`), and an optional `description`. Every attribute also carries a server-assigned `attribute_id`: publish gives an attribute the id of the same-named attribute in the latest published version, and a new id otherwise. Access policy names attributes by that id, so renaming an attribute makes it a new attribute. `required`, `unique`, `indexed`, and `business_key` default to false. A `number` attribute may be unique or indexed. It is a poor business key: the value is approximate and may be NaN. A **Business Key** is defined in §2.6.
 
 `string` requires `config.max_length`, an integer from 1 through 65535. There is no default. 65535 is the product cap for a bounded string, not a ceiling for all text and not the Postgres `VARCHAR` limit. Longer or unbounded text is `text`.
 
-`text`, `integer`, `number`, `boolean`, `date`, `timestamp`, `time`, and `json` require `config` to be `{}`. `timestamp` is one instant. The attribute does not choose a timezone. `json` carries a JSON document, including a JSON array, and does not carry a schema, a path, or a format.
+`text`, `integer`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, and `user` require `config` to be `{}`. `user` stores the id of one **User** and is not a Business Key (`docs/business-entity-access.md` §3). `timestamp` is one instant. The attribute does not choose a timezone. `json` carries a JSON document, including a JSON array, and does not carry a schema, a path, or a format.
 
 `decimal` requires `config.precision` (an integer from 1 through 1000) and `config.scale` (an integer from 0 through `precision`). There is no default.
 
@@ -164,7 +165,7 @@ Deprecate is allowed while the current version is still unpublished (for example
 
 Entity Tables live in an entity database that refraq owns, declared by its own connection setting separate from the metadata database (`docs/env.md` owns the variable). Keeping the two apart keeps the platform connection budget in `docs/business-metadata.md` honest about metadata volume, and leaves the entity database free to grow with business data.
 
-The connection setting is not required to point at a separate server or a separate database. The product always treats it as a separate engine, a separate pool, and a separate budget line, and never collapses two identical URLs onto one engine. The worker opens the entity pool for publish and drop Jobs. Persistent API opens a process-local entity pool for the **Entity Data API**. MCP does not open the entity pool.
+The entity database must be a different database from the metadata database; it may share a server. Startup refuses a configuration where both settings name the same database. Runtime connections to the entity database never use a superuser: the owner connection runs DDL and writes, and a separate read-only reader connection serves reads through **Profile View**s (`docs/business-entity-access.md` §15). A bootstrap command, run with admin credentials that runtime processes never hold, creates the roles, schemas, and functions. The worker opens the owner pool for publish, drop, and view regeneration Jobs. Persistent API opens process-local owner and reader pools for the **Entity Data API**. The Metadata MCP process does not open an entity pool.
 
 An Entity Table is never created inside a **Source**. A Source is a read-only registered data origin; the only caller SQL refraq sends to one is a single guarded read (**Controlled Query**, **Catalog Sample**).
 
@@ -174,9 +175,9 @@ Entity Tables are not collected as **Catalog Object**s. The Entity definition is
 
 Creating or saving a version has no cross-database side effect. The definition lands first and is immediately readable. The table appears only when Publish succeeds.
 
-The Job creates that version's physical table under the name in §4.3. It does not ALTER a published table's columns. Publishing a successor leaves the previous physical table in place, replaces the stem view so it selects the new table, and then stores `published`. A name collision with a relation already present in the entity schema fails the Job with `ENTITY_TABLE_NAME_CONFLICT` and is never auto-suffixed around the collision.
+The Job creates that version's physical table under the name in §4.3. It does not ALTER a published table's columns. Publishing a successor leaves the previous physical table in place, replaces the stem view so it selects the new table, and then stores `published`. The same entity-database transaction regenerates the Entity's Profile Views for the new head; any failure rolls the publish back. A name collision with a relation already present in `entity_data` fails the Job with `ENTITY_TABLE_NAME_CONFLICT` and is never auto-suffixed around the collision.
 
-The product head is the latest published version that still has a table. That fact is metadata. The stem view is replaced before `published` is stored. Until that store commits, SQL against the stem may already read the new table, and the **Entity Data API** still exposes the previous head. After `published` is stored, the API's schema and row verbs move to the new empty table. Product writes from a **Data Channel** and from the Entity Data API address the head's physical table and do not write a superseded version. Direct SQL against a physical table name is not revoked by this rule. Channel write admission belongs to **Data Channel**.
+The product head is the latest published version that still has a table. That fact is metadata. The stem view is replaced before `published` is stored. Until that store commits, SQL against the stem may already read the new table, and the **Entity Data API** still exposes the previous head. After `published` is stored, the API's schema and row verbs move to the new empty table. Product writes from a **Data Channel** and from the Entity Data API address the head's physical table and do not write a superseded version. Physical tables, including superseded ones, are not readable by the runtime reader; only the head's Profile Views are. Channel write admission belongs to **Data Channel**.
 
 ### 4.3 Physical Naming And Collision
 
@@ -191,15 +192,15 @@ Reported names:
 
 Opening a new version does not move the view. The prior published version's physical table stays in place. A successor publish replaces the stem view so it selects the new table, and then stores `published`. A **Data Channel** may bind by **Entity Version** id and write only when that version is the head. The **Entity Data API** always addresses the metadata head by `table_name`.
 
-All DDL is schema-qualified against the configured entity schema (`REFRAQ_ENTITY_DB_SCHEMA`, default `public`). The product uses that schema and never creates it. Emptiness and collision checks are evaluated in that schema so their meaning does not drift with a connection-level `search_path`.
+Physical tables and stem views live in the fixed schema `entity_data`; Profile Views live in `entity_access`; signature and mask functions live in `acl`. The bootstrap creates these schemas. All DDL is schema-qualified, and emptiness and collision checks are evaluated in `entity_data` so their meaning does not drift with a connection-level `search_path`.
 
-Two Business Entities cannot collide, because `table_name` is unique. A physical table name, or the stem view, may still collide with a relation already present in that schema. Publish then fails with `ENTITY_TABLE_NAME_CONFLICT`. refraq does not rename around a collision.
+Two Business Entities cannot collide, because `table_name` is unique. A physical table name, or the stem view, may still collide with a relation already present in `entity_data`. Publish then fails with `ENTITY_TABLE_NAME_CONFLICT`. refraq does not rename around a collision.
 
 Constraints and indexes are named from the physical table, so two versions do not share them. Publish does not rename a superseded table.
 
 ### 4.4 Attribute Type To Physical Type
 
-Each **Attribute Type** maps to one physical type in the entity database engine. That mapping is product-owned and fixed; it is not a maintainable registry and not a **System Parameter**. It differs from **Type Mapping**, which classifies many engines' native types *into* **Normalized Type**. Here there is a single target engine and no second type registry for an operator to maintain. `string` is `VARCHAR(max_length)`. `text` is `TEXT`. `integer` is `BIGINT`. `decimal` is `NUMERIC(precision, scale)`. `number` is `DOUBLE PRECISION`. `boolean`, `date`, `timestamp`, and `time` are `BOOLEAN`, `DATE`, `TIMESTAMPTZ`, and `TIME`. `json` is `JSONB`. `dictionary` is `VARCHAR(64)` plus a CHECK that non-null values are members of the codes snapshotted from the **Dictionary** at publish; `required` decides whether the column is `NOT NULL`. It is not a Postgres ENUM. Changing the Dictionary does not `ALTER` that CHECK. An **Entity Reference** is not a foreign key. Its column type is the snapshotted target **Business Key**: `VARCHAR(max_length)` when that key is `string`, and `BIGINT` when it is `integer`. An **Inbound Reference** creates no column. Publish creates that version's empty physical table. It does not `ALTER` a published column or CHECK when the classifier reports `non_breaking` for a wider `max_length` or an added code. Publishing a successor does not rewrite values already stored in referring tables; those values are target business keys and stay valid on the new head when the Business Key is unchanged.
+Each **Attribute Type** maps to one physical type in the entity database engine. That mapping is product-owned and fixed; it is not a maintainable registry and not a **System Parameter**. It differs from **Type Mapping**, which classifies many engines' native types *into* **Normalized Type**. Here there is a single target engine and no second type registry for an operator to maintain. `string` is `VARCHAR(max_length)`. `text` is `TEXT`. `integer` is `BIGINT`. `decimal` is `NUMERIC(precision, scale)`. `number` is `DOUBLE PRECISION`. `boolean`, `date`, `timestamp`, and `time` are `BOOLEAN`, `DATE`, `TIMESTAMPTZ`, and `TIME`. `json` is `JSONB`. `user` is `VARCHAR(64)` holding a User id, with no foreign key. `dictionary` is `VARCHAR(64)` plus a CHECK that non-null values are members of the codes snapshotted from the **Dictionary** at publish; `required` decides whether the column is `NOT NULL`. It is not a Postgres ENUM. Changing the Dictionary does not `ALTER` that CHECK. An **Entity Reference** is not a foreign key. Its column type is the snapshotted target **Business Key**: `VARCHAR(max_length)` when that key is `string`, and `BIGINT` when it is `integer`. An **Inbound Reference** creates no column. Publish creates that version's empty physical table. It does not `ALTER` a published column or CHECK when the classifier reports `non_breaking` for a wider `max_length` or an added code. Publishing a successor does not rewrite values already stored in referring tables; those values are target business keys and stay valid on the new head when the Business Key is unchanged.
 
 ## 5. Supersession And Disposal
 
@@ -217,13 +218,14 @@ It is refused while a **Data Channel** references any version, rejected with `EN
 
 | Permission | Grants |
 | --- | --- |
-| `entity:read` | Read Business Entity definitions, versions, and attributes, and read **Dictionaries** |
+| `entity:read` | Read Business Entity definitions, versions, and attributes, and read **Dictionaries**. Which Entities and attributes a holder sees follows `docs/business-entity-access.md` §12 |
 | `entity:write` | Create and save unpublished definitions, publish, open versions, deprecate, and delete a never-published definition; create, update, and delete **Dictionaries** |
 | `entity:drop_table` | Enqueue an **Entity Table** drop (§5) |
-| `entity:data_read` | **Entity Data API** schema, get, and query (`docs/api-contracts-entity-data.md`) |
-| `entity:data_write` | Entity Data API write verbs; always required together with `entity:data_read` |
+| `entity:access_manage` | Manage presentation ladders, **Access Profile**s, **Access Grant**s, and **Access Restriction**s (`docs/business-entity-access.md`) |
+| `entity:data_read` | Master switch for **Entity Data API** schema, get, and query (`docs/api-contracts-entity-data.md`); data is reached only through an effective **Access Grant** |
+| `entity:data_write` | Master switch for Entity Data API write verbs; always required together with `entity:data_read`; a write is reached only through an attributing **Access Grant** |
 
-`entity:drop_table` is in the Permission catalog and is not seeded onto the `operator` **Role**. It is not implied by `entity:write`. `entity:data_read` and `entity:data_write` are not seeded onto `operator`, are held by `super_admin` by default, and are not implied by `entity:read` / `entity:write` (or the reverse).
+`entity:drop_table` is in the Permission catalog and is not seeded onto the `operator` **Role**. It is not implied by `entity:write`. `entity:access_manage` is not seeded onto `operator` and is not implied by `entity:write`. `entity:data_read` and `entity:data_write` are not seeded onto `operator`, are held by `super_admin` by default, and are not implied by `entity:read` / `entity:write` (or the reverse). No Permission, including those of `super_admin`, bypasses **Access Grant**s for Entity data.
 
 ## 7. Management Console
 
@@ -251,11 +253,13 @@ Page actions:
 - Deprecated: no authoring actions; table drop remains for holders of `entity:drop_table`.
 - Delete appears only when the Entity has never been published.
 
+The record also carries an access control tab and a data page; their rules are `docs/business-entity-access.md` §19. The version tab shows physical table names only to `entity:write` holders.
+
 Where a **Data Channel** module mounts is out of scope for this document.
 
 ## 8. Management Audit
 
-Persist a **Management Audit Event** for: Business Entity create, definition save, version open, publish enqueue, deprecate, definition delete, and table drop enqueue; and for **Dictionary** create, update, and delete. Each event records actor, **Instant**, resource, action, and result.
+Persist a **Management Audit Event** for: Business Entity create, definition save, version open, publish enqueue, deprecate, definition delete, and table drop enqueue; and for **Dictionary** create, update, and delete. Each event records actor, **Instant**, resource, action, and result. Access policy changes and the Entity Access Log follow `docs/business-entity-access.md` §16.
 
 ## 9. Non-Goals
 
@@ -267,14 +271,13 @@ Persist a **Management Audit Event** for: Business Entity create, definition sav
 6. Serving-reference graphs and undoing deprecate.
 7. Collecting Entity Tables as **Catalog Object**s, or registering the entity database as a **Source**.
 8. Creating tables inside a Source, or any write SQL against a Source.
-9. Entity-level ACL, per-attribute permissions, and masking.
-10. A hierarchy or inheritance between Business Entities. An **Inbound Reference** is not a saved relationship, and a many-to-many is not a link table or a relationship-entity subtype.
-11. Exposing Business Entity definition or the **Entity Data API** on the **MCP endpoint**.
-12. A Management Console data page that calls the Entity Data API.
-13. **Semantic Type**, or a JSON Schema or OpenAPI format, as an **Attribute Type**.
-14. A unit or quantity on a `decimal` attribute. A later quantity is a new type or a composite value, not a `decimal` config key.
-15. A multi-value attribute, including a cardinality on `reference` config. A many-to-many stays two **Entity Reference**s on an ordinary Business Entity.
-16. A dictionary as a constraint on a `string` or `integer` attribute, or an integer code kind.
+9. A hierarchy or inheritance between Business Entities. An **Inbound Reference** is not a saved relationship, and a many-to-many is not a link table or a relationship-entity subtype.
+10. Exposing Business Entity definition or the **Entity Data API** as Metadata **MCP endpoint** tools. Entity SQL over MCP is a planned, separate surface outside this document; it reads through the same Profile Views (`docs/business-entity-access.md` §15).
+11. **Semantic Type**, or a JSON Schema or OpenAPI format, as an **Attribute Type**.
+12. A unit or quantity on a `decimal` attribute. A later quantity is a new type or a composite value, not a `decimal` config key.
+13. A multi-value attribute, including a cardinality on `reference` config. A many-to-many stays two **Entity Reference**s on an ordinary Business Entity.
+14. A dictionary as a constraint on a `string` or `integer` attribute, or an integer code kind.
+15. A foreign key from a `user` attribute to the metadata database.
 
 ## 10. References
 
@@ -282,6 +285,8 @@ Persist a **Management Audit Event** for: Business Entity create, definition sav
 - `docs/business-jobs.md`
 - `docs/business-scheduled-tasks.md`
 - `docs/business-login-auth.md`
+- `docs/business-entity-access.md`
+- `docs/api-contracts-entity-access.md`
 - `docs/business-management-console.md`
 - `docs/conventions-errors.md`
 - `docs/conventions-pagination.md`

@@ -40,6 +40,14 @@ def test_template_isolates_entity_database() -> None:
     assert "5432/refraq_entity" in text
     assert "ensure-entity-db:" in text
     assert "service_completed_successfully" in text
+    assert "backend.entity.bootstrap" in text
+    assert "refraq:${POSTGRES_PASSWORD}@postgres:5432/refraq_entity" in text
+    assert text.count("ENTITY_ADMIN_DATABASE_URL") == 1
+    for line in text.splitlines():
+        if "ENTITY_DATABASE_URL:" in line and "ENTITY_ADMIN" not in line:
+            assert "refraq_entity_owner:" in line
+        if "ENTITY_READER_DATABASE_URL:" in line:
+            assert "refraq_reader:" in line
 
 
 @pytest.mark.parametrize("version", ["latest", "v0.1.3", SENTINEL, "", "1.2", "abc"])
@@ -100,6 +108,8 @@ def test_stamped_compose_config_parses(tmp_path: Path) -> None:
     env = {
         **os.environ,
         "POSTGRES_PASSWORD": "test",
+        "ENTITY_OWNER_PASSWORD": "test",
+        "ENTITY_READER_PASSWORD": "test",
         "REFRAQ_SECRETS_MASTER_KEY": "test",
         "ADMIN_SESSION_SECRET": "test",
         "INITIAL_ADMIN_PASSWORD": "test",

@@ -74,7 +74,7 @@ The browser calls same-origin `/api`; Next.js rewrites to the internal API servi
 Same-origin `/mcp` is streamed by the web process to an internal MCP service (`REFRAQ_MCP_UPSTREAM`). Compose does not publish the MCP listen port. Process `readyz` stays on the MCP container network.
 Postgres and Redis are **Backing Services**; app processes stay share-nothing.
 
-The platform opens two database connections. The metadata database holds Foundation, metadata, Job, Scheduled Task, and Entity definition rows. The entity database holds generated **Entity Table**s. The connection URLs may be identical; the product still opens two engines and two pools and never collapses them. Local and site compose default to a second database `refraq_entity` on the same Postgres instance. The worker opens the entity pool for publish and drop Jobs. Persistent API opens a process-local entity pool for the **Entity Data API**. MCP does not open the entity pool.
+The platform uses two databases. The metadata database holds Foundation, metadata, Job, Scheduled Task, Entity definition, and Entity access policy rows. The entity database holds generated **Entity Table**s, **Profile View**s, and the signed-context functions that enforce **Entity Access Control** (`docs/business-entity-access.md` §15). The entity database must not be the metadata database; local and site compose use a second database `refraq_entity` on the same Postgres instance, created and bootstrapped by a one-shot service. Runtime entity connections are never superusers: the worker opens an owner pool for publish, drop, and view regeneration Jobs; persistent API opens an owner pool for writes and a reader pool for reads. MCP does not open an entity pool.
 
 ```mermaid
 flowchart LR
@@ -128,6 +128,7 @@ The first version uses RBAC with **Role** as a first-class entity.
 - Seeded roles: locked `super_admin` (effective permissions = full catalog by identity) and editable `operator` (`console:access` + `dashboard:read` by default; metadata write/query/sample/token permissions are not implied).
 - Machine principals are reserved as **Client** and remain out of scope; person-owned **User PAT** is in scope for metadata foundation.
 - Console login requires the User's Role to include `console:access`.
+- Business Entity data adds **Entity Access Control** on top of the Permission check: `entity:data_read` / `entity:data_write` are master switches, and rows, columns, and cells come from **Access Grant**s to Users, Roles, and **User Group**s, enforced inside the entity database (`docs/business-entity-access.md`). No Permission bypasses grants.
 
 Permission checks happen in backend first.
 Frontend checks are only for UX and must never be treated as the final enforcement layer.
@@ -156,7 +157,7 @@ The repository should follow these dependency rules:
 
 - Default **Store Backend** is `persistent` (Postgres for User/Role, Redis for Session).
 - `memory` exists for automated tests only; missing URLs must not silently select memory.
-- Shared infrastructure (settings, engine, `DeclarativeBase`, Redis, `AppError`) lives under `backend/core/`. Business ORM tables live in owning packages (Foundation: `backend/admin/`; metadata: `backend/metadata/`; Entity definitions and Entity Data API: `backend/entity/`; platform Job: `backend/jobs/`; Celery/Scheduled Task: `backend/worker/`). Entity definition tables stay on the metadata-database Alembic chain. Generated Entity Tables live in the entity database and have no Alembic chain. The entity pool exists in the worker and in persistent API (Entity Data API); MCP does not open it.
+- Shared infrastructure (settings, engine, `DeclarativeBase`, Redis, `AppError`) lives under `backend/core/`. Business ORM tables live in owning packages (Foundation: `backend/admin/`; metadata: `backend/metadata/`; Entity definitions and Entity Data API: `backend/entity/`; platform Job: `backend/jobs/`; Celery/Scheduled Task: `backend/worker/`). Entity definition tables stay on the metadata-database Alembic chain. Generated Entity Tables and Profile Views live in the entity database and have no Alembic chain; the entity bootstrap owns that database's roles and schemas. Entity pools exist in the worker (owner) and in persistent API (owner and reader); MCP does not open them.
 - Module layout stays a modular monolith with package tiers and published APIs: see `docs/backend-layout.md`. Add packages when real code arrives; do not pre-scaffold empty domain trees.
 - Directory structure aids maintainability; multi-instance correctness depends on **Backing Services**, not sticky sessions.
 - Structure and other long-running **Jobs** use an out-of-process queue and worker with Redis as broker (`docs/adr/0004-redis-queue-for-ingestion.md`); the default runtime is Celery (`docs/adr/0006-celery-platform-async-runtime.md`). Job shape: `docs/adr/0008-job-generic-input.md`. Source `access` is app-encrypted as a whole document (`docs/adr/0005-app-encrypted-connection-secrets.md`, `docs/adr/0011-encrypted-access-blob-and-connector-spec.md`).

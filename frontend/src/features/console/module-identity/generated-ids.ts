@@ -3,6 +3,8 @@
 export const ModuleId = {
   dashboard: "dashboard",
   users: "users",
+  userGroups: "user-groups",
+  subjectAttributes: "subject-attributes",
   identityProviders: "identity-providers",
   roles: "roles",
   tokens: "tokens",

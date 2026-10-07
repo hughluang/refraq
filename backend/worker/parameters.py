@@ -14,6 +14,7 @@ from backend.admin.system_parameters import (
     register_parameters,
 )
 from backend.core.time_zones import iana_zone_ids
+from backend.entity.parameters import ENTITY_PARAMETER_SPECS
 from backend.jobs.parameters import JOBS_PARAMETER_SPECS
 from backend.metadata.parameters import METADATA_PARAMETER_SPECS
 
@@ -30,7 +31,7 @@ logger = logging.getLogger(__name__)
 BEAT_SYNC_EVERY_SEC = 30
 BEAT_MAX_INTERVAL_SEC = 5
 
-_GROUP_ORDER = ("session", "jobs", "schedules", "query")
+_GROUP_ORDER = ("session", "jobs", "schedules", "query", "entity_access")
 
 
 def _realign_schedule_timezone() -> None:
@@ -64,6 +65,7 @@ def assemble_system_parameters() -> None:
             *JOBS_PARAMETER_SPECS,
             *WORKER_PARAMETER_SPECS,
             *METADATA_PARAMETER_SPECS,
+            *ENTITY_PARAMETER_SPECS,
         ),
         group_order=_GROUP_ORDER,
     )
@@ -92,6 +94,10 @@ _DEAD_ENV: tuple[tuple[str, str], ...] = (
     (
         "REFRAQ_PEEK_SLOTS",
         "use REFRAQ_ADMISSION_SLOTS (ADR 0045)",
+    ),
+    (
+        "REFRAQ_ENTITY_DB_SCHEMA",
+        "entity schemas are fixed (entity_data, entity_access, acl; ADR 0054)",
     ),
 )
 

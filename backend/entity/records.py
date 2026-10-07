@@ -14,6 +14,7 @@ __all__ = [
     "EntityVersionRecord",
     "attribute_from_dict",
     "attribute_to_dict",
+    "attribute_to_stored",
 ]
 
 
@@ -36,6 +37,9 @@ class AttributeRecord:
     # Stamped from the reference snapshot for DDL and row encoding. Not stored.
     reference_key_type: str | None = None
     reference_max_length: int | None = None
+    # Server-assigned at publish; stable across versions while the name is kept.
+    # Not part of shape equality and never accepted on write.
+    attribute_id: str | None = field(default=None, compare=False)
 
 
 @dataclass
@@ -77,6 +81,14 @@ def attribute_to_dict(attr: AttributeRecord) -> dict[str, Any]:
     }
 
 
+def attribute_to_stored(attr: AttributeRecord) -> dict[str, Any]:
+    """Definition-store form: the authored shape plus the assigned attribute_id."""
+    payload = attribute_to_dict(attr)
+    if attr.attribute_id is not None:
+        payload["attribute_id"] = attr.attribute_id
+    return payload
+
+
 def attribute_from_dict(payload: dict[str, Any]) -> AttributeRecord:
     """Hydrate a stored attribute. Only the Attribute Type shape is accepted."""
     if "type" not in payload:
@@ -86,6 +98,7 @@ def attribute_from_dict(payload: dict[str, Any]) -> AttributeRecord:
         raise TypeError("attribute config must be an object")
     description = payload.get("description")
     attribute_type = str(payload["type"])
+    attribute_id = payload.get("attribute_id")
     return AttributeRecord(
         name=str(payload["name"]),
         type=attribute_type,
@@ -94,5 +107,6 @@ def attribute_from_dict(payload: dict[str, Any]) -> AttributeRecord:
         indexed=bool(payload.get("indexed", False)),
         business_key=bool(payload.get("business_key", False)),
         description=str(description) if isinstance(description, str) else None,
+        attribute_id=attribute_id if isinstance(attribute_id, str) else None,
         **resolve(attribute_type).stored_fields(config),
     )

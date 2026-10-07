@@ -13,6 +13,7 @@ import backend.admin.branding.models  # noqa: F401 — register branding tables
 import backend.jobs.models  # noqa: F401 — register Job tables
 import backend.metadata.models  # noqa: F401 — register Source/Catalog tables
 import backend.entity.models  # noqa: F401 — register Business Entity tables
+import backend.entity.access.models  # noqa: F401 — register Entity access policy tables
 import backend.worker.models  # noqa: F401 — register Scheduled Task tables
 
 config = context.config

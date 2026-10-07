@@ -29,6 +29,8 @@ import {
   type AttributeIssueField,
 } from "@/features/entities/attributeDraftValidation";
 import { EntityAttributesTab } from "@/features/entities/EntityAttributesTab";
+import { EntityAccessTab } from "@/features/entities/EntityAccessTab";
+import { EntityDataBrowser } from "@/features/entities/EntityDataBrowser";
 import { EntityIdentityFields } from "@/features/entities/EntityIdentityFields";
 import { EntityOverviewTab } from "@/features/entities/EntityOverviewTab";
 import { EntityTabs } from "@/features/entities/EntityTabs";
@@ -46,7 +48,7 @@ import {
   patchEntity,
   publishVersion,
 } from "@/features/entities/api";
-import { DROP_TABLE_PERMISSION } from "@/features/entities/constants";
+import { ACCESS_MANAGE_PERMISSION, DATA_READ_PERMISSION, DROP_TABLE_PERMISSION } from "@/features/entities/constants";
 import {
   createFormErrorTab,
   entityDetailHref,
@@ -99,6 +101,10 @@ export function EntityRecord(props: Props) {
   const { data: permissions } = usePermissions<string[]>({});
   const canDropTable =
     Array.isArray(permissions) && permissions.includes(DROP_TABLE_PERMISSION);
+  const canAccess =
+    Array.isArray(permissions) && permissions.includes(ACCESS_MANAGE_PERMISSION);
+  const canData =
+    Array.isArray(permissions) && permissions.includes(DATA_READ_PERMISSION);
 
   const rawTab = searchParams.get("tab");
   const [tab, setTab] = useState(() => parseEntityDetailTab(rawTab));
@@ -235,6 +241,15 @@ export function EntityRecord(props: Props) {
     if (canAuthor(entity)) return;
     router.replace(entityDetailHref(entityId, tab));
   }, [entity, entityId, mode, router, tab]);
+
+  useEffect(() => {
+    if (!Array.isArray(permissions) || mode === "create") return;
+    const hidden =
+      (tab === "access" && !canAccess) || (tab === "data" && !canData);
+    if (!hidden) return;
+    setTab("overview");
+    replaceEntityLocation(entityRecordHref(mode, entityId));
+  }, [canAccess, canData, entityId, mode, permissions, tab]);
 
   const selectTab = (next: typeof tab) => {
     setTab(next);
@@ -643,6 +658,23 @@ export function EntityRecord(props: Props) {
               onDrop={(version) => dropConfirm.open(version)}
             />
           )
+        }
+        showAccess={mode !== "create" && canAccess}
+        showData={mode !== "create" && canData}
+        access={
+          entityId ? (
+            <EntityAccessTab entityId={entityId} canPreviewRows={canData} />
+          ) : null
+        }
+        data={
+          entity ? (
+            <EntityDataBrowser
+              tableName={entity.table_name}
+              physicalHidden={Boolean(
+                entity.ever_published && entity.current_version?.table_name == null
+              )}
+            />
+          ) : null
         }
       />
     </Stack>

@@ -45,7 +45,7 @@ Each list endpoint declares its default and max `limit`. HTTP rejects out-of-ran
 | Entity Version | `0123456789abcdef` | 16 lowercase hexadecimal digits, no prefix |
 | Job | `job_01HZX` | Platform Job id (`docs/api-contracts-jobs.md`) |
 
-`table_name` is the immutable business identity. On this definition surface it is not an HTTP path substitute for `id`. The **Entity Data API** addresses the same Entity by `table_name` only and never falls back to `id` (`docs/api-contracts-entity-data.md`).
+`table_name` is the immutable business identity. On this definition surface it is not an HTTP path substitute for `id`. Access management lives under the definition subresource `/entities/{id}/access` (`docs/api-contracts-entity-access.md`). The **Entity Data API** addresses the same Entity by `table_name` only and never falls back to `id` (`docs/api-contracts-entity-data.md`).
 
 ## 3. Resource Shapes
 
@@ -103,9 +103,11 @@ Each list endpoint declares its default and max `limit`. HTTP rejects out-of-ran
 }
 ```
 
-`type` is required and is one **Attribute Type**: `string`, `text`, `integer`, `decimal`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, `dictionary`, or `reference`. Any other type, including `many2one`, `one2many`, and `array`, is `ENTITY_ATTRIBUTE_INVALID`. `inverse_attribute` is not a field. `kind` is not a field.
+`type` is required and is one **Attribute Type**: `string`, `text`, `integer`, `decimal`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, `dictionary`, `reference`, or `user`. Any other type, including `many2one`, `one2many`, and `array`, is `ENTITY_ATTRIBUTE_INVALID`. `inverse_attribute` is not a field. `kind` is not a field.
 
-`config` is a required object. `string` requires `max_length`, an integer from 1 through 65535, and no other key. `text`, `integer`, `number`, `boolean`, `date`, `timestamp`, `time`, and `json` require `{}`. `json` is a JSON document, including a JSON array, with no schema, path, or format key. The published column is `JSONB`. `decimal` requires `precision` (1–1000) and `scale` (0–`precision`) and no other key. `dictionary` requires `dictionary_id`, the id of an existing **Dictionary**, and no other key (§3.5). `entries` is rejected. A version read that includes attributes adds `dictionary` and `behind` on a `dictionary` attribute only. `dictionary` is `{ "id", "name", "display_name", "deprecated" }` when the id names a Dictionary, otherwise `null`. `behind` is a boolean (§3.5). Other attribute types omit both. Neither is stored on the attribute or accepted on write. `reference` requires `target_entity_id` and no other key. On write, `target_entity_id` is `self` or the id of an existing Business Entity that is not deprecated. `self` means the entity of this request. Create allocates that id and replaces `self` before the entity is stored. Save and classify replace `self` with the entity id in the path. The stored value is always that entity's id. A read never returns `self`. The target may be unpublished, and it may be this entity. A version read that includes attributes adds `target` on a `reference` attribute only: `{ "entity_id", "name", "table_name", "business_key" }` when the id names an entity, otherwise `null`. `business_key` is the name of the target current version's Business Key attribute, or `null` when that version has none. A version read also adds read-only `reference_snapshot` on a `reference` attribute: `{ "attribute", "type", "max_length" }` copied from that version's reference snapshot, or `null` when the version has none for the attribute. `max_length` is present only when `type` is `string`. `attribute` is the target Business Key name frozen at publish. `reference_snapshot` is not stored on the attribute and is rejected on write as an extra field. Other attribute types omit `target` and `reference_snapshot`. `target` is not stored and is rejected on write as an extra field. The example above is a read. Writers omit `target` and may send `"target_entity_id": "self"`. The published column stores the target **Business Key** value. Its type is `VARCHAR(max_length)` when that key is `string` and `BIGINT` when it is `integer`, taken from the reference snapshot frozen at publish (`docs/business-entity.md` §2.6). The contract does not create a foreign key. A stored value may not resolve. Save does not require the target to declare a Business Key. Publish does.
+A version read adds read-only `attribute_id` on every attribute: the id of the same-named attribute in the latest published version, a new id assigned at publish, or `null` for an attribute name that no published version has carried yet. `attribute_id` is rejected on write as an extra field.
+
+`config` is a required object. `string` requires `max_length`, an integer from 1 through 65535, and no other key. `text`, `integer`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, and `user` require `{}`. `user` stores a User id in a `VARCHAR(64)` column and may not carry `business_key`. `json` is a JSON document, including a JSON array, with no schema, path, or format key. The published column is `JSONB`. `decimal` requires `precision` (1–1000) and `scale` (0–`precision`) and no other key. `dictionary` requires `dictionary_id`, the id of an existing **Dictionary**, and no other key (§3.5). `entries` is rejected. A version read that includes attributes adds `dictionary` and `behind` on a `dictionary` attribute only. `dictionary` is `{ "id", "name", "display_name", "deprecated" }` when the id names a Dictionary, otherwise `null`. `behind` is a boolean (§3.5). Other attribute types omit both. Neither is stored on the attribute or accepted on write. `reference` requires `target_entity_id` and no other key. On write, `target_entity_id` is `self` or the id of an existing Business Entity that is not deprecated. `self` means the entity of this request. Create allocates that id and replaces `self` before the entity is stored. Save and classify replace `self` with the entity id in the path. The stored value is always that entity's id. A read never returns `self`. The target may be unpublished, and it may be this entity. A version read that includes attributes adds `target` on a `reference` attribute only: `{ "entity_id", "name", "table_name", "business_key" }` when the id names an entity, otherwise `null`. `business_key` is the name of the target current version's Business Key attribute, or `null` when that version has none. A version read also adds read-only `reference_snapshot` on a `reference` attribute: `{ "attribute", "type", "max_length" }` copied from that version's reference snapshot, or `null` when the version has none for the attribute. `max_length` is present only when `type` is `string`. `attribute` is the target Business Key name frozen at publish. `reference_snapshot` is not stored on the attribute and is rejected on write as an extra field. Other attribute types omit `target` and `reference_snapshot`. `target` is not stored and is rejected on write as an extra field. The example above is a read. Writers omit `target` and may send `"target_entity_id": "self"`. The published column stores the target **Business Key** value. Its type is `VARCHAR(max_length)` when that key is `string` and `BIGINT` when it is `integer`, taken from the reference snapshot frozen at publish (`docs/business-entity.md` §2.6). The contract does not create a foreign key. A stored value may not resolve. Save does not require the target to declare a Business Key. Publish does.
 
 A config key that belongs to another type, an unknown config key, or a top-level `kind`, `normalized_type`, `precision`, `scale`, `target_table_name`, `enumeration`, or `entries` is `ENTITY_ATTRIBUTE_INVALID`.
 
@@ -266,6 +268,8 @@ Publish acceptance freezes the active codes and whether the Dictionary is alread
 | `DELETE` | `/dictionaries/{id}` | `entity:write` | Delete a Dictionary that is not referenced |
 
 Creating a Business Entity has no cross-database side effect. Version `1` is `unpublished` and readable immediately. Its **Entity Table** does not exist until publish succeeds.
+
+Every read endpoint in §4 and §5 applies definition visibility (`docs/api-contracts-entity-access.md` §6): a caller holding neither `entity:write` nor `entity:access_manage` sees only Entities and attributes in its own `read` shape, invisible Entity ids are `404 ENTITY_NOT_FOUND`, version `table_name` is `null` unless the caller holds `entity:write`, and `inbound_references` lists only visible referring Entities. **Dictionary** reads are not filtered.
 
 ### 4.1 `GET /entities`
 
@@ -473,7 +477,7 @@ Publish create and drop share one execution lock keyed per Entity (`entity_table
 
 Failures leave Job `result` null and carry `error_code` / `error_message`. Success writes the kind envelope and only then.
 
-The worker opens the entity pool for publish and drop Jobs. Persistent API also opens a process-local entity pool for the **Entity Data API** (`docs/api-contracts-entity-data.md`). MCP does not open the entity pool.
+The worker opens the entity owner pool for publish, drop, and view regeneration Jobs. Persistent API also opens process-local owner and reader pools for the **Entity Data API** (`docs/api-contracts-entity-data.md`). The Metadata MCP process does not open an entity pool.
 
 ### 6.1 `POST /entities/{id}/versions/{version_id}/drop-table`
 
@@ -528,7 +532,7 @@ Job-terminal codes (successful GET of a failed Job; not Problem Details on the e
 | Problem Code | When |
 | --- | --- |
 | `ENTITY_ATTRIBUTE_INVALID` | Publish execution found an active code set different from acceptance, a Dictionary deprecated after acceptance, or a target Business Key that no longer matches the frozen reference binding. The version returns to `unpublished` and no physical table is created |
-| `ENTITY_TABLE_NAME_CONFLICT` | Publish found the physical table name or the stem view's name already present in `REFRAQ_ENTITY_DB_SCHEMA` |
+| `ENTITY_TABLE_NAME_CONFLICT` | Publish found the physical table name or the stem view's name already present in schema `entity_data` |
 | `ENTITY_TABLE_NOT_EMPTY` | Drop found rows in the same transaction |
 | `JOB_ALREADY_ACTIVE` | Runner could not take `entity_table:{entity_id}` |
 | `JOB_WORKER_LOST` | Occupancy stale (`docs/api-contracts-jobs.md`) |
@@ -546,16 +550,18 @@ Persist a **Management Audit Event** for: Business Entity create, definition sav
 3. Serving delivery targets and Serving-layer delivery contracts.
 4. Composite unique constraints, composite indexes, ALTER of a published table, and per-Entity evolution policy switches.
 5. Registering the entity database as a **Source**, or collecting Entity Tables as **Catalog Object**s.
-6. Entity-level ACL, attribute-level permissions, and masking.
+6. Access management shapes and data-plane access behavior: `docs/api-contracts-entity-access.md`.
 7. Hierarchy or inheritance between Business Entities. An **Inbound Reference** is derived and is not a saved attribute. A many-to-many is not a link table, a relationship-entity subtype, or an extra attribute type. Semantic Type, a unit on `decimal`, a cardinality on `reference`, and a dictionary constraint on `string` or `integer` are not part of this contract.
-8. An authorization scope mechanism.
+8. A Grant × scope control plane for Permissions.
 9. A global `POST /jobs` create path.
-10. MCP tools for Business Entity or Dictionary.
+10. Metadata MCP tools for Business Entity or Dictionary. Entity SQL over MCP is a planned, separate surface outside this contract.
 
 ## 10. References
 
 - `docs/business-entity.md`
 - `docs/api-contracts-entity-data.md`
+- `docs/business-entity-access.md`
+- `docs/api-contracts-entity-access.md`
 - `docs/business-jobs.md`
 - `docs/business-login-auth.md`
 - `docs/api-contracts-jobs.md`

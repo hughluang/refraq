@@ -23,6 +23,7 @@ from backend.admin.user_store import UserRecord, UserStore, get_user_store
 from backend.admin.schemas.user import (
     CreateUserRequest,
     CreateUserResponse,
+    GetUserResponse,
     UpdateStatusRequest,
     UpdateStatusResponse,
     UserListResponse,
@@ -82,6 +83,19 @@ def create_user(
         locale=locale,
     )
     return CreateUserResponse(user=build_user_summary(record, roles))
+
+
+@router.get("/{user_id}", response_model=GetUserResponse)
+def get_user(
+    user_id: str,
+    _user: UserRecord = Depends(require_permission("users:read")),
+    users: UserStore = Depends(get_user_store),
+    roles: RoleStore = Depends(get_role_store),
+) -> GetUserResponse:
+    record = users.get_by_id(user_id)
+    if record is None:
+        raise UserNotFound()
+    return GetUserResponse(user=build_user_summary(record, roles))
 
 
 @router.patch("/{user_id}/status", response_model=UpdateStatusResponse)

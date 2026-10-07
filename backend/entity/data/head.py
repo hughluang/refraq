@@ -5,8 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import cast
 
-from backend.entity.ddl import qualified_table
-from backend.entity.entity_db import entity_db_schema
+from backend.entity.ddl import ENTITY_DATA_SCHEMA, qualified_table
 from backend.entity.errors import (
     EntityDeprecated,
     EntityNotFound,
@@ -38,6 +37,7 @@ class HeadTarget:
     physical_table: str
     qualified_table: str
     writable: bool
+    read_relation: str | None = None
 
 
 def resolve_head(table_name: str, *, for_write: bool) -> HeadTarget:
@@ -67,12 +67,11 @@ def resolve_head(table_name: str, *, for_write: bool) -> HeadTarget:
         raise EntityNotServing(
             "Serving head predates reference snapshots; publish a new version"
         )
-    schema = entity_db_schema()
     return HeadTarget(
         entity=entity,
         head=head,
         attributes=attributes,
         physical_table=physical,
-        qualified_table=qualified_table(schema, physical),
+        qualified_table=qualified_table(ENTITY_DATA_SCHEMA, physical),
         writable=not publishing,
     )

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Protocol
 
 from sqlalchemy import text
@@ -14,9 +18,12 @@ from backend.entity.ddl import (
     create_view_sql,
     drop_view_sql,
     qualified_table,
+    view_security_statements,
 )
 from backend.entity.entity_db import get_entity_engine
 from backend.entity.records import AttributeRecord
+
+_PG_CONN: ContextVar[object | None] = ContextVar("entity_pg_ddl_conn", default=None)
 
 __all__ = [
     "EntityTableHasRows",
@@ -59,13 +66,17 @@ class EntityTablePort(Protocol):
 
     def revert_physical_table(self, schema: str, table: str) -> None: ...
 
+    def execute_ddl(self, statements: list[str]) -> None: ...
+
+    def ddl_transaction(self) -> Iterator[None]: ...
+
 
 class RecordingEntityTablePort:
     def __init__(self) -> None:
         self.statements: list[str] = []
         self._tables: dict[tuple[str, str], dict[str, AttributeRecord]] = {}
         self._views: dict[tuple[str, str], str] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def table_exists(self, schema: str, table: str) -> bool:
         with self._lock:
@@ -118,6 +129,7 @@ class RecordingEntityTablePort:
             if current is not None:
                 self.statements.append(drop_view_sql(schema, stem))
             self.statements.append(create_view_sql(schema, stem, physical))
+            self.statements.extend(view_security_statements(schema, stem))
             self._views[(schema, stem)] = physical
 
     def drop_stem_view(self, schema: str, stem: str) -> None:
@@ -131,6 +143,27 @@ class RecordingEntityTablePort:
                 return
             self.statements.append(f"DROP TABLE {qualified_table(schema, table)}")
             self._tables.pop((schema, table), None)
+
+    def execute_ddl(self, statements: list[str]) -> None:
+        with self._lock:
+            self.statements.extend(statements)
+
+    @contextmanager
+    def ddl_transaction(self) -> Iterator[None]:
+        """One critical section. A failure restores tables, views, and statements."""
+        with self._lock:
+            tables = copy.deepcopy(self._tables)
+            views = copy.deepcopy(self._views)
+            statements = list(self.statements)
+            try:
+                yield
+            except Exception:
+                self._tables.clear()
+                self._tables.update(tables)
+                self._views.clear()
+                self._views.update(views)
+                self.statements[:] = statements
+                raise
 
 
 class PostgresEntityTablePort:
@@ -165,15 +198,17 @@ class PostgresEntityTablePort:
         *,
         comment: str | None = None,
     ) -> None:
-        engine = get_entity_engine()
         statements = create_table_statements(schema, table, attributes)
         if comment is not None:
             statements.append(comment_table_sql(schema, table, comment))
-        with engine.begin() as conn:
+
+        def write(conn: object) -> None:
             if _relation_kind(conn, schema, table) is not None:
                 raise EntityTableNameConflict(table)
             for sql in statements:
-                conn.execute(text(sql))
+                conn.execute(text(sql))  # type: ignore[union-attr]
+
+        self._run(write)
 
     def swap_stem_view(
         self,
@@ -183,8 +218,7 @@ class PostgresEntityTablePort:
         physical: str,
         expected_target: str | None,
     ) -> None:
-        engine = get_entity_engine()
-        with engine.begin() as conn:
+        def write(conn: object) -> None:
             kind = _relation_kind(conn, schema, stem)
             if expected_target is None:
                 if kind is not None:
@@ -192,8 +226,42 @@ class PostgresEntityTablePort:
             else:
                 if kind != "v" or _view_base_table(conn, schema, stem) != expected_target:
                     raise EntityTableNameConflict(stem)
-                conn.execute(text(drop_view_sql(schema, stem)))
-            conn.execute(text(create_view_sql(schema, stem, physical)))
+                conn.execute(text(drop_view_sql(schema, stem)))  # type: ignore[union-attr]
+            conn.execute(text(create_view_sql(schema, stem, physical)))  # type: ignore[union-attr]
+            for sql in view_security_statements(schema, stem):
+                conn.execute(text(sql))  # type: ignore[union-attr]
+
+        self._run(write)
+
+    def execute_ddl(self, statements: list[str]) -> None:
+        def write(conn: object) -> None:
+            for sql in statements:
+                conn.execute(text(sql))  # type: ignore[union-attr]
+
+        self._run(write)
+
+    @contextmanager
+    def ddl_transaction(self) -> Iterator[None]:
+        """Join table create, stem swap, and profile views on one connection."""
+        if _PG_CONN.get() is not None:
+            yield
+            return
+        engine = get_entity_engine()
+        with engine.begin() as conn:
+            token = _PG_CONN.set(conn)
+            try:
+                yield
+            finally:
+                _PG_CONN.reset(token)
+
+    def _run(self, write) -> None:
+        joined = _PG_CONN.get()
+        if joined is not None:
+            write(joined)
+            return
+        engine = get_entity_engine()
+        with engine.begin() as conn:
+            write(conn)
 
     def drop_stem_view(self, schema: str, stem: str) -> None:
         engine = get_entity_engine()

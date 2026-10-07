@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import get_args
 
 import pytest
+from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 
 os.environ["REFRAQ_STORE_BACKEND"] = "memory"
@@ -237,6 +238,13 @@ def test_unpublished_reencode_migration_removed() -> None:
     assert "0017_reencode_locator_keys.py" not in names
     assert "0013_locator_keys.py" in names
     assert "0016_join_graph.py" in names
+
+
+def test_revision_ids_fit_alembic_version_column() -> None:
+    root = Path(__file__).resolve().parents[1] / "alembic"
+    revisions = ScriptDirectory(str(root)).walk_revisions()
+    too_long = [item.revision for item in revisions if len(item.revision) > 32]
+    assert too_long == []
 
 
 def test_semantic_source_excludes_system_specific_vocab() -> None:

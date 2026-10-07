@@ -7,9 +7,10 @@ from dataclasses import replace
 from celery import current_task
 
 from backend.core.time import utc_now
-from backend.entity.entity_db import entity_db_schema
+from backend.entity.access.views import rebuild_entity_views
+from backend.entity.ddl import ENTITY_DATA_SCHEMA
 from backend.entity.errors import EntityTableInService
-from backend.entity.kinds import KIND_DROP, KIND_RECONCILE
+from backend.entity.kinds import KIND_ACCESS_VIEWS, KIND_DROP, KIND_RECONCILE
 from backend.entity.lifecycle import is_deprecated, latest_published_of
 from backend.entity.locks import try_acquire_entity_table_lock
 from backend.entity.publish import execute, rollback_status
@@ -39,6 +40,8 @@ def run_entity_table_job(job_id: str) -> dict[str, str]:
         if existing is None:
             return {"status": "missing"}
         return {"status": existing.status}
+    if current.kind == KIND_ACCESS_VIEWS:
+        return _access_views(job_id, current)
     version_id = current.input.get("entity_version_id")
     if not isinstance(version_id, str):
         return _fail(job_id, "JOB_INPUT_INVALID", "entity_version_id is required")
@@ -67,6 +70,32 @@ def run_entity_table_job(job_id: str) -> dict[str, str]:
         lock.release()
 
 
+def _access_views(job_id: str, current: object) -> dict[str, str]:
+    payload = getattr(current, "input", {}) or {}
+    entity_id = payload.get("entity_id")
+    if not isinstance(entity_id, str) or not entity_id:
+        return _fail(job_id, "JOB_INPUT_INVALID", "entity_id is required")
+    entity = get_entity_store().get_entity(entity_id)
+    if entity is None:
+        return _fail(job_id, "ENTITY_NOT_FOUND", "Business Entity not found")
+    lock = try_acquire_entity_table_lock(entity.id)
+    if lock is None:
+        return _fail(
+            job_id,
+            "JOB_ALREADY_ACTIVE",
+            f"entity table lock held for {entity.id}",
+        )
+    try:
+        result = rebuild_entity_views(entity.id)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(job_id, "JOB_EXECUTION_FAILED", str(exc))
+    finally:
+        lock.release()
+    append_job_log(job_id, level="info", message="profile views regenerated")
+    mark_succeeded(job_id, result=result)
+    return {"status": "succeeded"}
+
+
 def _drop(job_id: str, version_id: str) -> dict[str, str]:
     version = get_entity_store().get_version(version_id)
     if version is None:
@@ -80,7 +109,7 @@ def _drop(job_id: str, version_id: str) -> dict[str, str]:
     if is_head and not is_deprecated(entity):
         refusal = EntityTableInService()
         return _fail(job_id, refusal.code, refusal.message)
-    schema = entity_db_schema()
+    schema = ENTITY_DATA_SCHEMA
     table = physical_table_name(version, entity.table_name)
     if table is None:
         mark_succeeded(

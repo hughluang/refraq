@@ -29,6 +29,44 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
       "list": "/console/users",
       "create": "/console/users/new",
       "edit": null,
+      "show": "/console/users/:id",
+      "aliases": []
+    },
+    "actions": {
+      "list": "users:read",
+      "create": "users:write",
+      "edit": "users:write",
+      "delete": "users:write",
+      "show": "users:read",
+      "sample": null
+    }
+  },
+  {
+    "id": "user-groups",
+    "label_key": "userGroups.title",
+    "routes": {
+      "list": "/console/user-groups",
+      "create": null,
+      "edit": null,
+      "show": "/console/user-groups/:id",
+      "aliases": []
+    },
+    "actions": {
+      "list": "users:read",
+      "create": "users:write",
+      "edit": "users:write",
+      "delete": "users:write",
+      "show": "users:read",
+      "sample": null
+    }
+  },
+  {
+    "id": "subject-attributes",
+    "label_key": "subjectAttributes.title",
+    "routes": {
+      "list": "/console/subject-attributes",
+      "create": null,
+      "edit": null,
       "show": null,
       "aliases": []
     },

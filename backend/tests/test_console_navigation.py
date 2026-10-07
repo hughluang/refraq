@@ -95,6 +95,8 @@ def test_super_admin_sees_all_seed_modules(client: TestClient) -> None:
     assert [m["id"] for m in groups["workbench"]["modules"]] == ["dashboard"]
     assert [m["id"] for m in groups["admin"]["modules"]] == [
         "users",
+        "user-groups",
+        "subject-attributes",
         "identity-providers",
         "roles",
     ]

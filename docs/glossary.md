@@ -194,7 +194,7 @@ The User resolved from the active Session or User PAT for the current request.
 ### Role
 
 A named, configurable access bundle assigned to at most one Role per User (nullable).
-Roles bind a subset of the fixed Permission catalog.
+Roles bind a subset of the fixed Permission catalog. A Role may also be the subject of an **Access Grant**.
 Seeded roles include locked `super_admin` and editable `operator`.
 Avoid calling it a job title or department.
 
@@ -446,17 +446,17 @@ Avoid treating it as a full platform SIEM or a substitute for application access
 ### Business Entity
 
 A definition of a reusable business thing (material, supplier, inventory fact), identified by an immutable `table_name` that spans all its **Entity Version**s and is the stem view name in the entity database. Authoring one requires business meaning and not only a shape: name and description. Each attribute has one **Attribute Type** and that type's configuration, and may be marked `unique`, `indexed`, and, for at most one attribute, the version's **Business Key**. The Entity Table carries a platform `row_id` identity column that is not that business identity. **Inbound Reference**s are derived and are not attributes.
-Permissions: `entity:read` / `entity:write` / `entity:drop_table` (definition); `entity:data_read` / `entity:data_write` (**Entity Data API**).
+Permissions: `entity:read` / `entity:write` / `entity:drop_table` (definition); `entity:access_manage` (**Entity Access Control**); `entity:data_read` / `entity:data_write` (**Entity Data API** master switches).
 Avoid calling it a **Catalog Object**, a Data Product, or a Serving output. Avoid putting source bindings, extract SQL, transforms, or lineage on the definition — those belong to a **Data Channel**. Avoid putting the `object_category` closed set on the Entity. Avoid treating `row_id` as a **Data Channel** upsert key. Avoid a link table or a relationship-entity subtype; a many-to-many is an ordinary Business Entity with two **Entity Reference**s. Avoid many-to-one, one-to-many, and many2one as names. Avoid **Join** and **Enum Catalog** as the home of entity references or dictionaries. Avoid hierarchy and inheritance between Business Entities. Avoid typing an attribute with **Normalized Type**.
 
 ### Entity Data API
 
-The HTTP data plane for a published **Business Entity**'s metadata head: outbound schema discovery plus synchronous head-table row create, read, update, delete, query, conditional write, and upsert. Callers hold a User Session or **User PAT**, address by immutable `table_name`, and use permissions `entity:data_read` / `entity:data_write`. Core package `backend/entity/data/`; HTTP `backend/entity/routers/data.py` and shapes `backend/entity/schemas/data.py`. Contract: `docs/api-contracts-entity-data.md`.
+The HTTP data plane for a published **Business Entity**'s metadata head: outbound schema discovery plus synchronous head-table row create, read, update, delete, query, conditional write, and upsert. Callers hold a User Session or **User PAT**, address by immutable `table_name`, and use permissions `entity:data_read` / `entity:data_write` as master switches; what they see and write comes from their **Access Grant**s and is read through their **Profile View**. Core package `backend/entity/data/`; HTTP `backend/entity/routers/data.py` and shapes `backend/entity/schemas/data.py`. Contract: `docs/api-contracts-entity-data.md`.
 Avoid naming it Entity Consumer API, Entity Row API, a "consume" service, or Serving. Avoid conflating it with the definition API (`entity:read` / `entity:write`), with a **Data Channel**, with ISC `/v1/serving`, or with a **Client** principal. Avoid `entity:consume` / `entity:consume_write` as Permission keys.
 
 ### Attribute Type
 
-The closed set of classes that define one attribute of a **Business Entity**: `string`, `text`, `integer`, `decimal`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, `dictionary`, `reference`. Each class owns its configuration. `json` is a JSON document with an empty configuration; a JSON array is a value of that type. `required`, `unique`, `indexed`, and `business_key` are facts of every attribute.
+The closed set of classes that define one attribute of a **Business Entity**: `string`, `text`, `integer`, `decimal`, `number`, `boolean`, `date`, `timestamp`, `time`, `json`, `dictionary`, `reference`, `user`. Each class owns its configuration. `json` is a JSON document with an empty configuration; a JSON array is a value of that type. `user` holds one **User** id. Every attribute also carries a server-assigned `attribute_id` that stays stable across versions while the name is unchanged. `required`, `unique`, `indexed`, and `business_key` are facts of every attribute.
 Avoid **Normalized Type**, **Semantic Type**, a JSON Schema or OpenAPI format, `array` as its own class, a unit or quantity on `decimal`, a cardinality on `reference`, and treating `dictionary` as a constraint on `string` or `integer`.
 
 ### Dictionary
@@ -499,6 +499,63 @@ Avoid creating it inside a **Source** (Sources stay read-only origins), placing 
 
 The product domain that moves rows from declared inputs into one declared target table, owning the mapping, transform, and lineage that a **Business Entity** definition does not carry. Its target is polymorphic: an **Entity Table** whose shape refraq declared and governs, or a delivery target owned outside the Entity Table and agreed with that delivery party.
 Avoid conflating it with **Job** or **Scheduled Task**, with a DAG or workflow engine, or with structure collection (which reads a **Source** into the catalog). Avoid an Entity-only name, since external delivery is another target kind on this same domain. Avoid reading "channel load" as request load in the load-shedding sense. Avoid treating the **Entity Data API** as a Data Channel.
+
+## Entity Access
+
+### Entity Access Control
+
+The rules that decide which rows of a **Business Entity** a User reads or writes, which attributes exist for that User, and how each cell is presented. Default deny; enforced inside the entity database through **Profile View**s and a signed access context, the same for every Entity data surface. Rules: `docs/business-entity-access.md`.
+Avoid ACL, data permission, or Authorization Scope as the name; avoid treating `entity:data_read` as access to any Entity's data by itself; avoid application-side row filtering as the enforcement layer.
+
+### User Group
+
+A named set of **User**s, many-to-many, that **Access Grant**s and **Access Restriction**s may name. It carries no **Permission** and no **Role**. Managed under `users:read` / `users:write`.
+Avoid department, organization, team, or a second Role; avoid synchronizing it from an Identity Provider.
+
+### Subject Attribute
+
+A centrally defined typed key (`string`, `integer`, `date`, `dictionary`, `user`; single- or multi-valued) whose values are set on Users and **User Group**s and compared by row rules. A User's effective values are its own values united with its groups' values.
+Avoid Principal Attribute, user profile field, claim, or treating a Subject Attribute as a Permission.
+
+### Presentation Ladder
+
+The per-attribute, totally ordered list of presentation levels, most revealing first: `clear`, then masks. Profiles pick one level per column; merging takes the more revealing level; a restriction ceiling caps it.
+Avoid treating masks as a fixed global hierarchy or a hidden level; absence from a profile is hiding.
+
+### Access Profile
+
+A per-Entity fixed set of columns with one presentation level each, independent of rows. Copyable from another Entity; not shared by reference.
+Avoid calling it a view, a role, or a column grant.
+
+### Access Grant
+
+A permissive binding of one subject (User, Role, or **User Group**) to one **Access Profile**, a row rule, actions (`read`, `write`, `export`, `mcp_query`), status, and an optional expiry, on one Business Entity.
+Avoid Grant (the Permission × scope binding), policy, or ACL entry; avoid granting columns directly.
+
+### Access Restriction
+
+A restrictive rule on one Business Entity that applies to all, listed, or all-but-listed subjects: an extra row rule ANDed onto every grant, denied columns, and presentation ceilings. Overrides grants.
+Avoid deny grant or negative permission.
+
+### Profile View
+
+A `security_barrier` view in the entity database for the head of one Business Entity and one profile combination. Its columns are the shape; its guards check the request's signed access context per grant. Every Entity data read goes through one.
+Avoid stem view, exposure view per User, or a view per Role.
+
+### Coupled Union
+
+The merge rule for several effective grants: a cell is shown only at a level that one single grant reveals for both its row and its column; cells no grant covers are withheld (NULL, listed in `__withheld`).
+Avoid naive union of rows and columns, intersection, or priority ordering.
+
+### Narrowing
+
+Restricting a request to the grants that one of the caller's own identities (direct, Role, or one User Group) contributes. Only reduces. The Console names it "view as".
+Avoid impersonation, role switching that adds access, or previewing another subject.
+
+### Entity Access Log
+
+The application-level record of every Entity Data API request that reaches the access decision: who, which grants, which Profile View, which revision, outcome. Retention is a **System Parameter**.
+Avoid **Management Audit Event** for data access, or treating it as a database statement audit.
 
 ## Auth Concepts
 

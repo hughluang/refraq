@@ -26,6 +26,14 @@ from backend.entity.errors import (
     EntityVersionSuperseded,
 )
 from backend.entity.ids import new_entity_id, new_version_id
+from backend.admin.roles import effective_permissions
+from backend.admin.role_store import get_role_store
+from backend.admin.subjects import user_group_ids
+from backend.admin.user_store import UserRecord
+from backend.entity.access.compiler import compile_policy, subject_outcome
+from backend.entity.access.facts import Person
+from backend.entity.access.plan import load_head, load_policy
+from backend.entity.access.store import get_access_store
 from backend.entity.inbound import inbound_references_for
 from backend.entity.reference_binding import require_business_key_stable
 from backend.entity.lifecycle import (
@@ -115,17 +123,18 @@ def _project_entity(
     current: EntityVersionRecord | None,
     *,
     include_inbound: bool,
+    user: UserRecord | None = None,
 ) -> dict[str, Any]:
+    _visible, see_physical, _names = _definition(user, entity.id)
     physical = None
     alignment = None
     if current is not None:
-        physical = physical_table_name(current, entity.table_name)
+        if see_physical:
+            physical = physical_table_name(current, entity.table_name)
         alignment = alignment_state(current)
-    inbound = (
-        inbound_references_for(get_entity_store(), entity.id)
-        if include_inbound
-        else None
-    )
+    inbound = None
+    if include_inbound:
+        inbound = _visible_inbound(entity.id, user)
     return entity_out(
         entity,
         current=current,
@@ -135,25 +144,86 @@ def _project_entity(
     )
 
 
+def _catalog_permissions(user: UserRecord) -> set[str]:
+    if not user.role_id:
+        return set()
+    role = get_role_store().get_by_id(user.role_id)
+    if role is None:
+        return set()
+    return set(effective_permissions(role))
+
+
+def _sees_every_definition(user: UserRecord) -> bool:
+    perms = _catalog_permissions(user)
+    return "entity:write" in perms or "entity:access_manage" in perms
+
+
+def _definition(
+    user: UserRecord | None, entity_id: str
+) -> tuple[bool, bool, set[str] | None]:
+    if user is None or _sees_every_definition(user):
+        return True, "entity:write" in _catalog_permissions(user) if user else True, None
+    head = load_head(entity_id)
+    revision = get_access_store().revision(entity_id)
+    policy = load_policy(head, revision)
+    compiled = compile_policy(policy)
+    person = Person(
+        user_id=user.id,
+        role_id=user.role_id,
+        group_ids=user_group_ids(user.id),
+    )
+    outcome = subject_outcome(compiled, policy, person, action="read", narrow=None)
+    if not outcome.grant_ids and not outcome.over_limit:
+        return False, False, set()
+    return True, False, {column.attr.name for column in outcome.columns}
+
+
+def _require_visible(user: UserRecord | None, entity_id: str) -> None:
+    if user is None:
+        return
+    visible, _physical, _names = _definition(user, entity_id)
+    if not visible:
+        raise EntityNotFound()
+
+
+def _visible_inbound(
+    entity_id: str, user: UserRecord | None
+) -> list[dict[str, str]]:
+    rows = inbound_references_for(get_entity_store(), entity_id)
+    if user is None or _sees_every_definition(user):
+        return rows
+    return [
+        row
+        for row in rows
+        if _definition(user, row["entity_id"])[0]
+    ]
+
+
 def _project_version(
     version: EntityVersionRecord,
     *,
     entity: BusinessEntityRecord,
     include_attributes: bool,
+    user: UserRecord | None = None,
 ) -> dict[str, Any]:
+    _visible, see_physical, names = _definition(user, entity.id)
     return version_out(
         version,
         entity=entity,
         include_attributes=include_attributes,
-        physical_table=physical_table_name(version, entity.table_name),
+        physical_table=(
+            physical_table_name(version, entity.table_name) if see_physical else None
+        ),
         alignment=alignment_state(version),
+        attribute_names=None if names is None else frozenset(names),
     )
 
 
-def get_entity(entity_id: str) -> dict[str, Any]:
+def get_entity(entity_id: str, *, user: UserRecord | None = None) -> dict[str, Any]:
     entity = require_entity(entity_id)
+    _require_visible(user, entity.id)
     current = get_entity_store().current_version(entity.id)
-    return _project_entity(entity, current, include_inbound=True)
+    return _project_entity(entity, current, include_inbound=True, user=user)
 
 
 def list_entities(
@@ -162,25 +232,44 @@ def list_entities(
     statuses: list[EntityListStatus] | None,
     limit: int,
     offset: int,
+    user: UserRecord | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     store = get_entity_store()
-    records, total = store.list_entities(
-        q=q,
-        statuses=status_filter_selection(statuses),
-        limit=limit,
-        offset=offset,
-    )
-    items = []
-    for entity in records:
-        current = store.current_version(entity.id)
-        items.append(_project_entity(entity, current, include_inbound=False))
+    full = user is None or _sees_every_definition(user)
+    if full:
+        records, total = store.list_entities(
+            q=q,
+            statuses=status_filter_selection(statuses),
+            limit=limit,
+            offset=offset,
+        )
+    else:
+        records, _total = store.list_entities(
+            q=q,
+            statuses=status_filter_selection(statuses),
+            limit=1_000_000,
+            offset=0,
+        )
+        records = [entity for entity in records if _definition(user, entity.id)[0]]
+        total = len(records)
+        records = records[offset : offset + limit]
+    items = [
+        _project_entity(
+            entity,
+            store.current_version(entity.id),
+            include_inbound=False,
+            user=user,
+        )
+        for entity in records
+    ]
     return items, total
 
 
 def list_versions(
-    entity_id: str, *, limit: int, offset: int
+    entity_id: str, *, limit: int, offset: int, user: UserRecord | None = None
 ) -> tuple[list[dict[str, Any]], int]:
     entity = require_entity(entity_id)
+    _require_visible(user, entity.id)
     versions, total = get_entity_store().list_versions(
         entity_id, limit=limit, offset=offset
     )
@@ -189,18 +278,23 @@ def list_versions(
             version,
             entity=entity,
             include_attributes=False,
+            user=user,
         )
         for version in versions
     ], total
 
 
-def get_version(entity_id: str, version_id: str) -> dict[str, Any]:
+def get_version(
+    entity_id: str, version_id: str, *, user: UserRecord | None = None
+) -> dict[str, Any]:
     entity = require_entity(entity_id)
+    _require_visible(user, entity.id)
     version = require_version(entity_id, version_id)
     return _project_version(
         version,
         entity=entity,
         include_attributes=True,
+        user=user,
     )
 
 

@@ -24,7 +24,7 @@ from backend.entity.records import (
     BusinessEntityRecord,
     EntityVersionRecord,
     attribute_from_dict,
-    attribute_to_dict,
+    attribute_to_stored,
 )
 
 __all__ = [
@@ -440,7 +440,7 @@ def _write_entity_row(row: BusinessEntityRow, entity: BusinessEntityRecord) -> N
 
 
 def _write_version_row(row: EntityVersionRow, version: EntityVersionRecord) -> None:
-    row.attributes = [attribute_to_dict(attr) for attr in version.attributes]
+    row.attributes = [attribute_to_stored(attr) for attr in version.attributes]
     row.materialized_attributes = list(version.materialized_attributes)
     row.publish_status = version.publish_status
     row.latest_reconcile_job_id = version.latest_reconcile_job_id
@@ -555,7 +555,7 @@ def _version_to_row(record: EntityVersionRecord) -> EntityVersionRow:
         id=record.id,
         entity_id=record.entity_id,
         version=record.version,
-        attributes=[attribute_to_dict(attr) for attr in record.attributes],
+        attributes=[attribute_to_stored(attr) for attr in record.attributes],
         materialized_attributes=list(record.materialized_attributes),
         publish_status=record.publish_status,
         latest_reconcile_job_id=record.latest_reconcile_job_id,

@@ -15,6 +15,10 @@ type Props = {
   overview: ReactNode;
   attributes: ReactNode;
   versions: ReactNode;
+  access?: ReactNode;
+  data?: ReactNode;
+  showAccess?: boolean;
+  showData?: boolean;
 };
 
 export function EntityTabs({
@@ -23,6 +27,10 @@ export function EntityTabs({
   overview,
   attributes,
   versions,
+  access,
+  data,
+  showAccess = false,
+  showData = false,
 }: Props) {
   const t = useTranslate();
 
@@ -36,6 +44,12 @@ export function EntityTabs({
         <Tabs.Tab value="overview">{t("entities.tabs.overview")}</Tabs.Tab>
         <Tabs.Tab value="attributes">{t("entities.tabs.attributes")}</Tabs.Tab>
         <Tabs.Tab value="versions">{t("entities.tabs.versions")}</Tabs.Tab>
+        {showAccess ? (
+          <Tabs.Tab value="access">{t("entities.tabs.access")}</Tabs.Tab>
+        ) : null}
+        {showData ? (
+          <Tabs.Tab value="data">{t("entities.tabs.data")}</Tabs.Tab>
+        ) : null}
       </Tabs.List>
       <Tabs.Panel value="overview" pt="md">
         {overview}
@@ -46,6 +60,16 @@ export function EntityTabs({
       <Tabs.Panel value="versions" pt="md">
         {versions}
       </Tabs.Panel>
+      {showAccess ? (
+        <Tabs.Panel value="access" pt="md">
+          {access}
+        </Tabs.Panel>
+      ) : null}
+      {showData ? (
+        <Tabs.Panel value="data" pt="md">
+          {data}
+        </Tabs.Panel>
+      ) : null}
     </Tabs>
   );
 }

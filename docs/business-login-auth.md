@@ -118,7 +118,9 @@ Frontend navigation around the session boundary:
 
 ## 7. Role Model
 
-Role is a first-class entity. Each User may hold **at most one** Role (`role_id` nullable).
+Role is a first-class entity. Each User may hold **at most one** Role (`role_id` nullable). The Role is the User's only source of **Permission**s.
+
+A User may also belong to any number of **User Group**s and carry **Subject Attribute** values. Groups and attributes carry no Permission; they exist so **Access Grant**s and row rules on Business Entity data can name populations and facts that do not match a Role (`docs/business-entity-access.md` §2). They are managed under `users:read` / `users:write`.
 
 ### Locked system role: `super_admin`
 
@@ -170,6 +172,7 @@ Fixed Permission catalog (Foundation + metadata foundation extensions):
 - `identity_providers:read` / `identity_providers:write`
 - `model_services:read` / `model_services:write`
 - `entity:read` / `entity:write` / `entity:drop_table`
+- `entity:access_manage`
 - `entity:data_read` / `entity:data_write`
 
 Rules:
@@ -179,8 +182,8 @@ Rules:
 - Frontend checks are UX only; backend remains authoritative
 - Seeded `operator` keeps `console:access` + `dashboard:read` only (no `settings:*`, no metadata write/query/sample/token/audit, and no `entity:*` by default). `entity:drop_table`, `entity:data_read`, and `entity:data_write` are not seeded onto `operator`. `entity:drop_table` is not implied by `entity:write`. `entity:data_read` / `entity:data_write` are not implied by `entity:read` / `entity:write` (or the reverse).
 - `identity_providers:read` lists configured providers and the protocol spec; `identity_providers:write` creates, updates, tests, enables, disables, and deletes them. Neither permission grants Role or User permissions.
-- Entity permission meanings: `docs/business-entity.md` §6; Entity Data API: `docs/api-contracts-entity-data.md`.
-- An auto-provisioned provider default Role must not effectively contain `users:write`, `roles:write`, or `identity_providers:write`; the locked `super_admin` Role is therefore never valid as an auto-provisioning default.
+- Entity permission meanings: `docs/business-entity.md` §6; Entity Data API: `docs/api-contracts-entity-data.md`; Entity access control: `docs/business-entity-access.md` §18. `entity:access_manage` is not seeded onto `operator` and is not implied by `entity:write`. `entity:data_read` / `entity:data_write` are master switches: Entity data is reached only through **Access Grant**s, and no Permission, including those of `super_admin`, bypasses them.
+- An auto-provisioned provider default Role must not effectively contain `users:write`, `roles:write`, `identity_providers:write`, or `entity:access_manage`; the locked `super_admin` Role is therefore never valid as an auto-provisioning default.
 - Metadata permission meanings: `docs/business-metadata.md` §6; User PAT: `docs/business-user-tokens.md`
 - Session absolute lifetime and idle window used at login are the **effective** values of `admin_session_ttl_hours` (seeded 12) and `admin_session_idle_minutes` (seeded 30). There is no env fallback. Changing either parameter does not rewrite existing sessions — see `docs/business-system-parameters.md` and `docs/api-contracts-settings.md`
 
@@ -195,7 +198,7 @@ Rules:
 ### Backend
 
 - protected endpoints require a valid Session or User PAT
-- user-management endpoints require `users:read` / `users:write`
+- user-management endpoints, including User Groups, membership, and Subject Attributes, require `users:read` / `users:write`
 - role-management endpoints require `roles:read` / `roles:write`
 - platform settings endpoints require `settings:read` / `settings:write`
 - metadata / token / audit endpoints use permissions in §8 and `docs/business-metadata.md`

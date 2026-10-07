@@ -216,7 +216,10 @@ def test_role_defaults_and_actor_share() -> None:
     assert api.uvicorn_limit_concurrency == api.http_max_inflight + 32
     assert api.entity_pool_size == 4
     assert api.entity_max_overflow == 0
-    assert api.process_pool_budget == api.pool_max_connections + api.entity_pool_max_connections
+    assert api.entity_pool_count == 2
+    assert api.process_pool_budget == (
+        api.pool_max_connections + 2 * api.entity_pool_max_connections
+    )
 
     set_process_role("mcp")
     reset_runtime_capacity()
@@ -229,6 +232,7 @@ def test_role_defaults_and_actor_share() -> None:
     assert mcp.uvicorn_limit_concurrency is None
     assert mcp.entity_pool_size == 1
     assert mcp.entity_max_overflow == 0
+    assert mcp.entity_pool_count == 0
     assert mcp.process_pool_budget == mcp.pool_max_connections
 
     set_process_role("worker")
@@ -241,6 +245,7 @@ def test_role_defaults_and_actor_share() -> None:
     assert worker.http_max_inflight == 0
     assert worker.entity_pool_size == 5
     assert worker.entity_max_overflow == 5
+    assert worker.entity_pool_count == 1
     assert worker.process_pool_budget == (
         worker.pool_max_connections + worker.entity_pool_max_connections
     )

@@ -19,6 +19,7 @@ import {
   useTranslate,
   useUpdate,
 } from "@refinedev/core";
+import Link from "next/link";
 import { useCallback, useState } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
@@ -230,7 +231,7 @@ export function UserList() {
   const userTable = (
     <ListTable
       list={users}
-      columnCount={6}
+      columnCount={7}
       head={
         <Table.Tr>
           <Table.Th>{t("users.fields.account")}</Table.Th>
@@ -239,6 +240,7 @@ export function UserList() {
           <Table.Th>{t("users.fields.status")}</Table.Th>
           <Table.Th>{t("users.fields.identity")}</Table.Th>
           <Table.Th>{t("users.fields.lastLoginAt")}</Table.Th>
+          <Table.Th>{t("users.fields.actions")}</Table.Th>
         </Table.Tr>
       }
     >
@@ -291,6 +293,16 @@ export function UserList() {
               </Group>
             </Table.Td>
             <Table.Td>{formatInstant(row.last_login_at)}</Table.Td>
+            <Table.Td>
+              <Button
+                component={Link}
+                href={`/console/users/${row.id}`}
+                size="xs"
+                variant="light"
+              >
+                {t("users.show")}
+              </Button>
+            </Table.Td>
           </Table.Tr>
         );
       })}

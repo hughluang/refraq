@@ -26,6 +26,8 @@ describe("parseEntityDetailTab", () => {
     expect(parseEntityDetailTab("overview")).toBe("overview");
     expect(parseEntityDetailTab("attributes")).toBe("attributes");
     expect(parseEntityDetailTab("versions")).toBe("versions");
+    expect(parseEntityDetailTab("access")).toBe("access");
+    expect(parseEntityDetailTab("data")).toBe("data");
     expect(parseEntityDetailTab(null)).toBe("overview");
     expect(parseEntityDetailTab("nope")).toBe("overview");
   });
@@ -36,6 +38,8 @@ describe("isEntityDetailTab", () => {
     expect(isEntityDetailTab(null)).toBe(false);
     expect(isEntityDetailTab("nope")).toBe(false);
     expect(isEntityDetailTab("attributes")).toBe(true);
+    expect(isEntityDetailTab("access")).toBe(true);
+    expect(isEntityDetailTab("data")).toBe(true);
   });
 });
 

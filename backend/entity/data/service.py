@@ -4,9 +4,20 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.admin.user_store import UserRecord
+from backend.entity.access.enforce import (
+    DataAccess,
+    begin_data,
+    read_context,
+    read_view,
+    require_write_grant,
+    row_visible,
+    writable_names,
+    write_locator_target,
+)
 from backend.entity.data.capabilities import ROW_WRITE_LIMIT, upsert_key_for
 from backend.entity.data.filters import compile_filters
-from backend.entity.data.head import HeadTarget, resolve_head
+from backend.entity.data.head import HeadTarget
 from backend.entity.data.paging import resolve_keyset_query, resolve_offset_query
 from backend.entity.data.schema import build_schema
 from backend.entity.data import sql as data_sql
@@ -19,6 +30,7 @@ from backend.entity.errors import (
     EntityRequestInvalid,
     EntityRowConflict,
     EntityRowInvalid,
+    EntityRowNotFound,
 )
 from backend.entity.reference_binding import business_key_attr
 
@@ -36,25 +48,51 @@ __all__ = [
 ]
 
 
-def schema_for(table_name: str, body: dict[str, Any]) -> dict[str, Any]:
-    # Contract §10: resolve head / lifecycle before request structure.
-    target = resolve_head(table_name, for_write=False)
-    if body:
-        raise EntityRequestInvalid("schema body must be an empty object")
-    return build_schema(target)
+def schema_for(
+    table_name: str, body: dict[str, Any], user: UserRecord
+) -> dict[str, Any]:
+    access = begin_data(table_name, user, body, action="read", for_write=False)
+    try:
+        unknown = set(body) - {"narrow"}
+        if unknown:
+            raise EntityRequestInvalid(
+                f"Unknown top-level key(s): {', '.join(sorted(unknown))}"
+            )
+        schema = build_schema(access.target)
+        _annotate_schema(schema, access)
+        access.log(row_count=None, outcome_code="ok", verb="schema")
+        return schema
+    except Exception as exc:
+        access.log(row_count=None, outcome_code=_code(exc), verb="schema")
+        raise
 
 
-def create_row(table_name: str, body: dict[str, Any]) -> dict[str, Any]:
-    target = resolve_head(table_name, for_write=True)
-    _forbid_keys(body, allowed={"values"}, verb="create")
-    values_raw = _require_object(body.get("values"), "values")
-    encoded = encode_inbound_map(values_raw, target, partial=False)
-    with data_sql.entity_connection() as conn:
-        return data_sql.insert_one(conn, target, encoded)
+def create_row(
+    table_name: str, body: dict[str, Any], user: UserRecord
+) -> dict[str, Any]:
+    access = begin_data(table_name, user, body, action="write", for_write=True)
+    try:
+        _forbid_keys(body, allowed={"values"}, verb="create")
+        values_raw = _require_object(body.get("values"), "values")
+        encoded = encode_inbound_map(values_raw, access.target, partial=False)
+        require_write_grant(
+            access, written=set(encoded), before=[], after=[encoded]
+        )
+        with data_sql.entity_connection() as conn:
+            row_id = data_sql.insert_row(conn, access.target, encoded)
+        row = _present(access, [row_id])[0]
+        access.log(row_count=1, outcome_code="ok", verb="create")
+        return row
+    except Exception as exc:
+        access.log(row_count=None, outcome_code=_code(exc), verb="create")
+        raise
 
 
-def create_many_rows(table_name: str, body: dict[str, Any]) -> list[dict[str, Any]]:
-    target = resolve_head(table_name, for_write=True)
+def create_many_rows(
+    table_name: str, body: dict[str, Any], user: UserRecord
+) -> list[dict[str, Any]]:
+    access = begin_data(table_name, user, body, action="write", for_write=True)
+    target = access.target
     _forbid_keys(body, allowed={"items"}, verb="create-many")
     items = body.get("items")
     if not isinstance(items, list):
@@ -76,42 +114,95 @@ def create_many_rows(table_name: str, body: dict[str, Any]) -> list[dict[str, An
             encode_inbound_map(values_raw, target, partial=False)
         )
     _reject_batch_unique_dups(target, encoded_items)
-    with data_sql.entity_connection() as conn:
-        return [
-            data_sql.insert_one(conn, target, values) for values in encoded_items
-        ]
+    try:
+        written = set().union(*(set(item) for item in encoded_items))
+        require_write_grant(
+            access, written=written, before=[], after=encoded_items
+        )
+        with data_sql.entity_connection() as conn:
+            row_ids = [
+                data_sql.insert_row(conn, target, values) for values in encoded_items
+            ]
+        rows = _present(access, row_ids)
+        access.log(row_count=len(rows), outcome_code="ok", verb="create-many")
+        return rows
+    except Exception as exc:
+        access.log(row_count=None, outcome_code=_code(exc), verb="create-many")
+        raise
 
 
-def get_row(table_name: str, body: dict[str, Any]) -> dict[str, Any]:
-    target = resolve_head(table_name, for_write=False)
-    column, value = _locator(body, target, verb="get")
-    with data_sql.entity_connection() as conn:
-        return data_sql.select_by_column(conn, target, column, value)
+def get_row(
+    table_name: str, body: dict[str, Any], user: UserRecord
+) -> dict[str, Any]:
+    access = begin_data(table_name, user, body, action="read", for_write=False)
+    try:
+        column, value = _locator(body, access.target, verb="get")
+        with data_sql.entity_read_connection(read_context(access)) as conn:
+            row = data_sql.select_by_column(conn, access.target, column, value)
+        access.log(row_count=1, outcome_code="ok", verb="get")
+        return row
+    except Exception as exc:
+        access.log(row_count=None, outcome_code=_code(exc), verb="get")
+        raise
 
 
-def update_row(table_name: str, body: dict[str, Any]) -> dict[str, Any]:
-    target = resolve_head(table_name, for_write=True)
+def update_row(
+    table_name: str, body: dict[str, Any], user: UserRecord
+) -> dict[str, Any]:
+    access = begin_data(table_name, user, body, action="write", for_write=True)
+    target = access.target
     if "filters" in body:
         raise EntityRequestInvalid("update must not include filters")
-    column, value = _locator(body, target, verb="update", extra={"values"})
+    column, value = _locator(
+        body, write_locator_target(access), verb="update", extra={"values"}
+    )
     values_raw = _require_object(body.get("values"), "values")
     if not values_raw:
         raise EntityRowInvalid("values must not be empty")
     _reject_business_key_write(values_raw, target)
     encoded = encode_inbound_map(values_raw, target, partial=True)
-    with data_sql.entity_connection() as conn:
-        return data_sql.update_by_column(conn, target, column, value, encoded)
+    try:
+        with data_sql.entity_connection() as conn:
+            pre = data_sql.select_by_column(conn, access.full, column, value, lock=True)
+            if not row_visible(access, pre):
+                raise EntityRowNotFound()
+            post = {**pre, **encoded}
+            require_write_grant(
+                access, written=set(encoded), before=[pre], after=[post]
+            )
+            row_id = int(pre["row_id"])
+            data_sql.update_ids(conn, target, [row_id], encoded)
+        row = _present(access, [row_id])[0]
+        access.log(row_count=1, outcome_code="ok", verb="update")
+        return row
+    except Exception as exc:
+        access.log(row_count=None, outcome_code=_code(exc), verb="update")
+        raise
 
 
-def delete_row(table_name: str, body: dict[str, Any]) -> None:
-    target = resolve_head(table_name, for_write=True)
-    column, value = _locator(body, target, verb="delete")
-    with data_sql.entity_connection() as conn:
-        data_sql.delete_by_column(conn, target, column, value)
+def delete_row(table_name: str, body: dict[str, Any], user: UserRecord) -> None:
+    access = begin_data(table_name, user, body, action="write", for_write=True)
+    try:
+        column, value = _locator(body, write_locator_target(access), verb="delete")
+        with data_sql.entity_connection() as conn:
+            pre = data_sql.select_by_column(conn, access.full, column, value, lock=True)
+            if not row_visible(access, pre):
+                raise EntityRowNotFound()
+            require_write_grant(
+                access, written=set(), before=[pre], after=[]
+            )
+            data_sql.delete_ids(conn, access.target, [int(pre["row_id"])])
+        access.log(row_count=1, outcome_code="ok", verb="delete")
+    except Exception as exc:
+        access.log(row_count=None, outcome_code=_code(exc), verb="delete")
+        raise
 
 
-def query_rows(table_name: str, body: dict[str, Any]) -> dict[str, Any]:
-    target = resolve_head(table_name, for_write=False)
+def query_rows(
+    table_name: str, body: dict[str, Any], user: UserRecord
+) -> dict[str, Any]:
+    access = begin_data(table_name, user, body, action="read", for_write=False)
+    target = access.target
     if "cursor" in body:
         raise EntityRequestInvalid("cursor is not supported")
     if "sort" in body or "keys" in body:
@@ -123,6 +214,7 @@ def query_rows(table_name: str, body: dict[str, Any]) -> dict[str, Any]:
         "offset",
         "include_total",
         "after_row_id",
+        "narrow",
     }
     unknown = set(body.keys()) - known
     if unknown:
@@ -136,70 +228,129 @@ def query_rows(table_name: str, body: dict[str, Any]) -> dict[str, Any]:
         )
     fields = _resolve_fields(body.get("fields"), target)
     compiled = compile_filters(body.get("filters"), target, require_leaf=False)
-    if keyset:
-        limit, after = resolve_keyset_query(body)
-        with data_sql.entity_connection() as conn:
-            items, next_after = data_sql.query_keyset(
+    try:
+        ctx = read_context(access)
+        if keyset:
+            limit, after = resolve_keyset_query(body)
+            with data_sql.entity_read_connection(ctx) as conn:
+                items, next_after = data_sql.query_keyset(
+                    conn,
+                    target,
+                    fields=fields,
+                    compiled=compiled,
+                    limit=limit,
+                    after_row_id=after,
+                )
+            access.log(row_count=len(items), outcome_code="ok", verb="query")
+            return {
+                "items": items,
+                "limit": limit,
+                "next_after_row_id": next_after,
+            }
+        limit, offset, include_total = resolve_offset_query(body)
+        with data_sql.entity_read_connection(ctx) as conn:
+            items, total = data_sql.query_offset(
                 conn,
                 target,
                 fields=fields,
                 compiled=compiled,
                 limit=limit,
-                after_row_id=after,
+                offset=offset,
+                include_total=include_total,
             )
+        access.log(row_count=len(items), outcome_code="ok", verb="query")
         return {
             "items": items,
+            "total": total,
             "limit": limit,
-            "next_after_row_id": next_after,
+            "offset": offset,
         }
-    limit, offset, include_total = resolve_offset_query(body)
-    with data_sql.entity_connection() as conn:
-        items, total = data_sql.query_offset(
-            conn,
-            target,
-            fields=fields,
-            compiled=compiled,
-            limit=limit,
-            offset=offset,
-            include_total=include_total,
+    except Exception as exc:
+        access.log(row_count=None, outcome_code=_code(exc), verb="query")
+        raise
+
+
+def update_where_rows(
+    table_name: str, body: dict[str, Any], user: UserRecord
+) -> dict[str, Any]:
+    access = begin_data(table_name, user, body, action="write", for_write=True)
+    target = access.target
+    try:
+        _forbid_keys(body, allowed={"filters", "set"}, verb="update-where")
+        set_raw = _require_object(body.get("set"), "set")
+        if not set_raw:
+            raise EntityRowInvalid("set must not be empty")
+        _reject_business_key_write(set_raw, target)
+        compiled = compile_filters(
+            body.get("filters"), write_locator_target(access), require_leaf=True
         )
-    return {
-        "items": items,
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-    }
+        assert compiled is not None
+        encoded = encode_inbound_map(set_raw, target, partial=True)
+        with data_sql.entity_connection() as conn:
+            rows = data_sql.select_matching(conn, access.full, compiled)
+            visible = [row for row in rows if row_visible(access, row)]
+            posts = [{**row, **encoded} for row in visible]
+            require_write_grant(
+                access, written=set(encoded), before=visible, after=posts
+            )
+            affected = data_sql.update_ids(
+                conn,
+                target,
+                [int(row["row_id"]) for row in visible],
+                encoded,
+            )
+        access.log(row_count=affected, outcome_code="ok", verb="update-where")
+        return {"affected": affected}
+    except Exception as exc:
+        access.log(row_count=None, outcome_code=_code(exc), verb="update-where")
+        raise
 
 
-def update_where_rows(table_name: str, body: dict[str, Any]) -> dict[str, Any]:
-    target = resolve_head(table_name, for_write=True)
-    _forbid_keys(body, allowed={"filters", "set"}, verb="update-where")
-    set_raw = _require_object(body.get("set"), "set")
-    if not set_raw:
-        raise EntityRowInvalid("set must not be empty")
-    _reject_business_key_write(set_raw, target)
-    compiled = compile_filters(body.get("filters"), target, require_leaf=True)
-    assert compiled is not None
-    encoded = encode_inbound_map(set_raw, target, partial=True)
-    with data_sql.entity_connection() as conn:
-        affected = data_sql.update_where(
-            conn, target, compiled=compiled, values=encoded
+def delete_where_rows(
+    table_name: str, body: dict[str, Any], user: UserRecord
+) -> dict[str, Any]:
+    access = begin_data(table_name, user, body, action="write", for_write=True)
+    target = access.target
+    try:
+        _forbid_keys(body, allowed={"filters"}, verb="delete-where")
+        compiled = compile_filters(
+            body.get("filters"), write_locator_target(access), require_leaf=True
         )
-    return {"affected": affected}
+        assert compiled is not None
+        with data_sql.entity_connection() as conn:
+            rows = data_sql.select_matching(conn, access.full, compiled)
+            visible = [row for row in rows if row_visible(access, row)]
+            require_write_grant(
+                access, written=set(), before=visible, after=[]
+            )
+            affected = data_sql.delete_ids(
+                conn, target, [int(row["row_id"]) for row in visible]
+            )
+        access.log(row_count=affected, outcome_code="ok", verb="delete-where")
+        return {"affected": affected}
+    except Exception as exc:
+        access.log(row_count=None, outcome_code=_code(exc), verb="delete-where")
+        raise
 
 
-def delete_where_rows(table_name: str, body: dict[str, Any]) -> dict[str, Any]:
-    target = resolve_head(table_name, for_write=True)
-    _forbid_keys(body, allowed={"filters"}, verb="delete-where")
-    compiled = compile_filters(body.get("filters"), target, require_leaf=True)
-    assert compiled is not None
-    with data_sql.entity_connection() as conn:
-        affected = data_sql.delete_where(conn, target, compiled=compiled)
-    return {"affected": affected}
+def upsert_one(
+    table_name: str, body: dict[str, Any], user: UserRecord
+) -> tuple[dict[str, Any], bool]:
+    access = begin_data(table_name, user, body, action="write", for_write=True)
+    target = access.target
+    try:
+        row_id, created = _upsert_body(access, target, body)
+        row = _present(access, [row_id])[0]
+        access.log(row_count=1, outcome_code="ok", verb="upsert")
+        return row, created
+    except Exception as exc:
+        access.log(row_count=None, outcome_code=_code(exc), verb="upsert")
+        raise
 
 
-def upsert_one(table_name: str, body: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    target = resolve_head(table_name, for_write=True)
+def _upsert_body(
+    access: DataAccess, target: HeadTarget, body: dict[str, Any]
+) -> tuple[int, bool]:
     _forbid_keys(body, allowed={"key", "values"}, verb="upsert")
     if "key" not in body:
         marked = business_key_attr(target.attributes)
@@ -215,7 +366,11 @@ def upsert_one(table_name: str, body: dict[str, Any]) -> tuple[dict[str, Any], b
     values_raw = _require_object(body.get("values"), "values")
     by_name = {attr.name: attr for attr in target.attributes}
     attr = by_name.get(key_name)
-    if attr is None or not upsert_key_for(attr):
+    if (
+        attr is None
+        or not upsert_key_for(attr)
+        or key_name not in writable_names(access)
+    ):
         raise EntityRowInvalid(f"Attribute '{key_name}' is not an upsert_key")
     if key_name not in values_raw or values_raw[key_name] is None:
         raise EntityRowInvalid("values must include a non-null upsert key")
@@ -223,21 +378,42 @@ def upsert_one(table_name: str, body: dict[str, Any]) -> tuple[dict[str, Any], b
     key_value = encoded[key_name]
     update_values = {name: value for name, value in encoded.items() if name != key_name}
     with data_sql.entity_connection() as conn:
-        return data_sql.upsert_row(
-            conn,
-            target,
-            key_name=key_name,
-            key_value=key_value,
-            values=update_values,
+        try:
+            pre = data_sql.select_by_column(
+                conn, access.full, key_name, key_value, lock=True
+            )
+        except EntityRowNotFound:
+            pre = None
+        if pre is not None and not row_visible(access, pre):
+            raise EntityRowConflict()
+        if pre is None:
+            require_write_grant(
+                access, written=set(encoded), before=[], after=[encoded]
+            )
+            return data_sql.insert_row(conn, target, encoded), True
+        post = {**pre, **update_values}
+        require_write_grant(
+            access, written=set(update_values), before=[pre], after=[post]
         )
+        row_id = int(pre["row_id"])
+        if update_values:
+            data_sql.update_ids(conn, target, [row_id], update_values)
+        return row_id, False
+
+
+def _present(access: DataAccess, row_ids: list[int]) -> list[dict[str, Any]]:
+    """Written rows through the caller's read view; a row it does not show is only ``row_id``."""
+    reader = read_view(access)
+    if reader is None:
+        return [{"row_id": row_id} for row_id in row_ids]
+    with data_sql.entity_read_connection(read_context(reader)) as conn:
+        found = data_sql.select_ids(conn, reader.target, row_ids)
+    return [found.get(row_id, {"row_id": row_id}) for row_id in row_ids]
 
 
 def _reject_batch_unique_dups(
-    target: object, items: list[dict[str, Any]]
+    target: HeadTarget, items: list[dict[str, Any]]
 ) -> None:
-    from backend.entity.data.head import HeadTarget
-
-    assert isinstance(target, HeadTarget)
     unique_attrs = [attr.name for attr in target.attributes if attr.unique]
     for name in unique_attrs:
         seen: dict[Any, int] = {}
@@ -253,10 +429,7 @@ def _reject_batch_unique_dups(
             seen[value] = index
 
 
-def _resolve_fields(raw: Any, target: object) -> list[str]:
-    from backend.entity.data.head import HeadTarget
-
-    assert isinstance(target, HeadTarget)
+def _resolve_fields(raw: Any, target: HeadTarget) -> list[str]:
     allowed = {"row_id", *[attr.name for attr in target.attributes]}
     if raw is None:
         return ["row_id", *[attr.name for attr in target.attributes]]
@@ -334,3 +507,33 @@ def _reject_business_key_write(values: dict[str, Any], target: HeadTarget) -> No
         raise EntityRowInvalid(
             f"Attribute '{marked.name}' is the business key and cannot be changed"
         )
+
+
+def _code(exc: Exception) -> str:
+    code = getattr(exc, "code", None)
+    return code if isinstance(code, str) else "error"
+
+
+def _annotate_schema(schema: dict[str, Any], access: DataAccess) -> None:
+    clear = writable_names(access)
+    by_name = {column.attr.name: column for column in access.outcome.columns}
+    for attr in schema["attributes"]:
+        column = by_name.get(attr["name"])
+        if column is None:
+            continue
+        attr["attribute_id"] = column.attr.attribute_id
+        attr["presentation"] = {
+            "row_varying": column.row_varying,
+            "levels": [
+                {"key": level.key, "mode": level.mode} for level in column.levels
+            ],
+            "may_be_withheld": column.may_be_withheld,
+        }
+        attr["writable"] = attr["name"] in clear
+        if not attr["writable"]:
+            attr["upsert_key"] = False
+    schema["withheld_field"] = access.outcome.withheld_field
+    schema["access"] = {
+        "policy_revision": access.revision,
+        "narrowed": access.narrow is not None,
+    }

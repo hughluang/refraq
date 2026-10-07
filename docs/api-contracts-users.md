@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document defines the User management endpoints for the **Management Console** slice. They belong to the **Management Foundation** and are gated by the `users:read` and `users:write` permissions.
+This document defines the User management endpoints for the **Management Console** slice, including **User Group**s and **Subject Attribute**s. They belong to the **Management Foundation** and are gated by the `users:read` and `users:write` permissions. How grants and row rules consume groups and attributes is `docs/business-entity-access.md`.
 
 These contracts complement `docs/api-contracts-auth.md` and `docs/api-contracts-roles.md`. They follow the same transport rules (`docs/api-contracts-auth.md` §2, [`docs/conventions-errors.md`](conventions-errors.md)):
 
@@ -182,14 +182,6 @@ When `status` is set to `disabled`, the backend invalidates all sessions belongi
 
 `404 USER_NOT_FOUND` if the target User does not exist.
 
-## 8. Non-Goals
-
-- Hard delete of User records is intentionally not exposed.
-- Password reset / forgot-password flows remain out of scope (self-service password change for the current User is `docs/api-contracts-account.md`).
-- LDAP sync, non-OIDC federation, and **Client** (machine principal) credential management are out of scope.
-- **User PAT** is specified separately in `docs/api-contracts-tokens.md` / `docs/business-user-tokens.md` (not a Client API).
-- Self-service profile, locale, and password for the current User are specified in `docs/api-contracts-account.md` / `docs/business-account.md`.
-
 ## 6. Pending Federated Identities
 
 Pending identities are administrative handoff records, not Users or Identity Providers. Both endpoints require `users:write`; `users:read` does not expose external claims.
@@ -215,3 +207,90 @@ Existing-user claim changes no Role. New-user claim sets `identity_source=oidc` 
 ## 7. `POST /users/{id}/unfederate`
 
 Requires `users:write`; clears the binding, changes `identity_source` to `local`, and sets a new initial password atomically. Account Center and the User cannot call it. A missing or empty `password` fails schema validation with `422 REQUEST_INVALID` before the domain rule runs; `FEDERATION_PASSWORD_REQUIRED` is the domain-boundary guard behind it and is not reachable over HTTP. The reachable code is `FEDERATION_NOT_BOUND`.
+
+## 8. User Groups
+
+A **User Group** is a named set of Users that **Access Grant**s and **Access Restriction**s may name (`docs/business-entity-access.md` §2). It carries no Permission. Reads require `users:read`; writes require `users:write`. Every successful write writes a **Management Audit Event**.
+
+```json
+{
+  "id": "grp_01HZX",
+  "key": "east_sales",
+  "name": "East sales",
+  "description": null,
+  "member_count": 12,
+  "created_at": "2026-10-07T00:00:00Z",
+  "updated_at": "2026-10-07T00:00:00Z"
+}
+```
+
+`key` is `[a-z][a-z0-9_]*`, at most 63 characters, unique, and immutable. `name` is required, at most 256 characters.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/user-groups` | **Offset Page** (`key ASC`, `id ASC`); `q` matches `key` or `name` substring; `limit` default 50, max 200 |
+| `POST` | `/user-groups` | Create `{ "key", "name", "description"? }` → `201 { "group" }` |
+| `GET` | `/user-groups/{id}` | `{ "group" }` |
+| `PATCH` | `/user-groups/{id}` | Update `name`, `description` → `{ "group" }` |
+| `DELETE` | `/user-groups/{id}` | Delete the group, its memberships, and its Subject Attribute values → `204` |
+| `GET` | `/user-groups/{id}/members` | **Offset Page** of User Summaries (`account ASC`, `id ASC`) |
+| `PUT` | `/user-groups/{id}/members/{user_id}` | Add a member (idempotent) → `204` |
+| `DELETE` | `/user-groups/{id}/members/{user_id}` | Remove a member (idempotent) → `204` |
+| `GET` | `/users/{id}/groups` | The User's groups (array, `key ASC`) |
+| `PUT` | `/users/{id}/groups` | Replace the User's memberships `{ "group_ids": [] }` → `{ "groups" }` |
+
+Grants that name a deleted group grant nothing (`docs/business-entity-access.md` §2.1). Codes: `USER_GROUP_NOT_FOUND` (404), `USER_GROUP_KEY_DUPLICATE` (409), `USER_GROUP_INVALID` (422), `USER_NOT_FOUND` (404).
+
+## 9. Subject Attributes
+
+A **Subject Attribute** definition is a typed key whose values are set on Users and User Groups and compared by row rules (`docs/business-entity-access.md` §2.2). Reads require `users:read`; writes require `users:write`. Every successful write writes a **Management Audit Event**.
+
+### 9.1 Definitions
+
+```json
+{
+  "id": "sad_01HZX",
+  "key": "regions",
+  "name": "Covered regions",
+  "description": null,
+  "value_type": "dictionary",
+  "dictionary_id": "dct_01HZX",
+  "multi_value": true,
+  "created_at": "2026-10-07T00:00:00Z",
+  "updated_at": "2026-10-07T00:00:00Z"
+}
+```
+
+`key` follows the User Group key rule and is immutable. `value_type` is `string`, `integer`, `date`, `dictionary`, or `user`, and is immutable. `dictionary_id` is required for `dictionary`, must name an existing Dictionary, is immutable, and is absent for other types. `multi_value` may change from `false` to `true` only.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/subject-attributes` | **Offset Page** (`key ASC`, `id ASC`) |
+| `POST` | `/subject-attributes` | Create → `201 { "subject_attribute" }` |
+| `GET` | `/subject-attributes/{id}` | `{ "subject_attribute" }` |
+| `PATCH` | `/subject-attributes/{id}` | Update `name`, `description`, `multi_value` |
+| `DELETE` | `/subject-attributes/{id}` | Delete the definition and all its values → `204` |
+
+### 9.2 Values
+
+Values are addressed per subject as a map from key to a value list.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/users/{id}/subject-attributes` | `{ "values": { "regions": ["EAST"] }, "effective": { "regions": ["EAST", "SOUTH"] } }` |
+| `PUT` | `/users/{id}/subject-attributes` | Replace the User's own values `{ "values": { … } }` |
+| `GET` | `/user-groups/{id}/subject-attributes` | `{ "values": { … } }` |
+| `PUT` | `/user-groups/{id}/subject-attributes` | Replace the group's values `{ "values": { … } }` |
+
+`effective` is the User's own values united with the values of every group the User belongs to. A key with no values is omitted. Each value list is non-empty and has at most 256 distinct values; a single-valued key accepts one value. A value must encode under `value_type`: a `dictionary` value must be an active code of the bound Dictionary when written, and a `user` value must name an existing User.
+
+Codes: `SUBJECT_ATTRIBUTE_NOT_FOUND` (404), `SUBJECT_ATTRIBUTE_KEY_DUPLICATE` (409), `SUBJECT_ATTRIBUTE_INVALID` (422; unknown key in a values map, wrong value type, too many values, inactive code, unknown User, or a change to an immutable field).
+
+## 10. Non-Goals
+
+- Hard delete of User records is intentionally not exposed.
+- Password reset / forgot-password flows remain out of scope (self-service password change for the current User is `docs/api-contracts-account.md`).
+- LDAP sync, non-OIDC federation, and **Client** (machine principal) credential management are out of scope.
+- **User PAT** is specified separately in `docs/api-contracts-tokens.md` / `docs/business-user-tokens.md` (not a Client API).
+- Self-service profile, locale, and password for the current User are specified in `docs/api-contracts-account.md` / `docs/business-account.md`.
+- Synchronizing User Groups or Subject Attributes from an Identity Provider, nested groups, and Permissions on User Groups.

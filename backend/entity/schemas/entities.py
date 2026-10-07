@@ -97,6 +97,7 @@ class DictionaryRefOut(BaseModel):
 
 
 class AttributeOut(BaseModel):
+    attribute_id: str | None = None
     name: str
     type: str
     required: bool

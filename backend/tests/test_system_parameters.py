@@ -10,6 +10,7 @@ import pytest
 from pydantic.fields import FieldInfo
 
 from backend.admin.parameters import ADMIN_PARAMETER_SPECS
+from backend.entity.parameters import ENTITY_PARAMETER_SPECS
 from backend.metadata.parameters import METADATA_PARAMETER_SPECS
 from backend.admin.system_parameters import (
     JSON_SCHEMA_PROFILE_KEYWORDS,
@@ -195,6 +196,7 @@ def test_registry_parity_across_composition() -> None:
             *JOBS_PARAMETER_SPECS,
             *WORKER_PARAMETER_SPECS,
             *METADATA_PARAMETER_SPECS,
+            *ENTITY_PARAMETER_SPECS,
         )
     }
     assert {spec.key for spec in list_registered_specs()} == declared
@@ -283,6 +285,16 @@ def test_dead_peek_slots_env_is_logged(
         assemble_system_parameters()
     assert "REFRAQ_PEEK_SLOTS" in caplog.text
     assert "REFRAQ_ADMISSION_SLOTS" in caplog.text
+
+
+def test_retired_entity_schema_env_is_logged(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("REFRAQ_ENTITY_DB_SCHEMA", "public")
+    with caplog.at_level(logging.WARNING, logger="backend.worker.parameters"):
+        assemble_system_parameters()
+    assert "REFRAQ_ENTITY_DB_SCHEMA" in caplog.text
+    assert "entity_data" in caplog.text
 
 
 def test_dead_fail_safe_env_is_logged(

@@ -31,6 +31,7 @@ from backend.worker.errors import (
     ScheduleSystemImmutable,
     ScheduleUndeletable,
 )
+from backend.entity.tasks import ACCESS_LOG_SCHEDULE_KEY, ACCESS_LOG_TASK_NAME
 from backend.worker.models import REAPER_SCHEDULE_KEY, REAPER_TASK_NAME
 from backend.worker.schemas.schedules import ScheduleOut, ScheduleRecentJobOut
 from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store
@@ -91,6 +92,7 @@ def ensure_system_schedules() -> None:
                 updated_at=now,
             )
         )
+        _ensure_access_log_schedule(store, now)
         return
     if existing.interval_seconds != interval:
         store.upsert(
@@ -100,6 +102,37 @@ def ensure_system_schedules() -> None:
                 updated_at=now,
             )
         )
+    _ensure_access_log_schedule(store, now)
+
+
+def _ensure_access_log_schedule(store: object, now: datetime) -> None:
+    schedule_store = store
+    existing = schedule_store.get_by_key(ACCESS_LOG_SCHEDULE_KEY)
+    if existing is not None:
+        return
+    schedule_store.upsert(
+        ScheduledTaskRecord(
+            id=f"sched_{uuid.uuid4().hex[:12]}",
+            key=ACCESS_LOG_SCHEDULE_KEY,
+            name="Purge Entity access logs",
+            enabled=True,
+            interval_seconds=86400,
+            cron=None,
+            commitment_timezone=current_schedule_timezone(),
+            task_name=ACCESS_LOG_TASK_NAME,
+            args_json=[],
+            kwargs_json={},
+            hidden=True,
+            locked=True,
+            undeletable=True,
+            store_only=True,
+            owner_ref=None,
+            last_run_at=now,
+            next_run_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+    )
 
 
 def validate_cron(text: str, *, start_at: datetime | None = None) -> None:

@@ -348,6 +348,11 @@ export function AttributeEditor({
                 updateDraft({ type: (value ?? draft.type) as AttributeType })
               }
             />
+            {draft.type === "user" ? (
+              <Text size="sm" c="dimmed">
+                {t("entities.attributeType.userHint")}
+              </Text>
+            ) : null}
             <FieldDisplay
               label={t("entities.fields.databaseType")}
               value={

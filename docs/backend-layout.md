@@ -34,6 +34,7 @@ backend/
     federation/           # OIDC provider, binding, pending, and provisioning language unit
     branding/             # Site Branding configuration and asset language unit
     model_services/       # Model Service registry, purpose state, connectivity test
+    subjects/             # User Group, membership, Subject Attribute definitions and values, subject resolver
     # published modules listed in §3
     models.py *_store.py permissions.py …
     schemas/ routers/     # this package's HTTP shapes and adapters
@@ -44,9 +45,10 @@ backend/
     models.py errors.py sources/ catalog/ connectors/ structure_jobs/ join_detection_jobs/
     schemas/ routers/     # domain use-case HTTP
     mcp_catalog.py mcp_actor.py mcp_server.py mcp_http.py tasks.py
-  entity/                 # product domain: Business Entity / version / publish and drop Jobs / Entity Data API
-    models.py errors.py tasks.py
+  entity/                 # product domain: Business Entity / version / publish and drop Jobs / Entity Data API / access control
+    models.py errors.py tasks.py parameters.py bootstrap.py
     data/                 # Entity Data API core (not HTTP); routers/schemas stay sibling
+    access/               # Entity Access Control: policy store, DSL, compiler, views, signed context, access log
     schemas/ routers/     # definition + Entity Data API HTTP (published entity.routers.*)
   worker/                 # runtime: Celery app, Beat, Scheduled Task, system tasks, discovery
     models.py schedules.py scheduler.py …
@@ -81,6 +83,7 @@ Each **platform kernel / platform primitive / product domain** package has an ex
 | `backend.admin.audit_store` | Audit store ports used by audit HTTP / writers |
 | `backend.admin.federation` | Identity Provider, OIDC authorization-code flow, External Subject binding, pending identity, and provisioning APIs |
 | `backend.admin.model_services` | Model Service registry snapshot and purpose state for Catalog Search (`get_embedding_runtime`, `mark_embedding_ready`, bind of catalog-embed job port) |
+| `backend.admin.subjects` | Subject resolution for Entity access: a User's group ids and effective Subject Attribute values, Subject Attribute definition lookup by key, User Group and User existence for subject pickers; bind of the dictionary-code validation port (composition injects the adapter so `admin` never imports `entity`). HTTP router mounted by `main` |
 | `backend.admin.system_parameters` | System Parameter mechanism (registry, occupy, `read_stored_parameter` / `resolve_int`, store reset). Does not name domain knobs |
 | `backend.admin.parameters` | Admin-owned parameter specs and typed accessors |
 | `backend.admin.routers.*` | Foundation HTTP adapters (mounted by `main` only) |
@@ -118,13 +121,15 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 
 ### `entity` published modules
 
-`entity` is a **product domain** package. It owns Business Entity definition, versioning, publish, the Job kinds that create or drop an Entity Table, and the **Entity Data API**. Core data-plane logic lives in `entity/data/`; HTTP and request shapes stay in `entity/routers/` and `entity/schemas/` alongside definition (not under `entity/data/`).
+`entity` is a **product domain** package. It owns Business Entity definition, versioning, publish, the Job kinds that create or drop an Entity Table or regenerate Profile Views, the **Entity Data API**, and **Entity Access Control**. Core data-plane logic lives in `entity/data/`; access control is the language unit `entity/access/`; HTTP and request shapes stay in `entity/routers/` and `entity/schemas/` alongside definition (not under `entity/data/` or `entity/access/`). `entity/data/` reaches access control only through `entity/access/` orchestration modules, never its store.
 
 | Module | Published for |
 |--------|----------------|
 | `backend.entity.errors` | Domain errors (subclass `AppError`, not `admin` concrete types) |
-| `backend.entity.tasks` | Job kind handler dispatch (`entity_reconcile`, `entity_table_drop`); discovered by `worker`. Not registered on `metadata.tasks` |
-| `backend.entity.routers.*` | Domain use-case HTTP (definition and Entity Data API); mounted by `main` |
+| `backend.entity.tasks` | Job kind handler dispatch (`entity_reconcile`, `entity_table_drop`, `entity_access_views`) and access-log retention purge; discovered by `worker`. Not registered on `metadata.tasks` |
+| `backend.entity.parameters` | Entity-owned System Parameter specs and typed accessors (`entity_access.max_profile_combinations`, `entity_access.access_log_retention_days`); collected by `worker.parameters` assembly |
+| `backend.entity.bootstrap` | Entity database bootstrap process entry (`python -m backend.entity.bootstrap`); uses `ENTITY_ADMIN_DATABASE_URL` only |
+| `backend.entity.routers.*` | Domain use-case HTTP (definition, access management, and Entity Data API); mounted by `main` |
 
 ### `worker` published modules
 
@@ -223,7 +228,7 @@ Enforcement: `backend/tests/test_no_inline_imports.py`. Rationale: ADR 0020.
 
 Forward rules:
 
-1. `core` depends on no platform kernel / primitive / product-domain business package (upgrade may import **published** `admin`, `worker.api`, `worker.parameters`, and `metadata.type_mappings.seeds` only for orchestration).
+1. `core` depends on no platform kernel / primitive / product-domain business package (upgrade may import **published** `admin`, `worker.api`, `worker.parameters`, and `metadata.type_mappings.seeds` only for orchestration). Entity access seed is an Alembic data migration, not a Foundation Upgrade call.
 2. **Product domain ↔ product domain:** no direct imports. Collaborate via shared-kernel protocols or composition binding—extend this contract with an explicit edge when needed. `entity` does not import `metadata`. `metadata` must not import `entity`.
 3. **Product domain → platform kernel / primitive:** published API only (Conformist).
 4. Platform primitive → platform kernel: default none; if needed, add an explicit whitelist edge via published API.
@@ -236,10 +241,10 @@ Concrete edges:
 |------|------------|
 | `main` (composition) | `core`, published `admin` / `jobs` / `metadata` / `entity` / `worker` (including their `routers.*` for mount), Site Bootstrap helpers |
 | `core` | stdlib, third parties, Alembic; `admin.roles` published symbols from `upgrade` only; `worker.api` / `worker.parameters` from `upgrade` only; `metadata.type_mappings.seeds` from `upgrade` only |
-| `admin` | `core`; own stores/schemas/routers / `system_parameters` / `parameters` / `model_services` |
+| `admin` | `core`; own stores/schemas/routers / `system_parameters` / `parameters` / `model_services` / `subjects`. Must not import `entity` |
 | `jobs` | `core`; own store/schemas/routers / `parameters`; published `admin` (audit, System Parameter resolver) |
 | `metadata` | `core`; published `admin`; published `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; process entries `mcp_http` / `mcp_server` may import `worker.parameters`; own modules. Must not import `entity` |
-| `entity` | `core`; published `admin`; published `jobs`; own modules |
+| `entity` | `core`; published `admin` (including `admin.subjects`); published `jobs`; own modules |
 | `worker` | `core`; published `admin` / `jobs` / `metadata` / `entity` for assembly and system tasks |
 | `alembic` | `core` Base + every package `models` module |
 | `tests` | any backend module (enforcement tests assert production edges) |

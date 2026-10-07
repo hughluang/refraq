@@ -79,6 +79,7 @@ Recommended modules:
 - `admin/model_services/` (Model Service registry, purpose vector state, connectivity test, and HTTP)
 - `admin/system_parameters/` (System Parameter mechanism: registry, store, resolver, occupy, HTTP)
 - `admin/federation/` (Identity Provider configuration, OIDC validation, binding, pending admission, claim, and unfederation)
+- `admin/subjects/` (User Group, membership, Subject Attribute definition and values, HTTP, and the published subject resolver: a User's groups and effective Subject Attribute values. Dictionary code validation is an injected adapter bound by composition; `admin` never imports `entity`)
 - `admin/parameters.py` (admin-owned System Parameter specs and typed accessors)
 - `admin/roles.py` (Role domain: System Role ensure, Site Bootstrap seed, write invariants)
 - `admin/audit.py` (audit write facade)
@@ -153,21 +154,27 @@ Responsibilities:
 - Derived `table_present` from the stored attribute-set snapshot and the latest publish **Job**
 - Physical Entity Table names and live-table occupancy in `entity/table_name.py`. Publish, drop, and Entity Data resolve physical names through `entity/table_name.py`. `entity/present.py` does not import it. Definition orchestration and drop enqueue pass the physical name and alignment into the projection
 - The current-version **Inbound Reference** scan in `entity/inbound.py`. Definition orchestration and drop enqueue pass that read into `entity/present.py`. Delete and deprecate use the scan directly. `entity/present.py` does not import `entity/inbound.py`
-- Minting `entity_reconcile` (publish create) and `entity_table_drop` Jobs; own Celery task and kind dispatch (`entity/tasks.py`), discovered by `worker`. Not registered on `metadata.tasks`
-- **Entity Data API** core under `entity/data/` (head schema and row verbs; `docs/api-contracts-entity-data.md`)
+- Minting `entity_reconcile` (publish create), `entity_table_drop`, and `entity_access_views` Jobs; own Celery task and kind dispatch (`entity/tasks.py`), discovered by `worker`. Not registered on `metadata.tasks`
+- **Entity Data API** core under `entity/data/` (head schema and row verbs; `docs/api-contracts-entity-data.md`). Reads select from the caller's **Profile View** on the reader connection; the data plane does not assemble its own access predicates
+- **Entity Access Control** language unit `entity/access/` (`docs/business-entity-access.md`): presentation ladders, Access Profiles, Access Grants, Access Restrictions, policy revision, and compiled view bindings (ORM and store); row-rule DSL and type checking; the policy compiler; combination computation and the cap; Profile View generation in the entity database; effective-grant resolution, narrowing, and signed-context issuance; write attribution; the Entity Access Log and its retention; upgrade seeding; access management HTTP
+- Entity database bootstrap process entry (`python -m backend.entity.bootstrap`): roles, schemas, `pgcrypto`, the `acl` schema, and migration of existing tables, run with admin credentials only
+- `entity/parameters.py` (Entity-owned System Parameter specs: `entity_access.max_profile_combinations`, `entity_access.access_log_retention_days`)
 - Domain use-case HTTP under `entity/routers/` (definition plus `routers/data.py`) and shapes under `entity/schemas/` (including `schemas/data.py`)
 - Published API listed in `docs/backend-layout.md` §3
 
 Must not contain:
 
 - Owning the platform Job table (lives in `backend/jobs/`)
-- An entity-database engine or pool in the MCP process; persistent API may open the entity pool for Entity Data API; the worker opens it for publish and drop Jobs
+- An entity-database engine or pool in the Metadata MCP process; persistent API opens entity owner and reader pools for Entity Data API; the worker opens the owner pool for publish, drop, and view regeneration Jobs
+- A superuser runtime connection, or an entity database that is the metadata database
+- Read-path SQL that selects from `entity_data` physical tables or stem views instead of a Profile View
 - Duplicating the **Normalized Type** closed set (import the published `metadata` leaf module)
 - Mapping, transform, lineage, or channel write admission (**Data Channel**)
 - Importing `worker.app`
 - Pre-scaffolded empty subpackages for Data Channel
-- MCP tools for Business Entity definition or Entity Data API
+- Metadata MCP tools for Business Entity definition or Entity Data API (Entity SQL over MCP is a separate surface with its own host)
 - `entity/present.py` importing `entity/table_name.py` or `entity/inbound.py`
+- Owning User Group or Subject Attribute storage (lives in `admin/subjects/`)
 
 ### `backend/worker/`
 
@@ -322,7 +329,7 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 - `admin` → `core` (+ own modules)
 - `jobs` → `core`; published `admin` (including System Parameter resolver) when needed
 - `metadata` → `core`; published `admin` / `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; process entries `mcp_http` / `mcp_server` may import `worker.parameters`
-- `entity` → `core`; published `admin` / `jobs`
+- `entity` → `core`; published `admin` (including `admin.subjects` and the System Parameter resolver) / `jobs`
 - `worker` → `core`; published surfaces for assembly, including `entity.tasks`
 - `main` → `core` + package routers / bootstrap via published surfaces
 - `alembic` → `core` Base + every package `models` module
@@ -358,8 +365,10 @@ For the login/permission slice, each concern should land here:
 - Current-user fetch and logout wiring: `frontend/src/providers/`
 - Login page UI: `frontend/src/app/login/`
 - Protected layout behavior: `frontend/src/app/console/`
-- User resource UI: `frontend/src/features/users/`
+- User resource UI: `frontend/src/features/users/` (including the User record's groups and Subject Attribute values)
+- User Group and Subject Attribute UI: `frontend/src/features/subjects/`
 - Role resource UI: `frontend/src/features/roles/`
+- Entity access control tab, preview, and Entity data page: `frontend/src/features/entities/`
 - Console navigation API: `backend/admin/routers/console.py` + `admin/console_modules.py`
 - Console Module Identity codegen: `scripts/gen_console_module_catalog.py` → `frontend/src/features/console/module-identity/generated-ids.ts`, `generated-catalog.ts`
 - Console route ACL: `frontend/src/components/access/PageCanAccess.tsx` + `frontend/src/features/console/module-identity/adapters.ts` (`matchPath`)

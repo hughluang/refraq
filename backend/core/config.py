@@ -8,6 +8,7 @@ from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
 
 from backend.core.browser_host import valid_browser_host
 
@@ -43,8 +44,8 @@ class Settings(BaseSettings):
     entity_database_url: str | None = Field(
         default=None, validation_alias="ENTITY_DATABASE_URL"
     )
-    refraq_entity_db_schema: str = Field(
-        default="public", validation_alias="REFRAQ_ENTITY_DB_SCHEMA"
+    entity_reader_database_url: str | None = Field(
+        default=None, validation_alias="ENTITY_READER_DATABASE_URL"
     )
     redis_url: str | None = Field(default=None, validation_alias="REDIS_URL")
     admin_session_secret: str = Field(
@@ -115,6 +116,41 @@ def require_entity_database_url(url: str | None) -> str:
             "to open the entity pool"
         )
     return cleaned
+
+
+def require_entity_reader_database_url(url: str | None, *, owner_url: str) -> str:
+    """Persistent API reads Entity data as the reader role, in the owner's database."""
+    cleaned = (url or "").strip()
+    if not cleaned:
+        raise ValueError(
+            "persistent API requires ENTITY_READER_DATABASE_URL "
+            "to open the entity reader pool"
+        )
+    if _database_target(cleaned) != _database_target(owner_url):
+        raise ValueError(
+            "ENTITY_READER_DATABASE_URL must name the same database as "
+            "ENTITY_DATABASE_URL"
+        )
+    return cleaned
+
+
+def require_distinct_entity_database(entity_url: str, metadata_url: str | None) -> None:
+    """The entity database may share a server, never the metadata database itself."""
+    if metadata_url and _database_target(entity_url) == _database_target(metadata_url):
+        raise ValueError(
+            "ENTITY_DATABASE_URL must name a database other than DATABASE_URL"
+        )
+
+
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _database_target(url: str) -> tuple[str, int, str]:
+    parsed = make_url(url)
+    host = (parsed.host or "localhost").lower()
+    if host in _LOOPBACK_HOSTS:
+        host = "localhost"
+    return host, int(parsed.port or 5432), parsed.database or ""
 
 
 @lru_cache

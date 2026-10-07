@@ -70,10 +70,24 @@ class RuntimeCapacity:
         return self.entity_pool_size + self.entity_max_overflow
 
     @property
+    def entity_pool_count(self) -> int:
+        """Pools opened with the shared ``REFRAQ_ENTITY_DB_*`` quotas.
+
+        API opens an owner pool and a reader pool. Worker opens the owner pool.
+        MCP opens none.
+        """
+        if self.role == "api":
+            return 2
+        if self.role == "worker":
+            return 1
+        return 0
+
+    @property
     def process_pool_budget(self) -> int:
-        if self.role == "mcp":
-            return self.pool_max_connections
-        return self.pool_max_connections + self.entity_pool_max_connections
+        return (
+            self.pool_max_connections
+            + self.entity_pool_count * self.entity_pool_max_connections
+        )
 
 
 def _defaults_for(role: ProcessRole) -> dict[str, int]:
@@ -214,12 +228,14 @@ def log_capacity_warnings(cap: RuntimeCapacity) -> None:
             cap.thread_tokens,
             cap.pool_max_connections,
         )
-    if cap.role in ("api", "worker"):
+    labels = ("owner", "reader") if cap.role == "api" else ("owner",)
+    for label in labels[: cap.entity_pool_count]:
         entity_banner = (
-            "runtime capacity entity pool=%s+%s timeout=%ss recycle=%ss"
+            "runtime capacity entity pool=%s+%s which=%s timeout=%ss recycle=%ss"
             % (
                 cap.entity_pool_size,
                 cap.entity_max_overflow,
+                label,
                 cap.entity_pool_timeout_sec,
                 cap.entity_pool_recycle_sec,
             )

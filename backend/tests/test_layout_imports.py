@@ -41,6 +41,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "admin.parameters",
             "admin.federation",
             "admin.model_services",
+            "admin.subjects",
             "admin.routers",
         }
     ),
@@ -73,6 +74,8 @@ PUBLISHED: dict[str, frozenset[str]] = {
         {
             "entity.errors",
             "entity.tasks",
+            "entity.parameters",
+            "entity.dictionaries.active_codes",
             "entity.routers",
         }
     ),

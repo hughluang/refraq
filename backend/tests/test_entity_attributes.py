@@ -30,7 +30,7 @@ from backend.entity.errors import EntityAttributeInvalid  # noqa: E402
 from backend.entity.present import attribute_payload  # noqa: E402
 from backend.entity.table_name import compose_physical_table_name  # noqa: E402
 from backend.core.time import utc_now  # noqa: E402
-from backend.entity.entity_db import entity_db_schema  # noqa: E402
+from backend.entity.ddl import ENTITY_DATA_SCHEMA  # noqa: E402
 from backend.entity.ids import new_entity_id, new_version_id  # noqa: E402
 from backend.entity.lifecycle import PUBLISHED, UNPUBLISHED  # noqa: E402
 from backend.entity.records import (  # noqa: E402
@@ -324,10 +324,18 @@ def test_ddl_string_text_decimal_reference_and_enumeration() -> None:
     assert "CHECK" in enum_sql
     assert "'ACTIVE'" in enum_sql
     statements = create_table_statements(
-        "public", "material", [string_attr, text_attr, decimal_attr, ref, enum_attr]
+        "entity_data",
+        "material",
+        [string_attr, text_attr, decimal_attr, ref, enum_attr],
     )
-    assert len(statements) == 2
-    assert "CREATE INDEX" in statements[1]
+    assert statements[1].startswith("CREATE INDEX")
+    assert any("ENABLE ROW LEVEL SECURITY" in stmt for stmt in statements)
+    assert any("FORCE ROW LEVEL SECURITY" in stmt for stmt in statements)
+    assert any('OWNER TO "refraq_entity_owner"' in stmt for stmt in statements)
+    assert any(
+        'GRANT SELECT ON "entity_data"."material" TO "refraq_exposure_owner"' in stmt
+        for stmt in statements
+    )
 
 
 def test_classifier_type_precision_enumeration_target() -> None:
@@ -788,7 +796,7 @@ def _plant_snapshot(
         physical, _comment = compose_physical_table_name(table_name, 1, version_id)
         port = get_entity_table_port()
         port.create_physical_table(
-            entity_db_schema(),
+            ENTITY_DATA_SCHEMA,
             physical,
             [
                 replace(attr, reference_key_type="integer")
@@ -798,7 +806,7 @@ def _plant_snapshot(
             ],
         )
         port.swap_stem_view(
-            entity_db_schema(),
+            ENTITY_DATA_SCHEMA,
             table_name,
             physical=physical,
             expected_target=None,

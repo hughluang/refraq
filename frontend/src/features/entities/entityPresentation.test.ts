@@ -6,6 +6,7 @@ import {
   draftsFromVersion,
   isLegalTableName,
   referenceSummaryLabel,
+  userAttributeLabel,
 } from "@/features/entities/entityPresentation";
 import type { AttributeDraft, EntityVersion } from "@/features/entities/types";
 
@@ -232,6 +233,22 @@ describe("draftsFromVersion", () => {
         emptyNameLabel: "This entity",
       }),
     ).toBe("ent_gone");
+  });
+});
+
+describe("userAttributeLabel", () => {
+  it("shows the display name and account, and keeps a missing User as the id", () => {
+    expect(
+      userAttributeLabel({
+        userId: "user_1",
+        account: "ada",
+        displayName: "Ada Lovelace",
+      }),
+    ).toBe("Ada Lovelace (ada)");
+    expect(
+      userAttributeLabel({ userId: "user_1", account: "ada", displayName: "ada" }),
+    ).toBe("ada");
+    expect(userAttributeLabel({ userId: "user_gone" })).toBe("user_gone");
   });
 });
 

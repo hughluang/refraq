@@ -25,7 +25,9 @@ services:
 
   # POSTGRES_DB only creates `refraq`. Entity Tables live in `refraq_entity`
   # on the same instance. This one-shot is required on every up, including
-  # an already-initialized volume (initdb.d would not run again).
+  # an already-initialized volume (initdb.d would not run again). It creates
+  # the database only. Roles, schemas, and RLS are `python -m backend.entity.bootstrap`
+  # (site compose runs that command in this service).
   ensure-entity-db:
     image: pgvector/pgvector:pg18
     environment:

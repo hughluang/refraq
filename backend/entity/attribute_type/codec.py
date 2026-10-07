@@ -20,6 +20,7 @@ _TIME_RE = re.compile(
 )
 _BIGINT_MIN = -(2**63)
 _BIGINT_MAX = 2**63 - 1
+USER_ID_MAX_LENGTH = 64
 
 
 def encode_string(attr: Any, raw: Any, **_unused: Any) -> str:
@@ -161,6 +162,17 @@ def encode_dictionary(
                 f"Attribute '{attr.name}' filter code is not in the head snapshot"
             )
         raise EntityRowInvalid(f"Attribute '{attr.name}' code is not writable")
+    return raw
+
+
+def encode_user(attr: Any, raw: Any, **_unused: Any) -> str:
+    """Shape only. Whether the User exists is checked by the write path."""
+    if not isinstance(raw, str) or not raw:
+        raise EntityRowInvalid(f"Attribute '{attr.name}' must be a User id string")
+    if len(raw) > USER_ID_MAX_LENGTH:
+        raise EntityRowInvalid(
+            f"Attribute '{attr.name}' User id exceeds {USER_ID_MAX_LENGTH} characters"
+        )
     return raw
 
 
