@@ -5,8 +5,8 @@ export const SUBJECT_VALUES_MAX = 256;
 
 const KEY_RE = /^[a-z][a-z0-9_]*$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const BIGINT_MIN = -(2n ** 63n);
-const BIGINT_MAX = 2n ** 63n - 1n;
+const BIGINT_MIN = -(BigInt(2) ** BigInt(63));
+const BIGINT_MAX = BigInt(2) ** BigInt(63) - BigInt(1);
 
 export type SubjectValueType =
   | "string"
