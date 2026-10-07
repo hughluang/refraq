@@ -14,7 +14,6 @@ __all__ = [
     "existing_group_ids",
     "existing_user_ids",
     "group_labels",
-    "subject_attribute_by_key",
     "subject_attributes",
     "user_group_ids",
     "user_labels",
@@ -29,10 +28,6 @@ def user_group_ids(user_id: str) -> tuple[str, ...]:
 def effective_subject_values(user_id: str) -> dict[str, tuple[SubjectValue, ...]]:
     """Per Subject Attribute key: the User's own values united with its groups' values."""
     return {key: tuple(items) for key, items in effective_values_of(user_id).items()}
-
-
-def subject_attribute_by_key(key: str) -> SubjectAttributeRecord | None:
-    return get_subject_store().get_definition_by_key(key)
 
 
 def existing_user_ids(user_ids: Iterable[str]) -> frozenset[str]:

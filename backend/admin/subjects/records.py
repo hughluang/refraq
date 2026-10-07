@@ -10,7 +10,6 @@ __all__ = [
     "KEY_MAX_LENGTH",
     "NAME_MAX_LENGTH",
     "STRING_VALUE_MAX_LENGTH",
-    "SUBJECT_TYPES",
     "VALUES_MAX",
     "VALUE_TYPES",
     "SubjectAttributeRecord",
@@ -26,7 +25,6 @@ SubjectType = Literal["user", "group"]
 SubjectValue = str | int
 
 VALUE_TYPES: tuple[ValueType, ...] = ("string", "integer", "date", "dictionary", "user")
-SUBJECT_TYPES: tuple[SubjectType, ...] = ("user", "group")
 KEY_MAX_LENGTH = 63
 NAME_MAX_LENGTH = 256
 STRING_VALUE_MAX_LENGTH = 256

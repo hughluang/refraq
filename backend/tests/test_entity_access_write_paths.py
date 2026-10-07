@@ -31,7 +31,6 @@ from backend.entity.access import enforce  # noqa: E402
 from backend.entity.access import plan as access_plan  # noqa: E402
 from backend.entity.access.enforce import (  # noqa: E402
     begin_data,
-    definition_allows,
     read_context,
 )
 from backend.entity.access.errors import EntityAccessWriteDenied  # noqa: E402
@@ -309,8 +308,6 @@ def test_requests_do_not_load_every_user(
     monkeypatch.setattr(access_plan, "_population", _everyone)
     channels.reader_answers.append([(7, "A1", "n", "**34")])
     assert get_row(table, {"row_id": 7}, user)["row_id"] == 7
-    assert definition_allows(user, get_entity_store().get_entity_by_table_name(table).id)[0]
-
 
 def test_read_context_failure_is_raised(monkeypatch: pytest.MonkeyPatch) -> None:
     user, table = _masked_entity()

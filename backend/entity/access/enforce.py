@@ -5,8 +5,6 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, replace
 
-from backend.admin.roles import effective_permissions
-from backend.admin.role_store import get_role_store
 from backend.admin.user_store import UserRecord
 from backend.core.config import get_settings
 from backend.core.db import map_platform_db_error
@@ -41,8 +39,6 @@ from backend.entity.store import get_entity_store
 __all__ = [
     "DataAccess",
     "begin_data",
-    "definition_allows",
-    "sees_every_definition",
     "read_context",
     "read_view",
     "require_write_grant",
@@ -104,7 +100,7 @@ def begin_data(
 ) -> DataAccess:
     """Visibility, then configuration, then lifecycle, then narrow."""
     started = time.perf_counter()
-    entity = get_entity_store_entity(table_name)
+    entity = get_entity_store().get_entity_by_table_name(table_name)
     if entity is None:
         raise _missing(table_name)
     head = load_head(entity.id)
@@ -257,30 +253,6 @@ def require_write_grant(
     if not matches:
         raise EntityAccessWriteDenied()
     return matches[0]
-
-
-def sees_every_definition(user: UserRecord) -> bool:
-    perms = _permissions(user)
-    return "entity:write" in perms or "entity:access_manage" in perms
-
-
-def definition_allows(user: UserRecord, entity_id: str) -> tuple[bool, bool, set[str] | None]:
-    """Return (visible, physical names, shape names or None for every column)."""
-    perms = _permissions(user)
-    if "entity:write" in perms or "entity:access_manage" in perms:
-        return True, "entity:write" in perms, None
-    try:
-        person = _person(user.id)
-    except Exception:
-        return False, False, set()
-    head = load_head(entity_id)
-    revision = get_access_store().revision(entity_id)
-    policy = load_policy(head, revision, people=(person,))
-    compiled = compile_policy(policy)
-    outcome = subject_outcome(compiled, policy, person, action="read", narrow=None)
-    if not outcome.grant_ids:
-        return False, False, set()
-    return True, False, shape_names(outcome)
 
 
 def read_context(access: DataAccess) -> str | None:
@@ -457,8 +429,6 @@ def _row_ok(access: DataAccess, grant: GrantSpec, row: dict) -> bool:
 
 def _restriction_applies(item: object, person: Person) -> bool:
     mode = getattr(item, "mode")
-    if mode == "all":
-        return True
     hit = False
     for kind, subject_id in getattr(item, "subjects"):
         if kind == "user" and person.user_id == subject_id:
@@ -491,15 +461,6 @@ def _missing(table_name: str) -> EntityNotFound:
     )
 
 
-def _permissions(user: UserRecord) -> set[str]:
-    if not user.role_id:
-        return set()
-    role = get_role_store().get_by_id(user.role_id)
-    if role is None:
-        return set()
-    return set(effective_permissions(role))
-
-
 def _log_pending(
     user: UserRecord,
     entity_id: str,
@@ -527,7 +488,3 @@ def _log_pending(
             duration_ms=int((time.perf_counter() - started) * 1000),
         )
     )
-
-
-def get_entity_store_entity(table_name: str):
-    return get_entity_store().get_entity_by_table_name(table_name)

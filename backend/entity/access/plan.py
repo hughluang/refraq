@@ -28,9 +28,9 @@ from backend.entity.access.store import get_access_store
 from backend.entity.ddl import ENTITY_DATA_SCHEMA, qualified_table
 from backend.entity.lifecycle import PUBLISHED
 from backend.entity.parameters import max_profile_combinations
-from backend.entity.records import AttributeRecord, attribute_from_dict
+from backend.entity.records import AttributeRecord
 from backend.entity.store import get_entity_store
-from backend.entity.table_name import physical_table_name, table_present
+from backend.entity.table_name import physical_table_name, published_attributes, table_present
 
 __all__ = [
     "Head",
@@ -94,11 +94,7 @@ def load_head(entity_id: str) -> Head:
             physical=None,
         )
     version = max(published, key=lambda item: item.version)
-    raw = version.materialized_attributes or [
-        {"name": attr.name, "type": attr.type, "attribute_id": attr.attribute_id}
-        for attr in version.attributes
-    ]
-    attributes = tuple(attribute_from_dict(item) for item in raw)
+    attributes = tuple(published_attributes(version))
     physical = (
         physical_table_name(version, entity.table_name) if table_present(version) else None
     )

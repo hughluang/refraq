@@ -99,6 +99,21 @@ export function listSubjectAttributes(query: PageQuery) {
   );
 }
 
+/** Every definition. A values PUT replaces all keys, so the editor must see them all. */
+export async function listAllSubjectAttributes(): Promise<SubjectAttribute[]> {
+  const limit = 200;
+  const first = await listSubjectAttributes({ limit, offset: 0 });
+  const items = [...first.items];
+  while (items.length < first.total) {
+    const next = await listSubjectAttributes({ limit, offset: items.length });
+    if (next.items.length === 0) {
+      throw new Error("subject attributes changed while loading");
+    }
+    items.push(...next.items);
+  }
+  return items;
+}
+
 export function createSubjectAttribute(body: {
   key: string;
   name: string;

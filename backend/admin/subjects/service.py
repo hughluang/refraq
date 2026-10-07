@@ -29,7 +29,7 @@ from backend.admin.subjects.records import (
     SubjectValue,
     UserGroupRecord,
 )
-from backend.admin.subjects.store import SubjectStore, get_subject_store
+from backend.admin.subjects.store import get_subject_store
 from backend.admin.user_store import UserRecord, get_user_store
 from backend.core.time import utc_now
 
@@ -68,10 +68,6 @@ class Unset:
 
 
 UNSET = Unset()
-
-
-def _store() -> SubjectStore:
-    return get_subject_store()
 
 
 def _audit(
@@ -127,14 +123,14 @@ def require_user(user_id: str) -> UserRecord:
 
 
 def require_group(group_id: str) -> UserGroupRecord:
-    group = _store().get_group(group_id)
+    group = get_subject_store().get_group(group_id)
     if group is None:
         raise UserGroupNotFound()
     return group
 
 
 def require_definition(definition_id: str) -> SubjectAttributeRecord:
-    found = _store().get_definition(definition_id)
+    found = get_subject_store().get_definition(definition_id)
     if found is None:
         raise SubjectAttributeNotFound()
     return found
@@ -157,7 +153,7 @@ def create_group(
         created_at=now,
         updated_at=now,
     )
-    _store().create_group(record)
+    get_subject_store().create_group(record)
     _audit(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -189,7 +185,7 @@ def patch_group(
     if updated == current:
         return current
     updated = replace(updated, updated_at=utc_now())
-    _store().update_group(updated)
+    get_subject_store().update_group(updated)
     _audit(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -202,7 +198,7 @@ def patch_group(
 
 def delete_group(group_id: str, *, actor_user_id: str, actor_token_id: str | None) -> None:
     group = require_group(group_id)
-    _store().delete_group(group_id)
+    get_subject_store().delete_group(group_id)
     _audit(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -217,7 +213,7 @@ def list_member_users(
     group_id: str, *, limit: int | None, offset: int
 ) -> tuple[list[UserRecord], int]:
     require_group(group_id)
-    ids, total = _store().list_member_ids(group_id, limit=limit, offset=offset)
+    ids, total = get_subject_store().list_member_ids(group_id, limit=limit, offset=offset)
     users = get_user_store()
     found = [users.get_by_id(user_id) for user_id in ids]
     return [user for user in found if user is not None], total
@@ -228,7 +224,7 @@ def add_member(
 ) -> None:
     require_group(group_id)
     require_user(user_id)
-    store = _store()
+    store = get_subject_store()
     if group_id in store.group_ids_of(user_id):
         return
     store.add_member(group_id, user_id)
@@ -246,7 +242,7 @@ def remove_member(
     group_id: str, user_id: str, *, actor_user_id: str, actor_token_id: str | None
 ) -> None:
     require_group(group_id)
-    store = _store()
+    store = get_subject_store()
     if group_id not in store.group_ids_of(user_id):
         return
     store.remove_member(group_id, user_id)
@@ -261,7 +257,7 @@ def remove_member(
 
 
 def user_groups_of(user_id: str) -> list[UserGroupRecord]:
-    store = _store()
+    store = get_subject_store()
     groups = [store.get_group(group_id) for group_id in store.group_ids_of(user_id)]
     return sorted(
         (group for group in groups if group is not None),
@@ -277,7 +273,7 @@ def replace_user_groups(
     actor_token_id: str | None,
 ) -> list[UserGroupRecord]:
     require_user(user_id)
-    store = _store()
+    store = get_subject_store()
     wanted = list(dict.fromkeys(group_ids))
     missing = sorted(set(wanted) - store.existing_group_ids(wanted))
     if missing:
@@ -336,7 +332,7 @@ def create_definition(
         created_at=now,
         updated_at=now,
     )
-    _store().create_definition(record)
+    get_subject_store().create_definition(record)
     _audit(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -382,7 +378,7 @@ def patch_definition(
     if updated == current:
         return current
     updated = replace(updated, updated_at=utc_now())
-    _store().update_definition(updated)
+    get_subject_store().update_definition(updated)
     _audit(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -397,7 +393,7 @@ def delete_definition(
     definition_id: str, *, actor_user_id: str, actor_token_id: str | None
 ) -> None:
     current = require_definition(definition_id)
-    _store().delete_definition(definition_id)
+    get_subject_store().delete_definition(definition_id)
     _audit(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -421,27 +417,25 @@ def decode_values(
     """Stored values keyed by definition id → wire values keyed by attribute key."""
     out: dict[str, list[SubjectValue]] = {}
     for definition_id, items in stored.items():
-        definition = definitions.get(definition_id)
-        if definition is None or not items:
-            continue
+        definition = definitions[definition_id]
         out[definition.key] = [decode_value(definition, item) for item in items]
     return dict(sorted(out.items()))
 
 
 def _definitions_by_id() -> dict[str, SubjectAttributeRecord]:
-    items, _total = _store().list_definitions()
+    items, _total = get_subject_store().list_definitions()
     return {item.id: item for item in items}
 
 
 def own_values_of(
     subject_type: SubjectType, subject_id: str
 ) -> dict[str, list[SubjectValue]]:
-    stored = _store().values_for(subject_type, [subject_id]).get(subject_id, {})
+    stored = get_subject_store().values_for(subject_type, [subject_id]).get(subject_id, {})
     return decode_values(stored, _definitions_by_id())
 
 
 def effective_values_of(user_id: str) -> dict[str, list[SubjectValue]]:
-    store = _store()
+    store = get_subject_store()
     definitions = _definitions_by_id()
     merged: dict[str, list[str]] = {}
     sources = [store.values_for("user", [user_id]).get(user_id, {})]
@@ -510,7 +504,7 @@ def _encode_values_map(
 ) -> dict[str, tuple[str, ...]]:
     if not isinstance(raw_values, dict):
         raise SubjectAttributeInvalid("values must be an object")
-    store = _store()
+    store = get_subject_store()
     encoded: dict[str, tuple[str, ...]] = {}
     for key, raw_list in raw_values.items():
         definition = store.get_definition_by_key(key) if isinstance(key, str) else None
@@ -548,7 +542,7 @@ def _replace_values(
     actor_user_id: str,
     actor_token_id: str | None,
 ) -> dict[str, list[SubjectValue]]:
-    store = _store()
+    store = get_subject_store()
     current = store.values_for(subject_type, [subject_id]).get(subject_id, {})
     encoded = _encode_values_map(raw_values, current)
     if encoded != current:

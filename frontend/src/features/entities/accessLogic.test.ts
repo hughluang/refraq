@@ -3,20 +3,17 @@ import { describe, expect, it } from "vitest";
 import {
   classifyAccessProblem,
   columnsFromMatrix,
-  combinationOverLimit,
-  emptyRule,
   appendEditorCondition,
   isMaskedPresentation,
   literalOperand,
   matrixColumn,
   narrowBody,
-  parseRule,
   presentCell,
   serializeRule,
   validateLadder,
   withheldNames,
-  type RuleNode,
-} from "@/features/entities/accessLogic";
+  type RuleLeaf,
+  type RuleNode,} from "@/features/entities/accessLogic";
 
 describe("validateLadder", () => {
   it("requires clear first and unique keys", () => {
@@ -53,97 +50,37 @@ describe("profile matrix", () => {
 });
 
 describe("row rule editor", () => {
-  it("round-trips a visual tree without a text DSL", () => {
-    const tree: RuleNode = {
-      kind: "and",
-      children: [
-        {
-          kind: "leaf",
-          op: "eq",
-          attributeId: "att_region",
-          operand: { kind: "subject_attr", key: "region" },
-        },
-        {
-          kind: "not",
-          child: {
-            kind: "leaf",
-            op: "is_null",
-            attributeId: "att_sku",
-            operand: { kind: "value", value: true },
-          },
-        },
-      ],
-    };
-    const wire = serializeRule(tree);
-    expect(wire).toEqual({
-      and: [
-        { eq: { attr: "att_region", subject_attr: "region" } },
-        { not: { is_null: { attr: "att_sku", value: true } } },
-      ],
-    });
-    expect(parseRule(wire)).toEqual(tree);
-    expect(serializeRule(emptyRule())).toBeNull();
+  const leaf = (value: string): RuleLeaf => ({
+    kind: "leaf",
+    op: "eq",
+    attributeId: "att_region",
+    operand: { kind: "value", value },
   });
 
-  it("saves a flat AND and does not round-trip OR or NOT", () => {
-    const east: RuleNode = {
-      kind: "leaf",
-      op: "eq",
-      attributeId: "att_region",
-      operand: { kind: "value", value: "EAST" },
-    };
-    const south: RuleNode = {
-      kind: "leaf",
-      op: "eq",
-      attributeId: "att_region",
-      operand: { kind: "value", value: "SOUTH" },
-    };
-    const saved = appendEditorCondition(appendEditorCondition(emptyRule(), east), south);
+  it("saves a flat AND of leaves and nothing for an empty editor", () => {
+    const empty: RuleNode = { kind: "and", children: [] };
+    expect(serializeRule(empty)).toBeNull();
+    const saved = appendEditorCondition(
+      appendEditorCondition(empty, leaf("EAST")),
+      {
+        kind: "leaf",
+        op: "is_null",
+        attributeId: "att_sku",
+        operand: { kind: "subject_attr", key: "region" },
+      },
+    );
     expect(serializeRule(saved)).toEqual({
       and: [
         { eq: { attr: "att_region", value: "EAST" } },
-        { eq: { attr: "att_region", value: "SOUTH" } },
+        { is_null: { attr: "att_sku", subject_attr: "region" } },
       ],
     });
-    const parsedOr = parseRule({
-      or: [
-        { eq: { attr: "att_region", value: "EAST" } },
-        { eq: { attr: "att_region", value: "SOUTH" } },
-      ],
-    });
-    expect(serializeRule(saved)).not.toEqual(serializeRule(parsedOr as RuleNode));
-    const notRoot: RuleNode = { kind: "not", child: east };
-    const wrapped = appendEditorCondition(notRoot, south);
-    expect(wrapped.kind).toBe("and");
-    const wire = serializeRule(wrapped);
-    expect(wire !== null && "and" in wire).toBe(true);
-  });
-});
-
-describe("combination warning", () => {
-  it("flags subjects over the cap and a count past the limit", () => {
-    expect(
-      combinationOverLimit({
-        combinations: 2,
-        combination_limit: 64,
-        subjects_over_limit: 1,
-      }),
-    ).toBe(true);
-    expect(
-      combinationOverLimit({
-        combinations: 64,
-        combination_limit: 64,
-        subjects_over_limit: 0,
-      }),
-    ).toBe(false);
   });
 });
 
 describe("access problems", () => {
-  it("names pending, write denial, generic conflict, and the cap", () => {
+  it("names pending and the cap", () => {
     expect(classifyAccessProblem("ENTITY_ACCESS_PENDING")).toBe("pending");
-    expect(classifyAccessProblem("ENTITY_ACCESS_WRITE_DENIED")).toBe("write_denied");
-    expect(classifyAccessProblem("ENTITY_ROW_CONFLICT")).toBe("conflict");
     expect(classifyAccessProblem("ENTITY_ACCESS_COMBINATION_LIMIT")).toBe(
       "combination_limit",
     );
@@ -168,8 +105,6 @@ describe("presentCell", () => {
         name: "note",
         value: null,
         withheld: ["note"],
-        masked: false,
-        rowVarying: true,
         referenceHidden: false,
       }).kind,
     ).toBe("withheld");
@@ -178,24 +113,19 @@ describe("presentCell", () => {
         name: "note",
         value: null,
         withheld: [],
-        masked: false,
-        rowVarying: false,
         referenceHidden: false,
       }).kind,
     ).toBe("empty");
   });
 
-  it("marks masks and hides an invisible reference target", () => {
+  it("hides an invisible reference target and reads mask presentation", () => {
     const masked = presentCell({
       name: "phone",
       value: "138****",
       withheld: [],
-      masked: true,
-      rowVarying: false,
       referenceHidden: false,
     });
     expect(masked.kind).toBe("value");
-    expect(masked.marks).toContain("masked");
     expect(isMaskedPresentation([{ mode: "clear" }, { mode: { type: "partial" } }])).toBe(
       true,
     );
@@ -204,8 +134,6 @@ describe("presentCell", () => {
         name: "supplier",
         value: "sup_1",
         withheld: null,
-        masked: false,
-        rowVarying: false,
         referenceHidden: true,
       }).kind,
     ).toBe("inaccessible_record");

@@ -16,7 +16,7 @@ from sqlalchemy import create_engine, text
 
 from backend.entity.table_name import compose_physical_table_name as compose_physical
 from backend.entity.records import AttributeRecord, attribute_to_dict
-from backend.entity.access.seed import prepare_legacy_entity
+from backend.tests.entity_access_oracle import prepare_legacy_entity
 from backend.entity.table_port import PostgresEntityTablePort
 from backend.tests.entity_pg import bootstrapped_entity_database
 
@@ -71,7 +71,6 @@ def _serve(monkeypatch: pytest.MonkeyPatch, urls):
     from backend.admin.role_store import get_role_store
     from backend.admin.security import hash_password
     from backend.admin.user_store import get_user_store
-    from backend.entity.access.seed import prepare_legacy_entity
     from backend.entity.ids import new_entity_id, new_version_id
     from backend.entity.lifecycle import PUBLISHED
     from backend.entity.records import BusinessEntityRecord, EntityVersionRecord

@@ -36,7 +36,6 @@ export type AccessGrant = {
   actions: string[];
   status: string;
   valid_until: string | null;
-  warnings: string[];
   broken: boolean;
 };
 

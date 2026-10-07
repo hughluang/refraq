@@ -243,9 +243,6 @@ class PostgresEntityTablePort:
     @contextmanager
     def ddl_transaction(self) -> Iterator[None]:
         """Join table create, stem swap, and profile views on one connection."""
-        if _PG_CONN.get() is not None:
-            yield
-            return
         engine = get_entity_engine()
         with engine.begin() as conn:
             token = _PG_CONN.set(conn)

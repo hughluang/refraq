@@ -20,8 +20,8 @@ from backend.admin.roles import create_role, seed_roles  # noqa: E402
 from backend.admin.role_store import get_role_store  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import get_user_store  # noqa: E402
-from backend.entity.access.seed import (  # noqa: E402
-    ensure_creator_grant,
+from backend.entity.access.seed import ensure_creator_grant  # noqa: E402
+from backend.tests.entity_access_oracle import (  # noqa: E402
     prepare_legacy_entity,
     seed_entity_entitlements,
 )

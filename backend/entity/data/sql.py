@@ -99,7 +99,9 @@ def entity_read_connection(ctx: str | None) -> Iterator[Connection]:
 
 
 def _read_from(target: HeadTarget) -> str:
-    return target.read_relation or target.qualified_table
+    if target.read_relation is None:
+        raise EntityNotServing()
+    return target.read_relation
 
 
 def insert_row(conn: Connection, target: HeadTarget, values: dict[str, Any]) -> int:

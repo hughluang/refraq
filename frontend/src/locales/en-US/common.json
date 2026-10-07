@@ -791,8 +791,6 @@
   "entities.data.load": "Load rows",
   "entities.data.retry": "Retry",
   "entities.data.pending": "Access configuration is generating. Retry shortly.",
-  "entities.data.writeDenied": "No single grant can write these columns and rows.",
-  "entities.data.conflict": "That value conflicts with an existing row.",
   "entities.data.readOnly": "Read only",
   "entities.data.empty": "No visible rows",
   "entities.search": "Search table name / name",

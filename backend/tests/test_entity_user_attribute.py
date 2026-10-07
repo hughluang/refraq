@@ -14,11 +14,9 @@ from backend.entity.data.head import HeadTarget
 from backend.entity.data.values import (
     decode_row,
     encode_inbound_map,
-    user_display_labels,
 )
 from backend.entity.ddl import column_sql
 from backend.entity.errors import EntityAttributeInvalid, EntityRowInvalid
-from backend.entity.present import present_user_value
 from backend.entity.records import (
     AttributeRecord,
     BusinessEntityRecord,
@@ -82,7 +80,7 @@ def test_user_column_is_varchar_64_and_not_a_business_key() -> None:
     assert classified.changes[0].field == "attributes.owner.type"
 
 
-def test_user_write_requires_an_existing_user_and_display_resolves_the_name() -> None:
+def test_user_write_requires_an_existing_user() -> None:
     ada = get_user_store().create_user(
         account="ada",
         display_name="Ada Lovelace",
@@ -95,13 +93,6 @@ def test_user_write_requires_an_existing_user_and_display_resolves_the_name() ->
     assert encoded == {"owner": ada.id}
     row = decode_row(["owner"], (ada.id,), target)
     assert row == {"owner": ada.id}
-    assert present_user_value(ada.id) == {
-        "id": ada.id,
-        "account": "ada",
-        "display_name": "Ada Lovelace",
-    }
-    assert user_display_labels([ada.id])[ada.id]["account"] == "ada"
-    assert present_user_value("user_gone") == {"id": "user_gone"}
     with pytest.raises(EntityRowInvalid, match="do not name a User"):
         encode_inbound_map({"owner": "user_gone"}, target, partial=True)
 

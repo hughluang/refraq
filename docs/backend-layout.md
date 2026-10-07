@@ -83,7 +83,7 @@ Each **platform kernel / platform primitive / product domain** package has an ex
 | `backend.admin.audit_store` | Audit store ports used by audit HTTP / writers |
 | `backend.admin.federation` | Identity Provider, OIDC authorization-code flow, External Subject binding, pending identity, and provisioning APIs |
 | `backend.admin.model_services` | Model Service registry snapshot and purpose state for Catalog Search (`get_embedding_runtime`, `mark_embedding_ready`, bind of catalog-embed job port) |
-| `backend.admin.subjects` | Subject resolution for Entity access: a User's group ids and effective Subject Attribute values, Subject Attribute definition lookup by key, User Group and User existence for subject pickers; bind of the dictionary-code validation port (composition injects the adapter so `admin` never imports `entity`). HTTP router mounted by `main` |
+| `backend.admin.subjects` | Subject resolution for Entity access: a User's group ids and effective Subject Attribute values, the Subject Attribute definition catalog, User Group and User existence for subject pickers; bind of the dictionary-code validation port (composition injects the adapter so `admin` never imports `entity`). HTTP router mounted by `main` |
 | `backend.admin.system_parameters` | System Parameter mechanism (registry, occupy, `read_stored_parameter` / `resolve_int`, store reset). Does not name domain knobs |
 | `backend.admin.parameters` | Admin-owned parameter specs and typed accessors |
 | `backend.admin.routers.*` | Foundation HTTP adapters (mounted by `main` only) |

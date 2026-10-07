@@ -70,7 +70,7 @@ from backend.entity.data.filters import compile_filters
 from backend.entity.data.head import HeadTarget
 from backend.entity.data.schema import build_schema
 from backend.entity.entity_db import get_entity_engine
-from backend.entity.errors import EntityNotFound, EntityNotServing, EntityRowInvalid
+from backend.entity.errors import EntityNotServing, EntityRowInvalid
 from backend.entity.ids import (
     new_access_grant_id,
     new_access_log_id,
@@ -98,7 +98,6 @@ __all__ = [
     "list_restrictions",
     "preview",
     "put_ladder",
-    "require_subject_view",
     "summary",
     "update_grant",
     "update_profile",
@@ -814,32 +813,6 @@ def _narrow(person: Person, raw: dict[str, Any] | None) -> Narrow | None:
     raise EntityAccessInvalid("narrow type must be user, role, or group")
 
 
-def require_subject_view(
-    entity_id: str,
-    user_id: str,
-    *,
-    action: str = "read",
-    narrow: dict[str, Any] | None = None,
-) -> Outcome:
-    """Refuse until this subject's profile view matches the policy revision.
-
-    Over-cap combinations stay a combination-limit error. A missing view enqueues
-    a system job and raises a retryable pending error. Data reads are unchanged.
-    """
-    head, compiled, revision = _live(entity_id)
-    person = _person(user_id)
-    parsed = _narrow(person, narrow)
-    outcome = subject_outcome(
-        compiled, _policy(head, revision), person, action=action, narrow=parsed
-    )
-    if outcome.over_limit:
-        raise EntityAccessCombinationLimit(
-            "access configuration over limit for this subject"
-        )
-    _ensure_generated(head, outcome, revision, user_id=user_id)
-    return outcome
-
-
 def view_ready(head: _Head, outcome: Outcome, revision: int) -> bool:
     """True when nothing is left to generate for this outcome at this revision."""
     if outcome.shape is None or head.physical is None:
@@ -849,7 +822,6 @@ def view_ready(head: _Head, outcome: Outcome, revision: int) -> bool:
         return False
     return any(
         item.shape_key == outcome.shape.shape_key
-        and item.status == "ready"
         and item.policy_revision == revision
         for item in store.bindings(head.entity_id)
     )
@@ -1020,7 +992,7 @@ def _schema(
 ) -> dict[str, Any]:
     write = subject_outcome(compiled, policy, person, action="write", narrow=narrow)
     writable: set[str] = set()
-    if write.shape is not None and not write.hidden and not write.over_limit:
+    if write.shape is not None:
         active = set(write.grant_ids)
         for column in write.shape.columns:
             if any(

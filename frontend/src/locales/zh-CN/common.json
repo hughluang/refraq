@@ -791,8 +791,6 @@
   "entities.data.load": "加载行",
   "entities.data.retry": "重试",
   "entities.data.pending": "访问配置正在生成，请稍后重试。",
-  "entities.data.writeDenied": "没有单条授权能写入这些列和行。",
-  "entities.data.conflict": "该值与已有行冲突。",
   "entities.data.readOnly": "只读",
   "entities.data.empty": "没有可见行",
   "entities.search": "搜索表名 / 名称",

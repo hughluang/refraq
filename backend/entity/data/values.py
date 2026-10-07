@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import replace
 from typing import Any
 
-from backend.admin.subjects import existing_user_ids, user_labels
+from backend.admin.subjects import existing_user_ids
 from backend.entity.attribute_type import resolve
 from backend.entity.data.head import HeadTarget
 from backend.entity.dictionaries.store import get_dictionary_store
@@ -20,7 +19,6 @@ __all__ = [
     "reference_snapshot",
     "reference_value_attr",
     "require_business_key_value",
-    "user_display_labels",
     "writable_dictionary_codes",
 ]
 
@@ -70,17 +68,6 @@ def _require_known_users(target: HeadTarget, encoded: dict[str, Any]) -> None:
     unknown = sorted(wanted - existing_user_ids(wanted))
     if unknown:
         raise EntityRowInvalid(f"User id(s) do not name a User: {', '.join(unknown)}")
-
-
-def user_display_labels(user_ids: Iterable[str]) -> dict[str, dict[str, str]]:
-    """Account and display name for stored User ids. Unknown ids are omitted.
-
-    The data wire stays the id. Display surfaces call this to resolve a label.
-    """
-    return {
-        user_id: {"account": label.account, "display_name": label.display_name}
-        for user_id, label in user_labels(user_ids).items()
-    }
 
 
 def require_business_key_value(attr: AttributeRecord, raw: Any) -> None:

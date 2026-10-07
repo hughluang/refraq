@@ -46,8 +46,6 @@ export function EntityDataBrowser({ tableName, physicalHidden }: Props) {
     if (!(err instanceof ApiError)) return String(err);
     const problem = classifyAccessProblem(err.code);
     if (problem === "pending") return t("entities.data.pending");
-    if (problem === "write_denied") return t("entities.data.writeDenied");
-    if (problem === "conflict") return t("entities.data.conflict");
     if (problem === "combination_limit") return t("entities.access.overLimit");
     return err.detail;
   };
@@ -94,12 +92,12 @@ export function EntityDataBrowser({ tableName, physicalHidden }: Props) {
             if (next === "role") {
               void listRoles({ limit: 100, offset: 0 }).then((page) =>
                 setOptions(page.items.map((row) => ({ value: row.id, label: row.name }))),
-              );
+              ).catch((err: unknown) => setMessage(explain(err)));
             }
             if (next === "group") {
               void listUserGroups({ limit: 100, offset: 0 }).then((page) =>
                 setOptions(page.items.map((row) => ({ value: row.id, label: row.name }))),
-              );
+              ).catch((err: unknown) => setMessage(explain(err)));
             }
           }}
         />
@@ -157,8 +155,6 @@ export function EntityDataBrowser({ tableName, physicalHidden }: Props) {
                           name: attribute.name,
                           value: row[attribute.name],
                           withheld: held,
-                          masked: isMaskedPresentation(attribute.presentation?.levels),
-                          rowVarying: Boolean(attribute.presentation?.row_varying),
                           referenceHidden:
                             attribute.type === "reference" && attribute.target == null,
                         });

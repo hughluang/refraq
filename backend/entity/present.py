@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from backend.entity.attribute_type import resolve
-from backend.entity.data.values import user_display_labels
 from backend.entity.dictionaries.store import get_dictionary_store
 from backend.entity.dictionary_binding import relevant_snapshot
 from backend.entity.lifecycle import PUBLISHED, ever_published, latest_published_of
@@ -20,22 +19,8 @@ from backend.entity.store import EntityStore, get_entity_store
 
 __all__ = [
     "entity_out",
-    "present_user_value",
     "version_out",
 ]
-
-
-def present_user_value(user_id: str | None) -> dict[str, str] | None:
-    """Display surface for one stored User id.
-
-    A missing or disabled-then-deleted User keeps the id and omits the names.
-    """
-    if not user_id:
-        return None
-    found = user_display_labels([user_id]).get(user_id)
-    if found is None:
-        return {"id": user_id}
-    return {"id": user_id, **found}
 
 
 def attribute_payload(

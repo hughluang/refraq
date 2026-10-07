@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from backend.entity.access.facts import ACTIONS, GrantSpec, Narrow, Person
+from backend.entity.access.facts import GrantSpec, Narrow, Person
 
 __all__ = [
     "combo_key",
@@ -98,10 +98,6 @@ def identity_narrows(person: Person) -> tuple[Narrow | None, ...]:
         options.append(Narrow("role", person.role_id))
     options.extend(Narrow("group", group_id) for group_id in person.group_ids)
     return tuple(options)
-
-
-def actions() -> tuple[str, ...]:
-    return ACTIONS
 
 
 def _subject_hit(grant: GrantSpec, person: Person) -> bool:

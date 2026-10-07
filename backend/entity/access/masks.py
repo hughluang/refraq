@@ -1,9 +1,8 @@
-"""Presentation modes: validation, SQL, and the same mask in Python."""
+"""Presentation modes: validation and SQL."""
 
 from __future__ import annotations
 
 import math
-from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -12,8 +11,6 @@ from backend.entity.access.facts import AttrFact
 __all__ = [
     "CLEAR",
     "mask_sql",
-    "mask_value",
-    "mode_key",
     "validate_levels",
 ]
 
@@ -33,16 +30,6 @@ class ModeError(ValueError):
     def __init__(self, detail: str) -> None:
         super().__init__(detail)
         self.detail = detail
-
-
-def mode_key(mode: str | dict[str, Any]) -> str:
-    if mode == CLEAR:
-        return CLEAR
-    if isinstance(mode, dict):
-        kind = mode.get("type")
-        if isinstance(kind, str):
-            return kind
-    return ""
 
 
 def validate_levels(
@@ -128,29 +115,6 @@ def mask_sql(
         if acl:
             return f"acl.mask_bucket({expr}, {width})"
         return _bucket_inline(expr, attr, width)
-    raise ModeError(f"unknown mask type '{kind}'")
-
-
-def mask_value(value: Any, mode: str | dict[str, Any], attr: AttrFact) -> Any:
-    """Python twin of the inline mask expressions. Hash stays on acl.mask_hash."""
-    if value is None or mode == CLEAR:
-        return value
-    assert isinstance(mode, dict)
-    kind = str(mode["type"])
-    if kind == "null":
-        return None
-    if kind == "partial":
-        return _partial(str(value), int(mode["keep_first"]), int(mode["keep_last"]))
-    if kind == "email":
-        return _email(str(value))
-    if kind == "redact":
-        return "[redacted]"
-    if kind == "hash":
-        raise ModeError("hash preview requires acl.mask_hash")
-    if kind == "truncate_date":
-        return _truncate(value, str(mode["unit"]), attr)
-    if kind == "bucket":
-        return _bucket_value(value, mode["width"], attr)
     raise ModeError(f"unknown mask type '{kind}'")
 
 
@@ -267,53 +231,3 @@ def _bucket_inline(expr: str, attr: AttrFact, width: str) -> str:
     )
 
 
-def _partial(text: str, keep_first: int, keep_last: int) -> str:
-    keep_first = min(max(keep_first, 0), 64)
-    keep_last = min(max(keep_last, 0), 64)
-    if len(text) <= keep_first + keep_last:
-        return "*" * len(text)
-    hidden = len(text) - keep_first - keep_last
-    return text[:keep_first] + ("*" * hidden) + text[-keep_last:]
-
-
-def _email(text: str) -> str:
-    if "@" not in text:
-        return (text[:1] + "***") if text else "***"
-    local, _, domain = text.partition("@")
-    return (local[:1] + "***@" + domain)
-
-
-def _truncate(value: Any, unit: str, attr: AttrFact) -> Any:
-    if isinstance(value, datetime):
-        moment = value
-    elif isinstance(value, date):
-        moment = datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
-    else:
-        return value
-    if unit == "year":
-        clipped = moment.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-    elif unit == "month":
-        clipped = moment.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    else:
-        clipped = moment.replace(hour=0, minute=0, second=0, microsecond=0)
-    if attr.value_type() == "date":
-        return clipped.date()
-    return clipped
-
-
-def _bucket_value(value: Any, width: Any, attr: AttrFact) -> Any:
-    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
-        return value
-    span = Decimal(str(width))
-    if span <= 0:
-        return None
-    number = Decimal(str(value))
-    if number.is_nan():
-        return None
-    floored = (number // span) * span
-    kind = attr.value_type()
-    if kind == "integer":
-        return int(floored)
-    if kind == "number":
-        return float(floored)
-    return floored

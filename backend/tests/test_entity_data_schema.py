@@ -39,7 +39,7 @@ from backend.entity.records import (  # noqa: E402
     EntityVersionRecord,
     attribute_to_dict,
 )
-from backend.entity.access.seed import prepare_legacy_entity  # noqa: E402
+from backend.tests.entity_access_oracle import prepare_legacy_entity  # noqa: E402
 from backend.entity.store import get_entity_store  # noqa: E402
 from backend.main import app  # noqa: E402
 

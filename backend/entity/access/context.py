@@ -28,12 +28,9 @@ __all__ = [
     "SigningKey",
     "context_attrs",
     "effective_grants",
-    "install_signing_keys",
     "load_shared_ring",
     "issue_context",
-    "rotate_key",
     "sign_payload",
-    "verify_token",
 ]
 
 CONTEXT_TTL_SEC = 60
@@ -68,23 +65,6 @@ def load_shared_ring(conn: object) -> KeyRing:
     if not isinstance(secret, bytes):
         secret = bytes(secret)
     return KeyRing((SigningKey(str(row[0]), secret),))
-
-
-def install_signing_keys(conn: object, ring: KeyRing) -> None:
-    """Install the ring into ``acl.signing_keys`` oldest first so the newest signs."""
-    for key in ring.keys:
-        conn.execute(  # type: ignore[union-attr]
-            text("SELECT acl.install_key(:kid, :secret)"),
-            {"kid": key.kid, "secret": key.secret},
-        )
-
-
-def rotate_key(ring: KeyRing, key: SigningKey) -> KeyRing:
-    """Install ``key`` as the signer. A full ring drops the oldest key."""
-    kept = [item for item in ring.keys if item.kid != key.kid]
-    if len(kept) >= 2:
-        kept = kept[-1:]
-    return KeyRing(tuple([*kept, key]))
 
 
 def effective_grants(
@@ -161,41 +141,6 @@ def sign_payload(payload: Mapping[str, Any], secret: bytes) -> str:
     body = _canonical(payload)
     digest = hmac.new(secret, body, hashlib.sha256).hexdigest()
     return base64.b64encode(body).decode("ascii") + "." + digest
-
-
-def verify_token(
-    token: str,
-    keys: Mapping[str, bytes],
-    *,
-    now: datetime,
-) -> dict[str, Any] | None:
-    """Python mirror of ``acl.ctx_payload``: bad signature, kid, or expiry yields None."""
-    dot = token.find(".")
-    if dot < 2:
-        return None
-    try:
-        body = base64.b64decode(token[:dot], validate=True)
-    except Exception:
-        return None
-    try:
-        payload = json.loads(body.decode("utf-8"))
-    except Exception:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    kid = payload.get("kid")
-    exp = payload.get("exp")
-    if not isinstance(kid, str) or kid not in keys:
-        return None
-    if isinstance(exp, bool) or not isinstance(exp, (int, float)):
-        return None
-    secret = keys[kid]
-    expected = hmac.new(secret, body, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, token[dot + 1 :].lower()):
-        return None
-    if float(exp) <= now.timestamp():
-        return None
-    return payload
 
 
 def _canonical(payload: Mapping[str, Any]) -> bytes:

@@ -16,10 +16,7 @@ from backend.entity.access.compiler import Policy, compile_policy
 from backend.entity.access.context import (
     KeyRing,
     SigningKey,
-    install_signing_keys,
     issue_context,
-    rotate_key,
-    verify_token,
 )
 from backend.entity.access.errors import (
     EntityAccessCombinationLimit,
@@ -33,7 +30,14 @@ from backend.entity.access.facts import (
     ProfileSpec,
 )
 from backend.entity.access.records import ProfileRecord
-from backend.entity.access.service import create_grant, create_profile, require_subject_view
+from backend.entity.access.service import create_grant, create_profile
+from backend.tests.entity_access_oracle import (
+    install_signing_keys,
+    require_subject_view,
+    rotate_key,
+    stamped_attributes,
+    verify_token,
+)
 from backend.entity.access.store import get_access_store
 from backend.entity.access.views import profile_view_statements, rebuild_entity_views
 from backend.entity.parameters import ENTITY_PARAMETER_SPECS
@@ -579,3 +583,66 @@ def test_rebuild_without_a_head_marks_the_revision_applied() -> None:
     assert result["policy_revision"] == 3
     assert get_access_store().views_revision(entity.id) == 3
     assert get_access_store().bindings(entity.id) == []
+
+
+def _dropped_head_entity(table_name: str = "customer") -> BusinessEntityRecord:
+    now = utc_now()
+    attr = AttributeRecord(name="name", type="string", max_length=32, attribute_id="att_name")
+    entity = BusinessEntityRecord(
+        id=new_entity_id(),
+        table_name=table_name,
+        name="Customer",
+        description="",
+        deprecated_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+    version = EntityVersionRecord(
+        id=new_version_id(),
+        entity_id=entity.id,
+        version=1,
+        attributes=[attr],
+        materialized_attributes=[],
+        publish_status=PUBLISHED,
+        latest_reconcile_job_id=None,
+        created_at=now,
+        updated_at=now,
+    )
+    get_entity_store().create_entity(entity, version)
+    return entity
+
+
+def test_published_version_with_dropped_table_loads_without_a_table() -> None:
+    from backend.entity.access.plan import load_head
+    from backend.entity.table_name import table_present
+
+    entity = _dropped_head_entity()
+    head = load_head(entity.id)
+    assert head.physical is None
+    assert [attr.name for attr in head.attributes] == ["name"]
+    assert stamped_attributes(entity.id)
+    stored = get_entity_store().list_all_versions(entity.id)[0]
+    assert table_present(stored) is False
+
+
+def test_reconcile_continues_after_one_entity_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.entity.access import reconcile
+
+    first = _dropped_head_entity("first_one")
+    second = _dropped_head_entity("second_one")
+    seen: list[str] = []
+
+    def fake_one(entity: BusinessEntityRecord) -> int:
+        seen.append(entity.id)
+        if entity.id == first.id:
+            raise TypeError("boom")
+        return 1
+
+    monkeypatch.setattr(reconcile, "_reconcile_one", fake_one)
+    monkeypatch.setattr(
+        reconcile,
+        "get_entity_store",
+        lambda: type("S", (), {"list_all_entities": lambda self: [first, second]})(),
+    )
+    assert reconcile.enqueue_stale_view_jobs() == 1
+    assert seen == [first.id, second.id]

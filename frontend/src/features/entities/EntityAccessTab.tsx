@@ -33,8 +33,6 @@ import {
 import {
   classifyAccessProblem,
   columnsFromMatrix,
-  combinationOverLimit,
-  emptyRule,
   appendEditorCondition,
   literalOperand,
   matrixColumn,
@@ -43,16 +41,19 @@ import {
   validateLadder,
   withheldNames,
   type LadderLevel,
+  type RuleLeaf,
   type RuleNode,
   type RuleOp,
 } from "@/features/entities/accessLogic";
 import type { AccessSummary } from "@/features/entities/accessTypes";
+import { PageError } from "@/components/feedback/PageError";
 import { listEntities } from "@/features/entities/api";
 import { listRoles } from "@/features/roles/api";
 import { listSubjectAttributes, listUserGroups } from "@/features/subjects/api";
 import { listUsers } from "@/features/users/api";
 import { ApiError } from "@/lib/api";
 
+const EMPTY_RULE: RuleNode = { kind: "and", children: [] };
 const ACTIONS = ["read", "write", "export", "mcp_query"] as const;
 const MASKS = ["partial", "email", "hash", "truncate_date", "bucket", "redact", "null"] as const;
 
@@ -71,15 +72,12 @@ function problemText(
     const kind = classifyAccessProblem(err.code);
     if (kind === "pending") return t("entities.access.pending");
     if (kind === "combination_limit") return t("entities.access.overLimit");
-    if (kind === "write_denied") return t("entities.data.writeDenied");
-    if (kind === "conflict") return t("entities.data.conflict");
     return err.detail;
   }
   return String(err);
 }
 
-function leafOperand(node: RuleNode): string {
-  if (node.kind !== "leaf") return "";
+function leafOperand(node: RuleLeaf): string {
   const operand = node.operand;
   if (operand.kind === "value") return String(operand.value ?? "");
   if (operand.kind === "subject_attr") return operand.key;
@@ -91,7 +89,8 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
   const t = useTranslate();
   const { open } = useNotification();
   const [summary, setSummary] = useState<AccessSummary | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [users, setUsers] = useState<Option[]>([]);
   const [roles, setRoles] = useState<Option[]>([]);
@@ -114,7 +113,7 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
   const [ruleOp, setRuleOp] = useState("eq");
   const [ruleKind, setRuleKind] = useState("value");
   const [ruleValue, setRuleValue] = useState("");
-  const [rule, setRule] = useState<RuleNode>(emptyRule());
+  const [rule, setRule] = useState<RuleNode>(EMPTY_RULE);
   const [copyEntity, setCopyEntity] = useState<string | null>(null);
   const [copyProfiles, setCopyProfiles] = useState<Option[]>([]);
   const [copyProfileId, setCopyProfileId] = useState<string | null>(null);
@@ -127,6 +126,7 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
 
   const load = useCallback(async () => {
     const next = await getAccessSummary(entityId);
+    setLoadError(null);
     setSummary(next);
     const cells: Record<string, Record<string, string>> = {};
     for (const profile of next.profiles) {
@@ -141,31 +141,41 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
     setMatrix(cells);
   }, [entityId]);
 
+  const reload = useCallback(
+    () => load().catch((err: unknown) => setLoadError(problemText(err, t))),
+    [load, t],
+  );
+
   useEffect(() => {
-    void load().catch((err: unknown) => setError(problemText(err, t)));
-    void listUsers({ limit: 100, offset: 0 }).then((page) =>
-      setUsers(page.items.map((row) => ({ value: row.id, label: row.display_name || row.account }))),
-    );
-    void listRoles({ limit: 100, offset: 0 }).then((page) =>
-      setRoles(page.items.map((row) => ({ value: row.id, label: row.name }))),
-    );
-    void listUserGroups({ limit: 100, offset: 0 }).then((page) =>
-      setGroups(page.items.map((row) => ({ value: row.id, label: row.name }))),
-    );
-    void listSubjectAttributes({ limit: 100, offset: 0 }).then((page) =>
-      setSubjectAttrs(page.items.map((row) => ({ value: row.key, label: row.name }))),
-    );
-    void listEntities({ limit: 100, offset: 0 }).then((page) =>
-      setEntities(
-        page.items
-          .filter((row) => row.id !== entityId)
-          .map((row) => ({ value: row.id, label: row.name })),
-      ),
-    );
-  }, [entityId, load, t]);
+    void reload();
+    const optionsFailed = (err: unknown) => setOptionsError(problemText(err, t));
+    setOptionsError(null);
+    void listUsers({ limit: 100, offset: 0 })
+      .then((page) =>
+        setUsers(page.items.map((row) => ({ value: row.id, label: row.display_name || row.account }))),
+      )
+      .catch(optionsFailed);
+    void listRoles({ limit: 100, offset: 0 })
+      .then((page) => setRoles(page.items.map((row) => ({ value: row.id, label: row.name }))))
+      .catch(optionsFailed);
+    void listUserGroups({ limit: 100, offset: 0 })
+      .then((page) => setGroups(page.items.map((row) => ({ value: row.id, label: row.name }))))
+      .catch(optionsFailed);
+    void listSubjectAttributes({ limit: 100, offset: 0 })
+      .then((page) => setSubjectAttrs(page.items.map((row) => ({ value: row.key, label: row.name }))))
+      .catch(optionsFailed);
+    void listEntities({ limit: 100, offset: 0 })
+      .then((page) =>
+        setEntities(
+          page.items
+            .filter((row) => row.id !== entityId)
+            .map((row) => ({ value: row.id, label: row.name })),
+        ),
+      )
+      .catch(optionsFailed);
+  }, [entityId, reload, t]);
 
   const subjectOptions = subjectType === "role" ? roles : subjectType === "group" ? groups : users;
-  const over = summary ? combinationOverLimit(summary.views) : false;
 
   const notify = (ok: boolean, detail?: string) => {
     open?.({
@@ -182,7 +192,6 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
       notify(true);
     } catch (err) {
       const detail = problemText(err, t);
-      setError(detail);
       notify(false, detail);
     } finally {
       setBusy(false);
@@ -211,7 +220,7 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
                 kind: "value" as const,
                 value: literalOperand(ruleOp as RuleOp, ruleValue),
               };
-    const leaf: RuleNode = {
+    const leaf: RuleLeaf = {
       kind: "leaf",
       op: ruleOp as RuleOp,
       attributeId: ruleAttr,
@@ -220,30 +229,39 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
     setRule((current) => appendEditorCondition(current, leaf));
   };
 
-  if (!summary && !error) return <Text>{t("entities.access.loading")}</Text>;
+  if (!summary) {
+    return loadError ? (
+      <PageError message={loadError} onRetry={() => void reload()} />
+    ) : (
+      <Text>{t("entities.access.loading")}</Text>
+    );
+  }
+
+  const over =
+    summary.views.subjects_over_limit > 0 ||
+    summary.views.combinations > summary.views.combination_limit;
 
   return (
     <Stack gap="lg">
-      {error ? <Alert color="red">{error}</Alert> : null}
-      {summary ? (
-        <Alert color={over || summary.views.state !== "ready" ? "yellow" : "gray"}>
-          <Text>
-            {t(`entities.access.views.${summary.views.state}`)}{" "}
-            {t("entities.access.combinations", {
-              count: summary.views.combinations,
-              limit: summary.views.combination_limit,
-            })}
-          </Text>
-          {over ? <Text>{t("entities.access.overLimit")}</Text> : null}
-        </Alert>
-      ) : null}
+      {loadError ? <Alert color="red">{loadError}</Alert> : null}
+      {optionsError ? <Alert color="red">{optionsError}</Alert> : null}
+      <Alert color={over || summary.views.state !== "ready" ? "yellow" : "gray"}>
+        <Text>
+          {t(`entities.access.views.${summary.views.state}`)}{" "}
+          {t("entities.access.combinations", {
+            count: summary.views.combinations,
+            limit: summary.views.combination_limit,
+          })}
+        </Text>
+        {over ? <Text>{t("entities.access.overLimit")}</Text> : null}
+      </Alert>
 
       <Stack gap="xs">
         <Title order={4}>{t("entities.access.ladders")}</Title>
-        {(summary?.ladders ?? []).length === 0 ? (
+        {summary.ladders.length === 0 ? (
           <Text>{t("entities.access.ladders.empty")}</Text>
         ) : null}
-        {(summary?.ladders ?? []).map((ladder) => (
+        {summary.ladders.map((ladder) => (
           <Stack key={ladder.attribute_id} gap={4}>
             <Text fw={600}>
               {ladder.attribute_name} ({ladder.type})
@@ -380,7 +398,7 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
             {t("entities.access.profiles.create")}
           </Button>
         </Group>
-        {summary && summary.profiles.length > 0 ? (
+        {summary.profiles.length > 0 ? (
           <Table.ScrollContainer minWidth={640}>
             <Table>
               <Table.Thead>
@@ -469,15 +487,18 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
             onChange={(value) => {
               setCopyEntity(value);
               setCopyProfileId(null);
+              setCopyProfiles([]);
               if (!value) return;
-              void getAccessSummary(value).then((source) =>
-                setCopyProfiles(
-                  source.profiles.map((profile) => ({
-                    value: profile.id,
-                    label: profile.name,
-                  })),
-                ),
-              );
+              void getAccessSummary(value)
+                .then((source) =>
+                  setCopyProfiles(
+                    source.profiles.map((profile) => ({
+                      value: profile.id,
+                      label: profile.name,
+                    })),
+                  ),
+                )
+                .catch((err: unknown) => setOptionsError(problemText(err, t)));
             }}
           />
           <Select
@@ -518,7 +539,7 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
 
       <Stack gap="xs">
         <Title order={4}>{t("entities.access.grants")}</Title>
-        {(summary?.grants ?? []).map((grant) => (
+        {summary.grants.map((grant) => (
           <Group key={grant.id} justify="space-between">
             <Text>
               {grant.subject.display_name || grant.subject.id} · {grant.actions.join(", ")}
@@ -557,7 +578,7 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
           />
           <Select
             label={t("entities.access.profiles.column")}
-            data={(summary?.profiles ?? []).map((profile) => ({
+            data={summary.profiles.map((profile) => ({
               value: profile.id,
               label: profile.name,
             }))}
@@ -613,12 +634,8 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
           <Button onClick={addLeaf}>{t("entities.access.grants.addCondition")}</Button>
         </Group>
         <Text size="sm">
-          {(rule.kind === "and" || rule.kind === "or" ? rule.children : [rule])
-            .map((node) =>
-              node.kind === "leaf"
-                ? `${node.attributeId} ${node.op} ${leafOperand(node)}`
-                : node.kind,
-            )
+          {rule.children
+            .map((node) => `${node.attributeId} ${node.op} ${leafOperand(node)}`)
             .join(" AND ") || t("entities.access.grants.allRows")}
         </Text>
         <Button
@@ -636,7 +653,7 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
                 actions,
                 valid_until: validUntil ? new Date(validUntil).toISOString() : null,
               });
-              setRule(emptyRule());
+              setRule(EMPTY_RULE);
             })
           }
         >
@@ -646,7 +663,7 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
 
       <Stack gap="xs">
         <Title order={4}>{t("entities.access.restrictions")}</Title>
-        {(summary?.restrictions ?? []).map((item) => (
+        {summary.restrictions.map((item) => (
           <Group key={item.id} justify="space-between">
             <Text>
               {item.applies_to.mode} · {item.actions.join(", ")}
@@ -738,8 +755,6 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
                             name: attribute.name,
                             value: row[attribute.name],
                             withheld: held,
-                            masked: false,
-                            rowVarying: Boolean(attribute.presentation?.row_varying),
                             referenceHidden: false,
                           });
                           const source =

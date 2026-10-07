@@ -14,7 +14,7 @@ import {
   getUser,
   getUserGroups,
   getUserSubjectValues,
-  listSubjectAttributes,
+  listAllSubjectAttributes,
   listUserGroups,
   putUserGroups,
   putUserSubjectValues,
@@ -67,7 +67,7 @@ export function UserShow({ userId }: Props) {
           getUser(userId),
           getUserGroups(userId),
           getUserSubjectValues(userId),
-          listSubjectAttributes({ limit: 200, offset: 0 }),
+          listAllSubjectAttributes(),
           listUserGroups({ limit: 200, offset: 0 }),
           listUsers({ limit: 200, offset: 0 }),
         ]);
@@ -75,11 +75,11 @@ export function UserShow({ userId }: Props) {
         setUser(loaded.user);
         setGroups(catalog.items);
         setGroupIds(membership.groups.map((group) => group.id));
-        setDefinitions(defs.items);
+        setDefinitions(defs);
         setPeople(users.items);
         setEffective(values.effective);
         const next: Record<string, string[]> = {};
-        for (const item of defs.items) {
+        for (const item of defs) {
           next[item.key] = (values.values[item.key] ?? []).map(String);
         }
         setDrafts(next);

@@ -22,7 +22,6 @@ from backend.entity.access.combos import (
 )
 from backend.entity.access.dsl import (
     RuleWarning,
-    eval_rule,
     rule_sql,
     rule_warnings,
     validate_rule,
@@ -39,7 +38,7 @@ from backend.entity.access.facts import (
     RestrictionSpec,
     SubjectAttrFact,
 )
-from backend.entity.access.masks import CLEAR, mask_sql, mask_value
+from backend.entity.access.masks import CLEAR, mask_sql
 from backend.entity.ddl import (
     ENTITY_ACCESS_SCHEMA,
     EXPOSURE_OWNER_ROLE,
@@ -56,8 +55,8 @@ __all__ = [
     "Shape",
     "compile_policy",
     "context_attribute_keys",
-    "project_subject",
-    "render_grant_select",
+
+
     "render_shape",
     "script_statements",
     "subject_outcome",
@@ -121,7 +120,6 @@ class Binding:
     sql: str
     columns: tuple[dict[str, Any], ...]
     ddl_sha256: str
-    status: str
     withheld: bool
 
 
@@ -132,13 +130,11 @@ class CompiledPolicy:
     single_profile_views: int
     combinations: int
     subjects_over_limit: int
-    over_limit_user_ids: frozenset[str]
     emitted_combos: frozenset[str]
     broken_profiles: dict[str, tuple[str, ...]]
     broken_grants: dict[str, tuple[str, ...]]
     broken_restrictions: dict[str, tuple[str, ...]]
     grant_warnings: dict[str, tuple[RuleWarning, ...]]
-    context_keys: frozenset[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +145,6 @@ class Outcome:
     columns: tuple[ColumnPlan, ...]
     withheld_field: str | None
     shape: Shape | None
-    rows: tuple[dict[str, Any], ...] | None = None
 
 
 def compile_policy(policy: Policy) -> CompiledPolicy:
@@ -225,13 +220,11 @@ def compile_policy(policy: Policy) -> CompiledPolicy:
         single_profile_views=single,
         combinations=len(emitted),
         subjects_over_limit=len(over_users),
-        over_limit_user_ids=over_users,
         emitted_combos=emitted_keys,
         broken_profiles=broken_profiles,
         broken_grants=broken_grants,
         broken_restrictions=broken_restrictions,
         grant_warnings=warnings,
-        context_keys=context_attribute_keys(policy),
     )
 
 
@@ -327,68 +320,6 @@ def subject_outcome(
     )
 
 
-def project_subject(
-    compiled: CompiledPolicy,
-    policy: Policy,
-    person: Person,
-    rows: list[dict[str, Any]],
-    *,
-    action: str = "read",
-    narrow: Narrow | None = None,
-) -> Outcome:
-    outcome = subject_outcome(
-        compiled, policy, person, action=action, narrow=narrow
-    )
-    if outcome.hidden or outcome.over_limit or outcome.shape is None:
-        return outcome
-    values = policy.subject_values.get(person.user_id, {})
-    attrs = {item.attribute_id: item for item in policy.attributes}
-    projected: list[dict[str, Any]] = []
-    active = [
-        grant
-        for grant in outcome.shape.grants
-        if grant.id in outcome.grant_ids
-    ]
-    rules = _row_rules(policy, person, action, compiled.broken_restrictions)
-    for row in rows:
-        if not all(
-            eval_rule(
-                rule,
-                row,
-                attrs,
-                subject_id=person.user_id,
-                subject_values=values,
-                now=policy.now,
-            )
-            for rule in rules
-        ):
-            continue
-        covering = [
-            grant
-            for grant in active
-            if eval_rule(
-                grant.row_rule,
-                row,
-                attrs,
-                subject_id=person.user_id,
-                subject_values=values,
-                now=policy.now,
-            )
-        ]
-        if not covering:
-            continue
-        projected.append(_project_row(outcome.shape, row, covering))
-    return Outcome(
-        hidden=False,
-        over_limit=False,
-        grant_ids=outcome.grant_ids,
-        columns=outcome.columns,
-        withheld_field=outcome.withheld_field,
-        shape=outcome.shape,
-        rows=tuple(projected),
-    )
-
-
 def render_shape(
     shape: Shape,
     policy: Policy,
@@ -437,31 +368,6 @@ def script_statements(view_name: str, script: str) -> list[str]:
     if not script.startswith(create) or not script.endswith(suffix):
         raise ValueError(f"stored script is not a profile view script for '{view_name}'")
     return [script[: -len(suffix)], grant, owner]
-
-
-def render_grant_select(
-    policy: Policy,
-    grant: GrantSpec,
-    *,
-    subject_values: dict[str, tuple[Any, ...]] | None = None,
-) -> str:
-    """One grant as its own single-profile select, for the outer-join oracle."""
-    compiled = compile_policy(policy)
-    profile_ids = (grant.profile_id,)
-    shape = next(
-        item
-        for item in compiled.shapes
-        if item.action == "read"
-        and item.profile_ids == profile_ids
-        and not item.included_restrictions
-    )
-    return render_shape(
-        shape,
-        policy,
-        acl=False,
-        active=frozenset({grant.id}),
-        subject_values=subject_values,
-    )
 
 
 def _shapes(
@@ -681,7 +587,7 @@ def _binding(policy: Policy, shape: Shape) -> Binding:
         sql=sql,
         columns=columns,
         ddl_sha256=hashlib.sha256(sql.encode()).hexdigest(),
-        status="stored",
+
         withheld=shape.withheld,
     )
 
@@ -877,49 +783,6 @@ def _grant_flag(
     return f"COALESCE({pred}, false)"
 
 
-def _project_row(
-    shape: Shape, row: dict[str, Any], covering: list[GrantSpec]
-) -> dict[str, Any]:
-    out: dict[str, Any] = {"row_id": row.get("row_id")}
-    withheld: list[str] = []
-    sources: dict[str, list[str]] = {}
-    covered = {grant.id for grant in covering}
-    for column in shape.columns:
-        matching = [
-            (grant_id, mode)
-            for grant_id, mode in column.grant_modes
-            if grant_id in covered
-        ]
-        if not matching:
-            out[column.attr.name] = None
-            if column.may_be_withheld:
-                withheld.append(column.attr.name)
-            sources[column.attr.name] = []
-            continue
-        _grant_id, mode = matching[0]
-        out[column.attr.name] = mask_value(row.get(column.attr.name), mode, column.attr)
-        sources[column.attr.name] = [grant_id for grant_id, grant_mode in matching if grant_mode == mode]
-    if shape.withheld:
-        out["__withheld"] = withheld
-    out["__sources"] = sources
-    return out
-
-
-def _row_rules(
-    policy: Policy,
-    person: Person,
-    action: str,
-    broken: dict[str, tuple[str, ...]],
-) -> tuple[dict[str, Any], ...]:
-    found: list[dict[str, Any]] = []
-    for item in policy.restrictions:
-        if action not in item.actions or item.id in broken or item.row_rule is None:
-            continue
-        if item.mode == "all" or _applies(item, person):
-            found.append(item.row_rule)
-    return tuple(found)
-
-
 def _shape_for(
     compiled: CompiledPolicy,
     policy: Policy,
@@ -993,8 +856,6 @@ def _person_hidden(
 
 
 def _applies(item: RestrictionSpec, person: Person) -> bool:
-    if item.mode == "all":
-        return True
     hit = any(_person_hit(person, kind, subject_id) for kind, subject_id in item.subjects)
     return hit if item.mode == "only" else not hit
 

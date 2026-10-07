@@ -29,7 +29,6 @@ from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import UserRecord, get_user_store  # noqa: E402
 from backend.entity.access.compiler import (  # noqa: E402
     compile_policy,
-    project_subject,
     render_shape,
     subject_outcome,
 )
@@ -38,7 +37,6 @@ from backend.entity.access.context import (  # noqa: E402
     SigningKey,
     issue_context,
     sign_payload,
-    verify_token,
 )
 from backend.entity.access.dsl import rule_sql  # noqa: E402
 from backend.entity.access.errors import EntityAccessPending  # noqa: E402
@@ -46,14 +44,11 @@ from backend.entity.access.plan import Head  # noqa: E402
 from backend.entity.access.seed import (  # noqa: E402
     ALL_CLEAR_KEY,
     ensure_creator_grant,
-    prepare_legacy_entity,
-    seed_entity_entitlements,
 )
 from backend.entity.access.service import (  # noqa: E402
     _schema,
     create_grant,
     create_profile,
-    require_subject_view,
 )
 from backend.entity.access.store import get_access_store  # noqa: E402
 from backend.entity.bootstrap import role_statements, schema_statements  # noqa: E402
@@ -77,7 +72,8 @@ from backend.entity.errors import (  # noqa: E402
     EntityRowInvalid,
     EntityRowNotFound,
 )
-from backend.entity.access.enforce import begin_data, sees_every_definition  # noqa: E402
+from backend.entity import service as entity_service  # noqa: E402
+from backend.entity.access.enforce import begin_data  # noqa: E402
 from backend.entity.ids import new_entity_id, new_version_id  # noqa: E402
 from backend.entity.lifecycle import PUBLISHED, UNPUBLISHED  # noqa: E402
 from backend.entity.parameters import ENTITY_PARAMETER_SPECS  # noqa: E402
@@ -91,6 +87,13 @@ from backend.entity.store import get_entity_store  # noqa: E402
 from backend.admin.system_parameters import (  # noqa: E402
     is_registry_frozen,
     register_parameters,
+)
+from backend.tests.entity_access_oracle import (  # noqa: E402
+    prepare_legacy_entity,
+    project_subject,
+    require_subject_view,
+    seed_entity_entitlements,
+    verify_token,
 )
 from backend.tests.test_entity_access_compiler import (  # noqa: E402
     _customer_policy,
@@ -257,7 +260,7 @@ def test_sort_is_rejected_before_a_hidden_column_can_order() -> None:
 
 def test_definition_rights_do_not_bypass_data_denial() -> None:
     user, table = _designer_without_data_grant()
-    assert sees_every_definition(user) is True
+    assert entity_service._sees_every_definition(user) is True
     missing = _not_found("missing_table_redteam", user)
     hidden = _not_found(table, user)
     assert missing.code == hidden.code == "ENTITY_NOT_FOUND"

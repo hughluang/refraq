@@ -46,7 +46,7 @@ class SubjectStore(Protocol):
 
     def update_group(self, record: UserGroupRecord) -> UserGroupRecord: ...
 
-    def delete_group(self, group_id: str) -> bool: ...
+    def delete_group(self, group_id: str) -> None: ...
 
     def existing_group_ids(self, group_ids: Iterable[str]) -> frozenset[str]: ...
 
@@ -78,7 +78,7 @@ class SubjectStore(Protocol):
 
     def update_definition(self, record: SubjectAttributeRecord) -> SubjectAttributeRecord: ...
 
-    def delete_definition(self, definition_id: str) -> bool: ...
+    def delete_definition(self, definition_id: str) -> None: ...
 
     def values_for(
         self, subject_type: SubjectType, subject_ids: Iterable[str]
@@ -138,13 +138,12 @@ class MemorySubjectStore:
             self._groups[record.id] = record
             return record
 
-    def delete_group(self, group_id: str) -> bool:
+    def delete_group(self, group_id: str) -> None:
         with self._lock:
             if self._groups.pop(group_id, None) is None:
-                return False
+                return
             self._members = {pair for pair in self._members if pair[0] != group_id}
             self._values.pop(("group", group_id), None)
-            return True
 
     def existing_group_ids(self, group_ids: Iterable[str]) -> frozenset[str]:
         with self._lock:
@@ -217,13 +216,12 @@ class MemorySubjectStore:
             self._definitions[record.id] = record
             return record
 
-    def delete_definition(self, definition_id: str) -> bool:
+    def delete_definition(self, definition_id: str) -> None:
         with self._lock:
             if self._definitions.pop(definition_id, None) is None:
-                return False
+                return
             for values in self._values.values():
                 values.pop(definition_id, None)
-            return True
 
     def values_for(
         self, subject_type: SubjectType, subject_ids: Iterable[str]
@@ -306,11 +304,11 @@ class SqlSubjectStore:
             session.flush()
         return record
 
-    def delete_group(self, group_id: str) -> bool:
+    def delete_group(self, group_id: str) -> None:
         with session_scope() as session:
             row = session.get(UserGroupRow, group_id)
             if row is None:
-                return False
+                return
             session.execute(
                 delete(SubjectAttributeValueRow).where(
                     SubjectAttributeValueRow.subject_type == "group",
@@ -322,7 +320,6 @@ class SqlSubjectStore:
             )
             session.delete(row)
             session.flush()
-            return True
 
     def existing_group_ids(self, group_ids: Iterable[str]) -> frozenset[str]:
         wanted = list(set(group_ids))
@@ -479,11 +476,11 @@ class SqlSubjectStore:
             session.flush()
         return record
 
-    def delete_definition(self, definition_id: str) -> bool:
+    def delete_definition(self, definition_id: str) -> None:
         with session_scope() as session:
             row = session.get(SubjectAttributeDefRow, definition_id)
             if row is None:
-                return False
+                return
             session.execute(
                 delete(SubjectAttributeValueRow).where(
                     SubjectAttributeValueRow.definition_id == definition_id
@@ -491,7 +488,6 @@ class SqlSubjectStore:
             )
             session.delete(row)
             session.flush()
-            return True
 
     def values_for(
         self, subject_type: SubjectType, subject_ids: Iterable[str]

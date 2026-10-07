@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-from backend.entity.records import EntityVersionRecord
+from backend.entity.records import (
+    AttributeRecord,
+    EntityVersionRecord,
+    attribute_from_dict,
+)
 
 __all__ = [
     "compose_physical_table_name",
     "occupies_live_table",
     "physical_table_name",
+    "published_attributes",
     "table_present",
 ]
 
@@ -16,6 +21,13 @@ _IDENT_MAX = 63
 
 def table_present(version: EntityVersionRecord) -> bool:
     return bool(version.materialized_attributes)
+
+
+def published_attributes(version: EntityVersionRecord) -> list[AttributeRecord]:
+    """Attributes of a published version: the table snapshot, else the definition."""
+    if table_present(version):
+        return [attribute_from_dict(item) for item in version.materialized_attributes]
+    return list(version.attributes)
 
 
 def compose_physical_table_name(

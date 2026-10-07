@@ -14,8 +14,6 @@ from hypothesis import strategies as st
 from backend.entity.access.compiler import (
     Policy,
     compile_policy,
-    project_subject,
-    render_grant_select,
     render_shape,
     subject_outcome,
 )
@@ -30,6 +28,7 @@ from backend.entity.access.facts import (
     SubjectAttrFact,
 )
 from backend.entity.access.masks import ModeError, validate_levels
+from backend.tests.entity_access_oracle import project_subject, render_grant_select
 
 NOW = datetime(2026, 10, 7, tzinfo=timezone.utc)
 SOURCE = 'entity_data."customer__v3__9f1c2a7b4d6e8f00"'
@@ -421,7 +420,6 @@ def test_combination_cap_prefers_existing_and_marks_the_rest() -> None:
     compiled = compile_policy(capped)
     assert compiled.emitted_combos == frozenset({"eap_b,eap_c"})
     assert compiled.subjects_over_limit == 2
-    assert "user_bc" not in compiled.over_limit_user_ids
     kept = project_subject(compiled, capped, people[2], [{"row_id": 1, "name": "A"}])
     assert kept.over_limit is False
     refused = project_subject(compiled, capped, people[0], [{"row_id": 1, "name": "A"}])

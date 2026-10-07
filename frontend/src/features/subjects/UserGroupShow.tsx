@@ -16,7 +16,7 @@ import {
   getGroupSubjectValues,
   getUserGroup,
   listGroupMembers,
-  listSubjectAttributes,
+  listAllSubjectAttributes,
   patchUserGroup,
   putGroupSubjectValues,
   removeGroupMember,
@@ -83,17 +83,17 @@ export function UserGroupShow({ groupId }: Props) {
         const [loaded, values, defs, people] = await Promise.all([
           getUserGroup(groupId),
           getGroupSubjectValues(groupId),
-          listSubjectAttributes({ limit: 200, offset: 0 }),
+          listAllSubjectAttributes(),
           listUsers({ limit: 200, offset: 0 }).then((page) => page.items),
         ]);
         if (cancelled) return;
         setGroup(loaded.group);
         setName(loaded.group.name);
         setDescription(loaded.group.description ?? "");
-        setDefinitions(defs.items);
+        setDefinitions(defs);
         setUsers(people);
         const next: Record<string, string[]> = {};
-        for (const item of defs.items) {
+        for (const item of defs) {
           next[item.key] = (values.values[item.key] ?? []).map(String);
         }
         setDrafts(next);
