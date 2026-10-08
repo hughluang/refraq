@@ -98,7 +98,29 @@ Side effects: password hash updated; all other Sessions for this User are delete
 
 Password change requires a valid **Session** cookie (not PAT-only) so the current session id can be retained under S1.
 
-## 5. `GET /time-zones`
+## 5. `GET /account/groups`
+
+Purpose: the caller’s own **User Group** memberships, for Console narrowing (“view as”). Authentication only (Session or User PAT). Does not require `users:read`. Does not list other Users’ groups and does not list the tenant catalog.
+
+### Success Response: `200`
+
+```json
+{
+  "groups": [
+    { "id": "grp_01HZX", "key": "east_sales", "name": "East sales" }
+  ]
+}
+```
+
+`groups` is sorted by `key`, then `id`, the same order as `GET /users/{id}/groups`. Each item is `id`, `key`, and `name` only.
+
+### Failure Responses
+
+| Status | Code | When |
+| --- | --- | --- |
+| `401` | auth codes | Missing/invalid Session or PAT |
+
+## 6. `GET /time-zones`
 
 Purpose: the shared IANA zone catalog used by **Display Timezone** and by the `schedule_timezone` **System Parameter** enum.
 
@@ -124,7 +146,7 @@ Permission: `console:access`.
 | `401` | auth codes | Missing/invalid Session or PAT |
 | `403` | `AUTH_FORBIDDEN` | Authenticated but lacking `console:access` |
 
-## 6. Non-Goals
+## 7. Non-Goals
 
 - Forgot-password / reset links
 - Email verification

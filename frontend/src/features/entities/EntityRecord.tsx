@@ -673,6 +673,7 @@ export function EntityRecord(props: Props) {
               physicalHidden={Boolean(
                 entity.ever_published && entity.current_version?.table_name == null
               )}
+              active={tab === "data"}
             />
           ) : null
         }

@@ -1,3 +1,4 @@
+import type { DataSchemaBody } from "@/features/entities/accessLogic";
 import type {
   AccessGrant,
   AccessLadder,
@@ -170,7 +171,12 @@ export function previewAccess(
   });
 }
 
-export function loadDataSchema(tableName: string, body: Record<string, unknown>) {
+export type DataQueryBody = DataSchemaBody & {
+  limit?: number;
+  offset?: number;
+};
+
+export function loadDataSchema(tableName: string, body: DataSchemaBody) {
   return apiClient<DataSchema>(`/entities/${tableName}/schema`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -178,7 +184,7 @@ export function loadDataSchema(tableName: string, body: Record<string, unknown>)
   });
 }
 
-export function queryDataRows(tableName: string, body: Record<string, unknown>) {
+export function queryDataRows(tableName: string, body: DataQueryBody) {
   return apiClient<{
     items: Record<string, unknown>[];
     total: number;

@@ -25,3 +25,13 @@ class ChangePasswordRequest(BaseModel):
 
 class ChangePasswordResponse(BaseModel):
     success: bool = True
+
+
+class AccountGroup(BaseModel):
+    id: str
+    key: str
+    name: str
+
+
+class AccountGroupsResponse(BaseModel):
+    groups: list[AccountGroup]

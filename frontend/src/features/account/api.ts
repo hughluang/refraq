@@ -24,6 +24,16 @@ export async function patchAccountProfile(
   return data.user;
 }
 
+export type AccountGroup = {
+  id: string;
+  key: string;
+  name: string;
+};
+
+export function listAccountGroups() {
+  return apiClient<{ groups: AccountGroup[] }>("/account/groups");
+}
+
 export async function changeAccountPassword(
   payload: ChangePasswordPayload,
 ): Promise<void> {

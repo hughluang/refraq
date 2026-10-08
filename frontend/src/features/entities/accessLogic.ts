@@ -111,10 +111,13 @@ export function classifyAccessProblem(code: string | null | undefined): AccessPr
   return "other";
 }
 
+/** Identity narrowing accepted by schema, get, and query. Paging keys are not part of it. */
+export type DataSchemaBody = { narrow?: { type: string; id?: string } };
+
 export function narrowBody(
   kind: "none" | "user" | "role" | "group",
   id: string,
-): { narrow?: { type: string; id?: string } } {
+): DataSchemaBody {
   if (kind === "none") return {};
   if (kind === "user") return { narrow: { type: "user" } };
   return { narrow: { type: kind, id } };

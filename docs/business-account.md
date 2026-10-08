@@ -22,6 +22,7 @@ Platform system parameters remain under Console Module `settings` (`docs/api-con
 - A Metadata MCP section follows User PAT on the same page. Any User who can open Account Center (`console:access`) sees the same-origin client configuration (URL plus a PAT placeholder) and the tools their Role can call (`GET /mcp/catalog`). The primary action copies that configuration; the page never fills a live token. URL-only copy is not sufficient.
 - The page may show an in-page table of contents for three self-service jobs: profile (identity, locale, Display Timezone, and local password change), User PAT, and Metadata MCP. The directory stays visible beside the form, highlights the job in view, and jumps on click. That is findability on one form page, not Account Center secondary navigation and not a Console Navigation item: it does not write a URL hash or History entry, and does not add routes. Refresh returns to the top of `/console/account`. The tokens entry is shown only when the User PAT section is shown (`tokens:read`).
 - Self-service mutates **only the caller’s** User; admin `/users` APIs continue to manage other Users via `users:*`.
+- `GET /account/groups` returns only the caller’s own User Group memberships. Authentication is enough; `users:read` is not required. It is not the admin membership editor, it does not accept another User id, and it does not add a section to the Account Center page.
 
 ## 3. Profile, Locale, And Display Timezone
 

@@ -318,3 +318,80 @@ def test_change_password_requires_session_not_pat_only(
     )
     assert response.status_code == 400
     assert response.json()["code"] == "ACCOUNT_PASSWORD_SESSION_REQUIRED"
+
+
+def test_own_groups_requires_authentication(client: TestClient) -> None:
+    response = client.get("/account/groups")
+    assert response.status_code == 401
+
+
+def test_own_groups_without_users_read(client: TestClient, store_bundle) -> None:
+    from backend.admin.subjects.records import UserGroupRecord
+    from backend.admin.subjects.store import get_subject_store
+
+    user_store, role_store, _, _ = store_bundle
+    operator = role_store.get_by_key("operator")
+    assert operator is not None
+    caller = user_store.create_user(
+        account="op",
+        display_name="Operator",
+        password_hash=hash_password("op-pass"),
+        role_id=operator.id,
+        status="active",
+    )
+    other = user_store.create_user(
+        account="other",
+        display_name="Other",
+        password_hash=hash_password("other-pass"),
+        role_id=operator.id,
+        status="active",
+    )
+    now = utc_now()
+    subjects = get_subject_store()
+    subjects.create_group(
+        UserGroupRecord(
+            id="grp_zeta",
+            key="zeta",
+            name="Zeta",
+            description="hidden from this response",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    subjects.create_group(
+        UserGroupRecord(
+            id="grp_alpha",
+            key="alpha",
+            name="Alpha",
+            description=None,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    subjects.create_group(
+        UserGroupRecord(
+            id="grp_other",
+            key="other",
+            name="Other group",
+            description=None,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    subjects.add_member("grp_zeta", caller.id)
+    subjects.add_member("grp_alpha", caller.id)
+    subjects.add_member("grp_other", other.id)
+
+    assert (
+        client.post("/auth/login", json={"account": "op", "password": "op-pass"}).status_code
+        == 200
+    )
+    response = client.get("/account/groups")
+    assert response.status_code == 200, response.text
+    assert response.json()["groups"] == [
+        {"id": "grp_alpha", "key": "alpha", "name": "Alpha"},
+        {"id": "grp_zeta", "key": "zeta", "name": "Zeta"},
+    ]
+    denied = client.get(f"/users/{other.id}/groups")
+    assert denied.status_code == 403
+    assert denied.json()["code"] == "AUTH_FORBIDDEN"

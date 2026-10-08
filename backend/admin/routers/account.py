@@ -22,11 +22,14 @@ from backend.admin.session_store import SessionStore, get_session_store
 from backend.admin.user_store import UserRecord, UserStore, get_user_store
 from backend.core.time_zones import canonical_zone_id
 from backend.admin.schemas.account import (
+    AccountGroup,
+    AccountGroupsResponse,
     ChangePasswordRequest,
     ChangePasswordResponse,
     UpdateProfileRequest,
     UpdateProfileResponse,
 )
+from backend.admin.subjects.service import user_groups_of
 
 router = APIRouter(prefix="/account", tags=["account"])
 
@@ -43,6 +46,19 @@ def _normalize_display_timezone(value: str | None) -> str | None:
         return None
     trimmed = value.strip()
     return trimmed or None
+
+
+@router.get("/groups", response_model=AccountGroupsResponse)
+def list_own_groups(
+    user: UserRecord = Depends(get_current_user),
+) -> AccountGroupsResponse:
+    groups = user_groups_of(user.id)
+    return AccountGroupsResponse(
+        groups=[
+            AccountGroup(id=group.id, key=group.key, name=group.name)
+            for group in groups
+        ]
+    )
 
 
 @router.patch("/profile", response_model=UpdateProfileResponse)
