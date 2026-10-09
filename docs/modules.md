@@ -6,7 +6,7 @@ This document defines what each module is responsible for, what it may depend on
 
 **Backend structure contract** (package tiers, published APIs, placement, dependency whitelist, enforcement): [`docs/backend-layout.md`](backend-layout.md). This file focuses on responsibilities and ownership; when they disagree on layout, `backend-layout.md` wins.
 
-The layout covers the **Management Console**, **Management Foundation**, the **metadata foundation**, and the **entity** product domain. Do not pre-create empty packages for **Data Channel** or Data Product catalog.
+The layout covers the **Management Console**, **Management Foundation**, the **metadata foundation**, the **entity** product domain, and the **Data Channel** product domain (`backend/channel/`). Do not pre-create empty packages or modules for Data Channel or Data Product catalog; `backend/channel/` is created with its first real code.
 
 ## 2. Backend Modules
 
@@ -171,10 +171,43 @@ Must not contain:
 - Duplicating the **Normalized Type** closed set (import the published `metadata` leaf module)
 - Mapping, transform, lineage, or channel write admission (**Data Channel**)
 - Importing `worker.app`
-- Pre-scaffolded empty subpackages for Data Channel
+- Importing `channel`; the Entity publish confirmation reads incompatible write nodes through a port bound by composition
 - Metadata MCP tools for Business Entity definition or Entity Data API (Entity SQL over MCP is a separate surface with its own host)
 - `entity/present.py` importing `entity/table_name.py` or `entity/inbound.py`
 - Owning User Group or Subject Attribute storage (lives in `admin/subjects/`)
+
+Entity owns the entity Change Log and the head-table row-write port that appends to it in the same transaction. Both the **Entity Data API** and Data Channel write nodes write through that port.
+
+### `backend/channel/`
+
+Rules: `docs/business-data-channel.md`. HTTP: `docs/api-contracts-data-channel.md`.
+
+Responsibilities:
+
+- **Data Channel** definition, draft graph with `draft_revision`, immutable **Channel Version**s, and the activation switch (outside versions)
+- Graph validation as a pure function over a graph and a reference resolver
+- Node type catalog: each node type's configuration schema, ports, and execute function
+- Execution engine with n8n v1 semantics; it knows nothing about specific node types, storage, or Celery
+- Expression evaluator and Code node sandbox (one reused subprocess per run; no network; allow-listed modules; time and memory limits)
+- **Dataset Reference**s: run-scoped tables in the entity database and their expiry
+- Entity writer: modes, match key, mapped attributes only, head compatibility, dry run; writes through Entity's published row-write port
+- **Checkpoint** store: per (channel, Read Changes node, stream) cursors, run upper bounds, monotonic advance on whole-run success
+- Run records: node executions, truncated item samples, last failed node and edge
+- **Channel Run** runner and triggers: `channel_run` Job kind, version resolution at start, cancel and run-timeout checks between node executions, version supersede, error workflow, persistent-failure flag
+- Schedule sync of Scheduled nodes to `channel_run` **Scheduled Task** rows, and the `channel_run` schedule projection adapter
+- **Global Variable** store
+- `channel/parameters.py` (Data Channel-owned System Parameter specs)
+- Domain use-case HTTP under `channel/routers/` and shapes under `channel/schemas/`; own Celery task and kind dispatch (`channel/tasks.py`), discovered by `worker`
+- Published API in `docs/backend-layout.md` §3
+
+Must not contain:
+
+- Owning the platform Job table (lives in `backend/jobs/`) or the Scheduled Task table (lives in `backend/worker/`)
+- Entity Table DDL, Entity Version publish, or the entity Change Log (live in `backend/entity/`)
+- Catalog, Locator, or Controlled Query internals (live in `backend/metadata/`); use their published modules
+- An execution lock for `channel_run`
+- Importing `worker.app`
+- MCP tools for Data Channel
 
 ### `backend/worker/`
 
@@ -330,7 +363,8 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 - `jobs` → `core`; published `admin` (including System Parameter resolver) when needed
 - `metadata` → `core`; published `admin` / `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; process entries `mcp_http` / `mcp_server` may import `worker.parameters`
 - `entity` → `core`; published `admin` (including `admin.subjects` and the System Parameter resolver) / `jobs`
-- `worker` → `core`; published surfaces for assembly, including `entity.tasks`
+- `channel` → `core`; published `admin` / `jobs` / `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules` / `worker.due`; published `metadata` and `entity` modules listed for Data Channel use (`docs/backend-layout.md` §3)
+- `worker` → `core`; published surfaces for assembly, including `entity.tasks` and `channel.tasks`
 - `main` → `core` + package routers / bootstrap via published surfaces
 - `alembic` → `core` Base + every package `models` module
 
@@ -354,6 +388,7 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 - Do not import `worker.app` from domain or HTTP adapters
 - Do not subclass concrete `admin.errors` types from product domains or platform primitives (use `core.errors.AppError`)
 - Do not import `entity` from `metadata` domain modules. The coupling direction is `entity` → `metadata` (closed vocabularies only). `metadata` importing an entity job runner would close a package-level cycle.
+- Do not import `channel` from `metadata` or `entity`. The coupling direction is `channel` → published `metadata` / `entity`; reverse needs go through ports bound by composition.
 
 ## 6. First-Slice Ownership
 

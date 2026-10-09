@@ -4,12 +4,12 @@
 
 Contracts for operator management of domain **Scheduled Task** definitions (the schedule layer) and firing them.
 
-Business rules: `docs/business-scheduled-tasks.md` (platform Scheduled Task) and `docs/business-metadata.md` §4.2 (Metadata structure **facade** onto schedules — not schedule ownership by Source), root `CONTEXT.md`, `docs/adr/0026-seed-structure-schedule-on-source-create.md`, `docs/adr/0027-running-time-limit-on-schedule.md`.
+Business rules: `docs/business-scheduled-tasks.md` (platform Scheduled Task), `docs/business-metadata.md` §4.2 (Metadata structure **facade** onto schedules — not schedule ownership by Source), and `docs/business-data-channel.md` §7.2 (Data Channel publish sync), root `CONTEXT.md`, `docs/adr/0026-seed-structure-schedule-on-source-create.md`, `docs/adr/0027-running-time-limit-on-schedule.md`.
 Auth: Session or User PAT. Permission: `jobs:run`.
 Instants: [`docs/conventions-time.md`](conventions-time.md) (UTC `Z` on the wire).
 HTTP protocol failures: [`docs/conventions-errors.md`](conventions-errors.md).
 
-Create is domain-facade (`POST /sources/{id}/schedules`) plus the database Source create-time seed and a mutating Source update (missing product-default schedule kinds). Platform list/get/patch/delete do not create rows and do not accept Celery `task_name` or `owner_ref`. Mechanism responses do not invent Source shape; the Metadata facade adds `work_kind` / `target`.
+Create is domain-facade (`POST /sources/{id}/schedules`) plus the database Source create-time seed and a mutating Source update (missing product-default schedule kinds). `channel_run` rows are created only by Data Channel publish sync; there is no HTTP create for them. Platform list/get/patch/delete do not create rows and do not accept Celery `task_name` or `owner_ref`. Mechanism responses do not invent Source shape; the Metadata facade adds `work_kind` / `target` for Source and site rows, and the Data Channel projection adds them for `channel_run` rows.
 
 ## 2. Public shape
 
@@ -49,8 +49,37 @@ Create is domain-facade (`POST /sources/{id}/schedules`) plus the database Sourc
 Rules:
 
 - Public fields never include `task_name`, `args_json`, `kwargs_json`, `hidden`, `locked`, `undeletable`, `store_only`, `owner_ref`, or `commitment_timezone`. `deletable` is the inverse of `undeletable`.
-- `work_kind` is the closed catalog of domain work (`structure` \| `join_detection` \| `catalog_embed`), filled by the Metadata facade. Store-only rows return `work_kind` / `target` null. `catalog_embed` returns `target` null.
+- `work_kind` is the closed catalog of domain work (`structure` \| `join_detection` \| `catalog_embed` \| `channel_run`), filled by the owning domain projection. Store-only rows return `work_kind` / `target` null. `catalog_embed` returns `target` null.
 - `target` is facade projection of the work target (Source id/key for `structure` and `join_detection`), **not** proof that the schedule is owned by Source. `target.source_key` is present when the facade can resolve the Source; after Source hard-delete, matching schedules are withdrawn by `owner_ref` so orphans should not remain on product paths.
+- `channel_run` `target` is `{ "channel_id", "channel_name", "node_id", "node_name" }`: the **Data Channel** and the Scheduled node in its current published version. `channel_name` and `node_name` are presentation and are `null` when they do not resolve. A `channel_run` row returns `deletable: false` and `running_timeout_sec: null`, and its key is `channel_run:{channel_id}:{node_id}`.
+
+`channel_run` example:
+
+```json
+{
+  "id": "sched_01J2K",
+  "key": "channel_run:chn_01HZX:nd_hourly",
+  "name": "channel_run · Material master · Hourly",
+  "enabled": true,
+  "work_kind": "channel_run",
+  "target": {
+    "channel_id": "chn_01HZX",
+    "channel_name": "Material master",
+    "node_id": "nd_hourly",
+    "node_name": "Hourly"
+  },
+  "interval_seconds": null,
+  "cron": "0 * * * *",
+  "running_timeout_sec": null,
+  "start_at": null,
+  "deletable": false,
+  "last_run_at": "2026-10-09T08:00:00Z",
+  "next_run_at": "2026-10-09T09:00:00Z",
+  "recent_jobs": [],
+  "created_at": "2026-10-01T02:00:00Z",
+  "updated_at": "2026-10-08T09:30:00Z"
+}
+```
 - Cadence is exactly one of `interval_seconds` (an integer from 1 through 252460800, 2922 days) or five-field `cron`. Cron wall clock is the `schedule_timezone` **System Parameter**, not a field of the row. Interval schedules ignore it.
 - `running_timeout_sec` is the optional **Running Time Limit** (positive int seconds, at most 252460800). Null / omit / seed = no control. Mint copies it onto the Job. PATCH of this field does not rewrite in-flight Jobs.
 - `start_at` is the optional **Schedule Start** Instant. Null = start immediately. Interval with `start_at` fires on the grid `start_at + k * interval_seconds` (k ≥ 0); interval without it counts from the previous mint. Cron with `start_at` never fires before the first minute at or after `start_at`. A past `start_at` stays stored as the anchor and is returned as written.
@@ -129,11 +158,11 @@ Read-only. Does not write a row and does not record an audit event. Permission `
 
 ### `POST /schedules/{id}/run`
 
-Empty body. `202` `{ "job": { … } }` (Job shape). `trigger_kind=schedule`, `trigger_ref` = schedule id, `created_by_user_id` = operator, `scheduled_for` null. Disabled schedules are allowed. Locked schedules → `SCHEDULE_SYSTEM_IMMUTABLE`. Always mints a Job — Source busy / disabled is not a schedule HTTP conflict. Does not update `last_run_at` / `next_run_at`. The site `catalog_embed` schedule uses this same route.
+Empty body. `202` `{ "job": { … } }` (Job shape). `trigger_kind=schedule`, `trigger_ref` = schedule id, `created_by_user_id` = operator, `scheduled_for` null. Disabled schedules are allowed. Locked schedules → `SCHEDULE_SYSTEM_IMMUTABLE`; `channel_run` rows are locked, so running a Data Channel now uses `POST /channels/{id}/runs` (`docs/api-contracts-data-channel.md`). Always mints a Job — Source busy / disabled is not a schedule HTTP conflict. Does not update `last_run_at` / `next_run_at`. The site `catalog_embed` schedule uses this same route.
 
 ### `PATCH /schedules/{id}` body
 
-Any subset of `enabled`, `name`, `cron`, `interval_seconds`, `start_at`, `running_timeout_sec`. Present `start_at` null clears the anchor (start immediately); omission leaves the stored value; a value beyond the 8-year horizon is rejected (`SCHEDULE_START_AT_INVALID`). Setting `cron` clears `interval_seconds` and vice versa. Sending both non-null is rejected. Unknown fields on the request object are rejected (`422` `REQUEST_INVALID`); `schedule_timezone` is one such field. Present `running_timeout_sec` null clears to no-control; omission leaves the stored value; a present non-positive value, or a value above 252460800 seconds, is rejected. Empty or whitespace `name` restores that work kind's default: `structure · {source_key}`, `join_detection · {source_key}`, or `catalog embed` for the site schedule. Locked rows are rejected.
+Any subset of `enabled`, `name`, `cron`, `interval_seconds`, `start_at`, `running_timeout_sec`. Present `start_at` null clears the anchor (start immediately); omission leaves the stored value; a value beyond the 8-year horizon is rejected (`SCHEDULE_START_AT_INVALID`). Setting `cron` clears `interval_seconds` and vice versa. Sending both non-null is rejected. Unknown fields on the request object are rejected (`422` `REQUEST_INVALID`); `schedule_timezone` is one such field. Present `running_timeout_sec` null clears to no-control; omission leaves the stored value; a present non-positive value, or a value above 252460800 seconds, is rejected. Empty or whitespace `name` restores that work kind's default: `structure · {source_key}`, `join_detection · {source_key}`, or `catalog embed` for the site schedule. Locked rows, including every `channel_run` row, are rejected with `SCHEDULE_SYSTEM_IMMUTABLE`; their cadence, start, and enabled state come from Data Channel publish and activation.
 
 - `enabled=false` → `next_run_at` null immediately; already queued/running Jobs keep running.
 - `enabled=true` → recompute `next_run_at` from now (no pause catch-up), still honoring the stored `start_at`.
@@ -151,7 +180,7 @@ Same **Offset Page** envelope, including `cron_timezone`, defaults, max, and ord
 
 ### `DELETE`
 
-`204` empty body. Unfinished Jobs for this schedule are immediately cancelled (queued also revoked). Historical Jobs remain. An undeletable row is `SCHEDULE_UNDELETABLE`.
+`204` empty body. Unfinished Jobs for this schedule are immediately cancelled (queued also revoked). Historical Jobs remain. An undeletable row, including every `channel_run` row, is `SCHEDULE_UNDELETABLE`.
 
 ## 4. Errors
 
@@ -168,11 +197,11 @@ Same **Offset Page** envelope, including `cron_timezone`, defaults, max, and ord
 | `SOURCE_NOT_FOUND` | Facade path Source missing. Source delete withdraws Source-targeted schedules by `owner_ref` so orphans should not remain. |
 | `REQUEST_INVALID` | Unknown fields on `POST /sources/{id}/schedules`, `PATCH /schedules/{id}`, or `POST /schedules/cron-preview` |
 
-`JOB_ALREADY_ACTIVE` and `JOB_SOURCE_DISABLED` are Job execution / domain errors, not schedule mint HTTP codes.
+`JOB_ALREADY_ACTIVE` and `JOB_SOURCE_DISABLED` are Job execution / domain errors, not schedule mint HTTP codes. `channel_run` Jobs take no execution lock and never end with `JOB_ALREADY_ACTIVE`.
 
 ## 5. Console
 
-- Module id `schedules` (`operations` group, list permission `jobs:run`): platform-wide domain schedules, including site `catalog_embed`; edit cadence / enabled; delete when `deletable`; run-now; related Jobs. No hidden rows. No global create. The list identity column is the raw work kind. The platform list appends the Source key in that same cell (`{work_kind} · {source_key}`, or `source_id` when the key is absent). `catalog_embed` shows only `catalog_embed`. The Source workbench shows only the work kind. A custom name appears on a second line only when it differs from the work-kind default (`structure · {source_key}`, `join_detection · {source_key}`, or `catalog embed`). The list does not show the schedule id.
+- Module id `schedules` (`operations` group, list permission `jobs:run`): platform-wide domain schedules, including site `catalog_embed`; edit cadence / enabled; delete when `deletable`; run-now; related Jobs. No hidden rows. No global create. The list identity column is the raw work kind. The platform list appends the Source key in that same cell (`{work_kind} · {source_key}`, or `source_id` when the key is absent). `catalog_embed` shows only `catalog_embed`. `channel_run` shows `channel_run · {channel_name} · {node_name}`, falling back to ids. The Source workbench shows only the work kind. `channel_run` rows offer no edit, delete, enable/disable, or run-now action; related Jobs stay available. A custom name appears on a second line only when it differs from the work-kind default (`structure · {source_key}`, `join_detection · {source_key}`, or `catalog embed`). The list does not show the schedule id.
 - Sources: related-schedules **workbench** at `/console/sources/:id/schedules` — toolbar create plus the same row actions as Operations (enable/disable, edit, delete, run-now, related Jobs). Console delete asks for confirmation; HTTP `DELETE` remains immediate.
 - Do not label `last_run_at` as Last run; the list shows a Recent runs strip from `recent_jobs` for observation (one bar per Job, colored by status, height by duration, hover for details, click opens related Jobs) and `next_run_at` for commitment. Disabled → paused (not “unknown next”).
 - Create/edit may set optional **Running Time Limit**. Empty = no control. No schedule-list timezone column. The next-run column header names the **Display Timezone** once (the browser zone when the preference is null). Cell text and recent-run times do not repeat the zone. Job detail may show the minted Running Time Limit snapshot when non-null.
@@ -188,3 +217,4 @@ Same **Offset Page** envelope, including `cron_timezone`, defaults, max, and ord
 - Catchup / backfill / RRule
 - Schedule end time (`end_at`)
 - PUT replace of “the” schedule per Source or per work kind
+- A create facade for `channel_run` rows

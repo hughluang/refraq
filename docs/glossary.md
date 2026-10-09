@@ -88,6 +88,11 @@ The product seeds a default stored row; that row is what the operator sees. Cons
 A field of one **Scheduled Task** / **Source** / **User** is not a **System Parameter**. **Schedule Timezone** is the site-wide key `schedule_timezone`, not a field of one row. Occupancy lost-detection, session TTL, and **Schedule Timezone** are **System Parameter**s. Changing session TTL does not rewrite existing **Session**s. Widening lost-detection is live; tightening waits one old renew interval before the reaper cutoff shrinks. The hidden system reaper **Scheduled Task** interval is derived from lost-detection. Worker concurrency is a deployment concern. Beat loop / reload intervals are in-code constants (`docs/business-system-parameters.md` §5.2).
 Avoid env as the home of these keys; avoid Settings Override as a second entity; avoid Platform Parameter; avoid **Account Center** preferences; avoid treating the Console Module as the key; avoid moving **Running Time Limit** here; avoid editing the hidden system **Scheduled Task** as the reaper-interval UI; avoid putting an engineering tuning knob (pool size, loop interval, replica count) on this page.
 
+### Notification Channel
+
+A site-wide Management Foundation resource through which the platform announces states that need attention: a Source Mirror needs attention, a **Data Channel** is persistently failing, and Kafka or connector faults. It is one webhook. A delivery failure never fails the operation that raised the event.
+Avoid **Data Channel**, a per-workflow route, email or chat integrations, **System Parameter**, and **Management Audit Event**.
+
 ### Settings Override
 
 Retired as a named entity. A persisted override is a state on a **System Parameter**, not a second object.
@@ -257,7 +262,7 @@ Avoid Celery result backend, **Management Audit Event** `result`, treating resul
 The platform **scheduling foundation**: a cadence intent stored in Postgres that commits a next-due Instant (`next_run_at`), consumes a due tick only by minting a domain **Job**, and can be paused or **withdrawn** by the calling domain via opaque **owner_ref**.
 Celery Beat reads these rows (single Beat replica). Distinct from any one **Job** instance.
 A platform mechanism like **Job**, not a product domain, not a Metadata business object, and **not owned by Source** (no Source FK; scheduler never parses Source).
-Operator-facing identity is a closed work kind plus target projected by a **domain facade** (`structure` and `join_detection` targeting a **Source**; `catalog_embed` with no Source target), not a Celery task name. Facades may register several schedules of each Source kind that *target* one Source; that target lives in facade/kwargs projection, not as schedule ownership. `catalog_embed` is one site schedule.
+Operator-facing identity is a closed work kind plus target projected by a **domain facade** (`structure` and `join_detection` targeting a **Source**; `catalog_embed` with no Source target; `channel_run` targeting a **Data Channel** Scheduled node, synced by publish as a locked, undeletable row), not a Celery task name. Facades may register several schedules of each Source kind that *target* one Source; that target lives in facade/kwargs projection, not as schedule ownership. `catalog_embed` is one site schedule.
 Cron wall clock uses **Schedule Timezone**; `last_run_at` is the consumed-due cursor Instant; `next_run_at` is the stored commitment (null when paused). An optional **Running Time Limit** on the definition is copied onto each minted **Job**. Operator run-now enqueues without moving those fields. Observation “recent runs” joins the latest related **Jobs**.
 Console operator copy, docs that name the row, and identifiers whose referent is this entity use **schedule**, not clock.
 Avoid storing product schedules only in Redis Beat state or static code when operators need to change them.
@@ -265,7 +270,7 @@ Avoid treating Celery `timezone` as the business schedule zone.
 Avoid treating a Scheduled Task as a Job, putting cron **on** a **Source**, or treating Source delete as an ORM cascade into schedules.
 Avoid scanning schedule kwargs for `source_id` as the withdraw key (use **owner_ref**).
 Avoid treating **Kind execution lock** (or the retired phrases “Source catalog-write single-flight” / “structure single-flight”) as a schedule mutex, Beat skip, or schedule HTTP conflict.
-Avoid treating Scheduled Task **as** a DAG/workflow; dispatched work may later be those kinds.
+Avoid treating Scheduled Task **as** a DAG/workflow; a **Data Channel** graph lives on its **Channel Version**, and the schedule only decides when a **Channel Run** starts. Avoid treating `last_run_at` or `scheduled_for` as a **Checkpoint**.
 Avoid Clock as a product noun, Console label, or identifier for this entity. Avoid renaming Instant test `Clock` / `get_clock`, cron wall-clock English, or ADR file `0025-clock-first-structure-jobs.md`.
 Avoid treating stored `next_run_at` as a debt of missed ticks or computing it only on GET.
 Avoid treating **Running Time Limit** as cron wall-clock or a global Job env.
@@ -447,7 +452,7 @@ Avoid treating it as a full platform SIEM or a substitute for application access
 
 A definition of a reusable business thing (material, supplier, inventory fact), identified by an immutable `table_name` that spans all its **Entity Version**s and is the stem view name in the entity database. Authoring one requires business meaning and not only a shape: name and description. Each attribute has one **Attribute Type** and that type's configuration, and may be marked `unique`, `indexed`, and, for at most one attribute, the version's **Business Key**. The Entity Table carries a platform `row_id` identity column that is not that business identity. **Inbound Reference**s are derived and are not attributes.
 Permissions: `entity:read` / `entity:write` / `entity:drop_table` (definition); `entity:access_manage` (**Entity Access Control**); `entity:data_read` / `entity:data_write` (**Entity Data API** master switches).
-Avoid calling it a **Catalog Object**, a Data Product, or a Serving output. Avoid putting source bindings, extract SQL, transforms, or lineage on the definition — those belong to a **Data Channel**. Avoid putting the `object_category` closed set on the Entity. Avoid treating `row_id` as a **Data Channel** upsert key. Avoid a link table or a relationship-entity subtype; a many-to-many is an ordinary Business Entity with two **Entity Reference**s. Avoid many-to-one, one-to-many, and many2one as names. Avoid **Join** and **Enum Catalog** as the home of entity references or dictionaries. Avoid hierarchy and inheritance between Business Entities. Avoid typing an attribute with **Normalized Type**.
+Avoid calling it a **Catalog Object**, a Data Product, or a Serving output. Avoid putting source bindings, extract SQL, transforms, or lineage on the definition — those belong to a **Data Channel**. Avoid putting the `object_category` closed set on the Entity. Avoid treating `row_id` as a **Data Channel** match key. Avoid a link table or a relationship-entity subtype; a many-to-many is an ordinary Business Entity with two **Entity Reference**s. Avoid many-to-one, one-to-many, and many2one as names. Avoid **Join** and **Enum Catalog** as the home of entity references or dictionaries. Avoid hierarchy and inheritance between Business Entities. Avoid typing an attribute with **Normalized Type**.
 
 ### Entity Data API
 
@@ -476,7 +481,7 @@ Avoid many-to-one, many2one, **Join**, **Inbound Reference** as something the au
 
 ### Business Key
 
-The single attribute of an **Entity Version** marked `business_key`. It is `string` or `integer`, and the author sets `unique` and `required` on it. An **Entity Reference** stores that value. The **Entity Data API** may address a row by it. A version may declare none. `row_id` is not a Business Key.
+The single attribute of an **Entity Version** marked `business_key`. It is `string` or `integer`, and the author sets `unique` and `required` on it. An **Entity Reference** stores that value. The **Entity Data API** may address a row by it, and it is the default match key of a **Data Channel** write node, which may instead name any other `unique` attribute. A version may declare none. `row_id` is not a Business Key and never a match key.
 Avoid a second business key on the same version, a composite key, treating `row_id` as the business identity, and implying `unique` or `required` when the flag is set.
 
 ### Inbound Reference
@@ -493,12 +498,7 @@ Avoid treating a version as a byte-exact frozen shape, ALTERing a published tabl
 
 The physical table refraq creates from a **Business Entity** definition, in the refraq-owned entity database declared separately from the metadata database. The Entity `table_name` is a view of the latest published version that still has a table. Each version's physical table name is the stem, `__v`, the version number, `__`, and that version's 16-hexadecimal-digit id, and is not renamed when a successor publishes. The application keeps that name within 63 characters by shortening the stem from the right when the suffix would not fit, and writes a table comment of the full stem only then. `table_name` is character-set and length constrained to the engine identifier limit. A superseded version is not a product write target. Every table carries `row_id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY`; each attribute becomes one remaining column, with optional UNIQUE constraints and non-unique indexes. An **Entity Reference** column follows the snapshotted target **Business Key** (`VARCHAR(max_length)` or `BIGINT`). An **Inbound Reference** is not a column.
 Created empty by **Publish**; rows arrive from a **Data Channel** and/or the **Entity Data API**. The definition lands before the table exists: publish is an explicit **Job** and no transaction spans the two databases. Publish status is stored; `table_present` is derived from the attribute-set snapshot. Dropping one is a destructive act behind `entity:drop_table`, permitted on a published version that is not the metadata head, or on the head after the Entity is deprecated, and is refused while the table holds rows.
-Avoid creating it inside a **Source** (Sources stay read-only origins), placing it in the metadata database, collecting it as a Catalog Object, auto-suffixing around a name collision, reading an empty table as a failed publish, or using `row_id` as a **Data Channel** upsert key.
-
-### Data Channel
-
-The product domain that moves rows from declared inputs into one declared target table, owning the mapping, transform, and lineage that a **Business Entity** definition does not carry. Its target is polymorphic: an **Entity Table** whose shape refraq declared and governs, or a delivery target owned outside the Entity Table and agreed with that delivery party.
-Avoid conflating it with **Job** or **Scheduled Task**, with a DAG or workflow engine, or with structure collection (which reads a **Source** into the catalog). Avoid an Entity-only name, since external delivery is another target kind on this same domain. Avoid reading "channel load" as request load in the load-shedding sense. Avoid treating the **Entity Data API** as a Data Channel.
+Avoid creating it inside a **Source** (Sources stay read-only origins), placing it in the metadata database, collecting it as a Catalog Object, auto-suffixing around a name collision, reading an empty table as a failed publish, or using `row_id` as a **Data Channel** match key.
 
 ## Entity Access
 
@@ -556,6 +556,48 @@ Avoid impersonation, role switching that adds access, or previewing another subj
 
 The application-level record of every Entity Data API request that reaches the access decision: who, which grants, which Profile View, which revision, outcome. Retention is a **System Parameter**.
 Avoid **Management Audit Event** for data access, or treating it as a database statement audit.
+
+## Data Channel
+
+### Data Channel
+
+The product domain of user-orchestrated, versioned data workflows, and one such workflow. A Data Channel is a graph of trigger, read, transform, volume, state, and write nodes joined by edges (n8n style). It owns the mapping, transform, and lineage that a **Business Entity** definition does not carry, and one Data Channel may write several **Entity Table**s. Its draft is edited freely; only a published **Channel Version** runs, and each run is a **Channel Run**. The author orchestrates increments, deletes, concurrency, and error handling with nodes; the platform does not derive them. It guarantees instead that **Checkpoint**s never move backwards, that a run reads up to an upper bound fixed at its start, and that write nodes are safe to re-execute. An `active` switch outside versions decides whether schedules and event triggers fire. A delivery target outside the Entity Table is another write target kind on this domain, not a second write implementation. Rules: `docs/business-data-channel.md`.
+Avoid conflating it with **Job** or **Scheduled Task**, or with structure collection (which reads a **Source** into the catalog). Avoid "one declared target table". Avoid platform-derived dirty keys, grain checks, or fan-out thresholds as Data Channel behaviour. Avoid an execution lock as a platform guarantee. Avoid a general automation engine with network side effects. Avoid an Entity-only name. Avoid reading "channel load" as request load in the load-shedding sense. Avoid treating the **Entity Data API** as a Data Channel, and avoid "Ingestion Job" or "sync task".
+
+### Channel Version
+
+One immutable published graph of a **Data Channel**, numbered from 1 per channel. Publish copies the draft into a new version; editing the draft never changes a version. Node ids are stable across versions. A **Channel Run** executes the current published version resolved when it starts and records which one.
+Avoid **Entity Version**, a mutable published graph, and running a draft.
+
+### Channel Run
+
+One run of a **Data Channel**: exactly one **Job** of kind `channel_run`, executed in one worker process, entered at the trigger node that minted it. Minted by a manual run, a synced **Scheduled Task**, a platform event, or change arrival. Runs of one channel may overlap; there is no execution lock. A run ends `succeeded` (outcome `completed` or `skipped`), `failed`, or `cancelled`; a newer published version cancels runs still executing an older one. A rerun is a new Job.
+Avoid Ingestion Job, sync job, a Scheduled Task, in-place retry, and **Kind execution lock** or `JOB_ALREADY_ACTIVE` for this kind. Avoid "execution" for the whole run; one node's step inside a run is a node execution.
+
+### Checkpoint
+
+The cursor a **Data Channel** keeps per (channel, Read Changes node, stream) into a **Change Log**. It advances only when the whole **Channel Run** succeeds with outcome `completed`, to the greater of its stored position and the upper bound fixed at run start, so it never moves backwards. A failed, cancelled, or skipped run advances none. It becomes invalid when the log was cleaned past it or the mirror was resnapshotted.
+Avoid watermark, treating `last_run_at` or `scheduled_for` as a checkpoint, a per-schedule cursor, advancing on partial success, and a platform-derived dirty-key set.
+
+### Dataset Reference
+
+A value that names a run-scoped table in the entity database, passed between nodes instead of in-memory items when data is large. Created by Materialize or by read and SQL nodes, consumed by Batch Read, SQL, and write nodes, and expired with run data retention.
+Avoid temp table as a user concept, **Entity Table**, **Source Mirror**, and an item list.
+
+### Global Variable
+
+A named JSON value in one site-wide namespace shared by every **Data Channel**. Nodes get, set, delete, set-if-absent with optional expiry, and compare-and-set; writes take effect immediately and are not rolled back with a run. Values have a size cap. Authors build mutual exclusion from it.
+Avoid execution lock as a platform feature, **System Parameter**, per-version state, and values that vanish at run end.
+
+### Source Mirror
+
+A platform-managed, shared, full-column copy of one **Catalog Object** in a dedicated schema of the entity database, kept current by change data capture from its **Source**. One mirror per source table serves every Data Channel. It opens automatically when a published **Channel Version** reads it, heals itself by resnapshot, and is managed from one global list under Operations. Mirrors are not under **Entity Access Control**.
+Avoid replica, staging table, ODS, snapshot, a per-channel copy, **Catalog Object**, **Entity Table**, **Catalog Sample**, and a write target.
+
+### Change Log
+
+An append-only record of row changes to one **Source Mirror** or one **Business Entity**, written in the same transaction as the row write, with before and after values and a sequence number; entity entries also carry the write origin. Mirror entries are written only when values changed. Cleaned once every published Read Changes node has consumed an entry, bounded by a maximum-retention **System Parameter**.
+Avoid **Structure Diff**, **Semantics Change**, **Join Change**, **Management Audit Event**, the Entity Access Log, a Kafka topic, and the source database's own CDC log.
 
 ## Auth Concepts
 
