@@ -35,7 +35,7 @@ For repository structure and long-lived development guidance, read:
 
 ### Issue tracker
 
-Issues and specs are tracked in GitHub Issues for `hughluang/refraq`. See `docs/agents/issue-tracker.md`.
+Issues and specs live as markdown files under `.scratch/`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
