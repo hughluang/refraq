@@ -116,6 +116,10 @@ Deleting a Data Channel withdraws its Scheduled Task rows by `owner_ref` (`docs/
 
 Each node type declares a configuration schema, its input ports, its output ports, and an execute function that receives items or Dataset References. The node type catalog is served by the backend; the Console palette and configuration panels are generated from it. A node type that needs an extra **Permission** to author declares it (§11).
 
+Each node type states its function and its place in a workflow: a `label`, a one-sentence `summary`, and a longer `description`. The catalog serves that text in English.
+
+Port names are lower snake case. `main` carries the node's primary items or dataset reference. `error` is an output only, and only on a type that can send failed items there when `on_error` is `error_output`. Further port names are declared by the type that needs them.
+
 ### 4.3 Node Families
 
 | Family | Node types | Role |

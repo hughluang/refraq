@@ -14,6 +14,7 @@ export const ModuleId = {
   typeMappings: "type-mappings",
   entities: "entities",
   dictionaries: "dictionaries",
+  channels: "channels",
   jobs: "jobs",
   schedules: "schedules",
   settings: "settings",

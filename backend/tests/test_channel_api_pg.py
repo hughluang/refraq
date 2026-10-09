@@ -1,0 +1,214 @@
+"""Data Channel definition HTTP against real PostgreSQL."""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
+
+pytestmark = pytest.mark.integration
+
+INTEGRATION_DATABASE_URL = os.getenv(
+    "REFRAQ_INTEGRATION_DATABASE_URL",
+    "postgresql+psycopg://refraq:refraq@127.0.0.1:5432/refraq_test",
+)
+INTEGRATION_REDIS_URL = os.getenv(
+    "REFRAQ_INTEGRATION_REDIS_URL",
+    "redis://127.0.0.1:6379/1",
+)
+_MAINTENANCE_DATABASE_URL = os.getenv(
+    "REFRAQ_INTEGRATION_MAINTENANCE_DATABASE_URL",
+    "postgresql+psycopg://refraq:refraq@127.0.0.1:5432/refraq",
+)
+
+TRIGGER = {
+    "nodes": [
+        {
+            "id": "nd_trigger",
+            "type": "trigger.manual",
+            "name": "Run manually",
+            "position": {"x": 10, "y": 20},
+            "config": {},
+            "on_error": "stop",
+            "retry": None,
+        }
+    ],
+    "edges": [],
+    "settings": {"run_timeout_sec": None, "error_channel_id": None},
+}
+
+RENAMED = {
+    "nodes": [
+        {
+            **TRIGGER["nodes"][0],
+            "name": "Run later",
+        }
+    ],
+    "edges": [],
+    "settings": TRIGGER["settings"],
+}
+
+
+def _services_available() -> bool:
+    try:
+        engine = create_engine(_MAINTENANCE_DATABASE_URL)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        engine.dispose()
+        from redis import Redis
+
+        client = Redis.from_url(INTEGRATION_REDIS_URL)
+        client.ping()
+        client.close()
+    except Exception:
+        return False
+    return True
+
+
+def _ensure_database() -> None:
+    from sqlalchemy.engine import make_url
+
+    db_name = make_url(INTEGRATION_DATABASE_URL).database
+    admin_url = make_url(_MAINTENANCE_DATABASE_URL).set(database="postgres")
+    engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+    try:
+        with engine.connect() as conn:
+            exists = conn.execute(
+                text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                {"name": db_name},
+            ).scalar()
+            if not exists:
+                conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def channel_client(monkeypatch: pytest.MonkeyPatch):
+    if not _services_available():
+        pytest.skip("Postgres/Redis not available (start: docker compose up -d)")
+
+    _ensure_database()
+    monkeypatch.setenv("REFRAQ_STORE_BACKEND", "persistent")
+    monkeypatch.setenv("DATABASE_URL", INTEGRATION_DATABASE_URL)
+    monkeypatch.setenv("REDIS_URL", INTEGRATION_REDIS_URL)
+    monkeypatch.delenv("CELERY_BROKER_URL", raising=False)
+    monkeypatch.setenv("REFRAQ_SKIP_SEED", "0")
+    monkeypatch.setenv("INITIAL_ADMIN_ACCOUNT", "root")
+    monkeypatch.setenv("INITIAL_ADMIN_PASSWORD", "s3cret")
+
+    from backend.channel.store import reset_channel_store
+    from backend.admin.role_store import reset_role_store
+    from backend.admin.session_store import reset_session_store
+    from backend.admin.user_store import reset_user_store
+    from backend.core.config import reset_settings_cache
+    from backend.core.db import reset_db_singletons
+    from backend.core.entry import migrate_with_advisory_lock
+    from backend.core.redis_client import reset_redis_singleton
+
+    reset_settings_cache()
+    reset_db_singletons()
+    reset_redis_singleton()
+    reset_user_store()
+    reset_role_store()
+    reset_session_store()
+    reset_channel_store()
+    migrate_with_advisory_lock(INTEGRATION_DATABASE_URL)
+
+    engine = create_engine(INTEGRATION_DATABASE_URL)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "TRUNCATE TABLE users, roles, channels, channel_versions"
+                " RESTART IDENTITY CASCADE"
+            )
+        )
+    engine.dispose()
+
+    from redis import Redis
+
+    redis = Redis.from_url(INTEGRATION_REDIS_URL)
+    redis.flushdb()
+    redis.close()
+
+    import backend.main as main_mod
+
+    reset_settings_cache()
+    reset_channel_store()
+    main_mod.settings = main_mod.get_settings()
+    main_mod._bootstrap_site(main_mod.settings)
+
+    with TestClient(main_mod.app) as client:
+        login = client.post(
+            "/auth/login", json={"account": "root", "password": "s3cret"}
+        )
+        assert login.status_code == 200, login.text
+        yield client
+
+    reset_user_store()
+    reset_role_store()
+    reset_session_store()
+    reset_channel_store()
+    reset_db_singletons()
+    reset_redis_singleton()
+    reset_settings_cache()
+
+
+def test_publish_keeps_version_immutable(channel_client: TestClient) -> None:
+    created = channel_client.post(
+        "/channels", json={"name": "Material master", "description": None}
+    )
+    assert created.status_code == 201, created.text
+    channel = created.json()["channel"]
+    assert channel["active"] is False
+    channel_id = channel["id"]
+
+    saved = channel_client.put(
+        f"/channels/{channel_id}/draft",
+        json={"base_revision": 1, "graph": TRIGGER},
+    )
+    assert saved.status_code == 200, saved.text
+    revision = saved.json()["draft_revision"]
+
+    preview = channel_client.post(f"/channels/{channel_id}/publish/preview")
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["mirrors_to_open"] == []
+    assert preview.json()["runs_to_cancel"] == []
+    assert preview.json()["missing_run_timeout"] is True
+
+    published = channel_client.post(
+        f"/channels/{channel_id}/publish",
+        json={"draft_revision": revision},
+    )
+    assert published.status_code == 201, published.text
+    body = published.json()
+    assert body["version"]["number"] == 1
+    assert body["version"]["published_by_name"] == "root"
+    assert body["version"]["graph"]["nodes"][0]["name"] == "Run manually"
+    assert body["confirmation"]["missing_run_timeout"] is True
+    published_graph = body["version"]["graph"]
+
+    later = channel_client.put(
+        f"/channels/{channel_id}/draft",
+        json={"base_revision": revision, "graph": RENAMED},
+    )
+    assert later.status_code == 200, later.text
+
+    stored = channel_client.get(f"/channels/{channel_id}/versions/1")
+    assert stored.status_code == 200, stored.text
+    assert stored.json()["version"]["graph"] == published_graph
+
+    listing = channel_client.get(f"/channels/{channel_id}/versions")
+    assert listing.status_code == 200, listing.text
+    item = listing.json()["items"][0]
+    assert item["number"] == 1
+    assert item["published_by_name"] == "root"
+    assert item["published_at"]
+    assert "graph" not in item
+
+    current = channel_client.get(f"/channels/{channel_id}")
+    assert current.json()["channel"]["active"] is False
+    assert current.json()["channel"]["latest_version"]["number"] == 1
+    assert current.json()["channel"]["draft_revision"] == later.json()["draft_revision"]

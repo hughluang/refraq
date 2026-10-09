@@ -283,6 +283,27 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         module_order=20,
     ),
     ConsoleModuleSeed(
+        id="channels",
+        group_id="channel",
+        group_label_key="layout.navGroup.channel",
+        label_key="channels.title",
+        routes=ModuleRoutes(
+            list="/console/channels",
+            create="/console/channels/new",
+            edit="/console/channels/:id/edit",
+            show="/console/channels/:id",
+        ),
+        actions=ModuleActions(
+            list="channel:read",
+            create="channel:write",
+            edit="channel:write",
+            delete="channel:write",
+            show="channel:read",
+        ),
+        group_order=26,
+        module_order=30,
+    ),
+    ConsoleModuleSeed(
         id="jobs",
         group_id="operations",
         group_label_key="layout.navGroup.operations",

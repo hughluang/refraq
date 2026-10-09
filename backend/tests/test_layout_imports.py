@@ -19,6 +19,7 @@ PACKAGE_DIRS = {
     "jobs": BACKEND_ROOT / "jobs",
     "metadata": BACKEND_ROOT / "metadata",
     "entity": BACKEND_ROOT / "entity",
+    "channel": BACKEND_ROOT / "channel",
     "worker": BACKEND_ROOT / "worker",
 }
 
@@ -76,7 +77,14 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "entity.tasks",
             "entity.parameters",
             "entity.dictionaries.active_codes",
+            "entity.heads",
             "entity.routers",
+        }
+    ),
+    "channel": frozenset(
+        {
+            "channel.errors",
+            "channel.routers",
         }
     ),
     "worker": frozenset(
@@ -164,7 +172,7 @@ def test_layout_imports(path: Path) -> None:
 
     for imported in _imported_backend_modules(tree):
         if imported == "worker.app" or imported.startswith("worker.app."):
-            if importer_pkg in {"admin", "jobs", "metadata", "entity", "core"} or importer.startswith(
+            if importer_pkg in {"admin", "jobs", "metadata", "entity", "channel", "core"} or importer.startswith(
                 "routers."
             ):
                 if not _allowlisted(importer, imported):
@@ -180,7 +188,13 @@ def test_layout_imports(path: Path) -> None:
             continue
 
         # docs/backend-layout.md §8: admin may import core and own modules only.
-        if importer_pkg == "admin" and target_pkg in {"jobs", "metadata", "entity", "worker"}:
+        if importer_pkg == "admin" and target_pkg in {
+            "jobs",
+            "metadata",
+            "entity",
+            "worker",
+            "channel",
+        }:
             if not _allowlisted(importer, imported):
                 raise AssertionError(
                     f"{importer} must not import {imported} "
@@ -214,7 +228,7 @@ def test_layout_imports(path: Path) -> None:
 
         # core must not import business packages (upgrade → published admin/worker/metadata seeds).
         if importer_pkg == "core":
-            if target_pkg in {"admin", "jobs", "metadata", "entity", "worker"}:
+            if target_pkg in {"admin", "jobs", "metadata", "entity", "worker", "channel"}:
                 if importer == "core.upgrade" and target_pkg in {"admin", "worker", "metadata"}:
                     if target_pkg == "worker":
                         if imported == "worker.api" or imported.startswith("worker.api."):
@@ -238,6 +252,12 @@ def test_layout_imports(path: Path) -> None:
         if importer_pkg == "entity" and target_pkg == "metadata":
             raise AssertionError(
                 f"{importer} must not import {imported}; Attribute Type does not use Normalized Type"
+            )
+
+        if importer_pkg in {"entity", "metadata"} and target_pkg == "channel":
+            raise AssertionError(
+                f"{importer} must not import {imported} "
+                "(metadata and entity must not import channel)"
             )
 
         # Cross-package into another tiered package: published only.

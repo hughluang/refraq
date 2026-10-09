@@ -8,16 +8,20 @@ import { SectionHeader } from "@/components/layout/SectionHeader";
 
 type PageChromeProps = {
   title: string;
+  titleSlot?: ReactNode;
   titleExtra?: ReactNode;
   description?: string;
+  descriptionLineClamp?: number;
   actions?: ReactNode;
   children?: ReactNode;
 };
 
 export function PageChrome({
   title,
+  titleSlot,
   titleExtra,
   description,
+  descriptionLineClamp,
   actions,
   children,
 }: PageChromeProps) {
@@ -37,8 +41,10 @@ export function PageChrome({
       ) : null}
       <SectionHeader
         title={title}
+        titleSlot={titleSlot}
         titleExtra={titleExtra}
         description={description}
+        descriptionLineClamp={descriptionLineClamp}
         order={2}
       />
       {children}

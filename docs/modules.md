@@ -187,6 +187,7 @@ Responsibilities:
 - **Data Channel** definition, draft graph with `draft_revision`, immutable **Channel Version**s, and the activation switch (outside versions)
 - Graph validation as a pure function over a graph and a reference resolver
 - Node type catalog: each node type's configuration schema, ports, and execute function
+- Node type modules under `channel/nodes/`. `nodes/spec.py` holds the shared declaration (`NodeType`, `PortSpec`). `nodes/__init__.py` is the only registry: an explicit catalog tuple exporting `list_node_types` and `get_node_type`. Each type is one module, `nodes/<family>/<name>.py`, and that module exports only `NODE_TYPE`. Family packages do not re-export types. Callers outside a node module import the registry or `nodes.spec`, not the node module. A type becomes its own directory (`spec.py` for the declaration, `config.py` for the configuration schema, `execute.py` for execution) when it gains an execute function or no longer fits one module
 - Execution engine with n8n v1 semantics; it knows nothing about specific node types, storage, or Celery
 - Expression evaluator and Code node sandbox (one reused subprocess per run; no network; allow-listed modules; time and memory limits)
 - **Dataset Reference**s: run-scoped tables in the entity database and their expiry
@@ -363,7 +364,7 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 - `jobs` → `core`; published `admin` (including System Parameter resolver) when needed
 - `metadata` → `core`; published `admin` / `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; process entries `mcp_http` / `mcp_server` may import `worker.parameters`
 - `entity` → `core`; published `admin` (including `admin.subjects` and the System Parameter resolver) / `jobs`
-- `channel` → `core`; published `admin` / `jobs` / `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules` / `worker.due`; published `metadata` and `entity` modules listed for Data Channel use (`docs/backend-layout.md` §3)
+- `channel` → `core`; published `admin` / `jobs` / `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules` / `worker.due`; published `metadata` and `entity` modules listed for Data Channel use, including `entity.heads` (`docs/backend-layout.md` §3)
 - `worker` → `core`; published surfaces for assembly, including `entity.tasks` and `channel.tasks`
 - `main` → `core` + package routers / bootstrap via published surfaces
 - `alembic` → `core` Base + every package `models` module

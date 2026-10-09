@@ -253,6 +253,24 @@ EXPECTED_IDENTITIES = {
             "sample": None,
         },
     },
+    "channels": {
+        "label_key": "channels.title",
+        "routes": {
+            "list": "/console/channels",
+            "create": "/console/channels/new",
+            "edit": "/console/channels/:id/edit",
+            "show": "/console/channels/:id",
+            "aliases": [],
+        },
+        "actions": {
+            "list": "channel:read",
+            "create": "channel:write",
+            "edit": "channel:write",
+            "delete": "channel:write",
+            "show": "channel:read",
+            "sample": None,
+        },
+    },
     "jobs": {
         "label_key": "jobs.title",
         "routes": {"list": "/console/jobs", "create": None, "edit": None, "show": None, "aliases": []},

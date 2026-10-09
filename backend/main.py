@@ -79,6 +79,7 @@ from backend.entity.routers.data import router as entity_data_router
 from backend.entity.dictionaries.active_codes import DictionaryActiveCodes
 from backend.entity.routers.dictionaries import router as dictionaries_router
 from backend.entity.routers.entities import router as entities_router
+from backend.channel.routers.channels import router as channels_router
 from backend.metadata.catalog_embed_jobs.schedule import ensure_catalog_embed_schedule
 from backend.worker.api import ensure_system_schedules
 from backend.worker.parameters import assemble_system_parameters
@@ -223,6 +224,7 @@ app.include_router(entities_router)
 app.include_router(entity_access_router)
 app.include_router(entity_data_router)
 app.include_router(dictionaries_router)
+app.include_router(channels_router)
 app.include_router(jobs_mechanism_router)
 app.include_router(schedules_mechanism_router)
 

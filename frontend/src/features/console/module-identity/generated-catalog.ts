@@ -256,6 +256,25 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
     }
   },
   {
+    "id": "channels",
+    "label_key": "channels.title",
+    "routes": {
+      "list": "/console/channels",
+      "create": "/console/channels/new",
+      "edit": "/console/channels/:id/edit",
+      "show": "/console/channels/:id",
+      "aliases": []
+    },
+    "actions": {
+      "list": "channel:read",
+      "create": "channel:write",
+      "edit": "channel:write",
+      "delete": "channel:write",
+      "show": "channel:read",
+      "sample": null
+    }
+  },
+  {
     "id": "jobs",
     "label_key": "jobs.title",
     "routes": {

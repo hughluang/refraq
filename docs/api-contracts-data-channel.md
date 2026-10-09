@@ -137,6 +137,21 @@ Write Entity configuration (`write.entity`):
 | `mapping` | List of `{ "attribute", "value" }`; `attribute` names a head attribute at most once; `value` is an expression. `delete` ignores it |
 | `on_incompatible_head` | `fail` (default) or `skip` |
 
+Read Entity configuration (`read.entity`):
+
+| Field | Rule |
+| --- | --- |
+| `entity_id` | Business Entity id whose current head is read |
+| `filters` | List of `{ "attribute", "op", "value" }`. `op` is `eq`. `attribute` names a head attribute. `value` is an expression |
+
+`config_schema` may carry the custom keyword `x-refraq-ref`. It is ignored by JSON Schema validation and tells the Console which control to render, and tells validation how to resolve the value:
+
+| Value | Meaning |
+| --- | --- |
+| `entity` | A Business Entity id. The nearest such value in the same configuration is the entity context for attributes nested under it |
+| `entity_attribute` | An attribute name on that entity context. A name that is not on the head is `CHANNEL_REFERENCE_UNRESOLVED` |
+| `match_key` | A Write Entity match key: `null` or the name of a `unique` head attribute. Failure is `CHANNEL_MATCH_KEY_INVALID`, not an unresolved reference |
+
 ### 3.3 Channel Version
 
 ```json
@@ -213,19 +228,38 @@ Sections are empty lists, or `false`, when there is nothing to show.
 {
   "type": "write.entity",
   "family": "write",
+  "label": "Write Entity",
+  "summary": "Creates, updates, upserts, or deletes rows of a Business Entity.",
+  "description": "Writes mapped attributes into the current head of one Business Entity. The match key is the head's Business Key unless the node names a unique attribute. When the published head no longer matches, the node fails the item or skips it.",
   "entry": false,
-  "inputs": [{ "port": "main" }],
-  "outputs": [{ "port": "main" }, { "port": "error" }],
+  "inputs": [
+    {
+      "port": "main",
+      "description": "Items or a dataset reference from the previous node."
+    }
+  ],
+  "outputs": [
+    {
+      "port": "main",
+      "description": "Items or a dataset reference from a successful execution."
+    },
+    {
+      "port": "error",
+      "description": "Items that failed this node when on_error is error_output."
+    }
+  ],
   "config_schema": { "type": "object" },
   "permission": null
 }
 ```
 
 - `family` is `trigger`, `read`, `transform`, `volume`, `state`, or `write`.
+- `label`, `summary`, and `description` are English. `summary` is one sentence. `description` states the type's function and its place in a workflow.
 - `entry` is `true` for trigger types; they declare no inputs.
-- `config_schema` is a JSON Schema object that the Console renders as the configuration panel and the server enforces at validate and publish.
+- Each port is `{ "port", "description" }`. `port` is lower snake case. `main` is the primary data port. `error` is an output that carries items the node failed when `on_error` is `error_output`.
+- `config_schema` is a JSON Schema object that the Console renders as the configuration panel and the server enforces at validate and publish. Every property, including properties nested under array items, has `title` and `description`.
 - `permission` names the extra Permission needed to add or edit a node of this type (`channel:code_write` for `transform.code`), or `null`.
-- Display labels are Console i18n keys derived from `type`; the catalog does not carry localized text.
+- The Console prefers locale keys `channelNodeTypes.<type>.label` and `channelNodeTypes.<type>.summary`, and falls back to the served English `label` and `summary`.
 
 ## 4. Job Kind `channel_run`
 
@@ -288,6 +322,8 @@ On `succeeded` only:
 ### 5.3 `GET /channels`
 
 Query: `q` (optional literal substring of `name`), `active` (`true` | `false` | omitted), `limit` (default 50, max 200), `offset` (default 0). Ordered by `created_at DESC`, `id DESC`.
+
+`GET /channels/{id}` returns `200` `{ "channel": { … } }`.
 
 ### 5.4 `PATCH /channels/{id}`
 

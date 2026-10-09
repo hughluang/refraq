@@ -89,6 +89,7 @@ def test_super_admin_sees_all_seed_modules(client: TestClient) -> None:
         "admin",
         "metadata",
         "entity",
+        "channel",
         "operations",
         "settings",
     }
@@ -107,12 +108,14 @@ def test_super_admin_sees_all_seed_modules(client: TestClient) -> None:
         "type-mappings",
     ]
     assert [m["id"] for m in groups["entity"]["modules"]] == ["entities", "dictionaries"]
+    assert [m["id"] for m in groups["channel"]["modules"]] == ["channels"]
     assert [m["id"] for m in groups["operations"]["modules"]] == ["jobs", "schedules"]
     assert [g["id"] for g in response.json()["groups"]] == [
         "workbench",
         "admin",
         "metadata",
         "entity",
+        "channel",
         "operations",
         "settings",
     ]

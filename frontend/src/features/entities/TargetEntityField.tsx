@@ -30,6 +30,8 @@ type Props = {
   selfEntityId: string | null;
   selfName: string;
   selfTableName: string;
+  includeSelf?: boolean;
+  editable?: boolean;
   cachedName: string;
   cachedTableName: string;
   onChange: (next: TargetSelection) => void;
@@ -50,6 +52,8 @@ export function TargetEntityField({
   selfEntityId,
   selfName,
   selfTableName,
+  includeSelf = true,
+  editable = true,
   cachedName,
   cachedTableName,
   onChange,
@@ -92,7 +96,7 @@ export function TargetEntityField({
 
   const data = useMemo(() => {
     const options: { value: string; label: string }[] = [];
-    if (queryMatches(debouncedSearch, selfName, selfTableName)) {
+    if (includeSelf && queryMatches(debouncedSearch, selfName, selfTableName)) {
       options.push({
         value: selfValue,
         label: referenceOptionLabel({
@@ -136,6 +140,7 @@ export function TargetEntityField({
     debouncedSearch,
     emptyNameLabel,
     entities,
+    includeSelf,
     selfEntityId,
     selfName,
     selfTableName,
@@ -145,7 +150,7 @@ export function TargetEntityField({
 
   return (
     <SelectField
-      editable
+      editable={editable}
       required={required}
       label={label}
       description={description}
