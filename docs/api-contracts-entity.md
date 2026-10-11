@@ -375,6 +375,7 @@ Success `200`: `{ "entity": { … } }` with `deprecated_at` set.
 | `GET` | `/entities/{id}/versions/{version_id}` | `entity:read` | Get one version with attributes |
 | `PATCH` | `/entities/{id}/versions/{version_id}` | `entity:write` | Save an unpublished current version's shape |
 | `POST` | `/entities/{id}/versions/{version_id}/publish` | `entity:write` | Publish: enqueue table create (`entity_reconcile`) |
+| `POST` | `/entities/{id}/versions/{version_id}/publish/preview` | `entity:write` | List Data Channel write nodes the new head would make incompatible |
 
 ### 5.1 `GET /entities/{id}/versions`
 
@@ -462,6 +463,29 @@ Success envelope on the Job (`result` only when `succeeded`):
 ```
 
 `action` is `created` on the product path. A publish-enqueue audit event is written only when a Job is minted.
+
+### 5.6 `POST /entities/{id}/versions/{version_id}/publish/preview`
+
+Empty body. Computes, and does not store, the Data Channel write nodes whose mapping would be incompatible with this version as the Entity head (`docs/business-data-channel.md` §5.3). Publish is not refused when the list is non-empty.
+
+`200`:
+
+```json
+{
+  "incompatible_write_nodes": [
+    {
+      "channel_id": "chn_01HZX",
+      "channel_name": "Material master",
+      "node_id": "nd_write",
+      "node_name": "Write materials",
+      "on_incompatible_head": "fail",
+      "reasons": ["attribute_missing"]
+    }
+  ]
+}
+```
+
+`reasons` is a non-empty list drawn from `attribute_missing`, `match_key_not_unique`, `business_key_missing`, and `required_unmapped`. Only write nodes in each channel's current published version are listed. A version that cannot be published for another reason still returns this list. Missing entity or version is `404`.
 
 ## 6. Table Drop
 

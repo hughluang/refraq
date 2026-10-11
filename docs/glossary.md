@@ -561,22 +561,37 @@ Avoid **Management Audit Event** for data access, or treating it as a database s
 
 ### Data Channel
 
-The product domain of user-orchestrated, versioned data workflows, and one such workflow. A Data Channel is a graph of trigger, read, transform, volume, state, and write nodes joined by edges (n8n style). It owns the mapping, transform, and lineage that a **Business Entity** definition does not carry, and one Data Channel may write several **Entity Table**s. Its draft is edited freely; only a published **Channel Version** runs, and each run is a **Channel Run**. The author orchestrates increments, deletes, concurrency, and error handling with nodes; the platform does not derive them. It guarantees instead that **Checkpoint**s never move backwards, that a run reads up to an upper bound fixed at its start, and that write nodes are safe to re-execute. An `active` switch outside versions decides whether schedules and event triggers fire. A delivery target outside the Entity Table is another write target kind on this domain, not a second write implementation. Rules: `docs/business-data-channel.md`.
-Avoid conflating it with **Job** or **Scheduled Task**, or with structure collection (which reads a **Source** into the catalog). Avoid "one declared target table". Avoid platform-derived dirty keys, grain checks, or fan-out thresholds as Data Channel behaviour. Avoid an execution lock as a platform guarantee. Avoid a general automation engine with network side effects. Avoid an Entity-only name. Avoid reading "channel load" as request load in the load-shedding sense. Avoid treating the **Entity Data API** as a Data Channel, and avoid "Ingestion Job" or "sync task".
+The product domain of user-orchestrated, versioned data workflows, and one such workflow. A Data Channel is a graph of trigger, read, transform, volume, state, and write nodes joined by edges that order execution. It owns the mapping, transform, and lineage that a **Business Entity** definition does not carry, and one Data Channel may write several **Entity Table**s. Its draft is edited freely. Unattended triggers run only a published **Channel Version**. An on-demand **Channel Run** may execute a frozen draft and still writes Entity Tables. The author orchestrates increments, deletes, concurrency, and error handling with nodes; the platform does not derive them. It guarantees instead that **Checkpoint**s never move backwards, that a run reads up to an upper bound fixed at its start, and that write nodes are safe to re-execute. An `active` switch outside versions decides whether schedules and event triggers fire. A delivery target outside the Entity Table is another write target kind on this domain, not a second write implementation. Rules: `docs/business-data-channel.md`.
+Avoid conflating it with **Job** or **Scheduled Task**, or with structure collection (which reads a **Source** into the catalog). Avoid "one declared target table". Avoid platform-derived dirty keys, grain checks, or fan-out thresholds as Data Channel behaviour. Avoid an execution lock as a platform guarantee. Avoid a general automation engine with network side effects. Avoid an Entity-only name. Avoid reading "channel load" as request load in the load-shedding sense. Avoid treating the **Entity Data API** as a Data Channel, and avoid "Ingestion Job" or "sync task". Avoid treating an edge as a carrier of rows.
 
 ### Channel Version
 
-One immutable published graph of a **Data Channel**, numbered from 1 per channel. Publish copies the draft into a new version; editing the draft never changes a version. Node ids are stable across versions. A **Channel Run** executes the current published version resolved when it starts and records which one.
-Avoid **Entity Version**, a mutable published graph, and running a draft.
+One immutable published graph of a **Data Channel**, numbered from 1 per channel. Publish copies the draft into a new version; editing the draft never changes a version. Node ids are stable across versions. An unattended **Channel Run**, and an on-demand run with target `published`, executes the current published version resolved when it starts and records which one.
+Avoid **Entity Version**, a mutable published graph, and an unattended trigger running a draft.
 
 ### Channel Run
 
-One run of a **Data Channel**: exactly one **Job** of kind `channel_run`, executed in one worker process, entered at the trigger node that minted it. Minted by a manual run, a synced **Scheduled Task**, a platform event, or change arrival. Runs of one channel may overlap; there is no execution lock. A run ends `succeeded` (outcome `completed` or `skipped`), `failed`, or `cancelled`; a newer published version cancels runs still executing an older one. A rerun is a new Job.
-Avoid Ingestion Job, sync job, a Scheduled Task, in-place retry, and **Kind execution lock** or `JOB_ALREADY_ACTIVE` for this kind. Avoid "execution" for the whole run; one node's step inside a run is a node execution.
+One run of a **Data Channel**: exactly one **Job** of kind `channel_run`, executed in one worker process, entered at the trigger node that minted it. Minted by an on-demand run (target `draft` or `published`), a synced **Scheduled Task**, a platform event, or change arrival. A `draft` run freezes the draft it was queued from and never advances a **Checkpoint**. Runs of one channel may overlap; there is no execution lock. A run ends `succeeded` (outcome `completed` or `skipped`), `failed`, or `cancelled`; a newer published version cancels runs still executing an older published version and does not cancel a `draft` run. A rerun is a new Job. The run stores the graph it executed and each node execution's output.
+Avoid Ingestion Job, sync job, a Scheduled Task, in-place retry, and **Kind execution lock** or `JOB_ALREADY_ACTIVE` for this kind. Avoid "execution" for the whole run; one node's step inside a run is a node execution. Avoid a dry run: an on-demand run writes Entity Tables.
+
+### Node Ref
+
+The Python identifier on a **Data Channel** node, unique in the graph, generated when the node is created and editable. An expression reads that node's output as `self.<ref>.output`. The same output is `self.nodes["<node name>"].output`.
+Avoid using the node id as the expression name, and a `ref` that is not an identifier.
+
+### Expression Context
+
+The name `self` visible to a **Data Channel** expression: node outputs by **Node Ref** or by node name, plus `self.channel`, `self.run`, and `self.platform`. `self.platform` includes the site name, the **Schedule Timezone**, the run start instant, **System Parameter** values, and **Global Variable** values, all read-only. There is no current-row name.
+Avoid `item` as an implicit current row, credentials in the context, and naming another channel's run data.
+
+### System Identity
+
+The single User with `identity_source` `system`. It cannot sign in. It holds one locked **Access Grant** on every published **Business Entity**, and a **Data Channel** run reads and writes Entity Tables as this User.
+Avoid a permission bypass, a human account, and `super_admin` as a stand-in for platform writes.
 
 ### Checkpoint
 
-The cursor a **Data Channel** keeps per (channel, Read Changes node, stream) into a **Change Log**. It advances only when the whole **Channel Run** succeeds with outcome `completed`, to the greater of its stored position and the upper bound fixed at run start, so it never moves backwards. A failed, cancelled, or skipped run advances none. It becomes invalid when the log was cleaned past it or the mirror was resnapshotted.
+The cursor a **Data Channel** keeps per (channel, Read Changes node, stream) into a **Change Log**. It advances only when a **Channel Run** with target `published` succeeds with outcome `completed`, to the greater of its stored position and the upper bound fixed at run start, so it never moves backwards. A failed, cancelled, or skipped run advances none. A run with target `draft` never advances a cursor. It becomes invalid when the log was cleaned past it or the mirror was resnapshotted.
 Avoid watermark, treating `last_run_at` or `scheduled_for` as a checkpoint, a per-schedule cursor, advancing on partial success, and a platform-derived dirty-key set.
 
 ### Dataset Reference

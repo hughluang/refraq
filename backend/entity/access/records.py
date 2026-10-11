@@ -49,6 +49,7 @@ class GrantRecord:
     valid_until: datetime | None
     created_at: datetime
     updated_at: datetime
+    locked: bool = False
 
 
 @dataclass

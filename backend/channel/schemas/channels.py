@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import keyword
 import re
 from typing import Any, Literal
 
@@ -28,10 +29,14 @@ class RetryIn(BaseModel):
     wait_sec: int = Field(ge=0, le=3600)
 
 
+_RESERVED_REFS = frozenset({"nodes", "channel", "run", "platform"})
+
+
 class NodeIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(pattern=_ID_RE.pattern)
+    ref: str = Field(min_length=1, max_length=64)
     type: str = Field(min_length=1, max_length=64)
     name: str
     position: PositionIn
@@ -46,6 +51,18 @@ class NodeIn(BaseModel):
         if not cleaned or len(cleaned) > 128:
             raise ValueError("name must be 1 to 128 characters")
         return cleaned
+
+    @field_validator("ref")
+    @classmethod
+    def _ref(cls, value: str) -> str:
+        if (
+            not value.isidentifier()
+            or keyword.iskeyword(value)
+            or value.startswith("_")
+            or value in _RESERVED_REFS
+        ):
+            raise ValueError("ref is not a usable Python identifier")
+        return value
 
 
 class PortRefIn(BaseModel):
@@ -101,6 +118,9 @@ class GraphIn(BaseModel):
         edge_ids = [edge.id for edge in self.edges]
         if len(edge_ids) != len(set(edge_ids)):
             raise ValueError("edge id is duplicated")
+        refs = [node.ref for node in self.nodes]
+        if len(refs) != len(set(refs)):
+            raise ValueError("node ref is duplicated")
         return self
 
 

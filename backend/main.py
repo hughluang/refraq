@@ -80,6 +80,9 @@ from backend.entity.dictionaries.active_codes import DictionaryActiveCodes
 from backend.entity.routers.dictionaries import router as dictionaries_router
 from backend.entity.routers.entities import router as entities_router
 from backend.channel.routers.channels import router as channels_router
+from backend.channel.routers.runs import router as channel_runs_router
+from backend.channel.write_targets import incompatible_writers
+from backend.entity.publish_confirmation import bind_write_target_port
 from backend.metadata.catalog_embed_jobs.schedule import ensure_catalog_embed_schedule
 from backend.worker.api import ensure_system_schedules
 from backend.worker.parameters import assemble_system_parameters
@@ -90,6 +93,14 @@ bind_schedule_name_store(get_schedule_store)
 bind_catalog_embed_jobs(CatalogEmbedJobs())
 # Composition injects Dictionary codes so admin never imports entity.
 bind_dictionary_codes(DictionaryActiveCodes())
+
+
+class _ChannelWriteTargets:
+    def incompatible_writers(self, entity_id: str, attributes: object) -> list:
+        return incompatible_writers(entity_id, attributes)  # type: ignore[arg-type]
+
+
+bind_write_target_port(_ChannelWriteTargets())
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -107,7 +118,11 @@ def _bootstrap_site(target_settings: Settings) -> None:
     seed_roles(roles)
     ensure_product_type_mappings()
     users = get_user_store()
-    if users.count() > 0:
+    humans, _total = users.list_users(limit=1, offset=0, include_system=False)
+    if humans:
+        from backend.admin.user_store import ensure_system_user
+
+        ensure_system_user(users)
         return
     super_admin = roles.get_by_key(SUPER_ADMIN_KEY)
     if super_admin is None:
@@ -120,6 +135,9 @@ def _bootstrap_site(target_settings: Settings) -> None:
         role_id=super_admin.id,
         status="active",
     )
+    from backend.admin.user_store import ensure_system_user
+
+    ensure_system_user(users)
 
 
 @asynccontextmanager
@@ -225,6 +243,7 @@ app.include_router(entity_access_router)
 app.include_router(entity_data_router)
 app.include_router(dictionaries_router)
 app.include_router(channels_router)
+app.include_router(channel_runs_router)
 app.include_router(jobs_mechanism_router)
 app.include_router(schedules_mechanism_router)
 

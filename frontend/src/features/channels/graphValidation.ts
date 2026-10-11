@@ -2,6 +2,7 @@ import type { Graph, GraphEdge, GraphNode, GraphSettings } from "@/features/chan
 
 export type FlowNodeData = {
   nodeType: string;
+  ref: string;
   name: string;
   config: Record<string, unknown>;
   onError: GraphNode["on_error"];
@@ -46,14 +47,29 @@ export function newGraphId(prefix: "nd" | "ed"): string {
   return `${prefix}_${bytes}`;
 }
 
+export function nodeRef(type: string, used: Iterable<string>): string {
+  const base = type.replace(/\./g, "_").replace(/[^A-Za-z0-9_]/g, "") || "node";
+  const taken = new Set(used);
+  const reserved = new Set(["nodes", "channel", "run", "platform"]);
+  let ref = base;
+  let n = 2;
+  while (taken.has(ref) || reserved.has(ref)) {
+    ref = `${base}_${n}`;
+    n += 1;
+  }
+  return ref;
+}
+
 export function emptyNodeData(
   nodeType: string,
+  ref: string,
   name: string,
   config: Record<string, unknown>,
   entry: boolean,
 ): FlowNodeData {
   return {
     nodeType,
+    ref,
     name,
     config,
     onError: "stop",
@@ -73,6 +89,7 @@ export function flowFromGraph(
       position: node.position,
       data: {
         nodeType: node.type,
+        ref: node.ref || nodeRef(node.type, graph.nodes.map((item) => item.ref).filter(Boolean)),
         name: node.name,
         config: node.config,
         onError: node.on_error,
@@ -99,6 +116,7 @@ export function graphFromFlow(
   return {
     nodes: nodes.map((node) => ({
       id: node.id,
+      ref: node.data.ref,
       type: node.data.nodeType,
       name: node.data.name,
       position: { x: node.position.x, y: node.position.y },
@@ -262,6 +280,7 @@ export function connectionAllowed(
         ...graph.nodes.filter((node) => node.id !== candidate.id),
         {
           id: candidate.id,
+          ref: "probe",
           type: candidate.type,
           name: candidate.id,
           position: { x: 0, y: 0 },

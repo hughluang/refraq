@@ -20,6 +20,7 @@ __all__ = [
     "ALL_CLEAR_KEY",
     "CREATOR_ACTIONS",
     "ensure_creator_grant",
+    "ensure_system_grant",
 ]
 
 ALL_CLEAR_KEY = "all_clear"
@@ -57,6 +58,44 @@ def ensure_creator_grant(
             valid_until=None,
             created_at=now,
             updated_at=now,
+        )
+    )
+    store.set_revision(entity_id, store.revision(entity_id) + 1)
+    return grant_id
+
+
+def ensure_system_grant(entity_id: str, attributes: list[AttributeRecord]) -> str | None:
+    """Locked all-rows grant for the System Identity. Created on publish."""
+    from backend.admin.user_store import SYSTEM_USER_ID, ensure_system_user, get_user_store
+
+    if not attributes:
+        return None
+    ensure_system_user(get_user_store())
+    now = utc_now()
+    store = get_access_store()
+    profile = _ensure_profile(entity_id, attributes, now)
+    wanted = _clear_columns(attributes)
+    if profile.columns != wanted:
+        profile = replace(profile, columns=wanted, updated_at=now)
+        store.update_profile(profile)
+        store.set_revision(entity_id, store.revision(entity_id) + 1)
+    if _grant_exists(entity_id, "user", SYSTEM_USER_ID, profile.id):
+        return None
+    grant_id = new_access_grant_id()
+    store.insert_grant(
+        GrantRecord(
+            id=grant_id,
+            entity_id=entity_id,
+            subject_type="user",
+            subject_id=SYSTEM_USER_ID,
+            profile_id=profile.id,
+            row_rule=None,
+            actions=list(CREATOR_ACTIONS),
+            status="active",
+            valid_until=None,
+            created_at=now,
+            updated_at=now,
+            locked=True,
         )
     )
     store.set_revision(entity_id, store.revision(entity_id) + 1)

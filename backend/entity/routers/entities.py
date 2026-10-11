@@ -293,6 +293,23 @@ def http_publish(
     return payload
 
 
+@router.post("/entities/{entity_id}/versions/{version_id}/publish/preview")
+def http_publish_preview(
+    entity_id: str,
+    version_id: str,
+    user: UserRecord = Depends(require_permission("entity:write")),
+) -> dict[str, Any]:
+    from backend.entity.publish_confirmation import incompatible_write_nodes
+    from backend.entity.service import get_version
+
+    version = get_version(entity_id, version_id, user=user)
+    return {
+        "incompatible_write_nodes": incompatible_write_nodes(
+            entity_id, version.get("attributes") or []
+        )
+    }
+
+
 @router.post(
     "/entities/{entity_id}/versions/{version_id}/drop-table",
     response_model=EntityJobEnqueueResponse,

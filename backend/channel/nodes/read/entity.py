@@ -59,7 +59,8 @@ NODE_TYPE = NodeType(
                         "value": {
                             "type": "string",
                             "title": "Value",
-                            "description": "Expression compared with the attribute.",
+                            "description": "Literal or one expression, evaluated once.",
+                            "x-refraq-ref": "expression",
                         },
                     },
                     ["attribute", "op", "value"],

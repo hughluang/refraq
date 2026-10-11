@@ -4,6 +4,8 @@ import type { OffsetPage } from "@/lib/pagination";
 import type {
   Channel,
   ChannelDraft,
+  ChannelRun,
+  ChannelRunDetail,
   ChannelVersion,
   Confirmation,
   Graph,
@@ -115,6 +117,28 @@ export function publishChannel(id: string, draftRevision: number) {
       body: JSON.stringify({ draft_revision: draftRevision }),
     },
   );
+}
+
+export function startRun(
+  id: string,
+  body: { target: "draft" | "published"; trigger_node_id?: string; ignore_checkpoints?: boolean },
+) {
+  return apiClient<{ run: ChannelRun }>(`/channels/${id}/runs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function listRuns(
+  id: string,
+  params?: { status?: string; target?: string; limit?: number; offset?: number },
+) {
+  return apiClient<OffsetPage<ChannelRun>>(`/channels/${id}/runs${querySuffix(params)}`);
+}
+
+export function getRun(id: string, jobId: string) {
+  return apiClient<ChannelRunDetail>(`/channels/${id}/runs/${jobId}`);
 }
 
 export function listVersions(

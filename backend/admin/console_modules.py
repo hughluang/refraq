@@ -292,6 +292,12 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
             create="/console/channels/new",
             edit="/console/channels/:id/edit",
             show="/console/channels/:id",
+            aliases=(
+                RouteAlias(
+                    path="/console/channels/:id/runs/:jobId",
+                    action="show",
+                ),
+            ),
         ),
         actions=ModuleActions(
             list="channel:read",

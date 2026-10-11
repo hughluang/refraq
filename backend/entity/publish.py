@@ -8,7 +8,7 @@ from typing import Any
 from backend.admin.audit import persist_audit_event
 from backend.core.time import utc_now
 from backend.entity.access.compiler import compile_policy
-from backend.entity.access.seed import ensure_creator_grant
+from backend.entity.access.seed import ensure_creator_grant, ensure_system_grant
 from backend.entity.access.plan import load_policy, make_head
 from backend.entity.access.store import get_access_store
 from backend.entity.access.views import (
@@ -210,6 +210,7 @@ def execute(job_id: str, job_input: dict[str, Any]) -> dict[str, str]:
     unique_added = 0
     indexes_added = 0
     try:
+        ensure_system_grant(entity.id, definition)
         if previous is None:
             job = get_job_store().get(job_id)
             publisher = job.created_by if job is not None else None
@@ -230,6 +231,7 @@ def execute(job_id: str, job_input: dict[str, Any]) -> dict[str, str]:
                             "creator_grant": True,
                         },
                     )
+        policy_revision = access_store.revision(entity.id)
         compiled = compile_policy(load_policy(head, policy_revision))
         view_names = [item.view_name for item in compiled.bindings]
         view_statements = profile_view_statements(

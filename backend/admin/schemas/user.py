@@ -9,7 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 UserStatus = Literal["active", "disabled"]
-IdentitySource = Literal["local", "oidc"]
+IdentitySource = Literal["local", "oidc", "system"]
 
 
 class UserSummary(BaseModel):

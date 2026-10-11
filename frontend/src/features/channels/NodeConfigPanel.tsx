@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, CloseButton, Group, Stack, Text } from "@mantine/core";
+import { ActionIcon, Button, CloseButton, Group, Stack, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 
 import { SelectField } from "@/components/form/SelectField";
@@ -13,8 +13,11 @@ import {
 } from "@/features/channels/configSchemaForm";
 import { EntityAttributeSelect } from "@/features/channels/EntityAttributeSelect";
 import type { FlowNodeData } from "@/features/channels/graphValidation";
+import { resolvedMatchKeyName } from "@/features/channels/matchKeyName";
 import { nodeTypeSummary } from "@/features/channels/nodeTypeCopy";
 import type { NodeTypeSpec } from "@/features/channels/types";
+import { useEntityHeadAttributes } from "@/features/channels/useEntityHeadAttributes";
+import type { EntityAttribute } from "@/features/entities/types";
 import { TargetEntityField } from "@/features/entities/TargetEntityField";
 
 type Props = {
@@ -26,6 +29,12 @@ type Props = {
   problemLines?: readonly string[];
   onClose: () => void;
   onChange: (nodeId: string, data: FlowNodeData) => void;
+};
+
+type HeadState = {
+  attributes: readonly EntityAttribute[];
+  failed: boolean;
+  ready: boolean;
 };
 
 export function NodeConfigPanel({
@@ -42,6 +51,7 @@ export function NodeConfigPanel({
   const summary = spec ? nodeTypeSummary(t, spec) : "";
   const fields = schema ? fieldsFromSchema(schema) : [];
   const entityId = typeof data.config.entity_id === "string" ? data.config.entity_id : "";
+  const head = useEntityHeadAttributes(entityId);
 
   const update = (patch: Partial<FlowNodeData>) => {
     onChange(nodeId, { ...data, ...patch });
@@ -63,6 +73,12 @@ export function NodeConfigPanel({
               value={data.name}
               onChange={(event) => update({ name: event.currentTarget.value })}
             />
+            <TextField
+              editable={editable}
+              label={t("channels.node.ref")}
+              value={data.ref}
+              onChange={(event) => update({ ref: event.currentTarget.value })}
+            />
             {summary ? (
               <Text size="xs" c="dimmed">
                 {summary}
@@ -82,11 +98,7 @@ export function NodeConfigPanel({
           <SelectField
             editable={editable}
             label={t("channels.node.onError")}
-            data={[
-              { value: "stop", label: t("channels.node.onError.stop") },
-              { value: "continue", label: t("channels.node.onError.continue") },
-              { value: "error_output", label: t("channels.node.onError.error_output") },
-            ]}
+            data={[{ value: "stop", label: t("channels.node.onError.stop") }]}
             value={data.onError}
             onChange={(next) => {
               if (next === "stop" || next === "continue" || next === "error_output") {
@@ -102,6 +114,8 @@ export function NodeConfigPanel({
               value={data.config[field.key]}
               entityId={entityId}
               editable={editable}
+              head={head}
+              config={data.config}
               onChange={(value) => setConfig(field.key, value)}
             />
           ))}
@@ -116,20 +130,29 @@ function ConfigField({
   value,
   entityId,
   editable,
+  labeled = true,
+  exclude = [],
+  head,
+  config,
   onChange,
 }: {
   field: FieldSpec;
   value: unknown;
   entityId: string;
   editable: boolean;
+  labeled?: boolean;
+  exclude?: readonly string[];
+  head: HeadState;
+  config: Record<string, unknown>;
   onChange: (value: unknown) => void;
 }) {
   const t = useTranslate();
-  const label = t(`channels.config.fields.${field.key}`);
+  const caption = t(`channels.config.fields.${field.key}`);
+  const labelProps = labeled ? { label: caption } : { "aria-label": caption };
   if (field.kind === "entity") {
     return (
       <TargetEntityField
-        label={label}
+        label={caption}
         value={typeof value === "string" ? value : ""}
         selfEntityId={null}
         selfName=""
@@ -146,9 +169,14 @@ function ConfigField({
     return (
       <EntityAttributeSelect
         entityId={entityId}
-        label={label}
+        label={labeled ? caption : undefined}
+        aria-label={labeled ? undefined : caption}
         editable={editable}
         allowEmpty={field.allowEmpty}
+        exclude={exclude}
+        attributes={head.attributes}
+        failed={labeled ? head.failed : false}
+        size={labeled ? undefined : "xs"}
         value={typeof value === "string" ? value : null}
         onChange={onChange}
       />
@@ -162,72 +190,225 @@ function ConfigField({
     return (
       <SelectField
         editable={editable}
-        label={label}
+        {...labelProps}
         data={options}
         value={typeof value === "string" ? value : null}
+        size={labeled ? undefined : "xs"}
+        w={labeled ? undefined : "100%"}
         onChange={(next) => onChange(next ?? "")}
         allowDeselect={false}
       />
     );
   }
   if (field.kind === "objectList") {
-    const rows = Array.isArray(value) ? value.filter(isRecord) : [];
     return (
-      <Stack gap="xs">
-        <Group justify="space-between">
-          <Text size="sm" fw={500}>
-            {label}
-          </Text>
-          {editable ? (
-            <Button
-              size="xs"
-              variant="light"
-              onClick={() => onChange([...rows, emptyRow(field.fields)])}
-            >
-              {t("channels.config.addItem")}
-            </Button>
-          ) : null}
-        </Group>
-        {rows.map((row, index) => (
-          <Stack key={`${field.key}-${index}`} gap="xs">
-            {field.fields.map((child) => (
-              <ConfigField
-                key={child.key}
-                field={child}
-                value={row[child.key]}
-                entityId={entityId}
-                editable={editable}
-                onChange={(next) => {
-                  const copy = rows.map((item, itemIndex) =>
-                    itemIndex === index ? { ...item, [child.key]: next } : item,
-                  );
-                  onChange(copy);
-                }}
-              />
-            ))}
-            {editable ? (
-              <Button
-                size="xs"
-                variant="subtle"
-                color="red"
-                onClick={() => onChange(rows.filter((_, itemIndex) => itemIndex !== index))}
-              >
-                {t("channels.config.removeItem")}
-              </Button>
-            ) : null}
-          </Stack>
-        ))}
-      </Stack>
+      <ObjectListEditor
+        field={field}
+        value={value}
+        entityId={entityId}
+        editable={editable}
+        head={head}
+        config={config}
+        onChange={onChange}
+      />
     );
   }
   return (
     <TextField
       editable={editable}
-      label={label}
+      {...labelProps}
       value={typeof value === "string" ? value : ""}
+      size={labeled ? undefined : "xs"}
+      w={labeled ? undefined : "100%"}
       onChange={(event) => onChange(event.currentTarget.value)}
     />
   );
+}
+
+function ObjectListEditor({
+  field,
+  value,
+  entityId,
+  editable,
+  head,
+  config,
+  onChange,
+}: {
+  field: Extract<FieldSpec, { kind: "objectList" }>;
+  value: unknown;
+  entityId: string;
+  editable: boolean;
+  head: HeadState;
+  config: Record<string, unknown>;
+  onChange: (value: unknown) => void;
+}) {
+  const t = useTranslate();
+  const label = t(`channels.config.fields.${field.key}`);
+  const rows = Array.isArray(value) ? value.filter(isRecord) : [];
+  if (field.key === "mapping" && config.mode === "delete") return null;
+
+  const taken = attributeNames(rows);
+  const addBlocked =
+    field.key === "mapping" &&
+    head.ready &&
+    !head.attributes.some((attribute) => !taken.has(attribute.name));
+  const matchName =
+    field.key === "mapping" && head.ready
+      ? resolvedMatchKeyName(config.match_key, head.attributes)
+      : null;
+  const showMatchHint = matchName != null && !taken.has(matchName);
+  const columnClass =
+    field.fields.length === 3 ? "channel-config-grid--3" : "channel-config-grid--2";
+
+  return (
+    <Stack gap="xs">
+      <Group justify="space-between">
+        <Text size="sm" fw={500}>
+          {label}
+        </Text>
+        {editable ? (
+          <Button
+            type="button"
+            size="xs"
+            variant="light"
+            disabled={addBlocked}
+            onClick={() => onChange([...rows, emptyRow(field.fields)])}
+          >
+            {t("channels.config.addItem")}
+          </Button>
+        ) : null}
+      </Group>
+      {head.failed && field.fields.some((child) => child.kind === "attribute") ? (
+        <Text c="red" size="xs">
+          {t("channels.config.attributeLoadFailed")}
+        </Text>
+      ) : null}
+      {rows.length > 0 ? (
+        <div
+          className={[
+            "channel-config-grid",
+            columnClass,
+            editable ? "channel-config-grid--actions" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+        >
+          {field.fields.map((child) => (
+            <Text key={child.key} size="xs" fw={500} c="dimmed">
+              {t(`channels.config.fields.${child.key}`)}
+            </Text>
+          ))}
+          {editable ? <span /> : null}
+          {rows.map((row, index) => (
+            <ListRow
+              key={`${field.key}-${index}`}
+              field={field}
+              row={row}
+              index={index}
+              rows={rows}
+              entityId={entityId}
+              editable={editable}
+              head={head}
+              config={config}
+              onChange={onChange}
+            />
+          ))}
+        </div>
+      ) : null}
+      {showMatchHint ? (
+        <Text c="red" size="xs">
+          {t("channels.config.mapping.matchKeyMissing", { name: matchName })}
+        </Text>
+      ) : null}
+    </Stack>
+  );
+}
+
+function ListRow({
+  field,
+  row,
+  index,
+  rows,
+  entityId,
+  editable,
+  head,
+  config,
+  onChange,
+}: {
+  field: Extract<FieldSpec, { kind: "objectList" }>;
+  row: Record<string, unknown>;
+  index: number;
+  rows: Record<string, unknown>[];
+  entityId: string;
+  editable: boolean;
+  head: HeadState;
+  config: Record<string, unknown>;
+  onChange: (value: unknown) => void;
+}) {
+  const t = useTranslate();
+  const replace = (key: string, next: unknown) => {
+    onChange(
+      rows.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, [key]: next } : item,
+      ),
+    );
+  };
+  return (
+    <>
+      {field.fields.map((child) => (
+        <div key={child.key} className="channel-config-grid__cell">
+          <ConfigField
+            field={child}
+            value={row[child.key]}
+            entityId={entityId}
+            editable={editable}
+            labeled={false}
+            exclude={
+              field.key === "mapping" && child.kind === "attribute"
+                ? otherAttributeNames(rows, index)
+                : []
+            }
+            head={head}
+            config={config}
+            onChange={(next) => replace(child.key, next)}
+          />
+        </div>
+      ))}
+      {editable ? (
+        <ActionIcon
+          variant="subtle"
+          color="red"
+          size="sm"
+          aria-label={t("channels.config.removeItem")}
+          onClick={() => onChange(rows.filter((_, itemIndex) => itemIndex !== index))}
+        >
+          ×
+        </ActionIcon>
+      ) : null}
+    </>
+  );
+}
+
+function attributeNames(rows: readonly Record<string, unknown>[]): Set<string> {
+  const names = new Set<string>();
+  for (const row of rows) {
+    const name = row.attribute;
+    if (typeof name === "string" && name !== "") names.add(name);
+  }
+  return names;
+}
+
+function otherAttributeNames(
+  rows: readonly Record<string, unknown>[],
+  index: number,
+): string[] {
+  const names: string[] = [];
+  rows.forEach((row, rowIndex) => {
+    if (rowIndex === index) return;
+    const name = row.attribute;
+    if (typeof name === "string" && name !== "") names.push(name);
+  });
+  return names;
 }
 
 function optionLabel(

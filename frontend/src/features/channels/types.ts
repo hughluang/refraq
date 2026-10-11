@@ -1,5 +1,6 @@
 export type GraphNode = {
   id: string;
+  ref: string;
   type: string;
   name: string;
   position: { x: number; y: number };
@@ -41,6 +42,46 @@ export type ChannelDraft = {
   draft_revision: number;
   draft_updated_at: string;
   graph: Graph;
+};
+
+export type ChannelRun = {
+  job_id: string;
+  status: string;
+  outcome: string | null;
+  target: "draft" | "published";
+  version: number | null;
+  draft_revision: number | null;
+  trigger_kind: string | null;
+  trigger_ref: string | null;
+  trigger_node_id: string;
+  trigger_actor_name: string | null;
+  trigger_schedule_name: string | null;
+  ignore_checkpoints: boolean;
+  failed_node_id: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  error_code: string | null;
+  error_message: string | null;
+};
+
+export type NodeExecution = {
+  seq: number;
+  node_id: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  output_bytes: number;
+  output_preview: unknown;
+  error_code: string | null;
+  error_message: string | null;
+  error_detail: Record<string, unknown> | null;
+};
+
+export type ChannelRunDetail = {
+  run: ChannelRun;
+  graph: Graph | null;
+  node_executions: NodeExecution[];
 };
 
 export type ChannelVersion = {

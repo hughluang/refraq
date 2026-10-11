@@ -39,3 +39,41 @@ class ChannelVersionRow(Base):
     graph: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     published_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     published_by_user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class ChannelRunRow(Base):
+    __tablename__ = "channel_runs"
+
+    job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    channel_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("channels.id", ondelete="CASCADE"), nullable=False
+    )
+    target: Mapped[str] = mapped_column(String(16), nullable=False)
+    version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    draft_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    graph: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    trigger_node_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    ignore_checkpoints: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    failed_node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    skipped_node_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
+class ChannelNodeExecutionRow(Base):
+    __tablename__ = "channel_node_executions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("channel_runs.job_id", ondelete="CASCADE"), nullable=False
+    )
+    node_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    output: Mapped[Any] = mapped_column(JSONB, nullable=True)
+    output_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_detail: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)

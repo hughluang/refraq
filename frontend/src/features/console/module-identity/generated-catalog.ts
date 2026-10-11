@@ -263,7 +263,12 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
       "create": "/console/channels/new",
       "edit": "/console/channels/:id/edit",
       "show": "/console/channels/:id",
-      "aliases": []
+      "aliases": [
+        {
+          "path": "/console/channels/:id/runs/:jobId",
+          "action": "show"
+        }
+      ]
     },
     "actions": {
       "list": "channel:read",

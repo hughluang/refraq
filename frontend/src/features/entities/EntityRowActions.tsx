@@ -14,6 +14,7 @@ import {
   openVersion,
   publishVersion,
 } from "@/features/entities/api";
+import { EntityPublishConfirm } from "@/features/entities/EntityPublishConfirm";
 import { entityEditHref } from "@/features/entities/entityDetailTab";
 import { entityRecordHeaderActions } from "@/features/entities/entityRecordActions";
 import { canAuthor, isPublishing } from "@/features/entities/publishStatus";
@@ -184,18 +185,14 @@ export function EntityRowActions({ entity, canWrite, onChanged }: Props) {
           </CanAccess>
         ) : null}
       </Group>
-      <ConfirmActionModal
+      <EntityPublishConfirm
         opened={publishConfirm.opened}
         onClose={publishConfirm.close}
-        title={t("entities.publish.confirmTitle")}
-        body={t(
-          entity.ever_published
-            ? "entities.publish.confirmBodySuccessor"
-            : "entities.publish.confirmBody",
-          { name: entity.name },
-        )}
+        entityId={entity.id}
+        versionId={entity.current_version?.id}
+        name={entity.name}
+        everPublished={entity.ever_published}
         loading={busy}
-        confirmLabel={t("entities.publish")}
         onConfirm={() => void confirmPublish()}
       />
       <ConfirmActionModal

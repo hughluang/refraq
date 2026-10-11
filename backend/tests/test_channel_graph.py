@@ -47,6 +47,7 @@ def _node(
 ) -> dict:
     return {
         "id": node_id,
+        "ref": node_id.removeprefix("nd_"),
         "type": type_id,
         "name": name,
         "position": {"x": 0, "y": 0},
@@ -98,7 +99,8 @@ def _write(node_id: str = "nd_write", **config: object) -> dict:
         "entity_id": "ent_dst",
         "mode": "upsert",
         "match_key": None,
-        "mapping": [{"attribute": "sku", "value": "{{ item['sku'] }}"}],
+        "source": "{{ self.read.output.rows }}",
+        "mapping": [{"attribute": "sku", "key": "sku"}],
         "on_incompatible_head": "fail",
     }
     body.update(config)

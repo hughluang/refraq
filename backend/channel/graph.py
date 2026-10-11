@@ -8,6 +8,10 @@ cycle is rejected unless a test catalog declares one.
 
 from __future__ import annotations
 
+import ast
+import keyword
+import ast
+import keyword
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, Sequence
 
@@ -23,6 +27,9 @@ __all__ = [
     "ResolvedEntity",
     "validate",
 ]
+
+_RESERVED_REFS = frozenset({"nodes", "channel", "run", "platform"})
+_RESERVED_PAYLOAD = frozenset({"triggered_by", "triggered_at"})
 
 _WHITE = 0
 _GRAY = 1
@@ -67,7 +74,11 @@ def validate(
     by_id = {str(node["id"]): node for node in nodes}
     problems: list[Problem] = []
     problems.extend(_name_problems(nodes))
+    problems.extend(_ref_problems(nodes))
+    problems.extend(_policy_problems(nodes))
     problems.extend(_type_and_config_problems(nodes, by_type))
+    problems.extend(_expression_problems(nodes, by_type))
+    problems.extend(_payload_problems(nodes))
     problems.extend(_edge_problems(edges, by_id, by_type))
     problems.extend(_trigger_problems(nodes, edges, by_id, by_type))
     problems.extend(_reachability_problems(nodes, edges, by_id, by_type))
@@ -93,6 +104,130 @@ def _name_problems(nodes: list[dict[str, Any]]) -> list[Problem]:
             )
         else:
             seen.add(name)
+    return problems
+
+
+def _ref_problems(nodes: list[dict[str, Any]]) -> list[Problem]:
+    seen: set[str] = set()
+    problems: list[Problem] = []
+    for node in nodes:
+        ref = node.get("ref")
+        node_id = str(node["id"])
+        if (
+            not isinstance(ref, str)
+            or not ref.isidentifier()
+            or keyword.iskeyword(ref)
+            or ref.startswith("_")
+            or ref in _RESERVED_REFS
+        ):
+            problems.append(
+                Problem(
+                    "CHANNEL_NODE_REF_INVALID",
+                    "Node ref is not a usable Python identifier",
+                    node_id=node_id,
+                )
+            )
+            continue
+        if ref in seen:
+            problems.append(
+                Problem(
+                    "CHANNEL_NODE_REF_INVALID",
+                    "Node ref is duplicated",
+                    node_id=node_id,
+                )
+            )
+        else:
+            seen.add(ref)
+    return problems
+
+
+def _policy_problems(nodes: list[dict[str, Any]]) -> list[Problem]:
+    problems: list[Problem] = []
+    for node in nodes:
+        if node.get("on_error", "stop") != "stop" or node.get("retry") is not None:
+            problems.append(
+                Problem(
+                    "CHANNEL_NODE_POLICY_UNSUPPORTED",
+                    "Only on_error stop with no retry is supported",
+                    node_id=str(node["id"]),
+                )
+            )
+    return problems
+
+
+def _expression_problems(
+    nodes: list[dict[str, Any]],
+    by_type: dict[str, NodeType],
+) -> list[Problem]:
+    problems: list[Problem] = []
+    for node in nodes:
+        spec = by_type.get(str(node["type"]))
+        if spec is None or not isinstance(node.get("config"), dict):
+            continue
+        for text in _expression_texts(spec.config_schema, node["config"]):
+            if not _expression_ok(text):
+                problems.append(
+                    Problem(
+                        "CHANNEL_EXPRESSION_INVALID",
+                        "Expression is not a literal or one {{ }} Python expression",
+                        node_id=str(node["id"]),
+                    )
+                )
+                break
+    return problems
+
+
+def _expression_texts(schema: Mapping[str, Any], value: Any) -> list[str]:
+    found: list[str] = []
+    if schema.get("x-refraq-ref") == "expression" and isinstance(value, str):
+        found.append(value)
+    if schema.get("type") == "object" and isinstance(value, dict):
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            for key, subschema in properties.items():
+                if isinstance(subschema, dict) and key in value:
+                    found.extend(_expression_texts(subschema, value[key]))
+    if schema.get("type") == "array" and isinstance(value, list):
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for item in value:
+                found.extend(_expression_texts(item_schema, item))
+    return found
+
+
+def _expression_ok(value: str) -> bool:
+    text = value.strip()
+    if not (text.startswith("{{") and text.endswith("}}")):
+        return True
+    body = text[2:-2].strip()
+    if not body:
+        return False
+    try:
+        ast.parse(body, mode="eval")
+    except SyntaxError:
+        return False
+    return True
+
+
+def _payload_problems(nodes: list[dict[str, Any]]) -> list[Problem]:
+    problems: list[Problem] = []
+    for node in nodes:
+        if str(node.get("type")) != "trigger.manual":
+            continue
+        config = node.get("config")
+        if not isinstance(config, dict):
+            continue
+        payload = config.get("payload") or {}
+        if not isinstance(payload, dict):
+            continue
+        if _RESERVED_PAYLOAD & set(payload):
+            problems.append(
+                Problem(
+                    "CHANNEL_NODE_CONFIG_INVALID",
+                    "Manual payload uses a reserved key",
+                    node_id=str(node["id"]),
+                )
+            )
     return problems
 
 
@@ -355,12 +490,27 @@ def _match_key_problems(
         if head is None:
             continue
         match_key = config.get("match_key")
+        mapped = {
+            item.get("attribute")
+            for item in config.get("mapping") or []
+            if isinstance(item, dict)
+        }
         if match_key is None:
-            if not any(attr.business_key for attr in head.attributes):
+            marked = next((attr for attr in head.attributes if attr.business_key), None)
+            if marked is None:
                 problems.append(
                     Problem(
                         "CHANNEL_MATCH_KEY_INVALID",
                         "Target head has no Business Key",
+                        node_id=str(node["id"]),
+                    )
+                )
+                continue
+            if config.get("mode") != "delete" and marked.name not in mapped:
+                problems.append(
+                    Problem(
+                        "CHANNEL_MATCH_KEY_INVALID",
+                        "Mapping does not include the match key",
                         node_id=str(node["id"]),
                     )
                 )
@@ -380,6 +530,15 @@ def _match_key_problems(
                 Problem(
                     "CHANNEL_MATCH_KEY_INVALID",
                     "Match key does not resolve",
+                    node_id=str(node["id"]),
+                )
+            )
+            continue
+        if config.get("mode") != "delete" and match_key not in mapped:
+            problems.append(
+                Problem(
+                    "CHANNEL_MATCH_KEY_INVALID",
+                    "Mapping does not include the match key",
                     node_id=str(node["id"]),
                 )
             )
@@ -410,7 +569,11 @@ def _refs(
 ) -> list[tuple[str, str, str | None]]:
     found: list[tuple[str, str, str | None]] = []
     ref = schema.get("x-refraq-ref")
-    if isinstance(ref, str) and isinstance(value, str) and ref != "match_key":
+    if (
+        isinstance(ref, str)
+        and isinstance(value, str)
+        and ref not in {"match_key", "expression", "json"}
+    ):
         found.append((ref, value, entity_id))
     if schema.get("type") == "object" and isinstance(value, dict):
         properties = schema.get("properties")

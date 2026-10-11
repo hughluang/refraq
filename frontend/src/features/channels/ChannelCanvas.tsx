@@ -1,10 +1,11 @@
 "use client";
 
-import { ActionIcon, Button, CloseButton, Group, Paper, Popover, Stack, Text, Tooltip } from "@mantine/core";
+import { Button, CloseButton, Group, Paper, Popover, Stack, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import {
   Background,
   BaseEdge,
+  ControlButton,
   Controls,
   EdgeToolbar,
   Handle,
@@ -24,7 +25,15 @@ import {
   type NodeChange,
   type NodeProps,
 } from "@xyflow/react";
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 
 import "@xyflow/react/dist/style.css";
 import "./ChannelCanvas.css";
@@ -46,6 +55,7 @@ import {
   connectionAllowed,
   emptyNodeData,
   flowFromGraph,
+  nodeRef,
   graphFromFlow,
   newGraphId,
   outputTargetTypes,
@@ -63,10 +73,10 @@ type CanvasSnapshot = {
   edges: Edge[];
 };
 
-export type CanvasFocus = {
-  token: number;
+type ProblemHighlight = {
   nodeId: string | null;
   edgeId: string | null;
+  key: string;
 };
 
 type PickerState =
@@ -79,10 +89,22 @@ type PickerState =
       specs: NodeTypeSpec[];
     };
 
+const NODE_DRAG_THRESHOLD = 4;
 const CHANNEL_EDGE_TYPE = "channel";
 const nodeTypes = { channel: ChannelFlowNode };
 const edgeTypes = { [CHANNEL_EDGE_TYPE]: ChannelFlowEdge };
 const PROBLEM_STROKE = "var(--mantine-color-red-6)";
+const PROBLEM_HOVER_CLOSE_MS = 120;
+
+function problemIdentity(problem: GraphProblem): string {
+  return `${problem.code}-${problem.node_id ?? ""}-${problem.edge_id ?? ""}`;
+}
+
+function highlightTargets(problem: GraphProblem, active: ProblemHighlight): boolean {
+  return active.nodeId
+    ? problem.node_id === active.nodeId
+    : problem.edge_id != null && problem.edge_id === active.edgeId;
+}
 const CanvasEditableContext = createContext(false);
 const CanvasCatalogContext = createContext<readonly NodeTypeSpec[]>([]);
 
@@ -91,11 +113,7 @@ type Props = {
   catalog: NodeTypeSpec[];
   editable: boolean;
   problems: GraphProblem[];
-  problemNodeIds: ReadonlySet<string>;
-  problemEdgeIds: ReadonlySet<string>;
-  focus: CanvasFocus | null;
   onChange: (graph: Graph) => void;
-  onFocusProblem: (problem: GraphProblem) => void;
 };
 
 export function ChannelCanvas(props: Props) {
@@ -111,14 +129,10 @@ function ChannelCanvasBody({
   catalog,
   editable,
   problems,
-  problemNodeIds,
-  problemEdgeIds,
-  focus,
   onChange,
-  onFocusProblem,
 }: Props) {
   const t = useTranslate();
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, setCenter, getInternalNode } = useReactFlow();
   const entryTypes = useMemo(
     () => new Set(catalog.filter((item) => item.entry).map((item) => item.type)),
     [catalog],
@@ -133,9 +147,10 @@ function ChannelCanvasBody({
   const seededEdges = channelEdges(initial.edges);
   const [nodes, setNodes] = useState<ChannelNode[]>(seededNodes);
   const [edges, setEdges] = useState<Edge[]>(seededEdges);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [configNodeId, setConfigNodeId] = useState<string | null>(null);
   const [picker, setPicker] = useState<PickerState | null>(null);
-  const [problemsOpen, setProblemsOpen] = useState(false);
+  const [highlight, setHighlight] = useState<ProblemHighlight | null>(null);
+  const [problemsDismissed, setProblemsDismissed] = useState(0);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const nodesRef = useRef(nodes);
@@ -147,25 +162,33 @@ function ChannelCanvasBody({
   const flowRootRef = useRef<HTMLDivElement>(null);
   const undoRef = useRef<() => void>(() => {});
   const redoRef = useRef<() => void>(() => {});
-  const problemNodeIdsRef = useRef(problemNodeIds);
-  const problemEdgeIdsRef = useRef(problemEdgeIds);
+  const highlightRef = useRef<ProblemHighlight | null>(highlight);
   nodesRef.current = nodes;
   edgesRef.current = edges;
-  problemNodeIdsRef.current = problemNodeIds;
-  problemEdgeIdsRef.current = problemEdgeIds;
+  highlightRef.current = highlight;
   const settingsRef = useRef(graph.settings);
   settingsRef.current = graph.settings;
 
-  const problemKey = `${[...problemNodeIds].sort().join(",")}|${[...problemEdgeIds].sort().join(",")}`;
+  const problemKey = problems.map((problem) => problemIdentity(problem)).join("|");
+  const highlightKey = highlight?.key ?? "";
   useEffect(() => {
-    const painted = paintProblems(nodesRef.current, edgesRef.current);
+    const active = highlightRef.current;
+    const resolved =
+      active != null && !problems.some((problem) => highlightTargets(problem, active))
+        ? null
+        : active;
+    if (active && resolved == null) {
+      highlightRef.current = null;
+      setHighlight(null);
+    }
+    const painted = paintProblems(nodesRef.current, edgesRef.current, resolved);
     nodesRef.current = painted.nodes;
     edgesRef.current = painted.edges;
     setNodes(painted.nodes);
     setEdges(painted.edges);
-    // problemKey is the stable digest of both sets. The sets themselves are new each render.
+    // problemKey and highlightKey are the stable digests. The arrays themselves are new each render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [problemKey]);
+  }, [problemKey, highlightKey]);
 
   const emit = (nextNodes: ChannelNode[], nextEdges: Edge[]) => {
     onChange(
@@ -243,7 +266,7 @@ function ChannelCanvasBody({
     edgesRef.current = painted.edges;
     setNodes(painted.nodes);
     setEdges(painted.edges);
-    setSelectedId(painted.nodes.find((node) => node.selected)?.id ?? null);
+    setConfigNodeId(painted.nodes.find((node) => node.selected)?.id ?? null);
     emit(painted.nodes, painted.edges);
   };
 
@@ -283,36 +306,68 @@ function ChannelCanvasBody({
     return () => window.removeEventListener("keydown", onKey);
   }, [editable]);
 
-  useEffect(() => {
-    if (!focus) return;
-    if (focus.nodeId) {
-      const nextNodes = nodesRef.current.map((node) => ({
-        ...node,
-        selected: node.id === focus.nodeId,
-      }));
-      const nextEdges = edgesRef.current.map((edge) => ({ ...edge, selected: false }));
-      nodesRef.current = nextNodes;
-      edgesRef.current = nextEdges;
-      setNodes(nextNodes);
-      setEdges(nextEdges);
-      setSelectedId(focus.nodeId);
-      setPicker(null);
+  const clearHighlight = () => {
+    if (highlightRef.current == null) return;
+    highlightRef.current = null;
+    setHighlight(null);
+    const painted = paintProblems(nodesRef.current, edgesRef.current, null);
+    nodesRef.current = painted.nodes;
+    edgesRef.current = painted.edges;
+    setNodes(painted.nodes);
+    setEdges(painted.edges);
+  };
+
+  const centerOnHighlight = (active: ProblemHighlight) => {
+    const centerOf = (nodeId: string) => {
+      const node = getInternalNode(nodeId);
+      if (!node) return null;
+      return {
+        x: node.internals.positionAbsolute.x + (node.measured.width ?? 0) / 2,
+        y: node.internals.positionAbsolute.y + (node.measured.height ?? 0) / 2,
+      };
+    };
+    if (active.nodeId) {
+      const center = centerOf(active.nodeId);
+      if (center) void setCenter(center.x, center.y, { duration: 200 });
       return;
     }
-    if (focus.edgeId) {
-      const nextNodes = nodesRef.current.map((node) => ({ ...node, selected: false }));
-      const nextEdges = edgesRef.current.map((edge) => ({
+    if (!active.edgeId) return;
+    const edge = edgesRef.current.find((item) => item.id === active.edgeId);
+    if (!edge) return;
+    const source = centerOf(edge.source);
+    const target = centerOf(edge.target);
+    if (!source || !target) return;
+    void setCenter((source.x + target.x) / 2, (source.y + target.y) / 2, { duration: 200 });
+  };
+
+  const focusProblem = (problem: GraphProblem) => {
+    if (!problem.node_id && !problem.edge_id) return;
+    const next: ProblemHighlight = {
+      nodeId: problem.node_id,
+      edgeId: problem.node_id ? null : problem.edge_id,
+      key: problemIdentity(problem),
+    };
+    highlightRef.current = next;
+    setHighlight(next);
+    const painted = paintProblems(
+      nodesRef.current.map((node) => ({
+        ...node,
+        selected: next.nodeId != null && node.id === next.nodeId,
+      })),
+      edgesRef.current.map((edge) => ({
         ...edge,
-        selected: edge.id === focus.edgeId,
-      }));
-      nodesRef.current = nextNodes;
-      edgesRef.current = nextEdges;
-      setNodes(nextNodes);
-      setEdges(nextEdges);
-      setSelectedId(null);
-      setPicker(null);
-    }
-  }, [focus]);
+        selected: next.edgeId != null && edge.id === next.edgeId,
+      })),
+      next,
+    );
+    nodesRef.current = painted.nodes;
+    edgesRef.current = painted.edges;
+    setNodes(painted.nodes);
+    setEdges(painted.edges);
+    setConfigNodeId(next.nodeId);
+    setPicker(null);
+    centerOnHighlight(next);
+  };
 
   const placeNode = (
     spec: NodeTypeSpec,
@@ -320,10 +375,15 @@ function ChannelCanvasBody({
     link?: { sourceId: string; sourceHandle: string },
   ) => {
     if (!editable) return;
+    clearHighlight();
     const label = nodeTypeLabel(t, spec);
     const count = nodesRef.current.filter((node) => node.data.nodeType === spec.type).length;
     const name = count === 0 ? label : `${label} ${count + 1}`;
     const id = newGraphId("nd");
+    const ref = nodeRef(
+      spec.type,
+      nodesRef.current.map((node) => node.data.ref),
+    );
     const created: ChannelNode = {
       id,
       type: "channel",
@@ -331,6 +391,7 @@ function ChannelCanvasBody({
       selected: true,
       data: emptyNodeData(
         spec.type,
+        ref,
         name,
         defaultConfig(spec.config_schema as SchemaObject),
         spec.entry,
@@ -381,7 +442,7 @@ function ChannelCanvasBody({
     edgesRef.current = nextEdges;
     setNodes(nextNodes);
     setEdges(nextEdges);
-    setSelectedId(id);
+    setConfigNodeId(id);
     setPicker(null);
     emit(nextNodes, nextEdges);
     commitNow();
@@ -420,7 +481,13 @@ function ChannelCanvasBody({
     nodesRef.current = next;
     setNodes(next);
     const selected = next.find((node) => node.selected);
-    setSelectedId(selected?.id ?? null);
+    setConfigNodeId((current) => {
+      if (current == null) return null;
+      const open = next.find((node) => node.id === current);
+      return open?.selected ? current : null;
+    });
+    const marked = highlightRef.current;
+    if (marked && selected && selected.id !== marked.nodeId) clearHighlight();
     if (selected) setPicker(null);
     if (selected && edgesRef.current.some((edge) => edge.selected)) {
       const cleared = edgesRef.current.map((edge) => ({ ...edge, selected: false }));
@@ -440,8 +507,10 @@ function ChannelCanvasBody({
     edgesRef.current = next;
     setEdges(next);
     const selected = next.find((edge) => edge.selected);
+    const marked = highlightRef.current;
+    if (marked && selected && selected.id !== marked.edgeId) clearHighlight();
     if (selected) {
-      setSelectedId(null);
+      setConfigNodeId(null);
       if (nodesRef.current.some((node) => node.selected)) {
         const cleared = nodesRef.current.map((node) => ({ ...node, selected: false }));
         nodesRef.current = cleared;
@@ -508,12 +577,14 @@ function ChannelCanvasBody({
       edgesRef.current = nextEdges;
       setEdges(nextEdges);
     }
-    setSelectedId(null);
+    setConfigNodeId(null);
   };
 
   const clearSelection = () => {
     releaseSelection();
+    clearHighlight();
     setPicker(null);
+    setProblemsDismissed((count) => count + 1);
   };
 
   const openFullCatalog = () => {
@@ -525,7 +596,7 @@ function ChannelCanvasBody({
     setPicker({ kind: "catalog" });
   };
 
-  const selected = nodes.find((node) => node.id === selectedId) ?? null;
+  const selected = nodes.find((node) => node.id === configNodeId) ?? null;
   const selectedSpec = catalog.find((item) => item.type === selected?.data.nodeType);
   const problemLines =
     selected == null
@@ -549,103 +620,31 @@ function ChannelCanvasBody({
     placeNode(spec, openPosition());
   };
 
+  const openNodeConfig = (nodeId: string) => {
+    setConfigNodeId(nodeId);
+    setPicker(null);
+    const marked = highlightRef.current;
+    if (marked && marked.nodeId !== nodeId) clearHighlight();
+  };
+
+  const onCanvasKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Enter") return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement) || !target.classList.contains("react-flow__node")) return;
+    const nodeId = target.getAttribute("data-id");
+    if (!nodeId) return;
+    openNodeConfig(nodeId);
+  };
+
   return (
     <Stack gap="xs" flex={1} mih={0} w="100%">
-        <Group justify="space-between">
-          <Group gap="xs">
-            <Button
-              type="button"
-              variant="default"
-              size="compact-sm"
-              disabled={!editable}
-              aria-expanded={picker?.kind === "catalog"}
-              onClick={openFullCatalog}
-            >
-              {t("channels.canvas.add")}
-            </Button>
-            <Tooltip label={t("channels.canvas.undo")}>
-              <ActionIcon
-                type="button"
-                variant="default"
-                size="sm"
-                aria-label={t("channels.canvas.undo")}
-                disabled={!editable || !canUndo}
-                onClick={undo}
-              >
-                <HistoryIcon direction="undo" />
-              </ActionIcon>
-            </Tooltip>
-            <Tooltip label={t("channels.canvas.redo")}>
-              <ActionIcon
-                type="button"
-                variant="default"
-                size="sm"
-                aria-label={t("channels.canvas.redo")}
-                disabled={!editable || !canRedo}
-                onClick={redo}
-              >
-                <HistoryIcon direction="redo" />
-              </ActionIcon>
-            </Tooltip>
-          </Group>
-          <Group gap="sm">
-            {problems.length > 0 ? (
-              <Popover
-                opened={problemsOpen}
-                onChange={setProblemsOpen}
-                position="bottom-end"
-                withinPortal
-              >
-                <Popover.Target>
-                  <Button
-                    type="button"
-                    variant="subtle"
-                    color="red"
-                    size="compact-sm"
-                    aria-expanded={problemsOpen}
-                    onClick={() => setProblemsOpen((open) => !open)}
-                  >
-                    {t("channels.canvas.problems", { n: problems.length })}
-                  </Button>
-                </Popover.Target>
-                <Popover.Dropdown>
-                  <Stack gap={4}>
-                    {problems.map((problem) => {
-                      const label = formatGraphProblem(t, problem);
-                      const key = `${problem.code}-${problem.node_id ?? ""}-${problem.edge_id ?? ""}`;
-                      if (!problem.node_id && !problem.edge_id) {
-                        return (
-                          <Text key={key} c="red" size="sm">
-                            {label}
-                          </Text>
-                        );
-                      }
-                      return (
-                        <Button
-                          key={key}
-                          type="button"
-                          variant="subtle"
-                          color="red"
-                          size="compact-sm"
-                          justify="flex-start"
-                          onClick={() => {
-                            onFocusProblem(problem);
-                            setProblemsOpen(false);
-                          }}
-                        >
-                          {label}
-                        </Button>
-                      );
-                    })}
-                  </Stack>
-                </Popover.Dropdown>
-              </Popover>
-            ) : null}
-          </Group>
-        </Group>
         <CanvasEditableContext.Provider value={editable}>
         <CanvasCatalogContext.Provider value={catalog}>
-        <div ref={flowRootRef} className="channel-canvas-stage">
+        <div
+          ref={flowRootRef}
+          className="channel-canvas-stage"
+          onKeyDown={onCanvasKeyDown}
+        >
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -654,6 +653,7 @@ function ChannelCanvasBody({
             defaultEdgeOptions={{ type: CHANNEL_EDGE_TYPE }}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
+            onNodeClick={(_, node) => openNodeConfig(node.id)}
             onConnect={onConnect}
             onConnectEnd={onConnectEnd}
             onPaneClick={clearSelection}
@@ -661,19 +661,62 @@ function ChannelCanvasBody({
             nodesDraggable={editable}
             nodesConnectable={editable}
             elementsSelectable
+            nodeDragThreshold={NODE_DRAG_THRESHOLD}
+            nodeClickDistance={NODE_DRAG_THRESHOLD}
             multiSelectionKeyCode={null}
             deleteKeyCode={editable ? ["Backspace", "Delete"] : null}
             fitView
           >
             <Background />
-            <Controls />
+            <Controls showZoom={false} className="channel-canvas-controls">
+              {problems.length > 0 ? (
+                <ProblemsControl
+                  problems={problems}
+                  activeKey={highlight?.key ?? null}
+                  dismissToken={problemsDismissed}
+                  onFocus={focusProblem}
+                />
+              ) : null}
+              <ControlButton
+                className="channel-canvas-add"
+                title={t("channels.canvas.add")}
+                aria-label={t("channels.canvas.add")}
+                aria-expanded={picker?.kind === "catalog"}
+                disabled={!editable}
+                onClick={openFullCatalog}
+              >
+                <PlusIcon />
+              </ControlButton>
+              <ControlButton
+                className="channel-canvas-undo"
+                title={t("channels.canvas.undo")}
+                aria-label={t("channels.canvas.undo")}
+                disabled={!editable || !canUndo}
+                onClick={undo}
+              >
+                <HistoryIcon direction="undo" />
+              </ControlButton>
+              <ControlButton
+                className="channel-canvas-redo"
+                title={t("channels.canvas.redo")}
+                aria-label={t("channels.canvas.redo")}
+                disabled={!editable || !canRedo}
+                onClick={redo}
+              >
+                <HistoryIcon direction="redo" />
+              </ControlButton>
+            </Controls>
           </ReactFlow>
           {showCatalog || selected ? (
             <Paper
               withBorder
               shadow="md"
               p="sm"
-              className="channel-node-config"
+              className={
+                selected
+                  ? "channel-node-config channel-node-config--wide"
+                  : "channel-node-config"
+              }
               onPointerDown={(event) => event.stopPropagation()}
             >
               {showCatalog ? (
@@ -743,18 +786,20 @@ function ChannelCanvasBody({
     </Stack>
   );
 
-  function paintProblems(currentNodes: ChannelNode[], currentEdges: Edge[]) {
+  function paintProblems(
+    currentNodes: ChannelNode[],
+    currentEdges: Edge[],
+    active: ProblemHighlight | null = highlightRef.current,
+  ) {
     return {
       nodes: currentNodes.map((node) => ({
         ...node,
-        data: { ...node.data, problem: problemNodeIdsRef.current.has(node.id) },
+        data: { ...node.data, problem: active?.nodeId === node.id },
       })),
       edges: channelEdges(
         currentEdges.map((edge) => ({
           ...edge,
-          style: problemEdgeIdsRef.current.has(edge.id)
-            ? { stroke: PROBLEM_STROKE }
-            : undefined,
+          style: active?.edgeId === edge.id ? { stroke: PROBLEM_STROKE } : undefined,
         })),
       ),
     };
@@ -823,6 +868,166 @@ function eventPoint(event: MouseEvent | TouchEvent): { x: number; y: number } | 
     return touch ? { x: touch.clientX, y: touch.clientY } : null;
   }
   return { x: event.clientX, y: event.clientY };
+}
+
+function ProblemsControl({
+  problems,
+  activeKey,
+  dismissToken,
+  onFocus,
+}: {
+  problems: GraphProblem[];
+  activeKey: string | null;
+  dismissToken: number;
+  onFocus: (problem: GraphProblem) => void;
+}) {
+  const t = useTranslate();
+  const [pinned, setPinned] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const hideTimer = useRef<number | null>(null);
+  const previousCount = useRef(0);
+  const [pulseToken, setPulseToken] = useState(0);
+  const seenDismiss = useRef(dismissToken);
+
+  useEffect(() => {
+    if (seenDismiss.current === dismissToken) return;
+    seenDismiss.current = dismissToken;
+    setPinned(false);
+  }, [dismissToken]);
+
+  useEffect(() => {
+    if (problems.length > previousCount.current) {
+      setPulseToken((token) => token + 1);
+    }
+    previousCount.current = problems.length;
+  }, [problems.length]);
+
+  useEffect(
+    () => () => {
+      if (hideTimer.current != null) window.clearTimeout(hideTimer.current);
+    },
+    [],
+  );
+
+  const enter = () => {
+    if (hideTimer.current != null) {
+      window.clearTimeout(hideTimer.current);
+      hideTimer.current = null;
+    }
+    setHovered(true);
+  };
+
+  const leave = () => {
+    if (hideTimer.current != null) window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => {
+      hideTimer.current = null;
+      setHovered(false);
+    }, PROBLEM_HOVER_CLOSE_MS);
+  };
+
+  const open = pinned || hovered;
+  const label = t("channels.canvas.problems", { n: problems.length });
+
+  return (
+    <Popover
+      opened={open}
+      onChange={(next) => {
+        if (!next) setPinned(false);
+      }}
+      position="right-end"
+      withinPortal
+    >
+      <Popover.Target>
+        <ControlButton
+          className="channel-canvas-problems"
+          title={label}
+          aria-label={label}
+          aria-expanded={open}
+          onClick={() => setPinned((current) => !current)}
+          onMouseEnter={enter}
+          onMouseLeave={leave}
+        >
+          {pulseToken > 0 ? (
+            <span key={pulseToken} className="channel-canvas-problems__pulse" />
+          ) : null}
+          <WarningIcon />
+          <span className="channel-canvas-problems__badge">{problems.length}</span>
+        </ControlButton>
+      </Popover.Target>
+      <Popover.Dropdown onMouseEnter={enter} onMouseLeave={leave}>
+        <Stack gap={4}>
+          <Text size="sm" fw={600}>
+            {label}
+          </Text>
+          {problems.map((problem) => {
+            const itemLabel = formatGraphProblem(t, problem);
+            const key = problemIdentity(problem);
+            if (!problem.node_id && !problem.edge_id) {
+              return (
+                <Text key={key} c="red" size="sm">
+                  {itemLabel}
+                </Text>
+              );
+            }
+            const active = key === activeKey;
+            return (
+              <Button
+                key={key}
+                type="button"
+                variant="subtle"
+                color="red"
+                size="compact-sm"
+                justify="flex-start"
+                className={active ? "channel-canvas-problems__item--active" : undefined}
+                aria-current={active ? "true" : undefined}
+                onClick={() => onFocus(problem)}
+              >
+                {itemLabel}
+              </Button>
+            );
+          })}
+        </Stack>
+      </Popover.Dropdown>
+    </Popover>
+  );
+}
+
+function WarningIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M10.3 4.3 2.4 18a2 2 0 0 0 1.7 3h16a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z" />
+      <path d="M12 9v4" />
+      <path d="M12 17h.01" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </svg>
+  );
 }
 
 function HistoryIcon({ direction }: { direction: "undo" | "redo" }) {

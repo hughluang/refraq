@@ -124,6 +124,14 @@ class UserSelfDisableForbidden(AuthError):
         return "You cannot disable your own account"
 
 
+class UserSystemImmutable(AuthError):
+    code = "USER_SYSTEM_IMMUTABLE"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "The system identity cannot be changed"
+
+
 class UserNotFound(AuthError):
     code = "USER_NOT_FOUND"
     http_status = 404

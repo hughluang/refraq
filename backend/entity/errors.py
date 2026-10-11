@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from backend.core.errors import AppError
 
 __all__ = [
@@ -27,6 +29,7 @@ __all__ = [
     "EntityRowInvalid",
     "EntityRowLimitExceeded",
     "EntityRowNotFound",
+    "EntityRowWriteFailed",
     "EntityTableInService",
     "EntityTableNameDup",
     "EntityTableNameInvalid",
@@ -98,6 +101,31 @@ class EntityNotServing(AppError):
 
     def _default_message(self) -> str:
         return "Business Entity has no serving head table"
+
+
+class EntityRowWriteFailed(AppError):
+    """One source row failed a batch write. The transaction is rolled back."""
+
+    code = "ENTITY_ROW_WRITE_FAILED"
+    http_status = 422
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        row_index: int | None = None,
+        attribute: str | None = None,
+        value: Any = None,
+        reason: str = "invalid",
+    ) -> None:
+        super().__init__(message)
+        self.row_index = row_index
+        self.attribute = attribute
+        self.value = value
+        self.reason = reason
+
+    def _default_message(self) -> str:
+        return "Entity row write failed"
 
 
 class EntityRowInvalid(AppError):

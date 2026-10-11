@@ -440,6 +440,7 @@ class SqlAccessStore:
             row.row_rule = record.row_rule
             row.actions = list(record.actions)
             row.status = record.status
+            row.locked = record.locked
             row.valid_until = record.valid_until
             row.updated_at = record.updated_at
 
@@ -587,6 +588,7 @@ def _grant(row: AccessGrantRow) -> GrantRecord:
         row_rule=row.row_rule,
         actions=list(row.actions),
         status=row.status,
+        locked=bool(row.locked),
         valid_until=row.valid_until,
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -603,6 +605,7 @@ def _grant_row(record: GrantRecord) -> AccessGrantRow:
         row_rule=record.row_rule,
         actions=list(record.actions),
         status=record.status,
+        locked=record.locked,
         valid_until=record.valid_until,
         created_at=record.created_at,
         updated_at=record.updated_at,

@@ -721,3 +721,125 @@ def test_masked_writer_never_sees_the_raw_value(data_client) -> None:
     )
     assert denied.status_code == 403, denied.text
 
+
+def test_write_rows_upsert_is_idempotent_and_channel_run_writes(data_client) -> None:
+    _client, _stem, _physical, entity_id = data_client
+    from backend.admin.user_store import get_user_store
+    from backend.channel.runs import start_run
+    from backend.channel.tasks import run_job
+    from backend.entity.access.seed import ensure_system_grant
+    from backend.entity.access.views import rebuild_entity_views
+    from backend.entity.lifecycle import latest_published_of
+    from backend.entity.rows import read_rows, write_rows
+    from backend.entity.store import get_entity_store
+    from backend.jobs.store import get_job_store
+
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+    first = write_rows(
+        entity_id,
+        mode="upsert",
+        match_key="sku",
+        rows=[{"sku": "RUN1", "qty": 2, "note": "keep"}],
+        user=admin,
+        statement_timeout_ms=5000,
+    )
+    assert first.inserted == 1
+    second = write_rows(
+        entity_id,
+        mode="upsert",
+        match_key="sku",
+        rows=[{"sku": "RUN1", "qty": 2, "note": "keep"}],
+        user=admin,
+        statement_timeout_ms=5000,
+    )
+    assert second.unchanged == 1
+    rows, _total = read_rows(entity_id, filters=[], user=admin, limit=50)
+    kept = next(row for row in rows if row["sku"] == "RUN1")
+    assert kept["note"] == "keep"
+
+    version = latest_published_of(get_entity_store().list_all_versions(entity_id))
+    assert version is not None
+    ensure_system_grant(entity_id, list(version.attributes))
+    rebuild_entity_views(entity_id)
+
+    from backend.channel.service import create_channel, save_draft
+
+    created = create_channel(
+        name="Fill",
+        description=None,
+        actor_user_id=admin.id,
+        actor_token_id=None,
+    )
+    graph = {
+        "nodes": [
+            {
+                "id": "nd_trigger",
+                "ref": "run_manually",
+                "type": "trigger.manual",
+                "name": "Run manually",
+                "position": {"x": 0, "y": 0},
+                "config": {"payload": {}},
+                "on_error": "stop",
+                "retry": None,
+            },
+            {
+                "id": "nd_write",
+                "ref": "write_materials",
+                "type": "write.entity",
+                "name": "Write materials",
+                "position": {"x": 200, "y": 0},
+                "config": {
+                    "entity_id": entity_id,
+                    "mode": "upsert",
+                    "match_key": "sku",
+                    "source": '{{ [{"sku": "RUN2", "qty": 9, "note": "from-run"}] }}',
+                    "mapping": [
+                        {"attribute": "sku", "key": "sku"},
+                        {"attribute": "qty", "key": "qty"},
+                        {"attribute": "note", "key": "note"},
+                    ],
+                    "on_incompatible_head": "fail",
+                },
+                "on_error": "stop",
+                "retry": None,
+            },
+        ],
+        "edges": [
+            {
+                "id": "ed_1",
+                "source": {"node_id": "nd_trigger", "port": "main"},
+                "target": {"node_id": "nd_write", "port": "main"},
+            }
+        ],
+        "settings": {"run_timeout_sec": None, "error_channel_id": None},
+    }
+    save_draft(
+        channel_id=created.id,
+        base_revision=created.draft_revision,
+        graph=graph,
+        actor_user_id=admin.id,
+        actor_token_id=None,
+    )
+
+    def _inline(args, task_id=None):
+        del task_id
+        return run_job(args[0])
+
+    run_job.apply_async = _inline  # type: ignore[method-assign]
+    job, _record = start_run(
+        channel_id=created.id,
+        target="draft",
+        trigger_node_id="nd_trigger",
+        ignore_checkpoints=False,
+        actor=admin,
+        actor_token_id=None,
+    )
+    finished = get_job_store().get(job.id)
+    assert finished is not None
+    assert finished.status == "succeeded", finished.error_summary
+    rows, _total = read_rows(entity_id, filters=[], user=admin, limit=50)
+    written = next(row for row in rows if row["sku"] == "RUN2")
+    assert written["qty"] == 9
+    assert written["note"] == "from-run"
+

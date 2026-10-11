@@ -48,6 +48,7 @@ import {
   patchEntity,
   publishVersion,
 } from "@/features/entities/api";
+import { EntityPublishConfirm } from "@/features/entities/EntityPublishConfirm";
 import { ACCESS_MANAGE_PERMISSION, DATA_READ_PERMISSION, DROP_TABLE_PERMISSION } from "@/features/entities/constants";
 import {
   createFormErrorTab,
@@ -718,18 +719,14 @@ export function EntityRecord(props: Props) {
 
       {entity ? (
         <>
-          <ConfirmActionModal
+          <EntityPublishConfirm
             opened={publishConfirm.opened}
             onClose={publishConfirm.close}
-            title={t("entities.publish.confirmTitle")}
-            body={t(
-              entity.ever_published
-                ? "entities.publish.confirmBodySuccessor"
-                : "entities.publish.confirmBody",
-              { name: entity.name },
-            )}
+            entityId={entity.id}
+            versionId={current?.id}
+            name={entity.name}
+            everPublished={entity.ever_published}
             loading={busy}
-            confirmLabel={t("entities.publish")}
             onConfirm={() => void confirmPublish()}
           />
           <ConfirmActionModal

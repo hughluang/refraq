@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 
 from backend.core.pagination import PageParams, page_params
 
@@ -13,6 +13,7 @@ from backend.admin.errors import (
     UserInvalidStatus,
     UserNotFound,
     UserSelfDisableForbidden,
+    UserSystemImmutable,
 )
 from backend.admin.locales import DEFAULT_LOCALE, is_supported_locale
 from backend.admin.security import hash_password
@@ -40,8 +41,11 @@ def list_users(
     users: UserStore = Depends(get_user_store),
     roles: RoleStore = Depends(get_role_store),
     page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
+    include_system: bool = Query(default=False),
 ) -> UserListResponse:
-    records, total = users.list_users(limit=page.limit, offset=page.offset)
+    records, total = users.list_users(
+        limit=page.limit, offset=page.offset, include_system=include_system
+    )
     return UserListResponse(
         items=[build_user_summary(record, roles) for record in records],
         total=total,
@@ -116,6 +120,8 @@ def update_user_status(
     record = users.get_by_id(user_id)
     if record is None:
         raise UserNotFound()
+    if record.identity_source == "system":
+        raise UserSystemImmutable()
 
     updated = users.update_status(user_id, payload.status)
     if updated is None:

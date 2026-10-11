@@ -27,6 +27,7 @@ TRIGGER = {
     "nodes": [
         {
             "id": "nd_trigger",
+            "ref": "run_manually",
             "type": "trigger.manual",
             "name": "Run manually",
             "position": {"x": 10, "y": 20},
@@ -212,3 +213,67 @@ def test_publish_keeps_version_immutable(channel_client: TestClient) -> None:
     assert current.json()["channel"]["active"] is False
     assert current.json()["channel"]["latest_version"]["number"] == 1
     assert current.json()["channel"]["draft_revision"] == later.json()["draft_revision"]
+
+
+def _save_draft(
+    client: TestClient, channel_id: str, graph: dict, *, base_revision: int
+) -> int:
+    saved = client.put(
+        f"/channels/{channel_id}/draft",
+        json={"base_revision": base_revision, "graph": graph},
+    )
+    assert saved.status_code == 200, saved.text
+    return int(saved.json()["draft_revision"])
+
+
+def _enqueue_matches_get(client: TestClient, channel_id: str) -> dict:
+    queued = client.post(f"/channels/{channel_id}/runs", json={"target": "draft"})
+    assert queued.status_code == 202, queued.text
+    posted = queued.json()["run"]
+    loaded = client.get(f"/channels/{channel_id}/runs/{posted['job_id']}")
+    assert loaded.status_code == 200, loaded.text
+    stored = loaded.json()["run"]
+    assert posted["status"] == stored["status"]
+    assert posted["outcome"] == stored["outcome"]
+    assert posted["failed_node_id"] == stored["failed_node_id"]
+    return posted
+
+
+def test_enqueue_body_matches_finished_run(
+    channel_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Eager SQL runs return the stored outcome, not the pre-execution record."""
+    from backend.channel.engine import NodeResult
+    from backend.channel.executors import EXECUTORS
+    from backend.worker.app import celery_app
+
+    previous = celery_app.conf.task_always_eager
+    celery_app.conf.task_always_eager = True
+    try:
+        created = channel_client.post(
+            "/channels", json={"name": "Enqueue probe", "description": None}
+        )
+        assert created.status_code == 201, created.text
+        channel_id = created.json()["channel"]["id"]
+        _save_draft(channel_client, channel_id, TRIGGER, base_revision=1)
+
+        succeeded = _enqueue_matches_get(channel_client, channel_id)
+        assert succeeded["status"] == "succeeded"
+        assert succeeded["outcome"] == "completed"
+        assert succeeded["failed_node_id"] is None
+
+        def _fail(node: dict, hooks: object) -> NodeResult:
+            del node, hooks
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_NODE_FAILED",
+                error_message="forced",
+            )
+
+        monkeypatch.setitem(EXECUTORS, "trigger.manual", _fail)
+        failed = _enqueue_matches_get(channel_client, channel_id)
+        assert failed["status"] == "failed"
+        assert failed["outcome"] is None
+        assert failed["failed_node_id"] == "nd_trigger"
+    finally:
+        celery_app.conf.task_always_eager = previous

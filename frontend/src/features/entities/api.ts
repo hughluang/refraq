@@ -99,6 +99,22 @@ export function getVersion(entityId: string, versionId: string) {
   );
 }
 
+export type IncompatibleWriteNode = {
+  channel_id: string;
+  channel_name: string;
+  node_id: string;
+  node_name: string;
+  on_incompatible_head: string;
+  reasons: string[];
+};
+
+export function previewEntityPublish(entityId: string, versionId: string) {
+  return apiClient<{ incompatible_write_nodes: IncompatibleWriteNode[] }>(
+    `/entities/${entityId}/versions/${versionId}/publish/preview`,
+    { method: "POST" },
+  );
+}
+
 export function publishVersion(entityId: string, versionId: string) {
   return apiClient<EntityJobEnqueue>(
     `/entities/${entityId}/versions/${versionId}/publish`,

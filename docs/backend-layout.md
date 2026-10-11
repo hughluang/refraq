@@ -134,6 +134,8 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | `backend.entity.bootstrap` | Entity database bootstrap process entry (`python -m backend.entity.bootstrap`); uses `ENTITY_ADMIN_DATABASE_URL` only |
 | `backend.entity.dictionaries.active_codes` | Active dictionary codes, bound into subject attributes by composition |
 | `backend.entity.heads` | Current published head shape by Entity id (`get_entity_head`): attribute name, type, unique, required, and Business Key. Data Channel validation reads this and does not import Entity stores |
+| `backend.entity.rows` | Head-table row read and batch write by Entity id (`read_rows`, `write_rows`), executed as a given User through Entity Access Control. Data Channel runs pass the System Identity. Does not import `channel` |
+| `backend.entity.publish_confirmation` | Port a Data Channel adapter fills with write nodes a candidate head would make incompatible; bound by composition. Entity HTTP calls it and does not import `channel` |
 | `backend.entity.routers.*` | Domain use-case HTTP (definition, access management, and Entity Data API); mounted by `main` |
 
 ### `channel` published modules
@@ -149,7 +151,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | `backend.channel.write_targets` | Write-node consumers of a Business Entity, bound by composition into the Entity publish confirmation |
 | `backend.channel.routers.*` | Domain use-case HTTP; mounted by `main` |
 
-The modules above are registered as the package lands real code; no module is created empty. The definition slice publishes `channel.errors` and `channel.routers`. `channel.tasks`, `channel.parameters`, `channel.schedule_projection`, and `channel.write_targets` land with the tickets that need them.
+No module is created empty. `channel.errors`, `channel.routers`, `channel.tasks`, `channel.parameters`, and `channel.write_targets` are published. `channel.schedule_projection` is published with Scheduled-node sync and is not imported before that adapter exists.
 
 **Consumed published surfaces.** `channel` consumes, through published modules only:
 
@@ -157,7 +159,7 @@ The modules above are registered as the package lands real code; no module is cr
 - `worker`: schedule store port and seam (`worker.api`, `worker.schedules`, `worker.errors`, `worker.schemas`, `worker.due`) for publish sync, activation, withdraw, and due consumption.
 - `admin`: deps and permissions, audit, the System Parameter resolver, and the Notification Channel sender.
 - `metadata`: Locator parsing and resolution, Catalog Object and column reads, Controlled Query guards and execution, and Normalized Type.
-- `entity`: head resolution and head shape by Entity id (`entity.heads`), the head-table row-write port that appends the entity Change Log in the same transaction, entity Change Log reads, and head-switch events.
+- `entity`: head resolution and head shape by Entity id (`entity.heads`), the head-table row read and batch write port (`entity.rows`), entity Change Log reads, and head-switch events. Row writes go through Entity Access Control as the System Identity.
 
 `metadata` and `entity` publish those capabilities as named leaf modules in their own §3 tables when the consuming code lands. Neither imports `channel`; where they need channel facts (the Entity publish confirmation listing incompatible write nodes, the platform schedule list projecting `channel_run` rows) they define a port that composition binds to a `channel` adapter.
 

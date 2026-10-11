@@ -14,6 +14,7 @@ from backend.admin.system_parameters import (
     register_parameters,
 )
 from backend.core.time_zones import iana_zone_ids
+from backend.channel.parameters import CHANNEL_PARAMETER_SPECS
 from backend.entity.parameters import ENTITY_PARAMETER_SPECS
 from backend.jobs.parameters import JOBS_PARAMETER_SPECS
 from backend.metadata.parameters import METADATA_PARAMETER_SPECS
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 BEAT_SYNC_EVERY_SEC = 30
 BEAT_MAX_INTERVAL_SEC = 5
 
-_GROUP_ORDER = ("session", "jobs", "schedules", "query", "entity_access")
+_GROUP_ORDER = ("session", "jobs", "schedules", "query", "entity_access", "data_channel")
 
 
 def _realign_schedule_timezone() -> None:
@@ -66,6 +67,7 @@ def assemble_system_parameters() -> None:
             *WORKER_PARAMETER_SPECS,
             *METADATA_PARAMETER_SPECS,
             *ENTITY_PARAMETER_SPECS,
+            *CHANNEL_PARAMETER_SPECS,
         ),
         group_order=_GROUP_ORDER,
     )

@@ -1,0 +1,355 @@
+"""Channel run and node-execution records."""
+
+from __future__ import annotations
+
+import json
+import threading
+import uuid
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
+
+from sqlalchemy import func, select
+
+from backend.channel.models import ChannelNodeExecutionRow, ChannelRunRow
+from backend.core.config import get_settings
+from backend.core.db import session_scope
+from backend.core.time import utc_now
+
+__all__ = [
+    "ChannelRunRecord",
+    "NodeExecutionRecord",
+    "get_run_store",
+]
+
+
+@dataclass
+class ChannelRunRecord:
+    job_id: str
+    channel_id: str
+    target: str
+    version: int | None
+    draft_revision: int | None
+    graph: dict[str, Any] | None
+    trigger_node_id: str
+    ignore_checkpoints: bool
+    outcome: str | None
+    failed_node_id: str | None
+    skipped_node_ids: list[str]
+    created_at: datetime
+
+
+@dataclass
+class NodeExecutionRecord:
+    id: str
+    job_id: str
+    node_id: str
+    seq: int
+    status: str
+    started_at: datetime | None
+    finished_at: datetime | None
+    output: Any
+    output_bytes: int
+    error_code: str | None
+    error_message: str | None
+    error_detail: dict[str, Any] | None
+
+
+class MemoryRunStore:
+    def __init__(self) -> None:
+        self._runs: dict[str, ChannelRunRecord] = {}
+        self._execs: dict[str, NodeExecutionRecord] = {}
+        self._lock = threading.Lock()
+
+    def insert_run(self, record: ChannelRunRecord) -> None:
+        with self._lock:
+            self._runs[record.job_id] = record
+
+    def update_run(self, record: ChannelRunRecord) -> None:
+        with self._lock:
+            self._runs[record.job_id] = record
+
+    def get_run(self, job_id: str) -> ChannelRunRecord | None:
+        with self._lock:
+            return self._runs.get(job_id)
+
+    def list_runs(
+        self,
+        channel_id: str,
+        *,
+        status: str | None,
+        target: str | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[ChannelRunRecord], int]:
+        del status
+        with self._lock:
+            items = [
+                item
+                for item in self._runs.values()
+                if item.channel_id == channel_id
+                and (target is None or item.target == target)
+            ]
+        items.sort(key=lambda item: (item.created_at, item.job_id), reverse=True)
+        return items[offset : offset + limit], len(items)
+
+    def start_execution(self, job_id: str, node_id: str) -> NodeExecutionRecord:
+        with self._lock:
+            seq = 1 + sum(1 for item in self._execs.values() if item.job_id == job_id)
+            record = NodeExecutionRecord(
+                id=f"cne_{uuid.uuid4().hex[:12]}",
+                job_id=job_id,
+                node_id=node_id,
+                seq=seq,
+                status="running",
+                started_at=utc_now(),
+                finished_at=None,
+                output=None,
+                output_bytes=0,
+                error_code=None,
+                error_message=None,
+                error_detail=None,
+            )
+            self._execs[record.id] = record
+            return record
+
+    def finish_execution(self, record: NodeExecutionRecord) -> None:
+        with self._lock:
+            self._execs[record.id] = record
+
+    def list_executions(self, job_id: str) -> list[NodeExecutionRecord]:
+        with self._lock:
+            items = [item for item in self._execs.values() if item.job_id == job_id]
+        items.sort(key=lambda item: item.seq)
+        return items
+
+    def get_execution(self, job_id: str, seq: int) -> NodeExecutionRecord | None:
+        for item in self.list_executions(job_id):
+            if item.seq == seq:
+                return item
+        return None
+
+
+class SqlRunStore:
+    def insert_run(self, record: ChannelRunRecord) -> None:
+        with session_scope() as session:
+            session.add(_run_row(record))
+
+    def update_run(self, record: ChannelRunRecord) -> None:
+        with session_scope() as session:
+            row = session.get(ChannelRunRow, record.job_id)
+            if row is None:
+                raise RuntimeError(f"channel run {record.job_id} is missing")
+            row.version = record.version
+            row.draft_revision = record.draft_revision
+            row.graph = record.graph
+            row.outcome = record.outcome
+            row.failed_node_id = record.failed_node_id
+            row.skipped_node_ids = list(record.skipped_node_ids)
+
+    def get_run(self, job_id: str) -> ChannelRunRecord | None:
+        with session_scope() as session:
+            row = session.get(ChannelRunRow, job_id)
+            return None if row is None else _run_record(row)
+
+    def list_runs(
+        self,
+        channel_id: str,
+        *,
+        status: str | None,
+        target: str | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[ChannelRunRecord], int]:
+        del status
+        with session_scope() as session:
+            stmt = select(ChannelRunRow).where(ChannelRunRow.channel_id == channel_id)
+            if target is not None:
+                stmt = stmt.where(ChannelRunRow.target == target)
+            total = int(session.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+            rows = session.scalars(
+                stmt.order_by(ChannelRunRow.created_at.desc(), ChannelRunRow.job_id.desc())
+                .limit(limit)
+                .offset(offset)
+            ).all()
+            return [_run_record(row) for row in rows], total
+
+    def start_execution(self, job_id: str, node_id: str) -> NodeExecutionRecord:
+        with session_scope() as session:
+            seq = int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(ChannelNodeExecutionRow)
+                    .where(ChannelNodeExecutionRow.job_id == job_id)
+                )
+                or 0
+            ) + 1
+            record = NodeExecutionRecord(
+                id=f"cne_{uuid.uuid4().hex[:12]}",
+                job_id=job_id,
+                node_id=node_id,
+                seq=seq,
+                status="running",
+                started_at=utc_now(),
+                finished_at=None,
+                output=None,
+                output_bytes=0,
+                error_code=None,
+                error_message=None,
+                error_detail=None,
+            )
+            session.add(_exec_row(record))
+            return record
+
+    def finish_execution(self, record: NodeExecutionRecord) -> None:
+        with session_scope() as session:
+            row = session.get(ChannelNodeExecutionRow, record.id)
+            if row is None:
+                raise RuntimeError(f"channel node execution {record.id} is missing")
+            row.status = record.status
+            row.finished_at = record.finished_at
+            row.output = record.output
+            row.output_bytes = record.output_bytes
+            row.error_code = record.error_code
+            row.error_message = record.error_message
+            row.error_detail = record.error_detail
+
+    def list_executions(self, job_id: str) -> list[NodeExecutionRecord]:
+        with session_scope() as session:
+            rows = session.scalars(
+                select(ChannelNodeExecutionRow)
+                .where(ChannelNodeExecutionRow.job_id == job_id)
+                .order_by(ChannelNodeExecutionRow.seq)
+            ).all()
+            return [_exec_record(row) for row in rows]
+
+    def get_execution(self, job_id: str, seq: int) -> NodeExecutionRecord | None:
+        with session_scope() as session:
+            row = session.scalar(
+                select(ChannelNodeExecutionRow).where(
+                    ChannelNodeExecutionRow.job_id == job_id,
+                    ChannelNodeExecutionRow.seq == seq,
+                )
+            )
+            return None if row is None else _exec_record(row)
+
+
+def _run_row(record: ChannelRunRecord) -> ChannelRunRow:
+    return ChannelRunRow(
+        job_id=record.job_id,
+        channel_id=record.channel_id,
+        target=record.target,
+        version=record.version,
+        draft_revision=record.draft_revision,
+        graph=record.graph,
+        trigger_node_id=record.trigger_node_id,
+        ignore_checkpoints=record.ignore_checkpoints,
+        outcome=record.outcome,
+        failed_node_id=record.failed_node_id,
+        skipped_node_ids=list(record.skipped_node_ids),
+        created_at=record.created_at,
+    )
+
+
+def _run_record(row: ChannelRunRow) -> ChannelRunRecord:
+    return ChannelRunRecord(
+        job_id=row.job_id,
+        channel_id=row.channel_id,
+        target=row.target,
+        version=row.version,
+        draft_revision=row.draft_revision,
+        graph=row.graph,
+        trigger_node_id=row.trigger_node_id,
+        ignore_checkpoints=row.ignore_checkpoints,
+        outcome=row.outcome,
+        failed_node_id=row.failed_node_id,
+        skipped_node_ids=list(row.skipped_node_ids or []),
+        created_at=row.created_at,
+    )
+
+
+def _exec_row(record: NodeExecutionRecord) -> ChannelNodeExecutionRow:
+    return ChannelNodeExecutionRow(
+        id=record.id,
+        job_id=record.job_id,
+        node_id=record.node_id,
+        seq=record.seq,
+        status=record.status,
+        started_at=record.started_at,
+        finished_at=record.finished_at,
+        output=record.output,
+        output_bytes=record.output_bytes,
+        error_code=record.error_code,
+        error_message=record.error_message,
+        error_detail=record.error_detail,
+    )
+
+
+def _exec_record(row: ChannelNodeExecutionRow) -> NodeExecutionRecord:
+    return NodeExecutionRecord(
+        id=row.id,
+        job_id=row.job_id,
+        node_id=row.node_id,
+        seq=row.seq,
+        status=row.status,
+        started_at=row.started_at,
+        finished_at=row.finished_at,
+        output=row.output,
+        output_bytes=row.output_bytes,
+        error_code=row.error_code,
+        error_message=row.error_message,
+        error_detail=row.error_detail,
+    )
+
+
+def output_page(output: Any, path: str | None, *, limit: int, offset: int) -> dict[str, Any]:
+    value = output
+    if path:
+        for part in path.split("."):
+            if isinstance(value, dict) and part in value:
+                value = value[part]
+            else:
+                value = None
+                break
+    if isinstance(value, list):
+        return {
+            "items": value[offset : offset + limit],
+            "total": len(value),
+            "limit": limit,
+            "offset": offset,
+        }
+    return {"value": value}
+
+
+def output_preview(output: Any, *, cap: int = 100) -> Any:
+    return _cut(output, cap)
+
+
+def _cut(value: Any, cap: int) -> Any:
+    if isinstance(value, list):
+        return [_cut(item, cap) for item in value[:cap]]
+    if isinstance(value, dict):
+        return {key: _cut(item, cap) for key, item in value.items()}
+    return value
+
+
+def output_size(output: Any) -> int:
+    try:
+        return len(json.dumps(output))
+    except TypeError:
+        return 0
+
+
+_memory: MemoryRunStore | None = None
+_lock = threading.Lock()
+
+
+def get_run_store() -> MemoryRunStore | SqlRunStore:
+    settings = get_settings()
+    if settings.store_backend == "memory":
+        global _memory
+        with _lock:
+            if _memory is None:
+                _memory = MemoryRunStore()
+            return _memory
+    return SqlRunStore()

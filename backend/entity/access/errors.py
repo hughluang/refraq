@@ -33,6 +33,14 @@ class EntityAccessProfileNotFound(AppError):
         return "Access profile not found"
 
 
+class EntityAccessGrantLocked(AppError):
+    code = "ENTITY_ACCESS_GRANT_LOCKED"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "This access grant is locked"
+
+
 class EntityAccessGrantNotFound(AppError):
     code = "ENTITY_ACCESS_GRANT_NOT_FOUND"
     http_status = 404

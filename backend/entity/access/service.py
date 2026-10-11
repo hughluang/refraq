@@ -432,6 +432,10 @@ def update_grant(
 ) -> dict[str, Any]:
     head = _require_head(entity_id)
     current = _owned_grant(entity_id, grant_id)
+    if current.locked:
+        from backend.entity.access.errors import EntityAccessGrantLocked
+
+        raise EntityAccessGrantLocked()
     if "profile_id" in fields and profile_id is not None:
         _owned_profile(entity_id, profile_id)
         current.profile_id = profile_id
@@ -470,7 +474,11 @@ def delete_grant(
     actor_token_id: str | None,
 ) -> None:
     _require_head(entity_id)
-    _owned_grant(entity_id, grant_id)
+    current = _owned_grant(entity_id, grant_id)
+    if current.locked:
+        from backend.entity.access.errors import EntityAccessGrantLocked
+
+        raise EntityAccessGrantLocked()
 
     def mutate() -> None:
         get_access_store().delete_grant(grant_id)
@@ -924,6 +932,7 @@ def _grant_out(head: _Head, compiled: CompiledPolicy, record: GrantRecord) -> di
         "row_rule": record.row_rule,
         "actions": list(record.actions),
         "status": record.status,
+        "locked": record.locked,
         "valid_until": format_instant(record.valid_until) if record.valid_until else None,
         "broken": bool(reasons),
         "broken_reasons": reasons,

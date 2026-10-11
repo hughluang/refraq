@@ -25,7 +25,13 @@ Recommended User fields:
 - `password_hash`: stored server-side only; nullable for federated identity
 - `role_id`: optional foreign key to a Role (`null` means no role)
 - `status`: `active` or `disabled`
-- `identity_source`: `local` or `oidc`; `local` permits password login and `oidc` does not
+- `identity_source`: `local`, `oidc`, or `system`. `local` permits password login. `oidc` does not. `system` is the single **System Identity**
+
+### 2.1 System Identity
+
+The platform has exactly one User with `identity_source` `system`, account `system`, and id `usr_system`. It has no password, no Role, and cannot sign in, hold a Session, or hold a **User PAT**. It cannot be edited, disabled, deleted, or assigned a Role. User lists omit it unless the request asks to include it.
+
+It exists so background work can pass **Entity Access Control** as a real subject instead of a bypass. It holds one locked **Access Grant** on every published **Business Entity** (`docs/business-entity-access.md` §17). A **Data Channel** run reads and writes Entity Tables as this User.
 - `last_login_at`: latest successful login timestamp, nullable
 
 A User without a Role, or with a Role that lacks `console:access`, cannot obtain a Management Console session.

@@ -23,7 +23,7 @@ from backend.core.pagination import apply_offset_page, apply_sql_page
 
 
 UserStatus = Literal["active", "disabled"]
-IdentitySource = Literal["local", "oidc"]
+IdentitySource = Literal["local", "oidc", "system"]
 
 @dataclass
 class UserRecord:
@@ -46,7 +46,11 @@ class UserStore(Protocol):
 
     def get_by_account(self, account: str) -> UserRecord | None: ...
     def list_users(
-        self, *, limit: int | None = None, offset: int = 0
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        include_system: bool = False,
     ) -> tuple[list[UserRecord], int]: ...
 
     def count_by_role_id(self, role_id: str) -> int: ...
@@ -63,6 +67,7 @@ class UserStore(Protocol):
         email: str | None = None,
         locale: str = DEFAULT_LOCALE,
         session: Session | None = None,
+        user_id: str | None = None,
     ) -> UserRecord: ...
 
     def update_status(self, user_id: str, status: UserStatus) -> UserRecord | None: ...
@@ -115,11 +120,19 @@ class MemoryUserStore:
             return self._by_id.get(user_id)
 
     def list_users(
-        self, *, limit: int | None = None, offset: int = 0
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        include_system: bool = False,
     ) -> tuple[list[UserRecord], int]:
         with self._lock:
             items = sorted(
-                self._by_id.values(),
+                (
+                    record
+                    for record in self._by_id.values()
+                    if include_system or record.identity_source != "system"
+                ),
                 key=lambda record: (record.created_at, record.id),
             )
             return apply_offset_page(items, limit=limit, offset=offset)
@@ -150,13 +163,14 @@ class MemoryUserStore:
         email: str | None = None,
         locale: str = DEFAULT_LOCALE,
         session: Session | None = None,
+        user_id: str | None = None,
     ) -> UserRecord:
         del session
         with self._lock:
             if account in self._by_account:
 
                 raise UserAccountDuplicate()
-            user_id = f"user_{uuid.uuid4().hex[:12]}"
+            user_id = user_id or f"user_{uuid.uuid4().hex[:12]}"
             record = UserRecord(
                 id=user_id,
                 account=account,
@@ -259,12 +273,21 @@ class SqlUserStore:
             return _row_to_user(row) if row else None
 
     def list_users(
-        self, *, limit: int | None = None, offset: int = 0
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        include_system: bool = False,
     ) -> tuple[list[UserRecord], int]:
         with session_scope() as session:
-            total = int(session.scalar(select(func.count()).select_from(UserRow)) or 0)
+            base = select(UserRow)
+            if not include_system:
+                base = base.where(UserRow.identity_source != "system")
+            total = int(
+                session.scalar(select(func.count()).select_from(base.subquery())) or 0
+            )
             stmt = apply_sql_page(
-                select(UserRow).order_by(UserRow.created_at, UserRow.id),
+                base.order_by(UserRow.created_at, UserRow.id),
                 limit=limit,
                 offset=offset,
             )
@@ -306,9 +329,10 @@ class SqlUserStore:
         email: str | None = None,
         locale: str = DEFAULT_LOCALE,
         session: Session | None = None,
+        user_id: str | None = None,
     ) -> UserRecord:
 
-        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        user_id = user_id or f"user_{uuid.uuid4().hex[:12]}"
         created_at = utc_now()
         try:
             if session is not None:
@@ -492,6 +516,28 @@ def _row_to_user(row: object) -> UserRecord:
 
 # Back-compat alias used by tests that construct MemoryUserStore as UserStore historically
 UserStoreImpl = MemoryUserStore
+
+SYSTEM_USER_ID = "usr_system"
+SYSTEM_ACCOUNT = "system"
+
+
+def ensure_system_user(users: UserStore) -> UserRecord:
+    """Insert the system user when it is missing. Idempotent."""
+    existing = users.get_by_id(SYSTEM_USER_ID)
+    if existing is not None:
+        return existing
+    by_account = users.get_by_account(SYSTEM_ACCOUNT)
+    if by_account is not None:
+        return by_account
+    return users.create_user(
+        account=SYSTEM_ACCOUNT,
+        display_name="System",
+        password_hash=None,
+        role_id=None,
+        status="active",
+        identity_source="system",
+        user_id=SYSTEM_USER_ID,
+    )
 
 _memory_singleton: MemoryUserStore | None = None
 _memory_lock = threading.Lock()

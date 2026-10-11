@@ -22,6 +22,7 @@ TRIGGER_GRAPH = {
     "nodes": [
         {
             "id": "nd_trigger",
+            "ref": "run_manually",
             "type": "trigger.manual",
             "name": "Run manually",
             "position": {"x": 0, "y": 0},
@@ -117,6 +118,7 @@ def test_draft_conflict_and_invalid_publish(client: TestClient) -> None:
         "nodes": [
             {
                 "id": "nd_read",
+                "ref": "read_suppliers",
                 "type": "read.entity",
                 "name": "Read",
                 "position": {"x": 0, "y": 0},

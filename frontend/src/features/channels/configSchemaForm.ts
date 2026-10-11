@@ -12,7 +12,8 @@ export type FieldSpec =
   | { kind: "enum"; key: string; required: boolean; options: string[] }
   | { kind: "entity"; key: string; required: boolean }
   | { kind: "attribute"; key: string; required: boolean; allowEmpty: boolean }
-  | { kind: "objectList"; key: string; required: boolean; fields: FieldSpec[] };
+  | { kind: "objectList"; key: string; required: boolean; fields: FieldSpec[] }
+  | { kind: "json"; key: string; required: boolean };
 
 export function fieldsFromSchema(schema: SchemaObject): FieldSpec[] {
   const properties = schema.properties ?? {};
@@ -32,6 +33,7 @@ export function defaultConfig(schema: SchemaObject): Record<string, unknown> {
 
 function fieldFor(key: string, schema: SchemaObject, required: boolean): FieldSpec {
   const ref = schema["x-refraq-ref"];
+  if (ref === "json") return { kind: "json", key, required };
   if (ref === "entity") return { kind: "entity", key, required };
   if (ref === "entity_attribute" || ref === "match_key") {
     return { kind: "attribute", key, required, allowEmpty: ref === "match_key" };
@@ -78,5 +80,7 @@ function defaultValue(field: FieldSpec): unknown {
       return field.allowEmpty ? null : "";
     case "objectList":
       return [];
+    case "json":
+      return {};
   }
 }

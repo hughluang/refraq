@@ -51,9 +51,11 @@ import {
   previewPublish,
   publishChannel,
   saveDraft,
+  startRun,
   validateDraft,
 } from "@/features/channels/api";
-import { ChannelCanvas, type CanvasFocus } from "@/features/channels/ChannelCanvas";
+import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
+import { ChannelRuns } from "@/features/channels/ChannelRuns";
 import type { Graph, GraphProblem } from "@/features/channels/types";
 import { clientGraphProblems } from "@/features/channels/graphValidation";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
@@ -176,10 +178,9 @@ function ChannelExisting({
   const [publishRevision, setPublishRevision] = useState(1);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
-  const [focus, setFocus] = useState<CanvasFocus | null>(null);
   const [descriptionOpen, setDescriptionOpen] = useState(false);
+  const [runOpen, setRunOpen] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState("");
-  const focusToken = useRef(0);
   const nameEditorRef = useRef<ChannelNameHeadingHandle>(null);
   const form = useForm<IdentityValues>({
     initialValues: { name: "", description: "", active: false },
@@ -261,26 +262,6 @@ function ChannelExisting({
     ...clientProblemRecords.filter((item) => item.node_id || item.edge_id),
     ...problems,
   ]);
-  const problemNodeIds = new Set(
-    [...problems, ...clientProblemRecords]
-      .map((item) => item.node_id)
-      .filter((id): id is string => Boolean(id)),
-  );
-  const problemEdgeIds = new Set(
-    [...problems, ...clientProblemRecords]
-      .map((item) => item.edge_id)
-      .filter((id): id is string => Boolean(id)),
-  );
-
-  const focusProblem = (problem: GraphProblem) => {
-    if (!problem.node_id && !problem.edge_id) return;
-    focusToken.current += 1;
-    setFocus({
-      token: focusToken.current,
-      nodeId: problem.node_id,
-      edgeId: problem.node_id ? null : problem.edge_id,
-    });
-  };
 
   const notifyError = (error: unknown) => {
     open?.({
@@ -290,6 +271,24 @@ function ChannelExisting({
           ? error.message
           : problemMessage(t, error, t("channels.save.failed")),
     });
+  };
+
+  const launch = () => {
+    const manuals = (graph?.nodes ?? []).filter((node) => node.type === "trigger.manual");
+    if (manuals.length !== 1) {
+      notifyError(new Error(t("channels.run.needManual")));
+      return;
+    }
+    const triggerNodeId = manuals[0].id;
+    setBusy(true);
+    void (async () => {
+      if (writable) await persist();
+      await startRun(channelId, { target: "draft", trigger_node_id: triggerNodeId });
+      setRunOpen(false);
+      setTab("runs");
+    })()
+      .catch(notifyError)
+      .finally(() => setBusy(false));
   };
 
   const persist = async (): Promise<number> => {
@@ -427,6 +426,11 @@ function ChannelExisting({
             >
               {t("channels.actions.back")}
             </Button>
+            {canWrite?.can ? (
+              <Button size="sm" variant="filled" loading={busy} onClick={() => setRunOpen(true)}>
+                {t("channels.run.open")}
+              </Button>
+            ) : null}
           </Group>
           {showLifecycle ? (
             <>
@@ -565,6 +569,7 @@ function ChannelExisting({
         <Tabs.List>
           <Tabs.Tab value="canvas">{t("channels.tabs.canvas")}</Tabs.Tab>
           <Tabs.Tab value="versions">{t("channels.tabs.versions")}</Tabs.Tab>
+          <Tabs.Tab value="runs">{t("channels.tabs.runs")}</Tabs.Tab>
         </Tabs.List>
         <Tabs.Panel value="canvas" pt="md" style={{ overflow: "hidden" }}>
           <ChannelCanvas
@@ -573,11 +578,7 @@ function ChannelExisting({
             catalog={catalog}
             editable={writable}
             problems={shownProblems}
-            problemNodeIds={problemNodeIds}
-            problemEdgeIds={problemEdgeIds}
-            focus={focus}
             onChange={setGraph}
-            onFocusProblem={focusProblem}
           />
         </Tabs.Panel>
         <Tabs.Panel value="versions" pt="md">
@@ -604,8 +605,24 @@ function ChannelExisting({
             </Table>
           )}
         </Tabs.Panel>
+        <Tabs.Panel value="runs" pt="md">
+          <ChannelRuns channelId={channelId} />
+        </Tabs.Panel>
       </Tabs>
       </FillColumn>
+      <Modal opened={runOpen} onClose={() => setRunOpen(false)} title={t("channels.run.open")}>
+        <Stack gap="sm">
+          <Text size="sm">{t("channels.run.writes")}</Text>
+          <Group justify="flex-end">
+            <Button variant="default" disabled={busy} onClick={() => setRunOpen(false)}>
+              {t("common.cancel")}
+            </Button>
+            <Button loading={busy} onClick={() => launch()}>
+              {t("channels.run.confirm")}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
       <Modal
         opened={descriptionOpen}
         onClose={closeDescription}

@@ -53,12 +53,19 @@ NODE_TYPE = NodeType(
                 ),
                 "x-refraq-ref": "match_key",
             },
+            "source": {
+                "type": "string",
+                "minLength": 1,
+                "title": "Source",
+                "description": "Expression whose value is a list of objects.",
+                "x-refraq-ref": "expression",
+            },
             "mapping": {
                 "type": "array",
                 "title": "Mapping",
                 "description": (
-                    "Attributes to write and the expression for each. Delete "
-                    "ignores this list."
+                    "Attributes to write and the source-object key for each. "
+                    "Delete ignores this list. The match key attribute is included."
                 ),
                 "items": object_schema(
                     {
@@ -71,13 +78,14 @@ NODE_TYPE = NodeType(
                             ),
                             "x-refraq-ref": "entity_attribute",
                         },
-                        "value": {
+                        "key": {
                             "type": "string",
-                            "title": "Value",
-                            "description": "Expression written to the attribute.",
+                            "minLength": 1,
+                            "title": "Source key",
+                            "description": "Key copied from each source object.",
                         },
                     },
-                    ["attribute", "value"],
+                    ["attribute", "key"],
                 ),
             },
             "on_incompatible_head": {
@@ -90,6 +98,6 @@ NODE_TYPE = NodeType(
                 ),
             },
         },
-        ["entity_id", "mode", "match_key", "mapping", "on_incompatible_head"],
+        ["entity_id", "mode", "match_key", "source", "mapping", "on_incompatible_head"],
     ),
 )

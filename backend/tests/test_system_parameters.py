@@ -10,6 +10,7 @@ import pytest
 from pydantic.fields import FieldInfo
 
 from backend.admin.parameters import ADMIN_PARAMETER_SPECS
+from backend.channel.parameters import CHANNEL_PARAMETER_SPECS
 from backend.entity.parameters import ENTITY_PARAMETER_SPECS
 from backend.metadata.parameters import METADATA_PARAMETER_SPECS
 from backend.admin.system_parameters import (
@@ -197,6 +198,7 @@ def test_registry_parity_across_composition() -> None:
             *WORKER_PARAMETER_SPECS,
             *METADATA_PARAMETER_SPECS,
             *ENTITY_PARAMETER_SPECS,
+            *CHANNEL_PARAMETER_SPECS,
         )
     }
     assert {spec.key for spec in list_registered_specs()} == declared

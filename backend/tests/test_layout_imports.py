@@ -78,6 +78,8 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "entity.parameters",
             "entity.dictionaries.active_codes",
             "entity.heads",
+            "entity.rows",
+            "entity.publish_confirmation",
             "entity.routers",
         }
     ),
@@ -85,6 +87,9 @@ PUBLISHED: dict[str, frozenset[str]] = {
         {
             "channel.errors",
             "channel.routers",
+            "channel.tasks",
+            "channel.parameters",
+            "channel.write_targets",
         }
     ),
     "worker": frozenset(
