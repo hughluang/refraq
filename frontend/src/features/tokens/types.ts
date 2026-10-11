@@ -1,11 +1,13 @@
+import type { Instant } from "@/lib/instant";
+
 export type TokenMetadata = {
   id: string;
   name: string;
   prefix: string;
-  expires_at: string;
-  revoked_at: string | null;
-  created_at: string;
-  last_used_at: string | null;
+  expires_at: Instant;
+  revoked_at: Instant | null;
+  created_at: Instant;
+  last_used_at: Instant | null;
 };
 
 export type CreateTokenRequest = {

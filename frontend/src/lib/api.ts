@@ -1,3 +1,4 @@
+import { ApiContractError, decodeResponseInstants } from "@/lib/instant";
 import { isProtectedPath } from "@/lib/route-scope";
 
 const baseUrl = process.env.NEXT_PUBLIC_REFRAQ_API_BASE_URL || "/api";
@@ -117,5 +118,18 @@ export async function apiClient<T = unknown>(
     return undefined as T;
   }
 
-  return (await response.json()) as T;
+  const method = (fetchInit.method ?? "GET").toUpperCase();
+  const body: unknown = await response.json();
+  try {
+    return decodeResponseInstants(method, normalizedPath, body) as T;
+  } catch (err) {
+    if (!(err instanceof ApiContractError)) throw err;
+    const requestId = response.headers.get("x-request-id");
+    throw new ApiError(
+      response.status,
+      "API_CONTRACT_INVALID",
+      err.message,
+      requestId && requestId.length > 0 ? requestId : null,
+    );
+  }
 }

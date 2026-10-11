@@ -1,4 +1,8 @@
 import type { TokenMetadata, TokenStatus } from "@/features/tokens/types";
+import { Instant } from "@/lib/instant";
+import { instantToWall } from "@/lib/wall-time";
+
+const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 
 export function tokenStatus(
   token: TokenMetadata,
@@ -7,25 +11,14 @@ export function tokenStatus(
   if (token.revoked_at) {
     return "deactivated";
   }
-  if (new Date(token.expires_at).getTime() <= now.getTime()) {
+  if (token.expires_at.epochMs() <= now.getTime()) {
     return "expired";
   }
   return "active";
 }
 
-/** Value for `<input type="datetime-local">` in the browser's local zone. */
-export function toDatetimeLocalValue(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-/** Convert datetime-local string to ISO-8601 for the API. */
-export function datetimeLocalToIso(value: string): string {
-  return new Date(value).toISOString();
-}
-
-export function defaultExpiresLocalValue(): string {
-  const date = new Date();
-  date.setDate(date.getDate() + 90);
-  return toDatetimeLocalValue(date);
+/** Default expiry as datetime-local text in the zone the form will submit. */
+export function defaultExpiresWall(zone: string, now: number = Date.now()): string {
+  const at = Instant.parse(new Date(now + NINETY_DAYS_MS).toISOString());
+  return instantToWall(at, zone, "T") ?? "";
 }

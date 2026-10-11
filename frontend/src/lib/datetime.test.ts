@@ -6,28 +6,25 @@ import {
   formatDurationMs,
   formatInstant,
   formatJobDuration,
+  resolveDisplayZone,
   runDurationMs,
 } from "@/lib/datetime";
+import { Instant } from "@/lib/instant";
 
 describe("formatInstant", () => {
   it("returns em dash for empty values", () => {
     expect(formatInstant(null)).toBe("—");
     expect(formatInstant(undefined)).toBe("—");
-    expect(formatInstant("")).toBe("—");
-  });
-
-  it("returns em dash for invalid dates", () => {
-    expect(formatInstant("not-a-date")).toBe("—");
   });
 
   it("formats a valid ISO instant via browser default", () => {
     const value = "2026-08-11T14:20:38.676492Z";
-    expect(formatInstant(value)).toBe(new Date(value).toLocaleString());
+    expect(formatInstant(Instant.parse(value))).toBe(new Date(value).toLocaleString());
   });
 
   it("formats with an explicit IANA timeZone", () => {
     const value = "2026-08-11T14:20:38.000Z";
-    const formatted = formatInstant(value, {
+    const formatted = formatInstant(Instant.parse(value), {
       timeZone: "UTC",
       locale: "en-US",
     });
@@ -38,8 +35,8 @@ describe("formatInstant", () => {
 
   it("formats Asia/Shanghai differently from UTC for the same Instant", () => {
     const value = "2026-08-11T14:20:38.000Z";
-    const utc = formatInstant(value, { timeZone: "UTC", locale: "en-US" });
-    const shanghai = formatInstant(value, {
+    const utc = formatInstant(Instant.parse(value), { timeZone: "UTC", locale: "en-US" });
+    const shanghai = formatInstant(Instant.parse(value), {
       timeZone: "Asia/Shanghai",
       locale: "en-US",
     });
@@ -48,7 +45,7 @@ describe("formatInstant", () => {
 
   it("tries aliases before labeling UTC", () => {
     const value = "2026-08-11T14:20:38.000Z";
-    const viaAlias = formatInstant(value, {
+    const viaAlias = formatInstant(Instant.parse(value), {
       timeZone: "Not/AZone",
       aliases: ["UTC"],
       locale: "en-US",
@@ -61,9 +58,9 @@ describe("formatInstant", () => {
 
   it("throws when a valid instant cannot be formatted for the locale", () => {
     const value = "2026-08-11T14:20:38.000Z";
-    expect(() => formatInstant(value, { locale: "%%%" })).toThrow(RangeError);
+    expect(() => formatInstant(Instant.parse(value), { locale: "%%%" })).toThrow(RangeError);
     expect(() =>
-      formatInstant(value, {
+      formatInstant(Instant.parse(value), {
         timeZone: "Not/AZone",
         aliases: ["Also/Missing"],
         locale: "%%%",
@@ -73,8 +70,8 @@ describe("formatInstant", () => {
 
   it("labels UTC when the zone and its aliases are unknown", () => {
     const value = "2026-08-11T14:20:38.000Z";
-    const browser = formatInstant(value, { locale: "en-US" });
-    const invalid = formatInstant(value, {
+    const browser = formatInstant(Instant.parse(value), { locale: "en-US" });
+    const invalid = formatInstant(Instant.parse(value), {
       timeZone: "Not/AZone",
       aliases: ["Also/Missing"],
       locale: "en-US",
@@ -82,6 +79,43 @@ describe("formatInstant", () => {
     const utc = new Date(value).toLocaleString("en-US", { timeZone: "UTC" });
     expect(invalid).toBe(`${utc} UTC`);
     expect(invalid).not.toBe(browser);
+  });
+});
+
+describe("resolveDisplayZone", () => {
+  it("uses a preference the browser accepts", () => {
+    expect(resolveDisplayZone("Asia/Shanghai")).toBe("Asia/Shanghai");
+    expect(resolveDisplayZone("  UTC  ")).toBe("UTC");
+  });
+
+  it("uses the first accepted alias when the preference is rejected", () => {
+    expect(resolveDisplayZone("Not/AZone", ["Also/Missing", "Asia/Shanghai"])).toBe(
+      "Asia/Shanghai",
+    );
+  });
+
+  it("falls back to UTC when the preference and its aliases are rejected", () => {
+    expect(resolveDisplayZone("Not/AZone", ["Also/Missing"])).toBe("UTC");
+  });
+
+  it("follows the browser when the preference is empty", () => {
+    const browser = browserTimeZone() ?? "UTC";
+    expect(resolveDisplayZone(null)).toBe(browser);
+    expect(resolveDisplayZone(undefined)).toBe(browser);
+    expect(resolveDisplayZone("")).toBe(browser);
+    expect(resolveDisplayZone("   ")).toBe(browser);
+  });
+
+  it("uses UTC when the preference is empty and the browser zone cannot be read", () => {
+    const original = Intl.DateTimeFormat;
+    Intl.DateTimeFormat = function DateTimeFormat() {
+      throw new Error("intl down");
+    } as unknown as typeof Intl.DateTimeFormat;
+    try {
+      expect(resolveDisplayZone(null)).toBe("UTC");
+    } finally {
+      Intl.DateTimeFormat = original;
+    }
   });
 });
 
@@ -138,8 +172,8 @@ describe("formatDurationMs", () => {
 });
 
 describe("formatJobDuration", () => {
-  const started = "2026-08-11T10:00:00.000Z";
-  const finished = "2026-08-11T10:00:45.000Z";
+  const started = Instant.parse("2026-08-11T10:00:00.000Z");
+  const finished = Instant.parse("2026-08-11T10:00:45.000Z");
 
   it("uses finished - started when both present", () => {
     expect(
@@ -183,13 +217,13 @@ describe("formatJobDuration", () => {
 });
 
 describe("runDurationMs", () => {
-  const started = "2026-10-04T10:00:00Z";
+  const started = Instant.parse("2026-10-04T10:00:00Z");
   const now = Date.parse("2026-10-04T10:01:00Z");
 
   it("uses finished minus started", () => {
     expect(
       runDurationMs(
-        { status: "succeeded", started_at: started, finished_at: "2026-10-04T10:00:10Z" },
+        { status: "succeeded", started_at: started, finished_at: Instant.parse("2026-10-04T10:00:10Z") },
         now,
       ),
     ).toBe(10_000);
@@ -210,7 +244,7 @@ describe("runDurationMs", () => {
   it("is null when finish precedes start", () => {
     expect(
       runDurationMs(
-        { status: "failed", started_at: started, finished_at: "2026-10-04T09:59:00Z" },
+        { status: "failed", started_at: started, finished_at: Instant.parse("2026-10-04T09:59:00Z") },
         now,
       ),
     ).toBeNull();

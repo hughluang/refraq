@@ -1,3 +1,5 @@
+import type { Instant } from "@/lib/instant";
+
 export type GraphNode = {
   id: string;
   ref: string;
@@ -32,15 +34,15 @@ export type Channel = {
   description: string | null;
   active: boolean;
   draft_revision: number;
-  draft_updated_at: string;
-  latest_version: { number: number; published_at: string } | null;
-  created_at: string;
-  updated_at: string;
+  draft_updated_at: Instant;
+  latest_version: { number: number; published_at: Instant } | null;
+  created_at: Instant;
+  updated_at: Instant;
 };
 
 export type ChannelDraft = {
   draft_revision: number;
-  draft_updated_at: string;
+  draft_updated_at: Instant;
   graph: Graph;
 };
 
@@ -58,9 +60,9 @@ export type ChannelRun = {
   trigger_schedule_name: string | null;
   ignore_checkpoints: boolean;
   failed_node_id: string | null;
-  created_at: string;
-  started_at: string | null;
-  finished_at: string | null;
+  created_at: Instant;
+  started_at: Instant | null;
+  finished_at: Instant | null;
   error_code: string | null;
   error_message: string | null;
 };
@@ -69,8 +71,8 @@ export type NodeExecution = {
   seq: number;
   node_id: string;
   status: string;
-  started_at: string | null;
-  finished_at: string | null;
+  started_at: Instant | null;
+  finished_at: Instant | null;
   output_bytes: number;
   output_preview: unknown;
   error_code: string | null;
@@ -88,7 +90,7 @@ export type ChannelVersion = {
   channel_id: string;
   number: number;
   graph?: Graph;
-  published_at: string;
+  published_at: Instant;
   published_by_user_id: string;
   published_by_name: string | null;
 };
@@ -96,7 +98,7 @@ export type ChannelVersion = {
 export type Confirmation = {
   draft_revision: number;
   mirrors_to_open: { object_id: string; locator: string }[];
-  runs_to_cancel: { job_id: string; version: number; started_at: string }[];
+  runs_to_cancel: { job_id: string; version: number; started_at: Instant }[];
   missing_run_timeout: boolean;
 };
 

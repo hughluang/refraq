@@ -1,3 +1,5 @@
+import type { Instant } from "@/lib/instant";
+
 export type SubjectValueType =
   | "string"
   | "integer"
@@ -11,8 +13,8 @@ export type UserGroup = {
   name: string;
   description: string | null;
   member_count: number;
-  created_at: string;
-  updated_at: string;
+  created_at: Instant;
+  updated_at: Instant;
 };
 
 export type SubjectAttribute = {
@@ -23,8 +25,8 @@ export type SubjectAttribute = {
   value_type: SubjectValueType;
   dictionary_id: string | null;
   multi_value: boolean;
-  created_at: string;
-  updated_at: string;
+  created_at: Instant;
+  updated_at: Instant;
 };
 
 export type SubjectValues = Record<string, Array<string | number>>;

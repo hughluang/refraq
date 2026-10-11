@@ -39,6 +39,34 @@ describe("apiClient Problem Details", () => {
     await expect(apiClient("/auth/me")).rejects.toBeInstanceOf(ApiError);
   });
 
+  it("turns an unparseable Instant into API_CONTRACT_INVALID with the request id", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({ items: [{ last_login_at: "yesterday" }] }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+              "X-Request-ID": "req-contract",
+            },
+          },
+        );
+      }),
+    );
+
+    await expect(apiClient("/users")).rejects.toEqual(
+      expect.objectContaining({
+        status: 200,
+        code: "API_CONTRACT_INVALID",
+        detail: "items[].last_login_at is not an Instant: yesterday",
+        requestId: "req-contract",
+      }),
+    );
+    await expect(apiClient("/users")).rejects.toBeInstanceOf(ApiError);
+  });
+
   it("aborts when timeoutMs elapses", async () => {
     vi.stubGlobal(
       "fetch",

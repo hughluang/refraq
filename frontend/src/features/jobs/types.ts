@@ -1,3 +1,5 @@
+import type { Instant } from "@/lib/instant";
+
 export type Job = {
   id: string;
   kind: string;
@@ -11,16 +13,17 @@ export type Job = {
   trigger_schedule_name: string | null;
   created_by_user_id: string | null;
   running_timeout_sec?: number | null;
-  created_at: string;
-  started_at: string | null;
-  finished_at: string | null;
+  created_at: Instant;
+  started_at: Instant | null;
+  finished_at: Instant | null;
   error_code: string | null;
   error_message: string | null;
-  log_updated_at?: string | null;
+  log_updated_at?: Instant | null;
+  scheduled_for?: Instant | null;
 };
 
 export type JobLogs = {
   job_id: string;
   body: string;
-  updated_at: string | null;
+  updated_at: Instant | null;
 };

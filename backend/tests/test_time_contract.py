@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.util
+import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, get_args, get_origin
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -21,6 +25,7 @@ from backend.core.time import (
     resolve_wall_time,
     set_clock,
     utc_now,
+    _instant_after,
 )
 
 
@@ -73,6 +78,10 @@ def test_instant_field_accepts_offset_and_emits_z() -> None:
     assert model.at == datetime(2026, 8, 12, 2, 0, tzinfo=timezone.utc)
     dumped = model.model_dump_json()
     assert '"2026-08-12T02:00:00Z"' in dumped
+    for mode in ("serialization", "validation"):
+        schema = _InstantModel.model_json_schema(mode=mode)
+        assert schema["properties"]["at"]["type"] == "string"
+        assert schema["properties"]["at"]["format"] == "date-time"
 
 
 def test_instant_field_rejects_naive() -> None:
@@ -109,3 +118,143 @@ def test_resolve_wall_time_gap_advances_to_next_legal() -> None:
     resolved = resolve_wall_time(2025, 3, 9, 2, 30, 0, tz)
     local = resolved.astimezone(tz)
     assert (local.hour, local.minute) == (3, 0)
+
+
+def _export_time_fields():
+    path = Path(__file__).resolve().parents[2] / "scripts" / "export_time_fields.py"
+    spec = importlib.util.spec_from_file_location("export_time_fields", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _uses_instant(annotation: Any) -> bool:
+    if annotation is Instant:
+        return True
+    if get_origin(annotation) is None:
+        return False
+    return any(_uses_instant(arg) for arg in get_args(annotation))
+
+
+def _field_is_instant(field: Any) -> bool:
+    # Required Instant fields are unwrapped to AwareDatetime; the validator stays in metadata.
+    if any(getattr(meta, "func", None) is _instant_after for meta in field.metadata):
+        return True
+    return _uses_instant(field.annotation)
+
+
+def _iter_models():
+    seen: set[type] = set()
+    stack = list(BaseModel.__subclasses__())
+    while stack:
+        model = stack.pop()
+        if model in seen:
+            continue
+        seen.add(model)
+        stack.extend(model.__subclasses__())
+        yield model
+
+
+def _declares_date_time(node: Any, defs: dict[str, Any], seen: set[str] | None = None) -> bool:
+    if not isinstance(node, dict):
+        return False
+    seen = set() if seen is None else seen
+    ref = node.get("$ref")
+    if isinstance(ref, str):
+        if ref in seen:
+            return False
+        name = ref.rsplit("/", 1)[-1]
+        return _declares_date_time(defs.get(name), defs, seen | {ref})
+    if node.get("type") == "string" and node.get("format") == "date-time":
+        return True
+    if node.get("type") == "array":
+        return _declares_date_time(node.get("items"), defs, seen)
+    for key in ("anyOf", "oneOf", "allOf"):
+        if key not in node:
+            continue
+        branches = [
+            branch
+            for branch in node[key]
+            if isinstance(branch, dict) and branch.get("type") != "null"
+        ]
+        return bool(branches) and all(
+            _declares_date_time(branch, defs, seen) for branch in branches
+        )
+    return False
+
+
+def test_instant_fields_declare_date_time() -> None:
+    from backend.main import app
+
+    spec = app.openapi()
+    components = spec["components"]["schemas"]
+    missing: list[str] = []
+    local_checked = 0
+    published_checked = 0
+    for model in _iter_models():
+        for name, field in model.model_fields.items():
+            if not _field_is_instant(field) or field.exclude:
+                continue
+            local_checked += 1
+            local = model.model_json_schema(mode="serialization")
+            prop = (local.get("properties") or {}).get(name)
+            if not _declares_date_time(prop, local.get("$defs") or {}):
+                missing.append(f"{model.__module__}.{model.__name__}.{name}")
+                continue
+            published = components.get(model.__name__)
+            if not isinstance(published, dict):
+                continue
+            published_checked += 1
+            published_prop = (published.get("properties") or {}).get(name)
+            if not _declares_date_time(published_prop, components):
+                missing.append(f"openapi {model.__name__}.{name}")
+    assert missing == [], missing
+    # Every Instant field on a loaded model, not only those FastAPI names
+    # exactly after the class. 67 is the field count this contract started from.
+    assert local_checked >= 67, local_checked
+    assert published_checked > 0
+
+
+def test_exported_time_fields_match_openapi() -> None:
+    from backend.main import app
+
+    module = _export_time_fields()
+    derived = module.derive_response_time_fields(app.openapi())
+    committed = json.loads(module.OUTPUT.read_text(encoding="utf-8"))
+    assert committed == derived
+    assert "items[].started_at" in derived["GET /channels/{channel_id}/runs"]
+    assert "items[].created_at" in derived["GET /channels/{channel_id}/runs"]
+    assert "grants[].valid_until" in derived["GET /entities/{entity_id}/access"]
+    assert "next_run_ats[]" in derived["POST /schedules/cron-preview"]
+
+
+def test_derivation_rejects_dynamic_keys_that_hold_instants() -> None:
+    module = _export_time_fields()
+    spec = {
+        "components": {
+            "schemas": {
+                "Row": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string", "format": "date-time"},
+                }
+            }
+        },
+        "paths": {
+            "/rows": {
+                "get": {
+                    "responses": {
+                        "200": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/Row"}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    }
+    with pytest.raises(module.UnresolvedTimeSchema):
+        module.derive_response_time_fields(spec)

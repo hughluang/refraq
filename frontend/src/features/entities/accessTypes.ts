@@ -1,3 +1,5 @@
+import type { Instant } from "@/lib/instant";
+
 export type AccessSubject = {
   type: "user" | "role" | "group";
   id: string;
@@ -35,7 +37,7 @@ export type AccessGrant = {
   row_rule: Record<string, unknown> | null;
   actions: string[];
   status: string;
-  valid_until: string | null;
+  valid_until: Instant | null;
   broken: boolean;
 };
 

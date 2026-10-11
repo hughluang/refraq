@@ -152,18 +152,12 @@ class BusinessEntityOut(BaseModel):
     deprecated_at: Instant | None = None
     ever_published: bool = False
     current_version: CurrentVersionOut | None = None
-    inbound_references: list[InboundReferenceOut] | None = None
+    inbound_references: list[InboundReferenceOut] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     created_at: Instant
     updated_at: Instant
-
-    @model_serializer(mode="wrap")
-    def _omit_absent_inbound(
-        self, handler: Any
-    ) -> dict[str, Any]:
-        data = handler(self)
-        if data.get("inbound_references") is None:
-            data.pop("inbound_references", None)
-        return data
 
 
 class EntityVersionOut(BaseModel):

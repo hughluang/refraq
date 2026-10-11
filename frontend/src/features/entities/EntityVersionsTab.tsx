@@ -20,13 +20,14 @@ import type {
   EntityVersion,
 } from "@/features/entities/types";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
+import type { Instant } from "@/lib/instant";
 
 type Props = {
   entity: BusinessEntity;
   versions: EntityVersion[];
   canDropTable: boolean;
   busy: boolean;
-  formatInstant: (value: string | null | undefined) => string;
+  formatInstant: (value: Instant | null | undefined) => string;
   onOpenJob: (jobId: string | null) => void;
   onViewError: (err: unknown) => void;
   onDrop: (version: EntityVersion) => void;

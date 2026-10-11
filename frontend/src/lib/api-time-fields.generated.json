@@ -1,0 +1,608 @@
+{
+  "DELETE /branding/assets/{kind}": [],
+  "DELETE /business-domains/{domain_id}": [],
+  "DELETE /channels/{channel_id}": [],
+  "DELETE /dictionaries/{dictionary_id}": [],
+  "DELETE /entities/{entity_id}": [],
+  "DELETE /entities/{entity_id}/access/grants/{grant_id}": [],
+  "DELETE /entities/{entity_id}/access/profiles/{profile_id}": [],
+  "DELETE /entities/{entity_id}/access/restrictions/{restriction_id}": [],
+  "DELETE /identity-providers/{provider_id}": [],
+  "DELETE /joins/{join_id}": [],
+  "DELETE /model-services/{service_id}": [],
+  "DELETE /roles/{role_id}": [],
+  "DELETE /schedules/{schedule_id}": [],
+  "DELETE /sources/{source_id}": [],
+  "DELETE /subject-attributes/{definition_id}": [],
+  "DELETE /tokens/{token_id}": [],
+  "DELETE /user-groups/{group_id}": [],
+  "DELETE /user-groups/{group_id}/members/{user_id}": [],
+  "GET /account/groups": [],
+  "GET /audit/events": [
+    "items[].created_at"
+  ],
+  "GET /audit/events/{event_id}": [
+    "event.created_at"
+  ],
+  "GET /auth/me": [],
+  "GET /auth/providers": [],
+  "GET /auth/sso/{provider_id}/callback": [],
+  "GET /auth/sso/{provider_id}/start": [],
+  "GET /branding": [],
+  "GET /branding/assets/{kind}": [],
+  "GET /business-domains": [
+    "items[].created_at",
+    "items[].updated_at"
+  ],
+  "GET /catalog/columns/search": [],
+  "GET /catalog/objects/search": [
+    "items[].collected_at",
+    "items[].semantics_updated_at"
+  ],
+  "GET /channel-node-types": [],
+  "GET /channels": [
+    "items[].created_at",
+    "items[].draft_updated_at",
+    "items[].latest_version.published_at",
+    "items[].updated_at"
+  ],
+  "GET /channels/{channel_id}": [
+    "channel.created_at",
+    "channel.draft_updated_at",
+    "channel.latest_version.published_at",
+    "channel.updated_at"
+  ],
+  "GET /channels/{channel_id}/draft": [
+    "draft_updated_at"
+  ],
+  "GET /channels/{channel_id}/runs": [
+    "items[].created_at",
+    "items[].finished_at",
+    "items[].started_at"
+  ],
+  "GET /channels/{channel_id}/runs/{job_id}": [
+    "node_executions[].finished_at",
+    "node_executions[].started_at",
+    "run.created_at",
+    "run.finished_at",
+    "run.started_at"
+  ],
+  "GET /channels/{channel_id}/runs/{job_id}/executions/{seq}/output": [],
+  "GET /channels/{channel_id}/versions": [
+    "items[].published_at"
+  ],
+  "GET /channels/{channel_id}/versions/{number}": [
+    "version.published_at"
+  ],
+  "GET /console/module-identities": [],
+  "GET /console/navigation": [],
+  "GET /dictionaries": [
+    "items[].created_at",
+    "items[].deprecated_at",
+    "items[].updated_at"
+  ],
+  "GET /dictionaries/{dictionary_id}": [
+    "dictionary.created_at",
+    "dictionary.deprecated_at",
+    "dictionary.updated_at"
+  ],
+  "GET /entities": [
+    "items[].created_at",
+    "items[].deprecated_at",
+    "items[].updated_at"
+  ],
+  "GET /entities/{entity_id}": [
+    "entity.created_at",
+    "entity.deprecated_at",
+    "entity.updated_at"
+  ],
+  "GET /entities/{entity_id}/access": [
+    "grants[].created_at",
+    "grants[].updated_at",
+    "grants[].valid_until"
+  ],
+  "GET /entities/{entity_id}/access/grants": [
+    "items[].created_at",
+    "items[].updated_at",
+    "items[].valid_until"
+  ],
+  "GET /entities/{entity_id}/access/grants/{grant_id}": [
+    "grant.created_at",
+    "grant.updated_at",
+    "grant.valid_until"
+  ],
+  "GET /entities/{entity_id}/access/ladders": [],
+  "GET /entities/{entity_id}/access/profiles": [],
+  "GET /entities/{entity_id}/access/profiles/{profile_id}": [],
+  "GET /entities/{entity_id}/access/restrictions": [],
+  "GET /entities/{entity_id}/access/restrictions/{restriction_id}": [],
+  "GET /entities/{entity_id}/versions": [
+    "items[].created_at",
+    "items[].updated_at"
+  ],
+  "GET /entities/{entity_id}/versions/{version_id}": [
+    "version.created_at",
+    "version.updated_at"
+  ],
+  "GET /healthz": [],
+  "GET /identity-providers": [
+    "items[].created_at",
+    "items[].updated_at"
+  ],
+  "GET /identity-providers/spec": [],
+  "GET /identity-providers/{provider_id}": [
+    "provider.created_at",
+    "provider.updated_at"
+  ],
+  "GET /jobs": [
+    "items[].created_at",
+    "items[].finished_at",
+    "items[].log_updated_at",
+    "items[].scheduled_for",
+    "items[].started_at"
+  ],
+  "GET /jobs/{job_id}": [
+    "job.created_at",
+    "job.finished_at",
+    "job.log_updated_at",
+    "job.scheduled_for",
+    "job.started_at"
+  ],
+  "GET /jobs/{job_id}/logs": [
+    "updated_at"
+  ],
+  "GET /joins/path": [
+    "direct_joins[].created_at",
+    "direct_joins[].rejected_at"
+  ],
+  "GET /mcp/catalog": [],
+  "GET /metrics": [],
+  "GET /model-services": [
+    "items[].created_at",
+    "items[].updated_at"
+  ],
+  "GET /model-services/purpose/{purpose}": [
+    "embed_schedule.next_run_at"
+  ],
+  "GET /model-services/spec": [],
+  "GET /model-services/{service_id}": [
+    "created_at",
+    "updated_at"
+  ],
+  "GET /objects/{object_id}": [
+    "object.collected_at",
+    "object.semantics_updated_at"
+  ],
+  "GET /objects/{object_id}/ddl": [],
+  "GET /objects/{object_id}/joins": [
+    "items[].created_at",
+    "items[].rejected_at"
+  ],
+  "GET /objects/{object_id}/semantics-changes": [
+    "items[].created_at"
+  ],
+  "GET /permissions": [],
+  "GET /readyz": [],
+  "GET /roles": [],
+  "GET /roles/{role_id}": [],
+  "GET /schedules": [
+    "items[].created_at",
+    "items[].last_run_at",
+    "items[].next_run_at",
+    "items[].recent_jobs[].created_at",
+    "items[].recent_jobs[].finished_at",
+    "items[].recent_jobs[].started_at",
+    "items[].start_at",
+    "items[].updated_at"
+  ],
+  "GET /schedules/{schedule_id}": [
+    "schedule.created_at",
+    "schedule.last_run_at",
+    "schedule.next_run_at",
+    "schedule.recent_jobs[].created_at",
+    "schedule.recent_jobs[].finished_at",
+    "schedule.recent_jobs[].started_at",
+    "schedule.start_at",
+    "schedule.updated_at"
+  ],
+  "GET /schedules/{schedule_id}/jobs": [
+    "items[].created_at",
+    "items[].finished_at",
+    "items[].log_updated_at",
+    "items[].scheduled_for",
+    "items[].started_at"
+  ],
+  "GET /settings": [
+    "parameters[].updated_at"
+  ],
+  "GET /sources": [
+    "items[].access_updated_at"
+  ],
+  "GET /sources/access-schema/{engine}": [],
+  "GET /sources/{source_id}": [
+    "source.access_updated_at"
+  ],
+  "GET /sources/{source_id}/access": [],
+  "GET /sources/{source_id}/objects": [
+    "items[].collected_at",
+    "items[].semantics_updated_at"
+  ],
+  "GET /sources/{source_id}/schedules": [
+    "items[].created_at",
+    "items[].last_run_at",
+    "items[].next_run_at",
+    "items[].recent_jobs[].created_at",
+    "items[].recent_jobs[].finished_at",
+    "items[].recent_jobs[].started_at",
+    "items[].start_at",
+    "items[].updated_at"
+  ],
+  "GET /sources/{source_id}/structure-diffs": [
+    "items[].created_at"
+  ],
+  "GET /structure-diffs/{diff_id}": [
+    "structure_diff.created_at"
+  ],
+  "GET /subject-attributes": [
+    "items[].created_at",
+    "items[].updated_at"
+  ],
+  "GET /subject-attributes/{definition_id}": [
+    "subject_attribute.created_at",
+    "subject_attribute.updated_at"
+  ],
+  "GET /time-zones": [],
+  "GET /tokens": [
+    "items[].created_at",
+    "items[].expires_at",
+    "items[].last_used_at",
+    "items[].revoked_at"
+  ],
+  "GET /type-mappings": [
+    "items[].created_at",
+    "items[].updated_at"
+  ],
+  "GET /user-groups": [
+    "items[].created_at",
+    "items[].updated_at"
+  ],
+  "GET /user-groups/{group_id}": [
+    "group.created_at",
+    "group.updated_at"
+  ],
+  "GET /user-groups/{group_id}/members": [
+    "items[].last_login_at"
+  ],
+  "GET /user-groups/{group_id}/subject-attributes": [],
+  "GET /users": [
+    "items[].last_login_at"
+  ],
+  "GET /users/pending-federated-identities": [
+    "items[].expires_at",
+    "items[].first_seen_at",
+    "items[].last_attempt_at"
+  ],
+  "GET /users/{user_id}": [
+    "user.last_login_at"
+  ],
+  "GET /users/{user_id}/groups": [
+    "groups[].created_at",
+    "groups[].updated_at"
+  ],
+  "GET /users/{user_id}/subject-attributes": [],
+  "PATCH /account/profile": [],
+  "PATCH /business-domains/{domain_id}": [
+    "domain.created_at",
+    "domain.updated_at"
+  ],
+  "PATCH /channels/{channel_id}": [
+    "channel.created_at",
+    "channel.draft_updated_at",
+    "channel.latest_version.published_at",
+    "channel.updated_at"
+  ],
+  "PATCH /columns/{column_id}/semantics": [],
+  "PATCH /dictionaries/{dictionary_id}": [
+    "dictionary.created_at",
+    "dictionary.deprecated_at",
+    "dictionary.updated_at"
+  ],
+  "PATCH /entities/{entity_id}": [
+    "entity.created_at",
+    "entity.deprecated_at",
+    "entity.updated_at"
+  ],
+  "PATCH /entities/{entity_id}/access/grants/{grant_id}": [
+    "grant.created_at",
+    "grant.updated_at",
+    "grant.valid_until"
+  ],
+  "PATCH /entities/{entity_id}/access/profiles/{profile_id}": [],
+  "PATCH /entities/{entity_id}/access/restrictions/{restriction_id}": [],
+  "PATCH /entities/{entity_id}/versions/{version_id}": [
+    "version.created_at",
+    "version.updated_at"
+  ],
+  "PATCH /identity-providers/{provider_id}": [
+    "provider.created_at",
+    "provider.updated_at"
+  ],
+  "PATCH /joins/{join_id}": [
+    "join.created_at",
+    "join.rejected_at"
+  ],
+  "PATCH /model-services/{service_id}": [
+    "created_at",
+    "updated_at"
+  ],
+  "PATCH /objects/{object_id}/columns/semantics": [
+    "object.collected_at",
+    "object.semantics_updated_at"
+  ],
+  "PATCH /objects/{object_id}/semantics": [
+    "object.collected_at",
+    "object.semantics_updated_at"
+  ],
+  "PATCH /roles/{role_id}": [],
+  "PATCH /schedules/{schedule_id}": [
+    "schedule.created_at",
+    "schedule.last_run_at",
+    "schedule.next_run_at",
+    "schedule.recent_jobs[].created_at",
+    "schedule.recent_jobs[].finished_at",
+    "schedule.recent_jobs[].started_at",
+    "schedule.start_at",
+    "schedule.updated_at"
+  ],
+  "PATCH /settings": [
+    "parameters[].updated_at"
+  ],
+  "PATCH /sources/{source_id}": [
+    "schedules[].created_at",
+    "schedules[].last_run_at",
+    "schedules[].next_run_at",
+    "schedules[].recent_jobs[].created_at",
+    "schedules[].recent_jobs[].finished_at",
+    "schedules[].recent_jobs[].started_at",
+    "schedules[].start_at",
+    "schedules[].updated_at",
+    "source.access_updated_at"
+  ],
+  "PATCH /subject-attributes/{definition_id}": [
+    "subject_attribute.created_at",
+    "subject_attribute.updated_at"
+  ],
+  "PATCH /type-mappings/{mapping_id}": [
+    "mapping.created_at",
+    "mapping.updated_at"
+  ],
+  "PATCH /user-groups/{group_id}": [
+    "group.created_at",
+    "group.updated_at"
+  ],
+  "PATCH /users/{user_id}/status": [
+    "user.last_login_at"
+  ],
+  "POST /account/password": [],
+  "POST /auth/login": [],
+  "POST /auth/logout": [],
+  "POST /branding/assets/{kind}": [],
+  "POST /branding/reset": [],
+  "POST /business-domains": [
+    "domain.created_at",
+    "domain.updated_at"
+  ],
+  "POST /channels": [
+    "channel.created_at",
+    "channel.draft_updated_at",
+    "channel.latest_version.published_at",
+    "channel.updated_at"
+  ],
+  "POST /channels/{channel_id}/activate": [
+    "channel.created_at",
+    "channel.draft_updated_at",
+    "channel.latest_version.published_at",
+    "channel.updated_at"
+  ],
+  "POST /channels/{channel_id}/deactivate": [
+    "channel.created_at",
+    "channel.draft_updated_at",
+    "channel.latest_version.published_at",
+    "channel.updated_at"
+  ],
+  "POST /channels/{channel_id}/draft/validate": [],
+  "POST /channels/{channel_id}/publish": [
+    "confirmation.runs_to_cancel[].started_at",
+    "version.published_at"
+  ],
+  "POST /channels/{channel_id}/publish/preview": [
+    "runs_to_cancel[].started_at"
+  ],
+  "POST /channels/{channel_id}/runs": [
+    "run.created_at",
+    "run.finished_at",
+    "run.started_at"
+  ],
+  "POST /dictionaries": [
+    "dictionary.created_at",
+    "dictionary.deprecated_at",
+    "dictionary.updated_at"
+  ],
+  "POST /entities": [
+    "entity.created_at",
+    "entity.deprecated_at",
+    "entity.updated_at"
+  ],
+  "POST /entities/{entity_id}/access/grants": [
+    "grant.created_at",
+    "grant.updated_at",
+    "grant.valid_until"
+  ],
+  "POST /entities/{entity_id}/access/preview": [],
+  "POST /entities/{entity_id}/access/profiles": [],
+  "POST /entities/{entity_id}/access/profiles/copy": [],
+  "POST /entities/{entity_id}/access/restrictions": [],
+  "POST /entities/{entity_id}/classify": [],
+  "POST /entities/{entity_id}/deprecate": [
+    "entity.created_at",
+    "entity.deprecated_at",
+    "entity.updated_at"
+  ],
+  "POST /entities/{entity_id}/versions": [
+    "version.created_at",
+    "version.updated_at"
+  ],
+  "POST /entities/{entity_id}/versions/{version_id}/drop-table": [
+    "job.created_at",
+    "job.finished_at",
+    "job.log_updated_at",
+    "job.scheduled_for",
+    "job.started_at",
+    "version.created_at",
+    "version.updated_at"
+  ],
+  "POST /entities/{entity_id}/versions/{version_id}/publish": [
+    "job.created_at",
+    "job.finished_at",
+    "job.log_updated_at",
+    "job.scheduled_for",
+    "job.started_at",
+    "version.created_at",
+    "version.updated_at"
+  ],
+  "POST /entities/{entity_id}/versions/{version_id}/publish/preview": [],
+  "POST /entities/{table_name}/create": [],
+  "POST /entities/{table_name}/create-many": [],
+  "POST /entities/{table_name}/delete": [],
+  "POST /entities/{table_name}/delete-where": [],
+  "POST /entities/{table_name}/get": [],
+  "POST /entities/{table_name}/query": [],
+  "POST /entities/{table_name}/schema": [],
+  "POST /entities/{table_name}/update": [],
+  "POST /entities/{table_name}/update-where": [],
+  "POST /entities/{table_name}/upsert": [],
+  "POST /identity-providers": [
+    "provider.created_at",
+    "provider.updated_at"
+  ],
+  "POST /identity-providers/{provider_id}/test": [],
+  "POST /jobs/{job_id}/cancel": [
+    "job.created_at",
+    "job.finished_at",
+    "job.log_updated_at",
+    "job.scheduled_for",
+    "job.started_at"
+  ],
+  "POST /joins": [
+    "join.created_at",
+    "join.rejected_at"
+  ],
+  "POST /joins/{join_id}/reject": [
+    "join.created_at",
+    "join.rejected_at"
+  ],
+  "POST /joins/{join_id}/restore": [
+    "join.created_at",
+    "join.rejected_at"
+  ],
+  "POST /joins:batch": [
+    "items[].created_at",
+    "items[].rejected_at"
+  ],
+  "POST /model-services": [
+    "created_at",
+    "updated_at"
+  ],
+  "POST /model-services/purpose/{purpose}/cleanup": [
+    "embed_schedule.next_run_at"
+  ],
+  "POST /model-services/purpose/{purpose}/close": [
+    "embed_schedule.next_run_at"
+  ],
+  "POST /model-services/purpose/{purpose}/open": [
+    "embed_schedule.next_run_at"
+  ],
+  "POST /model-services/{service_id}/activate": [
+    "created_at",
+    "updated_at"
+  ],
+  "POST /model-services/{service_id}/test": [],
+  "POST /objects/{object_id}/sample": [],
+  "POST /roles": [],
+  "POST /schedules/cron-preview": [
+    "next_run_ats[]"
+  ],
+  "POST /schedules/{schedule_id}/run": [
+    "job.created_at",
+    "job.finished_at",
+    "job.log_updated_at",
+    "job.scheduled_for",
+    "job.started_at"
+  ],
+  "POST /settings/reset": [
+    "parameters[].updated_at"
+  ],
+  "POST /sources": [
+    "source.access_updated_at"
+  ],
+  "POST /sources/test": [],
+  "POST /sources/{source_id}/query": [],
+  "POST /sources/{source_id}/schedules": [
+    "schedule.created_at",
+    "schedule.last_run_at",
+    "schedule.next_run_at",
+    "schedule.recent_jobs[].created_at",
+    "schedule.recent_jobs[].finished_at",
+    "schedule.recent_jobs[].started_at",
+    "schedule.start_at",
+    "schedule.updated_at"
+  ],
+  "POST /sources/{source_id}/test": [],
+  "POST /subject-attributes": [
+    "subject_attribute.created_at",
+    "subject_attribute.updated_at"
+  ],
+  "POST /tokens": [
+    "token.created_at",
+    "token.expires_at",
+    "token.last_used_at",
+    "token.revoked_at"
+  ],
+  "POST /tokens/{token_id}/deactivate": [
+    "token.created_at",
+    "token.expires_at",
+    "token.last_used_at",
+    "token.revoked_at"
+  ],
+  "POST /tokens/{token_id}/restore": [
+    "token.created_at",
+    "token.expires_at",
+    "token.last_used_at",
+    "token.revoked_at"
+  ],
+  "POST /user-groups": [
+    "group.created_at",
+    "group.updated_at"
+  ],
+  "POST /users": [
+    "user.last_login_at"
+  ],
+  "POST /users/pending-federated-identities/{pending_id}/claim": [
+    "user.last_login_at"
+  ],
+  "POST /users/{user_id}/unfederate": [
+    "user.last_login_at"
+  ],
+  "PUT /branding": [],
+  "PUT /channels/{channel_id}/draft": [
+    "draft_updated_at"
+  ],
+  "PUT /entities/{entity_id}/access/ladders/{attribute_id}": [],
+  "PUT /user-groups/{group_id}/members/{user_id}": [],
+  "PUT /user-groups/{group_id}/subject-attributes": [],
+  "PUT /users/{user_id}/groups": [
+    "groups[].created_at",
+    "groups[].updated_at"
+  ],
+  "PUT /users/{user_id}/subject-attributes": []
+}

@@ -13,6 +13,7 @@ import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { Instant } from "@/components/display/Instant";
 import { PageError } from "@/components/feedback/PageError";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { FillColumn } from "@/components/layout/FillColumn";
@@ -201,12 +202,14 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
           </Text>
           {object.semantics_updated_at ? (
             <Text size="sm" c="dimmed">
-              {t("catalog.semantics.updatedAt")}: {object.semantics_updated_at}
+              {t("catalog.semantics.updatedAt")}:{" "}
+              <Instant value={object.semantics_updated_at} />
             </Text>
           ) : null}
           {object.collected_at ? (
             <Text size="sm" c="dimmed">
-              {t("catalog.structure.collectedAt")}: {object.collected_at}
+              {t("catalog.structure.collectedAt")}:{" "}
+              <Instant value={object.collected_at} />
             </Text>
           ) : null}
         </Group>

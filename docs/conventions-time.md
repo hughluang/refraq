@@ -36,6 +36,14 @@ Celery `timezone` / `enable_utc` is worker message time, **not** business Schedu
 - **Outbound:** one formatter from `backend.core.time` — HTTP, MCP, and Job log lines all emit UTC with `Z`.
 - Schema Instant fields use the shared Instant type from `core.time` (not bare `datetime`, and not bare `AwareDatetime` alone — that type only requires awareness, not UTC normalize / `Z` serialize).
 
+### 4.1 OpenAPI date-time and Console decoding
+
+`format: date-time` on a field is the Instant contract, for requests and responses. A non-null value is an offset RFC 3339 timestamp and is guaranteed parseable. A nullable field has one empty value: `null`. Omitted keys are absent, not an empty string.
+
+The Management Console decodes those response paths in `apiClient` (`frontend/src/lib/instant.ts`) using `scripts/export_time_fields.py`. The page receives an `Instant`, not a string. Display it only through `<Instant>` or `useFormatInstant` (User locale and Display Timezone). `epochMs()` and `toJSON()` are the non-display exits. Do not treat an unparseable API value as empty: that is a contract failure. The Console shows it as problem `API_CONTRACT_INVALID` and keeps the response `X-Request-ID`.
+
+`date` (`YYYY-MM-DD`), `time` (`HH:MM`), durations (`interval_seconds`, a leading `-P` interval), and cron wall-clock fields are not Instants. Do not shift them by a timezone.
+
 ## 5. Runtime
 
 - Deploy default process `TZ=UTC` (Dockerfile / Compose / `.env.example`). Override via standard `TZ` env only; no `APP_TIMEZONE`.
@@ -81,6 +89,8 @@ This matches Dagster’s **daily / weekly / monthly** DST handling. Dagster’s 
 Display Timezone and **Schedule Timezone** share one catalog (`backend.core.time_zones`): zones named in tzdata `zone1970.tab`, plus `UTC`. Historical link names are aliases of that set, not extra choices. A **Display Timezone** write, and the upgrade fold of stored zones, store the current id (`Asia/Calcutta` is stored as `Asia/Kolkata`). `GET /time-zones` returns each id with its aliases (`docs/api-contracts-account.md`). The Schedule Timezone parameter enum is that same id list. A historical alias is not a member of the enum, and a settings write does not rewrite it.
 
 When the browser rejects the stored id, formatting tries each alias, then formats in UTC and labels the text `UTC`. It does not switch to the browser zone.
+
+A Console field that types an Instant (not Schedule Start) interprets that wall time in the same effective zone: the Display Timezone when the browser accepts it, otherwise the first accepted alias, otherwise UTC. An empty preference uses the browser zone, or UTC when that zone cannot be read. The field states the zone. Schedule Start stays wall time in the Schedule Timezone (§6).
 
 ## 9. Deferred / do not reverse direction
 

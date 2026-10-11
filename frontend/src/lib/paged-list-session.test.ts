@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/api";
 import type { OffsetPage } from "@/lib/pagination";
@@ -8,6 +8,14 @@ import {
   loadPagedGeneration,
   syncResetPage,
 } from "@/lib/paged-list-session";
+
+vi.mock("@/providers/i18n-runtime", async () => {
+  const { default: en } = await import("@/locales/en-US/common.json");
+  const catalog = en as Record<string, string>;
+  return {
+    translateKey: (key: string) => catalog[key] ?? key,
+  };
+});
 
 function pageOf<T>(items: T[], total = items.length): OffsetPage<T> {
   return { items, total, limit: 50, offset: 0 };
@@ -122,6 +130,31 @@ describe("loadPagedGeneration", () => {
       pageSize: 50,
     });
     expect(result).toEqual({ kind: "redirect" });
+  });
+
+  it("surfaces a contract failure as its translated copy and request id", async () => {
+    const result = await loadPagedGeneration({
+      started: 5,
+      currentGeneration: () => 5,
+      enabled: true,
+      fetch: () =>
+        Promise.reject(
+          new ApiError(
+            200,
+            "API_CONTRACT_INVALID",
+            "items[].last_login_at is not an Instant: yesterday",
+            "req-contract",
+          ),
+        ),
+      page: 1,
+      pageSize: 50,
+    });
+    expect(result).toEqual({
+      kind: "error",
+      message:
+        "The server response does not match the API contract. Give the request ID to whoever maintains the platform.",
+      requestId: "req-contract",
+    });
   });
 
   it("returns error detail and requestId", async () => {

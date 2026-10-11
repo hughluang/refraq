@@ -13,6 +13,7 @@ import { useNotification, useTranslate } from "@refinedev/core";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
+import { Instant } from "@/components/display/Instant";
 import { ListTable } from "@/components/display/ListTable";
 import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
@@ -481,7 +482,9 @@ export function JoinsTab({
                   )}
                 </Group>
               </Table.Td>
-              <Table.Td>{join.created_at}</Table.Td>
+              <Table.Td>
+                <Instant value={join.created_at} />
+              </Table.Td>
               {writable ? (
                 <Table.Td>
                   <Group gap={4} wrap="nowrap">

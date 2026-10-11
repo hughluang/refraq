@@ -14,6 +14,7 @@ import { CanAccess, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
+import { Instant } from "@/components/display/Instant";
 import { TextareaField } from "@/components/form/TextareaField";
 import { TextField } from "@/components/form/TextField";
 import { ListTable } from "@/components/display/ListTable";
@@ -202,7 +203,7 @@ export function BusinessDomainList() {
             </Table.Td>
             <Table.Td>
               <Text size="sm" c="dimmed">
-                {row.updated_at}
+                <Instant value={row.updated_at} />
               </Text>
             </Table.Td>
             <Table.Td>

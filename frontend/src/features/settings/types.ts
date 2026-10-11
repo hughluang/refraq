@@ -1,4 +1,5 @@
 import type { JsonSchemaProperty } from "@/lib/json-schema";
+import type { Instant } from "@/lib/instant";
 
 export type SettingsSource = "seed" | "user";
 
@@ -15,7 +16,7 @@ export type SystemParameter = {
   label_key: string;
   help_key: string;
   apply_note_key: string;
-  updated_at: string | null;
+  updated_at: Instant | null;
   updated_by_user_id: string | null;
   updated_by_account: string | null;
 };

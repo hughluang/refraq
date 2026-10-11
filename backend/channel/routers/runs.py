@@ -14,7 +14,7 @@ from backend.channel.errors import ChannelGraphInvalid, ChannelRunNotFound
 from backend.channel.run_store import get_run_store, output_page, output_preview
 from backend.channel.runs import start_run
 from backend.core.pagination import PageParams, page_params
-from backend.core.time import format_instant
+from backend.core.time import Instant, format_instant
 from backend.jobs.store import get_job_store
 
 router = APIRouter(tags=["channels"])
@@ -28,7 +28,47 @@ class StartRunRequest(BaseModel):
     ignore_checkpoints: bool = False
 
 
-@router.post("/channels/{channel_id}/runs", status_code=202)
+class ChannelRunOut(BaseModel):
+    """Run record. Extra keys pass through; Instant fields are the time contract."""
+
+    model_config = ConfigDict(extra="allow")
+
+    created_at: Instant
+    started_at: Instant | None = None
+    finished_at: Instant | None = None
+
+
+class ChannelRunListResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    items: list[ChannelRunOut]
+
+
+class ChannelRunStartResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    run: ChannelRunOut
+
+
+class NodeExecutionOut(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    started_at: Instant | None = None
+    finished_at: Instant | None = None
+
+
+class ChannelRunDetailResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    run: ChannelRunOut
+    node_executions: list[NodeExecutionOut]
+
+
+@router.post(
+    "/channels/{channel_id}/runs",
+    status_code=202,
+    response_model=ChannelRunStartResponse,
+)
 def http_start_run(
     channel_id: str,
     body: StartRunRequest,
@@ -70,7 +110,7 @@ def http_start_run(
     return {"run": _present(job, stored)}
 
 
-@router.get("/channels/{channel_id}/runs")
+@router.get("/channels/{channel_id}/runs", response_model=ChannelRunListResponse)
 def http_list_runs(
     channel_id: str,
     _actor: UserRecord = Depends(require_permission("channel:read")),
@@ -94,7 +134,10 @@ def http_list_runs(
     return {"items": items, "total": total, "limit": page.limit, "offset": page.offset}
 
 
-@router.get("/channels/{channel_id}/runs/{job_id}")
+@router.get(
+    "/channels/{channel_id}/runs/{job_id}",
+    response_model=ChannelRunDetailResponse,
+)
 def http_get_run(
     channel_id: str,
     job_id: str,

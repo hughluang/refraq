@@ -34,10 +34,12 @@ import {
 } from "@/features/entities/accessLogic";
 import type { AccessOption, AccessRun } from "@/features/entities/accessSession";
 import type { AccessSummary } from "@/features/entities/accessTypes";
+import { Instant } from "@/components/display/Instant";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { SectionHeader } from "@/components/layout/SectionHeader";
-import { formatInstant } from "@/lib/datetime";
+import { useEntryZone } from "@/hooks/useFormatInstant";
+import { wallToInstant } from "@/lib/wall-time";
 
 const EMPTY_RULE: RuleNode = { kind: "and", children: [] };
 
@@ -67,6 +69,7 @@ export function AccessGrantsSection({
   focusNonce,
 }: Props) {
   const t = useTranslate();
+  const zone = useEntryZone();
   const [open, setOpen] = useState(false);
   const [limitRows, setLimitRows] = useState(false);
   const [subjectType, setSubjectType] = useState<"user" | "role" | "group">("user");
@@ -183,9 +186,11 @@ export function AccessGrantsSection({
                       {describeStoredRule(t, grant.row_rule, names)}
                     </Table.Td>
                     <Table.Td>
-                      {grant.valid_until
-                        ? formatInstant(grant.valid_until)
-                        : t("entities.access.grants.noExpiry")}
+                      {grant.valid_until ? (
+                        <Instant value={grant.valid_until} />
+                      ) : (
+                        t("entities.access.grants.noExpiry")
+                      )}
                     </Table.Td>
                     <Table.Td>
                       <Button
@@ -239,6 +244,7 @@ export function AccessGrantsSection({
             />
             <TextInput
               label={t("entities.access.grants.validUntil")}
+              description={t("entities.access.grants.validUntilHint", { zone })}
               type="datetime-local"
               value={validUntil}
               onChange={(event) => setValidUntil(event.currentTarget.value)}
@@ -407,7 +413,7 @@ export function AccessGrantsSection({
                   profile_id: grantProfile as string,
                   row_rule: serializeRule(rule),
                   actions,
-                  valid_until: validUntil ? new Date(validUntil).toISOString() : null,
+                  valid_until: validUntil ? wallToInstant(validUntil, zone) : null,
                 });
                 setRule(EMPTY_RULE);
               })

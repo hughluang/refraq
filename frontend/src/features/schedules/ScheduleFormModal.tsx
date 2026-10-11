@@ -43,15 +43,12 @@ import {
   timeoutPayload,
 } from "@/features/schedules/runningTimeoutField";
 import { scheduleKindFromTask } from "@/features/schedules/scheduleKindField";
-import {
-  isAllowedStartAt,
-  startAtToWall,
-  wallToStartAt,
-} from "@/features/schedules/startAtField";
+import { isAllowedStartAt } from "@/features/schedules/startAtField";
 import type { ScheduledTask } from "@/features/schedules/types";
 import { useDisplayZoneId, useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
 import { problemMessage } from "@/lib/problem";
+import { instantToWall, wallToInstant } from "@/lib/wall-time";
 
 type CadenceMode = "clock" | "interval";
 
@@ -84,7 +81,7 @@ function valuesFromTask(
     intervalAmount: split.amount,
     intervalUnit: split.unit,
     running_timeout_sec: timeoutFromTask(task?.running_timeout_sec),
-    startWall: startAtToWall(task?.start_at, cronTimezone),
+    startWall: instantToWall(task?.start_at, cronTimezone),
     enabled: task?.enabled ?? true,
     name: task?.name ?? "",
   };
@@ -157,7 +154,7 @@ function ScheduleForm({
     initialValues: valuesFromTask(schedule, cronTimezone),
   });
   const cron = form.values.cron.trim();
-  const startAt = wallToStartAt(form.values.startWall, cronTimezone);
+  const startAt = wallToInstant(form.values.startWall, cronTimezone);
   const [debouncedCron, setDebouncedCron] = useState(cron);
   const skipDebounce = useRef(true);
 
@@ -410,7 +407,7 @@ function ScheduleForm({
             })}
           </Text>
           {preview.data.next_run_ats.map((instant) => (
-            <Text key={instant} size="sm">
+            <Text key={instant.toJSON()} size="sm">
               {formatInstant(instant)}
             </Text>
           ))}

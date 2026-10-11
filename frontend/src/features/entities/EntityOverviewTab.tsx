@@ -6,10 +6,11 @@ import { useTranslate } from "@refinedev/core";
 import { DisplayField } from "@/components/display/DisplayField";
 import type { BusinessEntity } from "@/features/entities/types";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
+import type { Instant } from "@/lib/instant";
 
 type Props = {
   entity: BusinessEntity;
-  formatInstant: (value: string | null | undefined) => string;
+  formatInstant: (value: Instant | null | undefined) => string;
   onOpenJob: (jobId: string | null) => void;
 };
 

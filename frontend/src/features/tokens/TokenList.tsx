@@ -27,18 +27,15 @@ import {
   listTokens,
   restoreToken,
 } from "@/features/tokens/api";
-import {
-  datetimeLocalToIso,
-  defaultExpiresLocalValue,
-  tokenStatus,
-} from "@/features/tokens/status";
+import { defaultExpiresWall, tokenStatus } from "@/features/tokens/status";
 import type { TokenMetadata, TokenStatus } from "@/features/tokens/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { problemMessage } from "@/lib/problem";
+import { useEntryZone, useFormatInstant } from "@/hooks/useFormatInstant";
 import { copyText } from "@/lib/copy-text";
 import type { PageQuery } from "@/lib/pagination";
+import { problemMessage } from "@/lib/problem";
+import { wallToInstant } from "@/lib/wall-time";
 
 const PAGE_SIZE = 50;
 
@@ -58,6 +55,7 @@ export function TokenList() {
   const t = useTranslate();
   const { open } = useNotification();
   const formatInstant = useFormatInstant();
+  const zone = useEntryZone();
   const fetchPage = useCallback((query: PageQuery) => listTokens(query), []);
   const list = useConsolePagedList<TokenMetadata>({
     pageSize: PAGE_SIZE,
@@ -75,17 +73,17 @@ export function TokenList() {
   const form = useForm<CreateFormValues>({
     initialValues: {
       name: "",
-      expires_at: defaultExpiresLocalValue(),
+      expires_at: defaultExpiresWall(zone),
     },
     validate: {
       name: (value) =>
         value.trim().length > 0 ? null : t("tokens.validation.required"),
       expires_at: (value) => {
-        if (!value) {
+        const expires = value ? wallToInstant(value, zone) : null;
+        if (!expires) {
           return t("tokens.validation.required");
         }
-        const expires = new Date(value);
-        if (Number.isNaN(expires.getTime()) || expires.getTime() <= Date.now()) {
+        if (Date.parse(expires) <= Date.now()) {
           return t("tokens.validation.expiresFuture");
         }
         return null;
@@ -96,18 +94,20 @@ export function TokenList() {
   function openCreate() {
     form.setValues({
       name: "",
-      expires_at: defaultExpiresLocalValue(),
+      expires_at: defaultExpiresWall(zone),
     });
     form.clearErrors();
     setCreateOpen(true);
   }
 
   async function onCreate(values: CreateFormValues) {
+    const expiresAt = wallToInstant(values.expires_at, zone);
+    if (!expiresAt) return;
     setCreating(true);
     try {
       const result = await createToken({
         name: values.name.trim(),
-        expires_at: datetimeLocalToIso(values.expires_at),
+        expires_at: expiresAt,
       });
       setCreateOpen(false);
       setSecret(result.secret);
@@ -334,7 +334,7 @@ export function TokenList() {
               editable
               type="datetime-local"
               label={t("tokens.fields.expiresAt")}
-              description={t("tokens.fields.expiresAt.hint")}
+              description={t("tokens.fields.expiresAt.hint", { zone })}
               withAsterisk
               {...form.getInputProps("expires_at")}
             />

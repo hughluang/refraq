@@ -4,6 +4,7 @@ import { Table, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useEffect, useState } from "react";
 
+import { Instant } from "@/components/display/Instant";
 import { PageError } from "@/components/feedback/PageError";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { listSemanticsChanges } from "@/features/sources/api/catalog";
@@ -92,7 +93,9 @@ export function HistoryTab({ objectId, listEnabled }: HistoryTabProps) {
             <Table.Td>{formatValue(row.old_value)}</Table.Td>
             <Table.Td>{formatValue(row.new_value)}</Table.Td>
             <Table.Td>{row.semantic_source}</Table.Td>
-            <Table.Td>{row.created_at}</Table.Td>
+            <Table.Td>
+              <Instant value={row.created_at} />
+            </Table.Td>
           </Table.Tr>
         ))}
       </Table.Tbody>

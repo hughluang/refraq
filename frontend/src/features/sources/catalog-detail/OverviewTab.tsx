@@ -14,6 +14,7 @@ import { useTranslate } from "@refinedev/core";
 import { useEffect, useMemo, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
+import { Instant } from "@/components/display/Instant";
 import { MultiSelectField } from "@/components/form/MultiSelectField";
 import { SelectField } from "@/components/form/SelectField";
 import { TagsField } from "@/components/form/TagsField";
@@ -245,7 +246,7 @@ export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
         />
         <DisplayField
           label={t("catalog.structure.collectedAt")}
-          value={object.collected_at}
+          value={<Instant value={object.collected_at} />}
         />
       </Stack>
     </SimpleGrid>

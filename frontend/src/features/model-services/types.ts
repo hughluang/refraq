@@ -1,3 +1,5 @@
+import type { Instant } from "@/lib/instant";
+
 export type ModelServicePurpose = "embedding";
 export type ModelServiceProtocol = "openai_compat";
 export type IndexStatus = "none" | "indexing" | "ready" | "failed";
@@ -7,7 +9,7 @@ export type EmbedSchedule = {
   enabled: boolean;
   cron: string | null;
   interval_seconds: number | null;
-  next_run_at: string | null;
+  next_run_at: Instant | null;
 };
 
 export type ModelService = {
@@ -20,8 +22,8 @@ export type ModelService = {
   timeout_sec: number;
   has_secret: boolean;
   in_use: boolean;
-  created_at: string;
-  updated_at: string;
+  created_at: Instant;
+  updated_at: Instant;
 };
 
 export type PurposeState = {

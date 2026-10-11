@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 from backend.core.pagination import OffsetPage
 from backend.core.time import Instant
@@ -50,19 +50,16 @@ class DictionaryOut(BaseModel):
     revision: int
     deprecated_at: Instant | None = None
     entry_count: int
-    entries: list[DictionaryEntryOut] | None = None
-    usages: list[DictionaryUsageOut] | None = None
+    entries: list[DictionaryEntryOut] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    usages: list[DictionaryUsageOut] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     created_at: Instant
     updated_at: Instant
-
-    @model_serializer(mode="wrap")
-    def _omit_detail_when_absent(self, handler: Any) -> dict[str, Any]:
-        data = handler(self)
-        if data.get("entries") is None:
-            data.pop("entries", None)
-        if data.get("usages") is None:
-            data.pop("usages", None)
-        return data
 
 
 class DictionaryResponse(BaseModel):

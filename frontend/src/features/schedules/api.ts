@@ -1,4 +1,5 @@
 import { apiClient } from "@/lib/api";
+import type { Instant } from "@/lib/instant";
 import type { Job } from "@/features/jobs/types";
 import type {
   CreateScheduleBody,
@@ -48,7 +49,7 @@ export function createSourceSchedule(
 
 export type CronPreview = {
   cron_timezone: string;
-  next_run_ats: string[];
+  next_run_ats: Instant[];
 };
 
 export function previewCron(cron: string, startAt: string | null = null) {

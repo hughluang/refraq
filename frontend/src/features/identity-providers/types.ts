@@ -1,4 +1,5 @@
 import type { JsonSchemaProperty } from "@/lib/json-schema";
+import type { Instant } from "@/lib/instant";
 
 export type IdentityProviderProtocol = "oidc";
 
@@ -16,7 +17,8 @@ export type IdentityProvider = {
   client_id: string;
   client_secret_configured: boolean;
   bound_user_count: number;
-  updated_at: string | null;
+  created_at: Instant | null;
+  updated_at: Instant | null;
 };
 
 export type IdentityProviderSpec = {
@@ -78,9 +80,9 @@ export type PendingFederatedIdentity = {
   groups: string[];
   admission_reason: string;
   attempt_count: number;
-  first_seen_at: string;
-  last_attempt_at: string;
-  expires_at: string;
+  first_seen_at: Instant;
+  last_attempt_at: Instant;
+  expires_at: Instant;
   subject: string;
   provider_id: string | null;
 };

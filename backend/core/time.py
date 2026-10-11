@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, Protocol, runtime_checkable
 from zoneinfo import ZoneInfo
 
-from pydantic import AfterValidator, AwareDatetime, PlainSerializer
+from pydantic import AfterValidator, AwareDatetime, PlainSerializer, WithJsonSchema
 from sqlalchemy import DateTime
 from sqlalchemy.types import TypeDecorator
 
@@ -66,6 +66,7 @@ Instant = Annotated[
     AwareDatetime,
     AfterValidator(_instant_after),
     PlainSerializer(_instant_json, return_type=str, when_used="json"),
+    WithJsonSchema({"type": "string", "format": "date-time"}),
 ]
 
 

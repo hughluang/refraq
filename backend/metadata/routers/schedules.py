@@ -11,7 +11,7 @@ from backend.admin.user_store import UserRecord, UserStore, get_user_store
 from backend.core.pagination import PageParams, page_params
 from backend.core.time import Instant
 from backend.jobs.api import get_schedule_name_store, present_jobs
-from backend.jobs.schemas.jobs import JobListResponse
+from backend.jobs.schemas.jobs import JobListResponse, JobResponse
 from backend.jobs.store import JobStatus
 from backend.metadata.catalog_embed_jobs.schedule import (
     is_catalog_embed_schedule,
@@ -25,7 +25,7 @@ from backend.metadata.source_schedules import (
     require_runnable_schedule,
 )
 from backend.worker.api import current_schedule_timezone
-from backend.worker.schemas.schedules import ScheduleListResponse
+from backend.worker.schemas.schedules import ScheduleListResponse, ScheduleResponse
 
 router = APIRouter(tags=["schedules-catalog"])
 
@@ -42,7 +42,11 @@ class CreateSourceScheduleRequest(BaseModel):
     start_at: Instant | None = None
 
 
-@router.post("/sources/{source_id}/schedules", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/sources/{source_id}/schedules",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ScheduleResponse,
+)
 def create_source_schedule(
     source_id: str,
     payload: CreateSourceScheduleRequest,
@@ -85,7 +89,11 @@ def list_source_schedules(
     )
 
 
-@router.post("/schedules/{schedule_id}/run", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/schedules/{schedule_id}/run",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=JobResponse,
+)
 def run_source_schedule(
     schedule_id: str,
     request: Request,

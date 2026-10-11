@@ -227,10 +227,18 @@ class ValidateResponse(BaseModel):
     problems: list[ProblemOut]
 
 
+class RunToCancelOut(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    job_id: str
+    version: int
+    started_at: Instant
+
+
 class ConfirmationOut(BaseModel):
     draft_revision: int
     mirrors_to_open: list[dict[str, Any]]
-    runs_to_cancel: list[dict[str, Any]]
+    runs_to_cancel: list[RunToCancelOut]
     missing_run_timeout: bool
 
 

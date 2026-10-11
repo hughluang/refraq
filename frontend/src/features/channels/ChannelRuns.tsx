@@ -5,6 +5,7 @@ import { useTranslate } from "@refinedev/core";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { Instant } from "@/components/display/Instant";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { formatRunSubject } from "@/features/channels/formatRunSubject";
 import { listRuns } from "@/features/channels/api";
@@ -58,7 +59,9 @@ export function ChannelRuns({ channelId }: { channelId: string }) {
               ) : null}
             </Table.Td>
             <Table.Td>{formatJobTrigger(run, t)}</Table.Td>
-            <Table.Td>{run.started_at ?? run.created_at}</Table.Td>
+            <Table.Td>
+              <Instant value={run.started_at ?? run.created_at} />
+            </Table.Td>
             <Table.Td>{run.error_message ?? "—"}</Table.Td>
           </Table.Tr>
         ))}

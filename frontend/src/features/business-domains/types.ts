@@ -1,10 +1,12 @@
+import type { Instant } from "@/lib/instant";
+
 export type BusinessDomain = {
   id: string;
   code: string;
   name: string;
   description: string | null;
-  created_at: string;
-  updated_at: string;
+  created_at: Instant;
+  updated_at: Instant;
 };
 
 export type BusinessDomainCreate = {

@@ -10,8 +10,11 @@ from backend.admin.user_store import UserRecord
 from backend.core.pagination import PageParams, page_params
 from backend.entity.data.capabilities import PAGE_LIMIT_DEFAULT, PAGE_LIMIT_MAX
 from backend.entity.schemas.access import (
+    AccessSummaryResponse,
     GrantCreate,
+    GrantListResponse,
     GrantPatch,
+    GrantResponse,
     LadderPut,
     PreviewIn,
     ProfileCopy,
@@ -29,7 +32,7 @@ def _caller_permissions(user: UserRecord) -> set[str]:
     return set(resolve_user_permissions(user, get_role_store()))
 
 
-@router.get("/entities/{entity_id}/access")
+@router.get("/entities/{entity_id}/access", response_model=AccessSummaryResponse)
 def http_access_summary(
     entity_id: str,
     _: UserRecord = Depends(require_permission("entity:access_manage")),
@@ -155,7 +158,7 @@ def http_delete_profile(
     return Response(status_code=204)
 
 
-@router.get("/entities/{entity_id}/access/grants")
+@router.get("/entities/{entity_id}/access/grants", response_model=GrantListResponse)
 def http_list_grants(
     entity_id: str,
     page: PageParams = Depends(
@@ -166,7 +169,11 @@ def http_list_grants(
     return service.list_grants(entity_id, limit=page.limit, offset=page.offset)
 
 
-@router.post("/entities/{entity_id}/access/grants", status_code=201)
+@router.post(
+    "/entities/{entity_id}/access/grants",
+    status_code=201,
+    response_model=GrantResponse,
+)
 def http_create_grant(
     entity_id: str,
     body: GrantCreate,
@@ -186,7 +193,10 @@ def http_create_grant(
     )
 
 
-@router.get("/entities/{entity_id}/access/grants/{grant_id}")
+@router.get(
+    "/entities/{entity_id}/access/grants/{grant_id}",
+    response_model=GrantResponse,
+)
 def http_get_grant(
     entity_id: str,
     grant_id: str,
@@ -195,7 +205,10 @@ def http_get_grant(
     return service.get_grant(entity_id, grant_id)
 
 
-@router.patch("/entities/{entity_id}/access/grants/{grant_id}")
+@router.patch(
+    "/entities/{entity_id}/access/grants/{grant_id}",
+    response_model=GrantResponse,
+)
 def http_update_grant(
     entity_id: str,
     grant_id: str,

@@ -84,6 +84,34 @@ class CeilingIn(BaseModel):
     level: str
 
 
+class GrantOut(BaseModel):
+    """Grant on the wire. Extra keys pass through; Instant fields are the time contract."""
+
+    model_config = ConfigDict(extra="allow")
+
+    valid_until: Instant | None = None
+    created_at: Instant
+    updated_at: Instant
+
+
+class GrantListResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    items: list[GrantOut]
+
+
+class GrantResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    grant: GrantOut
+
+
+class AccessSummaryResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    grants: list[GrantOut]
+
+
 class GrantCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
