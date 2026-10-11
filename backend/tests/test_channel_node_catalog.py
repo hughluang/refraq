@@ -28,9 +28,11 @@ def test_every_type_states_its_function_and_ports() -> None:
         assert _sentence_count(node.summary) == 1
         assert len(node.summary) <= _SUMMARY_MAX
         assert _sentence_count(node.description) >= 2
+        assert node.type_version >= 1
         for port in (*node.inputs, *node.outputs):
             assert _PORT_NAME.fullmatch(port.port), port.port
             assert port.description.strip()
+            assert port.coarse_type in {"object", "items", "unknown"}
         assert all(port.port != "error" for port in node.inputs)
         error_ports = [port for port in node.outputs if port.port == "error"]
         assert len(error_ports) <= 1

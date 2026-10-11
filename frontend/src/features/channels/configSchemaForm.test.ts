@@ -64,6 +64,24 @@ describe("fieldsFromSchema", () => {
     }
   });
 
+  it("maps a template field to a template editor", () => {
+    const fields = fieldsFromSchema({
+      type: "object",
+      properties: {
+        source: {
+          type: "string",
+          description: "Rows to write.",
+          "x-refraq-template": { type: "array", items: { type: "object" } },
+        },
+      },
+    });
+    expect(fields[0]).toMatchObject({
+      kind: "template",
+      key: "source",
+      description: "Rows to write.",
+    });
+  });
+
   it("treats a match key as an optional attribute", () => {
     const matchKey = fieldsFromSchema(WRITE).find((field) => field.key === "match_key");
     expect(matchKey).toEqual({

@@ -25,6 +25,7 @@ from backend.channel.schemas.channels import (
     LatestVersionOut,
     NodeTypeListResponse,
     NodeTypeOut,
+    RefinedPortOut,
     PortOut,
     ProblemOut,
     PublishRequest,
@@ -35,6 +36,8 @@ from backend.channel.schemas.channels import (
     VersionResponse,
     VersionSummaryOut,
 )
+from backend.channel.graph import refine_ports
+from backend.channel.references import ChannelReferenceResolver
 from backend.channel.service import (
     create_channel,
     delete_channel,
@@ -88,7 +91,9 @@ def _draft_out(record: ChannelRecord) -> DraftResponse:
     )
 
 
-def _version_summary(record: ChannelVersionRecord, names: dict[str, str]) -> VersionSummaryOut:
+def _version_summary(
+    record: ChannelVersionRecord, names: dict[str, str]
+) -> VersionSummaryOut:
     return VersionSummaryOut(
         channel_id=record.channel_id,
         number=record.number,
@@ -119,13 +124,24 @@ def _node_type_out(spec: NodeType) -> NodeTypeOut:
         description=spec.description,
         entry=spec.entry,
         inputs=[
-            PortOut(port=port.port, description=port.description) for port in spec.inputs
+            PortOut(
+                port=port.port,
+                description=port.description,
+                coarse_type=port.coarse_type,
+            )
+            for port in spec.inputs
         ],
         outputs=[
-            PortOut(port=port.port, description=port.description) for port in spec.outputs
+            PortOut(
+                port=port.port,
+                description=port.description,
+                coarse_type=port.coarse_type,
+            )
+            for port in spec.outputs
         ],
         config_schema=spec.config_schema,
         permission=spec.permission,
+        type_version=spec.type_version,
     )
 
 
@@ -134,10 +150,14 @@ def http_list_node_types(
     user: UserRecord = Depends(require_permission("channel:read")),
 ) -> NodeTypeListResponse:
     del user
-    return NodeTypeListResponse(items=[_node_type_out(item) for item in list_node_types()])
+    return NodeTypeListResponse(
+        items=[_node_type_out(item) for item in list_node_types()]
+    )
 
 
-@router.post("/channels", response_model=ChannelResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/channels", response_model=ChannelResponse, status_code=status.HTTP_201_CREATED
+)
 def http_create_channel(
     body: ChannelCreateRequest,
     user: UserRecord = Depends(require_permission("channel:write")),
@@ -277,17 +297,32 @@ def http_validate_draft(
 ) -> ValidateResponse:
     del user
     record, problems = validate_draft(channel_id)
+    ports = refine_ports(record.draft_graph, ChannelReferenceResolver(channel_id))
+    errors = [problem for problem in problems if problem.severity == "error"]
     return ValidateResponse(
         draft_revision=record.draft_revision,
-        valid=not problems,
+        valid=not errors,
         problems=[
             ProblemOut(
                 code=problem.code,
                 node_id=problem.node_id,
                 edge_id=problem.edge_id,
                 detail=problem.detail,
+                severity=problem.severity if problem.severity == "warning" else "error",
             )
             for problem in problems
+        ],
+        ports=[
+            RefinedPortOut(
+                node_id=port.node_id,
+                port=port.port,
+                direction=port.direction
+                if port.direction in {"input", "output"}
+                else "output",
+                coarse_type=port.coarse_type,
+                value_schema=port.schema,
+            )
+            for port in ports
         ],
     )
 

@@ -10,6 +10,7 @@ import { PageError } from "@/components/feedback/PageError";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
 import { getRun, listNodeTypes } from "@/features/channels/api";
 import { formatRunSubject } from "@/features/channels/formatRunSubject";
+import { RunErrorText } from "@/features/channels/RunErrorText";
 import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
 import type { ChannelRunDetail as Detail, NodeTypeSpec } from "@/features/channels/types";
 import { ApiError } from "@/lib/api";
@@ -71,7 +72,7 @@ export function ChannelRunDetail({
             {t("channels.runs.ignoreCheckpoints")}
           </Text>
         ) : null}{" "}
-        {detail.run.error_message ?? ""}
+        <RunErrorText code={detail.run.error_code} message={detail.run.error_message} />
       </Text>
       <div style={{ flex: 1, minHeight: 360 }}>
         <ChannelCanvas
@@ -84,7 +85,8 @@ export function ChannelRunDetail({
       </div>
       {detail.node_executions.map((item) => (
         <Text key={item.seq} size="sm">
-          {item.node_id} {item.status} {item.error_message ?? ""}{" "}
+          {item.node_id} {item.status}{" "}
+          <RunErrorText code={item.error_code} message={item.error_message} />{" "}
           {JSON.stringify(item.output_preview)}
         </Text>
       ))}

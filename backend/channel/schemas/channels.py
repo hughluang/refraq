@@ -43,6 +43,7 @@ class NodeIn(BaseModel):
     config: dict[str, Any]
     on_error: Literal["stop", "continue", "error_output"] = "stop"
     retry: RetryIn | None = None
+    type_version: int = Field(default=1, ge=1)
 
     @field_validator("name")
     @classmethod
@@ -219,12 +220,24 @@ class ProblemOut(BaseModel):
     node_id: str | None
     edge_id: str | None
     detail: str
+    severity: Literal["error", "warning"] = "error"
+
+
+class RefinedPortOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    node_id: str
+    port: str
+    direction: Literal["input", "output"]
+    coarse_type: str
+    value_schema: dict[str, Any] | None = Field(alias="schema")
 
 
 class ValidateResponse(BaseModel):
     draft_revision: int
     valid: bool
     problems: list[ProblemOut]
+    ports: list[RefinedPortOut]
 
 
 class RunToCancelOut(BaseModel):
@@ -270,6 +283,7 @@ class PublishResponse(BaseModel):
 class PortOut(BaseModel):
     port: str
     description: str
+    coarse_type: str
 
 
 class NodeTypeOut(BaseModel):
@@ -283,6 +297,7 @@ class NodeTypeOut(BaseModel):
     outputs: list[PortOut]
     config_schema: dict[str, Any]
     permission: str | None
+    type_version: int
 
 
 class NodeTypeListResponse(BaseModel):

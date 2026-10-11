@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, Mapping
+
 from backend.channel.nodes.spec import (
     ERROR_OUTPUT,
     MAIN_INPUT,
@@ -9,8 +11,32 @@ from backend.channel.nodes.spec import (
     NodeType,
     object_schema,
 )
+from backend.channel.values import LIST_OF_OBJECTS
 
 __all__ = ["NODE_TYPE"]
+
+_COUNT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["inserted", "updated", "unchanged", "deleted", "unmatched"],
+    "properties": {
+        "inserted": {"type": "integer"},
+        "updated": {"type": "integer"},
+        "unchanged": {"type": "integer"},
+        "deleted": {"type": "integer"},
+        "unmatched": {"type": "integer"},
+    },
+}
+
+
+def _refine(
+    config: Mapping[str, Any],
+    upstream: Mapping[str, Any],
+    resolver: Any,
+) -> dict[str, Any]:
+    del config, upstream, resolver
+    return {"main": _COUNT_SCHEMA, "error": None}
+
 
 NODE_TYPE = NodeType(
     type_id="write.entity",
@@ -57,8 +83,11 @@ NODE_TYPE = NodeType(
                 "type": "string",
                 "minLength": 1,
                 "title": "Source",
-                "description": "Expression whose value is a list of objects.",
-                "x-refraq-ref": "expression",
+                "description": (
+                    "Template whose value is a list of objects. "
+                    "Text with no {{ }} is static JSON."
+                ),
+                "x-refraq-template": LIST_OF_OBJECTS,
             },
             "mapping": {
                 "type": "array",
@@ -100,4 +129,5 @@ NODE_TYPE = NodeType(
         },
         ["entity_id", "mode", "match_key", "source", "mapping", "on_incompatible_head"],
     ),
+    refine=_refine,
 )

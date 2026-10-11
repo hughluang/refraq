@@ -8,9 +8,6 @@ cycle is rejected unless a test catalog declares one.
 
 from __future__ import annotations
 
-import ast
-import keyword
-import ast
 import keyword
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, Sequence
@@ -19,12 +16,21 @@ from jsonschema import Draft202012Validator
 
 from backend.channel.nodes import list_node_types
 from backend.channel.nodes.spec import NodeType
+from backend.channel.template import (
+    TemplateSyntaxError,
+    TemplateTypeError,
+    parse,
+    static_check,
+)
+from backend.channel.values import attribute_value_schema
 
 __all__ = [
     "Problem",
     "ReferenceResolver",
+    "RefinedPort",
     "ResolvedAttribute",
     "ResolvedEntity",
+    "refine_ports",
     "validate",
 ]
 
@@ -42,6 +48,16 @@ class Problem:
     detail: str
     node_id: str | None = None
     edge_id: str | None = None
+    severity: str = "error"
+
+
+@dataclass(frozen=True, slots=True)
+class RefinedPort:
+    node_id: str
+    port: str
+    direction: str
+    coarse_type: str
+    schema: dict[str, Any] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +65,7 @@ class ResolvedAttribute:
     name: str
     unique: bool
     business_key: bool
+    value_type: str = "string"
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +94,7 @@ def validate(
     problems.extend(_ref_problems(nodes))
     problems.extend(_policy_problems(nodes))
     problems.extend(_type_and_config_problems(nodes, by_type))
-    problems.extend(_expression_problems(nodes, by_type))
+    problems.extend(_expression_problems(nodes, edges, by_id, by_type, resolver))
     problems.extend(_payload_problems(nodes))
     problems.extend(_edge_problems(edges, by_id, by_type))
     problems.extend(_trigger_problems(nodes, edges, by_id, by_type))
@@ -157,56 +174,162 @@ def _policy_problems(nodes: list[dict[str, Any]]) -> list[Problem]:
 
 def _expression_problems(
     nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    by_id: dict[str, dict[str, Any]],
     by_type: dict[str, NodeType],
+    resolver: ReferenceResolver,
 ) -> list[Problem]:
     problems: list[Problem] = []
+    ancestors = _ancestors(by_id, edges)
     for node in nodes:
         spec = by_type.get(str(node["type"]))
         if spec is None or not isinstance(node.get("config"), dict):
             continue
-        for text in _expression_texts(spec.config_schema, node["config"]):
-            if not _expression_ok(text):
-                problems.append(
-                    Problem(
-                        "CHANNEL_EXPRESSION_INVALID",
-                        "Expression is not a literal or one {{ }} Python expression",
-                        node_id=str(node["id"]),
-                    )
-                )
-                break
+        node_id = str(node["id"])
+        upstream = ancestors.get(node_id, set())
+        for text, value_schema in _template_fields(
+            spec.config_schema,
+            node["config"],
+            None,
+            resolver,
+        ):
+            problems.extend(
+                _template_problems(text, value_schema, node_id, node, upstream, by_id)
+            )
     return problems
 
 
-def _expression_texts(schema: Mapping[str, Any], value: Any) -> list[str]:
-    found: list[str] = []
-    if schema.get("x-refraq-ref") == "expression" and isinstance(value, str):
-        found.append(value)
+def _template_problems(
+    text: str,
+    value_schema: dict[str, Any] | None,
+    node_id: str,
+    node: Mapping[str, Any],
+    upstream: set[str],
+    by_id: dict[str, dict[str, Any]],
+) -> list[Problem]:
+    try:
+        template = parse(text)
+    except TemplateSyntaxError:
+        return [
+            Problem(
+                "CHANNEL_EXPRESSION_INVALID",
+                "Template expression does not parse",
+                node_id=node_id,
+            )
+        ]
+    problems: list[Problem] = []
+    by_ref = {str(item.get("ref")): str(item["id"]) for item in by_id.values()}
+    by_name = {str(item.get("name")): str(item["id"]) for item in by_id.values()}
+    for ref in template.refs:
+        target = by_ref.get(ref)
+        if target is None or target not in upstream:
+            problems.append(
+                Problem(
+                    "CHANNEL_TEMPLATE_REF_INVALID",
+                    f"Template names a node that is not upstream: {ref}",
+                    node_id=node_id,
+                )
+            )
+    for name in template.node_names:
+        target = by_name.get(name)
+        if target is None or target not in upstream:
+            problems.append(
+                Problem(
+                    "CHANNEL_TEMPLATE_REF_INVALID",
+                    f"Template names a node that is not upstream: {name}",
+                    node_id=node_id,
+                )
+            )
+    del node
+    if value_schema is None:
+        return problems
+    try:
+        status = static_check(template, value_schema)
+    except TemplateTypeError:
+        problems.append(
+            Problem(
+                "CHANNEL_TEMPLATE_TYPE_MISMATCH",
+                "Template value does not match the declared type",
+                node_id=node_id,
+            )
+        )
+        return problems
+    if status == "unknown":
+        problems.append(
+            Problem(
+                "CHANNEL_TEMPLATE_TYPE_UNKNOWN",
+                "Template result type is not known until the node runs",
+                node_id=node_id,
+                severity="warning",
+            )
+        )
+    return problems
+
+
+def _template_fields(
+    schema: Mapping[str, Any],
+    value: Any,
+    entity_id: str | None,
+    resolver: ReferenceResolver,
+) -> list[tuple[str, dict[str, Any] | None]]:
+    found: list[tuple[str, dict[str, Any] | None]] = []
+    marker = schema.get("x-refraq-template")
+    if isinstance(marker, dict) and isinstance(value, str):
+        found.append((value, _declared_schema(marker, None, entity_id, resolver)))
     if schema.get("type") == "object" and isinstance(value, dict):
         properties = schema.get("properties")
         if isinstance(properties, dict):
+            local_entity = entity_id
             for key, subschema in properties.items():
-                if isinstance(subschema, dict) and key in value:
-                    found.extend(_expression_texts(subschema, value[key]))
+                if (
+                    isinstance(subschema, dict)
+                    and subschema.get("x-refraq-ref") == "entity"
+                    and isinstance(value.get(key), str)
+                ):
+                    local_entity = str(value[key])
+            for key, subschema in properties.items():
+                if not isinstance(subschema, dict) or key not in value:
+                    continue
+                item = value[key]
+                nested_marker = subschema.get("x-refraq-template")
+                if isinstance(nested_marker, dict) and isinstance(item, str):
+                    found.append(
+                        (
+                            item,
+                            _declared_schema(
+                                nested_marker, value, local_entity, resolver
+                            ),
+                        )
+                    )
+                    continue
+                found.extend(_template_fields(subschema, item, local_entity, resolver))
     if schema.get("type") == "array" and isinstance(value, list):
         item_schema = schema.get("items")
         if isinstance(item_schema, dict):
             for item in value:
-                found.extend(_expression_texts(item_schema, item))
+                found.extend(_template_fields(item_schema, item, entity_id, resolver))
     return found
 
 
-def _expression_ok(value: str) -> bool:
-    text = value.strip()
-    if not (text.startswith("{{") and text.endswith("}}")):
-        return True
-    body = text[2:-2].strip()
-    if not body:
-        return False
-    try:
-        ast.parse(body, mode="eval")
-    except SyntaxError:
-        return False
-    return True
+def _declared_schema(
+    marker: Mapping[str, Any],
+    parent: Mapping[str, Any] | None,
+    entity_id: str | None,
+    resolver: ReferenceResolver,
+) -> dict[str, Any] | None:
+    if marker.get("from") != "entity_attribute":
+        return dict(marker)
+    if parent is None or not isinstance(parent.get("attribute"), str) or not entity_id:
+        return None
+    head = resolver.entity_head(entity_id)
+    if head is None:
+        return None
+    named = next(
+        (attr for attr in head.attributes if attr.name == parent["attribute"]), None
+    )
+    if named is None:
+        return None
+    return attribute_value_schema(named.value_type)
 
 
 def _payload_problems(nodes: list[dict[str, Any]]) -> list[Problem]:
@@ -247,6 +370,15 @@ def _type_and_config_problems(
                 )
             )
             continue
+        version = node.get("type_version", 1)
+        if version != spec.type_version:
+            problems.append(
+                Problem(
+                    "CHANNEL_NODE_TYPE_VERSION",
+                    "Node type version is not the current version",
+                    node_id=str(node["id"]),
+                )
+            )
         message = _config_error(spec.config_schema, node["config"])
         if message is not None:
             problems.append(
@@ -331,6 +463,31 @@ def _edge_problems(
                     "Edge names an unknown node or port",
                     node_id=source_id if bad_source else target_id,
                     edge_id=str(edge["id"]),
+                )
+            )
+            continue
+        if source_type is None or target_type is None:
+            continue
+        source_coarse = _coarse(source_type.outputs, source_port)
+        target_coarse = _coarse(target_type.inputs, target_port)
+        verdict = _port_verdict(source_coarse, target_coarse)
+        if verdict == "error":
+            problems.append(
+                Problem(
+                    "CHANNEL_PORT_TYPE_MISMATCH",
+                    "Ports have incompatible types",
+                    node_id=target_id,
+                    edge_id=str(edge["id"]),
+                )
+            )
+        elif verdict == "warning":
+            problems.append(
+                Problem(
+                    "CHANNEL_PORT_TYPE_UNKNOWN",
+                    "Upstream port type is not known yet",
+                    node_id=target_id,
+                    edge_id=str(edge["id"]),
+                    severity="warning",
                 )
             )
     return problems
@@ -446,7 +603,10 @@ def _reference_problems(
     problems: list[Problem] = []
     for node in nodes:
         spec = by_type.get(str(node["type"]))
-        if spec is None or _config_error(spec.config_schema, node["config"]) is not None:
+        if (
+            spec is None
+            or _config_error(spec.config_schema, node["config"]) is not None
+        ):
             continue
         for kind, value, entity_id in _refs(spec.config_schema, node["config"], None):
             if kind == "entity":
@@ -483,7 +643,10 @@ def _match_key_problems(
         if str(node["type"]) != "write.entity":
             continue
         spec = by_type.get("write.entity")
-        if spec is None or _config_error(spec.config_schema, node["config"]) is not None:
+        if (
+            spec is None
+            or _config_error(spec.config_schema, node["config"]) is not None
+        ):
             continue
         config = node["config"]
         head = resolver.entity_head(config["entity_id"])
@@ -628,3 +791,152 @@ def _is_loop_back(
         return False
     port = str(edge["source"]["port"])
     return any(item.port == port and item.loop_back for item in spec.outputs)
+
+
+def refine_ports(
+    graph: Mapping[str, Any],
+    resolver: ReferenceResolver,
+    catalog: Sequence[NodeType] | None = None,
+) -> list[RefinedPort]:
+    """Coarse type and refined schema for every declared port."""
+    types = list(catalog) if catalog is not None else list_node_types()
+    by_type = {item.type_id: item for item in types}
+    nodes = list(graph["nodes"])
+    edges = list(graph["edges"])
+    by_id = {str(node["id"]): node for node in nodes}
+    ancestors = _ancestors(by_id, edges)
+    outputs: dict[str, dict[str, Any]] = {}
+    for node in _topo(nodes, edges, by_id):
+        node_id = str(node["id"])
+        spec = by_type.get(str(node["type"]))
+        produced: dict[str, Any] = {}
+        if (
+            spec is not None
+            and spec.refine is not None
+            and isinstance(node.get("config"), dict)
+        ):
+            upstream = {
+                str(by_id[anc]["ref"]): outputs.get(anc, {})
+                for anc in ancestors.get(node_id, ())
+                if anc in by_id
+            }
+            produced = spec.refine(node["config"], upstream, resolver)
+        outputs[node_id] = produced if isinstance(produced, dict) else {}
+    refined: list[RefinedPort] = []
+    for node in nodes:
+        spec = by_type.get(str(node["type"]))
+        if spec is None:
+            continue
+        node_id = str(node["id"])
+        produced = outputs.get(node_id, {})
+        for port in spec.outputs:
+            schema = produced.get(port.port)
+            refined.append(
+                RefinedPort(
+                    node_id=node_id,
+                    port=port.port,
+                    direction="output",
+                    coarse_type=port.coarse_type,
+                    schema=schema if isinstance(schema, dict) else None,
+                )
+            )
+        for port in spec.inputs:
+            refined.append(
+                RefinedPort(
+                    node_id=node_id,
+                    port=port.port,
+                    direction="input",
+                    coarse_type=port.coarse_type,
+                    schema=_input_schema(node_id, port.port, edges, outputs),
+                )
+            )
+    return refined
+
+
+def _ancestors(
+    by_id: dict[str, dict[str, Any]],
+    edges: list[dict[str, Any]],
+) -> dict[str, set[str]]:
+    incoming: dict[str, set[str]] = {node_id: set() for node_id in by_id}
+    for edge in edges:
+        source_id = str(edge["source"]["node_id"])
+        target_id = str(edge["target"]["node_id"])
+        if source_id in by_id and target_id in by_id:
+            incoming[target_id].add(source_id)
+    found: dict[str, set[str]] = {}
+    for node_id in by_id:
+        seen: set[str] = set()
+        stack = list(incoming[node_id])
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            stack.extend(incoming.get(current, ()))
+        found[node_id] = seen
+    return found
+
+
+def _topo(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    by_id: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    incoming = {node_id: 0 for node_id in by_id}
+    outgoing: dict[str, list[str]] = {node_id: [] for node_id in by_id}
+    for edge in edges:
+        source_id = str(edge["source"]["node_id"])
+        target_id = str(edge["target"]["node_id"])
+        if source_id in by_id and target_id in by_id:
+            outgoing[source_id].append(target_id)
+            incoming[target_id] += 1
+    ready = [node_id for node_id, count in incoming.items() if count == 0]
+    ordered: list[str] = []
+    while ready:
+        node_id = ready.pop()
+        ordered.append(node_id)
+        for child in outgoing[node_id]:
+            incoming[child] -= 1
+            if incoming[child] == 0:
+                ready.append(child)
+    seen = set(ordered)
+    ordered.extend(node_id for node_id in by_id if node_id not in seen)
+    return [by_id[node_id] for node_id in ordered]
+
+
+def _input_schema(
+    node_id: str,
+    port: str,
+    edges: list[dict[str, Any]],
+    outputs: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    schemas: list[dict[str, Any] | None] = []
+    for edge in edges:
+        if str(edge["target"]["node_id"]) != node_id:
+            continue
+        if str(edge["target"]["port"]) != port:
+            continue
+        source_id = str(edge["source"]["node_id"])
+        source_port = str(edge["source"]["port"])
+        schema = outputs.get(source_id, {}).get(source_port)
+        schemas.append(schema if isinstance(schema, dict) else None)
+    if len(schemas) != 1:
+        return None
+    return schemas[0]
+
+
+def _coarse(ports: tuple[Any, ...], name: str) -> str:
+    for port in ports:
+        if port.port == name:
+            return str(port.coarse_type)
+    return "unknown"
+
+
+def _port_verdict(source: str, target: str) -> str:
+    if source == target:
+        return "ok"
+    if source == "unknown" and target != "unknown":
+        return "warning"
+    if source == "unknown" or target == "unknown":
+        return "ok"
+    return "error"

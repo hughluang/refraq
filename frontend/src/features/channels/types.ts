@@ -1,5 +1,7 @@
 import type { Instant } from "@/lib/instant";
 
+import type { SchemaObject } from "@/features/channels/configSchemaForm";
+
 export type GraphNode = {
   id: string;
   ref: string;
@@ -9,6 +11,7 @@ export type GraphNode = {
   config: Record<string, unknown>;
   on_error: "stop" | "continue" | "error_output";
   retry: { max_tries: number; wait_sec: number } | null;
+  type_version?: number;
 };
 
 export type GraphEdge = {
@@ -107,11 +110,21 @@ export type GraphProblem = {
   node_id: string | null;
   edge_id: string | null;
   detail: string;
+  severity?: "error" | "warning";
+};
+
+export type RefinedPort = {
+  node_id: string;
+  port: string;
+  direction: "input" | "output";
+  coarse_type: string;
+  schema: SchemaObject | null;
 };
 
 export type NodeTypePort = {
   port: string;
   description: string;
+  coarse_type?: string;
 };
 
 export type NodeTypeSpec = {
@@ -125,6 +138,7 @@ export type NodeTypeSpec = {
   outputs: NodeTypePort[];
   config_schema: Record<string, unknown>;
   permission: string | null;
+  type_version?: number;
 };
 
 export const EMPTY_GRAPH: Graph = {

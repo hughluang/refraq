@@ -793,7 +793,7 @@ def test_write_rows_upsert_is_idempotent_and_channel_run_writes(data_client) -> 
                     "entity_id": entity_id,
                     "mode": "upsert",
                     "match_key": "sku",
-                    "source": '{{ [{"sku": "RUN2", "qty": 9, "note": "from-run"}] }}',
+                    "source": '[{"sku": "RUN2", "qty": 9, "note": "from-run"}]',
                     "mapping": [
                         {"attribute": "sku", "key": "sku"},
                         {"attribute": "qty", "key": "qty"},

@@ -11,6 +11,7 @@ import type {
   Graph,
   GraphProblem,
   NodeTypeSpec,
+  RefinedPort,
 } from "@/features/channels/types";
 
 function querySuffix(
@@ -99,6 +100,7 @@ export function validateDraft(id: string) {
     draft_revision: number;
     valid: boolean;
     problems: GraphProblem[];
+    ports: RefinedPort[];
   }>(`/channels/${id}/draft/validate`, { method: "POST" });
 }
 

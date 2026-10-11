@@ -56,8 +56,9 @@ import {
 } from "@/features/channels/api";
 import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
 import { ChannelRuns } from "@/features/channels/ChannelRuns";
-import type { Graph, GraphProblem } from "@/features/channels/types";
+import type { Graph, GraphProblem, RefinedPort } from "@/features/channels/types";
 import { clientGraphProblems } from "@/features/channels/graphValidation";
+import { formatGraphProblem } from "@/features/channels/problemLabel";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { LEAVE_GUARD_ALLOW } from "@/hooks/leaveGuard";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
@@ -170,6 +171,7 @@ function ChannelExisting({
   const [versions, setVersions] = useState<ChannelVersion[]>([]);
   const [catalog, setCatalog] = useState<NodeTypeSpec[]>([]);
   const [problems, setProblems] = useState<GraphProblem[]>([]);
+  const [ports, setPorts] = useState<RefinedPort[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
@@ -273,6 +275,42 @@ function ChannelExisting({
     });
   };
 
+  const applyValidation = (result: {
+    valid: boolean;
+    problems: GraphProblem[];
+    ports: RefinedPort[];
+  }) => {
+    setProblems(result.problems);
+    setPorts(result.ports ?? []);
+    setTab("canvas");
+    const firstError = result.problems.find((problem) => problem.severity !== "warning");
+    open?.({
+      type: result.valid ? "success" : "error",
+      message: result.valid
+        ? t("channels.validate.ok")
+        : firstError
+          ? t("channels.validate.failedWith", {
+              problem: formatGraphProblem(t, firstError),
+            })
+          : t("channels.validate.failed"),
+    });
+  };
+
+  const revealInvalidGraph = (error: unknown) => {
+    if (!(error instanceof ApiError) || error.code !== "CHANNEL_GRAPH_INVALID") {
+      return null;
+    }
+    setPreview(null);
+    setRunOpen(false);
+    return validateDraft(channelId).then(applyValidation);
+  };
+
+  const catchFailure = (error: unknown) => {
+    const revealed = revealInvalidGraph(error);
+    if (revealed) return revealed.catch(notifyError);
+    notifyError(error);
+  };
+
   const launch = () => {
     const manuals = (graph?.nodes ?? []).filter((node) => node.type === "trigger.manual");
     if (manuals.length !== 1) {
@@ -287,7 +325,7 @@ function ChannelExisting({
       setRunOpen(false);
       setTab("runs");
     })()
-      .catch(notifyError)
+      .catch(catchFailure)
       .finally(() => setBusy(false));
   };
 
@@ -444,16 +482,7 @@ function ChannelExisting({
                     setBusy(true);
                     void persist()
                       .then(() => validateDraft(channelId))
-                      .then((result) => {
-                        setProblems(result.problems);
-                        setTab("canvas");
-                        open?.({
-                          type: result.valid ? "success" : "error",
-                          message: result.valid
-                            ? t("channels.validate.ok")
-                            : t("channels.validate.failed"),
-                        });
-                      })
+                      .then(applyValidation)
                       .catch(notifyError)
                       .finally(() => setBusy(false));
                   }}
@@ -468,6 +497,13 @@ function ChannelExisting({
                     setBusy(true);
                     void persist()
                       .then(async (nextRevision) => {
+                        const result = await validateDraft(channelId);
+                        if (!result.valid) {
+                          applyValidation(result);
+                          return;
+                        }
+                        setProblems(result.problems);
+                        setPorts(result.ports ?? []);
                         setPublishRevision(nextRevision);
                         setPreview(await previewPublish(channelId));
                       })
@@ -578,6 +614,7 @@ function ChannelExisting({
             catalog={catalog}
             editable={writable}
             problems={shownProblems}
+            ports={ports}
             onChange={setGraph}
           />
         </Tabs.Panel>
@@ -676,11 +713,12 @@ function ChannelExisting({
             .then(async () => {
               setPreview(null);
               setProblems([]);
+              setPorts([]);
               leaveGuard.bypass();
               open?.({ type: "success", message: t("channels.publish.done") });
               setReloadToken((value) => value + 1);
             })
-            .catch(notifyError)
+            .catch(catchFailure)
             .finally(() => setBusy(false));
         }}
       >

@@ -15,6 +15,12 @@ import { EntityAttributeSelect } from "@/features/channels/EntityAttributeSelect
 import type { FlowNodeData } from "@/features/channels/graphValidation";
 import { resolvedMatchKeyName } from "@/features/channels/matchKeyName";
 import { nodeTypeSummary } from "@/features/channels/nodeTypeCopy";
+import { problemColor } from "@/features/channels/problemLabel";
+import { TemplateField } from "@/features/channels/TemplateField";
+import {
+  attributeValueSchema,
+  type UpstreamOutput,
+} from "@/features/channels/templateLogic";
 import type { NodeTypeSpec } from "@/features/channels/types";
 import { useEntityHeadAttributes } from "@/features/channels/useEntityHeadAttributes";
 import type { EntityAttribute } from "@/features/entities/types";
@@ -26,7 +32,8 @@ type Props = {
   spec: NodeTypeSpec | null;
   schema: SchemaObject | null;
   editable: boolean;
-  problemLines?: readonly string[];
+  problemLines?: readonly { text: string; severity: "error" | "warning" }[];
+  upstream?: readonly UpstreamOutput[];
   onClose: () => void;
   onChange: (nodeId: string, data: FlowNodeData) => void;
 };
@@ -44,6 +51,7 @@ export function NodeConfigPanel({
   schema,
   editable,
   problemLines = [],
+  upstream = [],
   onClose,
   onChange,
 }: Props) {
@@ -90,9 +98,9 @@ export function NodeConfigPanel({
       </div>
       <div className="channel-node-config__body">
         <Stack gap="sm">
-          {problemLines.map((line, index) => (
-            <Text key={`${index}-${line}`} c="red" size="sm">
-              {line}
+          {problemLines.map((line) => (
+            <Text key={line.text} c={problemColor(line.severity)} size="sm">
+              {line.text}
             </Text>
           ))}
           <SelectField
@@ -116,6 +124,8 @@ export function NodeConfigPanel({
               editable={editable}
               head={head}
               config={data.config}
+              scope={data.config}
+              upstream={upstream}
               onChange={(value) => setConfig(field.key, value)}
             />
           ))}
@@ -134,6 +144,8 @@ function ConfigField({
   exclude = [],
   head,
   config,
+  scope,
+  upstream = [],
   onChange,
 }: {
   field: FieldSpec;
@@ -144,6 +156,8 @@ function ConfigField({
   exclude?: readonly string[];
   head: HeadState;
   config: Record<string, unknown>;
+  scope: Record<string, unknown>;
+  upstream?: readonly UpstreamOutput[];
   onChange: (value: unknown) => void;
 }) {
   const t = useTranslate();
@@ -209,6 +223,21 @@ function ConfigField({
         editable={editable}
         head={head}
         config={config}
+        upstream={upstream}
+        onChange={onChange}
+      />
+    );
+  }
+  if (field.kind === "template") {
+    const valueSchema = "from" in field.valueSchema ? attributeSchema(scope, head) : field.valueSchema;
+    return (
+      <TemplateField
+        label={labeled ? caption : undefined}
+        ariaLabel={labeled ? undefined : caption}
+        valueSchema={valueSchema}
+        value={typeof value === "string" ? value : ""}
+        editable={editable}
+        upstream={upstream}
         onChange={onChange}
       />
     );
@@ -232,6 +261,7 @@ function ObjectListEditor({
   editable,
   head,
   config,
+  upstream = [],
   onChange,
 }: {
   field: Extract<FieldSpec, { kind: "objectList" }>;
@@ -240,6 +270,7 @@ function ObjectListEditor({
   editable: boolean;
   head: HeadState;
   config: Record<string, unknown>;
+  upstream?: readonly UpstreamOutput[];
   onChange: (value: unknown) => void;
 }) {
   const t = useTranslate();
@@ -310,6 +341,7 @@ function ObjectListEditor({
               editable={editable}
               head={head}
               config={config}
+              upstream={upstream}
               onChange={onChange}
             />
           ))}
@@ -333,6 +365,7 @@ function ListRow({
   editable,
   head,
   config,
+  upstream = [],
   onChange,
 }: {
   field: Extract<FieldSpec, { kind: "objectList" }>;
@@ -343,6 +376,7 @@ function ListRow({
   editable: boolean;
   head: HeadState;
   config: Record<string, unknown>;
+  upstream?: readonly UpstreamOutput[];
   onChange: (value: unknown) => void;
 }) {
   const t = useTranslate();
@@ -370,6 +404,8 @@ function ListRow({
             }
             head={head}
             config={config}
+            scope={row}
+            upstream={upstream}
             onChange={(next) => replace(child.key, next)}
           />
         </div>
@@ -423,4 +459,10 @@ function optionLabel(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function attributeSchema(scope: Record<string, unknown>, head: HeadState) {
+  const name = typeof scope.attribute === "string" ? scope.attribute : "";
+  const attribute = head.attributes.find((item) => item.name === name);
+  return attribute ? attributeValueSchema(attribute.type) : null;
 }

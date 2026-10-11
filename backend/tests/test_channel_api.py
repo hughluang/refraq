@@ -87,7 +87,9 @@ def test_read_permission_cannot_write() -> None:
     with TestClient(app) as client:
         _login(client, "reader", "secret")
         assert client.get("/channels").status_code == 200
-        denied = client.post("/channels", json={"name": "Material", "description": None})
+        denied = client.post(
+            "/channels", json={"name": "Material", "description": None}
+        )
     assert denied.status_code == 403
 
 
@@ -149,6 +151,8 @@ def test_draft_conflict_and_invalid_publish(client: TestClient) -> None:
     assert checked.status_code == 200
     assert checked.json()["valid"] is False
     assert checked.json()["problems"]
+    assert checked.json()["ports"]
+    assert "schema" in checked.json()["ports"][0]
 
 
 def test_node_type_catalog_and_audit(client: TestClient) -> None:
@@ -166,11 +170,16 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
     assert items[0]["description"]
     assert items[0]["inputs"] == []
     assert items[0]["outputs"][0]["port"] == "main"
+    assert items[0]["outputs"][0]["coarse_type"] == "object"
     assert items[0]["outputs"][0]["description"]
+    assert items[0]["type_version"] == 1
     assert all(item["permission"] is None for item in items)
     assert "x-refraq-ref" in items[1]["config_schema"]["properties"]["entity_id"]
+    assert "x-refraq-template" in items[2]["config_schema"]["properties"]["source"]
 
-    created = client.post("/channels", json={"name": "Material", "description": "from U9"})
+    created = client.post(
+        "/channels", json={"name": "Material", "description": "from U9"}
+    )
     assert created.status_code == 201
     events, _cursor = get_audit_store().list_events(limit=20)
     assert any(event.action == "channel.create" for event in events)

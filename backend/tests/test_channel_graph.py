@@ -27,8 +27,19 @@ class FakeResolver:
         return channel_id in self.channels
 
 
-def _attr(name: str, *, unique: bool = False, business_key: bool = False) -> ResolvedAttribute:
-    return ResolvedAttribute(name=name, unique=unique, business_key=business_key)
+def _attr(
+    name: str,
+    *,
+    unique: bool = False,
+    business_key: bool = False,
+    value_type: str = "string",
+) -> ResolvedAttribute:
+    return ResolvedAttribute(
+        name=name,
+        unique=unique,
+        business_key=business_key,
+        value_type=value_type,
+    )
 
 
 def _head(*attrs: ResolvedAttribute) -> ResolvedEntity:
@@ -99,7 +110,7 @@ def _write(node_id: str = "nd_write", **config: object) -> dict:
         "entity_id": "ent_dst",
         "mode": "upsert",
         "match_key": None,
-        "source": "{{ self.read.output.rows }}",
+        "source": '[{"sku": "a"}]',
         "mapping": [{"attribute": "sku", "key": "sku"}],
         "on_incompatible_head": "fail",
     }
@@ -108,7 +119,9 @@ def _write(node_id: str = "nd_write", **config: object) -> dict:
 
 
 def _codes(graph: dict, resolver: FakeResolver | None = None, catalog=None) -> set[str]:
-    problems = validate(graph, resolver or FakeResolver({"ent_src": SKU, "ent_dst": SKU}), catalog)
+    problems = validate(
+        graph, resolver or FakeResolver({"ent_src": SKU, "ent_dst": SKU}), catalog
+    )
     return {problem.code for problem in problems}
 
 
@@ -147,7 +160,9 @@ def test_unreachable_node() -> None:
         [_node("nd_trigger", "trigger.manual", "Run"), _read()],
     )
     problems = validate(graph, FakeResolver({"ent_src": SKU}))
-    unreachable = [item for item in problems if item.code == "CHANNEL_GRAPH_UNREACHABLE"]
+    unreachable = [
+        item for item in problems if item.code == "CHANNEL_GRAPH_UNREACHABLE"
+    ]
     assert [item.node_id for item in unreachable] == ["nd_read"]
 
 
@@ -305,6 +320,98 @@ def test_repeated_mapping_attribute() -> None:
         [_edge("ed_1", "nd_trigger", "nd_write")],
     )
     assert "CHANNEL_NODE_CONFIG_INVALID" in _codes(graph)
+
+
+def test_static_source_that_is_not_a_list_is_rejected() -> None:
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _write(source="not-json"),
+        ],
+        [_edge("ed_1", "nd_trigger", "nd_write")],
+    )
+    assert "CHANNEL_TEMPLATE_TYPE_MISMATCH" in _codes(graph)
+
+
+def test_expression_source_warns_until_run_time() -> None:
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _read(),
+            _write(source="{{ self.read.output.rows }}"),
+        ],
+        [
+            _edge("ed_1", "nd_trigger", "nd_read"),
+            _edge("ed_2", "nd_read", "nd_write"),
+        ],
+    )
+    problems = validate(graph, FakeResolver({"ent_src": SKU, "ent_dst": SKU}))
+    assert [item.code for item in problems if item.severity == "error"] == []
+    assert any(
+        item.code == "CHANNEL_TEMPLATE_TYPE_UNKNOWN" and item.severity == "warning"
+        for item in problems
+    )
+
+
+def test_expression_must_name_an_upstream_node() -> None:
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _write(source="{{ self.read.output.rows }}"),
+        ],
+        [_edge("ed_1", "nd_trigger", "nd_write")],
+    )
+    assert "CHANNEL_TEMPLATE_REF_INVALID" in _codes(graph)
+
+
+def test_incompatible_coarse_port_types() -> None:
+    items = NodeType(
+        type_id="test.items",
+        family="trigger",
+        label="Items",
+        summary="Emits a list.",
+        description="Test type. Its output is a list of items, not an object.",
+        entry=True,
+        inputs=(),
+        outputs=(PortSpec("main", "A list of items.", coarse_type="items"),),
+        config_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {},
+            "required": [],
+        },
+    )
+    graph = _graph(
+        [
+            _node("nd_items", "test.items", "Items"),
+            _write(),
+        ],
+        [_edge("ed_1", "nd_items", "nd_write")],
+    )
+    catalog = [*list_node_types(), items]
+    assert "CHANNEL_PORT_TYPE_MISMATCH" in _codes(graph, catalog=catalog)
+
+
+def test_filter_static_text_must_match_the_attribute_type() -> None:
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node(
+                "nd_read",
+                "read.entity",
+                "Read",
+                {
+                    "entity_id": "ent_src",
+                    "filters": [{"attribute": "qty", "op": "eq", "value": "nope"}],
+                },
+            ),
+        ],
+        [_edge("ed_1", "nd_trigger", "nd_read")],
+    )
+    head = _head(_attr("qty", value_type="integer"))
+    assert "CHANNEL_TEMPLATE_TYPE_MISMATCH" in _codes(
+        graph, FakeResolver({"ent_src": head})
+    )
 
 
 def test_error_channel_must_resolve() -> None:

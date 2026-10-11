@@ -6,6 +6,7 @@ registry; it is not imported from here.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,6 +25,13 @@ class PortSpec:
     port: str
     description: str
     loop_back: bool = False
+    coarse_type: str = "unknown"
+
+
+Refine = Callable[
+    [Mapping[str, Any], Mapping[str, Any], Any],
+    dict[str, Any],
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,19 +46,24 @@ class NodeType:
     outputs: tuple[PortSpec, ...]
     config_schema: dict[str, Any]
     permission: str | None = None
+    type_version: int = 1
+    refine: Refine | None = None
 
 
 MAIN_INPUT = PortSpec(
     "main",
     "Items or a dataset reference from the previous node.",
+    coarse_type="object",
 )
 MAIN_OUTPUT = PortSpec(
     "main",
     "Items or a dataset reference from a successful execution.",
+    coarse_type="object",
 )
 ERROR_OUTPUT = PortSpec(
     "error",
     "Items that failed this node when on_error is error_output.",
+    coarse_type="unknown",
 )
 
 

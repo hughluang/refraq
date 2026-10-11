@@ -24,6 +24,7 @@ class HeadAttribute:
     name: str
     unique: bool
     business_key: bool
+    value_type: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +45,7 @@ def get_entity_head(entity_id: str) -> EntityHeadShape | None:
             name=attr.name,
             unique=bool(attr.unique),
             business_key=bool(attr.business_key),
+            value_type=attr.type,
         )
         for attr in published_attributes(version)
     )

@@ -122,8 +122,9 @@ Node fields:
 | Field | Rule |
 | --- | --- |
 | `id` | §2.3 |
-| `ref` | A Python identifier, 1 to 64 characters, unique within the graph. It does not start with `_`, is not a Python keyword, and is not `nodes`, `channel`, `run`, or `platform`. Expressions name this node's output as `self.<ref>` |
+| `ref` | A Python identifier, 1 to 64 characters, unique within the graph. It does not start with `_`, is not a Python keyword, and is not `nodes`, `channel`, `run`, or `platform`. Templates name this node's output as `self.<ref>` |
 | `type` | A node type id from the catalog (§3.7) |
+| `type_version` | Integer, default `1`. Must equal the node type's current `type_version` |
 | `name` | Trimmed, 1 to 128 characters, unique within the graph |
 | `position` | Canvas coordinates; numbers; not interpreted by the server |
 | `config` | Object validated against the node type's `config_schema` at validate and publish. Save accepts any object |
@@ -139,7 +140,7 @@ Write Entity configuration (`write.entity`):
 | `entity_id` | Target Business Entity id |
 | `mode` | `upsert`, `create`, `update`, or `delete` |
 | `match_key` | `null` means the target head's **Business Key**; otherwise the name of a `unique` attribute on the head. `row_id` is never accepted |
-| `source` | An expression whose value is a list of objects |
+| `source` | A template whose value is a list of objects. Static JSON is the text itself. `{{ }}` calculates |
 | `mapping` | List of `{ "attribute", "key" }`; `attribute` names a head attribute at most once and the list includes the match key attribute; `key` is the source-object key to copy. `delete` ignores the list |
 | `on_incompatible_head` | `fail` (default) or `skip` |
 
@@ -148,7 +149,7 @@ Read Entity configuration (`read.entity`):
 | Field | Rule |
 | --- | --- |
 | `entity_id` | Business Entity id whose current head is read |
-| `filters` | List of `{ "attribute", "op", "value" }`. `op` is `eq`. `attribute` names a head attribute. `value` is an expression evaluated once for the node execution |
+| `filters` | List of `{ "attribute", "op", "value" }`. `op` is `eq`. `attribute` names a head attribute. `value` is a template evaluated once for the node execution. Its declared type is that attribute's type |
 
 Manual trigger configuration (`trigger.manual`):
 
@@ -163,8 +164,9 @@ Manual trigger configuration (`trigger.manual`):
 | `entity` | A Business Entity id. The nearest such value in the same configuration is the entity context for attributes nested under it |
 | `entity_attribute` | An attribute name on that entity context. A name that is not on the head is `CHANNEL_REFERENCE_UNRESOLVED` |
 | `match_key` | A Write Entity match key: `null` or the name of a `unique` head attribute. Failure is `CHANNEL_MATCH_KEY_INVALID`, not an unresolved reference |
-| `expression` | A literal string, or one Python expression wrapped in `{{ }}`. A wrapped value that does not parse is `CHANNEL_EXPRESSION_INVALID` |
 | `json` | A JSON object. Used by the Manual trigger payload |
+
+`config_schema` may also carry `x-refraq-template`. It is ignored by JSON Schema validation. Its value is the declared value type as a JSON Schema object, or `{ "from": "entity_attribute" }` when the type is the sibling attribute's **Attribute Type**. The stored value is always the template text. A template that does not parse is `CHANNEL_EXPRESSION_INVALID`. Text with no `{{ }}` that does not match the declared type is `CHANNEL_TEMPLATE_TYPE_MISMATCH`. A `self.<ref>` or `self.nodes["<name>"]` that is missing or not upstream is `CHANNEL_TEMPLATE_REF_INVALID`. A result whose type cannot be known until run time is `CHANNEL_TEMPLATE_TYPE_UNKNOWN` with severity `warning`.
 
 ### 3.3 Channel Version
 
@@ -186,8 +188,10 @@ Manual trigger configuration (`trigger.manual`):
 Validation reports problems as result documents, not as Problem Details:
 
 ```json
-{ "code": "CHANNEL_GRAPH_CYCLE", "node_id": "nd_read", "edge_id": "ed_2", "detail": "Cycle does not pass through a Loop node" }
+{ "code": "CHANNEL_GRAPH_CYCLE", "node_id": "nd_read", "edge_id": "ed_2", "detail": "Cycle does not pass through a Loop node", "severity": "error" }
 ```
+
+`severity` is `error` or `warning`. Only `error` makes the graph invalid.
 
 `node_id` and `edge_id` are each the offending node or edge, or `null`. `detail` is English occurrence text. Codes are listed in §6.2.
 
@@ -255,28 +259,33 @@ Sections are empty lists, or `false`, when there is nothing to show.
   "inputs": [
     {
       "port": "main",
-      "description": "Items or a dataset reference from the previous node."
+      "description": "Items or a dataset reference from the previous node.",
+      "coarse_type": "object"
     }
   ],
   "outputs": [
     {
       "port": "main",
-      "description": "Items or a dataset reference from a successful execution."
+      "description": "Items or a dataset reference from a successful execution.",
+      "coarse_type": "object"
     },
     {
       "port": "error",
-      "description": "Items that failed this node when on_error is error_output."
+      "description": "Items that failed this node when on_error is error_output.",
+      "coarse_type": "unknown"
     }
   ],
   "config_schema": { "type": "object" },
-  "permission": null
+  "permission": null,
+  "type_version": 1
 }
 ```
 
 - `family` is `trigger`, `read`, `transform`, `volume`, `state`, or `write`.
 - `label`, `summary`, and `description` are English. `summary` is one sentence. `description` states the type's function and its place in a workflow.
 - `entry` is `true` for trigger types; they declare no inputs.
-- Each port is `{ "port", "description" }`. `port` is lower snake case. `main` is the primary data port. `error` is an output that carries items the node failed when `on_error` is `error_output`.
+- Each port is `{ "port", "description", "coarse_type" }`. `port` is lower snake case. `coarse_type` is `object`, `items`, or `unknown`. `main` is the primary data port. `error` is an output that carries items the node failed when `on_error` is `error_output`.
+- `type_version` is the current version of the node type. A node instance's `type_version` must match it.
 - `config_schema` is a JSON Schema object that the Console renders as the configuration panel and the server enforces at validate and publish. Every property, including properties nested under array items, has `title` and `description`.
 - `permission` names the extra Permission needed to add or edit a node of this type (`channel:code_write` for `transform.code`), or `null`.
 - The Console prefers locale keys `channelNodeTypes.<type>.label` and `channelNodeTypes.<type>.summary`, and falls back to the served English `label` and `summary`.
@@ -375,10 +384,19 @@ Any subset of `name` and `description`. Present `description` `null` clears it. 
 Empty body. Validates the stored draft. `200`:
 
 ```json
-{ "draft_revision": 12, "valid": false, "problems": [ { "code": "CHANNEL_GRAPH_NO_TRIGGER", "node_id": null, "edge_id": null, "detail": "Graph has no trigger node" } ] }
+{
+  "draft_revision": 12,
+  "valid": false,
+  "problems": [
+    { "code": "CHANNEL_GRAPH_NO_TRIGGER", "node_id": null, "edge_id": null, "detail": "Graph has no trigger node", "severity": "error" }
+  ],
+  "ports": [
+    { "node_id": "nd_read", "port": "main", "direction": "output", "coarse_type": "object", "schema": { "type": "object" } }
+  ]
+}
 ```
 
-An invalid graph is a `200` result, not a Problem Details failure. Validate writes nothing.
+`valid` is false when any problem has severity `error`. `ports` lists every declared port. `schema` is the refined JSON Schema, or `null` when it is not known. An invalid graph is a `200` result, not a Problem Details failure. Validate writes nothing.
 
 ### 5.8 `POST /channels/{id}/publish/preview` and `POST /channels/{id}/publish`
 
@@ -391,7 +409,7 @@ Publish body:
 ```
 
 - `draft_revision` must equal the stored revision, so the published graph is the previewed graph; otherwise `409 CHANNEL_DRAFT_CONFLICT`.
-- An invalid draft is refused with `422 CHANNEL_GRAPH_INVALID`; `detail` names the first problem, and the full list comes from validate.
+- An invalid draft is refused with `422 CHANNEL_GRAPH_INVALID`; `detail` names the first error, and the full list, including warnings, comes from validate.
 - The caller must hold every Permission declared by node types present in the draft.
 - `201` `{ "version": { … }, "confirmation": { … } }`, where `confirmation` is the list as applied at publish. Publish stores the version, reconciles schedule rows, requests cancel of older-version runs, and requests opening of the listed mirrors (`docs/business-data-channel.md` §3.5). It does not change `active`.
 
@@ -483,7 +501,13 @@ When the value at `path` is a list, `200` is an **Offset Page** of its elements.
 | `CHANNEL_NODE_REF_INVALID` | A `ref` is missing, not a Python identifier, reserved, or duplicated |
 | `CHANNEL_REFERENCE_UNRESOLVED` | A configuration names an Entity, attribute, Catalog Object, Locator, Source, or Data Channel that does not resolve |
 | `CHANNEL_MATCH_KEY_INVALID` | A write node's match key does not resolve, or the mapping does not include the match key attribute |
-| `CHANNEL_EXPRESSION_INVALID` | An expression field is neither a literal nor one parseable `{{ }}` expression |
+| `CHANNEL_EXPRESSION_INVALID` | A template expression does not parse |
+| `CHANNEL_TEMPLATE_TYPE_MISMATCH` | A template with no `{{ }}` does not match its declared value type |
+| `CHANNEL_TEMPLATE_REF_INVALID` | A template names a node that does not exist or is not upstream |
+| `CHANNEL_TEMPLATE_TYPE_UNKNOWN` | Warning. A template result type cannot be known until run time |
+| `CHANNEL_PORT_TYPE_MISMATCH` | An edge joins ports whose coarse types differ and both are known |
+| `CHANNEL_PORT_TYPE_UNKNOWN` | Warning. An edge's upstream coarse type is `unknown` |
+| `CHANNEL_NODE_TYPE_VERSION` | A node's `type_version` is not the node type's current version |
 | `CHANNEL_NODE_POLICY_UNSUPPORTED` | `on_error` is not `stop`, or `retry` is not null |
 
 ### 6.3 Job Error Codes
@@ -494,6 +518,8 @@ When the value at `path` is a list, `200` is an **Offset Page** of its elements.
 | `CHANNEL_WRITE_INCOMPATIBLE` | A write node with policy `fail` met a head its mapping is incompatible with |
 | `CHANNEL_ITEM_LIMIT_EXCEEDED` | One node execution exceeded the in-memory item limit |
 | `CHANNEL_NODE_FAILED` | A node failed with `on_error` `stop`; the run record names the node and its error |
+| `CHANNEL_VALUE_TYPE_MISMATCH` | A template result does not match its declared value type |
+| `CHANNEL_OUTPUT_SCHEMA_MISMATCH` | A successful node output does not match its refined schema |
 | `CHANNEL_SANDBOX_FAILED` | The expression sandbox crashed or could not be restarted |
 
 `JOB_WORKER_LOST` applies as for every Job. `JOB_RUNNING_TIMEOUT` does not occur, because channel schedule rows carry no **Running Time Limit**.

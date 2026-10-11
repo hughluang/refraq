@@ -130,6 +130,7 @@ function node(config: Record<string, unknown>, nodeType = "write.entity"): FlowN
     retry: null,
     entry: false,
     problem: false,
+    typeVersion: 1,
   };
 }
 

@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { Instant } from "@/components/display/Instant";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { formatRunSubject } from "@/features/channels/formatRunSubject";
+import { RunErrorText } from "@/features/channels/RunErrorText";
 import { listRuns } from "@/features/channels/api";
 import type { ChannelRun } from "@/features/channels/types";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
@@ -62,7 +63,13 @@ export function ChannelRuns({ channelId }: { channelId: string }) {
             <Table.Td>
               <Instant value={run.started_at ?? run.created_at} />
             </Table.Td>
-            <Table.Td>{run.error_message ?? "—"}</Table.Td>
+            <Table.Td>
+              <RunErrorText
+                code={run.error_code}
+                message={run.error_message}
+                empty="—"
+              />
+            </Table.Td>
           </Table.Tr>
         ))}
       </Table.Tbody>

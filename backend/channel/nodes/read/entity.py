@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, Mapping
+
 from backend.channel.nodes.spec import (
     ERROR_OUTPUT,
     MAIN_INPUT,
@@ -9,8 +11,45 @@ from backend.channel.nodes.spec import (
     NodeType,
     object_schema,
 )
+from backend.channel.values import attribute_value_schema
 
 __all__ = ["NODE_TYPE"]
+
+
+def _refine(
+    config: Mapping[str, Any],
+    upstream: Mapping[str, Any],
+    resolver: Any,
+) -> dict[str, Any]:
+    del upstream
+    entity_id = config.get("entity_id") if isinstance(config, Mapping) else None
+    head = resolver.entity_head(entity_id) if isinstance(entity_id, str) else None
+    if head is None:
+        return {"main": None, "error": None}
+    properties = {
+        "row_id": {"type": "integer"},
+    }
+    for attr in head.attributes:
+        properties[attr.name] = attribute_value_schema(attr.value_type)
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["rows", "count"],
+        "properties": {
+            "rows": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": properties,
+                    "required": list(properties),
+                },
+            },
+            "count": {"type": "integer"},
+        },
+    }
+    return {"main": schema, "error": None}
+
 
 NODE_TYPE = NodeType(
     type_id="read.entity",
@@ -19,7 +58,7 @@ NODE_TYPE = NodeType(
     summary="Reads rows from the current head of a Business Entity.",
     description=(
         "Brings rows from one Business Entity into the workflow. Filters compare "
-        "a head attribute with an expression, which may use values from the "
+        "a head attribute with a template, which may use values from the "
         "incoming item. A lookup is this node followed by Merge."
     ),
     entry=False,
@@ -39,7 +78,7 @@ NODE_TYPE = NodeType(
                 "title": "Filters",
                 "description": (
                     "Conditions that must all match. Each compares one head "
-                    "attribute with an expression."
+                    "attribute with a template."
                 ),
                 "items": object_schema(
                     {
@@ -59,8 +98,11 @@ NODE_TYPE = NodeType(
                         "value": {
                             "type": "string",
                             "title": "Value",
-                            "description": "Literal or one expression, evaluated once.",
-                            "x-refraq-ref": "expression",
+                            "description": (
+                                "Template compared with the attribute. "
+                                "Its declared type is that attribute's type."
+                            ),
+                            "x-refraq-template": {"from": "entity_attribute"},
                         },
                     },
                     ["attribute", "op", "value"],
@@ -69,4 +111,5 @@ NODE_TYPE = NodeType(
         },
         ["entity_id", "filters"],
     ),
+    refine=_refine,
 )

@@ -25,6 +25,7 @@ class ChannelReferenceResolver:
                     name=attr.name,
                     unique=attr.unique,
                     business_key=attr.business_key,
+                    value_type=attr.value_type,
                 )
                 for attr in shape.attributes
             )

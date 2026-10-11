@@ -69,11 +69,13 @@ Validation is a pure function over a graph and a reference resolver. It reports 
 9. a write node has no resolvable match key, or its mapping does not include the match key attribute (§5.2);
 10. node names are not unique;
 11. node `ref` values are not unique, are not Python identifiers, start with `_`, are Python keywords, or are the reserved names `nodes`, `channel`, `run`, or `platform`;
-12. an expression field is not a literal and is not one `{{ }}` expression that parses as a Python expression;
+12. a template field does not parse, names a node that does not exist or is not upstream, or contains no `{{ }}` and does not match its declared value type;
 13. a node's `on_error` is not `stop`, or its `retry` is not null, while only stop-without-retry is supported;
-14. a Manual trigger's payload uses the reserved keys `triggered_by` or `triggered_at`.
+14. a Manual trigger's payload uses the reserved keys `triggered_by` or `triggered_at`;
+15. an edge joins ports whose coarse types are both known and not the same;
+16. a node's `type_version` is not the current version of its node type.
 
-Validate may be called on the draft at any time and does not change anything. Publish runs the same validation and refuses an invalid graph.
+Validate may be called on the draft at any time and does not change anything. It also reports warnings: a template whose result type cannot be known until run time, and an edge whose upstream coarse type is `unknown`. Warnings do not make the graph invalid. Publish runs the same validation and refuses a graph that has an error. A warning alone does not refuse publish.
 
 ### 3.5 Publish
 
@@ -113,8 +115,8 @@ Deleting a Data Channel withdraws its Scheduled Task rows by `owner_ref` (`docs/
 ### 4.1 Node Outputs, Expressions, And Dataset References
 
 - A node executes once in a run, after every ancestor this run reached has finished. Among ready nodes, the smaller canvas `y` then the smaller `x` runs first. Execution order follows the edges. A node inside a Loop or For, or downstream of a Batch Read, may execute several times in one run; Loop, For, and Batch Read are volume nodes and are not part of the linear runner.
-- A node's **output** is the JSON value its execute function returns: an object, a list, or a scalar. Binary values are not supported. The node type catalog does not declare output keys. The run record stores the output in full (§6.9).
-- An **expression** is one Python expression stored as a whole configuration field wrapped in `{{ }}`. A field that is not wrapped is a literal. Expressions evaluate in one sandbox subprocess reused for the run: no network, an allow-listed import set, and time and memory limits (ADR 0056). The only workflow name in scope is `self`.
+- A node's **output** is the JSON value its execute function returns: an object, a list, or a scalar. Binary values are not supported. The node type declares the output's coarse type and, when the configuration allows it, a refined JSON Schema. The run record stores the output in full (§6.9). A successful output that does not match that schema fails the node.
+- A **template field** is one configuration string. The node type declares which fields are templates and the declared value type of each result. `{{ }}` marks one Python expression; `\{{` is a literal `{{`. After trimming, a field that is exactly one `{{ expression }}` yields that expression's Python value. Any other text, including text with no `{{ }}`, is concatenation: each expression is evaluated, converted to text, and joined. Concatenated `None` becomes an empty string. A bare `None` is not a string. Joined text is the result when the declared type is string; otherwise it is parsed once as JSON. The result must already match the declared type. The only conversion of a Python value is into a declared string. A mismatch fails the node. Expressions evaluate in one sandbox subprocess reused for the run: no network, an allow-listed import set, and time and memory limits (ADR 0056). The only workflow name in scope is `self`.
 - `self.<ref>.output` is that node's output. `self.nodes["<node name>"].output` is the same value. `self.channel` carries the channel id, name, description, activation switch, and graph settings. `self.run` carries the run id, target (`draft` or `published`), version or draft revision, trigger kind, start instant, and trigger actor. `self.platform` carries the site name, the **Schedule Timezone**, the run's start instant, the current **System Parameter** values, and **Global Variable** values, all read-only. Credentials and other channels' run data are never in `self`.
 - Naming a node that did not run, or a path that does not resolve, fails the node that holds the expression.
 - A **Dataset Reference** is a value that names a run-scoped table in the entity database. Read and SQL nodes may return one instead of a list when the result is large; Materialize turns a list into one; Batch Read turns one into batches; write nodes accept one and write in bulk inside the database. Dataset References expire with run data retention (§6.9).
@@ -122,7 +124,7 @@ Deleting a Data Channel withdraws its Scheduled Task rows by `owner_ref` (`docs/
 
 ### 4.2 Node Types
 
-Each node type declares a configuration schema, its input ports, its output ports, and an execute function. Ports order execution and select a branch; they do not carry values (ADR 0056). The node type catalog is served by the backend; the Console palette and configuration panels are generated from it. A node type that needs an extra **Permission** to author declares it (§11).
+Each node type declares a configuration schema, its input ports, its output ports, a `type_version`, and an execute function. Ports order execution and select a branch; they do not carry values (ADR 0056). Each port declares a coarse type: `object`, `items`, or `unknown`. The node type may refine a JSON Schema for an output from its configuration and from upstream refined schemas. `unknown` means the refined schema is not known yet; an empty schema is not used for that. The node type catalog is served by the backend; the Console palette and configuration panels are generated from it. A node type that needs an extra **Permission** to author declares it (§11).
 
 Each node type states its function and its place in a workflow: a `label`, a one-sentence `summary`, and a longer `description`. The catalog serves that text in English.
 
@@ -141,13 +143,13 @@ Port names are lower snake case. `main` carries the node's primary items or data
 
 Family rules:
 
-- **Read Entity** reads the head of a **Business Entity**. Each filter value is one expression, evaluated once for the node execution. A lookup is Read Entity followed by Merge; there is no separate lookup node.
+- **Read Entity** reads the head of a **Business Entity**. Each filter value is one template, evaluated once for the node execution, and its declared type is the attribute's type. A lookup is Read Entity followed by Merge; there is no separate lookup node.
 - **Read Mirror** reads a **Source Mirror** of any **Catalog Object**. **Read Changes** reads a **Change Log** of a mirror or of a Business Entity and returns before and after values and a sequence number; it is the only node that owns a **Checkpoint** (§6.1).
 - **SQL** addresses mirrors and entity tables with `{{obj/...}}` **Locator** references; the platform resolves physical names.
 - **Live Source query** reads a **Source** directly under **Controlled Query** guards (read-only single statement, timeout, row cap, audit). The node may raise the row cap. It requires its own Permission (§11).
 - Each read node chooses what happens when an input mirror is not in sync: continue (default), skip this run (§6.4), or fail.
 - Read, SQL, and write nodes carry a statement timeout: an in-code default that a node may raise.
-- **Set fields** computes values with expressions (`{{ self.read_suppliers.output.rows }}`). **Code** runs Python in the same sandbox as expressions: no network, an allow-listed module set, and time and memory limits; one sandbox subprocess is reused per run. Authoring or editing a Code node requires `channel:code_write`. Network access is never a sandbox relaxation; if needed it is a dedicated node type.
+- **Set fields** computes values with templates (`{{ self.read_suppliers.output.rows }}`). **Code** runs Python in the same sandbox as template expressions: no network, an allow-listed module set, and time and memory limits; one sandbox subprocess is reused per run. Authoring or editing a Code node requires `channel:code_write`. Network access is never a sandbox relaxation; if needed it is a dedicated node type.
 
 ## 5. Writing Entities
 
@@ -160,7 +162,7 @@ A Write Entity node targets one **Business Entity**. One graph may hold several 
 | Target | One Business Entity by id |
 | Mode | `upsert`, `create`, `update`, or `delete` |
 | Match key | §5.2 |
-| Source | One expression whose value is a list of objects. Shaping that list is an upstream node's job |
+| Source | One template whose value is a list of objects. Static JSON is written as text, without `{{ }}`. Shaping a calculated list is an upstream node's job |
 | Mapping | Target attribute names, each with the source-object key to copy. `delete` ignores it. The mapping includes the match key attribute |
 | On incompatible head | `fail` (default) or `skip` (§5.4) |
 
@@ -201,7 +203,7 @@ A mapping is **incompatible** with a head when:
 2. the match key is no longer `unique`, or the default match key is used and the head has no Business Key;
 3. under `upsert` or `create`, a `required` head attribute is unmapped.
 
-A value that cannot be encoded as the attribute's **Attribute Type** is not an incompatibility. It fails that write execution when the row is written, naming the attribute, the source index, and the value. Type agreement is not checked at publish, because a value's shape is known only when the upstream node has produced it.
+A value that cannot be encoded as the attribute's **Attribute Type** is not an incompatibility. It fails that write execution when the row is written, naming the attribute, the source index, and the value. A template with no `{{ }}` is checked against its declared value type at publish. A template that calculates is checked when the node runs, because the result is not known before then.
 
 ### 5.4 Incompatible Head Policy
 

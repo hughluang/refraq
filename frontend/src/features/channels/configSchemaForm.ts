@@ -4,7 +4,9 @@ export type SchemaObject = {
   required?: string[];
   items?: SchemaObject;
   enum?: string[];
+  description?: string;
   "x-refraq-ref"?: string;
+  "x-refraq-template"?: SchemaObject | { from: "entity_attribute" };
 };
 
 export type FieldSpec =
@@ -13,7 +15,14 @@ export type FieldSpec =
   | { kind: "entity"; key: string; required: boolean }
   | { kind: "attribute"; key: string; required: boolean; allowEmpty: boolean }
   | { kind: "objectList"; key: string; required: boolean; fields: FieldSpec[] }
-  | { kind: "json"; key: string; required: boolean };
+  | { kind: "json"; key: string; required: boolean }
+  | {
+      kind: "template";
+      key: string;
+      required: boolean;
+      valueSchema: SchemaObject | { from: "entity_attribute" };
+      description: string;
+    };
 
 export function fieldsFromSchema(schema: SchemaObject): FieldSpec[] {
   const properties = schema.properties ?? {};
@@ -32,6 +41,16 @@ export function defaultConfig(schema: SchemaObject): Record<string, unknown> {
 }
 
 function fieldFor(key: string, schema: SchemaObject, required: boolean): FieldSpec {
+  const template = schema["x-refraq-template"];
+  if (template) {
+    return {
+      kind: "template",
+      key,
+      required,
+      valueSchema: template,
+      description: schema.description ?? "",
+    };
+  }
   const ref = schema["x-refraq-ref"];
   if (ref === "json") return { kind: "json", key, required };
   if (ref === "entity") return { kind: "entity", key, required };
@@ -82,5 +101,7 @@ function defaultValue(field: FieldSpec): unknown {
       return [];
     case "json":
       return {};
+    case "template":
+      return "";
   }
 }

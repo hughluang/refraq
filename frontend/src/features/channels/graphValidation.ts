@@ -9,6 +9,7 @@ export type FlowNodeData = {
   retry: GraphNode["retry"];
   entry: boolean;
   problem: boolean;
+  typeVersion: number;
 };
 
 export type FlowNodeShape = {
@@ -76,6 +77,7 @@ export function emptyNodeData(
     retry: null,
     entry,
     problem: false,
+    typeVersion: 1,
   };
 }
 
@@ -96,6 +98,7 @@ export function flowFromGraph(
         retry: node.retry,
         entry: entryTypes.has(node.type),
         problem: false,
+        typeVersion: node.type_version ?? 1,
       },
     })),
     edges: graph.edges.map((edge) => ({
@@ -123,6 +126,7 @@ export function graphFromFlow(
       config: node.data.config,
       on_error: node.data.onError,
       retry: node.data.retry,
+      type_version: node.data.typeVersion ?? 1,
     })),
     edges: edges.map((edge) => ({
       id: edge.id,

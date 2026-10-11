@@ -581,8 +581,18 @@ Avoid using the node id as the expression name, and a `ref` that is not an ident
 
 ### Expression Context
 
-The name `self` visible to a **Data Channel** expression: node outputs by **Node Ref** or by node name, plus `self.channel`, `self.run`, and `self.platform`. `self.platform` includes the site name, the **Schedule Timezone**, the run start instant, **System Parameter** values, and **Global Variable** values, all read-only. There is no current-row name.
+The name `self` visible to a **Data Channel** template expression: node outputs by **Node Ref** or by node name, plus `self.channel`, `self.run`, and `self.platform`. `self.platform` includes the site name, the **Schedule Timezone**, the run start instant, **System Parameter** values, and **Global Variable** values, all read-only. There is no current-row name.
 Avoid `item` as an implicit current row, credentials in the context, and naming another channel's run data.
+
+### Template Field
+
+A **Data Channel** configuration value stored as text. `{{ }}` marks a calculation. Text with no calculation is static data, and the field's declared value type is what that text must become.
+Avoid requiring `{{ }}` around static JSON, and a separate literal mode.
+
+### Coarse Port Type
+
+The broad type of a **Data Channel** port: `object`, `items`, or `unknown`. Two known types that differ cannot be connected. A refined schema, when the node can derive one, states the value's shape; `unknown` means that shape is not derived yet.
+Avoid an untyped port, and an empty schema that accepts every value.
 
 ### System Identity
 

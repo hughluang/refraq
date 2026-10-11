@@ -63,8 +63,9 @@ import {
 } from "@/features/channels/graphValidation";
 import { NodeConfigPanel } from "@/features/channels/NodeConfigPanel";
 import { nodeTypeLabel, nodeTypeSummary } from "@/features/channels/nodeTypeCopy";
-import { formatGraphProblem } from "@/features/channels/problemLabel";
-import type { Graph, GraphProblem, NodeTypeSpec } from "@/features/channels/types";
+import { formatGraphProblem, problemColor } from "@/features/channels/problemLabel";
+import { upstreamOutputs } from "@/features/channels/templateLogic";
+import type { Graph, GraphProblem, NodeTypeSpec, RefinedPort } from "@/features/channels/types";
 
 type ChannelNode = Node<FlowNodeData, "channel">;
 
@@ -113,6 +114,7 @@ type Props = {
   catalog: NodeTypeSpec[];
   editable: boolean;
   problems: GraphProblem[];
+  ports?: readonly RefinedPort[];
   onChange: (graph: Graph) => void;
 };
 
@@ -129,6 +131,7 @@ function ChannelCanvasBody({
   catalog,
   editable,
   problems,
+  ports = [],
   onChange,
 }: Props) {
   const t = useTranslate();
@@ -603,7 +606,24 @@ function ChannelCanvasBody({
       ? []
       : problems
           .filter((problem) => problem.node_id === selected.id)
-          .map((problem) => formatGraphProblem(t, problem));
+          .map((problem) => ({
+            text: formatGraphProblem(t, problem),
+            severity: problem.severity ?? "error",
+          }));
+  const outputSchemas = new Map(
+    ports
+      .filter((port) => port.direction === "output" && port.port === "main")
+      .map((port) => [port.node_id, port.schema] as const),
+  );
+  const upstream =
+    selected == null
+      ? []
+      : upstreamOutputs(
+          selected.id,
+          nodes.map((node) => ({ id: node.id, ref: node.data.ref })),
+          edges.map((edge) => ({ source: edge.source, target: edge.target })),
+          outputSchemas,
+        );
   const showCatalog = picker !== null && selected == null;
   const catalogSpecs = picker?.kind === "connect" ? picker.specs : catalog;
   const catalogTitle =
@@ -766,6 +786,7 @@ function ChannelCanvasBody({
                   schema={(selectedSpec?.config_schema as SchemaObject | undefined) ?? null}
                   editable={editable}
                   problemLines={problemLines}
+                  upstream={upstream}
                   onClose={clearSelection}
                   onChange={(nodeId, data) => {
                     const next = nodesRef.current.map((node) =>
@@ -926,7 +947,13 @@ function ProblemsControl({
   };
 
   const open = pinned || hovered;
-  const label = t("channels.canvas.problems", { n: problems.length });
+  const errorCount = problems.filter((problem) => problem.severity !== "warning").length;
+  const warningCount = problems.length - errorCount;
+  const warningsOnly = errorCount === 0;
+  const label = t("channels.canvas.problemsSummary", {
+    errors: errorCount,
+    warnings: warningCount,
+  });
 
   return (
     <Popover
@@ -939,7 +966,11 @@ function ProblemsControl({
     >
       <Popover.Target>
         <ControlButton
-          className="channel-canvas-problems"
+          className={
+            warningsOnly
+              ? "channel-canvas-problems channel-canvas-problems--warning"
+              : "channel-canvas-problems"
+          }
           title={label}
           aria-label={label}
           aria-expanded={open}
@@ -962,9 +993,12 @@ function ProblemsControl({
           {problems.map((problem) => {
             const itemLabel = formatGraphProblem(t, problem);
             const key = problemIdentity(problem);
+            const color = problemColor(problem.severity);
+            const tone =
+              color === "yellow" ? "channel-canvas-problems__item--warning" : undefined;
             if (!problem.node_id && !problem.edge_id) {
               return (
-                <Text key={key} c="red" size="sm">
+                <Text key={key} c={color} className={tone} size="sm">
                   {itemLabel}
                 </Text>
               );
@@ -975,10 +1009,12 @@ function ProblemsControl({
                 key={key}
                 type="button"
                 variant="subtle"
-                color="red"
+                color={color}
                 size="compact-sm"
                 justify="flex-start"
-                className={active ? "channel-canvas-problems__item--active" : undefined}
+                className={[tone, active ? "channel-canvas-problems__item--active" : undefined]
+                  .filter(Boolean)
+                  .join(" ") || undefined}
                 aria-current={active ? "true" : undefined}
                 onClick={() => onFocus(problem)}
               >

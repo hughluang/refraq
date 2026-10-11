@@ -27,6 +27,16 @@
   position: relative;
   overflow: visible;
   color: var(--mantine-color-red-6);
+  --channel-problem-pulse: var(--mantine-color-red-4);
+}
+
+.channel-canvas-controls .channel-canvas-problems--warning {
+  color: var(--mantine-color-yellow-6);
+  --channel-problem-pulse: var(--mantine-color-yellow-4);
+}
+
+.channel-canvas-problems--warning .channel-canvas-problems__badge {
+  background: var(--mantine-color-yellow-6);
 }
 
 .channel-canvas-controls .channel-canvas-add {
@@ -73,6 +83,10 @@
   background: var(--mantine-color-red-light);
 }
 
+.channel-canvas-problems__item--warning.channel-canvas-problems__item--active {
+  background: var(--mantine-color-yellow-light);
+}
+
 .channel-canvas-problems__pulse {
   position: absolute;
   inset: 0;
@@ -87,7 +101,7 @@
 
   @keyframes channel-canvas-problems-pulse {
     0% {
-      box-shadow: 0 0 0 0 var(--mantine-color-red-4);
+      box-shadow: 0 0 0 0 var(--channel-problem-pulse);
     }
 
     100% {
@@ -275,4 +289,82 @@
   min-height: 0;
   margin-top: var(--mantine-spacing-sm);
   overflow: auto;
+}
+
+.channel-template-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.channel-template-field__editor {
+  position: relative;
+}
+
+.channel-template-field__highlight,
+.channel-template-field__input,
+.channel-template-field__readonly {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-default);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--mantine-font-size-sm);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.channel-template-field__highlight {
+  min-height: 4.5rem;
+  color: var(--mantine-color-text);
+  pointer-events: none;
+}
+
+.channel-template-field__input {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  color: transparent;
+  caret-color: var(--mantine-color-text);
+  background: transparent;
+  resize: none;
+}
+
+.channel-template-field__input:focus {
+  outline: 2px solid var(--mantine-primary-color-filled);
+  outline-offset: 1px;
+}
+
+.channel-template-field__mark {
+  color: var(--mantine-color-blue-filled);
+}
+
+.channel-template-field__readonly {
+  min-height: 2.5rem;
+}
+
+.channel-template-field__menu {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-default);
+  background: var(--mantine-color-body);
+}
+
+.channel-template-field__option {
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--mantine-font-size-xs);
+  text-align: start;
+  cursor: pointer;
+}
+
+.channel-template-field__option:hover {
+  background: var(--mantine-color-default-hover);
 }

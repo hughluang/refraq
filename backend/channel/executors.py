@@ -5,7 +5,10 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from backend.channel.engine import EngineHooks, NodeResult
-from backend.channel.expr import expression_body
+from backend.channel.nodes import list_node_types
+from backend.channel.references import ChannelReferenceResolver
+from backend.channel.template import TemplateTypeError, output_matches, render
+from backend.channel.values import LIST_OF_OBJECTS, attribute_value_schema
 from backend.entity.errors import EntityRowWriteFailed
 from backend.entity.rows import head_target, read_rows, write_rows
 
@@ -21,7 +24,9 @@ def execute_manual(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     actor = ctx.actor
     payload["triggered_by"] = {"id": actor["id"], "name": actor["name"]}
     payload["triggered_at"] = ctx.started_at
-    return NodeResult(status="succeeded", output=payload)
+    return _checked(
+        "trigger.manual", node, NodeResult(status="succeeded", output=payload)
+    )
 
 
 def execute_read(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
@@ -29,10 +34,15 @@ def execute_read(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     filters = []
     for item in config.get("filters") or []:
         try:
-            value = _value(hooks, item.get("value"))
+            schema = _filter_schema(str(config["entity_id"]), item.get("attribute"))
+            value = _value(hooks, item.get("value"), schema)
+        except TemplateTypeError as exc:
+            return _type_failed(item.get("value"), exc)
         except Exception as exc:  # noqa: BLE001
             return _expr_failed(item.get("value"), exc)
-        filters.append({"attribute": item["attribute"], "op": item.get("op", "eq"), "value": value})
+        filters.append(
+            {"attribute": item["attribute"], "op": item.get("op", "eq"), "value": value}
+        )
     try:
         rows, _total = read_rows(
             config["entity_id"],
@@ -52,7 +62,11 @@ def execute_read(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             error_code="CHANNEL_NODE_FAILED",
             error_message=str(exc),
         )
-    return NodeResult(status="succeeded", output={"rows": rows, "count": len(rows)})
+    return _checked(
+        "read.entity",
+        node,
+        NodeResult(status="succeeded", output={"rows": rows, "count": len(rows)}),
+    )
 
 
 def execute_write(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
@@ -79,15 +93,11 @@ def execute_write(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             error_detail={"reasons": reasons},
         )
     try:
-        source = _value(hooks, config.get("source"))
+        source = _value(hooks, config.get("source"), LIST_OF_OBJECTS)
+    except TemplateTypeError as exc:
+        return _type_failed(config.get("source"), exc)
     except Exception as exc:  # noqa: BLE001
         return _expr_failed(config.get("source"), exc)
-    if not isinstance(source, list) or any(not isinstance(item, dict) for item in source):
-        return NodeResult(
-            status="failed",
-            error_code="CHANNEL_NODE_FAILED",
-            error_message="source is not a list of objects",
-        )
     mode = config["mode"]
     projected, error = _project(source, config.get("mapping") or [], mode)
     if error is not None:
@@ -119,25 +129,65 @@ def execute_write(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             error_code="CHANNEL_NODE_FAILED",
             error_message=str(exc),
         )
-    return NodeResult(
-        status="succeeded",
-        output={
-            "inserted": result.inserted,
-            "updated": result.updated,
-            "unchanged": result.unchanged,
-            "deleted": result.deleted,
-            "unmatched": result.unmatched,
-        },
+    return _checked(
+        "write.entity",
+        node,
+        NodeResult(
+            status="succeeded",
+            output={
+                "inserted": result.inserted,
+                "updated": result.updated,
+                "unchanged": result.unchanged,
+                "deleted": result.deleted,
+                "unmatched": result.unmatched,
+            },
+        ),
     )
 
 
-def _value(hooks: EngineHooks, raw: Any) -> Any:
+def _value(hooks: EngineHooks, raw: Any, schema: Mapping[str, Any]) -> Any:
     if not isinstance(raw, str):
-        return raw
-    body = expression_body(raw)
-    if body is None:
-        return raw
-    return hooks.evaluate(body)  # type: ignore[attr-defined]
+        raise TemplateTypeError("Template value must be text")
+    return render(raw, hooks.evaluate, schema)  # type: ignore[attr-defined]
+
+
+def _filter_schema(entity_id: str, attribute: Any) -> dict[str, Any]:
+    if not isinstance(attribute, str):
+        raise TemplateTypeError("Filter attribute does not resolve")
+    head = ChannelReferenceResolver("_").entity_head(entity_id)
+    if head is None:
+        raise TemplateTypeError("Filter attribute does not resolve")
+    named = next((attr for attr in head.attributes if attr.name == attribute), None)
+    if named is None:
+        raise TemplateTypeError("Filter attribute does not resolve")
+    return attribute_value_schema(named.value_type)
+
+
+def _checked(type_id: str, node: Mapping[str, Any], result: NodeResult) -> NodeResult:
+    if result.status != "succeeded":
+        return result
+    spec = next((item for item in list_node_types() if item.type_id == type_id), None)
+    if spec is None or spec.refine is None:
+        return result
+    config = node.get("config") if isinstance(node.get("config"), dict) else {}
+    refined = spec.refine(config, {}, ChannelReferenceResolver("_"))
+    schema = refined.get("main") if isinstance(refined, dict) else None
+    if not isinstance(schema, dict) or output_matches(result.output, schema):
+        return result
+    return NodeResult(
+        status="failed",
+        error_code="CHANNEL_OUTPUT_SCHEMA_MISMATCH",
+        error_message="Output does not match the declared schema",
+    )
+
+
+def _type_failed(raw: Any, exc: Exception) -> NodeResult:
+    return NodeResult(
+        status="failed",
+        error_code="CHANNEL_VALUE_TYPE_MISMATCH",
+        error_message=str(exc),
+        error_detail={"expression": raw},
+    )
 
 
 def _expr_failed(raw: Any, exc: Exception) -> NodeResult:

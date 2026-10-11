@@ -45,8 +45,9 @@ def start_run(
     elif target == "draft":
         graph = channel.draft_graph
         problems = validate(graph, ChannelReferenceResolver(channel_id))
-        if problems:
-            raise ChannelGraphInvalid(problems[0].detail, problems=list(problems))
+        errors = [problem for problem in problems if problem.severity == "error"]
+        if errors:
+            raise ChannelGraphInvalid(errors[0].detail, problems=list(problems))
         version = None
         draft_revision = channel.draft_revision
     entry = _manual_node(graph, trigger_node_id)
