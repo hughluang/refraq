@@ -57,11 +57,11 @@ The entity database is a separate database that the worker and persistent API op
 
 | Connection | Role | Used by | Purpose |
 | --- | --- | --- | --- |
-| `ENTITY_DATABASE_URL` | `refraq_entity_owner` (LOGIN, not superuser) | api, worker | Publish and drop DDL, Profile View regeneration, Entity Data API writes |
+| `ENTITY_DATABASE_URL` | `refraq_entity_owner` (LOGIN, not superuser) | api, worker | Publish and drop DDL, Profile View regeneration, Entity Data API writes, and Data Channel SQL when the node selects the entity database |
 | `ENTITY_READER_DATABASE_URL` | `refraq_reader` (LOGIN, `NOSUPERUSER NOBYPASSRLS NOINHERIT`, read-only by default) | api | Entity Data API reads through Profile Views |
 | `ENTITY_ADMIN_DATABASE_URL` | an administrative role able to create roles and extensions | `python -m backend.entity.bootstrap` only | Create roles, schemas `entity_data` / `entity_access` / `acl`, `pgcrypto`, `acl` functions and key table; move existing tables into `entity_data`; enable and force row-level security |
 
-The bootstrap is idempotent. Runtime processes never read `ENTITY_ADMIN_DATABASE_URL`; do not put it in the api, mcp, worker, or beat environment. Role passwords are site secrets in the live `.env`.
+The bootstrap is idempotent. It does not create `refraq_channel_reader`. When that role is present, the bootstrap revokes the privileges it holds in the entity database and drops the role. Runtime processes never read `ENTITY_ADMIN_DATABASE_URL`; do not put it in the api, mcp, worker, or beat environment. Role passwords are site secrets in the live `.env`.
 
 The product always treats each entity connection as a separate engine, a separate pool, and a separate budget line. The Metadata MCP process and Beat hold no entity-database connection. Persistent API uses the owner and reader pools for the **Entity Data API** and applies `REFRAQ_DB_STATEMENT_TIMEOUT_MS` plus `lock_timeout` on those connections (`docs/api-contracts-entity-data.md`); the reader role also carries role-level timeouts set by the bootstrap. The worker opens the owner URL for publish, drop, and view regeneration Jobs; by existing convention the worker sets no statement timeout on entity connections used for long DDL. Entity schemas are fixed (`entity_data`, `entity_access`, `acl`). `REFRAQ_ENTITY_DB_SCHEMA` is retired; a leftover name is ignored and reported at startup.
 

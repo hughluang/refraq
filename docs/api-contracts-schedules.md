@@ -51,14 +51,14 @@ Rules:
 - Public fields never include `task_name`, `args_json`, `kwargs_json`, `hidden`, `locked`, `undeletable`, `store_only`, `owner_ref`, or `commitment_timezone`. `deletable` is the inverse of `undeletable`.
 - `work_kind` is the closed catalog of domain work (`structure` \| `join_detection` \| `catalog_embed` \| `channel_run`), filled by the owning domain projection. Store-only rows return `work_kind` / `target` null. `catalog_embed` returns `target` null.
 - `target` is facade projection of the work target (Source id/key for `structure` and `join_detection`), **not** proof that the schedule is owned by Source. `target.source_key` is present when the facade can resolve the Source; after Source hard-delete, matching schedules are withdrawn by `owner_ref` so orphans should not remain on product paths.
-- `channel_run` `target` is `{ "channel_id", "channel_name", "node_id", "node_name" }`: the **Data Channel** and the Scheduled node in its current published version. `channel_name` and `node_name` are presentation and are `null` when they do not resolve. A `channel_run` row returns `deletable: false` and `running_timeout_sec: null`, and its key is `channel_run:{channel_id}:{node_id}`.
+- `channel_run` `target` is `{ "channel_id", "channel_name", "node_id", "node_name" }`: the **Data Channel** and the Scheduled node in its current published version. `channel_name` and `node_name` are presentation and are `null` when they do not resolve. A `channel_run` row returns `deletable: false` and `running_timeout_sec: null`, and its key is `channel_run:{channel_id}`.
 
 `channel_run` example:
 
 ```json
 {
   "id": "sched_01J2K",
-  "key": "channel_run:chn_01HZX:nd_hourly",
+  "key": "channel_run:chn_01HZX",
   "name": "channel_run · Material master · Hourly",
   "enabled": true,
   "work_kind": "channel_run",

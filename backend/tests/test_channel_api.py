@@ -16,6 +16,8 @@ from backend.admin.roles import create_role, seed_roles  # noqa: E402
 from backend.admin.role_store import get_role_store  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import get_user_store  # noqa: E402
+from backend.channel.store import get_channel_store  # noqa: E402
+from backend.core.time import utc_now  # noqa: E402
 from backend.main import app  # noqa: E402
 
 TRIGGER_GRAPH = {
@@ -121,7 +123,7 @@ def test_draft_conflict_and_invalid_publish(client: TestClient) -> None:
             {
                 "id": "nd_read",
                 "ref": "read_suppliers",
-                "type": "read.entity",
+                "type": "write.entity",
                 "name": "Read",
                 "position": {"x": 0, "y": 0},
                 "config": {},
@@ -155,13 +157,91 @@ def test_draft_conflict_and_invalid_publish(client: TestClient) -> None:
     assert "schema" in checked.json()["ports"][0]
 
 
+def test_validate_returns_problems_when_stored_nodes_lack_ref(client: TestClient) -> None:
+    created = client.post("/channels", json={"name": "Legacy", "description": None})
+    assert created.status_code == 201, created.text
+    channel_id = created.json()["channel"]["id"]
+    legacy = {
+        "nodes": [
+            {
+                "id": "nd_trigger",
+                "type": "trigger.manual",
+                "name": "Run",
+                "position": {"x": 0, "y": 0},
+                "config": {},
+                "on_error": "stop",
+                "retry": None,
+            },
+            {
+                "id": "nd_read",
+                "type": "read.entity",
+                "name": "Read",
+                "position": {"x": 0, "y": 0},
+                "config": {},
+                "on_error": "stop",
+                "retry": None,
+            },
+            {
+                "id": "nd_write",
+                "type": "write.entity",
+                "name": "Write",
+                "position": {"x": 0, "y": 0},
+                "config": {},
+                "on_error": "stop",
+                "retry": None,
+            },
+        ],
+        "edges": [
+            {
+                "id": "ed_1",
+                "source": {"node_id": "nd_trigger", "port": "main"},
+                "target": {"node_id": "nd_read", "port": "main"},
+            },
+            {
+                "id": "ed_2",
+                "source": {"node_id": "nd_read", "port": "main"},
+                "target": {"node_id": "nd_write", "port": "main"},
+            },
+        ],
+        "settings": {"run_timeout_sec": None, "error_channel_id": None},
+    }
+    stored = get_channel_store().replace_draft(
+        channel_id,
+        base_revision=created.json()["channel"]["draft_revision"],
+        graph=legacy,
+        now=utc_now(),
+    )
+    opened = client.get(f"/channels/{channel_id}/draft")
+    assert opened.status_code == 200, opened.text
+    assert opened.json()["graph"]["nodes"] == legacy["nodes"]
+    assert "ref" not in opened.json()["graph"]["nodes"][0]
+    version = get_channel_store().publish_version(
+        channel_id,
+        draft_revision=stored.draft_revision,
+        published_at=utc_now(),
+        published_by_user_id="user_admin",
+    )
+    fetched = client.get(f"/channels/{channel_id}/versions/{version.number}")
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["version"]["graph"]["nodes"] == legacy["nodes"]
+    checked = client.post(f"/channels/{channel_id}/draft/validate")
+    assert checked.status_code == 200, checked.text
+    body = checked.json()
+    assert body["valid"] is False
+    codes = {problem["code"] for problem in body["problems"]}
+    assert codes >= {"CHANNEL_NODE_REF_INVALID", "CHANNEL_NODE_TYPE_UNKNOWN"}
+    assert {port["node_id"] for port in body["ports"]} == {"nd_trigger", "nd_write"}
+
+
 def test_node_type_catalog_and_audit(client: TestClient) -> None:
     catalog = client.get("/channel-node-types")
     assert catalog.status_code == 200, catalog.text
     items = catalog.json()["items"]
     assert [item["type"] for item in items] == [
         "trigger.manual",
-        "read.entity",
+        "trigger.scheduled",
+        "read.sql",
+        "state.variable",
         "write.entity",
     ]
     assert items[0]["entry"] is True
@@ -174,8 +254,13 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
     assert items[0]["outputs"][0]["description"]
     assert items[0]["type_version"] == 1
     assert all(item["permission"] is None for item in items)
-    assert "x-refraq-ref" in items[1]["config_schema"]["properties"]["entity_id"]
-    assert "x-refraq-template" in items[2]["config_schema"]["properties"]["source"]
+    write = next(item for item in items if item["type"] == "write.entity")
+    sql = next(item for item in items if item["type"] == "read.sql")
+    assert "x-refraq-ref" in write["config_schema"]["properties"]["entity_id"]
+    assert "x-refraq-template" in write["config_schema"]["properties"]["source"]
+    assert "x-refraq-template" in sql["config_schema"]["properties"]["sql"]
+    assert sql["config_schema"]["properties"]["source"]["x-refraq-ref"] == "sql_source"
+    assert "source" in sql["config_schema"]["required"]
 
     created = client.post(
         "/channels", json={"name": "Material", "description": "from U9"}
@@ -204,3 +289,94 @@ def test_activate_and_deactivate(client: TestClient) -> None:
     current = client.get(f"/channels/{channel_id}")
     assert current.status_code == 200
     assert current.json()["channel"]["active"] is False
+
+
+SCHEDULED_GRAPH = {
+    "nodes": [
+        {
+            "id": "nd_hourly",
+            "ref": "hourly",
+            "type": "trigger.scheduled",
+            "name": "Hourly",
+            "position": {"x": 0, "y": 0},
+            "config": {"cron": "0 * * * *", "interval_seconds": None, "start_at": None},
+            "on_error": "stop",
+            "retry": None,
+        }
+    ],
+    "edges": [],
+    "settings": {"run_timeout_sec": 60, "error_channel_id": None},
+}
+
+
+def _save_draft(client: TestClient, channel_id: str, graph: dict) -> int:
+    current = client.get(f"/channels/{channel_id}/draft")
+    assert current.status_code == 200, current.text
+    revision = current.json()["draft_revision"]
+    saved = client.put(
+        f"/channels/{channel_id}/draft",
+        json={"base_revision": revision, "graph": graph},
+    )
+    assert saved.status_code == 200, saved.text
+    return saved.json()["draft_revision"]
+
+
+def test_publish_syncs_and_activation_toggles_the_schedule(client: TestClient) -> None:
+    from backend.worker.schedules import get_schedule_store
+
+    created = client.post("/channels", json={"name": "Material", "description": None})
+    channel_id = created.json()["channel"]["id"]
+    revision = _save_draft(client, channel_id, SCHEDULED_GRAPH)
+    published = client.post(
+        f"/channels/{channel_id}/publish", json={"draft_revision": revision}
+    )
+    assert published.status_code == 201, published.text
+    store = get_schedule_store()
+    row = store.get_by_key(f"channel_run:{channel_id}")
+    assert row is not None
+    assert row.enabled is False
+    assert row.locked is True
+    assert row.undeletable is True
+    assert row.running_timeout_sec is None
+    assert row.next_run_at is None
+    assert row.owner_ref == f"channel:{channel_id}"
+
+    changed = dict(SCHEDULED_GRAPH)
+    changed["nodes"] = [{**SCHEDULED_GRAPH["nodes"][0], "config": {"cron": "15 * * * *"}}]
+    _save_draft(client, channel_id, changed)
+    assert store.get_by_key(f"channel_run:{channel_id}").cron == "0 * * * *"
+
+    activated = client.post(f"/channels/{channel_id}/activate")
+    assert activated.status_code == 200
+    row = store.get_by_key(f"channel_run:{channel_id}")
+    assert row.enabled is True
+    assert row.next_run_at is not None
+
+    renamed = client.patch(f"/channels/{channel_id}", json={"name": "Materials"})
+    assert renamed.status_code == 200, renamed.text
+    assert "Materials" in store.get_by_key(f"channel_run:{channel_id}").name
+
+    manual = _save_draft(client, channel_id, TRIGGER_GRAPH)
+    published_manual = client.post(
+        f"/channels/{channel_id}/publish", json={"draft_revision": manual}
+    )
+    assert published_manual.status_code == 201, published_manual.text
+    assert store.get_by_key(f"channel_run:{channel_id}") is None
+
+    deleted = client.delete(f"/channels/{channel_id}")
+    assert deleted.status_code == 204
+
+
+def test_global_variable_list_and_delete(client: TestClient) -> None:
+    from backend.channel.variables import get_variable_store
+
+    saved = get_variable_store().apply(operation="set", name="lease", value={"held": True})
+    assert saved.applied is True
+    listed = client.get("/channel-variables")
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["items"][0]["name"] == "lease"
+    removed = client.delete("/channel-variables/lease")
+    assert removed.status_code == 204
+    assert client.get("/channel-variables").json()["items"] == []
+    events, _cursor = get_audit_store().list_events(limit=20)
+    assert any(event.action == "channel.variable_delete" for event in events)

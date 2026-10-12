@@ -1,8 +1,12 @@
 import type { Instant } from "@/lib/instant";
 
 export type ScheduleTarget = {
-  source_id: string | null;
-  source_key: string | null;
+  source_id?: string | null;
+  source_key?: string | null;
+  channel_id?: string | null;
+  channel_name?: string | null;
+  node_id?: string | null;
+  node_name?: string | null;
 };
 
 export type ScheduleRecentJob = {

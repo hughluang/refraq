@@ -8,7 +8,7 @@ Mapping a source column onto an attribute, transforming values, channel load, an
 
 Related boundaries:
 
-- Sources, catalog, **Object Semantics**, **Normalized Type**, and read-only **Controlled Query**: `docs/business-metadata.md`. Sources stay read-only registered data origins; refraq does not create tables inside one.
+- Sources, catalog, **Object Semantics**, **Normalized Type**, and **Controlled Query**: `docs/business-metadata.md`. Console, MCP, and Catalog Sample send a guarded read. A Data Channel SQL node may send the author's statement to a **Source**.
 - Platform **Job**: `docs/business-jobs.md`. Platform **Scheduled Task**: `docs/business-scheduled-tasks.md`. Publish and table drop use the Job mechanism and do not make Entity a scheduling domain.
 - **Permission** and role grants: `docs/business-login-auth.md`.
 - Row, column, and cell access to Entity data, definition visibility, and the entity database roles that enforce them: `docs/business-entity-access.md`, `docs/api-contracts-entity-access.md`.
@@ -165,9 +165,9 @@ Deprecate is allowed while the current version is still unpublished (for example
 
 Entity Tables live in an entity database that refraq owns, declared by its own connection setting separate from the metadata database (`docs/env.md` owns the variable). Keeping the two apart keeps the platform connection budget in `docs/business-metadata.md` honest about metadata volume, and leaves the entity database free to grow with business data.
 
-The entity database must be a different database from the metadata database; it may share a server. Startup refuses a configuration where both settings name the same database. Runtime connections to the entity database never use a superuser: the owner connection runs DDL and writes, and a separate read-only reader connection serves reads through **Profile View**s (`docs/business-entity-access.md` §15). A bootstrap command, run with admin credentials that runtime processes never hold, creates the roles, schemas, and functions. The worker opens the owner pool for publish, drop, and view regeneration Jobs. Persistent API opens process-local owner and reader pools for the **Entity Data API**. The Metadata MCP process does not open an entity pool.
+The entity database must be a different database from the metadata database; it may share a server. Startup refuses a configuration where both settings name the same database. Runtime connections to the entity database never use a superuser: the owner connection runs DDL, writes, and Data Channel SQL against the entity database, and a separate read-only reader connection serves **Entity Data API** reads through **Profile View**s (`docs/business-entity-access.md` §15). A bootstrap command, run with admin credentials that runtime processes never hold, creates the roles, schemas, and functions. The worker opens the owner pool for publish, drop, view regeneration, and that SQL. Persistent API opens process-local owner and reader pools for the **Entity Data API**. The Metadata MCP process does not open an entity pool.
 
-An Entity Table is never created inside a **Source**. A Source is a read-only registered data origin; the only caller SQL refraq sends to one is a single guarded read (**Controlled Query**, **Catalog Sample**).
+Publish never creates an Entity Table inside a **Source**. Console, MCP, and Catalog Sample send one guarded read (**Controlled Query**, Catalog Sample). A Data Channel SQL node sends the author's statement on the Source connection and returns the driver result (`docs/business-data-channel.md`).
 
 Entity Tables are not collected as **Catalog Object**s. The Entity definition is already the authoritative statement of their shape.
 

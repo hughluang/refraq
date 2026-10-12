@@ -99,6 +99,15 @@ def channel_client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("REFRAQ_SKIP_SEED", "0")
     monkeypatch.setenv("INITIAL_ADMIN_ACCOUNT", "root")
     monkeypatch.setenv("INITIAL_ADMIN_PASSWORD", "s3cret")
+    from backend.core.config import get_settings, reset_settings_cache
+
+    reset_settings_cache()
+    loaded = get_settings()
+    owner_url = loaded.entity_database_url
+    reader_url = loaded.entity_reader_database_url or owner_url
+    if not owner_url or not reader_url:
+        pytest.skip("ENTITY_DATABASE_URL is not configured")
+    monkeypatch.setenv("ENTITY_DATABASE_URL", owner_url)
 
     from backend.channel.store import reset_channel_store
     from backend.admin.role_store import reset_role_store
@@ -122,7 +131,7 @@ def channel_client(monkeypatch: pytest.MonkeyPatch):
     with engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE TABLE users, roles, channels, channel_versions"
+                "TRUNCATE TABLE users, roles, channels, channel_versions, channel_variables"
                 " RESTART IDENTITY CASCADE"
             )
         )
@@ -277,3 +286,40 @@ def test_enqueue_body_matches_finished_run(
         assert failed["failed_node_id"] == "nd_trigger"
     finally:
         celery_app.conf.task_always_eager = previous
+
+
+def test_global_variable_writes_are_atomic(channel_client: TestClient) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from backend.channel.variables import get_variable_store
+
+    del channel_client
+    store = get_variable_store()
+
+    def claim(owner: int) -> bool:
+        return store.apply(
+            operation="set_if_absent", name="once", value={"owner": owner}
+        ).applied
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        winners = list(pool.map(claim, range(8)))
+    assert winners.count(True) == 1
+
+    def bump(_: int) -> None:
+        for _step in range(20):
+            while True:
+                current = store.apply(operation="get", name="counter")
+                assert current.found
+                result = store.apply(
+                    operation="compare_and_set",
+                    name="counter",
+                    value={"n": current.value["n"] + 1},
+                    expected=current.value,
+                )
+                if result.applied:
+                    break
+
+    store.apply(operation="set", name="counter", value={"n": 0})
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(bump, range(4)))
+    assert store.apply(operation="get", name="counter").value == {"n": 80}

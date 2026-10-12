@@ -15,6 +15,7 @@ from backend.metadata.connectors.base import (
     QueryResult,
     SourceEndpoint,
     fetch_query_result,
+    finish_statement,
     query_endpoint_error,
 )
 from backend.metadata.connectors.structure_rows import (
@@ -91,6 +92,26 @@ class PostgresqlConnector:
                 conn.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
                 result = conn.execute(text(sql))
                 return fetch_query_result(result, max_rows=max_rows)
+        except Exception as exc:  # noqa: BLE001
+            raise query_endpoint_error(exc) from exc
+        finally:
+            eng.dispose()
+
+    def run_statement(
+        self,
+        endpoint: SourceEndpoint,
+        sql: str,
+        *,
+        max_rows: int,
+        timeout_sec: int,
+    ):
+        eng = self._engine(endpoint)
+        try:
+            with eng.connect() as conn:
+                timeout_ms = max(1, int(timeout_sec) * 1000)
+                conn.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
+                result = conn.exec_driver_sql(sql)
+                return finish_statement(conn, result, max_rows=max_rows)
         except Exception as exc:  # noqa: BLE001
             raise query_endpoint_error(exc) from exc
         finally:

@@ -280,6 +280,25 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
     }
   },
   {
+    "id": "channel-variables",
+    "label_key": "channelVariables.title",
+    "routes": {
+      "list": "/console/channel-variables",
+      "create": null,
+      "edit": null,
+      "show": null,
+      "aliases": []
+    },
+    "actions": {
+      "list": "channel:read",
+      "create": null,
+      "edit": null,
+      "delete": "channel:write",
+      "show": null,
+      "sample": null
+    }
+  },
+  {
     "id": "jobs",
     "label_key": "jobs.title",
     "routes": {

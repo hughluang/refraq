@@ -64,6 +64,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "metadata.source_schedules",
             "metadata.type_mappings.seeds",
             "metadata.parameters",
+            "metadata.source_statements",
             "metadata.mcp_catalog",
             "metadata.mcp_server",
             "metadata.mcp_http",
@@ -80,6 +81,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "entity.heads",
             "entity.rows",
             "entity.publish_confirmation",
+            "entity.statements",
             "entity.routers",
         }
     ),
@@ -90,6 +92,8 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "channel.tasks",
             "channel.parameters",
             "channel.write_targets",
+            "channel.schedules",
+            "channel.schedule_projection",
         }
     ),
     "worker": frozenset(

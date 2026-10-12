@@ -1,10 +1,13 @@
 "use client";
 
-import { ActionIcon, Button, CloseButton, Group, Stack, Text } from "@mantine/core";
+import { ActionIcon, Button, CloseButton, Group, Stack, Text, Textarea } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 
+import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
 import { TextField } from "@/components/form/TextField";
+import { ScheduledCadenceFields } from "@/features/channels/ScheduledCadenceFields";
+import { SqlSourceField } from "@/features/channels/SqlSourceField";
 import {
   emptyRow,
   fieldsFromSchema,
@@ -57,7 +60,11 @@ export function NodeConfigPanel({
 }: Props) {
   const t = useTranslate();
   const summary = spec ? nodeTypeSummary(t, spec) : "";
-  const fields = schema ? fieldsFromSchema(schema) : [];
+  const fields = (schema ? fieldsFromSchema(schema) : []).filter((field) =>
+    data.nodeType === "trigger.scheduled"
+      ? !["cron", "interval_seconds", "start_at"].includes(field.key)
+      : true,
+  );
   const entityId = typeof data.config.entity_id === "string" ? data.config.entity_id : "";
   const head = useEntityHeadAttributes(entityId);
 
@@ -115,6 +122,13 @@ export function NodeConfigPanel({
             }}
             allowDeselect={false}
           />
+          {data.nodeType === "trigger.scheduled" ? (
+            <ScheduledCadenceFields
+              config={data.config}
+              editable={editable}
+              onChange={(config) => update({ config })}
+            />
+          ) : null}
           {fields.map((field) => (
             <ConfigField
               key={field.key}
@@ -163,6 +177,17 @@ function ConfigField({
   const t = useTranslate();
   const caption = t(`channels.config.fields.${field.key}`);
   const labelProps = labeled ? { label: caption } : { "aria-label": caption };
+  if (field.kind === "sql_source") {
+    return (
+      <SqlSourceField
+        label={caption}
+        description={field.description}
+        value={value}
+        editable={editable}
+        onChange={onChange}
+      />
+    );
+  }
   if (field.kind === "entity") {
     return (
       <TargetEntityField
@@ -225,6 +250,32 @@ function ConfigField({
         config={config}
         upstream={upstream}
         onChange={onChange}
+      />
+    );
+  }
+  if (field.kind === "sql") {
+    return (
+      <Textarea
+        label={labeled ? caption : undefined}
+        aria-label={labeled ? undefined : caption}
+        description={field.description}
+        disabled={!editable}
+        autosize
+        minRows={6}
+        value={typeof value === "string" ? value : ""}
+        onChange={(event) => onChange(event.currentTarget.value)}
+      />
+    );
+  }
+  if (field.kind === "integer") {
+    return (
+      <NumberField
+        editable={editable}
+        {...labelProps}
+        min={field.minimum}
+        max={field.maximum}
+        value={typeof value === "number" ? value : ""}
+        onChange={(next) => onChange(typeof next === "number" ? next : null)}
       />
     );
   }

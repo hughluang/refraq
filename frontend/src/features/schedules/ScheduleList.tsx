@@ -16,7 +16,10 @@ import { ScheduleRunStrip } from "@/features/schedules/ScheduleRunStrip";
 import { ScheduleTableHead } from "@/features/schedules/ScheduleTableHead";
 import { ScheduleRowActions } from "@/features/schedules/ScheduleRowActions";
 import { formatScheduleNextRun } from "@/features/schedules/nextRunPreview";
-import { scheduleIdentityLabel } from "@/features/schedules/scheduleIdentity";
+import {
+  isChannelRunSchedule,
+  scheduleIdentityLabel,
+} from "@/features/schedules/scheduleIdentity";
 import type { ScheduledTask } from "@/features/schedules/types";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
@@ -70,7 +73,7 @@ export function ScheduleList() {
             </Table.Td>
             <Table.Td>
               <SwitchField
-                editable
+                editable={!isChannelRunSchedule(task)}
                 checked={task.enabled}
                 onChange={async (event) => {
                   try {

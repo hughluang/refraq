@@ -63,6 +63,7 @@ export type ChannelRun = {
   trigger_schedule_name: string | null;
   ignore_checkpoints: boolean;
   failed_node_id: string | null;
+  stopped_node_id?: string | null;
   created_at: Instant;
   started_at: Instant | null;
   finished_at: Instant | null;

@@ -9,9 +9,9 @@ from backend.core.pagination import PageParams, page_params
 from backend.admin.audit import persist_audit_event
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
+from backend.channel.schedule_projection import project_channel_schedule
 from backend.metadata.source_schedules import (
     public_schedule,
-    public_schedules,
     recent_jobs_by_schedule,
     schedule_label_for_record,
 )
@@ -35,9 +35,10 @@ router = APIRouter(tags=["schedules"])
 
 
 def _schedule_response(record: ScheduledTaskRecord) -> ScheduleResponse:
+    recent = recent_jobs_by_schedule([record.id])[record.id]
     return ScheduleResponse(
-        schedule=public_schedule(
-            record, recent_jobs=recent_jobs_by_schedule([record.id])[record.id]
+        schedule=project_channel_schedule(
+            record, public_schedule(record, recent_jobs=recent)
         )
     )
 
@@ -51,8 +52,14 @@ def list_platform_schedules(
     records, total = get_schedule_store().list(
         include_hidden=hidden, limit=page.limit, offset=page.offset
     )
+    recent = recent_jobs_by_schedule([record.id for record in records])
     return ScheduleListResponse(
-        items=public_schedules(records),
+        items=[
+            project_channel_schedule(
+                record, public_schedule(record, recent_jobs=recent[record.id])
+            )
+            for record in records
+        ],
         total=total,
         limit=page.limit,
         offset=page.offset,

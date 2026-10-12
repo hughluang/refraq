@@ -625,7 +625,10 @@ function ChannelCanvasBody({
           outputSchemas,
         );
   const showCatalog = picker !== null && selected == null;
-  const catalogSpecs = picker?.kind === "connect" ? picker.specs : catalog;
+  const hasTrigger = nodes.some((node) => node.data.entry);
+  const catalogSpecs = (picker?.kind === "connect" ? picker.specs : catalog).filter(
+    (spec) => !hasTrigger || !spec.entry,
+  );
   const catalogTitle =
     picker?.kind === "connect" ? t("channels.canvas.nextStep") : t("channels.canvas.palette");
 

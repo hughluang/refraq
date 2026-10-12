@@ -114,6 +114,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | `backend.metadata.source_schedules` | Metadata facade onto platform schedules: operator projection (`public_schedule`: work_kind + target), opaque `owner_ref` register/withdraw, per-kind product-default seed on Source create / mutating Source update. Closed work kinds: `structure`, `join_detection`. Not schedule ownership by Source |
 | `backend.metadata.type_mappings.seeds` | Product Type Mapping seed occupy (`ensure_product_type_mappings`) for Foundation Upgrade / Site Bootstrap |
 | `backend.metadata.parameters` | Metadata-owned parameter specs and typed accessors (`query_timeout_sec`, `query_max_rows`) |
+| `backend.metadata.source_statements` | Execute one author statement on a registered Source (`execute_source_statement`, `source_exists`) and return the driver result. Not Controlled Query |
 | `backend.metadata.mcp_catalog` | MCP tool catalog (name / Permission / description) shared by HTTP and `tools/list` |
 | `backend.metadata.mcp_server` | MCP tool host (stdio / in-process handlers). The stdio process entry assembles System Parameters |
 | `backend.metadata.mcp_http` | Product Streamable HTTP process entry; assembles System Parameters |
@@ -135,6 +136,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | `backend.entity.dictionaries.active_codes` | Active dictionary codes, bound into subject attributes by composition |
 | `backend.entity.heads` | Current published head shape by Entity id (`get_entity_head`): attribute name, type, unique, required, and Business Key. Data Channel validation reads this and does not import Entity stores |
 | `backend.entity.rows` | Head-table row read and batch write by Entity id (`read_rows`, `write_rows`), executed as a given User through Entity Access Control. Data Channel runs pass the System Identity. Does not import `channel` |
+| `backend.entity.statements` | Execute one statement on the entity owner connection (`execute_entity_statement`) for Data Channel SQL that selects the entity database. Sets `search_path` to `entity_data` for that transaction |
 | `backend.entity.publish_confirmation` | Port a Data Channel adapter fills with write nodes a candidate head would make incompatible; bound by composition. Entity HTTP calls it and does not import `channel` |
 | `backend.entity.routers.*` | Domain use-case HTTP (definition, access management, and Entity Data API); mounted by `main` |
 
@@ -148,17 +150,18 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | `backend.channel.tasks` | Job kind handler dispatch (`channel_run`) and Data Channel system tasks; discovered by `worker`. Not registered on `metadata.tasks` or `entity.tasks` |
 | `backend.channel.parameters` | Data Channel-owned System Parameter specs and typed accessors; collected by `worker.parameters` assembly |
 | `backend.channel.schedule_projection` | `channel_run` schedule `work_kind` / `target` projection adapter, bound by composition into the platform schedule list |
+| `backend.channel.schedules` | Publish sync, activation, withdraw, and the due-tick task that mints `channel_run` Jobs |
 | `backend.channel.write_targets` | Write-node consumers of a Business Entity, bound by composition into the Entity publish confirmation |
 | `backend.channel.routers.*` | Domain use-case HTTP; mounted by `main` |
 
-No module is created empty. `channel.errors`, `channel.routers`, `channel.tasks`, `channel.parameters`, and `channel.write_targets` are published. `channel.schedule_projection` is published with Scheduled-node sync and is not imported before that adapter exists.
+No module is created empty. `channel.errors`, `channel.routers`, `channel.tasks`, `channel.parameters`, `channel.write_targets`, `channel.schedules`, and `channel.schedule_projection` are published.
 
 **Consumed published surfaces.** `channel` consumes, through published modules only:
 
 - `jobs`: Job create, status transitions, cancel request, run log.
 - `worker`: schedule store port and seam (`worker.api`, `worker.schedules`, `worker.errors`, `worker.schemas`, `worker.due`) for publish sync, activation, withdraw, and due consumption.
 - `admin`: deps and permissions, audit, the System Parameter resolver, and the Notification Channel sender.
-- `metadata`: Locator parsing and resolution, Catalog Object and column reads, Controlled Query guards and execution, and Normalized Type.
+- `metadata`: Locator parsing and resolution, Catalog Object and column reads, Controlled Query guards and execution, Source statement execution, and Normalized Type.
 - `entity`: head resolution and head shape by Entity id (`entity.heads`), the head-table row read and batch write port (`entity.rows`), entity Change Log reads, and head-switch events. Row writes go through Entity Access Control as the System Identity.
 
 `metadata` and `entity` publish those capabilities as named leaf modules in their own §3 tables when the consuming code lands. Neither imports `channel`; where they need channel facts (the Entity publish confirmation listing incompatible write nodes, the platform schedule list projecting `channel_run` rows) they define a port that composition binds to a `channel` adapter.

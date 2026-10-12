@@ -1,6 +1,7 @@
 "use client";
 
 import { Text } from "@mantine/core";
+import Link from "next/link";
 
 import {
   scheduleIdentity,
@@ -16,9 +17,16 @@ export function ScheduleIdentityCell({
   scope: ScheduleIdentityScope;
 }) {
   const identity = scheduleIdentity(task, scope);
+  const channelId = task.target?.channel_id;
   return (
     <>
-      <Text size="sm">{identity.primary}</Text>
+      <Text size="sm">
+        {channelId ? (
+          <Link href={`/console/channels/${channelId}`}>{identity.primary}</Link>
+        ) : (
+          identity.primary
+        )}
+      </Text>
       {identity.customName ? (
         <Text size="xs" c="dimmed">
           {identity.customName}

@@ -73,6 +73,11 @@ export function ChannelRunDetail({
           </Text>
         ) : null}{" "}
         <RunErrorText code={detail.run.error_code} message={detail.run.error_message} />
+        {detail.run.stopped_node_id ? (
+          <Text span size="xs" c="dimmed" ml={6}>
+            {t("channels.runDetail.stoppedAt", { node: detail.run.stopped_node_id })}
+          </Text>
+        ) : null}
       </Text>
       <div style={{ flex: 1, minHeight: 360 }}>
         <ChannelCanvas

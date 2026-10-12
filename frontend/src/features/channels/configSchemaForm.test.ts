@@ -64,6 +64,29 @@ describe("fieldsFromSchema", () => {
     }
   });
 
+  it("maps an SQL source ref to the source picker", () => {
+    const fields = fieldsFromSchema({
+      type: "object",
+      required: ["source"],
+      properties: {
+        source: {
+          type: "object",
+          description: "Entity database or a registered Source.",
+          "x-refraq-ref": "sql_source",
+        },
+      },
+    });
+    expect(fields[0]).toMatchObject({
+      kind: "sql_source",
+      key: "source",
+      required: true,
+    });
+    expect(defaultConfig({
+      type: "object",
+      properties: { source: { "x-refraq-ref": "sql_source" } },
+    }).source).toBeNull();
+  });
+
   it("maps a template field to a template editor", () => {
     const fields = fieldsFromSchema({
       type: "object",

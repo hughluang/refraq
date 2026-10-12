@@ -10,6 +10,10 @@ from pydantic import BaseModel, ConfigDict
 class ScheduleTargetOut(BaseModel):
     source_id: str | None = None
     source_key: str | None = None
+    channel_id: str | None = None
+    channel_name: str | None = None
+    node_id: str | None = None
+    node_name: str | None = None
 
 
 class ScheduleRecentJobOut(BaseModel):

@@ -11,6 +11,8 @@ __all__ = [
     "ChannelNotPublished",
     "ChannelRunNotFound",
     "ChannelTriggerInvalid",
+    "ChannelVariableNameInvalid",
+    "ChannelVariableNotFound",
     "ChannelVersionNotFound",
 ]
 
@@ -64,7 +66,23 @@ class ChannelTriggerInvalid(AppError):
     http_status = 422
 
     def _default_message(self) -> str:
-        return "Manual trigger node is missing or ambiguous"
+        return "Graph does not have exactly one trigger node"
+
+
+class ChannelVariableNotFound(AppError):
+    code = "CHANNEL_VARIABLE_NOT_FOUND"
+    http_status = 404
+
+    def _default_message(self) -> str:
+        return "Global Variable not found"
+
+
+class ChannelVariableNameInvalid(AppError):
+    code = "CHANNEL_VARIABLE_NAME_INVALID"
+    http_status = 422
+
+    def _default_message(self) -> str:
+        return "Global Variable name is invalid"
 
 
 class ChannelRunNotFound(AppError):

@@ -16,13 +16,23 @@ from backend.channel.errors import (
 from backend.channel.graph import Problem, validate
 from backend.channel.ids import new_channel_id
 from backend.channel.references import ChannelReferenceResolver
+from backend.channel.schedules import (
+    cancel_channel_jobs,
+    owner_ref_for,
+    rename_channel_schedule,
+    set_channel_schedule_enabled,
+    sync_published_schedule,
+)
 from backend.channel.store import (
     ChannelRecord,
     ChannelVersionRecord,
     empty_graph,
     get_channel_store,
 )
-from backend.core.time import utc_now
+from backend.channel.run_store import get_run_store
+from backend.core.time import format_instant, utc_now
+from backend.jobs.store import get_job_store
+from backend.worker.api import withdraw_schedules_by_owner_ref
 
 __all__ = [
     "create_channel",
@@ -114,6 +124,8 @@ def patch_channel(
     if changed:
         record.updated_at = utc_now()
         record = get_channel_store().save(record)
+        if name is not None:
+            rename_channel_schedule(record)
         _audit(
             actor_user_id=actor_user_id,
             actor_token_id=actor_token_id,
@@ -137,6 +149,7 @@ def set_channel_active(
         record.active = active
         record.updated_at = utc_now()
         record = get_channel_store().save(record)
+        set_channel_schedule_enabled(record, enabled=active)
         _audit(
             actor_user_id=actor_user_id,
             actor_token_id=actor_token_id,
@@ -154,6 +167,10 @@ def delete_channel(
     actor_user_id: str,
     actor_token_id: str | None,
 ) -> None:
+    if get_channel_store().get(channel_id) is None:
+        raise ChannelNotFound()
+    withdraw_schedules_by_owner_ref(owner_ref_for(channel_id))
+    cancel_channel_jobs(channel_id)
     if not get_channel_store().delete(channel_id):
         raise ChannelNotFound()
     _audit(
@@ -226,6 +243,9 @@ def publish_channel(
         published_at=utc_now(),
         published_by_user_id=actor_user_id,
     )
+    confirmation = _confirmation(record)
+    confirmation["draft_revision"] = draft_revision
+    sync_published_schedule(record, version.graph)
     _audit(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -233,8 +253,6 @@ def publish_channel(
         action="channel.publish",
         detail={"number": version.number, "draft_revision": draft_revision},
     )
-    confirmation = _confirmation(record)
-    confirmation["draft_revision"] = draft_revision
     return version, confirmation
 
 
@@ -275,9 +293,28 @@ def _confirmation(record: ChannelRecord) -> dict[str, Any]:
     return {
         "draft_revision": record.draft_revision,
         "mirrors_to_open": [],
-        "runs_to_cancel": [],
+        "runs_to_cancel": _runs_to_cancel(record.id),
         "missing_run_timeout": timeout is None,
     }
+
+
+def _runs_to_cancel(channel_id: str) -> list[dict[str, Any]]:
+    jobs, _total = get_job_store().list(kind="channel_run", status="running")
+    items: list[dict[str, Any]] = []
+    for job in jobs:
+        if (job.input or {}).get("channel_id") != channel_id:
+            continue
+        run = get_run_store().get_run(job.id)
+        if run is None or run.target != "published":
+            continue
+        items.append(
+            {
+                "job_id": job.id,
+                "version": run.version,
+                "started_at": format_instant(job.started_at) if job.started_at else None,
+            }
+        )
+    return items
 
 
 def _audit(

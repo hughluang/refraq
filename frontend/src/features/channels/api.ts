@@ -123,7 +123,7 @@ export function publishChannel(id: string, draftRevision: number) {
 
 export function startRun(
   id: string,
-  body: { target: "draft" | "published"; trigger_node_id?: string; ignore_checkpoints?: boolean },
+  body: { target: "draft" | "published"; ignore_checkpoints?: boolean },
 ) {
   return apiClient<{ run: ChannelRun }>(`/channels/${id}/runs`, {
     method: "POST",

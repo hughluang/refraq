@@ -42,6 +42,7 @@ def create_celery_app() -> Celery:
             "backend.metadata.catalog_embed_jobs.schedule",
             "backend.entity.tasks",
             "backend.channel.tasks",
+            "backend.channel.schedules",
             "backend.worker.tasks",
         ),
         beat_scheduler="backend.worker.scheduler:DatabaseScheduler",

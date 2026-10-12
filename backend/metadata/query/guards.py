@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from sqlglot import exp, parse
-from sqlglot.errors import ParseError
+from sqlglot.errors import ParseError, SqlglotError
 
 from backend.metadata.errors import QueryMultiStatement, QueryNotReadonly
 
@@ -43,6 +43,37 @@ _BLOCKED_FUNCTION_NAMES = frozenset(
         "sp_executesql",
     }
 )
+
+
+class SqlNotOneStatement(Exception):
+    """The text is empty, unreadable, or more than one statement.
+
+    This is a count, not a Controlled Query guard. Callers must not map it to
+    ``QUERY_MULTI_STATEMENT`` or ``QUERY_NOT_READONLY``.
+    """
+
+
+def prove_one_statement(sql: str, *, engine: str) -> None:
+    """Reject text that is not exactly one statement for ``engine``.
+
+    One trailing semicolon is ignored. The statement is not rewritten, and
+    statement kind is not restricted.
+    """
+    dialect = _DIALECT_BY_ENGINE.get((engine or "").strip().lower())
+    if dialect is None or not _exactly_one_statement(sql, dialect):
+        raise SqlNotOneStatement("SQL must be exactly one statement")
+
+
+def _exactly_one_statement(sql: str, dialect: str) -> bool:
+    cleaned = (sql or "").strip()
+    body = cleaned[:-1].strip() if cleaned.endswith(";") else cleaned
+    if not body:
+        return False
+    try:
+        statements = [item for item in parse(body, read=dialect) if item is not None]
+    except SqlglotError:
+        return False
+    return len(statements) == 1
 
 
 def dialect_for_engine(engine: str) -> str:

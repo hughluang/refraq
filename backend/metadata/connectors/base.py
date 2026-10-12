@@ -73,6 +73,16 @@ class QueryResult:
     truncated: bool
 
 
+@dataclass
+class StatementResult:
+    """Driver result of one author statement. ``truncated`` means another row existed."""
+
+    columns: list[str]
+    rows: list[list[Any]]
+    rowcount: int | None
+    truncated: bool
+
+
 @runtime_checkable
 class CollectProgress(Protocol):
     """Observer for collect_structure. Implementations must not live in connectors."""
@@ -116,6 +126,19 @@ class EngineConnector(Protocol):
         timeout_sec: int,
     ) -> QueryResult:
         """Execute a single read-only statement with engine timeout + row cap."""
+
+    def run_statement(
+        self,
+        endpoint: SourceEndpoint,
+        sql: str,
+        *,
+        max_rows: int,
+        timeout_sec: int,
+    ) -> StatementResult:
+        """Execute one author statement and return the driver result.
+
+        Commits when the result fits in ``max_rows``. Rolls back when it does not.
+        """
 
 
 class ConnectorError(Exception):
@@ -170,3 +193,34 @@ def fetch_query_result(result: Any, *, max_rows: int) -> QueryResult:
             break
         rows.append([value for value in row])
     return QueryResult(columns=columns, rows=rows, truncated=truncated)
+
+
+def statement_rowcount(result: Any) -> int | None:
+    count = getattr(result, "rowcount", None)
+    if count is None or count < 0:
+        return None
+    return int(count)
+
+
+def finish_statement(conn: Any, result: Any, *, max_rows: int) -> StatementResult:
+    """Commit a statement that fits. Roll back when another row was waiting."""
+    outcome = consume_statement(result, max_rows=max_rows)
+    if outcome.truncated:
+        conn.rollback()
+    else:
+        conn.commit()
+    return outcome
+
+
+def consume_statement(result: Any, *, max_rows: int) -> StatementResult:
+    """Read one driver result. A non-row statement leaves ``rows`` empty."""
+    rowcount = statement_rowcount(result)
+    if not getattr(result, "returns_rows", False):
+        return StatementResult(columns=[], rows=[], rowcount=rowcount, truncated=False)
+    fetched = fetch_query_result(result, max_rows=max_rows)
+    return StatementResult(
+        columns=fetched.columns,
+        rows=fetched.rows,
+        rowcount=rowcount,
+        truncated=fetched.truncated,
+    )

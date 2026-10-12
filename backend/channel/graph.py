@@ -23,6 +23,9 @@ from backend.channel.template import (
     static_check,
 )
 from backend.channel.values import attribute_value_schema
+from backend.core.time import parse_instant
+from backend.worker.api import validate_cadence, validate_start_at
+from backend.worker.errors import ScheduleCadenceInvalid, ScheduleStartAtInvalid
 
 __all__ = [
     "Problem",
@@ -78,6 +81,8 @@ class ReferenceResolver(Protocol):
 
     def channel_exists(self, channel_id: str) -> bool: ...
 
+    def source_exists(self, source_id: str) -> bool: ...
+
 
 def validate(
     graph: Mapping[str, Any],
@@ -96,11 +101,13 @@ def validate(
     problems.extend(_type_and_config_problems(nodes, by_type))
     problems.extend(_expression_problems(nodes, edges, by_id, by_type, resolver))
     problems.extend(_payload_problems(nodes))
+    problems.extend(_scheduled_problems(nodes))
     problems.extend(_edge_problems(edges, by_id, by_type))
     problems.extend(_trigger_problems(nodes, edges, by_id, by_type))
     problems.extend(_reachability_problems(nodes, edges, by_id, by_type))
     problems.extend(_cycle_problems(nodes, edges, by_id, by_type))
     problems.extend(_reference_problems(nodes, by_type, resolver))
+    problems.extend(_sql_source_problems(nodes, by_type, resolver))
     problems.extend(_match_key_problems(nodes, by_type, resolver))
     problems.extend(_settings_problems(graph["settings"], resolver))
     return problems
@@ -354,6 +361,34 @@ def _payload_problems(nodes: list[dict[str, Any]]) -> list[Problem]:
     return problems
 
 
+def _scheduled_problems(nodes: list[dict[str, Any]]) -> list[Problem]:
+    problems: list[Problem] = []
+    for node in nodes:
+        if str(node.get("type")) != "trigger.scheduled":
+            continue
+        config = node.get("config") if isinstance(node.get("config"), dict) else {}
+        cron = config.get("cron")
+        cron_text = str(cron).strip() if isinstance(cron, str) and str(cron).strip() else None
+        interval = config.get("interval_seconds")
+        seconds = interval if isinstance(interval, int) else None
+        start = None
+        raw_start = config.get("start_at")
+        try:
+            if isinstance(raw_start, str) and raw_start.strip():
+                start = parse_instant(raw_start)
+            start = validate_start_at(start)
+            validate_cadence(cron=cron_text, interval_seconds=seconds, start_at=start)
+        except (ScheduleCadenceInvalid, ScheduleStartAtInvalid, ValueError) as exc:
+            problems.append(
+                Problem(
+                    "CHANNEL_NODE_CONFIG_INVALID",
+                    str(exc),
+                    node_id=str(node["id"]),
+                )
+            )
+    return problems
+
+
 def _type_and_config_problems(
     nodes: list[dict[str, Any]],
     by_type: dict[str, NodeType],
@@ -500,10 +535,20 @@ def _trigger_problems(
     by_type: dict[str, NodeType],
 ) -> list[Problem]:
     problems: list[Problem] = []
-    if not any(_is_trigger(node, by_type) for node in nodes):
+    triggers = [node for node in nodes if _is_trigger(node, by_type)]
+    if not triggers:
         problems.append(
             Problem("CHANNEL_GRAPH_NO_TRIGGER", "Graph has no trigger node")
         )
+    elif len(triggers) > 1:
+        for node in triggers:
+            problems.append(
+                Problem(
+                    "CHANNEL_GRAPH_MULTIPLE_TRIGGERS",
+                    "Graph has more than one trigger node",
+                    node_id=str(node["id"]),
+                )
+            )
     for edge in edges:
         target = by_id.get(str(edge["target"]["node_id"]))
         if target is not None and _is_trigger(target, by_type):
@@ -630,6 +675,33 @@ def _reference_problems(
                         node_id=str(node["id"]),
                     )
                 )
+    return problems
+
+
+def _sql_source_problems(
+    nodes: list[dict[str, Any]],
+    by_type: dict[str, NodeType],
+    resolver: ReferenceResolver,
+) -> list[Problem]:
+    problems: list[Problem] = []
+    for node in nodes:
+        if str(node["type"]) != "read.sql":
+            continue
+        spec = by_type.get("read.sql")
+        if spec is None or _config_error(spec.config_schema, node["config"]) is not None:
+            continue
+        source = node["config"].get("source")
+        if not isinstance(source, dict) or source.get("kind") != "source":
+            continue
+        source_id = source["source_id"]
+        if not resolver.source_exists(source_id):
+            problems.append(
+                Problem(
+                    "CHANNEL_REFERENCE_UNRESOLVED",
+                    f"Source does not resolve: {source_id}",
+                    node_id=str(node["id"]),
+                )
+            )
     return problems
 
 
@@ -815,11 +887,13 @@ def refine_ports(
             and spec.refine is not None
             and isinstance(node.get("config"), dict)
         ):
-            upstream = {
-                str(by_id[anc]["ref"]): outputs.get(anc, {})
-                for anc in ancestors.get(node_id, ())
-                if anc in by_id
-            }
+            upstream = {}
+            for anc in ancestors.get(node_id, ()):
+                if anc not in by_id:
+                    continue
+                ref = by_id[anc].get("ref")
+                if isinstance(ref, str):
+                    upstream[ref] = outputs.get(anc, {})
             produced = spec.refine(node["config"], upstream, resolver)
         outputs[node_id] = produced if isinstance(produced, dict) else {}
     refined: list[RefinedPort] = []

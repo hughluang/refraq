@@ -14,6 +14,9 @@ class RecordingHooks:
     def cancelled(self) -> bool:
         return bool(self.cancel_after and self.cancel_after in self.order)
 
+    def superseded(self) -> bool:
+        return False
+
     def on_start(self, node: dict) -> int:
         self.order.append(str(node["id"]))
         return len(self.order)
@@ -82,6 +85,86 @@ def test_stop_failure_does_not_run_downstream() -> None:
     assert hooks.order == ["a", "b"]
 
 
+def test_timeout_records_the_node_about_to_run() -> None:
+    import time
+
+    graph = {
+        "nodes": [_node("a", 0), _node("b", 1)],
+        "edges": [_edge("a", "b")],
+        "settings": {},
+    }
+    hooks = RecordingHooks()
+    outcome = execute(
+        graph,
+        "a",
+        {"fake": _ok},
+        hooks,
+        timeout_sec=1,
+        started=time.monotonic() - 5,
+    )
+    assert outcome.status == "failed"
+    assert outcome.error_code == "CHANNEL_RUN_TIMEOUT"
+    assert outcome.stopped_node_id == "a"
+    assert hooks.order == []
+
+
+def test_supersede_stops_before_the_next_node() -> None:
+    class Superseding(RecordingHooks):
+        def superseded(self) -> bool:
+            return "a" in self.order
+
+    graph = {
+        "nodes": [_node("a", 0), _node("b", 1)],
+        "edges": [_edge("a", "b")],
+        "settings": {},
+    }
+    hooks = Superseding()
+    outcome = execute(graph, "a", {"fake": _ok}, hooks)
+    assert outcome.status == "cancelled"
+    assert outcome.stopped_node_id == "b"
+    assert hooks.order == ["a"]
+
+
+def test_timeout_records_the_node_that_would_run() -> None:
+    import time
+
+    graph = {
+        "nodes": [_node("a", 0), _node("b", 1)],
+        "edges": [_edge("a", "b")],
+        "settings": {},
+    }
+    hooks = RecordingHooks()
+    outcome = execute(
+        graph,
+        "a",
+        {"fake": _ok},
+        hooks,
+        timeout_sec=1,
+        started=time.monotonic() - 5,
+    )
+    assert outcome.status == "failed"
+    assert outcome.error_code == "CHANNEL_RUN_TIMEOUT"
+    assert outcome.stopped_node_id == "a"
+    assert hooks.order == []
+
+
+def test_supersede_stops_before_the_next_node() -> None:
+    class Superseding(RecordingHooks):
+        def superseded(self) -> bool:
+            return "a" in self.order
+
+    graph = {
+        "nodes": [_node("a", 0), _node("b", 1)],
+        "edges": [_edge("a", "b")],
+        "settings": {},
+    }
+    hooks = Superseding()
+    outcome = execute(graph, "a", {"fake": _ok}, hooks)
+    assert outcome.status == "cancelled"
+    assert outcome.stopped_node_id == "b"
+    assert hooks.order == ["a"]
+
+
 def test_cancel_between_nodes() -> None:
     graph = {
         "nodes": [_node("a", 0), _node("b", 1)],
@@ -92,4 +175,5 @@ def test_cancel_between_nodes() -> None:
     hooks.cancel_after = "a"
     outcome = execute(graph, "a", {"fake": _ok}, hooks)
     assert outcome.status == "cancelled"
+    assert outcome.stopped_node_id == "b"
     assert hooks.order == ["a"]

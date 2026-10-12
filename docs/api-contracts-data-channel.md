@@ -4,7 +4,7 @@
 
 This document defines the HTTP contract for **Data Channel** definitions and runs: the node type catalog, channel create, read, edit, and delete, draft save, validate, publish with its confirmation list, **Channel Version** reads, the activation switch, on-demand runs, the run list, and node-execution reads. Paths address a channel by opaque `id`.
 
-Editor execution (execute up to a node, pinned data, write dry run), **Global Variable**s, **Source Mirror**s, and the **Notification Channel** are not defined here.
+Editor execution (execute up to a node, pinned data, write dry run), **Source Mirror**s, and the **Notification Channel** are not defined here. Global Variable HTTP is `docs/api-contracts-global-variables.md`.
 
 Related boundaries:
 
@@ -81,10 +81,10 @@ Collection lists use the **Offset Page** envelope `{ "items", "total", "limit", 
     {
       "id": "nd_read",
       "ref": "read_suppliers",
-      "type": "read.entity",
+      "type": "read.sql",
       "name": "Read suppliers",
       "position": { "x": 240, "y": 0 },
-      "config": { "entity_id": "ent_01HZX", "filters": [] },
+      "config": { "sql": "SELECT code, name FROM suppliers", "statement_timeout_sec": 30 },
       "on_error": "stop",
       "retry": null
     },
@@ -144,12 +144,33 @@ Write Entity configuration (`write.entity`):
 | `mapping` | List of `{ "attribute", "key" }`; `attribute` names a head attribute at most once and the list includes the match key attribute; `key` is the source-object key to copy. `delete` ignores the list |
 | `on_incompatible_head` | `fail` (default) or `skip` |
 
-Read Entity configuration (`read.entity`):
+SQL configuration (`read.sql`):
 
 | Field | Rule |
 | --- | --- |
-| `entity_id` | Business Entity id whose current head is read |
-| `filters` | List of `{ "attribute", "op", "value" }`. `op` is `eq`. `attribute` names a head attribute. `value` is a template evaluated once for the node execution. Its declared type is that attribute's type |
+| `source` | Required object. `{"kind":"entity"}` or `{"kind":"source","source_id":"<Source id>"}`. `kind` `entity` rejects `source_id`. `kind` `source` requires `source_id`. Absent or any other shape is `CHANNEL_NODE_CONFIG_INVALID`. Validate and publish do not default a missing source to the entity database. A `source_id` that does not resolve is `CHANNEL_REFERENCE_UNRESOLVED` |
+| `sql` | A template. Each `{{ }}` result is spliced as text. The rendered text must be exactly one statement; otherwise the node fails with `CHANNEL_SQL_NOT_ONE_STATEMENT` and the driver is not called. On the entity database, unqualified names resolve in schema `entity_data` |
+| `statement_timeout_sec` | Integer seconds from 1 to 3600. Absent means 30 |
+
+A successful SQL execution returns `{rows, count, rowcount}`. `rows` is an array of objects and `count` is its length. Both are empty and 0 when the statement returns no result set. `rowcount` is an integer when the driver reports an affected-row count, otherwise `null`. More than 100000 rows fails the node with `CHANNEL_ITEM_LIMIT_EXCEEDED`. Text that is not exactly one statement fails the node with `CHANNEL_SQL_NOT_ONE_STATEMENT` before the driver runs. A database error fails the node with `CHANNEL_NODE_FAILED` and the database message.
+
+Scheduled trigger configuration (`trigger.scheduled`):
+
+| Field | Rule |
+| --- | --- |
+| `cron` | Five-field cron, or `null`. Exactly one of `cron` and `interval_seconds` |
+| `interval_seconds` | Integer seconds from 1 to 252460800, or `null` |
+| `start_at` | Optional Instant, or `null` |
+
+Global Variable configuration (`state.variable`):
+
+| Field | Rule |
+| --- | --- |
+| `operation` | `get`, `set`, `delete`, `set_if_absent`, or `compare_and_set` |
+| `name` | A string template. The result matches `^[A-Za-z0-9_.:-]{1,128}$` |
+| `value` | A JSON template for `set`, `set_if_absent`, and `compare_and_set` |
+| `expected` | A JSON template for `compare_and_set` |
+| `ttl_sec` | Optional positive integer seconds on a write, or `null` |
 
 Manual trigger configuration (`trigger.manual`):
 
@@ -165,6 +186,7 @@ Manual trigger configuration (`trigger.manual`):
 | `entity_attribute` | An attribute name on that entity context. A name that is not on the head is `CHANNEL_REFERENCE_UNRESOLVED` |
 | `match_key` | A Write Entity match key: `null` or the name of a `unique` head attribute. Failure is `CHANNEL_MATCH_KEY_INVALID`, not an unresolved reference |
 | `json` | A JSON object. Used by the Manual trigger payload |
+| `sql_source` | The SQL node's `source` object. The Console renders one control listing the entity database and registered Sources |
 
 `config_schema` may also carry `x-refraq-template`. It is ignored by JSON Schema validation. Its value is the declared value type as a JSON Schema object, or `{ "from": "entity_attribute" }` when the type is the sibling attribute's **Attribute Type**. The stored value is always the template text. A template that does not parse is `CHANNEL_EXPRESSION_INVALID`. Text with no `{{ }}` that does not match the declared type is `CHANNEL_TEMPLATE_TYPE_MISMATCH`. A `self.<ref>` or `self.nodes["<name>"]` that is missing or not upstream is `CHANNEL_TEMPLATE_REF_INVALID`. A result whose type cannot be known until run time is `CHANNEL_TEMPLATE_TYPE_UNKNOWN` with severity `warning`.
 
@@ -229,6 +251,7 @@ Sections are empty lists, or `false`, when there is nothing to show.
   "trigger_schedule_name": null,
   "ignore_checkpoints": false,
   "failed_node_id": null,
+  "stopped_node_id": null,
   "created_at": "2026-10-09T08:00:00Z",
   "started_at": "2026-10-09T08:00:01Z",
   "finished_at": "2026-10-09T08:00:41Z",
@@ -243,6 +266,7 @@ Sections are empty lists, or `false`, when there is nothing to show.
 - `version` is the Channel Version a `published` run resolved at start, or `null` before it starts, when it ended before resolving one, or when `target` is `draft`.
 - `draft_revision` is the frozen draft revision when `target` is `draft`, otherwise `null`.
 - `failed_node_id` names the node that failed the run, or `null`.
+- `stopped_node_id` names the node that was next when cancel, timeout, or a newer version stopped the run, or `null`.
 - `trigger_kind` is `user` for an on-demand run, `schedule` for a Scheduled node, and `system` for platform-event and change-arrival triggers. `trigger_ref`, `trigger_actor_name`, and `trigger_schedule_name` follow the Job contract.
 - Duration is derived by clients from `started_at` and `finished_at`.
 
@@ -299,7 +323,7 @@ A `channel_run` Job follows the platform Job lifecycle (`docs/business-jobs.md`)
 ### 4.2 Input
 
 ```json
-{ "channel_id": "chn_01HZX", "target": "published", "trigger_node_id": "nd_trigger", "ignore_checkpoints": false }
+{ "channel_id": "chn_01HZX", "target": "published", "ignore_checkpoints": false }
 ```
 
 The input carries no version. A `published` run resolves the current published version at start. A `draft` run executes the snapshot stored on the run record. Unattended runs set `target` to `published` and omit a user-chosen trigger when the schedule names the node.
@@ -358,7 +382,7 @@ Query: `q` (optional literal substring of `name`), `active` (`true` | `false` | 
 
 ### 5.4 `PATCH /channels/{id}`
 
-Any subset of `name` and `description`. Present `description` `null` clears it. `200` `{ "channel": { … } }`. Does not touch the draft, versions, or schedule rows. Synced schedule rows keep their stored names.
+Any subset of `name` and `description`. Present `description` `null` clears it. `200` `{ "channel": { … } }`. Does not touch the draft or versions. A changed channel name rewrites the name of the synced schedule row without another publish. A description-only change leaves that schedule name as stored.
 
 ### 5.5 `DELETE /channels/{id}`
 
@@ -366,7 +390,7 @@ Any subset of `name` and `description`. Present `description` `null` clears it. 
 
 ### 5.6 `GET` and `PUT /channels/{id}/draft`
 
-`GET` returns `{ "draft_revision", "draft_updated_at", "graph" }`.
+`GET` returns `{ "draft_revision", "draft_updated_at", "graph" }`. The graph is the stored document. A node that lacks `ref`, names an unknown type, or otherwise fails §3.2 is still returned. Those failures are reported by validate, not by this read.
 
 `PUT` body:
 
@@ -411,11 +435,11 @@ Publish body:
 - `draft_revision` must equal the stored revision, so the published graph is the previewed graph; otherwise `409 CHANNEL_DRAFT_CONFLICT`.
 - An invalid draft is refused with `422 CHANNEL_GRAPH_INVALID`; `detail` names the first error, and the full list, including warnings, comes from validate.
 - The caller must hold every Permission declared by node types present in the draft.
-- `201` `{ "version": { … }, "confirmation": { … } }`, where `confirmation` is the list as applied at publish. Publish stores the version, reconciles schedule rows, requests cancel of older-version runs, and requests opening of the listed mirrors (`docs/business-data-channel.md` §3.5). It does not change `active`.
+- `201` `{ "version": { … }, "confirmation": { … } }`, where `confirmation` lists the running published runs the new version will stop between nodes. Publish stores the version and reconciles the schedule row. It does not change `active` and it does not cancel Jobs itself.
 
 ### 5.9 `GET /channels/{id}/versions` and `GET /channels/{id}/versions/{number}`
 
-List query: `limit` (default 50, max 200), `offset` (default 0). Ordered by `number DESC`. Items omit `graph`. Get returns `{ "version": { … } }` with `graph`. Unknown number is `404 CHANNEL_VERSION_NOT_FOUND`.
+List query: `limit` (default 50, max 200), `offset` (default 0). Ordered by `number DESC`. Items omit `graph`. Get returns `{ "version": { … } }` with the stored `graph`. A stored graph that does not meet §3.2 is still returned. Unknown number is `404 CHANNEL_VERSION_NOT_FOUND`.
 
 ### 5.10 `POST /channels/{id}/activate` and `POST /channels/{id}/deactivate`
 
@@ -424,15 +448,15 @@ Empty body. `200` `{ "channel": { … } }`. Idempotent: activating an active cha
 ### 5.11 `POST /channels/{id}/runs`
 
 ```json
-{ "target": "draft", "ignore_checkpoints": false, "trigger_node_id": "nd_trigger" }
+{ "target": "draft", "ignore_checkpoints": false }
 ```
 
 - `target` is `draft` or `published`. `draft` freezes the current draft, which must validate; `published` requires a published version.
-- `trigger_node_id` names a Manual trigger node in the graph that will run. It may be omitted when that graph has exactly one Manual trigger node.
+- The run enters the graph's only trigger node.
 - `ignore_checkpoints` defaults to `false`. A `draft` run never advances checkpoints even when this is `false`.
 - Allowed while the channel is inactive.
 - `202` `{ "run": { … } }` (§3.6). `trigger_kind` is `user` and `trigger_ref` is the acting User. The body is the Channel Run as stored when the handler returns, the same read as a following GET. `status` is `queued` and `outcome` is null when the worker has not finished. When the worker has already finished inside the request, `status`, `outcome`, and `failed_node_id` match that GET and §3.6.
-- Target `published` with no published version is `409 CHANNEL_NOT_PUBLISHED`. A missing, non-Manual, or ambiguous trigger node is `422 CHANNEL_TRIGGER_INVALID`. An invalid draft is `422 CHANNEL_GRAPH_INVALID`.
+- Target `published` with no published version is `409 CHANNEL_NOT_PUBLISHED`. A graph that does not have exactly one trigger is `422 CHANNEL_TRIGGER_INVALID`. An invalid draft is `422 CHANNEL_GRAPH_INVALID`.
 
 ### 5.12 `GET /channels/{id}/runs`
 
@@ -482,7 +506,7 @@ When the value at `path` is a list, `200` is an **Offset Page** of its elements.
 | `CHANNEL_DRAFT_CONFLICT` | 409 | `base_revision` or `draft_revision` is not the stored draft revision |
 | `CHANNEL_GRAPH_INVALID` | 422 | Publish of a draft that fails validation |
 | `CHANNEL_NOT_PUBLISHED` | 409 | On-demand run with target `published` of a channel with no published version |
-| `CHANNEL_TRIGGER_INVALID` | 422 | On-demand run names a missing or non-Manual trigger node, or omits it when the graph has several |
+| `CHANNEL_TRIGGER_INVALID` | 422 | The graph does not have exactly one trigger node |
 | `CHANNEL_RUN_NOT_FOUND` | 404 | No run with this Job id on the channel |
 | `REQUEST_INVALID` | 422 | Unknown fields, malformed identifiers, or out-of-range fields |
 
@@ -491,6 +515,7 @@ When the value at `path` is a list, `200` is an **Offset Page** of its elements.
 | Code | When |
 | --- | --- |
 | `CHANNEL_GRAPH_NO_TRIGGER` | The graph has no trigger node |
+| `CHANNEL_GRAPH_MULTIPLE_TRIGGERS` | The graph has more than one trigger node |
 | `CHANNEL_GRAPH_TRIGGER_INPUT` | A trigger node has an inbound edge |
 | `CHANNEL_GRAPH_UNREACHABLE` | A node is not reachable from any trigger node |
 | `CHANNEL_GRAPH_CYCLE` | A cycle does not pass through a Loop node |
@@ -517,6 +542,7 @@ When the value at `path` is a list, `200` is an **Offset Page** of its elements.
 | `CHANNEL_RUN_TIMEOUT` | The graph run timeout elapsed; the run log names the node it stopped at |
 | `CHANNEL_WRITE_INCOMPATIBLE` | A write node with policy `fail` met a head its mapping is incompatible with |
 | `CHANNEL_ITEM_LIMIT_EXCEEDED` | One node execution exceeded the in-memory item limit |
+| `CHANNEL_SQL_NOT_ONE_STATEMENT` | The rendered SQL text is empty, unreadable, or more than one statement |
 | `CHANNEL_NODE_FAILED` | A node failed with `on_error` `stop`; the run record names the node and its error |
 | `CHANNEL_VALUE_TYPE_MISMATCH` | A template result does not match its declared value type |
 | `CHANNEL_OUTPUT_SCHEMA_MISMATCH` | A successful node output does not match its refined schema |

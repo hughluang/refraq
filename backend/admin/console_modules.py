@@ -310,6 +310,19 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         module_order=30,
     ),
     ConsoleModuleSeed(
+        id="channel-variables",
+        group_id="channel",
+        group_label_key="layout.navGroup.channel",
+        label_key="channelVariables.title",
+        routes=ModuleRoutes(list="/console/channel-variables"),
+        actions=ModuleActions(
+            list="channel:read",
+            delete="channel:write",
+        ),
+        group_order=26,
+        module_order=40,
+    ),
+    ConsoleModuleSeed(
         id="jobs",
         group_id="operations",
         group_label_key="layout.navGroup.operations",

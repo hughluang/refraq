@@ -43,6 +43,7 @@ __all__ = [
     "ensure_database",
     "main",
     "move_statements",
+    "retire_channel_reader_statements",
     "role_statements",
     "run_bootstrap",
     "schema_statements",
@@ -84,10 +85,16 @@ def _literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+_RETIRED_CHANNEL_READER = "refraq_channel_reader"
+
+
 def role_statements(
-    *, owner_password: str, reader_password: str, existing: frozenset[str]
+    *,
+    owner_password: str,
+    reader_password: str,
+    existing: frozenset[str],
 ) -> list[str]:
-    """Create or converge the four roles. Passwords are SQL literals; never log them."""
+    """Create or converge the entity roles. Passwords are SQL literals; never log them."""
     common = "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
     specs = (
         (ENTITY_OWNER_ROLE, f"LOGIN {common} NOINHERIT", owner_password),
@@ -114,11 +121,20 @@ def role_statements(
     return statements
 
 
+def retire_channel_reader_statements(existing: frozenset[str]) -> list[str]:
+    """Drop the retired channel-reader login after revoking what it holds here."""
+    if _RETIRED_CHANNEL_READER not in existing:
+        return []
+    role = ident(_RETIRED_CHANNEL_READER)
+    return [f"DROP OWNED BY {role}", f"DROP ROLE {role}"]
+
+
 def database_statements(database: str, *, has_public_schema: bool) -> list[str]:
     db = ident(database)
     statements = [
         f"REVOKE ALL ON DATABASE {db} FROM PUBLIC",
-        f"GRANT CONNECT ON DATABASE {db} TO {ident(ENTITY_OWNER_ROLE)}, {ident(READER_ROLE)}",
+        f"GRANT CONNECT ON DATABASE {db} TO {ident(ENTITY_OWNER_ROLE)}, "
+        f"{ident(READER_ROLE)}",
     ]
     if has_public_schema:
         statements.append("REVOKE ALL ON SCHEMA public FROM PUBLIC")
@@ -595,6 +611,7 @@ def _converge(
                     EXPOSURE_OWNER_ROLE,
                     ACL_OWNER_ROLE,
                     READER_ROLE,
+                    _RETIRED_CHANNEL_READER,
                 ]
             },
         ).scalars()
@@ -607,6 +624,7 @@ def _converge(
             existing=existing,
         ),
     )
+    _apply(conn, retire_channel_reader_statements(existing))
     has_public = bool(
         conn.execute(text("SELECT to_regnamespace('public') IS NOT NULL")).scalar()
     )

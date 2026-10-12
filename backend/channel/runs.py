@@ -26,7 +26,6 @@ def start_run(
     *,
     channel_id: str,
     target: Literal["draft", "published"],
-    trigger_node_id: str | None,
     ignore_checkpoints: bool,
     actor: UserRecord,
     actor_token_id: str | None,
@@ -50,13 +49,12 @@ def start_run(
             raise ChannelGraphInvalid(errors[0].detail, problems=list(problems))
         version = None
         draft_revision = channel.draft_revision
-    entry = _manual_node(graph, trigger_node_id)
+    entry = _entry_node(graph)
     job = create_queued_job(
         kind="channel_run",
         input={
             "channel_id": channel_id,
             "target": target,
-            "trigger_node_id": entry,
             "ignore_checkpoints": ignore_checkpoints,
         },
         trigger_kind="user",
@@ -94,14 +92,13 @@ def start_run(
     return job, record
 
 
-def _manual_node(graph: dict[str, Any], trigger_node_id: str | None) -> str:
-    manuals = [
-        node
-        for node in graph.get("nodes") or []
-        if node.get("type") == "trigger.manual"
+def _entry_node(graph: dict[str, Any]) -> str:
+    from backend.channel.nodes import list_node_types
+
+    entry_types = {item.type_id for item in list_node_types() if item.entry}
+    entries = [
+        node for node in graph.get("nodes") or [] if node.get("type") in entry_types
     ]
-    if trigger_node_id and any(node["id"] == trigger_node_id for node in manuals):
-        return trigger_node_id
-    if not trigger_node_id and len(manuals) == 1:
-        return str(manuals[0]["id"])
-    raise ChannelTriggerInvalid()
+    if len(entries) != 1:
+        raise ChannelTriggerInvalid()
+    return str(entries[0]["id"])

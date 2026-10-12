@@ -6,9 +6,11 @@ registry: add a type by importing its ``NODE_TYPE`` and listing it here.
 
 from __future__ import annotations
 
-from backend.channel.nodes.read.entity import NODE_TYPE as READ_ENTITY
+from backend.channel.nodes.read.sql import NODE_TYPE as READ_SQL
 from backend.channel.nodes.spec import NodeType
+from backend.channel.nodes.state.variable import NODE_TYPE as STATE_VARIABLE
 from backend.channel.nodes.trigger.manual import NODE_TYPE as TRIGGER_MANUAL
+from backend.channel.nodes.trigger.scheduled import NODE_TYPE as TRIGGER_SCHEDULED
 from backend.channel.nodes.write.entity import NODE_TYPE as WRITE_ENTITY
 
 __all__ = [
@@ -18,12 +20,15 @@ __all__ = [
 _FAMILY_ORDER = {
     "trigger": 0,
     "read": 1,
-    "write": 2,
+    "state": 2,
+    "write": 3,
 }
 
 _CATALOG: tuple[NodeType, ...] = (
     TRIGGER_MANUAL,
-    READ_ENTITY,
+    TRIGGER_SCHEDULED,
+    READ_SQL,
+    STATE_VARIABLE,
     WRITE_ENTITY,
 )
 

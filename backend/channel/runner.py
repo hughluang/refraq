@@ -2,32 +2,33 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from typing import Any
 
-from backend.admin.user_store import ensure_system_user, get_user_store
 from backend.admin.system_parameters.registry import list_registered_specs
 from backend.admin.system_parameters.resolver import resolve_int, resolve_str
 from backend.admin.system_parameters.spec import IntConstraint
+from backend.admin.user_store import ensure_system_user, get_user_store
 from backend.channel.engine import NodeResult, execute
 from backend.channel.executors import EXECUTORS
-from backend.channel.run_store import (
-    get_run_store,
-    output_size,
-)
+from backend.channel.nodes import list_node_types
+from backend.channel.run_store import get_run_store, output_size
 from backend.channel.sandbox import SandboxFailed, SandboxSession
+from backend.channel.schedules import schedule_key_for
 from backend.channel.store import get_channel_store
-from backend.core.time import utc_now
+from backend.core.time import ensure_aware_utc, format_instant, utc_now
 from backend.jobs.store import (
+    append_job_log,
     claim_queued,
     get_job_store,
     mark_cancelled,
     mark_failed,
     mark_succeeded,
 )
+from backend.worker.schedules import get_schedule_store
 
 __all__ = ["run_channel_job"]
-
 
 class _Hooks:
     def __init__(
@@ -38,16 +39,34 @@ class _Hooks:
         actor: dict[str, str],
         started_at: str,
         user: Any,
+        schedule: dict[str, Any],
+        target: str,
+        channel_id: str,
+        run_version: int | None,
     ) -> None:
         self.job_id = job_id
         self.sandbox = sandbox
         self.actor = actor
         self.started_at = started_at
         self.user = user
+        self.schedule = schedule
+        self._target = target
+        self._channel_id = channel_id
+        self._run_version = run_version
 
     def cancelled(self) -> bool:
         record = get_job_store().get(self.job_id)
         return record is not None and record.status == "cancelled"
+
+    def superseded(self) -> bool:
+        if self._target != "published" or self._run_version is None:
+            return False
+        versions, _total = get_channel_store().list_versions(
+            self._channel_id, limit=1, offset=0
+        )
+        if not versions:
+            return False
+        return versions[0].number > self._run_version
 
     def evaluate(self, expression: str) -> Any:
         return self.sandbox.evaluate(expression)
@@ -83,35 +102,47 @@ def run_channel_job(job_id: str) -> dict[str, str]:
     if claimed is None:
         record = get_job_store().get(job_id)
         return {"status": record.status if record else "missing"}
-    payload = claimed.input or {}
     store = get_run_store()
     run = store.get_run(job_id)
     if run is None:
-        mark_failed(job_id, error_code="CHANNEL_NODE_FAILED", error_summary="Run record is missing")
-        return {"status": "failed"}
-    graph, version = _resolve_graph(run)
-    if graph is None:
         mark_cancelled(job_id)
         return {"status": "cancelled"}
-    entry = str(payload.get("trigger_node_id") or run.trigger_node_id)
-    if not any(node["id"] == entry and node["type"] == "trigger.manual" for node in graph["nodes"]):
-        mark_cancelled(job_id)
+    channel = get_channel_store().get(run.channel_id)
+    if channel is None:
+        _cancel(job_id, run, run.trigger_node_id or None)
+        return {"status": "cancelled"}
+    graph, version = _resolve_graph(run)
+    if graph is None:
+        _cancel(job_id, run, None)
+        return {"status": "cancelled"}
+    entry = _entry_id(graph)
+    entry_node = next((node for node in graph["nodes"] if node["id"] == entry), None)
+    if entry is None or entry_node is None:
+        _cancel(job_id, run, None)
+        return {"status": "cancelled"}
+    if claimed.trigger_kind == "schedule" and (
+        not channel.active or entry_node.get("type") != "trigger.scheduled"
+    ):
+        _cancel(job_id, run, entry)
         return {"status": "cancelled"}
     run.graph = graph
     run.version = version
+    run.trigger_node_id = entry
     store.update_run(run)
-    channel = get_channel_store().get(run.channel_id)
     started = utc_now()
-    actor = {
-        "id": claimed.trigger_ref or "usr_system",
-        "name": claimed.trigger_ref or "System",
-    }
+    actor = _actor(claimed)
     user = ensure_system_user(get_user_store())
+    elapsed = 0.0
+    if claimed.started_at is not None:
+        elapsed = max(
+            0.0,
+            (started - ensure_aware_utc(claimed.started_at)).total_seconds(),
+        )
     try:
         with SandboxSession() as sandbox:
             sandbox.set_context(
                 channel=_channel_ctx(channel, run),
-                run=_run_ctx(run, started, actor),
+                run=_run_ctx(run, started, actor, claimed.trigger_kind),
                 platform=_platform_ctx(started),
             )
             hooks = _Hooks(
@@ -120,6 +151,10 @@ def run_channel_job(job_id: str) -> dict[str, str]:
                 actor=actor,
                 started_at=started.isoformat().replace("+00:00", "Z"),
                 user=user,
+                schedule=_schedule_ctx(claimed, channel.id, entry_node),
+                target=run.target,
+                channel_id=run.channel_id,
+                run_version=version,
             )
             timeout = (graph.get("settings") or {}).get("run_timeout_sec")
             outcome = execute(
@@ -128,14 +163,22 @@ def run_channel_job(job_id: str) -> dict[str, str]:
                 EXECUTORS,
                 hooks,
                 timeout_sec=timeout,
+                started=time.monotonic() - elapsed,
             )
     except SandboxFailed as exc:
         mark_failed(job_id, error_code="CHANNEL_SANDBOX_FAILED", error_summary=str(exc))
         return {"status": "failed"}
     run.outcome = outcome.outcome
     run.failed_node_id = outcome.failed_node_id
+    run.stopped_node_id = outcome.stopped_node_id
     run.skipped_node_ids = list(outcome.skipped_node_ids)
-    store.update_run(run)
+    get_run_store().update_run(run)
+    if outcome.stopped_node_id:
+        append_job_log(
+            job_id,
+            level="warning",
+            message=f"stopped at node {outcome.stopped_node_id}",
+        )
     if outcome.status == "succeeded":
         mark_succeeded(
             job_id,
@@ -158,6 +201,14 @@ def run_channel_job(job_id: str) -> dict[str, str]:
     return {"status": "failed"}
 
 
+def _cancel(job_id: str, run: Any, node_id: str | None) -> None:
+    if node_id:
+        run.stopped_node_id = node_id
+        get_run_store().update_run(run)
+        append_job_log(job_id, level="warning", message=f"stopped at node {node_id}")
+    mark_cancelled(job_id)
+
+
 def _resolve_graph(run: Any) -> tuple[dict[str, Any] | None, int | None]:
     if run.target == "draft":
         return run.graph, None
@@ -168,26 +219,57 @@ def _resolve_graph(run: Any) -> tuple[dict[str, Any] | None, int | None]:
     return latest.graph, latest.number
 
 
+def _entry_id(graph: dict[str, Any]) -> str | None:
+    entry_types = {item.type_id for item in list_node_types() if item.entry}
+    entries = [node for node in graph.get("nodes") or [] if node.get("type") in entry_types]
+    if len(entries) != 1:
+        return None
+    return str(entries[0]["id"])
+
+
+def _actor(job: Any) -> dict[str, str]:
+    if job.trigger_kind == "schedule":
+        return {"id": "usr_system", "name": "System"}
+    ref = job.trigger_ref or "usr_system"
+    user = get_user_store().get_by_id(ref) if job.trigger_ref else None
+    return {"id": ref, "name": user.display_name if user is not None else ref}
+
+
+def _schedule_ctx(job: Any, channel_id: str, node: dict[str, Any]) -> dict[str, Any]:
+    row = get_schedule_store().get_by_key(schedule_key_for(channel_id))
+    node_name = str(node.get("name") or "")
+    if job.trigger_kind == "schedule":
+        when = job.scheduled_for or job.created_at
+        return {
+            "schedule_id": job.trigger_ref,
+            "name": row.name if row is not None else node_name,
+            "scheduled_for": format_instant(when) if when is not None else "",
+        }
+    when = job.created_at
+    return {
+        "schedule_id": row.id if row is not None else None,
+        "name": row.name if row is not None else node_name,
+        "scheduled_for": format_instant(when) if when is not None else "",
+    }
+
+
 def _channel_ctx(channel: Any, run: Any) -> dict[str, Any]:
-    settings = (run.graph or {}).get("settings") or {}
-    if channel is None:
-        return {"id": run.channel_id, "settings": settings}
     return {
         "id": channel.id,
         "name": channel.name,
         "description": channel.description,
         "active": channel.active,
-        "settings": settings,
+        "settings": (run.graph or {}).get("settings") or {},
     }
 
 
-def _run_ctx(run: Any, started: datetime, actor: dict[str, str]) -> dict[str, Any]:
+def _run_ctx(run: Any, started: datetime, actor: dict[str, str], trigger_kind: str | None) -> dict[str, Any]:
     return {
         "id": run.job_id,
         "target": run.target,
         "version": run.version,
         "draft_revision": run.draft_revision,
-        "trigger_kind": "user",
+        "trigger_kind": trigger_kind or "user",
         "started_at": started.isoformat().replace("+00:00", "Z"),
         "triggered_by": actor,
     }
@@ -208,5 +290,4 @@ def _platform_ctx(started: datetime) -> dict[str, Any]:
         "schedule_timezone": parameters.get("schedule_timezone", "UTC"),
         "now": started.isoformat().replace("+00:00", "Z"),
         "parameters": parameters,
-        "variables": {},
     }

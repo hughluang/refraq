@@ -34,6 +34,7 @@ import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageError } from "@/components/feedback/PageError";
+import { NumberField } from "@/components/form/NumberField";
 import { TextareaField } from "@/components/form/TextareaField";
 import { TextField } from "@/components/form/TextField";
 import { FillColumn } from "@/components/layout/FillColumn";
@@ -71,6 +72,10 @@ import type { Channel, ChannelVersion, Confirmation, NodeTypeSpec } from "@/feat
 const FORM_ID = "channel-record-form";
 const NAME_MAX = 200;
 const DESCRIPTION_MAX = 2000;
+
+function runTimeoutSec(value: number | string): number | null {
+  return typeof value === "number" && value > 0 ? Math.floor(value) : null;
+}
 
 type IdentityValues = {
   name: string;
@@ -183,6 +188,7 @@ function ChannelExisting({
   const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [runOpen, setRunOpen] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState("");
+  const [timeoutDraft, setTimeoutDraft] = useState<number | string>("");
   const nameEditorRef = useRef<ChannelNameHeadingHandle>(null);
   const form = useForm<IdentityValues>({
     initialValues: { name: "", description: "", active: false },
@@ -312,16 +318,15 @@ function ChannelExisting({
   };
 
   const launch = () => {
-    const manuals = (graph?.nodes ?? []).filter((node) => node.type === "trigger.manual");
-    if (manuals.length !== 1) {
-      notifyError(new Error(t("channels.run.needManual")));
+    const triggers = (graph?.nodes ?? []).filter((node) => node.type.startsWith("trigger."));
+    if (triggers.length !== 1) {
+      notifyError(new Error(t("channels.run.needTrigger")));
       return;
     }
-    const triggerNodeId = manuals[0].id;
     setBusy(true);
     void (async () => {
       if (writable) await persist();
-      await startRun(channelId, { target: "draft", trigger_node_id: triggerNodeId });
+      await startRun(channelId, { target: "draft" });
       setRunOpen(false);
       setTab("runs");
     })()
@@ -399,17 +404,22 @@ function ChannelExisting({
 
   const descriptionText = form.values.description.trim();
   const descriptionLabel = writable
-    ? descriptionText
-      ? t("channels.description.edit")
-      : t("channels.description.add")
-    : t("channels.description.view");
+    ? t("channels.details.edit")
+    : t("channels.details.view");
   const openDescription = () => {
     setDescriptionDraft(form.values.description);
+    setTimeoutDraft(graph.settings.run_timeout_sec ?? "");
     setDescriptionOpen(true);
   };
   const closeDescription = () => setDescriptionOpen(false);
   const applyDescription = () => {
     form.setFieldValue("description", descriptionDraft.trim());
+    const next = runTimeoutSec(timeoutDraft);
+    setGraph((current) =>
+      current
+        ? { ...current, settings: { ...current.settings, run_timeout_sec: next } }
+        : current,
+    );
     setDescriptionOpen(false);
   };
 
@@ -437,7 +447,7 @@ function ChannelExisting({
               {t("channels.unsaved")}
             </Badge>
           ) : null}
-          {writable || descriptionText ? (
+          {writable || descriptionText || graph.settings.run_timeout_sec != null ? (
             <Button
               variant="subtle"
               size="compact-sm"
@@ -663,7 +673,7 @@ function ChannelExisting({
       <Modal
         opened={descriptionOpen}
         onClose={closeDescription}
-        title={t("channels.fields.description")}
+        title={t("channels.details.title")}
       >
         {writable ? (
           <Stack gap="sm">
@@ -671,7 +681,7 @@ function ChannelExisting({
               {t("channels.description.hint")}
             </Text>
             <Textarea
-              aria-label={t("channels.fields.description")}
+              label={t("channels.fields.description")}
               placeholder={t("channels.description.optional")}
               value={descriptionDraft}
               autosize
@@ -680,6 +690,15 @@ function ChannelExisting({
               onChange={(event) =>
                 setDescriptionDraft(event.currentTarget.value.slice(0, DESCRIPTION_MAX))
               }
+            />
+            <NumberField
+              editable
+              label={t("channels.settings.runTimeout")}
+              description={t("channels.settings.runTimeoutHint")}
+              min={1}
+              w={280}
+              value={timeoutDraft}
+              onChange={setTimeoutDraft}
             />
             <Group justify="flex-end">
               <Button variant="default" onClick={closeDescription}>
@@ -690,9 +709,21 @@ function ChannelExisting({
           </Stack>
         ) : (
           <Stack gap="sm">
-            <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
-              {descriptionText || t("channels.description.empty")}
-            </Text>
+            <Stack gap={4}>
+              <Text size="sm" fw={500}>
+                {t("channels.fields.description")}
+              </Text>
+              <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
+                {descriptionText || t("channels.description.empty")}
+              </Text>
+            </Stack>
+            <NumberField
+              editable={false}
+              label={t("channels.settings.runTimeout")}
+              description={t("channels.settings.runTimeoutHint")}
+              w={280}
+              value={graph.settings.run_timeout_sec ?? ""}
+            />
             <Group justify="flex-end">
               <Button variant="default" onClick={closeDescription}>
                 {t("channels.description.close")}

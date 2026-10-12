@@ -5,6 +5,7 @@ from __future__ import annotations
 from backend.channel.graph import ResolvedAttribute, ResolvedEntity
 from backend.channel.store import get_channel_store
 from backend.entity.heads import get_entity_head
+from backend.metadata.source_statements import source_exists as source_record_exists
 
 __all__ = ["ChannelReferenceResolver"]
 
@@ -35,3 +36,6 @@ class ChannelReferenceResolver:
         if channel_id == self._channel_id:
             return False
         return get_channel_store().get(channel_id) is not None
+
+    def source_exists(self, source_id: str) -> bool:
+        return source_record_exists(source_id)

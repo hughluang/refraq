@@ -581,7 +581,7 @@ Avoid using the node id as the expression name, and a `ref` that is not an ident
 
 ### Expression Context
 
-The name `self` visible to a **Data Channel** template expression: node outputs by **Node Ref** or by node name, plus `self.channel`, `self.run`, and `self.platform`. `self.platform` includes the site name, the **Schedule Timezone**, the run start instant, **System Parameter** values, and **Global Variable** values, all read-only. There is no current-row name.
+The name `self` visible to a **Data Channel** template expression: node outputs by **Node Ref** or by node name, plus `self.channel`, `self.run`, and `self.platform`. `self.platform` includes the site name, the **Schedule Timezone**, the run start instant, and **System Parameter** values, all read-only. Global Variable values are read and written by a node, not by `self`. There is no current-row name.
 Avoid `item` as an implicit current row, credentials in the context, and naming another channel's run data.
 
 ### Template Field

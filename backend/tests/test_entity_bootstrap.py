@@ -9,6 +9,7 @@ from backend.entity.bootstrap import (
     LegacyRelation,
     acl_statements,
     move_statements,
+    retire_channel_reader_statements,
     role_statements,
     schema_statements,
     secure_existing_table_statements,
@@ -43,7 +44,11 @@ def test_role_statements_create_then_alter_and_quote_passwords() -> None:
     assert any("default_transaction_read_only = on" in stmt for stmt in altered)
     assert any("statement_timeout" in stmt for stmt in altered)
     with pytest.raises(BootstrapPlanError):
-        role_statements(owner_password="a\x00b", reader_password="y", existing=frozenset())
+        role_statements(
+            owner_password="a\x00b",
+            reader_password="y",
+            existing=frozenset(),
+        )
 
 
 def test_schema_statements_hide_entity_data_from_the_reader() -> None:
@@ -53,7 +58,17 @@ def test_schema_statements_hide_entity_data_from_the_reader() -> None:
     assert "CREATE SCHEMA IF NOT EXISTS \"acl\"" in sql
     assert f'REVOKE ALL ON SCHEMA "entity_data" FROM "{READER_ROLE}"' in sql
     assert f'GRANT USAGE ON SCHEMA "entity_access" TO "{READER_ROLE}"' in sql
+    assert "refraq_channel_reader" not in sql
     assert 'CREATE ON SCHEMA "entity_data"' not in sql
+
+
+def test_retire_channel_reader_only_when_the_role_exists() -> None:
+    assert retire_channel_reader_statements(frozenset()) == []
+    dropped = retire_channel_reader_statements(frozenset({"refraq_channel_reader"}))
+    assert dropped == [
+        'DROP OWNED BY "refraq_channel_reader"',
+        'DROP ROLE "refraq_channel_reader"',
+    ]
 
 
 def test_acl_statements_are_definer_stable_and_fail_closed() -> None:

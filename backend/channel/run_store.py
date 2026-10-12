@@ -37,6 +37,7 @@ class ChannelRunRecord:
     failed_node_id: str | None
     skipped_node_ids: list[str]
     created_at: datetime
+    stopped_node_id: str | None = None
 
 
 @dataclass
@@ -145,6 +146,8 @@ class SqlRunStore:
             row.graph = record.graph
             row.outcome = record.outcome
             row.failed_node_id = record.failed_node_id
+            row.stopped_node_id = record.stopped_node_id
+            row.trigger_node_id = record.trigger_node_id
             row.skipped_node_ids = list(record.skipped_node_ids)
 
     def get_run(self, job_id: str) -> ChannelRunRecord | None:
@@ -246,6 +249,7 @@ def _run_row(record: ChannelRunRecord) -> ChannelRunRow:
         ignore_checkpoints=record.ignore_checkpoints,
         outcome=record.outcome,
         failed_node_id=record.failed_node_id,
+        stopped_node_id=record.stopped_node_id,
         skipped_node_ids=list(record.skipped_node_ids),
         created_at=record.created_at,
     )
@@ -265,6 +269,7 @@ def _run_record(row: ChannelRunRow) -> ChannelRunRecord:
         failed_node_id=row.failed_node_id,
         skipped_node_ids=list(row.skipped_node_ids or []),
         created_at=row.created_at,
+        stopped_node_id=row.stopped_node_id,
     )
 
 

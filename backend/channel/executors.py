@@ -7,15 +7,18 @@ from typing import Any, Mapping
 from backend.channel.engine import EngineHooks, NodeResult
 from backend.channel.nodes import list_node_types
 from backend.channel.references import ChannelReferenceResolver
+from backend.channel.sql_read import SqlReadError, run_channel_sql
 from backend.channel.template import TemplateTypeError, output_matches, render
-from backend.channel.values import LIST_OF_OBJECTS, attribute_value_schema
+from backend.channel.values import LIST_OF_OBJECTS
+from backend.channel.variables import VALUE_MAX_BYTES, get_variable_store, valid_name, value_size
+from backend.core.time import format_instant
 from backend.entity.errors import EntityRowWriteFailed
-from backend.entity.rows import head_target, read_rows, write_rows
+from backend.entity.rows import head_target, write_rows
 
-ITEM_LIMIT = 10_000
 STATEMENT_TIMEOUT_MS = 30_000
+_JSON = {"type": ["object", "array", "string", "number", "boolean", "null"]}
 
-__all__ = ["EXECUTORS", "ITEM_LIMIT"]
+__all__ = ["EXECUTORS"]
 
 
 def execute_manual(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
@@ -29,43 +32,100 @@ def execute_manual(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     )
 
 
-def execute_read(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+def execute_scheduled(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    schedule = getattr(hooks, "schedule")
+    return _checked(
+        "trigger.scheduled",
+        node,
+        NodeResult(
+            status="succeeded",
+            output={
+                "schedule_id": schedule.get("schedule_id"),
+                "name": schedule.get("name"),
+                "scheduled_for": schedule.get("scheduled_for"),
+            },
+        ),
+    )
+
+
+def execute_sql(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
-    filters = []
-    for item in config.get("filters") or []:
-        try:
-            schema = _filter_schema(str(config["entity_id"]), item.get("attribute"))
-            value = _value(hooks, item.get("value"), schema)
-        except TemplateTypeError as exc:
-            return _type_failed(item.get("value"), exc)
-        except Exception as exc:  # noqa: BLE001
-            return _expr_failed(item.get("value"), exc)
-        filters.append(
-            {"attribute": item["attribute"], "op": item.get("op", "eq"), "value": value}
-        )
     try:
-        rows, _total = read_rows(
-            config["entity_id"],
-            filters=filters,
-            user=hooks.user,  # type: ignore[attr-defined]
-            limit=ITEM_LIMIT,
-        )
-    except EntityRowWriteFailed as exc:
-        return NodeResult(
-            status="failed",
-            error_code="CHANNEL_ITEM_LIMIT_EXCEEDED",
-            error_message=exc.message,
-        )
+        statement = _value(hooks, config.get("sql"), {"type": "string"})
+    except TemplateTypeError as exc:
+        return _type_failed(config.get("sql"), exc)
     except Exception as exc:  # noqa: BLE001
+        return _expr_failed(config.get("sql"), exc)
+    try:
+        output = run_channel_sql(
+            str(statement),
+            source=config["source"],
+            statement_timeout_sec=config.get("statement_timeout_sec", 30),
+        )
+    except SqlReadError as exc:
+        return NodeResult(status="failed", error_code=exc.code, error_message=exc.message)
+    return _checked("read.sql", node, NodeResult(status="succeeded", output=output))
+
+
+def execute_variable(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    config = node["config"]
+    operation = str(config.get("operation") or "")
+    try:
+        name = str(_value(hooks, config.get("name"), {"type": "string"}))
+    except TemplateTypeError as exc:
+        return _type_failed(config.get("name"), exc)
+    except Exception as exc:  # noqa: BLE001
+        return _expr_failed(config.get("name"), exc)
+    if not valid_name(name):
         return NodeResult(
             status="failed",
             error_code="CHANNEL_NODE_FAILED",
-            error_message=str(exc),
+            error_message="Variable name is invalid",
         )
+    value = None
+    expected = None
+    writes = operation in {"set", "set_if_absent", "compare_and_set"}
+    if writes:
+        try:
+            value = _value(hooks, config.get("value"), _JSON)
+        except TemplateTypeError as exc:
+            return _type_failed(config.get("value"), exc)
+        except Exception as exc:  # noqa: BLE001
+            return _expr_failed(config.get("value"), exc)
+        if value_size(value) > VALUE_MAX_BYTES:
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_VARIABLE_TOO_LARGE",
+                error_message="Variable value exceeds 64 KiB",
+            )
+    if operation == "compare_and_set":
+        try:
+            expected = _value(hooks, config.get("expected"), _JSON)
+        except TemplateTypeError as exc:
+            return _type_failed(config.get("expected"), exc)
+        except Exception as exc:  # noqa: BLE001
+            return _expr_failed(config.get("expected"), exc)
+    result = get_variable_store().apply(
+        operation=operation,
+        name=name,
+        value=value,
+        expected=expected,
+        ttl_sec=config.get("ttl_sec") if writes else None,
+    )
+    expires = format_instant(result.expires_at) if result.expires_at is not None else None
     return _checked(
-        "read.entity",
+        "state.variable",
         node,
-        NodeResult(status="succeeded", output={"rows": rows, "count": len(rows)}),
+        NodeResult(
+            status="succeeded",
+            output={
+                "name": result.name,
+                "found": result.found,
+                "value": result.value,
+                "applied": result.applied,
+                "expires_at": expires,
+            },
+        ),
     )
 
 
@@ -149,18 +209,6 @@ def _value(hooks: EngineHooks, raw: Any, schema: Mapping[str, Any]) -> Any:
     if not isinstance(raw, str):
         raise TemplateTypeError("Template value must be text")
     return render(raw, hooks.evaluate, schema)  # type: ignore[attr-defined]
-
-
-def _filter_schema(entity_id: str, attribute: Any) -> dict[str, Any]:
-    if not isinstance(attribute, str):
-        raise TemplateTypeError("Filter attribute does not resolve")
-    head = ChannelReferenceResolver("_").entity_head(entity_id)
-    if head is None:
-        raise TemplateTypeError("Filter attribute does not resolve")
-    named = next((attr for attr in head.attributes if attr.name == attribute), None)
-    if named is None:
-        raise TemplateTypeError("Filter attribute does not resolve")
-    return attribute_value_schema(named.value_type)
 
 
 def _checked(type_id: str, node: Mapping[str, Any], result: NodeResult) -> NodeResult:
@@ -256,6 +304,8 @@ def _incompatible(config: Mapping[str, Any], target: Any) -> list[str]:
 
 EXECUTORS = {
     "trigger.manual": execute_manual,
-    "read.entity": execute_read,
+    "trigger.scheduled": execute_scheduled,
+    "read.sql": execute_sql,
+    "state.variable": execute_variable,
     "write.entity": execute_write,
 }

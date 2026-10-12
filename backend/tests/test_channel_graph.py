@@ -5,6 +5,7 @@ from __future__ import annotations
 from backend.channel.graph import (
     ResolvedAttribute,
     ResolvedEntity,
+    refine_ports,
     validate,
 )
 from backend.channel.nodes import list_node_types
@@ -16,15 +17,20 @@ class FakeResolver:
         self,
         heads: dict[str, ResolvedEntity] | None = None,
         channels: set[str] | None = None,
+        sources: set[str] | None = None,
     ) -> None:
         self.heads = heads or {}
         self.channels = channels or set()
+        self.sources = sources or set()
 
     def entity_head(self, entity_id: str) -> ResolvedEntity | None:
         return self.heads.get(entity_id)
 
     def channel_exists(self, channel_id: str) -> bool:
         return channel_id in self.channels
+
+    def source_exists(self, source_id: str) -> bool:
+        return source_id in self.sources
 
 
 def _attr(
@@ -99,9 +105,13 @@ def _graph(
 def _read(node_id: str = "nd_read", name: str = "Read suppliers") -> dict:
     return _node(
         node_id,
-        "read.entity",
+        "read.sql",
         name,
-        {"entity_id": "ent_src", "filters": []},
+        {
+            "sql": "SELECT 1",
+            "statement_timeout_sec": 30,
+            "source": {"kind": "entity"},
+        },
     )
 
 
@@ -239,7 +249,7 @@ def test_invalid_config_and_duplicate_name() -> None:
     graph = _graph(
         [
             _node("nd_trigger", "trigger.manual", "Run"),
-            _node("nd_read", "read.entity", "Read", {}),
+            _node("nd_read", "read.sql", "Read", {}),
             _read("nd_read_2", "Read"),
         ],
         [
@@ -250,39 +260,78 @@ def test_invalid_config_and_duplicate_name() -> None:
     assert _codes(graph) >= {"CHANNEL_NODE_CONFIG_INVALID", "CHANNEL_NODE_NAME_DUP"}
 
 
-def test_dangling_entity_and_attribute() -> None:
-    graph = _graph(
+def test_sql_source_must_resolve_and_entity_rejects_an_id() -> None:
+    missing = _graph(
         [
             _node("nd_trigger", "trigger.manual", "Run"),
             _node(
                 "nd_read",
-                "read.entity",
+                "read.sql",
                 "Read",
                 {
-                    "entity_id": "ent_missing",
-                    "filters": [{"attribute": "sku", "op": "eq", "value": "A"}],
+                    "sql": "SELECT 1",
+                    "source": {"kind": "source", "source_id": "src_missing"},
                 },
             ),
+        ],
+        [_edge("ed_1", "nd_trigger", "nd_read")],
+    )
+    assert "CHANNEL_REFERENCE_UNRESOLVED" in _codes(missing)
+    present = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
             _node(
-                "nd_read_2",
-                "read.entity",
-                "Read two",
+                "nd_read",
+                "read.sql",
+                "Read",
                 {
-                    "entity_id": "ent_src",
-                    "filters": [{"attribute": "gone", "op": "eq", "value": "A"}],
+                    "sql": "SELECT 1",
+                    "source": {"kind": "source", "source_id": "src_live"},
                 },
+            ),
+        ],
+        [_edge("ed_1", "nd_trigger", "nd_read")],
+    )
+    assert _codes(present, FakeResolver(sources={"src_live"})) == set()
+    entity_id = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node(
+                "nd_read",
+                "read.sql",
+                "Read",
+                {
+                    "sql": "SELECT 1",
+                    "source": {"kind": "entity", "source_id": "src_live"},
+                },
+            ),
+        ],
+        [_edge("ed_1", "nd_trigger", "nd_read")],
+    )
+    assert "CHANNEL_NODE_CONFIG_INVALID" in _codes(entity_id)
+
+
+def test_dangling_entity_and_attribute() -> None:
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _write("nd_missing", entity_id="ent_missing"),
+            _write(
+                "nd_attr",
+                entity_id="ent_dst",
+                mapping=[{"attribute": "gone", "key": "gone"}],
             ),
         ],
         [
-            _edge("ed_1", "nd_trigger", "nd_read"),
-            _edge("ed_2", "nd_trigger", "nd_read_2"),
+            _edge("ed_1", "nd_trigger", "nd_missing"),
+            _edge("ed_2", "nd_trigger", "nd_attr"),
         ],
     )
-    problems = validate(graph, FakeResolver({"ent_src": SKU}))
-    by_node = {item.node_id: item.detail for item in problems}
-    assert "ent_missing" in by_node["nd_read"]
-    assert "gone" in by_node["nd_read_2"]
-    assert {item.code for item in problems} == {"CHANNEL_REFERENCE_UNRESOLVED"}
+    problems = validate(graph, FakeResolver({"ent_dst": SKU}))
+    missing = " ".join(item.detail for item in problems if item.node_id == "nd_missing")
+    attr = " ".join(item.detail for item in problems if item.node_id == "nd_attr")
+    assert "ent_missing" in missing
+    assert "gone" in attr
 
 
 def test_match_key_rules() -> None:
@@ -392,26 +441,101 @@ def test_incompatible_coarse_port_types() -> None:
     assert "CHANNEL_PORT_TYPE_MISMATCH" in _codes(graph, catalog=catalog)
 
 
-def test_filter_static_text_must_match_the_attribute_type() -> None:
+def test_scheduled_node_requires_one_cadence() -> None:
+    graph = _graph(
+        [_node("nd_hourly", "trigger.scheduled", "Hourly", {"cron": "0 * * * *"})]
+    )
+    assert _codes(graph) == set()
+    both = _graph(
+        [
+            _node(
+                "nd_hourly",
+                "trigger.scheduled",
+                "Hourly",
+                {"cron": "0 * * * *", "interval_seconds": 60},
+            )
+        ]
+    )
+    assert "CHANNEL_NODE_CONFIG_INVALID" in _codes(both)
+
+
+def test_graph_allows_only_one_trigger() -> None:
     graph = _graph(
         [
-            _node("nd_trigger", "trigger.manual", "Run"),
-            _node(
-                "nd_read",
-                "read.entity",
-                "Read",
-                {
-                    "entity_id": "ent_src",
-                    "filters": [{"attribute": "qty", "op": "eq", "value": "nope"}],
-                },
-            ),
+            _node("nd_manual", "trigger.manual", "Manual"),
+            _node("nd_hourly", "trigger.scheduled", "Hourly", {"cron": "0 * * * *"}),
+        ]
+    )
+    assert "CHANNEL_GRAPH_MULTIPLE_TRIGGERS" in _codes(graph)
+
+
+def _without_ref(node_id: str, type_id: str, name: str) -> dict:
+    node = _node(node_id, type_id, name)
+    del node["ref"]
+    return node
+
+
+def test_stored_draft_without_ref_validates_and_refines() -> None:
+    graph = _graph(
+        [
+            _without_ref("nd_trigger", "trigger.manual", "Run"),
+            _without_ref("nd_read", "read.entity", "Read"),
+            _without_ref("nd_write", "write.entity", "Write"),
         ],
-        [_edge("ed_1", "nd_trigger", "nd_read")],
+        [
+            _edge("ed_1", "nd_trigger", "nd_read"),
+            _edge("ed_2", "nd_read", "nd_write"),
+        ],
     )
-    head = _head(_attr("qty", value_type="integer"))
-    assert "CHANNEL_TEMPLATE_TYPE_MISMATCH" in _codes(
-        graph, FakeResolver({"ent_src": head})
+    assert _codes(graph) >= {
+        "CHANNEL_NODE_REF_INVALID",
+        "CHANNEL_NODE_TYPE_UNKNOWN",
+    }
+    ports = refine_ports(graph, FakeResolver())
+    assert {(port.node_id, port.port, port.direction) for port in ports} == {
+        ("nd_trigger", "main", "output"),
+        ("nd_write", "main", "input"),
+        ("nd_write", "main", "output"),
+        ("nd_write", "error", "output"),
+    }
+
+
+def test_refine_upstream_names_only_ancestors_with_ref() -> None:
+    seen: dict[str, set[str]] = {}
+
+    def capture(config: dict, upstream: dict, resolver: object) -> dict:
+        del config, resolver
+        seen["keys"] = set(upstream)
+        return {}
+
+    sink = NodeType(
+        type_id="test.sink",
+        family="test",
+        label="Sink",
+        summary="Records the upstream map.",
+        description="Test-only sink. Its refine records ancestor refs.",
+        entry=False,
+        inputs=(PortSpec("main", "Items."),),
+        outputs=(PortSpec("main", "Items."),),
+        config_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {},
+            "required": [],
+        },
+        refine=capture,
     )
+    named = _node("nd_named", "trigger.manual", "Named")
+    bare = _without_ref("nd_bare", "write.entity", "Bare")
+    graph = _graph(
+        [named, bare, _node("nd_sink", "test.sink", "Sink")],
+        [
+            _edge("ed_named", "nd_named", "nd_sink"),
+            _edge("ed_bare", "nd_bare", "nd_sink"),
+        ],
+    )
+    refine_ports(graph, FakeResolver(), [*list_node_types(), sink])
+    assert seen["keys"] == {"named"}
 
 
 def test_error_channel_must_resolve() -> None:

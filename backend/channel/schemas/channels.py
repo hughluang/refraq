@@ -210,9 +210,11 @@ class ChannelListResponse(OffsetPage[ChannelOut]):
 
 
 class DraftResponse(BaseModel):
+    """Stored draft. ``graph`` is the stored document, not re-checked as ``GraphIn``."""
+
     draft_revision: int
     draft_updated_at: Instant
-    graph: GraphIn
+    graph: dict[str, Any]
 
 
 class ProblemOut(BaseModel):
@@ -244,8 +246,8 @@ class RunToCancelOut(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     job_id: str
-    version: int
-    started_at: Instant
+    version: int | None = None
+    started_at: Instant | None = None
 
 
 class ConfirmationOut(BaseModel):
@@ -264,7 +266,9 @@ class VersionSummaryOut(BaseModel):
 
 
 class VersionOut(VersionSummaryOut):
-    graph: GraphIn
+    """Stored version. ``graph`` is the stored document, not re-checked as ``GraphIn``."""
+
+    graph: dict[str, Any]
 
 
 class VersionResponse(BaseModel):

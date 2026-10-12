@@ -15,6 +15,7 @@ export const ModuleId = {
   entities: "entities",
   dictionaries: "dictionaries",
   channels: "channels",
+  channelVariables: "channel-variables",
   jobs: "jobs",
   schedules: "schedules",
   settings: "settings",

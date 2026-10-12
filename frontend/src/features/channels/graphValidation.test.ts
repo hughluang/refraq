@@ -44,8 +44,21 @@ function codes(graph: Pick<Graph, "nodes" | "edges">) {
 }
 
 describe("clientGraphProblems", () => {
+  it("rejects a second trigger", () => {
+    const problems = clientGraphProblems(
+      {
+        nodes: [node("nd_manual", "trigger.manual"), node("nd_hourly", "trigger.scheduled")],
+        edges: [],
+      },
+      new Set(["trigger.manual", "trigger.scheduled"]),
+    );
+    expect(problems.map((problem) => problem.code)).toContain(
+      "CHANNEL_GRAPH_MULTIPLE_TRIGGERS",
+    );
+  });
+
   it("rejects a graph with no trigger", () => {
-    expect(codes({ nodes: [node("nd_read", "read.entity")], edges: [] })).toEqual([
+    expect(codes({ nodes: [node("nd_read", "read.sql")], edges: [] })).toEqual([
       "CHANNEL_GRAPH_NO_TRIGGER",
       "CHANNEL_GRAPH_UNREACHABLE",
     ]);
@@ -55,9 +68,9 @@ describe("clientGraphProblems", () => {
     const graph = {
       nodes: [
         node("nd_trigger", "trigger.manual"),
-        node("nd_read", "read.entity"),
+        node("nd_read", "read.sql"),
         node("nd_write", "write.entity"),
-        node("nd_lone", "read.entity"),
+        node("nd_lone", "read.sql"),
       ],
       edges: [
         edge("ed_back", "nd_read", "nd_trigger"),
@@ -75,7 +88,7 @@ describe("clientGraphProblems", () => {
   it("accepts a trigger connected to a read", () => {
     expect(
       codes({
-        nodes: [node("nd_trigger", "trigger.manual"), node("nd_read", "read.entity")],
+        nodes: [node("nd_trigger", "trigger.manual"), node("nd_read", "read.sql")],
         edges: [edge("ed_1", "nd_trigger", "nd_read")],
       }),
     ).toEqual([]);
@@ -113,7 +126,7 @@ describe("flow conversion", () => {
 const CATALOG: ConnectionCatalogItem[] = [
   { type: "trigger.manual", entry: true, inputs: [], outputs: [{ port: "main" }] },
   {
-    type: "read.entity",
+    type: "read.sql",
     entry: false,
     inputs: [{ port: "main" }],
     outputs: [{ port: "main" }, { port: "error" }],
@@ -130,7 +143,7 @@ describe("connectionAllowed", () => {
   const chain = {
     nodes: [
       node("nd_trigger", "trigger.manual"),
-      node("nd_read", "read.entity"),
+      node("nd_read", "read.sql"),
       node("nd_write", "write.entity"),
     ],
     edges: [
@@ -143,7 +156,7 @@ describe("connectionAllowed", () => {
     expect(
       connectionAllowed(
         {
-          nodes: [node("nd_trigger", "trigger.manual"), node("nd_read", "read.entity")],
+          nodes: [node("nd_trigger", "trigger.manual"), node("nd_read", "read.sql")],
           edges: [],
         },
         CATALOG,
@@ -155,7 +168,7 @@ describe("connectionAllowed", () => {
   it("allows a read to a write when the graph has no trigger yet", () => {
     expect(
       connectionAllowed(
-        { nodes: [node("nd_read", "read.entity"), node("nd_write", "write.entity")], edges: [] },
+        { nodes: [node("nd_read", "read.sql"), node("nd_write", "write.entity")], edges: [] },
         CATALOG,
         { source: "nd_read", target: "nd_write", sourceHandle: "main", targetHandle: "main" },
       ),
@@ -165,7 +178,7 @@ describe("connectionAllowed", () => {
   it("rejects a self-loop, a trigger input, a duplicate, a missing port, and a cycle", () => {
     expect(
       connectionAllowed(
-        { nodes: [node("nd_read", "read.entity")], edges: [] },
+        { nodes: [node("nd_read", "read.sql")], edges: [] },
         CATALOG,
         { source: "nd_read", target: "nd_read", sourceHandle: "main", targetHandle: "main" },
       ),
@@ -173,7 +186,7 @@ describe("connectionAllowed", () => {
     expect(
       connectionAllowed(
         {
-          nodes: [node("nd_trigger", "trigger.manual"), node("nd_read", "read.entity")],
+          nodes: [node("nd_trigger", "trigger.manual"), node("nd_read", "read.sql")],
           edges: [],
         },
         CATALOG,
@@ -191,7 +204,7 @@ describe("connectionAllowed", () => {
     expect(
       connectionAllowed(
         {
-          nodes: [node("nd_trigger", "trigger.manual"), node("nd_read", "read.entity")],
+          nodes: [node("nd_trigger", "trigger.manual"), node("nd_read", "read.sql")],
           edges: [],
         },
         CATALOG,
@@ -215,6 +228,6 @@ describe("connectionAllowed", () => {
       "nd_trigger",
       "main",
     ).map((item) => item.type);
-    expect(types).toEqual(["read.entity", "write.entity"]);
+    expect(types).toEqual(["read.sql", "write.entity"]);
   });
 });

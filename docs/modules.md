@@ -165,9 +165,9 @@ Responsibilities:
 Must not contain:
 
 - Owning the platform Job table (lives in `backend/jobs/`)
-- An entity-database engine or pool in the Metadata MCP process; persistent API opens entity owner and reader pools for Entity Data API; the worker opens the owner pool for publish, drop, and view regeneration Jobs
+- An entity-database engine or pool in the Metadata MCP process; persistent API opens entity owner and reader pools for Entity Data API; the worker opens the owner pool for publish, drop, view regeneration, and Data Channel SQL against the entity database
 - A superuser runtime connection, or an entity database that is the metadata database
-- Read-path SQL that selects from `entity_data` physical tables or stem views instead of a Profile View
+- Entity Data API read-path SQL that selects from `entity_data` physical tables or stem views instead of a Profile View
 - Duplicating the **Normalized Type** closed set (import the published `metadata` leaf module)
 - Mapping, transform, lineage, or channel write admission (**Data Channel**)
 - Importing `worker.app`

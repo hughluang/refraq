@@ -56,8 +56,18 @@ class ChannelRunRow(Base):
     ignore_checkpoints: Mapped[bool] = mapped_column(Boolean, nullable=False)
     outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)
     failed_node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    stopped_node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     skipped_node_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
+class ChannelVariableRow(Base):
+    __tablename__ = "channel_variables"
+
+    name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    value: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
 
 class ChannelNodeExecutionRow(Base):

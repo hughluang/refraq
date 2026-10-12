@@ -17,6 +17,8 @@ export type ScheduleIdentity = {
 };
 
 function targetToken(target: ScheduleTarget | null): string | null {
+  const channel = target?.channel_name?.trim() || target?.channel_id?.trim();
+  if (channel) return channel;
   const key = target?.source_key?.trim();
   if (key) return key;
   const id = target?.source_id?.trim();
@@ -25,6 +27,11 @@ function targetToken(target: ScheduleTarget | null): string | null {
 
 function defaultName(task: ScheduleIdentityInput): string | null {
   if (task.work_kind === "catalog_embed") return CATALOG_EMBED_DEFAULT_NAME;
+  if (task.work_kind === "channel_run") {
+    const channel = targetToken(task.target);
+    const node = task.target?.node_name?.trim() || task.target?.node_id?.trim();
+    return `channel_run · ${channel} · ${node}`;
+  }
   const key = task.target?.source_key?.trim();
   if (!key) return null;
   return `${task.work_kind} · ${key}`;
@@ -38,6 +45,10 @@ function primaryLine(
     return task.work_kind!;
   }
   return `${task.work_kind} · ${targetToken(task.target)}`;
+}
+
+export function isChannelRunSchedule(task: { work_kind: string | null }): boolean {
+  return task.work_kind === "channel_run";
 }
 
 export function scheduleIdentity(

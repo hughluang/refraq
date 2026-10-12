@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isChannelRunSchedule,
   scheduleIdentity,
   scheduleIdentityLabel,
 } from "@/features/schedules/scheduleIdentity";
@@ -18,6 +19,25 @@ function task(
 }
 
 describe("scheduleIdentity", () => {
+  it("names a channel run by the channel and keeps the row read-only", () => {
+    const channel = task({
+      name: "channel_run · Material · Hourly",
+      work_kind: "channel_run",
+      target: {
+        channel_id: "chn_1",
+        channel_name: "Material",
+        node_id: "nd_hourly",
+        node_name: "Hourly",
+      },
+    });
+    expect(isChannelRunSchedule(channel)).toBe(true);
+    expect(isChannelRunSchedule(task())).toBe(false);
+    expect(scheduleIdentity(channel, "platform")).toEqual({
+      primary: "channel_run · Material",
+      customName: null,
+    });
+  });
+
   it("hides a platform default name and shows kind plus source key", () => {
     expect(scheduleIdentity(task(), "platform")).toEqual({
       primary: "structure · mes-prod",

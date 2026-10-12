@@ -34,7 +34,12 @@ BEGIN
 END
 $body$;
 """
-_ROLES = (ENTITY_OWNER_ROLE, EXPOSURE_OWNER_ROLE, ACL_OWNER_ROLE, READER_ROLE)
+_ROLES = (
+    ENTITY_OWNER_ROLE,
+    EXPOSURE_OWNER_ROLE,
+    ACL_OWNER_ROLE,
+    READER_ROLE,
+)
 
 
 def ensure_entity_ddl_targets(conn: Connection) -> None:

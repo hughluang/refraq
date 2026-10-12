@@ -1,6 +1,7 @@
 {
   "DELETE /branding/assets/{kind}": [],
   "DELETE /business-domains/{domain_id}": [],
+  "DELETE /channel-variables/{name}": [],
   "DELETE /channels/{channel_id}": [],
   "DELETE /dictionaries/{dictionary_id}": [],
   "DELETE /entities/{entity_id}": [],
@@ -40,6 +41,10 @@
     "items[].semantics_updated_at"
   ],
   "GET /channel-node-types": [],
+  "GET /channel-variables": [
+    "items[].expires_at",
+    "items[].updated_at"
+  ],
   "GET /channels": [
     "items[].created_at",
     "items[].draft_updated_at",

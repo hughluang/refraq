@@ -30,11 +30,14 @@ class RunOutcome:
     error_code: str | None = None
     error_message: str | None = None
     failed_node_id: str | None = None
+    stopped_node_id: str | None = None
     skipped_node_ids: list[str] = field(default_factory=list)
 
 
 class EngineHooks(Protocol):
     def cancelled(self) -> bool: ...
+
+    def superseded(self) -> bool: ...
 
     def on_start(self, node: Mapping[str, Any]) -> int: ...
 
@@ -69,13 +72,19 @@ def execute(
     clock = time.monotonic() if started is None else started
     stack = [entry_node_id]
     while stack:
-        if hooks.cancelled():
-            return RunOutcome(status="cancelled", skipped_node_ids=skipped)
+        pending = stack[-1]
+        if hooks.cancelled() or hooks.superseded():
+            return RunOutcome(
+                status="cancelled",
+                stopped_node_id=pending,
+                skipped_node_ids=skipped,
+            )
         if timeout_sec is not None and time.monotonic() - clock > timeout_sec:
             return RunOutcome(
                 status="failed",
                 error_code="CHANNEL_RUN_TIMEOUT",
                 error_message="Run timeout elapsed",
+                stopped_node_id=pending,
                 skipped_node_ids=skipped,
             )
         node_id = stack.pop()

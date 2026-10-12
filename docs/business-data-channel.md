@@ -117,7 +117,7 @@ Deleting a Data Channel withdraws its Scheduled Task rows by `owner_ref` (`docs/
 - A node executes once in a run, after every ancestor this run reached has finished. Among ready nodes, the smaller canvas `y` then the smaller `x` runs first. Execution order follows the edges. A node inside a Loop or For, or downstream of a Batch Read, may execute several times in one run; Loop, For, and Batch Read are volume nodes and are not part of the linear runner.
 - A node's **output** is the JSON value its execute function returns: an object, a list, or a scalar. Binary values are not supported. The node type declares the output's coarse type and, when the configuration allows it, a refined JSON Schema. The run record stores the output in full (§6.9). A successful output that does not match that schema fails the node.
 - A **template field** is one configuration string. The node type declares which fields are templates and the declared value type of each result. `{{ }}` marks one Python expression; `\{{` is a literal `{{`. After trimming, a field that is exactly one `{{ expression }}` yields that expression's Python value. Any other text, including text with no `{{ }}`, is concatenation: each expression is evaluated, converted to text, and joined. Concatenated `None` becomes an empty string. A bare `None` is not a string. Joined text is the result when the declared type is string; otherwise it is parsed once as JSON. The result must already match the declared type. The only conversion of a Python value is into a declared string. A mismatch fails the node. Expressions evaluate in one sandbox subprocess reused for the run: no network, an allow-listed import set, and time and memory limits (ADR 0056). The only workflow name in scope is `self`.
-- `self.<ref>.output` is that node's output. `self.nodes["<node name>"].output` is the same value. `self.channel` carries the channel id, name, description, activation switch, and graph settings. `self.run` carries the run id, target (`draft` or `published`), version or draft revision, trigger kind, start instant, and trigger actor. `self.platform` carries the site name, the **Schedule Timezone**, the run's start instant, the current **System Parameter** values, and **Global Variable** values, all read-only. Credentials and other channels' run data are never in `self`.
+- `self.<ref>.output` is that node's output. `self.nodes["<node name>"].output` is the same value. `self.channel` carries the channel id, name, description, activation switch, and graph settings. `self.run` carries the run id, target (`draft` or `published`), version or draft revision, trigger kind, start instant, and trigger actor. `self.platform` carries the site name, the **Schedule Timezone**, the run's start instant, the current **System Parameter** values, all read-only. Global Variable values are not in `self`; a node reads and writes them. Credentials and other channels' run data are never in `self`.
 - Naming a node that did not run, or a path that does not resolve, fails the node that holds the expression.
 - A **Dataset Reference** is a value that names a run-scoped table in the entity database. Read and SQL nodes may return one instead of a list when the result is large; Materialize turns a list into one; Batch Read turns one into batches; write nodes accept one and write in bulk inside the database. Dataset References expire with run data retention (§6.9).
 - One node execution may hold at most a product-constant number of list elements in memory. Exceeding it fails that node execution with a message pointing to Batch Read.
@@ -135,7 +135,7 @@ Port names are lower snake case. `main` carries the node's primary items or data
 | Family | Node types | Role |
 | --- | --- | --- |
 | Trigger | Manual, Scheduled, Platform event, Changes arrived | Entry point of a run (§7) |
-| Read | Read Entity, Read Mirror, Read Changes, SQL, Live Source query | Bring rows into the run |
+| Read | SQL, Read Mirror, Read Changes | Run a SQL statement, or read mirror and change rows |
 | Transform | Set fields, If, Filter, Merge, Deduplicate, Code | Reshape, route, or drop items |
 | Volume | Loop, Materialize, Batch Read | Iterate, and move large data by reference |
 | State | Global Variable get, set, delete, set-if-absent, compare-and-set | Cross-workflow shared state (§8) |
@@ -143,10 +143,8 @@ Port names are lower snake case. `main` carries the node's primary items or data
 
 Family rules:
 
-- **Read Entity** reads the head of a **Business Entity**. Each filter value is one template, evaluated once for the node execution, and its declared type is the attribute's type. A lookup is Read Entity followed by Merge; there is no separate lookup node.
 - **Read Mirror** reads a **Source Mirror** of any **Catalog Object**. **Read Changes** reads a **Change Log** of a mirror or of a Business Entity and returns before and after values and a sequence number; it is the only node that owns a **Checkpoint** (§6.1).
-- **SQL** addresses mirrors and entity tables with `{{obj/...}}` **Locator** references; the platform resolves physical names.
-- **Live Source query** reads a **Source** directly under **Controlled Query** guards (read-only single statement, timeout, row cap, audit). The node may raise the row cap. It requires its own Permission (§11).
+- **SQL** runs one statement on a required source: the entity database, or one registered **Source**. After rendering, the platform parses that text for the source engine and does not send it when it is empty, unreadable, or more than one statement (`CHANNEL_SQL_NOT_ONE_STATEMENT`). Save accepts a draft without it; validate and publish report `CHANNEL_NODE_CONFIG_INVALID` and do not fill in the entity database. The statement text is a template: each `{{ }}` result is spliced as text, and the author quotes values. On the entity database the session `search_path` is `entity_data` only, so an unqualified name resolves to a physical table or stem view in that schema, and the statement runs as `refraq_entity_owner` on `ENTITY_DATABASE_URL`. The platform does not wrap the statement in a read-only transaction and does not reject it for naming another schema; the database returns that result. A registered **Source** uses that Source's connection and engine. The platform does not set `search_path` and does not apply **Controlled Query** guards. `channel:write` is enough to author the node. A node may set `statement_timeout_sec` from 1 to 3600; the default is 30. A successful execution returns `{rows, count, rowcount}`. When the statement returns a result set, `rows` holds the objects and `count` is the number of rows. When it returns none, `rows` is empty and `count` is 0. `rowcount` is the driver's affected-row count when the driver reports one, otherwise `null`. More than 100000 rows fails the node. A database error fails the node and carries the database message. A lookup is SQL followed by Merge; there is no Read Entity node.
 - Each read node chooses what happens when an input mirror is not in sync: continue (default), skip this run (§6.4), or fail.
 - Read, SQL, and write nodes carry a statement timeout: an in-code default that a node may raise.
 - **Set fields** computes values with templates (`{{ self.read_suppliers.output.rows }}`). **Code** runs Python in the same sandbox as template expressions: no network, an allow-listed module set, and time and memory limits; one sandbox subprocess is reused per run. Authoring or editing a Code node requires `channel:code_write`. Network access is never a sandbox relaxation; if needed it is a dedicated node type.
@@ -229,7 +227,7 @@ Schedule instants (`last_run_at`, `scheduled_for`) are never checkpoints. A skip
 
 ### 6.2 A Run Is One Job
 
-Each run is one **Job** of kind `channel_run`, executed in one worker process. Its `input` names the channel, the target (`draft` or `published`), the trigger node that minted it, and run options (`docs/api-contracts-data-channel.md` §4.2). It carries no version.
+Each run is one **Job** of kind `channel_run`, executed in one worker process. Its `input` names the channel, the target (`draft` or `published`), and run options (`docs/api-contracts-data-channel.md` §4.2). It carries no version. The runner enters the graph's single trigger node.
 
 - Target `published`: at start the runner resolves the current published version, records it and the graph on the run, and enters at the trigger node.
 - Target `draft`: the runner executes the graph and `draft_revision` frozen when the run was queued.
@@ -256,7 +254,7 @@ A run that read a mirror while it was not in sync is marked "input mirror not in
 
 ### 6.5 Version Supersede
 
-Publishing a new version requests cancel of every running Channel Run of that channel that executes an older published version. It does not cancel a run with target `draft`. Queued Jobs with target `published` are not cancelled; they resolve the new version when they start. A queued Job whose Scheduled node was removed by the new version is cancelled by schedule withdraw (§7.2). Two published versions of one channel therefore never write at the same time, except for the cooperative-stop window of §6.6. A `draft` run may write while a published run of the same channel writes; serializing them is the author's choice (§6.3).
+A published run stops between node executions when a newer published version exists, and ends `cancelled`. Publish does not write Job rows; the confirmation list names the running published runs that will stop. It does not include a run with target `draft`. Queued Jobs with target `published` are not cancelled; they resolve the new version when they start. A queued Job minted by a schedule that publish withdrew is cancelled by that withdraw (§7.2). Two published versions of one channel therefore never write at the same time, except for the cooperative-stop window of §6.6. A `draft` run may write while a published run of the same channel writes; serializing them is the author's choice (§6.3).
 
 ### 6.6 Cancel And Layered Timeouts
 
@@ -295,7 +293,7 @@ Editor actions (execute up to a node, pinned data, write dry run) use real data 
 
 | Trigger | Mints a Channel Run when |
 | --- | --- |
-| Manual | An operator with `channel:write` asks for an on-demand run and names this node; optionally ignoring checkpoints. The run's target is `draft` or `published`. Allowed while inactive. The node's payload is a static JSON object; the node's output is that object plus `triggered_by` and `triggered_at` |
+| Manual | An operator with `channel:write` asks for an on-demand run of the graph's only trigger; optionally ignoring checkpoints. The run's target is `draft` or `published`. Allowed while inactive. The node's payload is a static JSON object; the node's output is that object plus `triggered_by` and `triggered_at` |
 | Scheduled | Its synced Scheduled Task row is due (§7.2) |
 | Platform event | A platform event matches: workflow failed, entity head switched, mirror resnapshot completed, mirror status changed |
 | Changes arrived | New entries appear in a chosen mirror or entity Change Log |
@@ -304,21 +302,21 @@ Event and change-arrival dispatch is not coalesced: each dispatch scan mints one
 
 ### 7.2 Scheduled Node And Schedule Sync
 
-A Scheduled node carries one cadence (cron or interval, plus an optional **Schedule Start**). Cron is interpreted in the site **Schedule Timezone**. The node has no timeout. A workflow may hold several Scheduled nodes; each is its own entry point. A run entered at a Scheduled node sets that node's output to an object carrying the schedule id, the schedule name, and `scheduled_for`.
+A graph has exactly one trigger node. A Scheduled node carries one cadence (cron or interval, plus an optional **Schedule Start** stored as an Instant). Cron is interpreted in the site **Schedule Timezone**. The node has no timeout. A run entered at a Scheduled node sets that node's output to an object carrying the schedule id, the schedule name, and `scheduled_for`. An on-demand run uses the enqueue Instant as `scheduled_for` and a null schedule id when no row is synced.
 
-The Scheduled node in the current published version is the only place its cadence is edited. Publish reconciles the version's Scheduled nodes with Scheduled Task rows, keyed by node id:
+The Scheduled node in the current published version is the only place its cadence is edited. Publish reconciles that node with one Scheduled Task row for the channel:
 
-- a new Scheduled node inserts a row;
-- a changed cadence or start rewrites that row's `next_run_at`;
-- a removed Scheduled node withdraws its row, which cancels its unfinished Jobs;
-- editing the draft changes no row.
+- a Scheduled trigger inserts or updates the row; a changed cadence or start rewrites `next_run_at`;
+- any other trigger withdraws the row, which cancels its unfinished Jobs;
+- editing the draft changes no row;
+- renaming the channel rewrites the row name without a publish.
 
 Synced rows use:
 
 | Field | Value |
 | --- | --- |
 | Work kind | `channel_run` (the Job kind it mints) |
-| `key` | `channel_run:{channel_id}:{node_id}` |
+| `key` | `channel_run:{channel_id}` |
 | `owner_ref` | `channel:{channel_id}` |
 | Default name | `channel_run · {channel name} · {node name}` |
 | Traits | `locked` + `undeletable` |
@@ -339,11 +337,11 @@ Data Channel's background duties run as hidden, `locked`, `undeletable`, `store_
 
 A **Global Variable** is a named JSON value in one site-wide namespace shared by every Data Channel.
 
-- Operations: get, set, delete, set-if-absent with optional expiry, and compare-and-set. Set-if-absent and compare-and-set are atomic.
+- Operations: get, set, delete, set-if-absent, and compare-and-set. Set, set-if-absent, and compare-and-set accept an optional expiry. Set-if-absent and compare-and-set are atomic.
+- A name matches `^[A-Za-z0-9_.:-]{1,128}$`. A value is at most 64 KiB of JSON. An oversize write fails the node execution.
 - A write takes effect immediately, not at run success, and is not rolled back when the run fails.
-- An expired value disappears; an expired lease therefore releases itself if the run that took it dies.
-- Values have a size cap (product constant). An oversize write fails the node execution.
-- Writing through a node requires the channel author to hold `channel:write`. The Console lists values and allows a manual delete, recorded as a **Management Audit Event**.
+- An expired value is absent on the next read or conditional write. Nothing sweeps expired rows.
+- Saving a node that writes a variable requires `channel:write`. The Console lists live values and allows a manual delete, recorded as a **Management Audit Event**. The contract is `docs/api-contracts-global-variables.md`.
 
 ## 9. Source Mirrors And Change Logs
 
@@ -386,7 +384,6 @@ All keys are `platform`-scoped.
 | `channel:write` | Create, edit, save drafts, validate, publish, and delete channels; Global Variable writes; on-demand runs (target `draft` or `published`) and rerun |
 | `channel:code_write` | Create or edit a Code node; required in addition to `channel:write` |
 | `mirror:write` | Operate Source Mirrors (disable, delete data, resnapshot overrides) |
-| Live Source query key | Create or edit a Live Source query node; required in addition to `channel:write` |
 
 Source Mirrors are not under **Entity Access Control**. A holder of `channel:read` can see all mirror data. Grant it knowingly.
 
@@ -410,7 +407,7 @@ Persist a **Management Audit Event** for: channel create, identity edit, draft s
 6. Binary items, and node types with network access.
 7. MCP tools for Data Channel or Source Mirrors.
 8. Restoring source transaction boundaries at the target. Targets are atomic per batch and eventually consistent.
-9. Source-side triggers, and any source writes beyond the documented CDC signal and flush objects.
+9. Source-side triggers installed by the platform, and source writes other than a Data Channel SQL statement or the documented CDC signal and flush objects.
 10. In-place retry of a Job, and Job retention.
 
 ## 15. References
@@ -425,5 +422,3 @@ Persist a **Management Audit Event** for: channel create, identity edit, draft s
 - `docs/business-login-auth.md`
 - `docs/ui-console-record-form.md`
 - `docs/glossary.md`
-- `docs/adr/0055-draft-test-runs.md`
-- `docs/adr/0056-node-output-reference-model.md`

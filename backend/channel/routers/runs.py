@@ -24,7 +24,6 @@ class StartRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     target: Literal["draft", "published"] = "published"
-    trigger_node_id: str | None = None
     ignore_checkpoints: bool = False
 
 
@@ -79,7 +78,6 @@ def http_start_run(
         job, _queued = start_run(
             channel_id=channel_id,
             target=body.target,
-            trigger_node_id=body.trigger_node_id,
             ignore_checkpoints=body.ignore_checkpoints,
             actor=actor,
             actor_token_id=actor_token_id,
@@ -204,6 +202,7 @@ def _present(job: Any, record: Any) -> dict[str, Any]:
         "trigger_schedule_name": None,
         "ignore_checkpoints": record.ignore_checkpoints,
         "failed_node_id": record.failed_node_id,
+        "stopped_node_id": record.stopped_node_id,
         "created_at": format_instant(record.created_at),
         "started_at": format_instant(job.started_at) if job.started_at else None,
         "finished_at": format_instant(job.finished_at) if job.finished_at else None,

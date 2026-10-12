@@ -9,6 +9,7 @@ import {
   deleteSchedule,
   runSchedule,
 } from "@/features/schedules/api";
+import { isChannelRunSchedule } from "@/features/schedules/scheduleIdentity";
 import type { ScheduledTask } from "@/features/schedules/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { problemMessage } from "@/lib/problem";
@@ -55,6 +56,7 @@ export function ScheduleRowActions({
   return (
     <>
       <Group gap="xs" wrap="nowrap">
+        {isChannelRunSchedule(task) ? null : (
         <Button
           size="xs"
           variant="light"
@@ -80,12 +82,15 @@ export function ScheduleRowActions({
         >
           {t("schedules.run")}
         </Button>
+        )}
         <Button size="xs" variant="default" onClick={onJobs}>
           {t("jobs.scheduleJobs.open")}
         </Button>
+        {isChannelRunSchedule(task) ? null : (
         <Button size="xs" variant="light" onClick={onEdit}>
           {t("schedules.edit")}
         </Button>
+        )}
         {task.deletable !== false ? (
           <Button
             size="xs"

@@ -29,6 +29,7 @@ export type FlowEdgeShape = {
 
 export type ClientProblemCode =
   | "CHANNEL_GRAPH_NO_TRIGGER"
+  | "CHANNEL_GRAPH_MULTIPLE_TRIGGERS"
   | "CHANNEL_GRAPH_TRIGGER_INPUT"
   | "CHANNEL_GRAPH_UNREACHABLE"
   | "CHANNEL_GRAPH_CYCLE";
@@ -151,6 +152,14 @@ export function clientGraphProblems(
       nodeId: null,
       edgeId: null,
     });
+  } else if (triggers.length > 1) {
+    for (const trigger of triggers) {
+      problems.push({
+        code: "CHANNEL_GRAPH_MULTIPLE_TRIGGERS",
+        nodeId: trigger.id,
+        edgeId: null,
+      });
+    }
   }
   for (const edge of graph.edges) {
     const target = byId.get(edge.target.node_id);
