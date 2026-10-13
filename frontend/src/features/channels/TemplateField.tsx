@@ -19,8 +19,10 @@ import { Button, Group, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useEffect, useId, useRef } from "react";
 
+import { FieldMarks } from "@/components/form/FieldChrome";
+import type { FieldNote } from "@/components/form/fieldNotes";
 import type { SchemaObject } from "@/features/channels/configSchemaForm";
-import { problemColor, type FieldMessage } from "@/features/channels/problemLabel";
+import type { FieldMessage } from "@/features/channels/problemLabel";
 import { scanTemplate } from "@/features/channels/templateScan";
 import {
   resolvedText,
@@ -29,7 +31,6 @@ import {
   templateRule,
   typeBadge,
   type TemplatePreview,
-  type TemplateRule,
   type TemplateValueSchema,
   type UpstreamOutput,
 } from "@/features/channels/templateLogic";
@@ -43,6 +44,7 @@ type Props = {
   editable: boolean;
   upstream?: readonly UpstreamOutput[];
   messages?: readonly FieldMessage[];
+  openSignal?: string | null;
   onChange: (value: string) => void;
 };
 
@@ -69,8 +71,8 @@ const templateTheme = EditorView.theme({
     fontSize: "var(--mantine-font-size-sm)",
   },
   "&.cm-focused": {
-    outline: "2px solid var(--mantine-primary-color-filled)",
-    outlineOffset: "1px",
+    outline: "none",
+    borderColor: "var(--mantine-primary-color-filled)",
   },
   ".cm-scroller": {
     fontFamily: "inherit",
@@ -94,6 +96,7 @@ export function TemplateField({
   editable,
   upstream = [],
   messages = [],
+  openSignal = null,
   onChange,
 }: Props) {
   const schema: SchemaObject | null =
@@ -184,11 +187,14 @@ export function TemplateField({
   const rule = templateRule(schema);
   const badge = typeBadge(valueSchema);
   const t = useTranslate();
-  const tone = invalid
-    ? "error"
-    : messages.some((message) => message.severity === "warning")
-      ? "warning"
-      : undefined;
+  const tone = label
+    ? invalid
+      ? "error"
+      : messages.some((message) => message.severity === "warning")
+        ? "warning"
+        : undefined
+    : undefined;
+  const notes = label ? templateNotes(t, messages, preview, !invalid) : [];
 
   const insertCalculation = () => {
     const view = slots.current?.view;
@@ -204,19 +210,30 @@ export function TemplateField({
   return (
     <div className="channel-template-field">
       <Group justify="space-between" wrap="nowrap" gap="xs">
-        {label ? (
-          <Text component="label" htmlFor={fieldId} size="sm" fw={500}>
-            {label}{" "}
+        <Group gap={4} wrap="nowrap">
+          {label ? (
+            <Text component="label" htmlFor={fieldId} size="sm" fw={500}>
+              {label}{" "}
+              <Text span size="xs" c="dimmed">
+                {badge}
+              </Text>
+            </Text>
+          ) : (
             <Text span size="xs" c="dimmed">
               {badge}
             </Text>
-          </Text>
-        ) : (
-          <Text span size="xs" c="dimmed">
-            {badge}
-          </Text>
-        )}
-        {editable ? (
+          )}
+          {label ? (
+            <FieldMarks
+              label={label}
+              description={description}
+              notes={notes}
+              openSignal={openSignal}
+              editSignal={value}
+            />
+          ) : null}
+        </Group>
+        {editable && label ? (
           <Button type="button" size="compact-xs" variant="subtle" onClick={insertCalculation}>
             {t("channels.template.insert")}
           </Button>
@@ -227,24 +244,45 @@ export function TemplateField({
         className="channel-template-field__editor"
         data-severity={tone}
       />
-      {description ? (
+      {label && !description && rule === "text" ? (
         <Text size="xs" c="dimmed">
-          {description}
+          {t("channels.template.ruleText")}
         </Text>
       ) : null}
-      {messages.map((message, index) => (
-        <Text key={`${index}-${message.text}`} size="xs" c={problemColor(message.severity)}>
-          {message.text}
+      {label && !description && rule === "json" ? (
+        <Text size="xs" c="dimmed">
+          {t("channels.template.ruleJson")}
         </Text>
-      ))}
-      <TemplateStatus
-        preview={preview}
-        rule={rule}
-        showRule={!description}
-        showMatch={!invalid}
-      />
+      ) : null}
     </div>
   );
+}
+
+function templateNotes(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  messages: readonly FieldMessage[],
+  preview: TemplatePreview,
+  showMatch: boolean,
+): FieldNote[] {
+  const notes: FieldNote[] = messages.map((message) => ({
+    text: message.text,
+    tone: message.severity === "warning" ? "warning" : "error",
+  }));
+  if (preview.state === "error") {
+    notes.push({ text: t("channels.template.parseFailed"), tone: "error" });
+  } else if (preview.state === "invalid") {
+    notes.push({ text: t("problems.CHANNEL_EXPRESSION_INVALID"), tone: "error" });
+  } else if (showMatch && preview.state === "ok") {
+    notes.push(
+      { text: t("channels.template.parsed"), tone: "info" },
+      { text: t("channels.template.resolved", { value: resolvedText(preview.value) }), tone: "info" },
+    );
+  } else if (preview.state === "string") {
+    notes.push({ text: t("channels.template.resultString"), tone: "info" });
+  } else if (preview.state === "deferred") {
+    notes.push({ text: t("channels.template.checkedAtRun"), tone: "info" });
+  }
+  return notes;
 }
 
 function contentAttributes(
@@ -276,60 +314,3 @@ function marksFor(text: string): DecorationSet {
   return Decoration.set(ranges);
 }
 
-function TemplateStatus({
-  preview,
-  rule,
-  showRule,
-  showMatch,
-}: {
-  preview: TemplatePreview;
-  rule: TemplateRule | null;
-  showRule: boolean;
-  showMatch: boolean;
-}) {
-  const t = useTranslate();
-  return (
-    <>
-      {showRule && rule === "text" ? (
-        <Text size="xs" c="dimmed">
-          {t("channels.template.ruleText")}
-        </Text>
-      ) : null}
-      {showRule && rule === "json" ? (
-        <Text size="xs" c="dimmed">
-          {t("channels.template.ruleJson")}
-        </Text>
-      ) : null}
-      {preview.state === "error" ? (
-        <Text size="xs" c="red">
-          {t("channels.template.parseFailed")}
-        </Text>
-      ) : null}
-      {preview.state === "invalid" ? (
-        <Text size="xs" c="red">
-          {t("problems.CHANNEL_EXPRESSION_INVALID")}
-        </Text>
-      ) : null}
-      {showMatch && preview.state === "ok" ? (
-        <Text size="xs" c="dimmed">
-          {t("channels.template.parsed")}
-        </Text>
-      ) : null}
-      {showMatch && preview.state === "ok" ? (
-        <Text size="xs" c="dimmed">
-          {t("channels.template.resolved", { value: resolvedText(preview.value) })}
-        </Text>
-      ) : null}
-      {preview.state === "string" ? (
-        <Text size="xs" c="dimmed">
-          {t("channels.template.resultString")}
-        </Text>
-      ) : null}
-      {preview.state === "deferred" ? (
-        <Text size="xs" c="dimmed">
-          {t("channels.template.checkedAtRun")}
-        </Text>
-      ) : null}
-    </>
-  );
-}

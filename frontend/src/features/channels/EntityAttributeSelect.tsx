@@ -4,6 +4,7 @@ import { type SelectProps } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 
 import { SelectField } from "@/components/form/SelectField";
+import type { FieldNote } from "@/components/form/fieldNotes";
 import type { EntityAttribute } from "@/features/entities/types";
 
 const EMPTY = "__business_key__";
@@ -18,7 +19,9 @@ type Props = {
   exclude?: readonly string[];
   attributes: readonly EntityAttribute[];
   failed?: boolean;
-  error?: string;
+  notes?: readonly FieldNote[];
+  openSignal?: string | null;
+  bare?: boolean;
   size?: SelectProps["size"];
   onChange: (next: string | null) => void;
 };
@@ -33,7 +36,9 @@ export function EntityAttributeSelect({
   exclude = [],
   attributes,
   failed = false,
-  error,
+  notes,
+  openSignal,
+  bare = false,
   size,
   onChange,
 }: Props) {
@@ -63,7 +68,10 @@ export function EntityAttributeSelect({
       value={selected}
       size={size}
       w="100%"
-      error={error ?? (failed ? t("channels.config.attributeLoadFailed") : undefined)}
+      notes={notes}
+      openSignal={openSignal}
+      bare={bare}
+      error={failed ? t("channels.config.attributeLoadFailed") : undefined}
       nothingFoundMessage={
         entityId ? t("channels.config.noAttributes") : t("channels.config.pickEntity")
       }

@@ -27,6 +27,8 @@ import {
   type HourStep,
   type MinuteStep,
 } from "@/components/form/cronBuilder";
+import { FieldChrome } from "@/components/form/FieldChrome";
+import { collectNotes, type FieldNote } from "@/components/form/fieldNotes";
 import { NumberField } from "@/components/form/NumberField";
 
 const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
@@ -42,6 +44,8 @@ type CronFieldProps = {
   label?: ReactNode;
   description?: ReactNode;
   error?: ReactNode;
+  notes?: readonly FieldNote[];
+  openSignal?: string | null;
   required?: boolean;
   style?: CSSProperties;
   value: string;
@@ -73,6 +77,8 @@ export function CronField({
   label,
   description,
   error,
+  notes,
+  openSignal = null,
   required,
   style,
   value,
@@ -97,6 +103,7 @@ export function CronField({
     emit(next);
   }
 
+  const merged = collectNotes(error, notes);
   const showClock =
     parsed != null &&
     (parsed.frequency === "daily" ||
@@ -122,39 +129,60 @@ export function CronField({
         }}
       />
       {advanced ? (
-        <TextInput
+        <FieldChrome
           label={label}
           description={description}
+          notes={merged}
           required={required}
-          error={error}
-          value={value}
-          onChange={(event) => onChange?.(event.currentTarget.value)}
-        />
+          openSignal={openSignal}
+          editSignal={value}
+        >
+          {({ id, invalid }) => (
+            <TextInput
+              id={id}
+              required={required}
+              error={invalid || undefined}
+              withAsterisk={false}
+              value={value}
+              onChange={(event) => onChange?.(event.currentTarget.value)}
+            />
+          )}
+        </FieldChrome>
       ) : parsed ? (
         <Stack gap="sm">
-          <Select
+          <FieldChrome
             label={label ?? t("form.cron.frequency")}
             description={description}
+            notes={merged}
             required={required}
-            error={error}
-            allowDeselect={false}
-            data={FREQUENCIES.map((frequency) => ({
-              value: frequency,
-              label: t(`form.cron.frequency.${frequency}`),
-            }))}
-            value={parsed.frequency}
-            onChange={(next) => {
-              if (
-                next === "minutes" ||
-                next === "hours" ||
-                next === "daily" ||
-                next === "weekly" ||
-                next === "monthly"
-              ) {
-                patch({ frequency: next });
-              }
-            }}
-          />
+            openSignal={openSignal}
+            editSignal={value}
+          >
+            {({ id, invalid }) => (
+              <Select
+                id={id}
+                error={invalid || undefined}
+                withAsterisk={false}
+                allowDeselect={false}
+                data={FREQUENCIES.map((frequency) => ({
+                  value: frequency,
+                  label: t(`form.cron.frequency.${frequency}`),
+                }))}
+                value={parsed.frequency}
+                onChange={(next) => {
+                  if (
+                    next === "minutes" ||
+                    next === "hours" ||
+                    next === "daily" ||
+                    next === "weekly" ||
+                    next === "monthly"
+                  ) {
+                    patch({ frequency: next });
+                  }
+                }}
+              />
+            )}
+          </FieldChrome>
           {parsed.frequency === "minutes" ? (
             <Select
               label={t("form.cron.every")}

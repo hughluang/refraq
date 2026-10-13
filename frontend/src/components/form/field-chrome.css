@@ -1,0 +1,55 @@
+.field-chrome__label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.field-chrome__label > label {
+  min-width: 0;
+}
+
+.field-marks {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.field-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--mantine-color-dimmed);
+  cursor: pointer;
+  flex: none;
+}
+
+.field-mark[data-tone="error"] {
+  color: var(--mantine-color-red-filled);
+}
+
+.field-mark[data-tone="warning"] {
+  color: var(--mantine-color-yellow-6);
+}
+
+.field-chrome__control {
+  position: relative;
+}
+
+.field-chrome__overlay {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  display: flex;
+}
+
+.field-chrome[data-tone="warning"] .mantine-Input-input {
+  border-color: var(--mantine-color-yellow-6);
+}

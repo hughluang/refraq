@@ -5,18 +5,38 @@ import { useTranslate } from "@refinedev/core";
 
 import { CronField } from "@/components/form/CronField";
 import { FieldMode } from "@/components/form/FieldMode";
+import type { FieldNote } from "@/components/form/fieldNotes";
 import { NumberField } from "@/components/form/NumberField";
 import { SegmentedField } from "@/components/form/SegmentedField";
 import { TextField } from "@/components/form/TextField";
 
+type CadenceNotes = {
+  cron?: readonly FieldNote[];
+  interval_seconds?: readonly FieldNote[];
+  start_at?: readonly FieldNote[];
+};
+
+type CadenceSignals = {
+  cron?: string | null;
+  interval_seconds?: string | null;
+  start_at?: string | null;
+};
+
 type Props = {
   config: Record<string, unknown>;
   editable: boolean;
-  errors?: { cron?: string; interval_seconds?: string; start_at?: string };
+  notes?: CadenceNotes;
+  openSignal?: CadenceSignals;
   onChange: (config: Record<string, unknown>) => void;
 };
 
-export function ScheduledCadenceFields({ config, editable, errors, onChange }: Props) {
+export function ScheduledCadenceFields({
+  config,
+  editable,
+  notes,
+  openSignal,
+  onChange,
+}: Props) {
   const t = useTranslate();
   const interval = typeof config.interval_seconds === "number";
   const mode = interval ? "interval" : "cron";
@@ -47,12 +67,15 @@ export function ScheduledCadenceFields({ config, editable, errors, onChange }: P
         <FieldMode
           editable={editable}
           label={t("channels.config.cadence.cron")}
+          notes={notes?.cron}
+          openSignal={openSignal?.cron}
           value={cron}
         >
           <CronField
             label={t("channels.config.cadence.cron")}
             value={cron}
-            error={errors?.cron}
+            notes={notes?.cron}
+            openSignal={openSignal?.cron}
             onChange={(next) => onChange({ ...config, cron: next, interval_seconds: null })}
           />
         </FieldMode>
@@ -61,7 +84,8 @@ export function ScheduledCadenceFields({ config, editable, errors, onChange }: P
           editable={editable}
           label={t("channels.config.cadence.intervalSeconds")}
           min={1}
-          error={errors?.interval_seconds}
+          notes={notes?.interval_seconds}
+          openSignal={openSignal?.interval_seconds}
           value={seconds}
           onChange={(value) =>
             onChange({
@@ -76,7 +100,8 @@ export function ScheduledCadenceFields({ config, editable, errors, onChange }: P
         editable={editable}
         label={t("channels.config.cadence.startAt")}
         description={t("channels.config.cadence.startAtHint")}
-        error={errors?.start_at}
+        notes={notes?.start_at}
+        openSignal={openSignal?.start_at}
         value={start}
         placeholder="2026-10-11T00:00:00Z"
         onChange={(event) => {

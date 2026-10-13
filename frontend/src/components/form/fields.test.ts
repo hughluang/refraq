@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -29,7 +29,7 @@ function stubDomApis() {
 }
 
 function mount(node: ReturnType<typeof createElement>) {
-  return render(createElement(MantineProvider, null, node));
+  return render(createElement(MantineProvider, { env: "test" }, node));
 }
 
 describe("form fields", () => {
@@ -68,6 +68,82 @@ describe("form fields", () => {
     expect(box).toBeTruthy();
     expect(box.hasAttribute("disabled")).toBe(false);
     expect(box.hasAttribute("readonly")).toBe(false);
+  });
+
+  it("keeps a description and an error out of the field flow", async () => {
+    const { TextField } = await import("@/components/form/TextField");
+    mount(
+      createElement(TextField, {
+        editable: true,
+        label: "Name",
+        description: "Help text",
+        error: "Required",
+        value: "",
+        onChange: () => {},
+      }),
+    );
+    const field = screen.getByRole("textbox", { name: "Name" }).closest(".field-chrome");
+    expect(field?.querySelector(".mantine-InputWrapper-description")).toBeNull();
+    expect(field?.querySelector(".mantine-InputWrapper-error")).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Name" }).getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByText("Required")).toBeTruthy();
+    expect(screen.queryByText("Help text")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Name form.field.description" }));
+    expect(screen.getByText("Help text")).toBeTruthy();
+  });
+
+  it("closes an announced error once the value changes", async () => {
+    const { TextField } = await import("@/components/form/TextField");
+    const props = {
+      editable: true,
+      label: "Name",
+      error: "Required",
+      onChange: () => {},
+    };
+    const view = mount(createElement(TextField, { ...props, value: "" }));
+    expect(screen.getByText("Required")).toBeTruthy();
+    view.rerender(
+      createElement(MantineProvider, { env: "test" }, createElement(TextField, { ...props, value: "a" })),
+    );
+    expect(screen.queryByText("Required")).toBeNull();
+    expect(screen.getByRole("button", { name: "Name form.field.status" })).toBeTruthy();
+  });
+
+  it("puts an unlabeled error on the control instead of a new line", async () => {
+    const { TextField } = await import("@/components/form/TextField");
+    mount(
+      createElement(TextField, {
+        editable: true,
+        "aria-label": "Name",
+        error: "Required",
+        value: "",
+        onChange: () => {},
+      }),
+    );
+    const mark = screen.getByRole("button", { name: "form.field.status" });
+    expect(mark.closest(".field-chrome__overlay")).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Name" }).getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("leaves a bare field unmarked", async () => {
+    const { TextField } = await import("@/components/form/TextField");
+    mount(
+      createElement(TextField, {
+        editable: true,
+        bare: true,
+        "aria-label": "Name",
+        description: "Help text",
+        error: "Required",
+        value: "",
+        onChange: () => {},
+      }),
+    );
+    expect(screen.queryByRole("button", { name: /form\.field/ })).toBeNull();
+    expect(screen.queryByText("Help text")).toBeNull();
+    expect(screen.queryByText("Required")).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Name" }).getAttribute("aria-invalid")).not.toBe(
+      "true",
+    );
   });
 
   it("shows the select option label and no combobox in display mode", async () => {

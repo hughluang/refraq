@@ -190,6 +190,10 @@ describe("ChannelCanvas controls", () => {
     fireEvent.click(screen.getByRole("button", { name: "Empty graph (Start)" }));
     expect(document.querySelector(".channel-flow-node--problem")).not.toBeNull();
     expect(screen.getByRole("button", { name: "channels.node.close" })).toBeTruthy();
+    expect(screen.getByText("Empty graph")).toBeTruthy();
+    expect(document.querySelector(".channel-node-config__body")?.textContent ?? "").not.toContain(
+      "Empty graph",
+    );
 
     const pane = document.querySelector(".react-flow__pane");
     if (!(pane instanceof HTMLElement)) throw new Error("missing pane");

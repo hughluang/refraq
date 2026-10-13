@@ -153,6 +153,40 @@ describe("fieldsFromSchema", () => {
     }).sql).toBe("");
   });
 
+  it("keeps an object list description and drops child descriptions", () => {
+    const fields = fieldsFromSchema({
+      type: "object",
+      properties: {
+        mapping: {
+          type: "array",
+          description: "Attributes to write.",
+          items: {
+            type: "object",
+            properties: {
+              attribute: {
+                type: "string",
+                description: "Head attribute.",
+                "x-refraq-ref": "entity_attribute",
+              },
+              key: { type: "string", description: "Source key." },
+            },
+          },
+        },
+      },
+    });
+    const mapping = fields[0];
+    expect(mapping).toMatchObject({
+      kind: "objectList",
+      description: "Attributes to write.",
+    });
+    if (mapping?.kind === "objectList") {
+      expect(mapping.fields.map((field) => ("description" in field ? field.description : null))).toEqual([
+        null,
+        null,
+      ]);
+    }
+  });
+
   it("treats a match key as an optional attribute", () => {
     const matchKey = fieldsFromSchema(WRITE).find((field) => field.key === "match_key");
     expect(matchKey).toEqual({

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useTranslate } from "@refinedev/core";
 
 import { SelectField } from "@/components/form/SelectField";
+import type { FieldNote } from "@/components/form/fieldNotes";
 import { listSources } from "@/features/sources/api/sources";
 
 const ENTITY = "entity";
@@ -16,14 +17,18 @@ export function SqlSourceField({
   description,
   value,
   editable,
-  error,
+  notes,
+  openSignal,
+  bare = false,
   onChange,
 }: {
   label: string;
   description: string;
   value: unknown;
   editable: boolean;
-  error?: string;
+  notes?: readonly FieldNote[];
+  openSignal?: string | null;
+  bare?: boolean;
   onChange: (value: SourceValue) => void;
 }) {
   const t = useTranslate();
@@ -67,10 +72,13 @@ export function SqlSourceField({
       editable={editable}
       label={label}
       description={description}
+      notes={notes}
+      openSignal={openSignal}
+      bare={bare}
       data={data}
       value={selected}
       placeholder={t("channels.config.sqlSource.placeholder")}
-      error={error ?? (loadFailed ? t("channels.config.sqlSource.loadFailed") : undefined)}
+      error={loadFailed ? t("channels.config.sqlSource.loadFailed") : undefined}
       allowDeselect={false}
       onChange={(next) => {
         if (!next) return;

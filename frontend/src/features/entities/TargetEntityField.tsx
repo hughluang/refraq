@@ -4,6 +4,7 @@ import { useTranslate } from "@refinedev/core";
 import { useEffect, useMemo, useState } from "react";
 
 import { SelectField } from "@/components/form/SelectField";
+import type { FieldNote } from "@/components/form/fieldNotes";
 import { listEntities } from "@/features/entities/api";
 import {
   REFERENCE_SELF,
@@ -26,6 +27,9 @@ type Props = {
   description?: string;
   required?: boolean;
   error?: string;
+  notes?: readonly FieldNote[];
+  openSignal?: string | null;
+  bare?: boolean;
   value: string;
   selfEntityId: string | null;
   selfName: string;
@@ -48,6 +52,9 @@ export function TargetEntityField({
   description,
   required,
   error,
+  notes,
+  openSignal,
+  bare = false,
   value,
   selfEntityId,
   selfName,
@@ -154,6 +161,9 @@ export function TargetEntityField({
       required={required}
       label={label}
       description={description}
+      notes={notes}
+      openSignal={openSignal}
+      bare={bare}
       error={
         error ??
         (loadFailed ? t("entities.attributes.targetLoadFailed") : undefined)

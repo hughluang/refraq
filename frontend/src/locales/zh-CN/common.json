@@ -649,6 +649,8 @@
   "common.save": "保存",
   "form.value.yes": "是",
   "form.value.no": "否",
+  "form.field.description": "说明",
+  "form.field.status": "问题",
   "form.cron.frequency": "频率",
   "form.cron.frequency.minutes": "每 N 分钟",
   "form.cron.frequency.hours": "每 N 小时",

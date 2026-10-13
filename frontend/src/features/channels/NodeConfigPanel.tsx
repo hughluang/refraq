@@ -1,10 +1,10 @@
 "use client";
 
 import { ActionIcon, Button, CloseButton, Group, Stack, Text } from "@mantine/core";
-import type { ReactNode } from "react";
 import { useTranslate } from "@refinedev/core";
 
-import { FieldMode } from "@/components/form/FieldMode";
+import { FieldDisclosureContext, FieldMarks } from "@/components/form/FieldChrome";
+import type { FieldNote } from "@/components/form/fieldNotes";
 import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
 import { TextField } from "@/components/form/TextField";
@@ -22,7 +22,8 @@ import { resolvedMatchKeyName } from "@/features/channels/matchKeyName";
 import { nodeTypeSummary } from "@/features/channels/nodeTypeCopy";
 import {
   fieldMessages,
-  problemColor,
+  formatGraphProblem,
+  problemIdentity,
   type FieldMessage,
   type ProblemGraph,
 } from "@/features/channels/problemLabel";
@@ -43,7 +44,7 @@ type Props = {
   spec: NodeTypeSpec | null;
   schema: SchemaObject | null;
   editable: boolean;
-  problemLines?: readonly { text: string; severity: "error" | "warning" }[];
+  revealKey?: string | null;
   problems?: readonly GraphProblem[];
   graph?: ProblemGraph;
   upstream?: readonly UpstreamOutput[];
@@ -65,7 +66,7 @@ export function NodeConfigPanel({
   spec,
   schema,
   editable,
-  problemLines = [],
+  revealKey = null,
   problems = [],
   graph = EMPTY_GRAPH,
   upstream = [],
@@ -81,6 +82,26 @@ export function NodeConfigPanel({
   );
   const entityId = typeof data.config.entity_id === "string" ? data.config.entity_id : "";
   const head = useEntityHeadAttributes(entityId);
+  const attached = new Set<string>(fields.map((field) => field.key));
+  if (data.nodeType === "trigger.scheduled") {
+    attached.add("cron");
+    attached.add("interval_seconds");
+    attached.add("start_at");
+  }
+  if (data.config.mode === "delete") attached.delete("mapping");
+  const headerProblems = problems.filter((problem) => {
+    const headKey = problem.path[0];
+    return typeof headKey !== "string" || !attached.has(headKey);
+  });
+  const headerNotes = toNotes(
+    headerProblems.map((problem) => ({
+      text: formatGraphProblem(t, problem, graph, { nodeName: false }),
+      severity: problem.severity === "warning" ? ("warning" as const) : ("error" as const),
+    })),
+  );
+  const headerSignal = headerProblems.some((problem) => problemIdentity(problem) === revealKey)
+    ? revealKey
+    : null;
 
   const update = (patch: Partial<FlowNodeData>) => {
     onChange(nodeId, { ...data, ...patch });
@@ -97,7 +118,7 @@ export function NodeConfigPanel({
   };
 
   return (
-    <>
+    <FieldDisclosureContext.Provider value="quiet">
       <div className="channel-node-config__header">
         <Group justify="space-between" align="flex-start" wrap="nowrap" gap="xs">
           <Stack gap={4} style={{ flex: 1, minWidth: 0 }}>
@@ -120,16 +141,20 @@ export function NodeConfigPanel({
               </Text>
             ) : null}
           </Stack>
-          <CloseButton size="sm" aria-label={t("channels.node.close")} onClick={onClose} />
+          <Group gap={4} wrap="nowrap" align="flex-start">
+            {headerNotes.length > 0 ? (
+              <FieldMarks
+                label={data.name}
+                notes={headerNotes}
+                openSignal={headerSignal}
+              />
+            ) : null}
+            <CloseButton size="sm" aria-label={t("channels.node.close")} onClick={onClose} />
+          </Group>
         </Group>
       </div>
       <div className="channel-node-config__body">
         <Stack gap="sm">
-          {problemLines.map((line) => (
-            <Text key={line.text} c={problemColor(line.severity)} size="sm">
-              {line.text}
-            </Text>
-          ))}
           <SelectField
             editable={editable}
             label={t("channels.node.onError")}
@@ -146,10 +171,15 @@ export function NodeConfigPanel({
             <ScheduledCadenceFields
               config={data.config}
               editable={editable}
-              errors={{
-                cron: errorText(fieldMessages(t, problems, "cron", graph)),
-                interval_seconds: errorText(fieldMessages(t, problems, "interval_seconds", graph)),
-                start_at: errorText(fieldMessages(t, problems, "start_at", graph)),
+              notes={{
+                cron: toNotes(fieldMessages(t, problems, "cron", graph)),
+                interval_seconds: toNotes(fieldMessages(t, problems, "interval_seconds", graph)),
+                start_at: toNotes(fieldMessages(t, problems, "start_at", graph)),
+              }}
+              openSignal={{
+                cron: signalFor(problems, "cron", revealKey),
+                interval_seconds: signalFor(problems, "interval_seconds", revealKey),
+                start_at: signalFor(problems, "start_at", revealKey),
               }}
               onChange={(config) => update({ config })}
             />
@@ -166,12 +196,13 @@ export function NodeConfigPanel({
               scope={data.config}
               upstream={upstream}
               messages={fieldMessages(t, problems, field.key, graph)}
+              openSignal={signalFor(problems, field.key, revealKey)}
               onChange={(value) => setConfig(field.key, value)}
             />
           ))}
         </Stack>
       </div>
-    </>
+    </FieldDisclosureContext.Provider>
   );
 }
 
@@ -187,6 +218,7 @@ function ConfigField({
   scope,
   upstream = [],
   messages = [],
+  openSignal = null,
   onChange,
 }: {
   field: FieldSpec;
@@ -200,40 +232,30 @@ function ConfigField({
   scope: Record<string, unknown>;
   upstream?: readonly UpstreamOutput[];
   messages?: readonly FieldMessage[];
+  openSignal?: string | null;
   onChange: (value: unknown) => void;
 }) {
   const t = useTranslate();
   const caption = t(`channels.config.fields.${field.key}`);
   const labelProps = labeled ? { label: caption } : { "aria-label": caption };
-  const error = errorText(messages);
-  const warnings = messages.filter((message) => message.severity === "warning");
-  const withWarnings = (control: ReactNode) => {
-    if (warnings.length === 0) return control;
-    return (
-      <>
-        {control}
-        {warnings.map((message, index) => (
-          <Text key={`${index}-${message.text}`} c={problemColor(message.severity)} size="xs">
-            {message.text}
-          </Text>
-        ))}
-      </>
-    );
-  };
+  const notes = toNotes(messages);
+  const bare = !labeled;
   if (field.kind === "sql_source") {
-    return withWarnings(
+    return (
       <SqlSourceField
         label={caption}
         description={field.description}
         value={value}
         editable={editable}
-        error={error}
+        notes={notes}
+        openSignal={openSignal}
+        bare={bare}
         onChange={onChange}
-      />,
+      />
     );
   }
   if (field.kind === "entity") {
-    return withWarnings(
+    return (
       <TargetEntityField
         label={caption}
         value={typeof value === "string" ? value : ""}
@@ -244,13 +266,15 @@ function ConfigField({
         editable={editable}
         cachedName=""
         cachedTableName=""
-        error={error}
+        notes={notes}
+        openSignal={openSignal}
+        bare={bare}
         onChange={(next) => onChange(next.target_entity_id)}
-      />,
+      />
     );
   }
   if (field.kind === "attribute") {
-    return withWarnings(
+    return (
       <EntityAttributeSelect
         entityId={entityId}
         label={labeled ? caption : undefined}
@@ -260,11 +284,13 @@ function ConfigField({
         exclude={exclude}
         attributes={head.attributes}
         failed={labeled ? head.failed : false}
-        error={error}
+        notes={notes}
+        openSignal={openSignal}
+        bare={bare}
         size={labeled ? undefined : "xs"}
         value={typeof value === "string" ? value : null}
         onChange={onChange}
-      />,
+      />
     );
   }
   if (field.kind === "enum") {
@@ -272,7 +298,7 @@ function ConfigField({
       value: option,
       label: optionLabel(t, field.key, option),
     }));
-    return withWarnings(
+    return (
       <SelectField
         editable={editable}
         {...labelProps}
@@ -280,14 +306,16 @@ function ConfigField({
         value={typeof value === "string" ? value : null}
         size={labeled ? undefined : "xs"}
         w={labeled ? undefined : "100%"}
-        error={error}
+        notes={notes}
+        openSignal={openSignal}
+        bare={bare}
         onChange={(next) => onChange(next ?? "")}
         allowDeselect={false}
-      />,
+      />
     );
   }
   if (field.kind === "objectList") {
-    return withWarnings(
+    return (
       <ObjectListEditor
         field={field}
         value={value}
@@ -296,18 +324,21 @@ function ConfigField({
         head={head}
         config={config}
         upstream={upstream}
-        error={error}
+        notes={notes}
+        openSignal={openSignal}
         onChange={onChange}
-      />,
+      />
     );
   }
   if (field.kind === "integer") {
-    return withWarnings(
+    return (
       <NumberField
         editable={editable}
         {...labelProps}
-        description={field.description || undefined}
-        error={error}
+        description={field.description}
+        notes={notes}
+        openSignal={openSignal}
+        bare={bare}
         min={field.minimum}
         max={field.maximum}
         value={typeof value === "number" ? value : ""}
@@ -316,7 +347,7 @@ function ConfigField({
           else if (field.nullable) onChange(null);
           else onChange(undefined);
         }}
-      />,
+      />
     );
   }
   if (field.kind === "template") {
@@ -331,28 +362,24 @@ function ConfigField({
         editable={editable}
         upstream={upstream}
         messages={messages}
+        openSignal={openSignal}
         onChange={onChange}
       />
     );
   }
-  return withWarnings(
+  return (
     <TextField
       editable={editable}
       {...labelProps}
       value={typeof value === "string" ? value : ""}
       size={labeled ? undefined : "xs"}
       w={labeled ? undefined : "100%"}
-      error={error}
+      notes={notes}
+      openSignal={openSignal}
+      bare={bare}
       onChange={(event) => onChange(event.currentTarget.value)}
-    />,
+    />
   );
-}
-
-function errorText(messages: readonly FieldMessage[]): string | undefined {
-  const lines = messages
-    .filter((message) => message.severity !== "warning")
-    .map((message) => message.text);
-  return lines.length > 0 ? lines.join("; ") : undefined;
 }
 
 function ObjectListEditor({
@@ -363,7 +390,8 @@ function ObjectListEditor({
   head,
   config,
   upstream = [],
-  error,
+  notes,
+  openSignal = null,
   onChange,
 }: {
   field: Extract<FieldSpec, { kind: "objectList" }>;
@@ -373,7 +401,8 @@ function ObjectListEditor({
   head: HeadState;
   config: Record<string, unknown>;
   upstream?: readonly UpstreamOutput[];
-  error?: string;
+  notes: readonly FieldNote[];
+  openSignal?: string | null;
   onChange: (value: unknown) => void;
 }) {
   const t = useTranslate();
@@ -397,9 +426,30 @@ function ObjectListEditor({
   return (
     <Stack gap="xs">
       <Group justify="space-between">
-        <Text size="sm" fw={500}>
-          {label}
-        </Text>
+        <Group gap={4} wrap="nowrap">
+          <Text size="sm" fw={500}>
+            {label}
+          </Text>
+          <FieldMarks
+            label={label}
+            description={field.description}
+            notes={[
+              ...notes,
+              ...(head.failed && field.fields.some((child) => child.kind === "attribute")
+                ? [{ text: t("channels.config.attributeLoadFailed"), tone: "error" as const }]
+                : []),
+              ...(showMatchHint
+                ? [
+                    {
+                      text: t("channels.config.mapping.matchKeyMissing", { name: matchName }),
+                      tone: "error" as const,
+                    },
+                  ]
+                : []),
+            ]}
+            openSignal={openSignal}
+          />
+        </Group>
         {editable ? (
           <Button
             type="button"
@@ -412,16 +462,6 @@ function ObjectListEditor({
           </Button>
         ) : null}
       </Group>
-      {error ? (
-        <Text c="red" size="xs">
-          {error}
-        </Text>
-      ) : null}
-      {head.failed && field.fields.some((child) => child.kind === "attribute") ? (
-        <Text c="red" size="xs">
-          {t("channels.config.attributeLoadFailed")}
-        </Text>
-      ) : null}
       {rows.length > 0 ? (
         <div
           className={[
@@ -454,11 +494,6 @@ function ObjectListEditor({
             />
           ))}
         </div>
-      ) : null}
-      {showMatchHint ? (
-        <Text c="red" size="xs">
-          {t("channels.config.mapping.matchKeyMissing", { name: matchName })}
-        </Text>
       ) : null}
     </Stack>
   );
@@ -559,6 +594,26 @@ function otherAttributeNames(
     if (typeof name === "string" && name !== "") names.push(name);
   });
   return names;
+}
+
+function toNotes(messages: readonly FieldMessage[]): FieldNote[] {
+  return messages.map((message) => ({
+    text: message.text,
+    tone: message.severity,
+  }));
+}
+
+function signalFor(
+  problems: readonly GraphProblem[],
+  fieldKey: string,
+  revealKey: string | null,
+): string | null {
+  if (!revealKey) return null;
+  return problems.some(
+    (problem) => problem.path[0] === fieldKey && problemIdentity(problem) === revealKey,
+  )
+    ? revealKey
+    : null;
 }
 
 function optionLabel(

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SchemaObject } from "@/features/channels/configSchemaForm";
 import type { FlowNodeData } from "@/features/channels/graphValidation";
+import { problemIdentity } from "@/features/channels/problemLabel";
 import type { GraphProblem } from "@/features/channels/types";
 import { listEntities, listVersions } from "@/features/entities/api";
 import type { EntityAttribute, EntityVersion } from "@/features/entities/types";
@@ -44,7 +45,11 @@ const LABELS: Record<string, string> = {
   "channels.template.resultString":
     "The result type is string. Quotes inside an expression are not part of the result.",
   "channels.template.ruleText": "The whole text is the value. Quotes are not needed.",
+  "channels.config.fields.sql": "SQL",
+  "form.field.description": "Description",
+  "form.field.status": "Problems",
   "problems.CHANNEL_NODE_CONFIG_INVALID": "A node configuration is invalid",
+  "problems.CHANNEL_GRAPH_UNREACHABLE": "A node is unreachable from the trigger",
   "problems.CHANNEL_TEMPLATE_TYPE_UNKNOWN": "Checked at run time",
   "problems.CHANNEL_EXPRESSION_INVALID": "A template expression does not parse",
 };
@@ -189,12 +194,13 @@ function renderPanel(
   onChange = vi.fn(),
   problems: GraphProblem[] = [],
   editable = true,
+  revealKey: string | null = null,
 ) {
   return import("@/features/channels/NodeConfigPanel").then(({ NodeConfigPanel }) => {
     render(
       createElement(
         MantineProvider,
-        null,
+        { env: "test" },
         createElement(NodeConfigPanel, {
           nodeId: "n1",
           data,
@@ -202,6 +208,7 @@ function renderPanel(
           schema,
           editable,
           problems,
+          revealKey,
           onClose: vi.fn(),
           onChange,
         }) as ReactNode,
@@ -265,6 +272,43 @@ describe("NodeConfigPanel grids", () => {
     expect(screen.getAllByRole("combobox", { name: "Attribute" })).toHaveLength(2);
     expect(screen.getAllByRole("textbox", { name: "Source key" })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "Remove" })).toHaveLength(2);
+  });
+
+  it("puts a mapping cell problem on the mapping label and leaves the cell unmarked", async () => {
+    await renderPanel(
+      WRITE,
+      node({
+        entity_id: "ent_1",
+        mode: "upsert",
+        match_key: null,
+        source: "rows",
+        mapping: [{ attribute: "sku", key: "sku" }],
+        on_incompatible_head: "fail",
+      }),
+      vi.fn(),
+      [
+        {
+          code: "CHANNEL_NODE_CONFIG_INVALID",
+          node_id: "n1",
+          edge_id: null,
+          path: ["mapping", 0, "attribute"],
+          detail: "'' should be non-empty",
+        },
+      ],
+    );
+
+    const cell = screen.getAllByRole("combobox", { name: "Attribute" })[0];
+    expect(cell?.getAttribute("aria-invalid")).not.toBe("true");
+    expect(screen.queryByText(/should be non-empty/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Mapping Problems" }));
+    expect(
+      screen.getByText(
+        "A node configuration is invalid: mapping.0.attribute — '' should be non-empty",
+      ),
+    ).toBeTruthy();
+    expect(document.querySelector(".channel-config-grid")?.textContent ?? "").not.toContain(
+      "should be non-empty",
+    );
   });
 
   it("hides the mapping grid when the mode is delete and keeps the rows", async () => {
@@ -347,7 +391,8 @@ describe("NodeConfigPanel grids", () => {
       }),
     );
 
-    expect(await screen.findByText("Mapping must include sku")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Mapping Problems" }));
+    expect(screen.getByText("Mapping must include sku")).toBeTruthy();
   });
 
   it("keeps a repeated filter attribute available on every row", async () => {
@@ -407,12 +452,23 @@ describe("NodeConfigPanel integers", () => {
       ],
     );
 
-    expect(screen.getByText("Seconds before the statement is cancelled. Default 30.")).toBeTruthy();
+    const timeout = screen.getByRole("textbox", { name: "Statement timeout" });
+    expect(timeout.closest(".field-chrome")?.textContent ?? "").not.toContain(
+      "Seconds before the statement is cancelled",
+    );
     expect(
-      screen.getByText(
+      screen.queryByText(
         "A node configuration is invalid: statement_timeout_sec — None is not of type 'integer'",
       ),
-    ).toBeTruthy();
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Statement timeout Description" }));
+    expect(screen.getByText("Seconds before the statement is cancelled. Default 30.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Statement timeout Problems" }));
+    expect(
+      screen.getAllByText(
+        "A node configuration is invalid: statement_timeout_sec — None is not of type 'integer'",
+      ),
+    ).toHaveLength(1);
 
     fireEvent.change(screen.getByRole("textbox", { name: "Statement timeout" }), {
       target: { value: "" },
@@ -420,6 +476,29 @@ describe("NodeConfigPanel integers", () => {
     expect(onChange).toHaveBeenCalled();
     const next = onChange.mock.calls.at(-1)?.[1] as FlowNodeData;
     expect(next.config).not.toHaveProperty("statement_timeout_sec");
+  });
+
+  it("keeps a node-level problem on the title and opens it from the problem list", async () => {
+    const problem: GraphProblem = {
+      code: "CHANNEL_GRAPH_UNREACHABLE",
+      node_id: "n1",
+      edge_id: null,
+      path: [],
+      detail: "Node is not reachable",
+    };
+    await renderPanel(
+      { type: "object", properties: {} },
+      node({}),
+      vi.fn(),
+      [problem],
+      true,
+      problemIdentity(problem),
+    );
+
+    expect(document.querySelector(".channel-node-config__body")?.textContent ?? "").not.toContain(
+      "A node is unreachable from the trigger",
+    );
+    expect(screen.getByText("A node is unreachable from the trigger")).toBeTruthy();
   });
 });
 
@@ -446,6 +525,8 @@ describe("NodeConfigPanel display mode", () => {
     );
 
     expect(screen.queryByRole("button", { name: "Insert calculation" })).toBeNull();
+    expect(screen.queryByText("The query")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "SQL Description" }));
     expect(screen.getByText("The query")).toBeTruthy();
     const content = document.querySelector(".cm-content");
     expect(content?.getAttribute("contenteditable")).toBe("false");
@@ -476,6 +557,11 @@ describe("NodeConfigPanel display mode", () => {
       },
     ]);
 
+    const sqlField = document.querySelector(".channel-template-field");
+    expect(sqlField?.textContent ?? "").not.toContain(
+      "The result type is string. Quotes inside an expression are not part of the result.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "SQL Problems" }));
     expect(
       screen.getByText(
         "The result type is string. Quotes inside an expression are not part of the result.",
@@ -510,6 +596,7 @@ describe("NodeConfigPanel display mode", () => {
       "error",
     );
     expect(document.querySelector(".cm-content")?.getAttribute("aria-invalid")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "SQL Problems" }));
     expect(
       screen.getByText(
         "Checked at run time: sql — Template result type is not known until the node runs",
@@ -520,6 +607,9 @@ describe("NodeConfigPanel display mode", () => {
         "A template expression does not parse: sql — Template expression does not parse",
       ),
     ).toBeTruthy();
+    expect(document.querySelector(".channel-template-field__editor")?.textContent ?? "").not.toContain(
+      "A template expression does not parse",
+    );
   });
 
   it("shows an unclosed expression before a problem is attached", async () => {
@@ -536,6 +626,8 @@ describe("NodeConfigPanel display mode", () => {
       node({ sql: "{{ " }, "read.sql"),
     );
 
+    expect(screen.queryByText("A template expression does not parse")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "SQL Problems" }));
     expect(screen.getByText("A template expression does not parse")).toBeTruthy();
     expect(document.querySelector(".channel-template-field__editor")?.getAttribute("data-severity")).toBeNull();
   });

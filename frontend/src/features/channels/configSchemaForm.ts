@@ -16,7 +16,7 @@ export type FieldSpec =
   | { kind: "enum"; key: string; required: boolean; options: string[] }
   | { kind: "entity"; key: string; required: boolean }
   | { kind: "attribute"; key: string; required: boolean; allowEmpty: boolean }
-  | { kind: "objectList"; key: string; required: boolean; fields: FieldSpec[] }
+  | { kind: "objectList"; key: string; required: boolean; description: string; fields: FieldSpec[] }
   | { kind: "json"; key: string; required: boolean }
   | { kind: "sql_source"; key: string; required: boolean; description: string }
   | {
@@ -107,7 +107,7 @@ function fieldFor(key: string, schema: SchemaObject, required: boolean): FieldSp
       item && (item.type === "object" || item.properties)
         ? fieldsFromSchema(item)
         : [];
-    return { kind: "objectList", key, required, fields };
+    return { kind: "objectList", key, required, description: schema.description ?? "", fields };
   }
   return { kind: "string", key, required };
 }

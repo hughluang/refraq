@@ -603,15 +603,8 @@ function ChannelCanvasBody({
   const selected = nodes.find((node) => node.id === configNodeId) ?? null;
   const selectedSpec = catalog.find((item) => item.type === selected?.data.nodeType);
   const labelGraph = problemGraphOf(nodes, edges);
-  const problemLines =
-    selected == null
-      ? []
-      : problems
-          .filter((problem) => problem.node_id === selected.id)
-          .map((problem) => ({
-            text: formatGraphProblem(t, problem, labelGraph, { nodeName: false }),
-            severity: problem.severity ?? "error",
-          }));
+  const revealKey =
+    selected != null && highlight?.nodeId === selected.id ? highlight.key : null;
   const outputSchemas = new Map(
     ports
       .filter((port) => port.direction === "output" && port.port === "main")
@@ -804,7 +797,7 @@ function ChannelCanvasBody({
                   spec={selectedSpec ?? null}
                   schema={(selectedSpec?.config_schema as SchemaObject | undefined) ?? null}
                   editable={editable}
-                  problemLines={problemLines}
+                  revealKey={revealKey}
                   problems={problems.filter((problem) => problem.node_id === selected.id)}
                   graph={labelGraph}
                   upstream={upstream}

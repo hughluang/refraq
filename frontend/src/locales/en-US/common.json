@@ -649,6 +649,8 @@
   "common.save": "Save",
   "form.value.yes": "Yes",
   "form.value.no": "No",
+  "form.field.description": "Description",
+  "form.field.status": "Problems",
   "form.cron.frequency": "Frequency",
   "form.cron.frequency.minutes": "Every N minutes",
   "form.cron.frequency.hours": "Every N hours",
