@@ -301,74 +301,22 @@
   gap: 4px;
 }
 
-.channel-template-field__editor {
-  position: relative;
-}
-
-.channel-template-field__highlight,
-.channel-template-field__input,
-.channel-template-field__readonly {
-  box-sizing: border-box;
+.channel-template-field__editor .cm-editor {
   width: 100%;
-  margin: 0;
-  padding: 8px;
-  border: 1px solid var(--mantine-color-default-border);
-  border-radius: var(--mantine-radius-default);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: var(--mantine-font-size-sm);
-  line-height: 1.45;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 
-.channel-template-field__highlight {
-  min-height: 4.5rem;
-  color: var(--mantine-color-text);
-  pointer-events: none;
+.channel-template-field__editor[data-severity="error"] .cm-editor {
+  border-color: var(--mantine-color-red-filled);
 }
 
-.channel-template-field__input {
-  position: absolute;
-  inset: 0;
-  height: 100%;
-  color: transparent;
-  caret-color: var(--mantine-color-text);
-  background: transparent;
-  resize: none;
+.channel-template-field__editor[data-severity="warning"] .cm-editor {
+  border-color: var(--mantine-color-yellow-6);
 }
 
-.channel-template-field__input:focus {
-  outline: 2px solid var(--mantine-primary-color-filled);
-  outline-offset: 1px;
-}
-
-.channel-template-field__mark {
+.channel-template-field__delim {
   color: var(--mantine-color-blue-filled);
 }
 
-.channel-template-field__readonly {
-  min-height: 2.5rem;
-}
-
-.channel-template-field__menu {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--mantine-color-default-border);
-  border-radius: var(--mantine-radius-default);
-  background: var(--mantine-color-body);
-}
-
-.channel-template-field__option {
-  padding: 4px 8px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: var(--mantine-font-size-xs);
-  text-align: start;
-  cursor: pointer;
-}
-
-.channel-template-field__option:hover {
-  background: var(--mantine-color-default-hover);
+.channel-template-field__ref {
+  color: var(--mantine-color-grape-filled);
 }

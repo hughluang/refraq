@@ -269,7 +269,10 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
     sql = next(item for item in items if item["type"] == "read.sql")
     assert "x-refraq-ref" in write["config_schema"]["properties"]["entity_id"]
     assert "x-refraq-template" in write["config_schema"]["properties"]["source"]
-    assert "x-refraq-template" in sql["config_schema"]["properties"]["sql"]
+    sql_field = sql["config_schema"]["properties"]["sql"]
+    assert "x-refraq-template" in sql_field
+    assert "x-refraq-ref" not in sql_field
+    assert "Quote literals in the statement." in sql_field["description"]
     assert sql["config_schema"]["properties"]["source"]["x-refraq-ref"] == "sql_source"
     assert "source" in sql["config_schema"]["required"]
 

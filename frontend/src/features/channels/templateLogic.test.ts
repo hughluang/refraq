@@ -1,12 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  applyCompletion,
-  completionLabels,
-  completionQuery,
-  hasCalculation,
   outputPaths,
   resolvedText,
+  templateCompletions,
   templatePreview,
   templateRule,
   upstreamOutputs,
@@ -16,7 +13,6 @@ const LIST = { type: "array", items: { type: "object" } } as const;
 
 describe("templatePreview", () => {
   it("accepts static JSON for a list without braces", () => {
-    expect(hasCalculation('[{"sku": "BT-abc"}]')).toBe(false);
     expect(templatePreview('[{"sku": "BT-abc"}]', LIST).state).toBe("ok");
   });
 
@@ -24,12 +20,23 @@ describe("templatePreview", () => {
     expect(templatePreview("not-json", LIST).state).toBe("error");
   });
 
-  it("defers a calculation", () => {
-    expect(templatePreview('abc{{ "def" }}', { type: "string" }).state).toBe("deferred");
+  it("defers a whole expression and keeps a string concatenation typed", () => {
+    expect(templatePreview('{{ "def" }}', { type: "string" }).state).toBe("deferred");
+    expect(templatePreview('abc{{ "def" }}', { type: "string" }).state).toBe("string");
+    expect(templatePreview('[{"sku": "{{ 1 }}"}]', LIST).state).toBe("deferred");
   });
 
   it("treats an escaped brace as static text", () => {
-    expect(hasCalculation("\\{{ not code }}")).toBe(false);
+    expect(templatePreview("\\{{ not code }}", { type: "string" })).toEqual({
+      state: "ok",
+      value: "{{ not code }}",
+    });
+  });
+
+  it("marks an unclosed expression before a schema is known", () => {
+    expect(templatePreview("{{ self.read", { type: "string" }).state).toBe("invalid");
+    expect(templatePreview("{{  }}", null).state).toBe("invalid");
+    expect(templatePreview("hello", null).state).toBe("unknown");
   });
 
   it("keeps quoted text as the string value", () => {
@@ -58,23 +65,54 @@ describe("templatePreview", () => {
 
 describe("completion", () => {
   const upstream = [
-    { ref: "read_entity", paths: outputPaths({ type: "object", properties: { rows: {}, count: {} } }) },
+    {
+      ref: "read_entity",
+      name: "Read entity",
+      paths: outputPaths({ type: "object", properties: { rows: {}, count: {} } }),
+    },
   ];
 
-  it("suggests upstream refs after self.", () => {
-    const query = completionQuery("{{ self.", 8);
-    expect(query?.kind).toBe("ref");
-    expect(query ? completionLabels(query, upstream) : []).toEqual(["read_entity"]);
+  it("suggests upstream refs inside an expression and not in literal text", () => {
+    const inside = templateCompletions("{{ self.", 8, false, upstream);
+    expect(inside?.options).toEqual(["self.read_entity"]);
+    expect(templateCompletions("self.", 5, false, upstream)).toBeNull();
+    expect(templateCompletions("{{ ", 3, true, upstream)?.options).toEqual(["self.read_entity"]);
+    expect(templateCompletions("{{ ", 3, false, upstream)).toBeNull();
+    expect(templateCompletions('{{ "self.', 9, true, upstream)).toBeNull();
   });
 
-  it("suggests output fields and inserts the chosen path", () => {
+  it("suggests upstream display names inside a node key", () => {
+    const text = '{{ self.nodes["';
+    expect(templateCompletions(text, text.length, false, upstream)).toEqual({
+      from: 3,
+      options: ['self.nodes["Read entity"]'],
+    });
+    const partial = '{{ self.nodes["Hold';
+    expect(
+      templateCompletions(partial, partial.length, true, [
+        ...upstream,
+        { ref: "hold", name: "Hold", paths: ["output"] },
+      ])?.options,
+    ).toEqual(['self.nodes["Hold"]']);
+  });
+
+  it("suggests refs on an explicit invoke inside empty braces", () => {
+    const text = "{{  }}";
+    const found = templateCompletions(text, 3, true, upstream);
+    expect(found?.options).toEqual(["self.read_entity"]);
+    expect(templateCompletions(text, 3, false, upstream)).toBeNull();
+  });
+
+  it("suggests output fields from the start of the path", () => {
     const text = "{{ self.read_entity.output.";
-    const query = completionQuery(text, text.length);
-    expect(query?.kind).toBe("path");
-    expect(query ? completionLabels(query, upstream) : []).toEqual(["output", "output.rows", "output.count"]);
-    if (!query) return;
-    const applied = applyCompletion(text, text.length, query, "output.rows");
-    expect(applied.next).toBe("{{ self.read_entity.output.rows");
+    expect(templateCompletions(text, text.length, false, upstream)).toEqual({
+      from: 3,
+      options: [
+        "self.read_entity.output",
+        "self.read_entity.output.rows",
+        "self.read_entity.output.count",
+      ],
+    });
   });
 });
 
@@ -83,9 +121,9 @@ describe("upstreamOutputs", () => {
     const found = upstreamOutputs(
       "write",
       [
-        { id: "trigger", ref: "run_manually" },
-        { id: "read", ref: "read_entity" },
-        { id: "write", ref: "write_entity" },
+        { id: "trigger", ref: "run_manually", name: "Run" },
+        { id: "read", ref: "read_entity", name: "Read" },
+        { id: "write", ref: "write_entity", name: "Write" },
       ],
       [
         { source: "trigger", target: "read" },

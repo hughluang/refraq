@@ -106,6 +106,53 @@ describe("fieldsFromSchema", () => {
     });
   });
 
+  it("lets a template marker win over an unregistered sql ref", () => {
+    const fields = fieldsFromSchema({
+      type: "object",
+      properties: {
+        sql: {
+          type: "string",
+          description: "One statement.",
+          "x-refraq-template": { type: "string" },
+          "x-refraq-ref": "sql",
+        },
+      },
+    });
+    expect(fields[0]).toMatchObject({
+      kind: "template",
+      key: "sql",
+      description: "One statement.",
+    });
+  });
+
+  it("lets a template marker choose the control when an unregistered sql ref is also present", () => {
+    const fields = fieldsFromSchema({
+      type: "object",
+      properties: {
+        sql: {
+          type: "string",
+          description: "One statement.",
+          "x-refraq-template": { type: "string" },
+          "x-refraq-ref": "sql",
+        },
+      },
+    });
+    expect(fields[0]).toMatchObject({
+      kind: "template",
+      key: "sql",
+      description: "One statement.",
+    });
+    expect(defaultConfig({
+      type: "object",
+      properties: {
+        sql: {
+          "x-refraq-template": { type: "string" },
+          "x-refraq-ref": "sql",
+        },
+      },
+    }).sql).toBe("");
+  });
+
   it("treats a match key as an optional attribute", () => {
     const matchKey = fieldsFromSchema(WRITE).find((field) => field.key === "match_key");
     expect(matchKey).toEqual({

@@ -59,19 +59,23 @@ function lookupName(graph: ProblemGraph, nodeId: string): string | null {
   return name ? name : null;
 }
 
-export function fieldConstraint(
+export type FieldMessage = {
+  text: string;
+  severity: "error" | "warning";
+};
+
+export function fieldMessages(
+  t: Translate,
   problems: readonly GraphProblem[],
   fieldKey: string,
-): string | undefined {
-  const lines: string[] = [];
-  for (const problem of problems) {
-    const path = problem.path;
-    if (path[0] !== fieldKey) continue;
-    const rest = path.slice(1).map(String).join(".");
-    if (rest) lines.push(`${rest} — ${problem.detail}`);
-    else lines.push(problem.detail);
-  }
-  return lines.length > 0 ? lines.join("; ") : undefined;
+  graph: ProblemGraph,
+): FieldMessage[] {
+  return problems
+    .filter((problem) => problem.path[0] === fieldKey)
+    .map((problem) => ({
+      text: formatGraphProblem(t, problem, graph, { nodeName: false }),
+      severity: problem.severity === "warning" ? "warning" : "error",
+    }));
 }
 
 export function problemColor(severity: "error" | "warning" | undefined): "red" | "yellow" {

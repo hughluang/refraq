@@ -1306,6 +1306,8 @@
   "problems.JOB_WORKER_LOST": "执行作业的工作进程丢失",
   "channels.template.parsed": "静态值符合声明类型",
   "channels.template.parseFailed": "静态值不符合声明类型",
+  "channels.template.insert": "插入计算",
+  "channels.template.resultString": "结果类型是字符串。表达式里的引号不会留在结果里。",
   "channels.template.checkedAtRun": "通道运行时计算",
   "channels.template.resolved": "解析为：{{value}}",
   "channels.template.ruleText": "整段文本就是值，不需要引号",

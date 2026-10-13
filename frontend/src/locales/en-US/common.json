@@ -1306,6 +1306,8 @@
   "problems.JOB_WORKER_LOST": "The worker running this job was lost",
   "channels.template.parsed": "Static value matches the declared type",
   "channels.template.parseFailed": "Static value does not match the declared type",
+  "channels.template.insert": "Insert calculation",
+  "channels.template.resultString": "The result type is string. Quotes inside an expression are not part of the result.",
   "channels.template.checkedAtRun": "Calculated when the channel runs",
   "channels.template.resolved": "Resolves to {{value}}",
   "channels.template.ruleText": "The whole text is the value. Quotes are not needed.",

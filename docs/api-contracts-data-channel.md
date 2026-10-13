@@ -149,7 +149,7 @@ SQL configuration (`read.sql`):
 | Field | Rule |
 | --- | --- |
 | `source` | Required object. `{"kind":"entity"}` or `{"kind":"source","source_id":"<Source id>"}`. `kind` `entity` rejects `source_id`. `kind` `source` requires `source_id`. Absent or any other shape is `CHANNEL_NODE_CONFIG_INVALID`. Validate and publish do not default a missing source to the entity database. A `source_id` that does not resolve is `CHANNEL_REFERENCE_UNRESOLVED` |
-| `sql` | A template. Each `{{ }}` result is spliced as text. The rendered text must be exactly one statement; otherwise the node fails with `CHANNEL_SQL_NOT_ONE_STATEMENT` and the driver is not called. On the entity database, unqualified names resolve in schema `entity_data` |
+| `sql` | A template. Each `{{ }}` result is spliced as text, and the author quotes literals in the statement. The rendered text must be exactly one statement; otherwise the node fails with `CHANNEL_SQL_NOT_ONE_STATEMENT` and the driver is not called. On the entity database, unqualified names resolve in schema `entity_data` |
 | `statement_timeout_sec` | Integer seconds from 1 to 3600. Absent means 30 |
 
 A successful SQL execution returns `{rows, count, rowcount}`. `rows` is an array of objects and `count` is its length. Both are empty and 0 when the statement returns no result set. `rowcount` is an integer when the driver reports an affected-row count, otherwise `null`. More than 100000 rows fails the node with `CHANNEL_ITEM_LIMIT_EXCEEDED`. Text that is not exactly one statement fails the node with `CHANNEL_SQL_NOT_ONE_STATEMENT` before the driver runs. A database error fails the node with `CHANNEL_NODE_FAILED` and the database message.

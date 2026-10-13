@@ -413,7 +413,11 @@ def test_static_source_that_is_not_a_list_is_rejected() -> None:
         ],
         [_edge("ed_1", "nd_trigger", "nd_write")],
     )
-    assert "CHANNEL_TEMPLATE_TYPE_MISMATCH" in _codes(graph)
+    problems = validate(graph, FakeResolver({"ent_dst": SKU}))
+    mismatch = [
+        item for item in problems if item.code == "CHANNEL_TEMPLATE_TYPE_MISMATCH"
+    ]
+    assert [item.path for item in mismatch] == [("source",)]
 
 
 def test_expression_source_warns_until_run_time() -> None:
@@ -430,10 +434,10 @@ def test_expression_source_warns_until_run_time() -> None:
     )
     problems = validate(graph, FakeResolver({"ent_src": SKU, "ent_dst": SKU}))
     assert [item.code for item in problems if item.severity == "error"] == []
-    assert any(
-        item.code == "CHANNEL_TEMPLATE_TYPE_UNKNOWN" and item.severity == "warning"
-        for item in problems
-    )
+    unknown = [
+        item for item in problems if item.code == "CHANNEL_TEMPLATE_TYPE_UNKNOWN"
+    ]
+    assert [(item.severity, item.path) for item in unknown] == [("warning", ("source",))]
 
 
 def test_expression_must_name_an_upstream_node() -> None:
@@ -444,7 +448,78 @@ def test_expression_must_name_an_upstream_node() -> None:
         ],
         [_edge("ed_1", "nd_trigger", "nd_write")],
     )
-    assert "CHANNEL_TEMPLATE_REF_INVALID" in _codes(graph)
+    problems = validate(graph, FakeResolver({"ent_dst": SKU}))
+    invalid = [item for item in problems if item.code == "CHANNEL_TEMPLATE_REF_INVALID"]
+    assert [item.path for item in invalid] == [("source",)]
+
+
+def test_template_problem_names_each_property() -> None:
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node(
+                "nd_var",
+                "state.variable",
+                "Counter",
+                {"operation": "set", "name": "{{", "value": "not-json"},
+            ),
+        ],
+        [_edge("ed_1", "nd_trigger", "nd_var")],
+    )
+    problems = validate(graph, FakeResolver())
+    named = {
+        item.code: item.path
+        for item in problems
+        if item.code
+        in {"CHANNEL_EXPRESSION_INVALID", "CHANNEL_TEMPLATE_TYPE_MISMATCH"}
+    }
+    assert named["CHANNEL_EXPRESSION_INVALID"] == ("name",)
+    assert named["CHANNEL_TEMPLATE_TYPE_MISMATCH"] == ("value",)
+
+
+def test_template_problem_path_includes_a_list_index() -> None:
+    nested = NodeType(
+        type_id="test.nested",
+        family="trigger",
+        label="Nested",
+        summary="Holds a list of templates.",
+        description="Test type. One template sits under a list index.",
+        entry=True,
+        inputs=(),
+        outputs=(PortSpec("main", "An object.", coarse_type="object"),),
+        config_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "value": {
+                                "type": "string",
+                                "x-refraq-template": {"type": "string"},
+                            }
+                        },
+                    },
+                }
+            },
+            "required": [],
+        },
+    )
+    graph = _graph(
+        [
+            _node(
+                "nd_nested",
+                "test.nested",
+                "Nested",
+                {"items": [{"value": "{{"}]},
+            )
+        ]
+    )
+    problems = validate(graph, FakeResolver(), [*list_node_types(), nested])
+    invalid = [item for item in problems if item.code == "CHANNEL_EXPRESSION_INVALID"]
+    assert [item.path for item in invalid] == [("items", 0, "value")]
 
 
 def test_incompatible_coarse_port_types() -> None:

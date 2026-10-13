@@ -18,7 +18,6 @@ export type FieldSpec =
   | { kind: "attribute"; key: string; required: boolean; allowEmpty: boolean }
   | { kind: "objectList"; key: string; required: boolean; fields: FieldSpec[] }
   | { kind: "json"; key: string; required: boolean }
-  | { kind: "sql"; key: string; required: boolean; description: string }
   | { kind: "sql_source"; key: string; required: boolean; description: string }
   | {
       kind: "integer";
@@ -68,9 +67,6 @@ export function omitUnsetIntegers(
 }
 
 function fieldFor(key: string, schema: SchemaObject, required: boolean): FieldSpec {
-  if (schema["x-refraq-ref"] === "sql") {
-    return { kind: "sql", key, required, description: schema.description ?? "" };
-  }
   if (schema["x-refraq-ref"] === "sql_source") {
     return { kind: "sql_source", key, required, description: schema.description ?? "" };
   }
@@ -150,7 +146,6 @@ function defaultValue(field: FieldSpec): unknown {
       return [];
     case "json":
       return {};
-    case "sql":
     case "template":
       return "";
     case "sql_source":

@@ -195,14 +195,16 @@ def _expression_problems(
             continue
         node_id = str(node["id"])
         upstream = ancestors.get(node_id, set())
-        for text, value_schema in _template_fields(
+        for text, value_schema, path in _template_fields(
             spec.config_schema,
             node["config"],
             None,
             resolver,
         ):
             problems.extend(
-                _template_problems(text, value_schema, node_id, node, upstream, by_id)
+                _template_problems(
+                    text, value_schema, node_id, node, upstream, by_id, path
+                )
             )
     return problems
 
@@ -214,6 +216,7 @@ def _template_problems(
     node: Mapping[str, Any],
     upstream: set[str],
     by_id: dict[str, dict[str, Any]],
+    path: tuple[str | int, ...],
 ) -> list[Problem]:
     try:
         template = parse(text)
@@ -223,6 +226,7 @@ def _template_problems(
                 "CHANNEL_EXPRESSION_INVALID",
                 "Template expression does not parse",
                 node_id=node_id,
+                path=path,
             )
         ]
     problems: list[Problem] = []
@@ -236,6 +240,7 @@ def _template_problems(
                     "CHANNEL_TEMPLATE_REF_INVALID",
                     f"Template names a node that is not upstream: {ref}",
                     node_id=node_id,
+                    path=path,
                 )
             )
     for name in template.node_names:
@@ -246,6 +251,7 @@ def _template_problems(
                     "CHANNEL_TEMPLATE_REF_INVALID",
                     f"Template names a node that is not upstream: {name}",
                     node_id=node_id,
+                    path=path,
                 )
             )
     del node
@@ -259,6 +265,7 @@ def _template_problems(
                 "CHANNEL_TEMPLATE_TYPE_MISMATCH",
                 "Template value does not match the declared type",
                 node_id=node_id,
+                path=path,
             )
         )
         return problems
@@ -268,6 +275,7 @@ def _template_problems(
                 "CHANNEL_TEMPLATE_TYPE_UNKNOWN",
                 "Template result type is not known until the node runs",
                 node_id=node_id,
+                path=path,
                 severity="warning",
             )
         )
@@ -279,11 +287,12 @@ def _template_fields(
     value: Any,
     entity_id: str | None,
     resolver: ReferenceResolver,
-) -> list[tuple[str, dict[str, Any] | None]]:
-    found: list[tuple[str, dict[str, Any] | None]] = []
+    path: tuple[str | int, ...] = (),
+) -> list[tuple[str, dict[str, Any] | None, tuple[str | int, ...]]]:
+    found: list[tuple[str, dict[str, Any] | None, tuple[str | int, ...]]] = []
     marker = schema.get("x-refraq-template")
     if isinstance(marker, dict) and isinstance(value, str):
-        found.append((value, _declared_schema(marker, None, entity_id, resolver)))
+        found.append((value, _declared_schema(marker, None, entity_id, resolver), path))
     if schema.get("type") == "object" and isinstance(value, dict):
         properties = schema.get("properties")
         if isinstance(properties, dict):
@@ -307,15 +316,24 @@ def _template_fields(
                             _declared_schema(
                                 nested_marker, value, local_entity, resolver
                             ),
+                            (*path, str(key)),
                         )
                     )
                     continue
-                found.extend(_template_fields(subschema, item, local_entity, resolver))
+                found.extend(
+                    _template_fields(
+                        subschema, item, local_entity, resolver, (*path, str(key))
+                    )
+                )
     if schema.get("type") == "array" and isinstance(value, list):
         item_schema = schema.get("items")
         if isinstance(item_schema, dict):
-            for item in value:
-                found.extend(_template_fields(item_schema, item, entity_id, resolver))
+            for index, item in enumerate(value):
+                found.extend(
+                    _template_fields(
+                        item_schema, item, entity_id, resolver, (*path, index)
+                    )
+                )
     return found
 
 

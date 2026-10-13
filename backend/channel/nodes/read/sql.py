@@ -80,9 +80,11 @@ NODE_TYPE = NodeType(
                 "type": "string",
                 "minLength": 1,
                 "title": "SQL",
-                "description": "One SQL statement. {{ }} expressions are spliced as text.",
+                "description": (
+                    "One SQL statement. Each {{ }} result is spliced as text. "
+                    "Quote literals in the statement."
+                ),
                 "x-refraq-template": {"type": "string"},
-                "x-refraq-ref": "sql",
             },
             "statement_timeout_sec": {
                 "type": "integer",

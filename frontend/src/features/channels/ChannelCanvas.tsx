@@ -622,7 +622,7 @@ function ChannelCanvasBody({
       ? []
       : upstreamOutputs(
           selected.id,
-          nodes.map((node) => ({ id: node.id, ref: node.data.ref })),
+          nodes.map((node) => ({ id: node.id, ref: node.data.ref, name: node.data.name })),
           edges.map((edge) => ({ source: edge.source, target: edge.target })),
           outputSchemas,
         );
@@ -806,6 +806,7 @@ function ChannelCanvasBody({
                   editable={editable}
                   problemLines={problemLines}
                   problems={problems.filter((problem) => problem.node_id === selected.id)}
+                  graph={labelGraph}
                   upstream={upstream}
                   onClose={clearSelection}
                   onChange={(nodeId, data) => {

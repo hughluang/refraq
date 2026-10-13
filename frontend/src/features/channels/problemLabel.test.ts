@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  fieldConstraint,
+  fieldMessages,
   formatGraphProblem,
   problemIdentity,
   type ProblemGraph,
@@ -10,6 +10,7 @@ import type { GraphProblem } from "@/features/channels/types";
 
 const t = (key: string, options?: Record<string, unknown>) => {
   if (key === "problems.CHANNEL_NODE_CONFIG_INVALID") return "Invalid node configuration";
+  if (key === "problems.CHANNEL_TEMPLATE_TYPE_UNKNOWN") return "Checked at run time";
   if (key === "channels.canvas.problemEdge") return `${options?.source} → ${options?.target}`;
   return key;
 };
@@ -127,19 +128,39 @@ describe("formatGraphProblem", () => {
   });
 });
 
-describe("fieldConstraint", () => {
-  it("binds the first path segment to that field and keeps deeper segments in the text", () => {
+describe("fieldMessages", () => {
+  it("uses the problem-list sentence and keeps severity", () => {
     const problems = [
       problem(["statement_timeout_sec"], "None is not of type 'integer'"),
       problem(["mapping", 0, "attribute"], "'attribute' is a required property"),
+      {
+        code: "CHANNEL_TEMPLATE_TYPE_UNKNOWN",
+        node_id: "nd_read",
+        edge_id: null,
+        path: ["value"],
+        detail: "Template result type is not known until the node runs",
+        severity: "warning" as const,
+      },
     ];
-    expect(fieldConstraint(problems, "statement_timeout_sec")).toBe(
-      "None is not of type 'integer'",
-    );
-    expect(fieldConstraint(problems, "mapping")).toBe(
-      "0.attribute — 'attribute' is a required property",
-    );
-    expect(fieldConstraint(problems, "sql")).toBeUndefined();
+    expect(fieldMessages(t, problems, "statement_timeout_sec", graph)).toEqual([
+      {
+        text: "Invalid node configuration: statement_timeout_sec — None is not of type 'integer'",
+        severity: "error",
+      },
+    ]);
+    expect(fieldMessages(t, problems, "mapping", graph)).toEqual([
+      {
+        text: "Invalid node configuration: mapping.0.attribute — 'attribute' is a required property",
+        severity: "error",
+      },
+    ]);
+    expect(fieldMessages(t, problems, "value", graph)).toEqual([
+      {
+        text: "Checked at run time: value — Template result type is not known until the node runs",
+        severity: "warning",
+      },
+    ]);
+    expect(fieldMessages(t, problems, "sql", graph)).toEqual([]);
   });
 });
 

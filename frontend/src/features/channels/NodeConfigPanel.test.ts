@@ -40,6 +40,13 @@ const LABELS: Record<string, string> = {
   "channels.config.options.mode.delete": "Delete",
   "channels.config.options.op.eq": "Equals",
   "channels.config.options.on_incompatible_head.fail": "Fail",
+  "channels.template.insert": "Insert calculation",
+  "channels.template.resultString":
+    "The result type is string. Quotes inside an expression are not part of the result.",
+  "channels.template.ruleText": "The whole text is the value. Quotes are not needed.",
+  "problems.CHANNEL_NODE_CONFIG_INVALID": "A node configuration is invalid",
+  "problems.CHANNEL_TEMPLATE_TYPE_UNKNOWN": "Checked at run time",
+  "problems.CHANNEL_EXPRESSION_INVALID": "A template expression does not parse",
 };
 
 vi.mock("@refinedev/core", () => ({
@@ -152,6 +159,28 @@ function stubDomApis() {
     disconnect() {}
   }
   globalThis.ResizeObserver = ResizeObserverStub;
+  const rect = () => ({
+    x: 0,
+    y: 0,
+    top: 0,
+    left: 0,
+    bottom: 0,
+    right: 0,
+    width: 0,
+    height: 0,
+    toJSON() {
+      return {};
+    },
+  });
+  document.elementFromPoint = () => null;
+  Range.prototype.getBoundingClientRect = rect;
+  Range.prototype.getClientRects = () => ({
+    length: 0,
+    item: () => null,
+    [Symbol.iterator]: function* empty() {
+      yield* [];
+    },
+  }) as unknown as () => DOMRectList;
 }
 
 function renderPanel(
@@ -379,7 +408,11 @@ describe("NodeConfigPanel integers", () => {
     );
 
     expect(screen.getByText("Seconds before the statement is cancelled. Default 30.")).toBeTruthy();
-    expect(screen.getByText("None is not of type 'integer'")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "A node configuration is invalid: statement_timeout_sec — None is not of type 'integer'",
+      ),
+    ).toBeTruthy();
 
     fireEvent.change(screen.getByRole("textbox", { name: "Statement timeout" }), {
       target: { value: "" },
@@ -394,15 +427,15 @@ describe("NodeConfigPanel display mode", () => {
   beforeEach(stubDomApis);
   afterEach(cleanup);
 
-  it("shows SQL as preformatted text and no textbox", async () => {
+  it("shows a template statement as the same document when the panel is closed for editing", async () => {
     await renderPanel(
       {
         type: "object",
         properties: {
           sql: {
             type: "string",
-            "x-refraq-ref": "sql",
             description: "The query",
+            "x-refraq-template": { type: "string" },
           },
         },
       },
@@ -412,10 +445,98 @@ describe("NodeConfigPanel display mode", () => {
       false,
     );
 
-    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Insert calculation" })).toBeNull();
     expect(screen.getByText("The query")).toBeTruthy();
-    expect(document.querySelector(".channel-template-field__readonly")?.textContent).toBe(
-      "select\n1",
+    const content = document.querySelector(".cm-content");
+    expect(content?.getAttribute("contenteditable")).toBe("false");
+    expect(
+      [...document.querySelectorAll(".cm-line")].map((line) => line.textContent),
+    ).toEqual(["select", "1"]);
+  });
+
+  it("states the splice rule and paints a warning apart from an error", async () => {
+    const schema: SchemaObject = {
+      type: "object",
+      properties: {
+        sql: {
+          type: "string",
+          description: "The query",
+          "x-refraq-template": { type: "string" },
+        },
+      },
+    };
+    await renderPanel(schema, node({ sql: 'select {{ "abc" }}' }, "read.sql"), vi.fn(), [
+      {
+        code: "CHANNEL_TEMPLATE_TYPE_UNKNOWN",
+        node_id: "n1",
+        edge_id: null,
+        path: ["sql"],
+        detail: "Template result type is not known until the node runs",
+        severity: "warning",
+      },
+    ]);
+
+    expect(
+      screen.getByText(
+        "The result type is string. Quotes inside an expression are not part of the result.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("The whole text is the value. Quotes are not needed.")).toBeNull();
+    expect(document.querySelector(".channel-template-field__editor")?.getAttribute("data-severity")).toBe(
+      "warning",
     );
+    expect(document.querySelector(".cm-content")?.getAttribute("aria-invalid")).toBe("false");
+
+    cleanup();
+    await renderPanel(schema, node({ sql: "{{ 1 }}" }, "read.sql"), vi.fn(), [
+      {
+        code: "CHANNEL_TEMPLATE_TYPE_UNKNOWN",
+        node_id: "n1",
+        edge_id: null,
+        path: ["sql"],
+        detail: "Template result type is not known until the node runs",
+        severity: "warning",
+      },
+      {
+        code: "CHANNEL_EXPRESSION_INVALID",
+        node_id: "n1",
+        edge_id: null,
+        path: ["sql"],
+        detail: "Template expression does not parse",
+      },
+    ]);
+
+    expect(document.querySelector(".channel-template-field__editor")?.getAttribute("data-severity")).toBe(
+      "error",
+    );
+    expect(document.querySelector(".cm-content")?.getAttribute("aria-invalid")).toBe("true");
+    expect(
+      screen.getByText(
+        "Checked at run time: sql — Template result type is not known until the node runs",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "A template expression does not parse: sql — Template expression does not parse",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("shows an unclosed expression before a problem is attached", async () => {
+    await renderPanel(
+      {
+        type: "object",
+        properties: {
+          sql: {
+            type: "string",
+            "x-refraq-template": { type: "string" },
+          },
+        },
+      },
+      node({ sql: "{{ " }, "read.sql"),
+    );
+
+    expect(screen.getByText("A template expression does not parse")).toBeTruthy();
+    expect(document.querySelector(".channel-template-field__editor")?.getAttribute("data-severity")).toBeNull();
   });
 });
