@@ -655,7 +655,7 @@ function ChannelCanvasBody({
   };
 
   return (
-    <Stack gap="xs" flex={1} mih={0} w="100%">
+    <Stack gap={0} flex={1} mih={0} h="100%" w="100%" pos="relative">
         <CanvasEditableContext.Provider value={editable}>
         <CanvasCatalogContext.Provider value={catalog}>
         <div

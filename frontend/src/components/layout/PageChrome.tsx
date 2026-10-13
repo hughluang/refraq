@@ -13,6 +13,8 @@ type PageChromeProps = {
   description?: string;
   descriptionLineClamp?: number;
   actions?: ReactNode;
+  /** Lock the column to the viewport so a fill child can take the leftover height. */
+  fill?: boolean;
   children?: ReactNode;
 };
 
@@ -23,6 +25,7 @@ export function PageChrome({
   description,
   descriptionLineClamp,
   actions,
+  fill = false,
   children,
 }: PageChromeProps) {
   return (
@@ -31,7 +34,7 @@ export function PageChrome({
       flex={1}
       h="100%"
       mih={0}
-      style={{ overflow: "auto" }}
+      style={{ overflow: fill ? "hidden" : "auto" }}
     >
       <PageBreadcrumb />
       {actions ? (

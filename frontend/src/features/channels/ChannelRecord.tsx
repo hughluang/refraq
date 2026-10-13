@@ -2,14 +2,14 @@
 
 import {
   Badge,
+  Box,
   Button,
   Divider,
+  Drawer,
   Group,
   Modal,
   Stack,
   Switch,
-  Table,
-  Tabs,
   Text,
   Textarea,
   TextInput,
@@ -30,7 +30,6 @@ import {
 } from "react";
 
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
-import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageError } from "@/components/feedback/PageError";
 import { NumberField } from "@/components/form/NumberField";
@@ -46,7 +45,6 @@ import {
   getChannel,
   getDraft,
   listNodeTypes,
-  listVersions,
   patchChannel,
   previewPublish,
   publishChannel,
@@ -56,6 +54,7 @@ import {
 } from "@/features/channels/api";
 import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
 import { ChannelRuns } from "@/features/channels/ChannelRuns";
+import { ChannelVersions } from "@/features/channels/ChannelVersions";
 import type { Graph, GraphProblem, RefinedPort } from "@/features/channels/types";
 import {
   graphWithoutUnsetIntegers,
@@ -66,12 +65,11 @@ import {
 import { formatGraphProblem } from "@/features/channels/problemLabel";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { LEAVE_GUARD_ALLOW } from "@/hooks/leaveGuard";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { useLeaveGuard } from "@/hooks/useLeaveGuard";
 import { ApiError } from "@/lib/api";
 import { problemMessage } from "@/lib/problem";
 
-import type { Channel, ChannelVersion, Confirmation, NodeTypeSpec } from "@/features/channels/types";
+import type { Channel, Confirmation, NodeTypeSpec } from "@/features/channels/types";
 
 const FORM_ID = "channel-record-form";
 const NAME_MAX = 200;
@@ -168,7 +166,6 @@ function ChannelExisting({
   const t = useTranslate();
   const router = useRouter();
   const { open } = useNotification();
-  const formatInstant = useFormatInstant();
   const { data: canWrite } = useCan({
     resource: ModuleId.channels,
     action: ModuleAction.edit,
@@ -177,14 +174,13 @@ function ChannelExisting({
   const [graph, setGraph] = useState<Graph | null>(null);
   const [baseline, setBaseline] = useState("");
   const [revision, setRevision] = useState(1);
-  const [versions, setVersions] = useState<ChannelVersion[]>([]);
   const [catalog, setCatalog] = useState<NodeTypeSpec[]>([]);
   const [problems, setProblems] = useState<GraphProblem[]>([]);
   const [ports, setPorts] = useState<RefinedPort[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState("canvas");
+  const [panel, setPanel] = useState<"versions" | "runs" | null>(null);
   const [preview, setPreview] = useState<Confirmation | null>(null);
   const [publishRevision, setPublishRevision] = useState(1);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -220,13 +216,8 @@ function ChannelExisting({
     validateSeq.current += 1;
     setProblems([]);
     setPorts([]);
-    void Promise.all([
-      getChannel(channelId),
-      getDraft(channelId),
-      listVersions(channelId, { limit: 50 }),
-      listNodeTypes(),
-    ])
-      .then(([channelBody, draft, versionPage, types]) => {
+    void Promise.all([getChannel(channelId), getDraft(channelId), listNodeTypes()])
+      .then(([channelBody, draft, types]) => {
         if (cancelled) return;
         loadedChannelRef.current = channelId;
         arrivalRef.current = true;
@@ -235,7 +226,6 @@ function ChannelExisting({
         setDraftEpoch((epoch) => epoch + 1);
         setBaseline(JSON.stringify(draft.graph));
         setRevision(draft.draft_revision);
-        setVersions(versionPage.items);
         setCatalog(types.items);
         formRef.current.setValues({
           name: channelBody.channel.name,
@@ -264,7 +254,6 @@ function ChannelExisting({
 
   const writable = mode === "edit" && Boolean(canWrite?.can);
   const graphDirty = graph != null && JSON.stringify(graph) !== baseline;
-  const unsaved = writable && (form.isDirty() || graphDirty);
   const leaveGuard = useLeaveGuard({
     enabled: writable && (form.isDirty() || graphDirty),
     message: t("common.leaveUnsaved"),
@@ -328,7 +317,7 @@ function ChannelExisting({
     validateSeq.current += 1;
     setProblems(result.problems);
     setPorts(result.ports);
-    setTab("canvas");
+    setPanel(null);
     const firstError = result.problems.find((problem) => problem.severity !== "warning");
     open?.({
       type: "error",
@@ -432,7 +421,6 @@ function ChannelExisting({
       if (writable) await persist();
       await startRun(channelId, { target: "draft" });
       setRunOpen(false);
-      setTab("runs");
     })()
       .catch(catchFailure)
       .finally(() => setBusy(false));
@@ -442,9 +430,12 @@ function ChannelExisting({
   const showLifecycle = Boolean(canWrite?.can);
 
   const descriptionText = form.values.description.trim();
-  const descriptionLabel = writable
-    ? t("channels.details.edit")
-    : t("channels.details.view");
+  const versionLabel = channel.latest_version
+    ? `v${channel.latest_version.number}`
+    : t("channels.versions.unpublished");
+  const togglePanel = (next: "versions" | "runs") => {
+    setPanel((current) => (current === next ? null : next));
+  };
   const openDescription = () => {
     setDescriptionDraft(form.values.description);
     setTimeoutDraft(graph.settings.run_timeout_sec ?? "");
@@ -463,7 +454,21 @@ function ChannelExisting({
   };
 
   return (
+    // Above app chrome (100/101) and below modal (200) and popover (300).
+    <Box
+      flex={1}
+      h="100%"
+      mih={0}
+      style={{
+        position: "relative",
+        zIndex: 150,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}
+    >
     <PageChrome
+      fill
       title={form.values.name || channel.name}
       titleSlot={
         <ChannelNameHeading
@@ -481,26 +486,43 @@ function ChannelExisting({
             editable={writable && !busy}
             onToggle={() => form.setFieldValue("active", !form.values.active)}
           />
-          {unsaved ? (
-            <Badge variant="dot" color="orange" size="sm" tt="none">
-              {t("channels.unsaved")}
-            </Badge>
-          ) : null}
-          {writable || descriptionText || graph.settings.run_timeout_sec != null ? (
+          <Group gap={4} wrap="nowrap">
             <Button
               variant="subtle"
               size="compact-sm"
               color="gray"
               disabled={busy}
+              aria-expanded={panel === "versions"}
+              aria-label={t("channels.versions.open", { version: versionLabel })}
+              leftSection={<StackedPagesIcon />}
+              onClick={() => togglePanel("versions")}
+            >
+              {versionLabel}
+            </Button>
+            <Button
+              variant="subtle"
+              size="compact-sm"
+              color="gray"
+              disabled={busy}
+              aria-expanded={panel === "runs"}
+              leftSection={<ListIcon />}
+              onClick={() => togglePanel("runs")}
+            >
+              {t("channels.tabs.runs")}
+            </Button>
+            <Button
+              variant="subtle"
+              size="compact-sm"
+              color="gray"
+              disabled={busy}
+              leftSection={<SlidersIcon />}
               onClick={openDescription}
             >
-              {descriptionLabel}
+              {t("channels.details.title")}
             </Button>
-          ) : null}
+          </Group>
         </>
       }
-      description={descriptionText || undefined}
-      descriptionLineClamp={2}
       actions={
         <Group gap="xs" wrap="wrap" align="center">
           <Group gap="xs" wrap="nowrap" aria-label={t("channels.actions.navigation")}>
@@ -618,70 +640,15 @@ function ChannelExisting({
         }}
       />
       <FillColumn>
-      <Tabs
-        value={tab}
-        onChange={(value) => setTab(value ?? "canvas")}
-        keepMounted
-        style={{
-          flex: 1,
-          minHeight: 0,
-          display: "flex",
-          flexDirection: "column",
-        }}
-        styles={{
-          panel: {
-            flex: 1,
-            minHeight: 0,
-            overflow: "auto",
-            display: "flex",
-            flexDirection: "column",
-          },
-        }}
-      >
-        <Tabs.List>
-          <Tabs.Tab value="canvas">{t("channels.tabs.canvas")}</Tabs.Tab>
-          <Tabs.Tab value="versions">{t("channels.tabs.versions")}</Tabs.Tab>
-          <Tabs.Tab value="runs">{t("channels.tabs.runs")}</Tabs.Tab>
-        </Tabs.List>
-        <Tabs.Panel value="canvas" pt="md" style={{ overflow: "hidden" }}>
-          <ChannelCanvas
-            key={baseline}
-            graph={graph}
-            catalog={catalog}
-            editable={writable}
-            problems={problems}
-            ports={ports}
-            onChange={setGraph}
-          />
-        </Tabs.Panel>
-        <Tabs.Panel value="versions" pt="md">
-          {versions.length === 0 ? (
-            <EmptyState message={t("channels.versions.empty")} />
-          ) : (
-            <Table>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>{t("channels.versions.number")}</Table.Th>
-                  <Table.Th>{t("channels.versions.publisher")}</Table.Th>
-                  <Table.Th>{t("channels.versions.publishedAt")}</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {versions.map((version) => (
-                  <Table.Tr key={version.number}>
-                    <Table.Td>{version.number}</Table.Td>
-                    <Table.Td>{version.published_by_name ?? "—"}</Table.Td>
-                    <Table.Td>{formatInstant(version.published_at)}</Table.Td>
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
-          )}
-        </Tabs.Panel>
-        <Tabs.Panel value="runs" pt="md">
-          <ChannelRuns channelId={channelId} />
-        </Tabs.Panel>
-      </Tabs>
+        <ChannelCanvas
+          key={baseline}
+          graph={graph}
+          catalog={catalog}
+          editable={writable}
+          problems={problems}
+          ports={ports}
+          onChange={setGraph}
+        />
       </FillColumn>
       <Modal opened={runOpen} onClose={() => setRunOpen(false)} title={t("channels.run.open")}>
         <Stack gap="sm">
@@ -820,6 +787,44 @@ function ChannelExisting({
         }}
       />
     </PageChrome>
+    <Box
+      className="channel-record-overlays"
+      pos="absolute"
+      inset={0}
+      style={{ zIndex: 20, pointerEvents: "none" }}
+    >
+      <Drawer
+        opened={panel === "versions"}
+        onClose={() => setPanel(null)}
+        position="right"
+        size="xl"
+        withinPortal={false}
+        withOverlay={false}
+        lockScroll={false}
+        trapFocus={false}
+        zIndex={20}
+        title={t("channels.tabs.versions")}
+      >
+        {panel === "versions" ? (
+          <ChannelVersions channelId={channelId} reloadToken={reloadToken} />
+        ) : null}
+      </Drawer>
+      <Drawer
+        opened={panel === "runs"}
+        onClose={() => setPanel(null)}
+        position="right"
+        size="xl"
+        withinPortal={false}
+        withOverlay={false}
+        lockScroll={false}
+        trapFocus={false}
+        zIndex={20}
+        title={t("channels.tabs.runs")}
+      >
+        {panel === "runs" ? <ChannelRuns channelId={channelId} /> : null}
+      </Drawer>
+    </Box>
+    </Box>
   );
 }
 
@@ -988,6 +993,33 @@ function ChannelActiveStatus({
       onChange={onToggle}
       styles={{ body: { alignItems: "center" } }}
     />
+  );
+}
+
+function StackedPagesIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="3" y="4.5" width="8" height="8.5" rx="1" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M5 3.25h8.25A.75.75 0 0 1 14 4v8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ListIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M3 4.5h10M3 8h10M3 11.5h10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function SlidersIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M2.5 4.5h11M2.5 11.5h11" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <circle cx="6" cy="4.5" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <circle cx="10" cy="11.5" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
   );
 }
 
