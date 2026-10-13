@@ -1,6 +1,8 @@
 "use client";
 
-import { SegmentedControl, Text, type MantineSize } from "@mantine/core";
+import { SegmentedControl, type MantineSize } from "@mantine/core";
+
+import { FieldMode } from "@/components/form/FieldMode";
 
 export type SegmentOption = {
   value: string;
@@ -26,19 +28,17 @@ export function SegmentedField({
   fullWidth,
   "aria-label": ariaLabel,
 }: SegmentedFieldProps) {
-  if (!editable) {
-    const match = data.find((item) => item.value === value);
-    return <Text size="sm">{match?.label}</Text>;
-  }
-
+  const match = data.find((item) => item.value === value);
   return (
-    <SegmentedControl
-      data={data}
-      value={value ?? ""}
-      onChange={onChange}
-      size={size}
-      fullWidth={fullWidth}
-      aria-label={ariaLabel}
-    />
+    <FieldMode editable={editable} value={match?.label}>
+      <SegmentedControl
+        data={data}
+        value={value ?? ""}
+        onChange={onChange}
+        size={size}
+        fullWidth={fullWidth}
+        aria-label={ariaLabel}
+      />
+    </FieldMode>
   );
 }

@@ -3,6 +3,7 @@
 import { ActionIcon, Button, CloseButton, Group, Stack, Text, Textarea } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 
+import { FieldMode } from "@/components/form/FieldMode";
 import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
 import { TextField } from "@/components/form/TextField";
@@ -276,18 +277,27 @@ function ConfigField({
     );
   }
   if (field.kind === "sql") {
+    const text = typeof value === "string" ? value : "";
     return (
-      <Textarea
+      <FieldMode
+        editable={editable}
         label={labeled ? caption : undefined}
-        aria-label={labeled ? undefined : caption}
         description={field.description}
-        disabled={!editable}
-        error={error}
-        autosize
-        minRows={6}
-        value={typeof value === "string" ? value : ""}
-        onChange={(event) => onChange(event.currentTarget.value)}
-      />
+        value={
+          <pre className="channel-template-field__readonly">{text === "" ? "—" : text}</pre>
+        }
+      >
+        <Textarea
+          label={labeled ? caption : undefined}
+          aria-label={labeled ? undefined : caption}
+          description={field.description}
+          error={error}
+          autosize
+          minRows={6}
+          value={text}
+          onChange={(event) => onChange(event.currentTarget.value)}
+        />
+      </FieldMode>
     );
   }
   if (field.kind === "integer") {

@@ -1,10 +1,12 @@
 "use client";
 
-import { SegmentedControl, Stack } from "@mantine/core";
+import { Stack } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 
 import { CronField } from "@/components/form/CronField";
+import { FieldMode } from "@/components/form/FieldMode";
 import { NumberField } from "@/components/form/NumberField";
+import { SegmentedField } from "@/components/form/SegmentedField";
 import { TextField } from "@/components/form/TextField";
 
 type Props = {
@@ -21,17 +23,18 @@ export function ScheduledCadenceFields({ config, editable, errors, onChange }: P
   const cron = typeof config.cron === "string" ? config.cron : "0 * * * *";
   const seconds = typeof config.interval_seconds === "number" ? config.interval_seconds : 3600;
   const start = typeof config.start_at === "string" ? config.start_at : "";
+  const modes = [
+    { value: "cron", label: t("channels.config.cadence.cron") },
+    { value: "interval", label: t("channels.config.cadence.interval") },
+  ];
 
   return (
     <Stack gap="sm">
-      <SegmentedControl
+      <SegmentedField
+        editable={editable}
         fullWidth
-        disabled={!editable}
         value={mode}
-        data={[
-          { value: "cron", label: t("channels.config.cadence.cron") },
-          { value: "interval", label: t("channels.config.cadence.interval") },
-        ]}
+        data={modes}
         onChange={(next) => {
           if (next === "interval") {
             onChange({ ...config, cron: null, interval_seconds: seconds });
@@ -41,16 +44,18 @@ export function ScheduledCadenceFields({ config, editable, errors, onChange }: P
         }}
       />
       {mode === "cron" ? (
-        <CronField
+        <FieldMode
+          editable={editable}
           label={t("channels.config.cadence.cron")}
           value={cron}
-          error={errors?.cron}
-          onChange={
-            editable
-              ? (next) => onChange({ ...config, cron: next, interval_seconds: null })
-              : undefined
-          }
-        />
+        >
+          <CronField
+            label={t("channels.config.cadence.cron")}
+            value={cron}
+            error={errors?.cron}
+            onChange={(next) => onChange({ ...config, cron: next, interval_seconds: null })}
+          />
+        </FieldMode>
       ) : (
         <NumberField
           editable={editable}

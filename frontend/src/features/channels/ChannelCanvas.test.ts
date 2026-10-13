@@ -85,7 +85,11 @@ const nodeGraph: Graph = {
   settings: EMPTY_GRAPH.settings,
 };
 
-function renderCanvas(problems: GraphProblem[] = [], graph: Graph = EMPTY_GRAPH) {
+function renderCanvas(
+  problems: GraphProblem[] = [],
+  graph: Graph = EMPTY_GRAPH,
+  editable = true,
+) {
   return import("@/features/channels/ChannelCanvas").then(({ ChannelCanvas }) => {
     const element = (next: GraphProblem[]) =>
         createElement(
@@ -94,7 +98,7 @@ function renderCanvas(problems: GraphProblem[] = [], graph: Graph = EMPTY_GRAPH)
           createElement(ChannelCanvas, {
           graph,
           catalog: [spec],
-          editable: true,
+          editable,
           problems: next,
           onChange: vi.fn(),
         }),
@@ -121,6 +125,7 @@ describe("ChannelCanvas controls", () => {
     await renderCanvas();
 
     const panel = screen.getByTestId("rf__controls");
+    expect(document.querySelector(".channel-canvas-stage--browse")).toBeNull();
     expect(panel.querySelector(".react-flow__controls-zoomin")).toBeNull();
     expect(panel.querySelector(".react-flow__controls-zoomout")).toBeNull();
     expect(panel.querySelector(".react-flow__controls-fitview")).not.toBeNull();
@@ -142,6 +147,25 @@ describe("ChannelCanvas controls", () => {
     expect(add.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("Nodes")).toBeTruthy();
     expect(screen.getByText("Manual")).toBeTruthy();
+  });
+
+  it("drops the dot grid and authoring controls while browsing", async () => {
+    await renderCanvas(
+      [{ code: "graph.empty", node_id: null, edge_id: null, path: [], detail: "Empty graph" }],
+      nodeGraph,
+      false,
+    );
+
+    const panel = screen.getByTestId("rf__controls");
+    expect(document.querySelector(".channel-canvas-stage--browse")).not.toBeNull();
+    expect(document.querySelector(".react-flow__background")).toBeNull();
+    expect(document.querySelector(".react-flow__handle")).not.toBeNull();
+    expect(panel.querySelector(".react-flow__controls-fitview")).not.toBeNull();
+    expect(panel.querySelector(".react-flow__controls-interactive")).toBeNull();
+    expect(screen.getByRole("button", { name: "1 errors, 0 warnings" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Redo" })).toBeNull();
   });
 
   it("puts the problem control in the panel with a count badge", async () => {

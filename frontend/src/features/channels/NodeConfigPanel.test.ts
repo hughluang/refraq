@@ -159,6 +159,7 @@ function renderPanel(
   data: FlowNodeData,
   onChange = vi.fn(),
   problems: GraphProblem[] = [],
+  editable = true,
 ) {
   return import("@/features/channels/NodeConfigPanel").then(({ NodeConfigPanel }) => {
     render(
@@ -170,7 +171,7 @@ function renderPanel(
           data,
           spec: null,
           schema,
-          editable: true,
+          editable,
           problems,
           onClose: vi.fn(),
           onChange,
@@ -386,5 +387,35 @@ describe("NodeConfigPanel integers", () => {
     expect(onChange).toHaveBeenCalled();
     const next = onChange.mock.calls.at(-1)?.[1] as FlowNodeData;
     expect(next.config).not.toHaveProperty("statement_timeout_sec");
+  });
+});
+
+describe("NodeConfigPanel display mode", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  it("shows SQL as preformatted text and no textbox", async () => {
+    await renderPanel(
+      {
+        type: "object",
+        properties: {
+          sql: {
+            type: "string",
+            "x-refraq-ref": "sql",
+            description: "The query",
+          },
+        },
+      },
+      node({ sql: "select\n1" }, "read.sql"),
+      vi.fn(),
+      [],
+      false,
+    );
+
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.getByText("The query")).toBeTruthy();
+    expect(document.querySelector(".channel-template-field__readonly")?.textContent).toBe(
+      "select\n1",
+    );
   });
 });

@@ -667,7 +667,11 @@ function ChannelCanvasBody({
         <CanvasCatalogContext.Provider value={catalog}>
         <div
           ref={flowRootRef}
-          className="channel-canvas-stage"
+          className={
+            editable
+              ? "channel-canvas-stage"
+              : "channel-canvas-stage channel-canvas-stage--browse"
+          }
           onKeyDown={onCanvasKeyDown}
         >
           <ReactFlow
@@ -692,8 +696,12 @@ function ChannelCanvasBody({
             deleteKeyCode={editable ? ["Backspace", "Delete"] : null}
             fitView
           >
-            <Background />
-            <Controls showZoom={false} className="channel-canvas-controls">
+            {editable ? <Background /> : null}
+            <Controls
+              showZoom={false}
+              showInteractive={editable}
+              className="channel-canvas-controls"
+            >
               {problems.length > 0 ? (
                 <ProblemsControl
                   problems={problems}
@@ -703,34 +711,39 @@ function ChannelCanvasBody({
                   onFocus={focusProblem}
                 />
               ) : null}
-              <ControlButton
-                className="channel-canvas-add"
-                title={t("channels.canvas.add")}
-                aria-label={t("channels.canvas.add")}
-                aria-expanded={picker?.kind === "catalog"}
-                disabled={!editable}
-                onClick={openFullCatalog}
-              >
-                <PlusIcon />
-              </ControlButton>
-              <ControlButton
-                className="channel-canvas-undo"
-                title={t("channels.canvas.undo")}
-                aria-label={t("channels.canvas.undo")}
-                disabled={!editable || !canUndo}
-                onClick={undo}
-              >
-                <HistoryIcon direction="undo" />
-              </ControlButton>
-              <ControlButton
-                className="channel-canvas-redo"
-                title={t("channels.canvas.redo")}
-                aria-label={t("channels.canvas.redo")}
-                disabled={!editable || !canRedo}
-                onClick={redo}
-              >
-                <HistoryIcon direction="redo" />
-              </ControlButton>
+              {editable ? (
+                <ControlButton
+                  className="channel-canvas-add"
+                  title={t("channels.canvas.add")}
+                  aria-label={t("channels.canvas.add")}
+                  aria-expanded={picker?.kind === "catalog"}
+                  onClick={openFullCatalog}
+                >
+                  <PlusIcon />
+                </ControlButton>
+              ) : null}
+              {editable ? (
+                <ControlButton
+                  className="channel-canvas-undo"
+                  title={t("channels.canvas.undo")}
+                  aria-label={t("channels.canvas.undo")}
+                  disabled={!canUndo}
+                  onClick={undo}
+                >
+                  <HistoryIcon direction="undo" />
+                </ControlButton>
+              ) : null}
+              {editable ? (
+                <ControlButton
+                  className="channel-canvas-redo"
+                  title={t("channels.canvas.redo")}
+                  aria-label={t("channels.canvas.redo")}
+                  disabled={!canRedo}
+                  onClick={redo}
+                >
+                  <HistoryIcon direction="redo" />
+                </ControlButton>
+              ) : null}
             </Controls>
           </ReactFlow>
           {showCatalog || selected ? (

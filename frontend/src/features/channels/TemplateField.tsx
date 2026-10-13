@@ -4,6 +4,8 @@ import { Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useId, useMemo, useState } from "react";
 
+import { FieldMode } from "@/components/form/FieldMode";
+import type { SchemaObject } from "@/features/channels/configSchemaForm";
 import {
   applyCompletion,
   completionLabels,
@@ -17,7 +19,6 @@ import {
   type TemplateValueSchema,
   type UpstreamOutput,
 } from "@/features/channels/templateLogic";
-import type { SchemaObject } from "@/features/channels/configSchemaForm";
 
 type Props = {
   label?: string;
@@ -40,11 +41,67 @@ export function TemplateField({
   error,
   onChange,
 }: Props) {
+  const schema: SchemaObject | null =
+    valueSchema && "from" in valueSchema ? null : valueSchema;
+  return (
+    <FieldMode
+      editable={editable}
+      label={label}
+      value={<TemplateReadout value={value} schema={schema} />}
+    >
+      <TemplateEditor
+        label={label}
+        ariaLabel={ariaLabel}
+        valueSchema={valueSchema}
+        schema={schema}
+        value={value}
+        upstream={upstream}
+        error={error}
+        onChange={onChange}
+      />
+    </FieldMode>
+  );
+}
+
+function TemplateReadout({
+  value,
+  schema,
+}: {
+  value: string;
+  schema: SchemaObject | null;
+}) {
+  const preview = templatePreview(value, schema);
+  const rule = templateRule(schema);
+  return (
+    <>
+      <pre className="channel-template-field__readonly">{value === "" ? "—" : value}</pre>
+      <TemplateStatus preview={preview} rule={rule} />
+    </>
+  );
+}
+
+function TemplateEditor({
+  label,
+  ariaLabel,
+  valueSchema,
+  schema,
+  value,
+  upstream,
+  error,
+  onChange,
+}: {
+  label?: string;
+  ariaLabel?: string;
+  valueSchema: TemplateValueSchema | null;
+  schema: SchemaObject | null;
+  value: string;
+  upstream: readonly UpstreamOutput[];
+  error?: string;
+  onChange: (value: string) => void;
+}) {
   const fieldId = useId();
   const [cursor, setCursor] = useState(value.length);
   const [open, setOpen] = useState(false);
-  const schema: SchemaObject | null =
-    valueSchema && "from" in valueSchema ? null : valueSchema;
   const preview = templatePreview(value, schema);
   const rule = templateRule(schema);
   const query = open ? completionQuery(value, cursor) : null;
@@ -52,21 +109,7 @@ export function TemplateField({
     () => (query ? completionLabels(query, upstream) : []),
     [query, upstream],
   );
-  const badge = typeBadge(schema ?? valueSchema);
-
-  if (!editable) {
-    return (
-      <div className="channel-template-field">
-        {label ? (
-          <Text size="sm" fw={500}>
-            {label}
-          </Text>
-        ) : null}
-        <pre className="channel-template-field__readonly">{value === "" ? "—" : value}</pre>
-        <TemplateStatus preview={preview} rule={rule} />
-      </div>
-    );
-  }
+  const badge = typeBadge(valueSchema);
 
   return (
     <div className="channel-template-field">
@@ -77,7 +120,7 @@ export function TemplateField({
             {badge}
           </Text>
         </Text>
-        ) : null}
+      ) : null}
       <div className="channel-template-field__editor">
         <pre aria-hidden className="channel-template-field__highlight">
           {highlight(value)}

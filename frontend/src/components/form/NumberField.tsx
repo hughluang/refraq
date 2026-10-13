@@ -2,7 +2,7 @@
 
 import { NumberInput, type NumberInputProps } from "@mantine/core";
 
-import { FieldDisplay } from "@/components/form/FieldDisplay";
+import { FieldMode } from "@/components/form/FieldMode";
 
 export type NumberFieldProps = Omit<NumberInputProps, "disabled" | "readOnly"> & {
   editable: boolean;
@@ -14,16 +14,16 @@ function numberText(value: NumberInputProps["value"]): string | number | undefin
 }
 
 export function NumberField({ editable, ...props }: NumberFieldProps) {
-  if (!editable) {
-    return (
-      <FieldDisplay
-        label={props.label}
-        description={props.description}
-        value={numberText(props.value)}
-        style={props.style}
-        w={props.w}
-      />
-    );
-  }
-  return <NumberInput {...props} />;
+  return (
+    <FieldMode
+      editable={editable}
+      label={props.label}
+      description={props.description}
+      value={numberText(props.value)}
+      style={props.style}
+      w={props.w}
+    >
+      <NumberInput {...props} />
+    </FieldMode>
+  );
 }
