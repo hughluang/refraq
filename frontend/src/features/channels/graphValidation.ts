@@ -1,4 +1,5 @@
-import type { Graph, GraphEdge, GraphNode, GraphSettings } from "@/features/channels/types";
+import { omitUnsetIntegers, type SchemaObject } from "@/features/channels/configSchemaForm";
+import type { Graph, GraphNode, GraphSettings, NodeTypeSpec } from "@/features/channels/types";
 
 export type FlowNodeData = {
   nodeType: string;
@@ -26,23 +27,6 @@ export type FlowEdgeShape = {
   targetHandle?: string | null;
   problem?: boolean;
 };
-
-export type ClientProblemCode =
-  | "CHANNEL_GRAPH_NO_TRIGGER"
-  | "CHANNEL_GRAPH_MULTIPLE_TRIGGERS"
-  | "CHANNEL_GRAPH_TRIGGER_INPUT"
-  | "CHANNEL_GRAPH_UNREACHABLE"
-  | "CHANNEL_GRAPH_CYCLE";
-
-export type ClientProblem = {
-  code: ClientProblemCode;
-  nodeId: string | null;
-  edgeId: string | null;
-};
-
-const WHITE = 0;
-const GRAY = 1;
-const BLACK = 2;
 
 export function newGraphId(prefix: "nd" | "ed"): string {
   const bytes = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
@@ -112,6 +96,21 @@ export function flowFromGraph(
   };
 }
 
+export function graphWithoutUnsetIntegers(
+  graph: Graph,
+  types: readonly Pick<NodeTypeSpec, "type" | "config_schema">[],
+): Graph {
+  const schemas = new Map(types.map((item) => [item.type, item.config_schema]));
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node) => {
+      const schema = schemas.get(node.type);
+      if (!schema) return node;
+      return { ...node, config: omitUnsetIntegers(node.config, schema as SchemaObject) };
+    }),
+  };
+}
+
 export function graphFromFlow(
   nodes: FlowNodeShape[],
   edges: FlowEdgeShape[],
@@ -138,118 +137,10 @@ export function graphFromFlow(
   };
 }
 
-export function clientGraphProblems(
-  graph: Pick<Graph, "nodes" | "edges">,
-  entryTypes: ReadonlySet<string>,
-): ClientProblem[] {
-  const problems: ClientProblem[] = [];
-  const nodes = graph.nodes;
-  const byId = new Map(nodes.map((node) => [node.id, node]));
-  const triggers = nodes.filter((node) => entryTypes.has(node.type));
-  if (triggers.length === 0) {
-    problems.push({
-      code: "CHANNEL_GRAPH_NO_TRIGGER",
-      nodeId: null,
-      edgeId: null,
-    });
-  } else if (triggers.length > 1) {
-    for (const trigger of triggers) {
-      problems.push({
-        code: "CHANNEL_GRAPH_MULTIPLE_TRIGGERS",
-        nodeId: trigger.id,
-        edgeId: null,
-      });
-    }
-  }
-  for (const edge of graph.edges) {
-    const target = byId.get(edge.target.node_id);
-    if (target && entryTypes.has(target.type)) {
-      problems.push({
-        code: "CHANNEL_GRAPH_TRIGGER_INPUT",
-        nodeId: target.id,
-        edgeId: edge.id,
-      });
-    }
-  }
-  problems.push(...unreachable(nodes, graph.edges, entryTypes));
-  problems.push(...cycles(nodes, graph.edges, byId));
-  return problems;
-}
-
-function unreachable(
-  nodes: GraphNode[],
-  edges: GraphEdge[],
-  entryTypes: ReadonlySet<string>,
-): ClientProblem[] {
-  const outgoing = new Map<string, GraphEdge[]>();
-  for (const edge of edges) {
-    const list = outgoing.get(edge.source.node_id) ?? [];
-    list.push(edge);
-    outgoing.set(edge.source.node_id, list);
-  }
-  const seen = new Set<string>();
-  const stack = nodes.filter((node) => entryTypes.has(node.type)).map((node) => node.id);
-  while (stack.length > 0) {
-    const nodeId = stack.pop()!;
-    if (seen.has(nodeId)) continue;
-    seen.add(nodeId);
-    for (const edge of outgoing.get(nodeId) ?? []) {
-      stack.push(edge.target.node_id);
-    }
-  }
-  return nodes
-    .filter((node) => !seen.has(node.id))
-    .map((node) => ({
-      code: "CHANNEL_GRAPH_UNREACHABLE" as const,
-      nodeId: node.id,
-      edgeId: null,
-    }));
-}
-
-function cycles(
-  nodes: GraphNode[],
-  edges: GraphEdge[],
-  byId: Map<string, GraphNode>,
-): ClientProblem[] {
-  const outgoing = new Map<string, GraphEdge[]>();
-  for (const edge of edges) {
-    if (!byId.has(edge.source.node_id) || !byId.has(edge.target.node_id)) continue;
-    const list = outgoing.get(edge.source.node_id) ?? [];
-    list.push(edge);
-    outgoing.set(edge.source.node_id, list);
-  }
-  const color = new Map(nodes.map((node) => [node.id, WHITE]));
-  const problems: ClientProblem[] = [];
-
-  const dfs = (nodeId: string) => {
-    color.set(nodeId, GRAY);
-    for (const edge of outgoing.get(nodeId) ?? []) {
-      const targetId = edge.target.node_id;
-      if (color.get(targetId) === GRAY) {
-        problems.push({
-          code: "CHANNEL_GRAPH_CYCLE",
-          nodeId: edge.source.node_id,
-          edgeId: edge.id,
-        });
-      } else if (color.get(targetId) === WHITE) {
-        dfs(targetId);
-      }
-    }
-    color.set(nodeId, BLACK);
-  };
-
-  for (const node of nodes) {
-    if (color.get(node.id) === WHITE) dfs(node.id);
-  }
-  return problems;
-}
-
 const PROBE_NODE_ID = "__probe_node__";
-const PROBE_EDGE_ID = "__probe_edge__";
 
 export type ConnectionCatalogItem = {
   type: string;
-  entry: boolean;
   inputs: readonly { port: string }[];
   outputs: readonly { port: string }[];
 };
@@ -270,12 +161,23 @@ function portName(handle: string | null | undefined): string {
   return handle ? handle : "main";
 }
 
-function problemIdentity(problem: ClientProblem): string {
-  return `${problem.code}|${problem.nodeId ?? ""}|${problem.edgeId ?? ""}`;
+export const VALIDATION_PAUSE_MS = 500;
+
+export function validationContentKey(graph: Graph): string {
+  return JSON.stringify({
+    nodes: graph.nodes.map(({ position: _position, ...node }) => node),
+    edges: graph.edges,
+    settings: graph.settings,
+  });
 }
 
-function entryTypeSet(catalog: readonly ConnectionCatalogItem[]): Set<string> {
-  return new Set(catalog.filter((item) => item.entry).map((item) => item.type));
+/** A draft load validates immediately. Later content edits wait out one pause. */
+export function validationDelay(opened: boolean): number {
+  return opened ? 0 : VALIDATION_PAUSE_MS;
+}
+
+export function validationResultApplies(validated: Graph, latest: Graph | null): boolean {
+  return latest != null && validationContentKey(validated) === validationContentKey(latest);
 }
 
 export function connectionAllowed(
@@ -311,7 +213,6 @@ export function connectionAllowed(
   const sourceSpec = byType.get(source.type);
   const targetSpec = byType.get(target.type);
   if (!sourceSpec || !targetSpec) return false;
-  if (targetSpec.entry) return false;
 
   const sourcePort = portName(connection.sourceHandle);
   const targetPort = portName(connection.targetHandle);
@@ -325,29 +226,7 @@ export function connectionAllowed(
       edge.source.port === sourcePort &&
       edge.target.port === targetPort,
   );
-  if (duplicate) return false;
-
-  const entries = entryTypeSet(catalog);
-  const before = new Set(clientGraphProblems(graph, entries).map(problemIdentity));
-  const after = clientGraphProblems(
-    {
-      nodes,
-      edges: [
-        ...graph.edges,
-        {
-          id: PROBE_EDGE_ID,
-          source: { node_id: connection.source, port: sourcePort },
-          target: { node_id: connection.target, port: targetPort },
-        },
-      ],
-    },
-    entries,
-  );
-  return !after.some(
-    (problem) =>
-      (problem.code === "CHANNEL_GRAPH_TRIGGER_INPUT" || problem.code === "CHANNEL_GRAPH_CYCLE") &&
-      !before.has(problemIdentity(problem)),
-  );
+  return !duplicate;
 }
 
 export function outputTargetTypes<T extends ConnectionCatalogItem>(

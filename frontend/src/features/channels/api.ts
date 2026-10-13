@@ -95,13 +95,16 @@ export function saveDraft(
   });
 }
 
-export function validateDraft(id: string) {
+export function validateDraft(id: string, graph: Graph) {
   return apiClient<{
-    draft_revision: number;
     valid: boolean;
     problems: GraphProblem[];
     ports: RefinedPort[];
-  }>(`/channels/${id}/draft/validate`, { method: "POST" });
+  }>(`/channels/${id}/draft/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ graph }),
+  });
 }
 
 export function previewPublish(id: string) {

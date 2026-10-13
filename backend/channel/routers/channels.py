@@ -30,6 +30,7 @@ from backend.channel.schemas.channels import (
     ProblemOut,
     PublishRequest,
     PublishResponse,
+    ValidateRequest,
     ValidateResponse,
     VersionListResponse,
     VersionOut,
@@ -293,20 +294,22 @@ def http_put_draft(
 @router.post("/channels/{channel_id}/draft/validate", response_model=ValidateResponse)
 def http_validate_draft(
     channel_id: str,
+    body: ValidateRequest,
     user: UserRecord = Depends(require_permission("channel:write")),
 ) -> ValidateResponse:
     del user
-    record, problems = validate_draft(channel_id)
-    ports = refine_ports(record.draft_graph, ChannelReferenceResolver(channel_id))
+    graph = body.graph.model_dump(mode="json")
+    problems = validate_draft(channel_id, graph)
+    ports = refine_ports(graph, ChannelReferenceResolver(channel_id))
     errors = [problem for problem in problems if problem.severity == "error"]
     return ValidateResponse(
-        draft_revision=record.draft_revision,
         valid=not errors,
         problems=[
             ProblemOut(
                 code=problem.code,
                 node_id=problem.node_id,
                 edge_id=problem.edge_id,
+                path=list(problem.path),
                 detail=problem.detail,
                 severity=problem.severity if problem.severity == "warning" else "error",
             )

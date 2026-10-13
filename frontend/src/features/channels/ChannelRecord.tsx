@@ -25,7 +25,6 @@ import {
   forwardRef,
   useEffect,
   useImperativeHandle,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -58,7 +57,12 @@ import {
 import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
 import { ChannelRuns } from "@/features/channels/ChannelRuns";
 import type { Graph, GraphProblem, RefinedPort } from "@/features/channels/types";
-import { clientGraphProblems } from "@/features/channels/graphValidation";
+import {
+  graphWithoutUnsetIntegers,
+  validationContentKey,
+  validationDelay,
+  validationResultApplies,
+} from "@/features/channels/graphValidation";
 import { formatGraphProblem } from "@/features/channels/problemLabel";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { LEAVE_GUARD_ALLOW } from "@/hooks/leaveGuard";
@@ -203,11 +207,19 @@ function ChannelExisting({
   });
   const formRef = useRef(form);
   formRef.current = form;
+  const validateSeq = useRef(0);
+  const loadedChannelRef = useRef<string | null>(null);
+  const arrivalRef = useRef(false);
+  const [draftEpoch, setDraftEpoch] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
+    loadedChannelRef.current = null;
+    validateSeq.current += 1;
+    setProblems([]);
+    setPorts([]);
     void Promise.all([
       getChannel(channelId),
       getDraft(channelId),
@@ -216,8 +228,11 @@ function ChannelExisting({
     ])
       .then(([channelBody, draft, versionPage, types]) => {
         if (cancelled) return;
+        loadedChannelRef.current = channelId;
+        arrivalRef.current = true;
         setChannel(channelBody.channel);
-        setGraph(draft.graph);
+        setGraph(graphWithoutUnsetIntegers(draft.graph, types.items));
+        setDraftEpoch((epoch) => epoch + 1);
         setBaseline(JSON.stringify(draft.graph));
         setRevision(draft.draft_revision);
         setVersions(versionPage.items);
@@ -255,22 +270,6 @@ function ChannelExisting({
     message: t("common.leaveUnsaved"),
   });
 
-  const entryTypes = useMemo(
-    () => new Set(catalog.filter((item) => item.entry).map((item) => item.type)),
-    [catalog],
-  );
-  const clientProblems = graph ? clientGraphProblems(graph, entryTypes) : [];
-  const clientProblemRecords: GraphProblem[] = clientProblems.map((item) => ({
-    code: item.code,
-    node_id: item.nodeId,
-    edge_id: item.edgeId,
-    detail: "",
-  }));
-  const shownProblems = uniqueProblems([
-    ...clientProblemRecords.filter((item) => item.node_id || item.edge_id),
-    ...problems,
-  ]);
-
   const notifyError = (error: unknown) => {
     open?.({
       type: "error",
@@ -281,34 +280,73 @@ function ChannelExisting({
     });
   };
 
-  const applyValidation = (result: {
-    valid: boolean;
-    problems: GraphProblem[];
-    ports: RefinedPort[];
-  }) => {
+  const graphRef = useRef(graph);
+  graphRef.current = graph;
+  const contentKey = graph ? validationContentKey(graph) : "";
+  const scheduleRef = useRef({ content: "", delay: 0 });
+  if (
+    graph &&
+    loadedChannelRef.current === channelId &&
+    (arrivalRef.current || scheduleRef.current.content !== contentKey)
+  ) {
+    const opened = arrivalRef.current;
+    arrivalRef.current = false;
+    scheduleRef.current = {
+      content: contentKey,
+      delay: validationDelay(opened),
+    };
+  }
+
+  useEffect(() => {
+    const current = graphRef.current;
+    if (canWrite?.can !== true || !current) return;
+    if (loadedChannelRef.current !== channelId) return;
+    const seq = ++validateSeq.current;
+    const delay = scheduleRef.current.delay;
+    const timer = window.setTimeout(() => {
+      void validateDraft(channelId, current)
+        .then((result) => {
+          if (validateSeq.current !== seq) return;
+          setProblems(result.problems);
+          setPorts(result.ports);
+        })
+        .catch((error: unknown) => {
+          if (validateSeq.current !== seq) return;
+          notifyError(error);
+        });
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [canWrite?.can, channelId, contentKey, draftEpoch]);
+
+  const reportBlockedGraph = (
+    result: { problems: GraphProblem[]; ports: RefinedPort[] },
+    source: Graph,
+  ) => {
+    // A run or publish check can resolve after the canvas has moved on.
+    // Applying that snapshot would replace the problems on screen and drop the newer check.
+    if (!validationResultApplies(source, graphRef.current)) return;
+    validateSeq.current += 1;
     setProblems(result.problems);
-    setPorts(result.ports ?? []);
+    setPorts(result.ports);
     setTab("canvas");
     const firstError = result.problems.find((problem) => problem.severity !== "warning");
     open?.({
-      type: result.valid ? "success" : "error",
-      message: result.valid
-        ? t("channels.validate.ok")
-        : firstError
-          ? t("channels.validate.failedWith", {
-              problem: formatGraphProblem(t, firstError),
-            })
-          : t("channels.validate.failed"),
+      type: "error",
+      message: firstError
+        ? t("channels.validate.failedWith", {
+            problem: formatGraphProblem(t, firstError, source),
+          })
+        : t("channels.validate.failed"),
     });
   };
 
   const revealInvalidGraph = (error: unknown) => {
-    if (!(error instanceof ApiError) || error.code !== "CHANNEL_GRAPH_INVALID") {
+    if (!(error instanceof ApiError) || error.code !== "CHANNEL_GRAPH_INVALID" || !graph) {
       return null;
     }
     setPreview(null);
     setRunOpen(false);
-    return validateDraft(channelId).then(applyValidation);
+    return validateDraft(channelId, graph).then((result) => reportBlockedGraph(result, graph));
   };
 
   const catchFailure = (error: unknown) => {
@@ -317,25 +355,21 @@ function ChannelExisting({
     notifyError(error);
   };
 
-  const launch = () => {
-    const triggers = (graph?.nodes ?? []).filter((node) => node.type.startsWith("trigger."));
-    if (triggers.length !== 1) {
-      notifyError(new Error(t("channels.run.needTrigger")));
-      return;
-    }
-    setBusy(true);
-    void (async () => {
-      if (writable) await persist();
-      await startRun(channelId, { target: "draft" });
-      setRunOpen(false);
-      setTab("runs");
-    })()
-      .catch(catchFailure)
-      .finally(() => setBusy(false));
-  };
+  if (loading) return <PageBodySkeleton />;
+  if (loadError || !channel || !graph) {
+    return (
+      <PageError
+        message={problemMessage(t, loadError, t("channels.load.failed"))}
+        requestId={loadError?.requestId}
+        onRetry={() => setReloadToken((value) => value + 1)}
+      />
+    );
+  }
+  if (mode === "edit" && canWrite?.can === false) return <PageBodySkeleton />;
 
-  const persist = async (): Promise<number> => {
+  const persist = async (): Promise<{ revision: number; graph: Graph }> => {
     let nextRevision = revision;
+    let nextGraph = graph;
     const nameError = nameEditorRef.current?.commit() ?? null;
     if (nameError) {
       throw new RecordInvalid(nameError);
@@ -354,9 +388,8 @@ function ChannelExisting({
       const descriptionValue = description ? description : null;
       let saved = channel;
       if (
-        saved &&
-        (values.name.trim() !== saved.name ||
-          descriptionValue !== (saved.description ?? null))
+        values.name.trim() !== saved.name ||
+        descriptionValue !== (saved.description ?? null)
       ) {
         const updated = await patchChannel(channelId, {
           name: values.name.trim(),
@@ -365,7 +398,7 @@ function ChannelExisting({
         saved = updated.channel;
         setChannel(saved);
       }
-      if (saved && values.active !== saved.active) {
+      if (values.active !== saved.active) {
         const updated = values.active
           ? await activateChannel(channelId)
           : await deactivateChannel(channelId);
@@ -374,30 +407,36 @@ function ChannelExisting({
       }
       form.resetDirty(values);
     }
-    if (graph && JSON.stringify(graph) !== baseline) {
+    if (JSON.stringify(nextGraph) !== baseline) {
       const saved = await saveDraft(channelId, {
         base_revision: nextRevision,
-        graph,
+        graph: nextGraph,
       });
       nextRevision = saved.draft_revision;
+      nextGraph = graphWithoutUnsetIntegers(saved.graph, catalog);
       setRevision(saved.draft_revision);
-      setGraph(saved.graph);
+      setGraph(nextGraph);
       setBaseline(JSON.stringify(saved.graph));
     }
-    return nextRevision;
+    return { revision: nextRevision, graph: nextGraph };
   };
 
-  if (loading) return <PageBodySkeleton />;
-  if (loadError || !channel || !graph) {
-    return (
-      <PageError
-        message={problemMessage(t, loadError, t("channels.load.failed"))}
-        requestId={loadError?.requestId}
-        onRetry={() => setReloadToken((value) => value + 1)}
-      />
-    );
-  }
-  if (mode === "edit" && canWrite?.can === false) return <PageBodySkeleton />;
+  const launch = () => {
+    const triggers = graph.nodes.filter((node) => node.type.startsWith("trigger."));
+    if (triggers.length !== 1) {
+      notifyError(new Error(t("channels.run.needTrigger")));
+      return;
+    }
+    setBusy(true);
+    void (async () => {
+      if (writable) await persist();
+      await startRun(channelId, { target: "draft" });
+      setRunOpen(false);
+      setTab("runs");
+    })()
+      .catch(catchFailure)
+      .finally(() => setBusy(false));
+  };
 
   const showEdit = mode === "show" && Boolean(canWrite?.can);
   const showLifecycle = Boolean(canWrite?.can);
@@ -486,34 +525,21 @@ function ChannelExisting({
               <Group gap="xs" wrap="nowrap" aria-label={t("channels.actions.lifecycle")}>
                 <Button
                   size="sm"
-                  variant="default"
-                  loading={busy}
-                  onClick={() => {
-                    setBusy(true);
-                    void persist()
-                      .then(() => validateDraft(channelId))
-                      .then(applyValidation)
-                      .catch(notifyError)
-                      .finally(() => setBusy(false));
-                  }}
-                >
-                  {t("channels.actions.validate")}
-                </Button>
-                <Button
-                  size="sm"
                   variant={mode === "show" ? "filled" : "light"}
                   loading={busy}
                   onClick={() => {
                     setBusy(true);
                     void persist()
-                      .then(async (nextRevision) => {
-                        const result = await validateDraft(channelId);
+                      .then(async ({ revision: nextRevision, graph: savedGraph }) => {
+                        const result = await validateDraft(channelId, savedGraph);
                         if (!result.valid) {
-                          applyValidation(result);
+                          reportBlockedGraph(result, savedGraph);
                           return;
                         }
+                        if (!validationResultApplies(savedGraph, graphRef.current)) return;
+                        validateSeq.current += 1;
                         setProblems(result.problems);
-                        setPorts(result.ports ?? []);
+                        setPorts(result.ports);
                         setPublishRevision(nextRevision);
                         setPreview(await previewPublish(channelId));
                       })
@@ -623,7 +649,7 @@ function ChannelExisting({
             graph={graph}
             catalog={catalog}
             editable={writable}
-            problems={shownProblems}
+            problems={problems}
             ports={ports}
             onChange={setGraph}
           />
@@ -988,14 +1014,4 @@ function IdentityFields({
       />
     </Stack>
   );
-}
-
-function uniqueProblems(items: GraphProblem[]): GraphProblem[] {
-  const seen = new Set<string>();
-  return items.filter((item) => {
-    const key = `${item.code}|${item.node_id ?? ""}|${item.edge_id ?? ""}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }

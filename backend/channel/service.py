@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Mapping
 
 from backend.admin.audit import persist_audit_event
 from backend.admin.user_store import get_user_store
@@ -212,10 +212,9 @@ def save_draft(
     return saved
 
 
-def validate_draft(channel_id: str) -> tuple[ChannelRecord, list[Problem]]:
-    record = _require(channel_id)
-    problems = validate(record.draft_graph, ChannelReferenceResolver(channel_id))
-    return record, problems
+def validate_draft(channel_id: str, graph: Mapping[str, Any]) -> list[Problem]:
+    _require(channel_id)
+    return validate(graph, ChannelReferenceResolver(channel_id))
 
 
 def preview_publish(channel_id: str) -> dict[str, Any]:

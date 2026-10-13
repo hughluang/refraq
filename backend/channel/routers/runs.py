@@ -96,6 +96,7 @@ def http_start_run(
                         "detail": problem.detail,
                         "node_id": problem.node_id,
                         "edge_id": problem.edge_id,
+                        "path": list(problem.path),
                         "severity": problem.severity,
                     }
                     for problem in exc.problems

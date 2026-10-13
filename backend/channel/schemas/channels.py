@@ -184,6 +184,12 @@ class PublishRequest(BaseModel):
     draft_revision: int = Field(ge=1)
 
 
+class ValidateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    graph: GraphIn
+
+
 class LatestVersionOut(BaseModel):
     number: int
     published_at: Instant
@@ -221,6 +227,7 @@ class ProblemOut(BaseModel):
     code: str
     node_id: str | None
     edge_id: str | None
+    path: list[str | int] = Field(default_factory=list)
     detail: str
     severity: Literal["error", "warning"] = "error"
 
@@ -236,7 +243,6 @@ class RefinedPortOut(BaseModel):
 
 
 class ValidateResponse(BaseModel):
-    draft_revision: int
     valid: bool
     problems: list[ProblemOut]
     ports: list[RefinedPortOut]

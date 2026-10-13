@@ -149,15 +149,27 @@ def test_draft_conflict_and_invalid_publish(client: TestClient) -> None:
     assert body["code"] == "CHANNEL_GRAPH_INVALID"
     assert body["detail"]
 
-    checked = client.post(f"/channels/{channel_id}/draft/validate")
-    assert checked.status_code == 200
-    assert checked.json()["valid"] is False
-    assert checked.json()["problems"]
-    assert checked.json()["ports"]
-    assert "schema" in checked.json()["ports"][0]
+    before = client.get(f"/channels/{channel_id}/draft")
+    assert before.status_code == 200, before.text
+    checked = client.post(
+        f"/channels/{channel_id}/draft/validate",
+        json={"graph": broken},
+    )
+    assert checked.status_code == 200, checked.text
+    body = checked.json()
+    assert "draft_revision" not in body
+    assert body["valid"] is False
+    assert body["problems"]
+    assert body["ports"]
+    assert "schema" in body["ports"][0]
+    after = client.get(f"/channels/{channel_id}/draft")
+    assert after.json()["draft_revision"] == before.json()["draft_revision"]
+    assert after.json()["graph"] == before.json()["graph"]
 
 
-def test_validate_returns_problems_when_stored_nodes_lack_ref(client: TestClient) -> None:
+def test_stored_graph_without_ref_is_readable_and_validate_rejects_it(
+    client: TestClient,
+) -> None:
     created = client.post("/channels", json={"name": "Legacy", "description": None})
     assert created.status_code == 201, created.text
     channel_id = created.json()["channel"]["id"]
@@ -224,13 +236,12 @@ def test_validate_returns_problems_when_stored_nodes_lack_ref(client: TestClient
     fetched = client.get(f"/channels/{channel_id}/versions/{version.number}")
     assert fetched.status_code == 200, fetched.text
     assert fetched.json()["version"]["graph"]["nodes"] == legacy["nodes"]
-    checked = client.post(f"/channels/{channel_id}/draft/validate")
-    assert checked.status_code == 200, checked.text
-    body = checked.json()
-    assert body["valid"] is False
-    codes = {problem["code"] for problem in body["problems"]}
-    assert codes >= {"CHANNEL_NODE_REF_INVALID", "CHANNEL_NODE_TYPE_UNKNOWN"}
-    assert {port["node_id"] for port in body["ports"]} == {"nd_trigger", "nd_write"}
+    checked = client.post(
+        f"/channels/{channel_id}/draft/validate",
+        json={"graph": legacy},
+    )
+    assert checked.status_code == 422
+    assert checked.json()["code"] == "REQUEST_INVALID"
 
 
 def test_node_type_catalog_and_audit(client: TestClient) -> None:

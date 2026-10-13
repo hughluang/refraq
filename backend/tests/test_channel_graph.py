@@ -245,6 +245,40 @@ def test_unknown_node_and_port_and_edge() -> None:
     }
 
 
+def test_config_schema_errors_name_every_property() -> None:
+    absent = _read()
+    del absent["config"]["statement_timeout_sec"]
+    ok = _graph(
+        [_node("nd_trigger", "trigger.manual", "Run"), absent],
+        [_edge("ed_1", "nd_trigger", "nd_read")],
+    )
+    assert "CHANNEL_NODE_CONFIG_INVALID" not in _codes(ok)
+
+    invalid = _read()
+    invalid["config"]["statement_timeout_sec"] = None
+    invalid["config"]["sql"] = ""
+    bad = _graph(
+        [_node("nd_trigger", "trigger.manual", "Run"), invalid],
+        [_edge("ed_1", "nd_trigger", "nd_read")],
+    )
+    problems = validate(bad, FakeResolver())
+    config = [item for item in problems if item.code == "CHANNEL_NODE_CONFIG_INVALID"]
+    assert {item.path for item in config} == {("sql",), ("statement_timeout_sec",)}
+
+
+def test_missing_required_config_names_the_property() -> None:
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_read", "read.sql", "Read", {"source": {"kind": "entity"}}),
+        ],
+        [_edge("ed_1", "nd_trigger", "nd_read")],
+    )
+    problems = validate(graph, FakeResolver())
+    config = [item for item in problems if item.code == "CHANNEL_NODE_CONFIG_INVALID"]
+    assert ("sql",) in {item.path for item in config}
+
+
 def test_invalid_config_and_duplicate_name() -> None:
     graph = _graph(
         [

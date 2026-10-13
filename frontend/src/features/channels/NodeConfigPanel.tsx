@@ -18,7 +18,8 @@ import { EntityAttributeSelect } from "@/features/channels/EntityAttributeSelect
 import type { FlowNodeData } from "@/features/channels/graphValidation";
 import { resolvedMatchKeyName } from "@/features/channels/matchKeyName";
 import { nodeTypeSummary } from "@/features/channels/nodeTypeCopy";
-import { problemColor } from "@/features/channels/problemLabel";
+import { fieldConstraint, problemColor } from "@/features/channels/problemLabel";
+import type { GraphProblem } from "@/features/channels/types";
 import { TemplateField } from "@/features/channels/TemplateField";
 import {
   attributeValueSchema,
@@ -36,6 +37,7 @@ type Props = {
   schema: SchemaObject | null;
   editable: boolean;
   problemLines?: readonly { text: string; severity: "error" | "warning" }[];
+  problems?: readonly GraphProblem[];
   upstream?: readonly UpstreamOutput[];
   onClose: () => void;
   onChange: (nodeId: string, data: FlowNodeData) => void;
@@ -54,6 +56,7 @@ export function NodeConfigPanel({
   schema,
   editable,
   problemLines = [],
+  problems = [],
   upstream = [],
   onClose,
   onChange,
@@ -73,6 +76,12 @@ export function NodeConfigPanel({
   };
 
   const setConfig = (key: string, value: unknown) => {
+    if (value === undefined) {
+      const next = { ...data.config };
+      delete next[key];
+      update({ config: next });
+      return;
+    }
     update({ config: { ...data.config, [key]: value } });
   };
 
@@ -126,6 +135,11 @@ export function NodeConfigPanel({
             <ScheduledCadenceFields
               config={data.config}
               editable={editable}
+              errors={{
+                cron: fieldConstraint(problems, "cron"),
+                interval_seconds: fieldConstraint(problems, "interval_seconds"),
+                start_at: fieldConstraint(problems, "start_at"),
+              }}
               onChange={(config) => update({ config })}
             />
           ) : null}
@@ -140,6 +154,7 @@ export function NodeConfigPanel({
               config={data.config}
               scope={data.config}
               upstream={upstream}
+              error={fieldConstraint(problems, field.key)}
               onChange={(value) => setConfig(field.key, value)}
             />
           ))}
@@ -160,6 +175,7 @@ function ConfigField({
   config,
   scope,
   upstream = [],
+  error,
   onChange,
 }: {
   field: FieldSpec;
@@ -172,6 +188,7 @@ function ConfigField({
   config: Record<string, unknown>;
   scope: Record<string, unknown>;
   upstream?: readonly UpstreamOutput[];
+  error?: string;
   onChange: (value: unknown) => void;
 }) {
   const t = useTranslate();
@@ -184,6 +201,7 @@ function ConfigField({
         description={field.description}
         value={value}
         editable={editable}
+        error={error}
         onChange={onChange}
       />
     );
@@ -200,6 +218,7 @@ function ConfigField({
         editable={editable}
         cachedName=""
         cachedTableName=""
+        error={error}
         onChange={(next) => onChange(next.target_entity_id)}
       />
     );
@@ -215,6 +234,7 @@ function ConfigField({
         exclude={exclude}
         attributes={head.attributes}
         failed={labeled ? head.failed : false}
+        error={error}
         size={labeled ? undefined : "xs"}
         value={typeof value === "string" ? value : null}
         onChange={onChange}
@@ -234,6 +254,7 @@ function ConfigField({
         value={typeof value === "string" ? value : null}
         size={labeled ? undefined : "xs"}
         w={labeled ? undefined : "100%"}
+        error={error}
         onChange={(next) => onChange(next ?? "")}
         allowDeselect={false}
       />
@@ -249,6 +270,7 @@ function ConfigField({
         head={head}
         config={config}
         upstream={upstream}
+        error={error}
         onChange={onChange}
       />
     );
@@ -260,6 +282,7 @@ function ConfigField({
         aria-label={labeled ? undefined : caption}
         description={field.description}
         disabled={!editable}
+        error={error}
         autosize
         minRows={6}
         value={typeof value === "string" ? value : ""}
@@ -272,10 +295,16 @@ function ConfigField({
       <NumberField
         editable={editable}
         {...labelProps}
+        description={field.description || undefined}
+        error={error}
         min={field.minimum}
         max={field.maximum}
         value={typeof value === "number" ? value : ""}
-        onChange={(next) => onChange(typeof next === "number" ? next : null)}
+        onChange={(next) => {
+          if (typeof next === "number") onChange(next);
+          else if (field.nullable) onChange(null);
+          else onChange(undefined);
+        }}
       />
     );
   }
@@ -289,6 +318,7 @@ function ConfigField({
         value={typeof value === "string" ? value : ""}
         editable={editable}
         upstream={upstream}
+        error={error}
         onChange={onChange}
       />
     );
@@ -300,6 +330,7 @@ function ConfigField({
       value={typeof value === "string" ? value : ""}
       size={labeled ? undefined : "xs"}
       w={labeled ? undefined : "100%"}
+      error={error}
       onChange={(event) => onChange(event.currentTarget.value)}
     />
   );
@@ -313,6 +344,7 @@ function ObjectListEditor({
   head,
   config,
   upstream = [],
+  error,
   onChange,
 }: {
   field: Extract<FieldSpec, { kind: "objectList" }>;
@@ -322,6 +354,7 @@ function ObjectListEditor({
   head: HeadState;
   config: Record<string, unknown>;
   upstream?: readonly UpstreamOutput[];
+  error?: string;
   onChange: (value: unknown) => void;
 }) {
   const t = useTranslate();
@@ -360,6 +393,11 @@ function ObjectListEditor({
           </Button>
         ) : null}
       </Group>
+      {error ? (
+        <Text c="red" size="xs">
+          {error}
+        </Text>
+      ) : null}
       {head.failed && field.fields.some((child) => child.kind === "attribute") ? (
         <Text c="red" size="xs">
           {t("channels.config.attributeLoadFailed")}
@@ -433,9 +471,15 @@ function ListRow({
   const t = useTranslate();
   const replace = (key: string, next: unknown) => {
     onChange(
-      rows.map((item, itemIndex) =>
-        itemIndex === index ? { ...item, [key]: next } : item,
-      ),
+      rows.map((item, itemIndex) => {
+        if (itemIndex !== index) return item;
+        if (next === undefined) {
+          const copy = { ...item };
+          delete copy[key];
+          return copy;
+        }
+        return { ...item, [key]: next };
+      }),
     );
   };
   return (

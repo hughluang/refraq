@@ -63,7 +63,12 @@ import {
 } from "@/features/channels/graphValidation";
 import { NodeConfigPanel } from "@/features/channels/NodeConfigPanel";
 import { nodeTypeLabel, nodeTypeSummary } from "@/features/channels/nodeTypeCopy";
-import { formatGraphProblem, problemColor } from "@/features/channels/problemLabel";
+import {
+  formatGraphProblem,
+  problemColor,
+  problemIdentity,
+  type ProblemGraph,
+} from "@/features/channels/problemLabel";
 import { upstreamOutputs } from "@/features/channels/templateLogic";
 import type { Graph, GraphProblem, NodeTypeSpec, RefinedPort } from "@/features/channels/types";
 
@@ -96,10 +101,6 @@ const nodeTypes = { channel: ChannelFlowNode };
 const edgeTypes = { [CHANNEL_EDGE_TYPE]: ChannelFlowEdge };
 const PROBLEM_STROKE = "var(--mantine-color-red-6)";
 const PROBLEM_HOVER_CLOSE_MS = 120;
-
-function problemIdentity(problem: GraphProblem): string {
-  return `${problem.code}-${problem.node_id ?? ""}-${problem.edge_id ?? ""}`;
-}
 
 function highlightTargets(problem: GraphProblem, active: ProblemHighlight): boolean {
   return active.nodeId
@@ -601,13 +602,14 @@ function ChannelCanvasBody({
 
   const selected = nodes.find((node) => node.id === configNodeId) ?? null;
   const selectedSpec = catalog.find((item) => item.type === selected?.data.nodeType);
+  const labelGraph = problemGraphOf(nodes, edges);
   const problemLines =
     selected == null
       ? []
       : problems
           .filter((problem) => problem.node_id === selected.id)
           .map((problem) => ({
-            text: formatGraphProblem(t, problem),
+            text: formatGraphProblem(t, problem, labelGraph, { nodeName: false }),
             severity: problem.severity ?? "error",
           }));
   const outputSchemas = new Map(
@@ -695,6 +697,7 @@ function ChannelCanvasBody({
               {problems.length > 0 ? (
                 <ProblemsControl
                   problems={problems}
+                  graph={labelGraph}
                   activeKey={highlight?.key ?? null}
                   dismissToken={problemsDismissed}
                   onFocus={focusProblem}
@@ -789,6 +792,7 @@ function ChannelCanvasBody({
                   schema={(selectedSpec?.config_schema as SchemaObject | undefined) ?? null}
                   editable={editable}
                   problemLines={problemLines}
+                  problems={problems.filter((problem) => problem.node_id === selected.id)}
                   upstream={upstream}
                   onClose={clearSelection}
                   onChange={(nodeId, data) => {
@@ -894,13 +898,26 @@ function eventPoint(event: MouseEvent | TouchEvent): { x: number; y: number } | 
   return { x: event.clientX, y: event.clientY };
 }
 
+function problemGraphOf(nodes: ChannelNode[], edges: Edge[]): ProblemGraph {
+  return {
+    nodes: nodes.map((node) => ({ id: node.id, name: node.data.name })),
+    edges: edges.map((edge) => ({
+      id: edge.id,
+      source: { node_id: edge.source },
+      target: { node_id: edge.target },
+    })),
+  };
+}
+
 function ProblemsControl({
   problems,
+  graph,
   activeKey,
   dismissToken,
   onFocus,
 }: {
   problems: GraphProblem[];
+  graph: ProblemGraph;
   activeKey: string | null;
   dismissToken: number;
   onFocus: (problem: GraphProblem) => void;
@@ -994,7 +1011,7 @@ function ProblemsControl({
             {label}
           </Text>
           {problems.map((problem) => {
-            const itemLabel = formatGraphProblem(t, problem);
+            const itemLabel = formatGraphProblem(t, problem, graph);
             const key = problemIdentity(problem);
             const color = problemColor(problem.severity);
             const tone =

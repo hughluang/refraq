@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  clientGraphProblems,
   connectionAllowed,
   flowFromGraph,
   graphFromFlow,
   outputTargetTypes,
+  VALIDATION_PAUSE_MS,
+  validationContentKey,
+  validationDelay,
+  validationResultApplies,
   type ConnectionCatalogItem,
   type FlowNodeShape,
 } from "@/features/channels/graphValidation";
@@ -16,6 +19,7 @@ const ENTRY = new Set(["trigger.manual"]);
 function node(id: string, type: string, name = id): Graph["nodes"][number] {
   return {
     id,
+    ref: id,
     type,
     name,
     position: { x: 1, y: 2 },
@@ -38,62 +42,6 @@ function edge(
     target: { node_id: target, port: targetPort },
   };
 }
-
-function codes(graph: Pick<Graph, "nodes" | "edges">) {
-  return clientGraphProblems(graph, ENTRY).map((problem) => problem.code);
-}
-
-describe("clientGraphProblems", () => {
-  it("rejects a second trigger", () => {
-    const problems = clientGraphProblems(
-      {
-        nodes: [node("nd_manual", "trigger.manual"), node("nd_hourly", "trigger.scheduled")],
-        edges: [],
-      },
-      new Set(["trigger.manual", "trigger.scheduled"]),
-    );
-    expect(problems.map((problem) => problem.code)).toContain(
-      "CHANNEL_GRAPH_MULTIPLE_TRIGGERS",
-    );
-  });
-
-  it("rejects a graph with no trigger", () => {
-    expect(codes({ nodes: [node("nd_read", "read.sql")], edges: [] })).toEqual([
-      "CHANNEL_GRAPH_NO_TRIGGER",
-      "CHANNEL_GRAPH_UNREACHABLE",
-    ]);
-  });
-
-  it("rejects a trigger input, an unreachable node, and a cycle", () => {
-    const graph = {
-      nodes: [
-        node("nd_trigger", "trigger.manual"),
-        node("nd_read", "read.sql"),
-        node("nd_write", "write.entity"),
-        node("nd_lone", "read.sql"),
-      ],
-      edges: [
-        edge("ed_back", "nd_read", "nd_trigger"),
-        edge("ed_1", "nd_trigger", "nd_read"),
-        edge("ed_2", "nd_read", "nd_write"),
-        edge("ed_3", "nd_write", "nd_read"),
-      ],
-    };
-    const problems = clientGraphProblems(graph, ENTRY);
-    expect(problems.some((item) => item.code === "CHANNEL_GRAPH_TRIGGER_INPUT" && item.nodeId === "nd_trigger")).toBe(true);
-    expect(problems.some((item) => item.code === "CHANNEL_GRAPH_UNREACHABLE" && item.nodeId === "nd_lone")).toBe(true);
-    expect(problems.some((item) => item.code === "CHANNEL_GRAPH_CYCLE")).toBe(true);
-  });
-
-  it("accepts a trigger connected to a read", () => {
-    expect(
-      codes({
-        nodes: [node("nd_trigger", "trigger.manual"), node("nd_read", "read.sql")],
-        edges: [edge("ed_1", "nd_trigger", "nd_read")],
-      }),
-    ).toEqual([]);
-  });
-});
 
 describe("flow conversion", () => {
   it("round-trips node type, ports, and position", () => {
@@ -124,16 +72,14 @@ describe("flow conversion", () => {
 });
 
 const CATALOG: ConnectionCatalogItem[] = [
-  { type: "trigger.manual", entry: true, inputs: [], outputs: [{ port: "main" }] },
+  { type: "trigger.manual", inputs: [], outputs: [{ port: "main" }] },
   {
     type: "read.sql",
-    entry: false,
     inputs: [{ port: "main" }],
     outputs: [{ port: "main" }, { port: "error" }],
   },
   {
     type: "write.entity",
-    entry: false,
     inputs: [{ port: "main" }],
     outputs: [{ port: "main" }, { port: "error" }],
   },
@@ -175,22 +121,12 @@ describe("connectionAllowed", () => {
     ).toBe(true);
   });
 
-  it("rejects a self-loop, a trigger input, a duplicate, a missing port, and a cycle", () => {
+  it("rejects a self-loop, a duplicate, and a missing port", () => {
     expect(
       connectionAllowed(
         { nodes: [node("nd_read", "read.sql")], edges: [] },
         CATALOG,
         { source: "nd_read", target: "nd_read", sourceHandle: "main", targetHandle: "main" },
-      ),
-    ).toBe(false);
-    expect(
-      connectionAllowed(
-        {
-          nodes: [node("nd_trigger", "trigger.manual"), node("nd_read", "read.sql")],
-          edges: [],
-        },
-        CATALOG,
-        { source: "nd_read", target: "nd_trigger", sourceHandle: "main", targetHandle: "main" },
       ),
     ).toBe(false);
     expect(
@@ -211,6 +147,23 @@ describe("connectionAllowed", () => {
         { source: "nd_trigger", target: "nd_read", sourceHandle: "error", targetHandle: "main" },
       ),
     ).toBe(false);
+  });
+
+  it("allows a cycle and a connection into a trigger input", () => {
+    const triggerWithInput: ConnectionCatalogItem[] = [
+      { type: "trigger.manual", inputs: [{ port: "main" }], outputs: [{ port: "main" }] },
+      ...CATALOG.filter((item) => item.type !== "trigger.manual"),
+    ];
+    expect(
+      connectionAllowed(
+        {
+          nodes: [node("nd_trigger", "trigger.manual"), node("nd_read", "read.sql")],
+          edges: [],
+        },
+        triggerWithInput,
+        { source: "nd_read", target: "nd_trigger", sourceHandle: "main", targetHandle: "main" },
+      ),
+    ).toBe(true);
     expect(
       connectionAllowed(chain, CATALOG, {
         source: "nd_write",
@@ -218,7 +171,7 @@ describe("connectionAllowed", () => {
         sourceHandle: "main",
         targetHandle: "main",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("lists node types that can accept an output", () => {
@@ -229,5 +182,66 @@ describe("connectionAllowed", () => {
       "main",
     ).map((item) => item.type);
     expect(types).toEqual(["read.sql", "write.entity"]);
+  });
+});
+
+describe("validation schedule keys", () => {
+  const settings = { run_timeout_sec: null, error_channel_id: null };
+
+  it("ignores position when comparing content", () => {
+    const graph: Graph = {
+      nodes: [node("nd_read", "read.sql", "Read")],
+      edges: [],
+      settings,
+    };
+    const moved: Graph = {
+      ...graph,
+      nodes: [{ ...graph.nodes[0]!, position: { x: 9, y: 9 } }],
+    };
+    expect(validationContentKey(graph)).toBe(validationContentKey(moved));
+  });
+
+  it("validates a loaded draft immediately and later content after a pause", () => {
+    const graph: Graph = {
+      nodes: [node("nd_read", "read.sql", "Read")],
+      edges: [],
+      settings,
+    };
+    const renamed: Graph = {
+      ...graph,
+      nodes: [{ ...graph.nodes[0]!, name: "Suppliers" }],
+    };
+    const added: Graph = {
+      ...graph,
+      nodes: [...graph.nodes, node("nd_write", "write.entity", "Write")],
+    };
+    const first = validationContentKey(graph);
+    expect(validationContentKey(renamed)).not.toBe(first);
+    expect(validationContentKey(added)).not.toBe(first);
+
+    expect(validationDelay(true)).toBe(0);
+    expect(validationDelay(false)).toBe(VALIDATION_PAUSE_MS);
+  });
+
+  it("drops a validation result after the graph content has moved on", () => {
+    const settings = { run_timeout_sec: null, error_channel_id: null };
+    const broken: Graph = {
+      nodes: [node("nd_read", "read.sql", "")],
+      edges: [],
+      settings,
+    };
+    const fixed: Graph = {
+      ...broken,
+      nodes: [{ ...broken.nodes[0]!, name: "Suppliers" }],
+    };
+    const moved: Graph = {
+      ...fixed,
+      nodes: [{ ...fixed.nodes[0]!, position: { x: 40, y: 80 } }],
+    };
+
+    expect(validationResultApplies(broken, fixed)).toBe(false);
+    expect(validationResultApplies(fixed, null)).toBe(false);
+    expect(validationResultApplies(fixed, moved)).toBe(true);
+    expect(validationResultApplies(moved, fixed)).toBe(true);
   });
 });

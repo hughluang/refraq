@@ -1,12 +1,13 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SchemaObject } from "@/features/channels/configSchemaForm";
 import type { FlowNodeData } from "@/features/channels/graphValidation";
+import type { GraphProblem } from "@/features/channels/types";
 import { listEntities, listVersions } from "@/features/entities/api";
 import type { EntityAttribute, EntityVersion } from "@/features/entities/types";
 
@@ -32,6 +33,7 @@ const LABELS: Record<string, string> = {
   "channels.config.fields.match_key": "Match key",
   "channels.config.fields.mapping": "Mapping",
   "channels.config.fields.source": "Source",
+  "channels.config.fields.statement_timeout_sec": "Statement timeout",
   "channels.config.fields.key": "Source key",
   "channels.config.fields.on_incompatible_head": "Incompatible head",
   "channels.config.options.mode.upsert": "Upsert",
@@ -152,7 +154,12 @@ function stubDomApis() {
   globalThis.ResizeObserver = ResizeObserverStub;
 }
 
-function renderPanel(schema: SchemaObject, data: FlowNodeData, onChange = vi.fn()) {
+function renderPanel(
+  schema: SchemaObject,
+  data: FlowNodeData,
+  onChange = vi.fn(),
+  problems: GraphProblem[] = [],
+) {
   return import("@/features/channels/NodeConfigPanel").then(({ NodeConfigPanel }) => {
     render(
       createElement(
@@ -164,6 +171,7 @@ function renderPanel(schema: SchemaObject, data: FlowNodeData, onChange = vi.fn(
           spec: null,
           schema,
           editable: true,
+          problems,
           onClose: vi.fn(),
           onChange,
         }) as ReactNode,
@@ -335,5 +343,48 @@ describe("NodeConfigPanel grids", () => {
       expect(list).toBeTruthy();
       expect(within(list!).queryByRole("option", { name: "sku", hidden: true })).toBeTruthy();
     });
+  });
+});
+
+describe("NodeConfigPanel integers", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  it("shows the timeout constraint on that field and omits the key when the field is cleared", async () => {
+    const onChange = vi.fn();
+    await renderPanel(
+      {
+        type: "object",
+        properties: {
+          statement_timeout_sec: {
+            type: "integer",
+            minimum: 1,
+            maximum: 3600,
+            description: "Seconds before the statement is cancelled. Default 30.",
+          },
+        },
+      },
+      node({ statement_timeout_sec: 12 }, "read.sql"),
+      onChange,
+      [
+        {
+          code: "CHANNEL_NODE_CONFIG_INVALID",
+          node_id: "n1",
+          edge_id: null,
+          path: ["statement_timeout_sec"],
+          detail: "None is not of type 'integer'",
+        },
+      ],
+    );
+
+    expect(screen.getByText("Seconds before the statement is cancelled. Default 30.")).toBeTruthy();
+    expect(screen.getByText("None is not of type 'integer'")).toBeTruthy();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Statement timeout" }), {
+      target: { value: "" },
+    });
+    expect(onChange).toHaveBeenCalled();
+    const next = onChange.mock.calls.at(-1)?.[1] as FlowNodeData;
+    expect(next.config).not.toHaveProperty("statement_timeout_sec");
   });
 });

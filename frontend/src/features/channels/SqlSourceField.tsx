@@ -16,12 +16,14 @@ export function SqlSourceField({
   description,
   value,
   editable,
+  error,
   onChange,
 }: {
   label: string;
   description: string;
   value: unknown;
   editable: boolean;
+  error?: string;
   onChange: (value: SourceValue) => void;
 }) {
   const t = useTranslate();
@@ -68,7 +70,7 @@ export function SqlSourceField({
       data={data}
       value={selected}
       placeholder={t("channels.config.sqlSource.placeholder")}
-      error={loadFailed ? t("channels.config.sqlSource.loadFailed") : undefined}
+      error={error ?? (loadFailed ? t("channels.config.sqlSource.loadFailed") : undefined)}
       allowDeselect={false}
       onChange={(next) => {
         if (!next) return;

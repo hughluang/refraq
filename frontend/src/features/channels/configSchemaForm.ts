@@ -20,7 +20,15 @@ export type FieldSpec =
   | { kind: "json"; key: string; required: boolean }
   | { kind: "sql"; key: string; required: boolean; description: string }
   | { kind: "sql_source"; key: string; required: boolean; description: string }
-  | { kind: "integer"; key: string; required: boolean; minimum?: number; maximum?: number }
+  | {
+      kind: "integer";
+      key: string;
+      required: boolean;
+      nullable: boolean;
+      description: string;
+      minimum?: number;
+      maximum?: number;
+    }
   | {
       kind: "template";
       key: string;
@@ -40,9 +48,23 @@ export function fieldsFromSchema(schema: SchemaObject): FieldSpec[] {
 export function defaultConfig(schema: SchemaObject): Record<string, unknown> {
   const config: Record<string, unknown> = {};
   for (const field of fieldsFromSchema(schema)) {
+    if (field.kind === "integer" && !field.nullable) continue;
     config[field.key] = defaultValue(field);
   }
   return config;
+}
+
+export function omitUnsetIntegers(
+  config: Record<string, unknown>,
+  schema: SchemaObject,
+): Record<string, unknown> {
+  const next = { ...config };
+  for (const field of fieldsFromSchema(schema)) {
+    if (field.kind === "integer" && !field.nullable && next[field.key] === null) {
+      delete next[field.key];
+    }
+  }
+  return next;
 }
 
 function fieldFor(key: string, schema: SchemaObject, required: boolean): FieldSpec {
@@ -77,6 +99,8 @@ function fieldFor(key: string, schema: SchemaObject, required: boolean): FieldSp
       kind: "integer",
       key,
       required,
+      nullable: allowsNull(schema),
+      description: schema.description ?? "",
       minimum: typeof schema.minimum === "number" ? schema.minimum : undefined,
       maximum: typeof schema.maximum === "number" ? schema.maximum : undefined,
     };
@@ -100,9 +124,14 @@ function schemaType(schema: SchemaObject): string | null {
   return null;
 }
 
+function allowsNull(schema: SchemaObject): boolean {
+  return Array.isArray(schema.type) && schema.type.includes("null");
+}
+
 export function emptyRow(fields: FieldSpec[]): Record<string, unknown> {
   const row: Record<string, unknown> = {};
   for (const field of fields) {
+    if (field.kind === "integer" && !field.nullable) continue;
     row[field.key] = defaultValue(field);
   }
   return row;

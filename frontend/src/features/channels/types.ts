@@ -110,6 +110,7 @@ export type GraphProblem = {
   code: string;
   node_id: string | null;
   edge_id: string | null;
+  path: readonly (string | number)[];
   detail: string;
   severity?: "error" | "warning";
 };

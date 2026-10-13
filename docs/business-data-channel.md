@@ -75,7 +75,7 @@ Validation is a pure function over a graph and a reference resolver. It reports 
 15. an edge joins ports whose coarse types are both known and not the same;
 16. a node's `type_version` is not the current version of its node type.
 
-Validate may be called on the draft at any time and does not change anything. It also reports warnings: a template whose result type cannot be known until run time, and an edge whose upstream coarse type is `unknown`. Warnings do not make the graph invalid. Publish runs the same validation and refuses a graph that has an error. A warning alone does not refuse publish.
+Validate checks a graph and writes nothing. Save does not require the graph to be valid. The Console validates the graph on screen. Publish runs the same validation on the stored draft and refuses a graph that has an error. Validate also reports warnings: a template whose result type cannot be known until run time, and an edge whose upstream coarse type is `unknown`. Warnings do not make the graph invalid. A warning alone does not refuse publish.
 
 ### 3.5 Publish
 
@@ -391,7 +391,7 @@ Channel schedule rows are locked, so `jobs:run` only observes them.
 
 ## 12. Management Console
 
-The Data Channel editor is a record authoring surface (`docs/ui-console-record-form.md`): create, show, and edit share one layout, and node configuration panels follow the record-form conventions. The canvas edits the draft. The channel page shows the activation switch, the version list, and the run list. Where the module mounts in Console Navigation is outside this document.
+The Data Channel editor is a record authoring surface (`docs/ui-console-record-form.md`): create, show, and edit share one layout, and node configuration panels follow the record-form conventions. The canvas edits the draft. The channel page shows the activation switch, the version list, and the run list. The Console names a problem by the node's display name, and by the two endpoint names when the problem names an edge. It validates the graph on screen and has no separate validate action. Where the module mounts in Console Navigation is outside this document.
 
 ## 13. Management Audit
 

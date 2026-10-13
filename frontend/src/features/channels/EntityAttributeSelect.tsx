@@ -18,6 +18,7 @@ type Props = {
   exclude?: readonly string[];
   attributes: readonly EntityAttribute[];
   failed?: boolean;
+  error?: string;
   size?: SelectProps["size"];
   onChange: (next: string | null) => void;
 };
@@ -32,6 +33,7 @@ export function EntityAttributeSelect({
   exclude = [],
   attributes,
   failed = false,
+  error,
   size,
   onChange,
 }: Props) {
@@ -61,7 +63,7 @@ export function EntityAttributeSelect({
       value={selected}
       size={size}
       w="100%"
-      error={failed ? t("channels.config.attributeLoadFailed") : undefined}
+      error={error ?? (failed ? t("channels.config.attributeLoadFailed") : undefined)}
       nothingFoundMessage={
         entityId ? t("channels.config.noAttributes") : t("channels.config.pickEntity")
       }

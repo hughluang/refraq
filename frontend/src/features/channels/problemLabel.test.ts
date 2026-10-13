@@ -1,31 +1,154 @@
 import { describe, expect, it } from "vitest";
 
-import { formatRunError } from "@/features/channels/problemLabel";
+import {
+  fieldConstraint,
+  formatGraphProblem,
+  problemIdentity,
+  type ProblemGraph,
+} from "@/features/channels/problemLabel";
+import type { GraphProblem } from "@/features/channels/types";
 
-const LABELS: Record<string, string> = {
-  "problems.CHANNEL_VALUE_TYPE_MISMATCH": "A template result does not match its declared type",
+const t = (key: string, options?: Record<string, unknown>) => {
+  if (key === "problems.CHANNEL_NODE_CONFIG_INVALID") return "Invalid node configuration";
+  if (key === "channels.canvas.problemEdge") return `${options?.source} → ${options?.target}`;
+  return key;
 };
 
-const t = (key: string) => LABELS[key] ?? key;
+const graph: ProblemGraph = {
+  nodes: [
+    { id: "nd_read", name: "Read suppliers" },
+    { id: "nd_write", name: "Write orders" },
+  ],
+  edges: [
+    {
+      id: "ed_1",
+      source: { node_id: "nd_read" },
+      target: { node_id: "nd_write" },
+    },
+  ],
+};
 
-describe("formatRunError", () => {
-  it("uses the locale label and keeps the occurrence text", () => {
+function problem(path: (string | number)[], detail: string): GraphProblem {
+  return {
+    code: "CHANNEL_NODE_CONFIG_INVALID",
+    node_id: "nd_read",
+    edge_id: null,
+    path,
+    detail,
+  };
+}
+
+describe("formatGraphProblem", () => {
+  it("keeps a translated problem without a path as the translation", () => {
     expect(
-      formatRunError(t, "CHANNEL_VALUE_TYPE_MISMATCH", "Value does not match the declared type"),
-    ).toEqual({
-      label: "A template result does not match its declared type",
-      detail: "Value does not match the declared type",
-    });
+      formatGraphProblem(
+        t,
+        {
+          code: "CHANNEL_NODE_CONFIG_INVALID",
+          node_id: "nd_read",
+          edge_id: null,
+          path: [],
+          detail: "Mapping names an attribute more than once",
+        },
+        graph,
+      ),
+    ).toBe("Invalid node configuration (Read suppliers)");
   });
 
-  it("falls back to the message when the code has no locale", () => {
-    expect(formatRunError(t, "CHANNEL_NODE_FAILED", "import of os is not allowed")).toEqual({
-      label: "import of os is not allowed",
-      detail: null,
-    });
+  it("adds the property path and constraint when a path is present", () => {
+    expect(
+      formatGraphProblem(t, problem(["statement_timeout_sec"], "None is not of type 'integer'"), graph),
+    ).toBe(
+      "Invalid node configuration: statement_timeout_sec — None is not of type 'integer' (Read suppliers)",
+    );
   });
 
-  it("returns an empty label when nothing is known", () => {
-    expect(formatRunError(t, null, null)).toEqual({ label: "", detail: null });
+  it("omits the node name when the panel already shows that node", () => {
+    expect(
+      formatGraphProblem(t, problem([], "Mapping names an attribute more than once"), graph, {
+        nodeName: false,
+      }),
+    ).toBe("Invalid node configuration");
+  });
+
+  it("names an edge by the display names of its ends", () => {
+    expect(
+      formatGraphProblem(
+        t,
+        {
+          code: "CHANNEL_PORT_TYPE_MISMATCH",
+          node_id: "nd_write",
+          edge_id: "ed_1",
+          path: [],
+          detail: "Ports have incompatible types",
+        },
+        graph,
+        { nodeName: false },
+      ),
+    ).toBe("Ports have incompatible types (Read suppliers → Write orders)");
+  });
+
+  it("names the one end that resolves and omits a missing edge", () => {
+    expect(
+      formatGraphProblem(
+        t,
+        {
+          code: "CHANNEL_GRAPH_EDGE_INVALID",
+          node_id: "nd_missing",
+          edge_id: "ed_1",
+          path: [],
+          detail: "Edge names an unknown node or port",
+        },
+        {
+          nodes: [{ id: "nd_read", name: "Read suppliers" }],
+          edges: [
+            {
+              id: "ed_1",
+              source: { node_id: "nd_read" },
+              target: { node_id: "nd_missing" },
+            },
+          ],
+        },
+      ),
+    ).toBe("Edge names an unknown node or port (Read suppliers)");
+    expect(
+      formatGraphProblem(
+        t,
+        {
+          code: "CHANNEL_GRAPH_EDGE_INVALID",
+          node_id: "nd_read",
+          edge_id: "ed_gone",
+          path: [],
+          detail: "Edge names an unknown node or port",
+        },
+        graph,
+      ),
+    ).toBe("Edge names an unknown node or port");
+  });
+});
+
+describe("fieldConstraint", () => {
+  it("binds the first path segment to that field and keeps deeper segments in the text", () => {
+    const problems = [
+      problem(["statement_timeout_sec"], "None is not of type 'integer'"),
+      problem(["mapping", 0, "attribute"], "'attribute' is a required property"),
+    ];
+    expect(fieldConstraint(problems, "statement_timeout_sec")).toBe(
+      "None is not of type 'integer'",
+    );
+    expect(fieldConstraint(problems, "mapping")).toBe(
+      "0.attribute — 'attribute' is a required property",
+    );
+    expect(fieldConstraint(problems, "sql")).toBeUndefined();
+  });
+});
+
+describe("problemIdentity", () => {
+  it("keeps two configuration failures on one node distinct", () => {
+    const left = problemIdentity(problem(["sql"], "'' is too short"));
+    const right = problemIdentity(
+      problem(["statement_timeout_sec"], "None is not of type 'integer'"),
+    );
+    expect(left).not.toBe(right);
   });
 });

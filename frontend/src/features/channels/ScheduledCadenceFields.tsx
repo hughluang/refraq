@@ -10,10 +10,11 @@ import { TextField } from "@/components/form/TextField";
 type Props = {
   config: Record<string, unknown>;
   editable: boolean;
+  errors?: { cron?: string; interval_seconds?: string; start_at?: string };
   onChange: (config: Record<string, unknown>) => void;
 };
 
-export function ScheduledCadenceFields({ config, editable, onChange }: Props) {
+export function ScheduledCadenceFields({ config, editable, errors, onChange }: Props) {
   const t = useTranslate();
   const interval = typeof config.interval_seconds === "number";
   const mode = interval ? "interval" : "cron";
@@ -43,6 +44,7 @@ export function ScheduledCadenceFields({ config, editable, onChange }: Props) {
         <CronField
           label={t("channels.config.cadence.cron")}
           value={cron}
+          error={errors?.cron}
           onChange={
             editable
               ? (next) => onChange({ ...config, cron: next, interval_seconds: null })
@@ -54,6 +56,7 @@ export function ScheduledCadenceFields({ config, editable, onChange }: Props) {
           editable={editable}
           label={t("channels.config.cadence.intervalSeconds")}
           min={1}
+          error={errors?.interval_seconds}
           value={seconds}
           onChange={(value) =>
             onChange({
@@ -68,6 +71,7 @@ export function ScheduledCadenceFields({ config, editable, onChange }: Props) {
         editable={editable}
         label={t("channels.config.cadence.startAt")}
         description={t("channels.config.cadence.startAtHint")}
+        error={errors?.start_at}
         value={start}
         placeholder="2026-10-11T00:00:00Z"
         onChange={(event) => {

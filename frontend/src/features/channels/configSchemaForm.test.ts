@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   defaultConfig,
   fieldsFromSchema,
+  omitUnsetIntegers,
   type SchemaObject,
 } from "@/features/channels/configSchemaForm";
 
@@ -116,6 +117,22 @@ describe("fieldsFromSchema", () => {
   });
 });
 
+const TIMEOUT: SchemaObject = {
+  type: "object",
+  properties: {
+    statement_timeout_sec: {
+      type: "integer",
+      minimum: 1,
+      maximum: 3600,
+      description: "Seconds before the statement is cancelled. Default 30.",
+    },
+    interval_seconds: {
+      type: ["integer", "null"],
+      minimum: 1,
+    },
+  },
+};
+
 describe("defaultConfig", () => {
   it("seeds write defaults the draft can store before references are chosen", () => {
     expect(defaultConfig(WRITE)).toEqual({
@@ -125,5 +142,25 @@ describe("defaultConfig", () => {
       mapping: [],
       on_incompatible_head: "fail",
     });
+  });
+
+  it("omits an optional integer that cannot be null and keeps a nullable integer", () => {
+    expect(defaultConfig(TIMEOUT)).toEqual({ interval_seconds: null });
+    expect(fieldsFromSchema(TIMEOUT).find((field) => field.key === "statement_timeout_sec")).toMatchObject({
+      kind: "integer",
+      nullable: false,
+      description: "Seconds before the statement is cancelled. Default 30.",
+    });
+  });
+});
+
+describe("omitUnsetIntegers", () => {
+  it("drops a stored null on a non-nullable integer and keeps null where the type allows it", () => {
+    expect(
+      omitUnsetIntegers(
+        { statement_timeout_sec: null, interval_seconds: null, sql: "select 1" },
+        TIMEOUT,
+      ),
+    ).toEqual({ interval_seconds: null, sql: "select 1" });
   });
 });

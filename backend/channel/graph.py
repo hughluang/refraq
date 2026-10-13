@@ -52,6 +52,7 @@ class Problem:
     node_id: str | None = None
     edge_id: str | None = None
     severity: str = "error"
+    path: tuple[str | int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -414,15 +415,17 @@ def _type_and_config_problems(
                     node_id=str(node["id"]),
                 )
             )
-        message = _config_error(spec.config_schema, node["config"])
-        if message is not None:
-            problems.append(
-                Problem(
-                    "CHANNEL_NODE_CONFIG_INVALID",
-                    message,
-                    node_id=str(node["id"]),
+        errors = _config_errors(spec.config_schema, node["config"])
+        if errors:
+            for message, path in errors:
+                problems.append(
+                    Problem(
+                        "CHANNEL_NODE_CONFIG_INVALID",
+                        message,
+                        node_id=str(node["id"]),
+                        path=path,
+                    )
                 )
-            )
             continue
         repeated = _repeated_mapping(node["config"])
         if repeated is not None:
@@ -436,14 +439,30 @@ def _type_and_config_problems(
     return problems
 
 
-def _config_error(schema: dict[str, Any], config: Any) -> str | None:
+def _config_errors(
+    schema: dict[str, Any], config: Any
+) -> list[tuple[str, tuple[str | int, ...]]]:
     if not isinstance(config, dict):
-        return "Node configuration must be an object"
+        return [("Node configuration must be an object", ())]
     validator = Draft202012Validator(schema)
-    errors = sorted(validator.iter_errors(config), key=lambda item: list(item.path))
-    if not errors:
-        return None
-    return errors[0].message
+    found = sorted(validator.iter_errors(config), key=lambda item: list(item.path))
+    return [(item.message, _error_path(item)) for item in found]
+
+
+def _error_path(error: Any) -> tuple[str | int, ...]:
+    raw = list(error.path)
+    if error.validator == "required":
+        raw.append(_missing_required(error))
+    return tuple(raw)
+
+
+def _missing_required(error: Any) -> str:
+    message = error.message
+    return next(
+        name
+        for name in error.validator_value
+        if name not in error.instance and message.startswith(repr(name))
+    )
 
 
 def _repeated_mapping(config: Any) -> str | None:
@@ -648,10 +667,7 @@ def _reference_problems(
     problems: list[Problem] = []
     for node in nodes:
         spec = by_type.get(str(node["type"]))
-        if (
-            spec is None
-            or _config_error(spec.config_schema, node["config"]) is not None
-        ):
+        if spec is None or _config_errors(spec.config_schema, node["config"]):
             continue
         for kind, value, entity_id in _refs(spec.config_schema, node["config"], None):
             if kind == "entity":
@@ -688,7 +704,7 @@ def _sql_source_problems(
         if str(node["type"]) != "read.sql":
             continue
         spec = by_type.get("read.sql")
-        if spec is None or _config_error(spec.config_schema, node["config"]) is not None:
+        if spec is None or _config_errors(spec.config_schema, node["config"]):
             continue
         source = node["config"].get("source")
         if not isinstance(source, dict) or source.get("kind") != "source":
@@ -715,10 +731,7 @@ def _match_key_problems(
         if str(node["type"]) != "write.entity":
             continue
         spec = by_type.get("write.entity")
-        if (
-            spec is None
-            or _config_error(spec.config_schema, node["config"]) is not None
-        ):
+        if spec is None or _config_errors(spec.config_schema, node["config"]):
             continue
         config = node["config"]
         head = resolver.entity_head(config["entity_id"])

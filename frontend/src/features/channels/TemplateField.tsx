@@ -26,6 +26,7 @@ type Props = {
   value: string;
   editable: boolean;
   upstream?: readonly UpstreamOutput[];
+  error?: string;
   onChange: (value: string) => void;
 };
 
@@ -36,6 +37,7 @@ export function TemplateField({
   value,
   editable,
   upstream = [],
+  error,
   onChange,
 }: Props) {
   const fieldId = useId();
@@ -102,8 +104,14 @@ export function TemplateField({
           onBlur={() => {
             setOpen(false);
           }}
+          aria-invalid={error ? true : undefined}
         />
       </div>
+      {error ? (
+        <Text size="xs" c="red">
+          {error}
+        </Text>
+      ) : null}
       <TemplateStatus preview={preview} rule={rule} />
       {open && labels.length > 0 && query ? (
         <div className="channel-template-field__menu" role="listbox">

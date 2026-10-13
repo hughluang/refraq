@@ -210,12 +210,18 @@ Manual trigger configuration (`trigger.manual`):
 Validation reports problems as result documents, not as Problem Details:
 
 ```json
-{ "code": "CHANNEL_GRAPH_CYCLE", "node_id": "nd_read", "edge_id": "ed_2", "detail": "Cycle does not pass through a Loop node", "severity": "error" }
+{ "code": "CHANNEL_GRAPH_CYCLE", "node_id": "nd_read", "edge_id": "ed_2", "path": [], "detail": "Cycle does not pass through a Loop node", "severity": "error" }
 ```
 
 `severity` is `error` or `warning`. Only `error` makes the graph invalid.
 
-`node_id` and `edge_id` are each the offending node or edge, or `null`. `detail` is English occurrence text. Codes are listed in §6.2.
+`node_id` and `edge_id` are each the offending node or edge, or `null`. `path` is the configuration property segments when the failure names one, and is empty otherwise. A nested segment may be a property name or a list index. `detail` is English occurrence text. Codes are listed in §6.2.
+
+A configuration schema failure uses one entry per failing property:
+
+```json
+{ "code": "CHANNEL_NODE_CONFIG_INVALID", "node_id": "nd_read", "edge_id": null, "path": ["statement_timeout_sec"], "detail": "None is not of type 'integer'", "severity": "error" }
+```
 
 ### 3.5 Confirmation List
 
@@ -350,7 +356,7 @@ On `succeeded` only:
 | `DELETE` | `/channels/{id}` | `channel:write` | Delete the channel |
 | `GET` | `/channels/{id}/draft` | `channel:read` | Read the draft graph |
 | `PUT` | `/channels/{id}/draft` | `channel:write` | Replace the draft graph |
-| `POST` | `/channels/{id}/draft/validate` | `channel:write` | Validate the stored draft |
+| `POST` | `/channels/{id}/draft/validate` | `channel:write` | Validate a graph without writing it |
 | `POST` | `/channels/{id}/publish/preview` | `channel:write` | Compute the confirmation list |
 | `POST` | `/channels/{id}/publish` | `channel:write` | Publish the draft as a new version |
 | `GET` | `/channels/{id}/versions` | `channel:read` | List versions (**Offset Page**) |
@@ -390,7 +396,7 @@ Any subset of `name` and `description`. Present `description` `null` clears it. 
 
 ### 5.6 `GET` and `PUT /channels/{id}/draft`
 
-`GET` returns `{ "draft_revision", "draft_updated_at", "graph" }`. The graph is the stored document. A node that lacks `ref`, names an unknown type, or otherwise fails §3.2 is still returned. Those failures are reported by validate, not by this read.
+`GET` returns `{ "draft_revision", "draft_updated_at", "graph" }`. The graph is the stored document. A node that lacks `ref`, names an unknown type, or otherwise fails §3.2 is still returned. This read does not report those failures. Publish validates the stored draft and refuses it when that validation has an error. The validate endpoint accepts only a graph of the save shape; a document that fails that shape is `422`.
 
 `PUT` body:
 
@@ -405,14 +411,17 @@ Any subset of `name` and `description`. Present `description` `null` clears it. 
 
 ### 5.7 `POST /channels/{id}/draft/validate`
 
-Empty body. Validates the stored draft. `200`:
+```json
+{ "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "error_channel_id": null } } }
+```
+
+`graph` is the same shape as a draft save (§3.2). The body is required. Validate checks that graph and does not read or write the stored draft. It does not record an audit event. A graph that fails the save shape is `422`. The channel must exist (`404` otherwise). `200`:
 
 ```json
 {
-  "draft_revision": 12,
   "valid": false,
   "problems": [
-    { "code": "CHANNEL_GRAPH_NO_TRIGGER", "node_id": null, "edge_id": null, "detail": "Graph has no trigger node", "severity": "error" }
+    { "code": "CHANNEL_GRAPH_NO_TRIGGER", "node_id": null, "edge_id": null, "path": [], "detail": "Graph has no trigger node", "severity": "error" }
   ],
   "ports": [
     { "node_id": "nd_read", "port": "main", "direction": "output", "coarse_type": "object", "schema": { "type": "object" } }
@@ -420,7 +429,7 @@ Empty body. Validates the stored draft. `200`:
 }
 ```
 
-`valid` is false when any problem has severity `error`. `ports` lists every declared port. `schema` is the refined JSON Schema, or `null` when it is not known. An invalid graph is a `200` result, not a Problem Details failure. Validate writes nothing.
+The response describes the submitted graph. `valid` is false when any problem has severity `error`. `ports` lists every declared port of that graph. `schema` is the refined JSON Schema, or `null` when it is not known. An invalid graph is a `200` result, not a Problem Details failure.
 
 ### 5.8 `POST /channels/{id}/publish/preview` and `POST /channels/{id}/publish`
 

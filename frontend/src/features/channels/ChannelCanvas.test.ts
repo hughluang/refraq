@@ -146,7 +146,7 @@ describe("ChannelCanvas controls", () => {
 
   it("puts the problem control in the panel with a count badge", async () => {
     await renderCanvas([
-      { code: "graph.empty", node_id: null, edge_id: null, detail: "Empty graph" },
+      { code: "graph.empty", node_id: null, edge_id: null, path: [], detail: "Empty graph" },
     ]);
 
     const problems = screen.getByRole("button", { name: "1 errors, 0 warnings" });
@@ -157,13 +157,13 @@ describe("ChannelCanvas controls", () => {
 
   it("highlights a node only after its problem is chosen", async () => {
     const view = await renderCanvas(
-      [{ code: "graph.empty", node_id: "nd_1", edge_id: null, detail: "Empty graph" }],
+      [{ code: "graph.empty", node_id: "nd_1", edge_id: null, path: [], detail: "Empty graph" }],
       nodeGraph,
     );
     expect(document.querySelector(".channel-flow-node--problem")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "1 errors, 0 warnings" }));
-    fireEvent.click(screen.getByRole("button", { name: "Empty graph (nd_1)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Empty graph (Start)" }));
     expect(document.querySelector(".channel-flow-node--problem")).not.toBeNull();
     expect(screen.getByRole("button", { name: "channels.node.close" })).toBeTruthy();
 
@@ -173,12 +173,29 @@ describe("ChannelCanvas controls", () => {
     expect(document.querySelector(".channel-flow-node--problem")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "1 errors, 0 warnings" }));
-    fireEvent.click(screen.getByRole("button", { name: "Empty graph (nd_1)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Empty graph (Start)" }));
     expect(document.querySelector(".channel-flow-node--problem")).not.toBeNull();
 
     view.rerenderProblems([]);
     await waitFor(() => {
       expect(document.querySelector(".channel-flow-node--problem")).toBeNull();
+    });
+  });
+
+  it("hides the problem control when the open list is cleared", async () => {
+    const view = await renderCanvas([
+      { code: "graph.empty", node_id: null, edge_id: null, path: [], detail: "Empty graph" },
+      { code: "graph.other", node_id: null, edge_id: null, path: [], detail: "Other" },
+    ]);
+
+    const problems = screen.getByRole("button", { name: "2 errors, 0 warnings" });
+    fireEvent.click(problems);
+    expect(problems.getAttribute("aria-expanded")).toBe("true");
+    expect(problems.querySelector(".channel-canvas-problems__badge")?.textContent).toBe("2");
+
+    view.rerenderProblems([]);
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /errors/ })).toBeNull();
     });
   });
 
@@ -189,6 +206,7 @@ describe("ChannelCanvas controls", () => {
           code: "CHANNEL_TEMPLATE_TYPE_UNKNOWN",
           node_id: "nd_1",
           edge_id: null,
+          path: [],
           detail: "Checked at run time",
           severity: "warning",
         },
@@ -200,7 +218,7 @@ describe("ChannelCanvas controls", () => {
     expect(problems.className).toContain("channel-canvas-problems--warning");
     fireEvent.click(problems);
     expect(
-      screen.getByRole("button", { name: "Checked at run time (nd_1)" }).className,
+      screen.getByRole("button", { name: "Checked at run time (Start)" }).className,
     ).toContain("channel-canvas-problems__item--warning");
   });
 
@@ -211,6 +229,7 @@ describe("ChannelCanvas controls", () => {
           code: "graph.empty",
           node_id: "nd_1",
           edge_id: null,
+          path: [],
           detail: "Empty graph",
           severity: "error",
         },
@@ -218,6 +237,7 @@ describe("ChannelCanvas controls", () => {
           code: "CHANNEL_TEMPLATE_TYPE_UNKNOWN",
           node_id: "nd_1",
           edge_id: null,
+          path: [],
           detail: "Checked at run time",
           severity: "warning",
         },
@@ -228,11 +248,11 @@ describe("ChannelCanvas controls", () => {
     const problems = screen.getByRole("button", { name: "1 errors, 1 warnings" });
     expect(problems.className).not.toContain("channel-canvas-problems--warning");
     fireEvent.click(problems);
-    expect(screen.getByRole("button", { name: "Empty graph (nd_1)" }).className).not.toContain(
+    expect(screen.getByRole("button", { name: "Empty graph (Start)" }).className).not.toContain(
       "channel-canvas-problems__item--warning",
     );
     expect(
-      screen.getByRole("button", { name: "Checked at run time (nd_1)" }).className,
+      screen.getByRole("button", { name: "Checked at run time (Start)" }).className,
     ).toContain("channel-canvas-problems__item--warning");
   });
 });
