@@ -9,11 +9,6 @@ export function isTerminalRun(status: string): boolean {
   return TERMINAL.has(status);
 }
 
-export function objectKeys(value: unknown): string[] {
-  if (value == null || typeof value !== "object" || Array.isArray(value)) return [];
-  return Object.keys(value).filter((key) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key));
-}
-
 export function ancestorIds(nodeId: string, edges: readonly GraphEdge[]): Set<string> {
   const incoming = new Map<string, string[]>();
   for (const edge of edges) {
@@ -75,11 +70,11 @@ export function phaseByNode(detail: ChannelRunDetail, graph: Graph): Map<string,
   return phases;
 }
 
-export function sampleKeysByNode(executions: readonly NodeExecution[]): Map<string, string[]> {
-  const keys = new Map<string, string[]>();
+export function samplesByNode(executions: readonly NodeExecution[]): Map<string, unknown> {
+  const samples = new Map<string, unknown>();
   for (const item of executions) {
-    const found = objectKeys(item.output_preview);
-    if (found.length > 0) keys.set(item.node_id, found);
+    if (item.output_preview == null) continue;
+    samples.set(item.node_id, item.output_preview);
   }
-  return keys;
+  return samples;
 }

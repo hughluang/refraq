@@ -46,18 +46,20 @@ import {
   getDraft,
   getRun,
   listNodeTypes,
+  listRuns,
   patchChannel,
   previewPublish,
   publishChannel,
   saveDraft,
   startRun,
   validateDraft,
+  type DraftValidation,
 } from "@/features/channels/api";
 import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
 import { isTerminalRun } from "@/features/channels/runSession";
 import { ChannelRuns } from "@/features/channels/ChannelRuns";
 import { ChannelVersions } from "@/features/channels/ChannelVersions";
-import type { Graph, GraphProblem, RefinedPort } from "@/features/channels/types";
+import type { ExpressionContext, Graph, GraphProblem, RefinedPort } from "@/features/channels/types";
 import {
   graphWithoutUnsetIntegers,
   validationContentKey,
@@ -184,6 +186,7 @@ function ChannelExisting({
   const [catalog, setCatalog] = useState<NodeTypeSpec[]>([]);
   const [problems, setProblems] = useState<GraphProblem[]>([]);
   const [ports, setPorts] = useState<RefinedPort[]>([]);
+  const [expressionContext, setExpressionContext] = useState<ExpressionContext | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
@@ -215,6 +218,7 @@ function ChannelExisting({
   const validateSeq = useRef(0);
   const loadedChannelRef = useRef<string | null>(null);
   const arrivalRef = useRef(false);
+  const runEpoch = useRef(0);
   const [draftEpoch, setDraftEpoch] = useState(0);
 
   useEffect(() => {
@@ -225,6 +229,26 @@ function ChannelExisting({
     validateSeq.current += 1;
     setProblems([]);
     setPorts([]);
+    setExpressionContext(null);
+    const epoch = ++runEpoch.current;
+    setSessionRun(null);
+    void listRuns(channelId, { target: "draft", limit: 1 })
+      .then((page) => {
+        const latest = page.items[0];
+        if (!latest || cancelled || runEpoch.current !== epoch) return null;
+        return getRun(channelId, latest.job_id);
+      })
+      .then((detail) => {
+        if (!detail || cancelled || runEpoch.current !== epoch) return;
+        setSessionRun(detail);
+      })
+      .catch((error: unknown) => {
+        if (cancelled || runEpoch.current !== epoch) return;
+        open?.({
+          type: "error",
+          message: problemMessage(t, error, t("channels.load.failed")),
+        });
+      });
     void Promise.all([getChannel(channelId), getDraft(channelId), listNodeTypes()])
       .then(([channelBody, draft, types]) => {
         if (cancelled) return;
@@ -320,6 +344,7 @@ function ChannelExisting({
           if (validateSeq.current !== seq) return;
           setProblems(result.problems);
           setPorts(result.ports);
+          setExpressionContext(result.context);
         })
         .catch((error: unknown) => {
           if (validateSeq.current !== seq) return;
@@ -329,16 +354,14 @@ function ChannelExisting({
     return () => window.clearTimeout(timer);
   }, [canWrite?.can, channelId, contentKey, draftEpoch]);
 
-  const reportBlockedGraph = (
-    result: { problems: GraphProblem[]; ports: RefinedPort[] },
-    source: Graph,
-  ) => {
+  const reportBlockedGraph = (result: DraftValidation, source: Graph) => {
     // A run or publish check can resolve after the canvas has moved on.
     // Applying that snapshot would replace the problems on screen and drop the newer check.
     if (!validationResultApplies(source, graphRef.current)) return;
     validateSeq.current += 1;
     setProblems(result.problems);
     setPorts(result.ports);
+    setExpressionContext(result.context);
     setPanel(null);
     const firstError = result.problems.find((problem) => problem.severity !== "warning");
     open?.({
@@ -433,7 +456,10 @@ function ChannelExisting({
   };
 
   const rememberRun = async (jobId: string, nodeId?: string) => {
-    setSessionRun(await getRun(channelId, jobId));
+    const epoch = ++runEpoch.current;
+    const detail = await getRun(channelId, jobId);
+    if (runEpoch.current !== epoch) return;
+    setSessionRun(detail);
     if (nodeId) setRunFocus({ nodeId, token: Date.now() });
   };
 
@@ -629,6 +655,7 @@ function ChannelExisting({
                         validateSeq.current += 1;
                         setProblems(result.problems);
                         setPorts(result.ports);
+                        setExpressionContext(result.context);
                         setPublishRevision(nextRevision);
                         setPreview(await previewPublish(channelId));
                       })
@@ -714,6 +741,7 @@ function ChannelExisting({
           editable={writable && !runActive}
           problems={problems}
           ports={ports}
+          context={expressionContext}
           onChange={setGraph}
           sessionRun={sessionRun}
           onRunNode={runNode}
@@ -808,6 +836,7 @@ function ChannelExisting({
               setPreview(null);
               setProblems([]);
               setPorts([]);
+              setExpressionContext(null);
               leaveGuard.bypass();
               open?.({ type: "success", message: t("channels.publish.done") });
               setReloadToken((value) => value + 1);

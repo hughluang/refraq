@@ -101,7 +101,7 @@ The mechanism stores keys and values and never names an occupancy window, a Beat
 
 - Each owning package declares its specs in `<package>/parameters.py` and publishes both the spec list and its **typed accessors**. The mechanism publishes only a generic resolver, so no function inside `admin` is named after another package's concept.
 - Composition assembles the registry from those published spec lists and then runs seed occupy, reusing the existing product-seed path (`ensure_product_type_mappings`); no new pattern is introduced.
-- The API process, the worker / Beat process, and the MCP process (HTTP `mcp_http` and stdio `mcp_server`) all assemble and occupy. Occupy is insert-if-missing and safe to run concurrently.
+- The API process, the worker / Beat process, the supervised Job child (`python -m backend.jobs.job_child`), and the MCP process (HTTP `mcp_http` and stdio `mcp_server`) all assemble and occupy. Occupy is insert-if-missing and safe to run concurrently.
 - The assembled registry is frozen after composition. Reading an unregistered key is an error, so a process that forgets a declaration fails at boot rather than silently falling back.
 - Product seed occupy has the same meaning as for **Type Mapping** seeds: write only when the row is missing, never overwrite an operator value, and reset restores the seed.
 

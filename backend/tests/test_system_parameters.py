@@ -209,11 +209,13 @@ def test_registry_parity_across_composition() -> None:
     mcp_stdio_src = (BACKEND_ROOT / "metadata" / "mcp_server.py").read_text(
         encoding="utf-8"
     )
+    job_child_src = (BACKEND_ROOT / "jobs" / "job_child.py").read_text(encoding="utf-8")
     assert "assemble_system_parameters" in main_src
     assert "assemble_system_parameters" in app_src
     assert "assemble_system_parameters" in upgrade_src
     assert "assemble_system_parameters" in mcp_http_src
     assert "assemble_system_parameters" in mcp_stdio_src
+    assert "assemble_system_parameters" in job_child_src
 
 
 def test_retired_keys_are_not_registered() -> None:

@@ -213,6 +213,7 @@ def test_draft_conflict_and_invalid_publish(client: TestClient) -> None:
     assert body["problems"]
     assert body["ports"]
     assert "schema" in body["ports"][0]
+    assert set(body["context"]) == {"channel", "run", "platform"}
     after = client.get(f"/channels/{channel_id}/draft")
     assert after.json()["draft_revision"] == before.json()["draft_revision"]
     assert after.json()["graph"] == before.json()["graph"]

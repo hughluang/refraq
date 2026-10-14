@@ -2,6 +2,7 @@ export type SchemaObject = {
   type?: string | string[];
   properties?: Record<string, SchemaObject>;
   required?: string[];
+  additionalProperties?: boolean;
   items?: SchemaObject;
   enum?: string[];
   description?: string;

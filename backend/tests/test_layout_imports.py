@@ -228,7 +228,12 @@ def test_layout_imports(path: Path) -> None:
                 )
 
         # docs/backend-layout.md §8 from-column: jobs may not import worker.
+        # The supervised Job child is a process entry and assembles there.
         if importer_pkg == "jobs" and target_pkg not in {"core", "admin"}:
+            if importer == "jobs.job_child" and (
+                imported == "worker.parameters" or imported.startswith("worker.parameters.")
+            ):
+                continue
             if not _allowlisted(importer, imported):
                 raise AssertionError(
                     f"{importer} must not import {imported} "

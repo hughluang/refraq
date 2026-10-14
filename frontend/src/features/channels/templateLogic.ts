@@ -1,17 +1,14 @@
 import type { SchemaObject } from "@/features/channels/configSchemaForm";
 import { scanTemplate, templatePosition } from "@/features/channels/templateScan";
+import {
+  memberOptions,
+  parseAccess,
+  type AccessChain,
+  type ScopeNodeOutput,
+  type SelfScope,
+} from "@/features/channels/templateScope";
 
 export type TemplateValueSchema = SchemaObject | { from: "entity_attribute" };
-
-export type UpstreamOutput = {
-  ref: string;
-  name: string;
-  paths: readonly string[];
-};
-
-type CompletionQuery =
-  | { kind: "ref"; start: number; filter: string }
-  | { kind: "path"; start: number; ref: string; filter: string };
 
 export type TemplatePreview =
   | { state: "deferred" }
@@ -29,8 +26,6 @@ export type TemplateCompletion = {
 export type TemplateRule = "text" | "json";
 
 const RESOLVED_LIMIT = 80;
-
-const IDENT = "[A-Za-z_][A-Za-z0-9_]*";
 
 export function attributeValueSchema(attributeType: string): SchemaObject {
   const scalar: Record<string, string> = {
@@ -91,65 +86,16 @@ export function resolvedText(value: unknown): string {
   return `${text.slice(0, RESOLVED_LIMIT - 1)}…`;
 }
 
-function completionQuery(text: string, cursor: number): CompletionQuery | null {
-  const before = text.slice(0, cursor);
-  const path = before.match(
-    new RegExp(`self\\.(${IDENT})\\.output\\.?(${IDENT})?$`),
-  );
-  if (path?.[1]) {
-    return {
-      kind: "path",
-      start: before.length - path[0].length,
-      ref: path[1],
-      filter: path[2] ?? "",
-    };
-  }
-  const ref = before.match(new RegExp(`self\\.(${IDENT})?$`));
-  if (!ref) return null;
-  const filter = ref[1] ?? "";
-  return { kind: "ref", start: before.length - ref[0].length, filter };
-}
-
-function completionLabels(
-  query: CompletionQuery,
-  upstream: readonly UpstreamOutput[],
-): string[] {
-  if (query.kind === "ref") {
-    return upstream
-      .map((item) => item.ref)
-      .filter((ref) => ref.startsWith(query.filter));
-  }
-  const node = upstream.find((item) => item.ref === query.ref);
-  if (!node) return [];
-  return node.paths.filter((path) => {
-    const suffix = path === "output" ? "" : path.slice("output.".length);
-    return suffix.startsWith(query.filter);
-  });
-}
-
-export function outputPaths(
-  schema: SchemaObject | null | undefined,
-  sampleKeys: readonly string[] = [],
-): string[] {
-  if (schema?.type === "object" && schema.properties && Object.keys(schema.properties).length > 0) {
-    return ["output", ...Object.keys(schema.properties).map((key) => `output.${key}`)];
-  }
-  const extras = sampleKeys
-    .filter((key) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
-    .map((key) => `output.${key}`);
-  return extras.length > 0 ? ["output", ...extras] : ["output"];
-}
-
 export function templateCompletions(
   text: string,
   cursor: number,
   explicit: boolean,
-  upstream: readonly UpstreamOutput[],
+  scope: SelfScope,
 ): TemplateCompletion | null {
   const position = templatePosition(text, cursor);
   if (position.kind === "outside" || position.kind === "string") return null;
   if (position.kind === "nodeKey") {
-    const names = upstream
+    const names = scope.nodes
       .map((item) => item.name)
       .filter((name) => name !== "" && name.startsWith(position.filter));
     if (names.length === 0) return null;
@@ -158,16 +104,20 @@ export function templateCompletions(
       options: names.map((name) => `self.nodes[${JSON.stringify(name)}]`),
     };
   }
-  const query = completionQuery(text, cursor);
-  if (query) {
-    const labels = completionLabels(query, upstream);
-    if (labels.length === 0) return null;
-    return { from: query.start, options: labels.map((label) => completionText(query, label)) };
+  const access = parseAccess(text, cursor);
+  if (access) {
+    const members = memberOptions(scope, access);
+    if (members.length === 0) return null;
+    return {
+      from: access.start,
+      options: members.map((member) => applyMember(text, cursor, access, member)),
+    };
   }
   if (!explicit) return null;
-  const refs = upstream.map((item) => item.ref);
-  if (refs.length === 0) return null;
-  return { from: cursor, options: refs.map((ref) => `self.${ref}`) };
+  return {
+    from: cursor,
+    options: memberOptions(scope, { segments: [], filter: "" }).map((name) => `self.${name}`),
+  };
 }
 
 export function upstreamOutputs(
@@ -175,8 +125,8 @@ export function upstreamOutputs(
   nodes: readonly { id: string; ref: string; name: string }[],
   edges: readonly { source: string; target: string }[],
   schemas: ReadonlyMap<string, SchemaObject | null>,
-  samples: ReadonlyMap<string, readonly string[]> = new Map(),
-): UpstreamOutput[] {
+  samples: ReadonlyMap<string, unknown> = new Map(),
+): ScopeNodeOutput[] {
   const incoming = new Map<string, string[]>();
   for (const edge of edges) {
     const list = incoming.get(edge.target) ?? [];
@@ -196,13 +146,14 @@ export function upstreamOutputs(
     .map((node) => ({
       ref: node.ref,
       name: node.name,
-      paths: outputPaths(schemas.get(node.id), samples.get(node.id) ?? []),
+      schema: schemas.get(node.id) ?? null,
+      sample: samples.get(node.id),
     }));
 }
 
-function completionText(query: CompletionQuery, label: string): string {
-  if (query.kind === "ref") return `self.${label}`;
-  return `self.${query.ref}.${label}`;
+function applyMember(text: string, cursor: number, access: AccessChain, member: string): string {
+  const written = text.slice(access.start, cursor);
+  return written.slice(0, written.length - access.filter.length) + member;
 }
 
 function typeNames(schema: SchemaObject): string[] {

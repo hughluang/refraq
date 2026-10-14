@@ -8,6 +8,7 @@ import type {
   ChannelRunDetail,
   ChannelVersion,
   Confirmation,
+  ExpressionContext,
   Graph,
   GraphProblem,
   NodeTypeSpec,
@@ -95,12 +96,15 @@ export function saveDraft(
   });
 }
 
+export type DraftValidation = {
+  valid: boolean;
+  problems: GraphProblem[];
+  ports: RefinedPort[];
+  context: ExpressionContext;
+};
+
 export function validateDraft(id: string, graph: Graph) {
-  return apiClient<{
-    valid: boolean;
-    problems: GraphProblem[];
-    ports: RefinedPort[];
-  }>(`/channels/${id}/draft/validate`, {
+  return apiClient<DraftValidation>(`/channels/${id}/draft/validate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ graph }),

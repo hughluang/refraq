@@ -220,6 +220,7 @@ function renderPanel(
           editable,
           problems,
           revealKey,
+          scope: { nodes: [], context: { channel: null, run: null, platform: null } },
           onClose: vi.fn(),
           onChange,
         }) as ReactNode,

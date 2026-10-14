@@ -37,6 +37,7 @@ from backend.channel.schemas.channels import (
     VersionResponse,
     VersionSummaryOut,
 )
+from backend.channel.context import context_schema
 from backend.channel.graph import refine_ports
 from backend.channel.references import ChannelReferenceResolver
 from backend.channel.service import (
@@ -327,6 +328,7 @@ def http_validate_draft(
             )
             for port in ports
         ],
+        context=context_schema(),
     )
 
 

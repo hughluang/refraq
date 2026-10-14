@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime
 from typing import Any
 
-from backend.admin.system_parameters.registry import list_registered_specs
-from backend.admin.system_parameters.resolver import resolve_int, resolve_str
-from backend.admin.system_parameters.spec import IntConstraint
 from backend.admin.user_store import ensure_system_user, get_user_store
+from backend.channel.context import channel_context, platform_context, run_context
 from backend.channel.engine import NodeResult, execute
 from backend.channel.executors import EXECUTORS
 from backend.channel.nodes import list_node_types
@@ -161,9 +158,9 @@ def run_channel_job(job_id: str) -> dict[str, str]:
     try:
         with SandboxSession() as sandbox:
             sandbox.set_context(
-                channel=_channel_ctx(channel, run),
-                run=_run_ctx(run, started, actor, claimed.trigger_kind),
-                platform=_platform_ctx(started),
+                channel=channel_context(channel, run),
+                run=run_context(run, started, actor, claimed.trigger_kind),
+                platform=platform_context(started),
             )
             hooks = _Hooks(
                 job_id=job_id,
@@ -274,41 +271,3 @@ def _schedule_ctx(job: Any, channel_id: str, node: dict[str, Any]) -> dict[str, 
     }
 
 
-def _channel_ctx(channel: Any, run: Any) -> dict[str, Any]:
-    return {
-        "id": channel.id,
-        "name": channel.name,
-        "description": channel.description,
-        "active": channel.active,
-        "settings": (run.graph or {}).get("settings") or {},
-    }
-
-
-def _run_ctx(run: Any, started: datetime, actor: dict[str, str], trigger_kind: str | None) -> dict[str, Any]:
-    return {
-        "id": run.job_id,
-        "target": run.target,
-        "version": run.version,
-        "draft_revision": run.draft_revision,
-        "trigger_kind": trigger_kind or "user",
-        "started_at": started.isoformat().replace("+00:00", "Z"),
-        "triggered_by": actor,
-    }
-
-
-def _platform_ctx(started: datetime) -> dict[str, Any]:
-    parameters: dict[str, Any] = {}
-    try:
-        for spec in list_registered_specs():
-            if isinstance(spec.constraint, IntConstraint):
-                parameters[spec.key] = resolve_int(spec.key).value
-            else:
-                parameters[spec.key] = resolve_str(spec.key).value
-    except Exception:  # noqa: BLE001
-        parameters = {}
-    return {
-        "site_name": "",
-        "schedule_timezone": parameters.get("schedule_timezone", "UTC"),
-        "now": started.isoformat().replace("+00:00", "Z"),
-        "parameters": parameters,
-    }

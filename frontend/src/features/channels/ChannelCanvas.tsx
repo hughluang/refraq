@@ -63,7 +63,7 @@ import {
 } from "@/features/channels/graphValidation";
 import { NodeConfigPanel } from "@/features/channels/NodeConfigPanel";
 import { NodeRunPanel } from "@/features/channels/NodeRunPanel";
-import { phaseByNode, sampleKeysByNode, type NodeRunPhase } from "@/features/channels/runSession";
+import { phaseByNode, samplesByNode, type NodeRunPhase } from "@/features/channels/runSession";
 import { nodeTypeLabel, nodeTypeSummary } from "@/features/channels/nodeTypeCopy";
 import {
   formatGraphProblem,
@@ -72,7 +72,14 @@ import {
   type ProblemGraph,
 } from "@/features/channels/problemLabel";
 import { upstreamOutputs } from "@/features/channels/templateLogic";
-import type { ChannelRunDetail, Graph, GraphProblem, NodeTypeSpec, RefinedPort } from "@/features/channels/types";
+import type {
+  ChannelRunDetail,
+  ExpressionContext,
+  Graph,
+  GraphProblem,
+  NodeTypeSpec,
+  RefinedPort,
+} from "@/features/channels/types";
 
 type ChannelNode = Node<FlowNodeData, "channel">;
 
@@ -122,6 +129,7 @@ type Props = {
   editable: boolean;
   problems: GraphProblem[];
   ports?: readonly RefinedPort[];
+  context?: ExpressionContext | null;
   onChange: (graph: Graph) => void;
   sessionRun?: ChannelRunDetail | null;
   onRunNode?: (nodeId: string) => void;
@@ -142,6 +150,7 @@ function ChannelCanvasBody({
   editable,
   problems,
   ports = [],
+  context = null,
   onChange,
   sessionRun = null,
   onRunNode = () => {},
@@ -624,23 +633,13 @@ function ChannelCanvasBody({
       .map((port) => [port.node_id, port.schema] as const),
   );
   const samples = useMemo(
-    () => (sessionRun ? sampleKeysByNode(sessionRun.node_executions) : new Map<string, string[]>()),
+    () => (sessionRun ? samplesByNode(sessionRun.node_executions) : new Map<string, unknown>()),
     [sessionRun],
   );
   const phases = useMemo(
     () => (sessionRun ? phaseByNode(sessionRun, sessionRun.graph ?? graph) : new Map()),
     [sessionRun, graph],
   );
-  const upstream =
-    selected == null
-      ? []
-      : upstreamOutputs(
-          selected.id,
-          nodes.map((node) => ({ id: node.id, ref: node.data.ref, name: node.data.name })),
-          edges.map((edge) => ({ source: edge.source, target: edge.target })),
-          outputSchemas,
-          samples,
-        );
   const showCatalog = picker !== null && selected == null;
   const hasTrigger = nodes.some((node) => node.data.entry);
   const catalogSpecs = (picker?.kind === "connect" ? picker.specs : catalog).filter(
@@ -866,7 +865,20 @@ function ChannelCanvasBody({
                   revealKey={revealKey}
                   problems={problems.filter((problem) => problem.node_id === selected.id)}
                   graph={labelGraph}
-                  upstream={upstream}
+                  scope={{
+                    nodes: upstreamOutputs(
+                      selected.id,
+                      nodes.map((node) => ({ id: node.id, ref: node.data.ref, name: node.data.name })),
+                      edges.map((edge) => ({ source: edge.source, target: edge.target })),
+                      outputSchemas,
+                      samples,
+                    ),
+                    context: {
+                      channel: context?.channel ?? null,
+                      run: context?.run ?? null,
+                      platform: context?.platform ?? null,
+                    },
+                  }}
                   onClose={clearSelection}
                   onChange={(nodeId, data) => {
                     const next = nodesRef.current.map((node) =>

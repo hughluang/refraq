@@ -31,10 +31,8 @@ import {
 } from "@/features/channels/problemLabel";
 import type { GraphProblem } from "@/features/channels/types";
 import { TemplateField } from "@/features/channels/TemplateField";
-import {
-  attributeValueSchema,
-  type UpstreamOutput,
-} from "@/features/channels/templateLogic";
+import { attributeValueSchema } from "@/features/channels/templateLogic";
+import type { SelfScope } from "@/features/channels/templateScope";
 import type { NodeTypeSpec } from "@/features/channels/types";
 import { useEntityHeadAttributes } from "@/features/channels/useEntityHeadAttributes";
 import type { EntityAttribute } from "@/features/entities/types";
@@ -49,7 +47,7 @@ type Props = {
   revealKey?: string | null;
   problems?: readonly GraphProblem[];
   graph?: ProblemGraph;
-  upstream?: readonly UpstreamOutput[];
+  scope: SelfScope;
   onClose: () => void;
   onChange: (nodeId: string, data: FlowNodeData) => void;
 };
@@ -71,7 +69,7 @@ export function NodeConfigPanel({
   revealKey = null,
   problems = [],
   graph = EMPTY_GRAPH,
-  upstream = [],
+  scope,
   onClose,
   onChange,
 }: Props) {
@@ -196,7 +194,7 @@ export function NodeConfigPanel({
               head={head}
               config={data.config}
               scope={data.config}
-              upstream={upstream}
+              templateScope={scope}
               messages={fieldMessages(t, problems, field.key, graph)}
               openSignal={signalFor(problems, field.key, revealKey)}
               onChange={(value) => setConfig(field.key, value)}
@@ -218,7 +216,7 @@ function ConfigField({
   head,
   config,
   scope,
-  upstream = [],
+  templateScope,
   messages = [],
   openSignal = null,
   onChange,
@@ -232,7 +230,7 @@ function ConfigField({
   head: HeadState;
   config: Record<string, unknown>;
   scope: Record<string, unknown>;
-  upstream?: readonly UpstreamOutput[];
+  templateScope: SelfScope;
   messages?: readonly FieldMessage[];
   openSignal?: string | null;
   onChange: (value: unknown) => void;
@@ -325,7 +323,7 @@ function ConfigField({
         editable={editable}
         head={head}
         config={config}
-        upstream={upstream}
+        templateScope={templateScope}
         notes={notes}
         openSignal={openSignal}
         onChange={onChange}
@@ -376,7 +374,7 @@ function ConfigField({
         valueSchema={valueSchema}
         value={typeof value === "string" ? value : ""}
         editable={editable}
-        upstream={upstream}
+        scope={templateScope}
         messages={messages}
         openSignal={openSignal}
         onChange={onChange}
@@ -405,7 +403,7 @@ function ObjectListEditor({
   editable,
   head,
   config,
-  upstream = [],
+  templateScope,
   notes,
   openSignal = null,
   onChange,
@@ -416,7 +414,7 @@ function ObjectListEditor({
   editable: boolean;
   head: HeadState;
   config: Record<string, unknown>;
-  upstream?: readonly UpstreamOutput[];
+  templateScope: SelfScope;
   notes: readonly FieldNote[];
   openSignal?: string | null;
   onChange: (value: unknown) => void;
@@ -505,7 +503,7 @@ function ObjectListEditor({
               editable={editable}
               head={head}
               config={config}
-              upstream={upstream}
+              templateScope={templateScope}
               onChange={onChange}
             />
           ))}
@@ -524,7 +522,7 @@ function ListRow({
   editable,
   head,
   config,
-  upstream = [],
+  templateScope,
   onChange,
 }: {
   field: Extract<FieldSpec, { kind: "objectList" }>;
@@ -535,7 +533,7 @@ function ListRow({
   editable: boolean;
   head: HeadState;
   config: Record<string, unknown>;
-  upstream?: readonly UpstreamOutput[];
+  templateScope: SelfScope;
   onChange: (value: unknown) => void;
 }) {
   const t = useTranslate();
@@ -570,7 +568,7 @@ function ListRow({
             head={head}
             config={config}
             scope={row}
-            upstream={upstream}
+            templateScope={templateScope}
             onChange={(next) => replace(child.key, next)}
           />
         </div>

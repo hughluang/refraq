@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 
+import type { SchemaObject } from "@/features/channels/configSchemaForm";
 import {
-  outputPaths,
   resolvedText,
   templateCompletions,
   templatePreview,
   templateRule,
   upstreamOutputs,
 } from "@/features/channels/templateLogic";
+import type { SelfScope } from "@/features/channels/templateScope";
 
 const LIST = { type: "array", items: { type: "object" } } as const;
 
@@ -63,45 +64,57 @@ describe("templatePreview", () => {
   });
 });
 
+const NO_CONTEXT = { channel: null, run: null, platform: null } as const;
+
+function scopeOf(
+  nodes: SelfScope["nodes"],
+  context: SelfScope["context"] = NO_CONTEXT,
+): SelfScope {
+  return { nodes, context };
+}
+
+const READ_SCHEMA: SchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  properties: { rows: { type: "array" }, count: { type: "integer" } },
+};
+
+const MANUAL_SCHEMA: SchemaObject = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    test: { type: "string" },
+    triggered_at: { type: "string" },
+    triggered_by: {
+      type: "object",
+      additionalProperties: false,
+      properties: { id: { type: "string" }, name: { type: "string" } },
+    },
+  },
+};
+
 describe("completion", () => {
-  const upstream = [
+  const upstream = scopeOf([
     {
       ref: "read_entity",
       name: "Read entity",
-      paths: outputPaths({ type: "object", properties: { rows: {}, count: {} } }),
+      schema: READ_SCHEMA,
+      sample: { rows: [], count: 0, extra: true },
     },
+  ]);
+  const roots = [
+    "self.read_entity",
+    "self.nodes",
+    "self.channel",
+    "self.run",
+    "self.platform",
   ];
 
-  it("fills sample keys when the schema has no object properties", () => {
-    expect(outputPaths({ type: "array" }, ["rows", "count"])).toEqual([
-      "output",
-      "output.rows",
-      "output.count",
-    ]);
-    expect(outputPaths(null, ["rows"])).toEqual(["output", "output.rows"]);
-    expect(outputPaths({ type: "object", properties: { rows: {} } }, ["extra"])).toEqual([
-      "output",
-      "output.rows",
-    ]);
-    const sampled = [
-      {
-        ref: "read_entity",
-        name: "Read entity",
-        paths: outputPaths(null, ["rows"]),
-      },
-    ];
-    const text = "{{ self.read_entity.output.";
-    expect(templateCompletions(text, text.length, false, sampled)?.options).toEqual([
-      "self.read_entity.output",
-      "self.read_entity.output.rows",
-    ]);
-  });
-
-  it("suggests upstream refs inside an expression and not in literal text", () => {
+  it("suggests upstream refs and context names inside an expression", () => {
     const inside = templateCompletions("{{ self.", 8, false, upstream);
-    expect(inside?.options).toEqual(["self.read_entity"]);
+    expect(inside?.options).toEqual(roots);
     expect(templateCompletions("self.", 5, false, upstream)).toBeNull();
-    expect(templateCompletions("{{ ", 3, true, upstream)?.options).toEqual(["self.read_entity"]);
+    expect(templateCompletions("{{ ", 3, true, upstream)?.options).toEqual(roots);
     expect(templateCompletions("{{ ", 3, false, upstream)).toBeNull();
     expect(templateCompletions('{{ "self.', 9, true, upstream)).toBeNull();
   });
@@ -114,30 +127,104 @@ describe("completion", () => {
     });
     const partial = '{{ self.nodes["Hold';
     expect(
-      templateCompletions(partial, partial.length, true, [
-        ...upstream,
-        { ref: "hold", name: "Hold", paths: ["output"] },
-      ])?.options,
+      templateCompletions(
+        partial,
+        partial.length,
+        true,
+        scopeOf([
+          ...upstream.nodes,
+          { ref: "hold", name: "Hold", schema: null, sample: undefined },
+        ]),
+      )?.options,
     ).toEqual(['self.nodes["Hold"]']);
   });
 
-  it("suggests refs on an explicit invoke inside empty braces", () => {
+  it("suggests the root on an explicit invoke inside empty braces", () => {
     const text = "{{  }}";
     const found = templateCompletions(text, 3, true, upstream);
-    expect(found?.options).toEqual(["self.read_entity"]);
+    expect(found?.options).toEqual(roots);
     expect(templateCompletions(text, 3, false, upstream)).toBeNull();
   });
 
-  it("suggests output fields from the start of the path", () => {
+  it("suggests the next member of a closed schema and ignores sample keys", () => {
     const text = "{{ self.read_entity.output.";
-    expect(templateCompletions(text, text.length, false, upstream)).toEqual({
-      from: 3,
-      options: [
-        "self.read_entity.output",
-        "self.read_entity.output.rows",
-        "self.read_entity.output.count",
-      ],
-    });
+    expect(templateCompletions(text, text.length, false, upstream)?.options).toEqual([
+      "self.read_entity.output.rows",
+      "self.read_entity.output.count",
+    ]);
+  });
+
+  it("suggests output after a node ref and walks nested properties", () => {
+    const manual = scopeOf([
+      {
+        ref: "run_manually",
+        name: "Run",
+        schema: MANUAL_SCHEMA,
+        sample: { test: "2026-10-14T", surprise: 1, triggered_by: { id: "u", name: "root" } },
+      },
+    ]);
+    const refDot = "{{ self.run_manually.";
+    expect(templateCompletions(refDot, refDot.length, false, manual)?.options).toEqual([
+      "self.run_manually.output",
+    ]);
+    const nested = "{{ self.run_manually.output.triggered_by.";
+    expect(templateCompletions(nested, nested.length, false, manual)?.options).toEqual([
+      "self.run_manually.output.triggered_by.id",
+      "self.run_manually.output.triggered_by.name",
+    ]);
+    const named = '{{ self.nodes["Run"].output.';
+    expect(templateCompletions(named, named.length, false, manual)?.options).toEqual([
+      'self.nodes["Run"].output.test',
+      'self.nodes["Run"].output.triggered_at',
+      'self.nodes["Run"].output.triggered_by',
+    ]);
+  });
+
+  it("merges sample keys when the schema does not close additional properties", () => {
+    const open = scopeOf([
+      {
+        ref: "read_entity",
+        name: "Read entity",
+        schema: { type: "object", properties: { rows: { type: "array" } } },
+        sample: { rows: [], extra: 1 },
+      },
+    ]);
+    const text = "{{ self.read_entity.output.";
+    expect(templateCompletions(text, text.length, false, open)?.options).toEqual([
+      "self.read_entity.output.rows",
+      "self.read_entity.output.extra",
+    ]);
+    const sampled = scopeOf([
+      { ref: "read_entity", name: "Read entity", schema: null, sample: { rows: [] } },
+    ]);
+    expect(templateCompletions(text, text.length, false, sampled)?.options).toEqual([
+      "self.read_entity.output.rows",
+    ]);
+  });
+
+  it("suggests parameter keys from the platform schema", () => {
+    const platform: SchemaObject = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            schedule_timezone: { type: "string" },
+            keep_days: { type: "integer" },
+          },
+        },
+      },
+    };
+    const text = "{{ self.platform.parameters.";
+    expect(
+      templateCompletions(text, text.length, false, scopeOf([], { ...NO_CONTEXT, platform }))
+        ?.options,
+    ).toEqual([
+      "self.platform.parameters.schedule_timezone",
+      "self.platform.parameters.keep_days",
+    ]);
   });
 });
 
@@ -155,8 +242,12 @@ describe("upstreamOutputs", () => {
         { source: "read", target: "write" },
       ],
       new Map([["read", { type: "object", properties: { rows: {} } }]]),
+      new Map([["trigger", { test: "x" }]]),
     );
     expect(found.map((item) => item.ref).sort()).toEqual(["read_entity", "run_manually"]);
-    expect(found.find((item) => item.ref === "read_entity")?.paths).toContain("output.rows");
+    expect(found.find((item) => item.ref === "read_entity")?.schema?.properties).toHaveProperty(
+      "rows",
+    );
+    expect(found.find((item) => item.ref === "run_manually")?.sample).toEqual({ test: "x" });
   });
 });

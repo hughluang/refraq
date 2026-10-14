@@ -7,6 +7,7 @@ import os
 import sys
 
 from backend.jobs.store import CLAIMED_ENV
+from backend.worker.parameters import assemble_system_parameters
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -14,6 +15,7 @@ def main(argv: list[str] | None = None) -> None:
     target, job_id = args[0], args[1]
     module_name, func_name = target.split(":")
     os.environ[CLAIMED_ENV] = "1"
+    assemble_system_parameters()
     fn = getattr(importlib.import_module(module_name), func_name)
     fn(job_id)
 

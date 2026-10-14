@@ -124,6 +124,12 @@ export type RefinedPort = {
   schema: SchemaObject | null;
 };
 
+export type ExpressionContext = {
+  channel: SchemaObject;
+  run: SchemaObject;
+  platform: SchemaObject;
+};
+
 export type NodeTypePort = {
   port: string;
   description: string;

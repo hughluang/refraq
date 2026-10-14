@@ -246,6 +246,7 @@ class ValidateResponse(BaseModel):
     valid: bool
     problems: list[ProblemOut]
     ports: list[RefinedPortOut]
+    context: dict[str, Any]
 
 
 class RunToCancelOut(BaseModel):

@@ -32,8 +32,8 @@ import {
   typeBadge,
   type TemplatePreview,
   type TemplateValueSchema,
-  type UpstreamOutput,
 } from "@/features/channels/templateLogic";
+import type { SelfScope } from "@/features/channels/templateScope";
 
 type Props = {
   label?: string;
@@ -42,7 +42,7 @@ type Props = {
   valueSchema: TemplateValueSchema | null;
   value: string;
   editable: boolean;
-  upstream?: readonly UpstreamOutput[];
+  scope: SelfScope;
   messages?: readonly FieldMessage[];
   openSignal?: string | null;
   onChange: (value: string) => void;
@@ -94,7 +94,7 @@ export function TemplateField({
   valueSchema,
   value,
   editable,
-  upstream = [],
+  scope,
   messages = [],
   openSignal = null,
   onChange,
@@ -110,11 +110,11 @@ export function TemplateField({
   } | null>(null);
   const valueRef = useRef(value);
   const onChangeRef = useRef(onChange);
-  const upstreamRef = useRef(upstream);
+  const scopeRef = useRef(scope);
   const syncing = useRef(false);
   valueRef.current = value;
   onChangeRef.current = onChange;
-  upstreamRef.current = upstream;
+  scopeRef.current = scope;
   const invalid = messages.some((message) => message.severity !== "warning");
 
   useEffect(() => {
@@ -127,7 +127,7 @@ export function TemplateField({
         context.state.doc.toString(),
         context.pos,
         context.explicit,
-        upstreamRef.current,
+        scopeRef.current,
       );
       if (!found) return null;
       return {

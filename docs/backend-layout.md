@@ -278,7 +278,7 @@ Concrete edges:
 | `main` (composition) | `core`, published `admin` / `jobs` / `metadata` / `entity` / `channel` / `worker` (including their `routers.*` for mount), Site Bootstrap helpers |
 | `core` | stdlib, third parties, Alembic; `admin.roles` published symbols from `upgrade` only; `worker.api` / `worker.parameters` from `upgrade` only; `metadata.type_mappings.seeds` from `upgrade` only |
 | `admin` | `core`; own stores/schemas/routers / `system_parameters` / `parameters` / `model_services` / `subjects`. Must not import `entity` |
-| `jobs` | `core`; own store/schemas/routers / `parameters`; published `admin` (audit, System Parameter resolver) |
+| `jobs` | `core`; own store/schemas/routers / `parameters`; published `admin` (audit, System Parameter resolver); process entry `job_child` may import `worker.parameters` |
 | `metadata` | `core`; published `admin`; published `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; process entries `mcp_http` / `mcp_server` may import `worker.parameters`; own modules. Must not import `entity` or `channel` |
 | `entity` | `core`; published `admin` (including `admin.subjects`); published `jobs`; own modules. Must not import `channel` |
 | `channel` | `core`; published `admin`; published `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules` / `worker.due`; published `metadata` and `entity` modules listed for Data Channel use; own modules |

@@ -105,13 +105,14 @@ Responsibilities:
 - Shared helpers used by domain enqueue paths and the stuck-Job reaper
 - Job observation presentation (`present_jobs`: trigger actor / schedule names); Scheduled Task name lookup is an injected adapter
 - Mechanism-resource HTTP (get/cancel by Job id) under `jobs/routers/`
+- Supervised Job child process entry (`python -m backend.jobs.job_child`): assembles System Parameters, then runs the claimed handler
 - Published API in [`docs/backend-layout.md`](backend-layout.md) §3
 
 Must not contain:
 
 - Domain collector / Source facade HTTP (stay in `metadata/`)
 - Celery app / Beat scheduler / Scheduled Task ownership (stay in `worker/`)
-- Importing `worker` (Scheduled Task names are an injected adapter, bound by composition)
+- Importing `worker`, except the `job_child` process entry may import `worker.parameters` to assemble System Parameters. Scheduled Task names stay an injected adapter, bound by composition
 
 ### `backend/metadata/`
 
@@ -361,7 +362,7 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 
 - `core` → no business packages except `upgrade` → published `admin` / `worker.api` / `worker.parameters`
 - `admin` → `core` (+ own modules)
-- `jobs` → `core`; published `admin` (including System Parameter resolver) when needed
+- `jobs` → `core`; published `admin` (including System Parameter resolver) when needed; process entry `job_child` may import `worker.parameters`
 - `metadata` → `core`; published `admin` / `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; process entries `mcp_http` / `mcp_server` may import `worker.parameters`
 - `entity` → `core`; published `admin` (including `admin.subjects` and the System Parameter resolver) / `jobs`
 - `channel` → `core`; published `admin` / `jobs` / `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules` / `worker.due`; published `metadata` and `entity` modules listed for Data Channel use, including `entity.heads` (`docs/backend-layout.md` §3)
