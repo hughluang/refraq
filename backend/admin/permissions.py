@@ -109,7 +109,7 @@ PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
     "entity:data_read": "Read Entity Data API schema, get, and query",
     "entity:data_write": "Write Entity Data API rows (also requires entity:data_read)",
     "channel:read": "Read Data Channels, drafts, versions, and run lists",
-    "channel:write": "Create, edit, save drafts, validate, publish, delete Data Channels, change the activation switch, and start on-demand runs",
+    "channel:write": "Create, edit, save drafts, validate, publish, delete Data Channels, change the activation switch, start on-demand runs, and cancel channel runs",
 }
 
 CATALOG_SET: frozenset[str] = frozenset(ALL_PERMISSIONS)

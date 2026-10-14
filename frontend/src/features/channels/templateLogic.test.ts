@@ -72,6 +72,31 @@ describe("completion", () => {
     },
   ];
 
+  it("fills sample keys when the schema has no object properties", () => {
+    expect(outputPaths({ type: "array" }, ["rows", "count"])).toEqual([
+      "output",
+      "output.rows",
+      "output.count",
+    ]);
+    expect(outputPaths(null, ["rows"])).toEqual(["output", "output.rows"]);
+    expect(outputPaths({ type: "object", properties: { rows: {} } }, ["extra"])).toEqual([
+      "output",
+      "output.rows",
+    ]);
+    const sampled = [
+      {
+        ref: "read_entity",
+        name: "Read entity",
+        paths: outputPaths(null, ["rows"]),
+      },
+    ];
+    const text = "{{ self.read_entity.output.";
+    expect(templateCompletions(text, text.length, false, sampled)?.options).toEqual([
+      "self.read_entity.output",
+      "self.read_entity.output.rows",
+    ]);
+  });
+
   it("suggests upstream refs inside an expression and not in literal text", () => {
     const inside = templateCompletions("{{ self.", 8, false, upstream);
     expect(inside?.options).toEqual(["self.read_entity"]);

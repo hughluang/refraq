@@ -57,6 +57,7 @@ class ChannelRunRow(Base):
     outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)
     failed_node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     stopped_node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    stop_at_node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     skipped_node_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 

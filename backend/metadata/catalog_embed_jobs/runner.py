@@ -8,7 +8,7 @@ from backend.admin.model_services import get_embedding_runtime, mark_embedding_r
 from backend.jobs.store import (
     TERMINAL,
     append_job_log,
-    claim_queued,
+    claim_for_execution,
     get_job_store,
     mark_failed,
     mark_succeeded,
@@ -102,7 +102,7 @@ def _skip(job_id: str, reason: str, *, generation: int | None = None) -> dict[st
 
 
 def run_catalog_embed_job(job_id: str) -> dict[str, str]:
-    current = claim_queued(
+    current = claim_for_execution(
         job_id, celery_task_id=job_id, claimed_by=_claim_worker_id()
     )
     if current is None:

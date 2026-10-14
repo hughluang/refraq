@@ -196,6 +196,21 @@ describe("fieldsFromSchema", () => {
       allowEmpty: true,
     });
   });
+
+  it("maps a json ref to an object field", () => {
+    const schema: SchemaObject = {
+      type: "object",
+      properties: {
+        payload: { type: "object", "x-refraq-ref": "json" },
+      },
+    };
+    expect(fieldsFromSchema(schema)[0]).toEqual({
+      kind: "json",
+      key: "payload",
+      required: false,
+    });
+    expect(defaultConfig(schema).payload).toEqual({});
+  });
 });
 
 const TIMEOUT: SchemaObject = {

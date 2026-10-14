@@ -654,3 +654,37 @@ def test_error_channel_must_resolve() -> None:
     )
     assert _codes(graph, FakeResolver()) == {"CHANNEL_REFERENCE_UNRESOLVED"}
     assert _codes(graph, FakeResolver(channels={"chn_missing"})) == set()
+
+
+def test_manual_payload_string_is_not_an_object() -> None:
+    graph = _graph(
+        [
+            _node(
+                "nd_trigger",
+                "trigger.manual",
+                "Run",
+                {"payload": '{"triggered_at": "2026-10-14T06:01:20Z"}'},
+            )
+        ]
+    )
+    problems = validate(graph, FakeResolver())
+    invalid = [item for item in problems if item.code == "CHANNEL_NODE_CONFIG_INVALID"]
+    assert [item.path for item in invalid] == [("payload",)]
+
+
+def test_manual_payload_reserved_key_points_at_payload() -> None:
+    graph = _graph(
+        [
+            _node(
+                "nd_trigger",
+                "trigger.manual",
+                "Run",
+                {"payload": {"triggered_at": "2026-10-14T06:01:20Z"}},
+            )
+        ]
+    )
+    problems = validate(graph, FakeResolver())
+    reserved = [
+        item for item in problems if item.detail == "Manual payload uses a reserved key"
+    ]
+    assert [item.path for item in reserved] == [("payload",)]

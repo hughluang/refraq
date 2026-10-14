@@ -20,7 +20,8 @@ from backend.channel.store import get_channel_store
 from backend.core.time import ensure_aware_utc, format_instant, utc_now
 from backend.jobs.store import (
     append_job_log,
-    claim_queued,
+    claim_for_execution,
+    current_worker_id,
     get_job_store,
     mark_cancelled,
     mark_failed,
@@ -28,7 +29,7 @@ from backend.jobs.store import (
 )
 from backend.worker.schedules import get_schedule_store
 
-__all__ = ["run_channel_job"]
+__all__ = ["note_killed_run", "run_channel_job"]
 
 class _Hooks:
     def __init__(
@@ -97,8 +98,27 @@ class _Hooks:
         )
 
 
+def note_killed_run(job_id: str) -> None:
+    """Record the node a killed child left running, when one exists."""
+    store = get_run_store()
+    run = store.get_run(job_id)
+    if run is None:
+        return
+    running = [item for item in store.list_executions(job_id) if item.status == "running"]
+    if not running:
+        return
+    current = running[-1]
+    current.status = "failed"
+    current.finished_at = utc_now()
+    current.error_message = "cancelled"
+    store.finish_execution(current)
+    if run.stopped_node_id is None:
+        run.stopped_node_id = current.node_id
+        store.update_run(run)
+
+
 def run_channel_job(job_id: str) -> dict[str, str]:
-    claimed = claim_queued(job_id)
+    claimed = claim_for_execution(job_id, claimed_by=current_worker_id())
     if claimed is None:
         record = get_job_store().get(job_id)
         return {"status": record.status if record else "missing"}
@@ -164,6 +184,7 @@ def run_channel_job(job_id: str) -> dict[str, str]:
                 hooks,
                 timeout_sec=timeout,
                 started=time.monotonic() - elapsed,
+                stop_at_node_id=run.stop_at_node_id,
             )
     except SandboxFailed as exc:
         mark_failed(job_id, error_code="CHANNEL_SANDBOX_FAILED", error_summary=str(exc))

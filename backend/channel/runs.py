@@ -12,7 +12,7 @@ from backend.channel.errors import (
     ChannelNotPublished,
     ChannelTriggerInvalid,
 )
-from backend.channel.graph import validate
+from backend.channel.graph import ancestor_closure, validate
 from backend.channel.references import ChannelReferenceResolver
 from backend.channel.run_store import ChannelRunRecord, get_run_store
 from backend.channel.store import get_channel_store
@@ -29,6 +29,7 @@ def start_run(
     ignore_checkpoints: bool,
     actor: UserRecord,
     actor_token_id: str | None,
+    stop_at_node_id: str | None = None,
 ) -> Any:
     store = get_channel_store()
     channel = store.get(channel_id)
@@ -43,12 +44,19 @@ def start_run(
         draft_revision = None
     elif target == "draft":
         graph = channel.draft_graph
-        problems = validate(graph, ChannelReferenceResolver(channel_id))
-        errors = [problem for problem in problems if problem.severity == "error"]
-        if errors:
-            raise ChannelGraphInvalid(errors[0].detail, problems=list(problems))
         version = None
         draft_revision = channel.draft_revision
+    closure = _require_closure(graph, stop_at_node_id)
+    if target == "draft" or closure is not None:
+        problems = validate(graph, ChannelReferenceResolver(channel_id))
+        errors = [
+            problem
+            for problem in problems
+            if problem.severity == "error"
+            and (closure is None or problem.node_id is None or problem.node_id in closure)
+        ]
+        if errors:
+            raise ChannelGraphInvalid(errors[0].detail, problems=list(problems))
     entry = _entry_node(graph)
     job = create_queued_job(
         kind="channel_run",
@@ -56,6 +64,7 @@ def start_run(
             "channel_id": channel_id,
             "target": target,
             "ignore_checkpoints": ignore_checkpoints,
+            "stop_at_node_id": stop_at_node_id,
         },
         trigger_kind="user",
         trigger_ref=actor.id,
@@ -75,6 +84,7 @@ def start_run(
         failed_node_id=None,
         skipped_node_ids=[],
         created_at=utc_now(),
+        stop_at_node_id=stop_at_node_id,
     )
     get_run_store().insert_run(record)
     from backend.channel.tasks import run_job
@@ -102,3 +112,12 @@ def _entry_node(graph: dict[str, Any]) -> str:
     if len(entries) != 1:
         raise ChannelTriggerInvalid()
     return str(entries[0]["id"])
+
+
+def _require_closure(graph: dict[str, Any], stop_at_node_id: str | None) -> set[str] | None:
+    if stop_at_node_id is None:
+        return None
+    closure = ancestor_closure(graph, stop_at_node_id)
+    if closure is None:
+        raise ChannelGraphInvalid("Stop node is not in the graph")
+    return closure

@@ -256,6 +256,7 @@ Sections are empty lists, or `false`, when there is nothing to show.
   "trigger_actor_name": "Alice",
   "trigger_schedule_name": null,
   "ignore_checkpoints": false,
+  "stop_at_node_id": null,
   "failed_node_id": null,
   "stopped_node_id": null,
   "created_at": "2026-10-09T08:00:00Z",
@@ -272,7 +273,8 @@ Sections are empty lists, or `false`, when there is nothing to show.
 - `version` is the Channel Version a `published` run resolved at start, or `null` before it starts, when it ended before resolving one, or when `target` is `draft`.
 - `draft_revision` is the frozen draft revision when `target` is `draft`, otherwise `null`.
 - `failed_node_id` names the node that failed the run, or `null`.
-- `stopped_node_id` names the node that was next when cancel, timeout, or a newer version stopped the run, or `null`.
+- `stop_at_node_id` is the optional on-demand stop node, or `null` when the run executes every node reachable from the trigger.
+- `stopped_node_id` names the node that was next when a timeout or a newer version stopped the run between nodes, or the node a user cancel interrupted, or `null` when cancel killed the process before that node was recorded.
 - `trigger_kind` is `user` for an on-demand run, `schedule` for a Scheduled node, and `system` for platform-event and change-arrival triggers. `trigger_ref`, `trigger_actor_name`, and `trigger_schedule_name` follow the Job contract.
 - Duration is derived by clients from `started_at` and `finished_at`.
 
@@ -329,10 +331,10 @@ A `channel_run` Job follows the platform Job lifecycle (`docs/business-jobs.md`)
 ### 4.2 Input
 
 ```json
-{ "channel_id": "chn_01HZX", "target": "published", "ignore_checkpoints": false }
+{ "channel_id": "chn_01HZX", "target": "published", "ignore_checkpoints": false, "stop_at_node_id": null }
 ```
 
-The input carries no version. A `published` run resolves the current published version at start. A `draft` run executes the snapshot stored on the run record. Unattended runs set `target` to `published` and omit a user-chosen trigger when the schedule names the node.
+The input carries no version. A `published` run resolves the current published version at start. A `draft` run executes the snapshot stored on the run record. `stop_at_node_id` is optional. When set, the run enters the graph's only trigger and executes that node's ancestor closure, including the node. Unattended runs set `target` to `published`, omit `stop_at_node_id`, and omit a user-chosen trigger when the schedule names the node.
 
 ### 4.3 Result
 
@@ -457,10 +459,11 @@ Empty body. `200` `{ "channel": { … } }`. Idempotent: activating an active cha
 ### 5.11 `POST /channels/{id}/runs`
 
 ```json
-{ "target": "draft", "ignore_checkpoints": false }
+{ "target": "draft", "ignore_checkpoints": false, "stop_at_node_id": "nd_write" }
 ```
 
 - `target` is `draft` or `published`. `draft` freezes the current draft, which must validate; `published` requires a published version.
+- `stop_at_node_id` is optional. Omit it, or send `null`, to execute every node reachable from the trigger. When set, the draft must be valid for that node's ancestor closure, including the node. Errors on nodes outside the closure do not refuse the start. A stop node that is missing or not reachable from the trigger is `422 CHANNEL_GRAPH_INVALID`.
 - The run enters the graph's only trigger node.
 - `ignore_checkpoints` defaults to `false`. A `draft` run never advances checkpoints even when this is `false`.
 - Allowed while the channel is inactive.

@@ -38,6 +38,7 @@ class ChannelRunRecord:
     skipped_node_ids: list[str]
     created_at: datetime
     stopped_node_id: str | None = None
+    stop_at_node_id: str | None = None
 
 
 @dataclass
@@ -250,6 +251,7 @@ def _run_row(record: ChannelRunRecord) -> ChannelRunRow:
         outcome=record.outcome,
         failed_node_id=record.failed_node_id,
         stopped_node_id=record.stopped_node_id,
+        stop_at_node_id=record.stop_at_node_id,
         skipped_node_ids=list(record.skipped_node_ids),
         created_at=record.created_at,
     )
@@ -270,6 +272,7 @@ def _run_record(row: ChannelRunRow) -> ChannelRunRecord:
         skipped_node_ids=list(row.skipped_node_ids or []),
         created_at=row.created_at,
         stopped_node_id=row.stopped_node_id,
+        stop_at_node_id=row.stop_at_node_id,
     )
 
 

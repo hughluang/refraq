@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from backend.core.time import format_instant, utc_now
+import os
 import threading
 import uuid
 from dataclasses import dataclass
@@ -637,6 +638,35 @@ def claim_queued(
 ) -> JobRecord | None:
     """CAS queued → running. Returns the running record only when this caller claimed it."""
     return get_job_store().claim_queued(
+        job_id, celery_task_id=celery_task_id, claimed_by=claimed_by
+    )
+
+
+CLAIMED_ENV = "REFRAQ_JOB_ALREADY_CLAIMED"
+
+
+def current_worker_id() -> str:
+    """Celery hostname for occupancy, or the unknown-worker sentinel outside a task."""
+    from celery import current_task
+
+    request = getattr(current_task, "request", None)
+    hostname = getattr(request, "hostname", None) if request is not None else None
+    return occupancy_worker_id(hostname if isinstance(hostname, str) else None)
+
+
+def claim_for_execution(
+    job_id: str,
+    *,
+    celery_task_id: str | None = None,
+    claimed_by: str | None = None,
+) -> JobRecord | None:
+    """Claim, or adopt a claim the supervisor already took in this Job's parent."""
+    if os.environ.get(CLAIMED_ENV) == "1":
+        record = get_job_store().get(job_id)
+        if record is None or record.status != "running":
+            return None
+        return record
+    return claim_queued(
         job_id, celery_task_id=celery_task_id, claimed_by=claimed_by
     )
 

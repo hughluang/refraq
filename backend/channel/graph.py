@@ -375,6 +375,7 @@ def _payload_problems(nodes: list[dict[str, Any]]) -> list[Problem]:
                     "CHANNEL_NODE_CONFIG_INVALID",
                     "Manual payload uses a reserved key",
                     node_id=str(node["id"]),
+                    path=("payload",),
                 )
             )
     return problems
@@ -956,6 +957,15 @@ def refine_ports(
                 )
             )
     return refined
+
+
+def ancestor_closure(graph: Mapping[str, Any], node_id: str) -> set[str] | None:
+    """Ancestors of `node_id` plus itself. `None` when the node is not in the graph."""
+    by_id = {str(node["id"]): node for node in graph.get("nodes") or []}
+    if node_id not in by_id:
+        return None
+    edges = [edge for edge in graph.get("edges") or [] if isinstance(edge, dict)]
+    return _ancestors(by_id, edges).get(node_id, set()) | {node_id}
 
 
 def _ancestors(

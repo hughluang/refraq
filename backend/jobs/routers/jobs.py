@@ -5,7 +5,15 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, Request
 
 from backend.admin.audit import persist_audit_event
-from backend.admin.deps import get_actor_token_id, require_permission
+from backend.admin.deps import (
+    get_actor_token_id,
+    get_current_user,
+    require_permission,
+    resolve_user_permissions,
+)
+from backend.admin.errors import AuthForbidden
+from backend.admin.permissions import permissions_include
+from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.user_store import UserRecord, UserStore, get_user_store
 from backend.core.pagination import PageParams, page_params
 from backend.core.config import get_settings
@@ -18,6 +26,7 @@ from backend.jobs.errors import JobNotCancellable, JobNotFound
 from backend.jobs.schemas.jobs import JobListResponse, JobLogsResponse, JobResponse
 from backend.jobs.store import (
     TERMINAL,
+    JobRecord,
     JobStatus,
     append_job_log,
     get_job_store,
@@ -79,12 +88,15 @@ def get_job_logs(
 def cancel_job(
     job_id: str,
     request: Request,
-    user: UserRecord = Depends(require_permission("jobs:run")),
+    user: UserRecord = Depends(get_current_user),
     users: UserStore = Depends(get_user_store),
+    roles: RoleStore = Depends(get_role_store),
 ) -> JobResponse:
     record = get_job_store().get(job_id)
     if record is None:
         raise JobNotFound()
+    if not _may_cancel(user, roles, record):
+        raise AuthForbidden()
     if record.status in TERMINAL:
         raise JobNotCancellable()
     was_queued = record.status == "queued"
@@ -107,4 +119,17 @@ def cancel_job(
     )
     return JobResponse(
         job=present_jobs([logged], users=users, schedules=get_schedule_name_store())[0]
+    )
+
+
+def _may_cancel(user: UserRecord, roles: RoleStore, record: JobRecord) -> bool:
+    perms = resolve_user_permissions(user, roles)
+    if permissions_include(perms, "jobs:run"):
+        return True
+    channel_id = record.input.get("channel_id")
+    return (
+        record.kind == "channel_run"
+        and permissions_include(perms, "channel:write")
+        and isinstance(channel_id, str)
+        and channel_id != ""
     )

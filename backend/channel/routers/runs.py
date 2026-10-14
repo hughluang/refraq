@@ -25,6 +25,7 @@ class StartRunRequest(BaseModel):
 
     target: Literal["draft", "published"] = "published"
     ignore_checkpoints: bool = False
+    stop_at_node_id: str | None = None
 
 
 class ChannelRunOut(BaseModel):
@@ -79,6 +80,7 @@ def http_start_run(
             channel_id=channel_id,
             target=body.target,
             ignore_checkpoints=body.ignore_checkpoints,
+            stop_at_node_id=body.stop_at_node_id,
             actor=actor,
             actor_token_id=actor_token_id,
         )
@@ -202,6 +204,7 @@ def _present(job: Any, record: Any) -> dict[str, Any]:
         "trigger_actor_name": None,
         "trigger_schedule_name": None,
         "ignore_checkpoints": record.ignore_checkpoints,
+        "stop_at_node_id": record.stop_at_node_id,
         "failed_node_id": record.failed_node_id,
         "stopped_node_id": record.stopped_node_id,
         "created_at": format_instant(record.created_at),

@@ -227,7 +227,7 @@ Schedule instants (`last_run_at`, `scheduled_for`) are never checkpoints. A skip
 
 ### 6.2 A Run Is One Job
 
-Each run is one **Job** of kind `channel_run`, executed in one worker process. Its `input` names the channel, the target (`draft` or `published`), and run options (`docs/api-contracts-data-channel.md` §4.2). It carries no version. The runner enters the graph's single trigger node.
+Each run is one **Job** of kind `channel_run`, executed in one worker child process. Its `input` names the channel, the target (`draft` or `published`), and run options (`docs/api-contracts-data-channel.md` §4.2). It carries no version. The runner enters the graph's single trigger node. An on-demand run may set `stop_at_node_id`. The run still enters that trigger and executes only the node's ancestor closure, including the node. When the field is omitted, the run executes every node reachable from the trigger. A closure that finishes ends `succeeded` with outcome `completed`.
 
 - Target `published`: at start the runner resolves the current published version, records it and the graph on the run, and enters at the trigger node.
 - Target `draft`: the runner executes the graph and `draft_revision` frozen when the run was queued.
@@ -254,11 +254,11 @@ A run that read a mirror while it was not in sync is marked "input mirror not in
 
 ### 6.5 Version Supersede
 
-A published run stops between node executions when a newer published version exists, and ends `cancelled`. Publish does not write Job rows; the confirmation list names the running published runs that will stop. It does not include a run with target `draft`. Queued Jobs with target `published` are not cancelled; they resolve the new version when they start. A queued Job minted by a schedule that publish withdrew is cancelled by that withdraw (§7.2). Two published versions of one channel therefore never write at the same time, except for the cooperative-stop window of §6.6. A `draft` run may write while a published run of the same channel writes; serializing them is the author's choice (§6.3).
+A published run stops between node executions when a newer published version exists, and ends `cancelled`. Publish does not write Job rows; the confirmation list names the running published runs that will stop. It does not include a run with target `draft`. Queued Jobs with target `published` are not cancelled; they resolve the new version when they start. A queued Job minted by a schedule that publish withdrew is cancelled by that withdraw (§7.2). Two published versions of one channel therefore never write at the same time, except for the window between node executions while a published run notices a newer version. A `draft` run may write while a published run of the same channel writes; serializing them is the author's choice (§6.3).
 
 ### 6.6 Cancel And Layered Timeouts
 
-Cancel is the platform Job cancel: a cooperative stop request. The runner checks cancel between node executions.
+Cancel is the platform Job cancel: `POST /jobs/{id}/cancel`. The worker kills the child process executing a running Job and does not wait for the current node to return. Run timeout is still checked between node executions.
 
 Timeouts are layered:
 
@@ -381,7 +381,7 @@ All keys are `platform`-scoped.
 | Permission | Grants |
 | --- | --- |
 | `channel:read` | Read channels, drafts, versions, run lists, and run records; read **Source Mirror** data through read nodes and records |
-| `channel:write` | Create, edit, save drafts, validate, publish, and delete channels; Global Variable writes; on-demand runs (target `draft` or `published`) and rerun |
+| `channel:write` | Create, edit, save drafts, validate, publish, and delete channels; Global Variable writes; on-demand runs (target `draft` or `published`) and rerun; cancel a `channel_run` Job |
 | `channel:code_write` | Create or edit a Code node; required in addition to `channel:write` |
 | `mirror:write` | Operate Source Mirrors (disable, delete data, resnapshot overrides) |
 

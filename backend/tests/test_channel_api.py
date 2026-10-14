@@ -95,6 +95,57 @@ def test_read_permission_cannot_write() -> None:
     assert denied.status_code == 403
 
 
+def test_stop_at_ignores_errors_outside_the_closure(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    import backend.channel.tasks as tasks
+
+    monkeypatch.setattr(tasks.run_job, "apply_async", lambda *args, **kwargs: None)
+    created = client.post("/channels", json={"name": "Material", "description": None})
+    assert created.status_code == 201, created.text
+    channel_id = created.json()["channel"]["id"]
+    graph = {
+        "nodes": [
+            *TRIGGER_GRAPH["nodes"],
+            {
+                "id": "nd_bad",
+                "ref": "bad_node",
+                "type": "not.a.type",
+                "name": "Bad",
+                "position": {"x": 200, "y": 0},
+                "config": {},
+                "on_error": "stop",
+                "retry": None,
+            },
+        ],
+        "edges": [
+            {
+                "id": "ed_bad",
+                "source": {"node_id": "nd_trigger", "port": "main"},
+                "target": {"node_id": "nd_bad", "port": "main"},
+            }
+        ],
+        "settings": {"run_timeout_sec": None, "error_channel_id": None},
+    }
+    saved = client.put(
+        f"/channels/{channel_id}/draft",
+        json={"base_revision": 1, "graph": graph},
+    )
+    assert saved.status_code == 200, saved.text
+    started = client.post(
+        f"/channels/{channel_id}/runs",
+        json={"target": "draft", "stop_at_node_id": "nd_trigger"},
+    )
+    assert started.status_code == 202, started.text
+    assert started.json()["run"]["stop_at_node_id"] == "nd_trigger"
+    refused = client.post(
+        f"/channels/{channel_id}/runs",
+        json={"target": "draft", "stop_at_node_id": "nd_missing"},
+    )
+    assert refused.status_code == 422
+    assert refused.json()["code"] == "CHANNEL_GRAPH_INVALID"
+    publish = client.post(f"/channels/{channel_id}/publish")
+    assert publish.status_code == 422
+
+
 def test_create_rejects_unknown_fields(client: TestClient) -> None:
     response = client.post(
         "/channels", json={"name": "Material", "description": None, "active": True}

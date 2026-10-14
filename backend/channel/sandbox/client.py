@@ -77,11 +77,13 @@ class SandboxSession:
         proc.wait(timeout=2)
 
     def _start(self) -> None:
+        # Stay in the runner's process group so a cancel killpg reaps this child.
         self._proc = subprocess.Popen(
             [sys.executable, "-m", "backend.channel.sandbox.child"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=False,
             text=True,
         )
 

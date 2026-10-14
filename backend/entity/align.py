@@ -23,7 +23,7 @@ from backend.entity.table_port import (
 from backend.jobs.store import (
     TERMINAL,
     append_job_log,
-    claim_queued,
+    claim_for_execution,
     get_job_store,
     mark_failed,
     mark_succeeded,
@@ -32,7 +32,7 @@ from backend.jobs.store import (
 
 
 def run_entity_table_job(job_id: str) -> dict[str, str]:
-    current = claim_queued(
+    current = claim_for_execution(
         job_id, celery_task_id=job_id, claimed_by=_claim_worker_id()
     )
     if current is None:

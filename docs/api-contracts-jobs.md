@@ -106,7 +106,7 @@ Rules:
 | `GET` | `/jobs` | `jobs:run` | Platform list all Jobs (`status`, `kind`, **Offset Page**) |
 | `GET` | `/jobs/{id}` | `jobs:run` | Get Job by id |
 | `GET` | `/jobs/{id}/logs` | `jobs:run` | Get Job `log_body` (`{ job_id, body, updated_at }`) |
-| `POST` | `/jobs/{id}/cancel` | `jobs:run` | Cancel if not terminal |
+| `POST` | `/jobs/{id}/cancel` | `jobs:run`, or `channel:write` when `kind` is `channel_run` | Cancel if not terminal. A running Job is killed by its worker supervisor. A queued Job is revoked without `terminate` |
 | `GET` | `/schedules/{id}/jobs` | `jobs:run` | Jobs this schedule minted (`trigger_kind=schedule` and `trigger_ref=id`; **Offset Page**) |
 
 Structure and join-detection minting is `POST /schedules/{id}/run` (`docs/api-contracts-schedules.md`). There is no `POST /sources/{id}/jobs` and no `GET /sources/{id}/jobs`.

@@ -11,6 +11,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Protocol
 
+from backend.channel.graph import ancestor_closure
+
 __all__ = ["EngineHooks", "NodeResult", "RunOutcome", "execute"]
 
 
@@ -57,6 +59,7 @@ def execute(
     *,
     timeout_sec: int | None = None,
     started: float | None = None,
+    stop_at_node_id: str | None = None,
 ) -> RunOutcome:
     nodes = {str(node["id"]): node for node in graph["nodes"]}
     if entry_node_id not in nodes:
@@ -67,6 +70,9 @@ def execute(
         )
     children, parents = _links(graph, nodes)
     reachable = _reachable(entry_node_id, children)
+    if stop_at_node_id is not None:
+        closure = ancestor_closure(graph, stop_at_node_id)
+        reachable &= closure if closure is not None else set()
     done: set[str] = set()
     skipped: list[str] = []
     clock = time.monotonic() if started is None else started

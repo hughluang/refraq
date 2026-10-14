@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -26,6 +26,12 @@ function stubDomApis() {
     disconnect() {}
   }
   globalThis.ResizeObserver = ResizeObserverStub;
+  if (document.fonts == null) {
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: { addEventListener() {}, removeEventListener() {} },
+    });
+  }
 }
 
 function mount(node: ReturnType<typeof createElement>) {
@@ -209,5 +215,60 @@ describe("form fields", () => {
     );
     expect((screen.getByRole("switch") as HTMLInputElement).checked).toBe(true);
     expect(screen.getByRole("textbox").getAttribute("value")).toBe("0 2 1 * 1");
+  });
+
+  it("shows formatted JSON in display mode and parses it when editable", async () => {
+    const { JsonField } = await import("@/components/form/JsonField");
+    const onChange = vi.fn();
+    mount(
+      createElement(JsonField, {
+        editable: false,
+        label: "Output",
+        value: { status: "ready" },
+        onChange,
+      }),
+    );
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.getByText(/"status": "ready"/)).toBeTruthy();
+
+    cleanup();
+    mount(
+      createElement(JsonField, {
+        editable: true,
+        label: "Output",
+        value: {},
+        onChange,
+      }),
+    );
+    const box = screen.getByRole("textbox", { name: "Output" }) as HTMLTextAreaElement;
+    expect(box.value).toBe("{}");
+    fireEvent.change(box, { target: { value: '{"status":"ready"}' } });
+    fireEvent.blur(box);
+    expect(onChange).toHaveBeenCalledWith({ status: "ready" });
+  });
+
+  it("keeps invalid JSON in the draft and explains the format", async () => {
+    const { JsonField } = await import("@/components/form/JsonField");
+    const onChange = vi.fn();
+    mount(
+      createElement(JsonField, {
+        editable: true,
+        label: "Output",
+        value: { status: "ready" },
+        onChange,
+        accept: (value) => value !== null && typeof value === "object" && !Array.isArray(value),
+        invalidMessage: "Enter a JSON object, for example {\"status\": \"ready\"}.",
+      }),
+    );
+    const box = screen.getByRole("textbox", { name: "Output" });
+    fireEvent.change(box, { target: { value: "[1]" } });
+    fireEvent.blur(box);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(box.getAttribute("aria-invalid")).toBe("true");
+    await waitFor(() => {
+      expect(
+        screen.getByText("Enter a JSON object, for example {\"status\": \"ready\"}."),
+      ).toBeTruthy();
+    });
   });
 });

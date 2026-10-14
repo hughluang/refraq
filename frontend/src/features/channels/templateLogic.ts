@@ -127,9 +127,17 @@ function completionLabels(
   });
 }
 
-export function outputPaths(schema: SchemaObject | null | undefined): string[] {
-  if (schema?.type !== "object" || !schema.properties) return ["output"];
-  return ["output", ...Object.keys(schema.properties).map((key) => `output.${key}`)];
+export function outputPaths(
+  schema: SchemaObject | null | undefined,
+  sampleKeys: readonly string[] = [],
+): string[] {
+  if (schema?.type === "object" && schema.properties && Object.keys(schema.properties).length > 0) {
+    return ["output", ...Object.keys(schema.properties).map((key) => `output.${key}`)];
+  }
+  const extras = sampleKeys
+    .filter((key) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
+    .map((key) => `output.${key}`);
+  return extras.length > 0 ? ["output", ...extras] : ["output"];
 }
 
 export function templateCompletions(
@@ -167,6 +175,7 @@ export function upstreamOutputs(
   nodes: readonly { id: string; ref: string; name: string }[],
   edges: readonly { source: string; target: string }[],
   schemas: ReadonlyMap<string, SchemaObject | null>,
+  samples: ReadonlyMap<string, readonly string[]> = new Map(),
 ): UpstreamOutput[] {
   const incoming = new Map<string, string[]>();
   for (const edge of edges) {
@@ -187,7 +196,7 @@ export function upstreamOutputs(
     .map((node) => ({
       ref: node.ref,
       name: node.name,
-      paths: outputPaths(schemas.get(node.id)),
+      paths: outputPaths(schemas.get(node.id), samples.get(node.id) ?? []),
     }));
 }
 

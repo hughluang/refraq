@@ -44,6 +44,7 @@ import {
   deleteChannel,
   getChannel,
   getDraft,
+  getRun,
   listNodeTypes,
   patchChannel,
   previewPublish,
@@ -53,6 +54,7 @@ import {
   validateDraft,
 } from "@/features/channels/api";
 import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
+import { isTerminalRun } from "@/features/channels/runSession";
 import { ChannelRuns } from "@/features/channels/ChannelRuns";
 import { ChannelVersions } from "@/features/channels/ChannelVersions";
 import type { Graph, GraphProblem, RefinedPort } from "@/features/channels/types";
@@ -69,7 +71,8 @@ import { useLeaveGuard } from "@/hooks/useLeaveGuard";
 import { ApiError } from "@/lib/api";
 import { problemMessage } from "@/lib/problem";
 
-import type { Channel, Confirmation, NodeTypeSpec } from "@/features/channels/types";
+import type { Channel, ChannelRunDetail, Confirmation, NodeTypeSpec } from "@/features/channels/types";
+import { cancelJob } from "@/features/jobs/api";
 
 const FORM_ID = "channel-record-form";
 const NAME_MAX = 200;
@@ -170,6 +173,10 @@ function ChannelExisting({
     resource: ModuleId.channels,
     action: ModuleAction.edit,
   });
+  const { data: canJobs } = useCan({
+    resource: ModuleId.jobs,
+    action: ModuleAction.list,
+  });
   const [channel, setChannel] = useState<Channel | null>(null);
   const [graph, setGraph] = useState<Graph | null>(null);
   const [baseline, setBaseline] = useState("");
@@ -187,6 +194,8 @@ function ChannelExisting({
   const [reloadToken, setReloadToken] = useState(0);
   const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [runOpen, setRunOpen] = useState(false);
+  const [sessionRun, setSessionRun] = useState<ChannelRunDetail | null>(null);
+  const [runFocus, setRunFocus] = useState<{ nodeId: string; token: number } | null>(null);
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [timeoutDraft, setTimeoutDraft] = useState<number | string>("");
   const nameEditorRef = useRef<ChannelNameHeadingHandle>(null);
@@ -253,6 +262,19 @@ function ChannelExisting({
   }, [canWrite?.can, channelId, mode, router]);
 
   const writable = mode === "edit" && Boolean(canWrite?.can);
+  const runActive = sessionRun != null && !isTerminalRun(sessionRun.run.status);
+  const canStop = Boolean(canWrite?.can || canJobs?.can);
+  const runJobId = sessionRun?.run.job_id ?? null;
+  const runStatus = sessionRun?.run.status ?? null;
+  useEffect(() => {
+    if (!runJobId || runStatus == null || isTerminalRun(runStatus)) return;
+    const timer = window.setInterval(() => {
+      void getRun(channelId, runJobId)
+        .then(setSessionRun)
+        .catch(() => undefined);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [channelId, runJobId, runStatus]);
   const graphDirty = graph != null && JSON.stringify(graph) !== baseline;
   const leaveGuard = useLeaveGuard({
     enabled: writable && (form.isDirty() || graphDirty),
@@ -410,7 +432,13 @@ function ChannelExisting({
     return { revision: nextRevision, graph: nextGraph };
   };
 
+  const rememberRun = async (jobId: string, nodeId?: string) => {
+    setSessionRun(await getRun(channelId, jobId));
+    if (nodeId) setRunFocus({ nodeId, token: Date.now() });
+  };
+
   const launch = () => {
+    if (!graph || runActive) return;
     const triggers = graph.nodes.filter((node) => node.type.startsWith("trigger."));
     if (triggers.length !== 1) {
       notifyError(new Error(t("channels.run.needTrigger")));
@@ -419,9 +447,37 @@ function ChannelExisting({
     setBusy(true);
     void (async () => {
       if (writable) await persist();
-      await startRun(channelId, { target: "draft" });
+      const started = await startRun(channelId, { target: "draft", ignore_checkpoints: false });
+      await rememberRun(started.run.job_id);
       setRunOpen(false);
     })()
+      .catch(catchFailure)
+      .finally(() => setBusy(false));
+  };
+
+  const runNode = (nodeId: string) => {
+    if (runActive) return;
+    setBusy(true);
+    void (async () => {
+      if (writable) await persist();
+      const started = await startRun(channelId, {
+        target: "draft",
+        ignore_checkpoints: false,
+        stop_at_node_id: nodeId,
+      });
+      await rememberRun(started.run.job_id, nodeId);
+    })()
+      .catch(catchFailure)
+      .finally(() => setBusy(false));
+  };
+
+  const stopRun = () => {
+    if (!sessionRun) return;
+    const jobId = sessionRun.run.job_id;
+    setBusy(true);
+    void cancelJob(jobId)
+      .then(() => getRun(channelId, jobId))
+      .then(setSessionRun)
       .catch(catchFailure)
       .finally(() => setBusy(false));
   };
@@ -536,8 +592,19 @@ function ChannelExisting({
               {t("channels.actions.back")}
             </Button>
             {canWrite?.can ? (
-              <Button size="sm" variant="filled" loading={busy} onClick={() => setRunOpen(true)}>
+              <Button
+                size="sm"
+                variant="filled"
+                loading={busy}
+                disabled={runActive}
+                onClick={() => setRunOpen(true)}
+              >
                 {t("channels.run.open")}
+              </Button>
+            ) : null}
+            {runActive && canStop ? (
+              <Button size="sm" color="red" variant="light" loading={busy} onClick={stopRun}>
+                {t("channels.run.stop")}
               </Button>
             ) : null}
           </Group>
@@ -644,10 +711,13 @@ function ChannelExisting({
           key={baseline}
           graph={graph}
           catalog={catalog}
-          editable={writable}
+          editable={writable && !runActive}
           problems={problems}
           ports={ports}
           onChange={setGraph}
+          sessionRun={sessionRun}
+          onRunNode={runNode}
+          runFocus={runFocus}
         />
       </FillColumn>
       <Modal opened={runOpen} onClose={() => setRunOpen(false)} title={t("channels.run.open")}>

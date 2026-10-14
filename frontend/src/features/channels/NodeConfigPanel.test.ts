@@ -33,6 +33,11 @@ const LABELS: Record<string, string> = {
   "channels.config.fields.mode": "Mode",
   "channels.config.fields.match_key": "Match key",
   "channels.config.fields.mapping": "Mapping",
+  "channels.config.fields.payload": "Output",
+  "channels.config.json.hint":
+    'A JSON object copied into this node\'s output. Leave empty for {}. Example: {"status": "ready"}.',
+  "channels.config.json.reserved":
+    "triggered_by and triggered_at are added by the run. Remove them here.",
   "channels.config.fields.source": "Source",
   "channels.config.fields.statement_timeout_sec": "Statement timeout",
   "channels.config.fields.key": "Source key",
@@ -164,6 +169,12 @@ function stubDomApis() {
     disconnect() {}
   }
   globalThis.ResizeObserver = ResizeObserverStub;
+  if (document.fonts == null) {
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: { addEventListener() {}, removeEventListener() {} },
+    });
+  }
   const rect = () => ({
     x: 0,
     y: 0,
@@ -228,6 +239,13 @@ function attributeList(current: string) {
     );
   });
 }
+
+const PAYLOAD: SchemaObject = {
+  type: "object",
+  properties: {
+    payload: { type: "object", "x-refraq-ref": "json" },
+  },
+};
 
 describe("NodeConfigPanel grids", () => {
   const head = [
@@ -630,5 +648,82 @@ describe("NodeConfigPanel display mode", () => {
     fireEvent.click(screen.getByRole("button", { name: "SQL Problems" }));
     expect(screen.getByText("A template expression does not parse")).toBeTruthy();
     expect(document.querySelector(".channel-template-field__editor")?.getAttribute("data-severity")).toBeNull();
+  });
+
+  it("shows an empty object and the JSON format", async () => {
+    await renderPanel(PAYLOAD, node({ payload: {} }, "trigger.manual"));
+    const box = screen.getByRole("textbox", { name: "Output" }) as HTMLTextAreaElement;
+    expect(box.value).toBe("{}");
+    expect(screen.getByText(/Example: \{"status": "ready"\}/)).toBeTruthy();
+  });
+
+  it("writes a JSON object and leaves invalid text out of the config", async () => {
+    const onChange = await renderPanel(PAYLOAD, node({ payload: {} }, "trigger.manual"));
+    const box = screen.getByRole("textbox", { name: "Output" });
+    fireEvent.change(box, { target: { value: '{"status":"ready"}' } });
+    fireEvent.blur(box);
+    expect(onChange).toHaveBeenCalledWith(
+      "n1",
+      expect.objectContaining({
+        config: expect.objectContaining({ payload: { status: "ready" } }),
+      }),
+    );
+
+    fireEvent.change(box, { target: { value: "not-json" } });
+    fireEvent.blur(box);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(box.getAttribute("aria-invalid")).toBe("true");
+    expect((box as HTMLTextAreaElement).value).toBe("not-json");
+  });
+
+  it("shows a stored JSON string as typed and stores the object", async () => {
+    const raw = '{"triggered_at": "2026-10-14T06:01:20.717698Z"}';
+    const onChange = await renderPanel(
+      PAYLOAD,
+      node({ payload: raw }, "trigger.manual"),
+      vi.fn(),
+      [
+        {
+          code: "CHANNEL_NODE_CONFIG_INVALID",
+          node_id: "n1",
+          edge_id: null,
+          path: ["payload"],
+          detail: `'${raw}' is not of type 'object'`,
+        },
+      ],
+    );
+    const box = screen.getByRole("textbox", { name: "Output" }) as HTMLTextAreaElement;
+    expect(box.value).toBe(raw);
+    expect(screen.queryByText(/is not of type/)).toBeNull();
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalledWith(
+        "n1",
+        expect.objectContaining({
+          config: expect.objectContaining({
+            payload: { triggered_at: "2026-10-14T06:01:20.717698Z" },
+          }),
+        }),
+      );
+    });
+  });
+
+  it("explains reserved payload keys on the output field", async () => {
+    await renderPanel(
+      PAYLOAD,
+      node({ payload: { triggered_at: "2026-10-14T06:01:20.717698Z" } }, "trigger.manual"),
+      vi.fn(),
+      [
+        {
+          code: "CHANNEL_NODE_CONFIG_INVALID",
+          node_id: "n1",
+          edge_id: null,
+          path: ["payload"],
+          detail: "Manual payload uses a reserved key",
+        },
+      ],
+    );
+    expect(screen.queryByText(/reserved key/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Output Problems" }));
+    expect(screen.getByText(/added by the run/)).toBeTruthy();
   });
 });

@@ -2,9 +2,11 @@
 
 import { ActionIcon, Button, CloseButton, Group, Stack, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
+import { useEffect, useRef } from "react";
 
 import { FieldDisclosureContext, FieldMarks } from "@/components/form/FieldChrome";
 import type { FieldNote } from "@/components/form/fieldNotes";
+import { JsonField } from "@/components/form/JsonField";
 import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
 import { TextField } from "@/components/form/TextField";
@@ -350,6 +352,20 @@ function ConfigField({
       />
     );
   }
+  if (field.kind === "json") {
+    return (
+      <JsonObjectField
+        label={labeled ? caption : undefined}
+        aria-label={labeled ? undefined : caption}
+        value={value}
+        editable={editable}
+        notes={notes}
+        openSignal={openSignal}
+        bare={bare}
+        onChange={onChange}
+      />
+    );
+  }
   if (field.kind === "template") {
     const valueSchema = "from" in field.valueSchema ? attributeSchema(scope, head) : field.valueSchema;
     return (
@@ -628,6 +644,86 @@ function optionLabel(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+const RESERVED_PAYLOAD_KEYS = new Set(["triggered_by", "triggered_at"]);
+
+function parsedObject(value: unknown): Record<string, unknown> | null {
+  if (isRecord(value)) return value;
+  if (typeof value !== "string" || value.trim() === "") return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function JsonObjectField({
+  label,
+  "aria-label": ariaLabel,
+  value,
+  editable,
+  notes,
+  openSignal,
+  bare,
+  onChange,
+}: {
+  label?: string;
+  "aria-label"?: string;
+  value: unknown;
+  editable: boolean;
+  notes: readonly FieldNote[];
+  openSignal?: string | null;
+  bare?: boolean;
+  onChange: (value: unknown) => void;
+}) {
+  const t = useTranslate();
+  const hint = t("channels.config.json.hint");
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  useEffect(() => {
+    if (typeof value !== "string") return;
+    const trimmed = value.trim();
+    if (trimmed === "") {
+      onChangeRef.current({});
+      return;
+    }
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (isRecord(parsed)) onChangeRef.current(parsed);
+    } catch {
+      return;
+    }
+  }, [value]);
+
+  const parsed = parsedObject(value);
+  const reserved = parsed != null && Object.keys(parsed).some((key) => RESERVED_PAYLOAD_KEYS.has(key));
+  const kept = notes.filter((note) => {
+    const text = typeof note.text === "string" ? note.text : "";
+    if (!isRecord(value) && text.includes("is not of type")) return false;
+    if (reserved && text.includes("reserved key")) return false;
+    return true;
+  });
+  const reservedNotes: FieldNote[] = reserved
+    ? [{ text: t("channels.config.json.reserved"), tone: "error" }]
+    : [];
+  return (
+    <JsonField
+      editable={editable}
+      label={label}
+      aria-label={ariaLabel}
+      hint={hint}
+      invalidMessage={hint}
+      value={value === undefined ? {} : value}
+      accept={isRecord}
+      onEmpty={() => onChange({})}
+      notes={[...reservedNotes, ...kept]}
+      openSignal={openSignal}
+      bare={bare}
+      onChange={onChange}
+    />
+  );
 }
 
 function attributeSchema(scope: Record<string, unknown>, head: HeadState) {

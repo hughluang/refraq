@@ -188,13 +188,13 @@ Responsibilities:
 - Graph validation as a pure function over a graph and a reference resolver
 - Node type catalog: each node type's configuration schema, ports, and execute function
 - Node type modules under `channel/nodes/`. `nodes/spec.py` holds the shared declaration (`NodeType`, `PortSpec`). `nodes/__init__.py` is the only registry: an explicit catalog tuple exporting `list_node_types` and `get_node_type`. Each type is one module, `nodes/<family>/<name>.py`, and that module exports only `NODE_TYPE`. Family packages do not re-export types. Callers outside a node module import the registry or `nodes.spec`, not the node module. A type becomes its own directory (`spec.py` for the declaration, `config.py` for the configuration schema, `execute.py` for execution) when it gains an execute function or no longer fits one module
-- Execution engine with n8n v1 semantics; it knows nothing about specific node types, storage, or Celery
+- Execution engine with n8n v1 semantics; it knows nothing about specific node types, storage, or Celery. With no stop node it runs every node reachable from the entry. With a stop node it runs that node's ancestor closure, including the node
 - Expression evaluator and Code node sandbox (one reused subprocess per run; no network; allow-listed modules; time and memory limits)
 - **Dataset Reference**s: run-scoped tables in the entity database and their expiry
 - Entity writer: modes, match key, mapped attributes only, head compatibility, dry run; writes through Entity's published row-write port
 - **Checkpoint** store: per (channel, Read Changes node, stream) cursors, run upper bounds, monotonic advance on whole-run success
 - Run records: node executions, truncated item samples, last failed node and edge
-- **Channel Run** runner and triggers: `channel_run` Job kind, version resolution at start, cancel and run-timeout checks between node executions, version supersede, error workflow, persistent-failure flag
+- **Channel Run** runner and triggers: `channel_run` Job kind, version resolution at start, run-timeout checks between node executions, version supersede, error workflow, persistent-failure flag. User cancel kills the run's child process
 - Schedule sync of Scheduled nodes to `channel_run` **Scheduled Task** rows, and the `channel_run` schedule projection adapter
 - **Global Variable** store
 - `channel/parameters.py` (Data Channel-owned System Parameter specs)

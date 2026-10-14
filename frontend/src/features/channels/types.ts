@@ -62,6 +62,7 @@ export type ChannelRun = {
   trigger_actor_name: string | null;
   trigger_schedule_name: string | null;
   ignore_checkpoints: boolean;
+  stop_at_node_id?: string | null;
   failed_node_id: string | null;
   stopped_node_id?: string | null;
   created_at: Instant;

@@ -41,7 +41,9 @@ def init_worker_entity_pool() -> None:
 @shared_task(name="backend.entity.tasks.run_job")
 def run_job(job_id: str) -> dict[str, str]:
     try:
-        return run_entity_table_job(job_id)
+        from backend.jobs.supervise import supervise
+
+        return supervise(job_id, "backend.entity.align:run_entity_table_job")
     except Exception as exc:  # noqa: BLE001
         current = get_job_store().get(job_id)
         logger.exception("entity run_job aborted job_id=%s", job_id)

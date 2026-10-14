@@ -62,6 +62,8 @@ import {
   type FlowNodeData,
 } from "@/features/channels/graphValidation";
 import { NodeConfigPanel } from "@/features/channels/NodeConfigPanel";
+import { NodeRunPanel } from "@/features/channels/NodeRunPanel";
+import { phaseByNode, sampleKeysByNode, type NodeRunPhase } from "@/features/channels/runSession";
 import { nodeTypeLabel, nodeTypeSummary } from "@/features/channels/nodeTypeCopy";
 import {
   formatGraphProblem,
@@ -70,7 +72,7 @@ import {
   type ProblemGraph,
 } from "@/features/channels/problemLabel";
 import { upstreamOutputs } from "@/features/channels/templateLogic";
-import type { Graph, GraphProblem, NodeTypeSpec, RefinedPort } from "@/features/channels/types";
+import type { ChannelRunDetail, Graph, GraphProblem, NodeTypeSpec, RefinedPort } from "@/features/channels/types";
 
 type ChannelNode = Node<FlowNodeData, "channel">;
 
@@ -109,6 +111,10 @@ function highlightTargets(problem: GraphProblem, active: ProblemHighlight): bool
 }
 const CanvasEditableContext = createContext(false);
 const CanvasCatalogContext = createContext<readonly NodeTypeSpec[]>([]);
+const CanvasRunContext = createContext<{
+  phases: ReadonlyMap<string, NodeRunPhase>;
+  onRunNode: (nodeId: string) => void;
+}>({ phases: new Map(), onRunNode: () => {} });
 
 type Props = {
   graph: Graph;
@@ -117,6 +123,9 @@ type Props = {
   problems: GraphProblem[];
   ports?: readonly RefinedPort[];
   onChange: (graph: Graph) => void;
+  sessionRun?: ChannelRunDetail | null;
+  onRunNode?: (nodeId: string) => void;
+  runFocus?: { nodeId: string; token: number } | null;
 };
 
 export function ChannelCanvas(props: Props) {
@@ -134,6 +143,9 @@ function ChannelCanvasBody({
   problems,
   ports = [],
   onChange,
+  sessionRun = null,
+  onRunNode = () => {},
+  runFocus = null,
 }: Props) {
   const t = useTranslate();
   const { screenToFlowPosition, setCenter, getInternalNode } = useReactFlow();
@@ -152,6 +164,7 @@ function ChannelCanvasBody({
   const [nodes, setNodes] = useState<ChannelNode[]>(seededNodes);
   const [edges, setEdges] = useState<Edge[]>(seededEdges);
   const [configNodeId, setConfigNodeId] = useState<string | null>(null);
+  const [side, setSide] = useState<"config" | "run">("config");
   const [picker, setPicker] = useState<PickerState | null>(null);
   const [highlight, setHighlight] = useState<ProblemHighlight | null>(null);
   const [problemsDismissed, setProblemsDismissed] = useState(0);
@@ -610,6 +623,14 @@ function ChannelCanvasBody({
       .filter((port) => port.direction === "output" && port.port === "main")
       .map((port) => [port.node_id, port.schema] as const),
   );
+  const samples = useMemo(
+    () => (sessionRun ? sampleKeysByNode(sessionRun.node_executions) : new Map<string, string[]>()),
+    [sessionRun],
+  );
+  const phases = useMemo(
+    () => (sessionRun ? phaseByNode(sessionRun, sessionRun.graph ?? graph) : new Map()),
+    [sessionRun, graph],
+  );
   const upstream =
     selected == null
       ? []
@@ -618,6 +639,7 @@ function ChannelCanvasBody({
           nodes.map((node) => ({ id: node.id, ref: node.data.ref, name: node.data.name })),
           edges.map((edge) => ({ source: edge.source, target: edge.target })),
           outputSchemas,
+          samples,
         );
   const showCatalog = picker !== null && selected == null;
   const hasTrigger = nodes.some((node) => node.data.entry);
@@ -638,12 +660,20 @@ function ChannelCanvasBody({
     placeNode(spec, openPosition());
   };
 
-  const openNodeConfig = (nodeId: string) => {
+  const openNodeConfig = (nodeId: string, nextSide: "config" | "run" = "config") => {
     setConfigNodeId(nodeId);
+    setSide(nextSide === "run" && sessionRun ? "run" : "config");
     setPicker(null);
     const marked = highlightRef.current;
     if (marked && marked.nodeId !== nodeId) clearHighlight();
   };
+
+  useEffect(() => {
+    if (!runFocus) return;
+    setConfigNodeId(runFocus.nodeId);
+    setSide("run");
+    setPicker(null);
+  }, [runFocus?.token]);
 
   const onCanvasKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Enter") return;
@@ -658,6 +688,7 @@ function ChannelCanvasBody({
     <Stack gap={0} flex={1} mih={0} h="100%" w="100%" pos="relative">
         <CanvasEditableContext.Provider value={editable}>
         <CanvasCatalogContext.Provider value={catalog}>
+        <CanvasRunContext.Provider value={{ phases, onRunNode }}>
         <div
           ref={flowRootRef}
           className={
@@ -675,7 +706,7 @@ function ChannelCanvasBody({
             defaultEdgeOptions={{ type: CHANNEL_EDGE_TYPE }}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
-            onNodeClick={(_, node) => openNodeConfig(node.id)}
+            onNodeClick={(_, node) => openNodeConfig(node.id, sessionRun ? "run" : "config")}
             onConnect={onConnect}
             onConnectEnd={onConnectEnd}
             onPaneClick={clearSelection}
@@ -791,6 +822,41 @@ function ChannelCanvasBody({
                   </div>
                 </>
               ) : selected ? (
+                <Stack gap="sm" h="100%">
+                  {sessionRun ? (
+                    <Group gap={4} wrap="nowrap" justify="space-between">
+                      <Group gap={4} wrap="nowrap">
+                        <Button
+                          size="compact-xs"
+                          variant={side === "config" ? "filled" : "default"}
+                          onClick={() => setSide("config")}
+                        >
+                          {t("channels.run.config")}
+                        </Button>
+                        <Button
+                          size="compact-xs"
+                          variant={side === "run" ? "filled" : "default"}
+                          onClick={() => setSide("run")}
+                        >
+                          {t("channels.run.panel")}
+                        </Button>
+                      </Group>
+                      <CloseButton size="sm" aria-label={t("channels.node.close")} onClick={clearSelection} />
+                    </Group>
+                  ) : null}
+                  {side === "run" && sessionRun ? (
+                    <div className="channel-node-config__body">
+                      <NodeRunPanel
+                        nodeId={selected.id}
+                        nodes={nodes.map((node) => ({
+                          id: node.id,
+                          name: node.data.name,
+                          ref: node.data.ref,
+                        }))}
+                        detail={sessionRun}
+                      />
+                    </div>
+                  ) : (
                 <NodeConfigPanel
                   nodeId={selected.id}
                   data={selected.data}
@@ -812,10 +878,13 @@ function ChannelCanvasBody({
                     commitNow();
                   }}
                 />
+                  )}
+                </Stack>
               ) : null}
             </Paper>
           ) : null}
         </div>
+        </CanvasRunContext.Provider>
         </CanvasCatalogContext.Provider>
         </CanvasEditableContext.Provider>
     </Stack>
@@ -1113,6 +1182,14 @@ function HistoryIcon({ direction }: { direction: "undo" | "redo" }) {
   );
 }
 
+function PlayIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M8 5v14l11-7z" />
+    </svg>
+  );
+}
+
 function CloseIcon() {
   return (
     <svg
@@ -1249,14 +1326,23 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   const errorAnchor = catalog.some(
     (item) => item.type === data.nodeType && item.outputs.some((port) => port.port === "error"),
   );
+  const phase = useContext(CanvasRunContext).phases.get(id);
+  const onRunNode = useContext(CanvasRunContext).onRunNode;
   const emphasis = data.problem
     ? "channel-flow-node--problem"
     : selected
       ? "channel-flow-node--selected"
       : "";
+  const className = [
+    "channel-flow-node",
+    emphasis,
+    phase ? `channel-flow-node--${phase}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
     <div
-      className={emphasis ? `channel-flow-node ${emphasis}` : "channel-flow-node"}
+      className={className}
       style={{
         minWidth: 148,
         padding: "8px 12px",
@@ -1265,18 +1351,32 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
       }}
     >
       {editable ? (
-        <button
-          type="button"
-          className="channel-flow-node__delete nodrag nopan"
-          aria-label={t("channels.node.delete")}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            void deleteElements({ nodes: [{ id }] });
-          }}
-        >
-          <CloseIcon />
-        </button>
+        <>
+          <button
+            type="button"
+            className="channel-flow-node__run nodrag nopan"
+            aria-label={t("channels.node.run")}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onRunNode(id);
+            }}
+          >
+            <PlayIcon />
+          </button>
+          <button
+            type="button"
+            className="channel-flow-node__delete nodrag nopan"
+            aria-label={t("channels.node.delete")}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              void deleteElements({ nodes: [{ id }] });
+            }}
+          >
+            <CloseIcon />
+          </button>
+        </>
       ) : null}
       {data.entry ? null : <Handle type="target" position={Position.Left} id="main" />}
       <Text size="xs" c="dimmed">

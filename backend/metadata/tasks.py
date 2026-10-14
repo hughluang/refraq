@@ -20,7 +20,9 @@ def run_job(job_id: str) -> dict[str, str]:
     """Dispatch Job kind handlers via domain runners."""
 
     try:
-        return _dispatch_job(job_id)
+        from backend.jobs.supervise import supervise
+
+        return supervise(job_id, "backend.metadata.tasks:_dispatch_job")
     except Exception as exc:  # noqa: BLE001
         current = get_job_store().get(job_id)
         logger.exception("run_job aborted job_id=%s", job_id)

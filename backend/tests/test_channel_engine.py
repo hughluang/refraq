@@ -55,6 +55,27 @@ def _ok(node: dict, hooks: EngineHooks) -> NodeResult:
     return NodeResult(status="succeeded", output={"id": node["id"]})
 
 
+def test_stop_at_runs_both_incoming_branches_and_not_downstream() -> None:
+    graph = {
+        "nodes": [_node("a", 0), _node("b", 1), _node("c", 2), _node("d", 3), _node("e", 4)],
+        "edges": [
+            _edge("a", "b"),
+            _edge("a", "c"),
+            _edge("b", "d"),
+            _edge("c", "d"),
+            _edge("d", "e"),
+        ],
+        "settings": {},
+    }
+    hooks = RecordingHooks()
+    outcome = execute(graph, "a", {"fake": _ok}, hooks, stop_at_node_id="d")
+    assert outcome.status == "succeeded"
+    assert outcome.outcome == "completed"
+    assert outcome.stopped_node_id is None
+    assert hooks.order == ["a", "b", "c", "d"]
+    assert "e" not in hooks.order
+
+
 def test_branch_finishes_before_the_next_sibling() -> None:
     graph = {
         "nodes": [_node("a", 0), _node("b", 1), _node("c", 2), _node("d", 0)],

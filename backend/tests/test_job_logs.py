@@ -14,7 +14,7 @@ os.environ.pop("DATABASE_URL", None)
 os.environ.pop("REDIS_URL", None)
 os.environ.setdefault("CELERY_BROKER_URL", "memory://")
 
-from backend.admin.roles import seed_roles  # noqa: E402
+from backend.admin.roles import create_role, seed_roles  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.role_store import get_role_store, reset_role_store  # noqa: E402
 from backend.admin.user_store import get_user_store, reset_user_store  # noqa: E402
@@ -136,6 +136,37 @@ def test_list_jobs_and_logs_http(client: TestClient) -> None:
     body = logs.json()
     assert body["job_id"] == job.id
     assert "INFO hello" in body["body"]
+
+
+def test_channel_write_cancels_channel_run_only(client: TestClient) -> None:
+    roles = get_role_store()
+    role = create_role(
+        roles,
+        key="channel_author",
+        name="Channel author",
+        permissions=["console:access", "channel:write"],
+    )
+    get_user_store().create_user(
+        account="author",
+        display_name="Author",
+        password_hash=hash_password("secret"),
+        role_id=role.id,
+        status="active",
+    )
+    channel_job = create_queued_job(
+        kind="channel_run",
+        input={"channel_id": "chn_test", "target": "draft", "ignore_checkpoints": False},
+    )
+    other = create_queued_job(kind="structure", input={"source_id": "s1"})
+    with TestClient(app) as author:
+        login = author.post("/auth/login", json={"account": "author", "password": "secret"})
+        assert login.status_code == 200
+        assert author.get("/jobs").status_code == 403
+        denied = author.post(f"/jobs/{other.id}/cancel")
+        assert denied.status_code == 403
+        allowed = author.post(f"/jobs/{channel_job.id}/cancel")
+        assert allowed.status_code == 200
+        assert allowed.json()["job"]["status"] == "cancelled"
 
 
 def test_cancel_returns_log_updated_at(client: TestClient) -> None:
