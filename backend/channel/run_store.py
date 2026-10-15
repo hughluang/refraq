@@ -9,12 +9,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text, text
 
 from backend.channel.models import ChannelNodeExecutionRow, ChannelRunRow
 from backend.core.config import get_settings
 from backend.core.db import session_scope
 from backend.core.time import utc_now
+from backend.jobs.store import TERMINAL, get_job_store
+from backend.jobs.store import TERMINAL, get_job_store
 
 __all__ = [
     "ChannelRunRecord",
@@ -134,6 +136,28 @@ class MemoryRunStore:
                 return item
         return None
 
+    def delete_expired_terminal_runs(self, cutoff: datetime) -> int:
+        """Delete runs created before ``cutoff`` whose Job is terminal.
+
+        Node executions of those runs go with them. Jobs stay. A run whose Job
+        is missing or unfinished stays.
+        """
+        jobs = get_job_store()
+        with self._lock:
+            doomed = [
+                record.job_id
+                for record in self._runs.values()
+                if record.created_at < cutoff
+                and (job := jobs.get(record.job_id)) is not None
+                and job.status in TERMINAL
+            ]
+            for job_id in doomed:
+                del self._runs[job_id]
+            drop = [key for key, item in self._execs.items() if item.job_id in set(doomed)]
+            for key in drop:
+                del self._execs[key]
+            return len(doomed)
+
 
 class SqlRunStore:
     def insert_run(self, record: ChannelRunRecord) -> None:
@@ -240,6 +264,27 @@ class SqlRunStore:
                 )
             )
             return None if row is None else _exec_record(row)
+
+    def delete_expired_terminal_runs(self, cutoff: datetime) -> int:
+        """Delete runs created before ``cutoff`` whose Job is terminal.
+
+        ``channel_node_executions`` cascade with the run. Jobs stay.
+        """
+        statuses = list(TERMINAL)
+        holders = ", ".join(f":status_{index}" for index in range(len(statuses)))
+        params: dict[str, Any] = {
+            f"status_{index}": status for index, status in enumerate(statuses)
+        }
+        params["cutoff"] = cutoff
+        with session_scope() as session:
+            result = session.execute(
+                text(
+                    "DELETE FROM channel_runs WHERE created_at < :cutoff "
+                    f"AND job_id IN (SELECT id FROM jobs WHERE status IN ({holders}))"
+                ),
+                params,
+            )
+            return int(result.rowcount or 0)
 
 
 def _run_row(record: ChannelRunRecord) -> ChannelRunRow:

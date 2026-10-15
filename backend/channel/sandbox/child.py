@@ -10,6 +10,8 @@ import json
 import sys
 from typing import Any
 
+from backend.channel.sandbox.program import author_line, function_source
+
 try:
     import resource
 except ImportError:  # pragma: no cover - resource is present on Linux
@@ -58,9 +60,43 @@ _ALLOWED_IMPORTS = frozenset(
     }
 )
 
+_NETWORK_ROOTS = frozenset(
+    {
+        "socket",
+        "ssl",
+        "http",
+        "urllib",
+        "ftplib",
+        "smtplib",
+        "poplib",
+        "imaplib",
+        "nntplib",
+        "xmlrpc",
+        "webbrowser",
+    }
+)
+
+_REAL_IMPORT = __import__
+
+# Per-call wall timeouts govern. This is only a process-lifetime safety net
+# so a long run of many evaluations is not killed by accumulated CPU time.
+_CPU_SAFETY_SEC = 24 * 60 * 60
+
+
+class _Denied(Exception):
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
 
 def _audit(event: str, args: tuple[Any, ...]) -> None:
-    if event.startswith("socket.") or event.startswith("subprocess."):
+    if event == "import" and args:
+        root = str(args[0]).split(".", 1)[0]
+        if root in _NETWORK_ROOTS:
+            raise _Denied("network", "network access is not allowed")
+    if event.startswith("socket.") or event.startswith("urllib."):
+        raise _Denied("network", "network access is not allowed")
+    if event.startswith("subprocess."):
         raise RuntimeError(f"blocked: {event}")
     if event in {"os.system", "os.exec", "os.fork", "os.posix_spawn"}:
         raise RuntimeError(f"blocked: {event}")
@@ -74,9 +110,9 @@ def _audit(event: str, args: tuple[Any, ...]) -> None:
 
 def _safe_import(name: str, globals=None, locals=None, fromlist=(), level: int = 0):  # noqa: A002
     root = name.split(".", 1)[0]
-    if root not in _ALLOWED_IMPORTS or level != 0:
+    if level != 0 or (root not in _ALLOWED_IMPORTS and root not in _NETWORK_ROOTS):
         raise ImportError(f"import of {name} is not allowed")
-    return __import__(name, globals, locals, fromlist, level)
+    return _REAL_IMPORT(name, globals, locals, fromlist, level)
 
 
 class AttrDict(dict):
@@ -146,6 +182,40 @@ def _put_output(message: dict[str, Any]) -> None:
     SELF._by_ref[ref] = view
 
 
+def _author_line_of(exc: BaseException) -> int | None:
+    if isinstance(exc, SyntaxError) and exc.filename == "<code>":
+        return author_line(exc.lineno)
+    found: int | None = None
+    tb = exc.__traceback__
+    while tb is not None:
+        if tb.tb_frame.f_code.co_filename == "<code>":
+            found = tb.tb_lineno
+        tb = tb.tb_next
+    if found is None:
+        return None
+    return author_line(found)
+
+
+def _code_failure(message: dict[str, Any], exc: BaseException, reason: str) -> dict[str, Any]:
+    error: dict[str, Any] = {
+        "reason": reason,
+        "type": type(exc).__name__,
+        "message": str(exc),
+    }
+    line = _author_line_of(exc)
+    if line is not None:
+        error["line"] = line
+    return {"op": "run_code", "id": message.get("id"), "ok": False, "error": error}
+
+
+def _run_code(source: str) -> Any:
+    namespace: dict[str, Any] = {
+        "__builtins__": {**SAFE_BUILTINS, "__import__": _safe_import},
+    }
+    exec(compile(function_source(source), "<code>", "exec"), namespace)  # noqa: S102
+    return _unwrap(namespace["main"](SELF))
+
+
 def _eval(expression: str) -> Any:
     compiled = compile(expression, "<expression>", "eval")
     env = {"self": SELF, "__builtins__": {**SAFE_BUILTINS, "__import__": _safe_import}}
@@ -167,6 +237,19 @@ def _handle(message: dict[str, Any]) -> dict[str, Any]:
         for ref in message.get("refs") or []:
             SELF._by_ref.pop(str(ref), None)
         return {"op": "ok"}
+    if kind == "run_code":
+        try:
+            value = _run_code(str(message.get("source") or ""))
+            json.dumps(value)
+        except _Denied as exc:
+            return _code_failure(message, exc, exc.reason)
+        except MemoryError as exc:
+            return _code_failure(message, exc, "memory")
+        except ImportError as exc:
+            return _code_failure(message, exc, "import")
+        except Exception as exc:  # noqa: BLE001
+            return _code_failure(message, exc, "error")
+        return {"op": "run_code", "id": message.get("id"), "ok": True, "value": value}
     if kind == "eval":
         try:
             value = _eval(str(message.get("expression") or ""))
@@ -185,7 +268,7 @@ def main() -> None:
     if resource is not None:
         try:
             resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
-            resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
+            resource.setrlimit(resource.RLIMIT_CPU, (_CPU_SAFETY_SEC, _CPU_SAFETY_SEC))
         except (ValueError, OSError):
             pass
     sys.addaudithook(_audit)

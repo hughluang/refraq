@@ -115,7 +115,8 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | `backend.metadata.source_schedules` | Metadata facade onto platform schedules: operator projection (`public_schedule`: work_kind + target), opaque `owner_ref` register/withdraw, per-kind product-default seed on Source create / mutating Source update. Closed work kinds: `structure`, `join_detection`. Not schedule ownership by Source |
 | `backend.metadata.type_mappings.seeds` | Product Type Mapping seed occupy (`ensure_product_type_mappings`) for Foundation Upgrade / Site Bootstrap |
 | `backend.metadata.parameters` | Metadata-owned parameter specs and typed accessors (`query_timeout_sec`, `query_max_rows`) |
-| `backend.metadata.source_statements` | Execute one author statement on a registered Source (`execute_source_statement`, `source_exists`) and return the driver result. Not Controlled Query |
+| `backend.metadata.source_statements` | Execute one author statement on a registered Source (`execute_source_statement`, `source_exists`) and return the driver result. `guard_editor_source_sql` applies the Controlled Query read-only single-statement guard without opening a connection. Not Controlled Query |
+| `backend.metadata.query.service` | Controlled Query and Catalog Sample (`run_controlled_query`, `run_catalog_sample`). A Data Channel live Source query calls `run_controlled_query` as the System Identity |
 | `backend.metadata.mcp_catalog` | MCP tool catalog (name / Permission / description) shared by HTTP and `tools/list` |
 | `backend.metadata.mcp_server` | MCP tool host (stdio / in-process handlers). The stdio process entry assembles System Parameters |
 | `backend.metadata.mcp_http` | Product Streamable HTTP process entry; assembles System Parameters |
@@ -136,8 +137,8 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | `backend.entity.bootstrap` | Entity database bootstrap process entry (`python -m backend.entity.bootstrap`); uses `ENTITY_ADMIN_DATABASE_URL` only |
 | `backend.entity.dictionaries.active_codes` | Active dictionary codes, bound into subject attributes by composition |
 | `backend.entity.heads` | Current published head shape by Entity id (`get_entity_head`): attribute name, type, unique, required, and Business Key. Data Channel validation reads this and does not import Entity stores |
-| `backend.entity.rows` | Head-table row read and batch write by Entity id (`read_rows`, `write_rows`), executed as a given User through Entity Access Control. Data Channel runs pass the System Identity. Does not import `channel` |
-| `backend.entity.statements` | Execute one statement on the entity owner connection (`execute_entity_statement`) for Data Channel SQL that selects the entity database. Sets `search_path` to `entity_data` for that transaction |
+| `backend.entity.rows` | Head-table row read and batch write by Entity id (`read_rows`, `write_rows`), executed as a given User through Entity Access Control. `write_rows(..., dry_run=True)` runs the same statements, returns the real counts, and rolls back. Data Channel runs pass the System Identity. Does not import `channel` |
+| `backend.entity.statements` | Execute one statement on the entity owner connection (`execute_entity_statement`) for Data Channel SQL that selects the entity database. Sets `search_path` to `entity_data` for that transaction. `rollback=True` always rolls the transaction back after the rows are read |
 | `backend.entity.publish_confirmation` | Port a Data Channel adapter fills with write nodes a candidate head would make incompatible; bound by composition. Entity HTTP calls it and does not import `channel` |
 | `backend.entity.routers.*` | Domain use-case HTTP (definition, access management, and Entity Data API); mounted by `main` |
 
@@ -148,8 +149,8 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Module | Published for |
 |--------|----------------|
 | `backend.channel.errors` | Domain errors (subclass `AppError`, not `admin` concrete types) |
-| `backend.channel.tasks` | Job kind handler dispatch (`channel_run`) and Data Channel system tasks; discovered by `worker`. Not registered on `metadata.tasks` or `entity.tasks` |
-| `backend.channel.parameters` | Data Channel-owned System Parameter specs and typed accessors; collected by `worker.parameters` assembly |
+| `backend.channel.tasks` | Job kind handler dispatch (`channel_run`) and the run-record retention purge (`purge_run_records`); discovered by `worker`. Not registered on `metadata.tasks` or `entity.tasks` |
+| `backend.channel.parameters` | Data Channel-owned System Parameter specs and typed accessors (`channel_run_record_retention_days`), and the in-code identity of the run-record retention Scheduled Task. Collected by `worker.parameters` assembly |
 | `backend.channel.schedule_projection` | `channel_run` schedule `work_kind` / `target` projection adapter, bound by composition into the platform schedule list |
 | `backend.channel.schedules` | Publish sync, activation, withdraw, and the due-tick task that mints `channel_run` Jobs |
 | `backend.channel.write_targets` | Write-node consumers of a Business Entity, bound by composition into the Entity publish confirmation |

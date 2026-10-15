@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any, Mapping
 
 from backend.channel.engine import EngineHooks, NodeResult
 from backend.channel.nodes import list_node_types
+from backend.channel.references import ChannelReferenceResolver
 from backend.channel.reshape import (
     run_deduplicate,
     run_filter,
@@ -14,14 +16,16 @@ from backend.channel.reshape import (
     run_merge,
     run_set_fields,
 )
-from backend.channel.references import ChannelReferenceResolver
-from backend.channel.sql_read import SqlReadError, run_channel_sql
+from backend.channel.sandbox import CodeError
+from backend.channel.sql_read import ITEM_LIMIT, SqlReadError, run_channel_sql
 from backend.channel.template import TemplateTypeError, output_matches, render
 from backend.channel.values import LIST_OF_OBJECTS
 from backend.channel.variables import VALUE_MAX_BYTES, get_variable_store, valid_name, value_size
-from backend.core.time import format_instant
+from backend.core.errors import AppError
+from backend.core.time import format_instant, utc_now
 from backend.entity.errors import EntityRowWriteFailed
 from backend.entity.rows import head_target, write_rows
+from backend.metadata.query.service import run_controlled_query
 
 STATEMENT_TIMEOUT_MS = 30_000
 _JSON = {"type": ["object", "array", "string", "number", "boolean", "null"]}
@@ -64,11 +68,16 @@ def execute_sql(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
         return _type_failed(config.get("sql"), exc)
     except Exception as exc:  # noqa: BLE001
         return _expr_failed(config.get("sql"), exc)
+    editor = _editor(hooks)
     try:
         output = run_channel_sql(
             str(statement),
             source=config["source"],
             statement_timeout_sec=config.get("statement_timeout_sec", 30),
+            max_rows=editor.row_limit if editor is not None else ITEM_LIMIT,
+            rollback=editor is not None,
+            strict_limit=editor is None,
+            editor=editor is not None,
         )
     except SqlReadError as exc:
         return NodeResult(status="failed", error_code=exc.code, error_message=exc.message)
@@ -113,12 +122,22 @@ def execute_variable(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             return _type_failed(config.get("expected"), exc)
         except Exception as exc:  # noqa: BLE001
             return _expr_failed(config.get("expected"), exc)
+    ttl_sec = config.get("ttl_sec") if writes else None
+    if _editor(hooks) is not None and operation != "get":
+        output = _dry_variable(
+            operation=operation,
+            name=name,
+            value=value,
+            expected=expected,
+            ttl_sec=ttl_sec,
+        )
+        return _checked("state.variable", node, NodeResult(status="succeeded", output=output))
     result = get_variable_store().apply(
         operation=operation,
         name=name,
         value=value,
         expected=expected,
-        ttl_sec=config.get("ttl_sec") if writes else None,
+        ttl_sec=ttl_sec,
     )
     expires = format_instant(result.expires_at) if result.expires_at is not None else None
     return _checked(
@@ -171,6 +190,7 @@ def execute_write(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     if error is not None:
         return error
     try:
+        dry_run = _editor(hooks) is not None
         result = write_rows(
             str(config["entity_id"]),
             mode=mode,
@@ -178,6 +198,7 @@ def execute_write(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             rows=projected,
             user=hooks.user,  # type: ignore[attr-defined]
             statement_timeout_ms=STATEMENT_TIMEOUT_MS,
+            dry_run=dry_run,
         )
     except EntityRowWriteFailed as exc:
         return NodeResult(
@@ -201,20 +222,80 @@ def execute_write(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             error_code="CHANNEL_NODE_FAILED",
             error_message=str(exc),
         )
+    output: dict[str, Any] = {
+        "inserted": result.inserted,
+        "updated": result.updated,
+        "unchanged": result.unchanged,
+        "deleted": result.deleted,
+        "unmatched": result.unmatched,
+    }
+    if _editor(hooks) is not None:
+        output["dry_run"] = True
     return _checked(
         "write.entity",
         node,
-        NodeResult(
-            status="succeeded",
-            output={
-                "inserted": result.inserted,
-                "updated": result.updated,
-                "unchanged": result.unchanged,
-                "deleted": result.deleted,
-                "unmatched": result.unmatched,
-            },
-        ),
+        NodeResult(status="succeeded", output=output),
     )
+
+
+def _editor(hooks: EngineHooks) -> Any | None:
+    """Editor options on the hooks, or None for a real Channel Run."""
+    return getattr(hooks, "editor", None)
+
+
+def _dry_variable(
+    *,
+    operation: str,
+    name: str,
+    value: Any,
+    expected: Any,
+    ttl_sec: int | None,
+) -> dict[str, Any]:
+    """The write result computed from the current value, without storing it."""
+    current = get_variable_store().apply(operation="get", name=name)
+    applied = _dry_applied(operation, current.found, current.value, expected)
+    if operation == "delete":
+        return {
+            "name": name,
+            "found": False,
+            "value": None,
+            "applied": applied,
+            "expires_at": None,
+            "dry_run": True,
+        }
+    if applied:
+        expires = None if ttl_sec is None else utc_now() + timedelta(seconds=int(ttl_sec))
+        return {
+            "name": name,
+            "found": True,
+            "value": value,
+            "applied": True,
+            "expires_at": format_instant(expires) if expires is not None else None,
+            "dry_run": True,
+        }
+    expires_at = (
+        format_instant(current.expires_at) if current.expires_at is not None else None
+    )
+    return {
+        "name": name,
+        "found": current.found,
+        "value": current.value,
+        "applied": False,
+        "expires_at": expires_at,
+        "dry_run": True,
+    }
+
+
+def _dry_applied(operation: str, found: bool, current: Any, expected: Any) -> bool:
+    if operation == "set":
+        return True
+    if operation == "set_if_absent":
+        return not found
+    if operation == "compare_and_set":
+        return found and current == expected
+    if operation == "delete":
+        return found
+    return False
 
 
 def _value(hooks: EngineHooks, raw: Any, schema: Mapping[str, Any]) -> Any:
@@ -291,6 +372,82 @@ def _project(
     return rows, None
 
 
+def execute_code(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    config = node["config"]
+    source = config.get("code")
+    if not isinstance(source, str):
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_NODE_FAILED",
+            error_message="Code is missing",
+            error_detail={"reason": "error"},
+        )
+    timeout = config.get("timeout_sec", 30)
+    if not isinstance(timeout, int) or isinstance(timeout, bool):
+        timeout = 30
+    try:
+        value = hooks.sandbox.run_code(source, float(timeout))  # type: ignore[attr-defined]
+    except CodeError as exc:
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_NODE_FAILED",
+            error_message=str(exc),
+            error_detail=exc.detail,
+        )
+    return _checked("transform.code", node, NodeResult(status="succeeded", output=value))
+
+
+def execute_source_query(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    config = node["config"]
+    try:
+        statement = _value(hooks, config.get("sql"), {"type": "string"})
+    except TemplateTypeError as exc:
+        return _type_failed(config.get("sql"), exc)
+    except Exception as exc:  # noqa: BLE001
+        return _expr_failed(config.get("sql"), exc)
+    row_cap = config.get("row_cap", 100)
+    if not isinstance(row_cap, int) or isinstance(row_cap, bool):
+        row_cap = 100
+    editor = _editor(hooks)
+    if editor is not None:
+        row_cap = min(row_cap, editor.row_limit)
+    user = hooks.user  # type: ignore[attr-defined]
+    audit_detail = {
+        key: value
+        for key, value in {
+            "channel_id": getattr(hooks, "_channel_id", None),
+            "job_id": getattr(hooks, "job_id", None),
+            "node_id": node.get("id"),
+        }.items()
+        if value
+    }
+    try:
+        outcome = run_controlled_query(
+            source_id=str(config["source_id"]),
+            sql=str(statement),
+            max_rows=row_cap,
+            actor_user_id=user.id,
+            actor_token_id=None,
+            audit_detail=audit_detail or None,
+        )
+    except AppError as exc:
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_NODE_FAILED",
+            error_message=exc.message,
+            error_detail={"code": exc.code},
+        )
+    rows = [dict(zip(outcome.columns, row)) for row in outcome.rows]
+    return _checked(
+        "read.source_query",
+        node,
+        NodeResult(
+            status="succeeded",
+            output={"rows": rows, "count": len(rows), "truncated": outcome.truncated},
+        ),
+    )
+
+
 def execute_set_fields(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     return _checked("transform.set_fields", node, run_set_fields(node, hooks))
 
@@ -346,6 +503,8 @@ EXECUTORS = {
     "trigger.manual": execute_manual,
     "trigger.scheduled": execute_scheduled,
     "read.sql": execute_sql,
+    "read.source_query": execute_source_query,
+    "transform.code": execute_code,
     "transform.set_fields": execute_set_fields,
     "transform.if": execute_if,
     "transform.filter": execute_filter,

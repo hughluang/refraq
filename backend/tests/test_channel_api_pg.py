@@ -730,3 +730,471 @@ def test_if_and_for_run_the_live_branch(channel_client: TestClient) -> None:
         assert walk[0]["output_preview"]["results"] == [{"n": 1}, {"n": 2}]
     finally:
         celery_app.conf.task_always_eager = previous
+
+
+def _physical_rows(entity_id: str) -> list[dict]:
+    from sqlalchemy import text
+
+    from backend.entity.entity_db import get_entity_engine
+    from backend.entity.rows import head_target
+
+    target = head_target(entity_id)
+    assert target is not None
+    with get_entity_engine().connect() as conn:
+        rows = conn.execute(
+            text(f"SELECT * FROM {target.qualified_table} ORDER BY row_id")
+        ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def test_write_rows_dry_run_counts_and_leaves_the_table(channel_client: TestClient) -> None:
+    from backend.admin.user_store import get_user_store
+    from backend.entity.errors import EntityRowWriteFailed
+    from backend.entity.rows import write_rows
+    from backend.worker.app import celery_app
+
+    previous = celery_app.conf.task_always_eager
+    celery_app.conf.task_always_eager = True
+    try:
+        suffix = uuid.uuid4().hex[:8]
+        table = f"dry_{suffix}"
+        entity_id = _publish_entity(
+            channel_client,
+            table_name=table,
+            name="Dry",
+            attributes=[_string_attr("code", business_key=True), _string_attr("name")],
+        )
+        created = channel_client.post(
+            f"/entities/{table}/create", json={"values": {"code": "A", "name": "Bolt"}}
+        )
+        assert created.status_code == 201, created.text
+        user = get_user_store().get_by_account("root")
+        assert user is not None
+        before = _physical_rows(entity_id)
+
+        def attempt(mode: str, rows: list[dict], **counts: int) -> None:
+            result = write_rows(
+                entity_id,
+                mode=mode,  # type: ignore[arg-type]
+                match_key=None,
+                rows=rows,
+                user=user,
+                statement_timeout_ms=5000,
+                dry_run=True,
+            )
+            assert result.inserted == counts.get("inserted", 0)
+            assert result.updated == counts.get("updated", 0)
+            assert result.unchanged == counts.get("unchanged", 0)
+            assert result.deleted == counts.get("deleted", 0)
+            assert result.unmatched == counts.get("unmatched", 0)
+            assert _physical_rows(entity_id) == before
+
+        attempt("upsert", [{"code": "A", "name": "Bolt"}], unchanged=1)
+        attempt("upsert", [{"code": "A", "name": "Changed"}], updated=1)
+        attempt("upsert", [{"code": "B", "name": "Nut"}], inserted=1)
+        attempt("create", [{"code": "C", "name": "Cog"}], inserted=1)
+        with pytest.raises(EntityRowWriteFailed) as raised:
+            write_rows(
+                entity_id,
+                mode="create",
+                match_key=None,
+                rows=[{"code": "A", "name": "Bolt"}],
+                user=user,
+                statement_timeout_ms=5000,
+                dry_run=True,
+            )
+        assert raised.value.reason == "key_exists"
+        assert _physical_rows(entity_id) == before
+        attempt("update", [{"code": "A", "name": "Changed"}], updated=1)
+        attempt("update", [{"code": "M", "name": "Missing"}], unmatched=1)
+        attempt("delete", [{"code": "A"}], deleted=1)
+        attempt("delete", [{"code": "M"}], unmatched=1)
+    finally:
+        celery_app.conf.task_always_eager = previous
+
+
+def test_run_record_preview_and_retention(channel_client: TestClient) -> None:
+    from datetime import timedelta
+
+    from backend.channel.parameters import channel_run_record_retention_days
+    from backend.channel.run_store import (
+        ChannelRunRecord,
+        get_run_store,
+        output_page,
+        output_preview,
+    )
+    from backend.channel.tasks import purge_expired_run_records
+    from backend.core.time import utc_now
+    from backend.jobs.store import (
+        claim_for_execution,
+        create_queued_job,
+        get_job_store,
+        mark_cancelled,
+        mark_succeeded,
+    )
+
+    created = channel_client.post(
+        "/channels", json={"name": "Retention", "description": None}
+    )
+    assert created.status_code == 201, created.text
+    channel_id = created.json()["channel"]["id"]
+    days = channel_run_record_retention_days()
+    old = utc_now() - timedelta(days=days + 1)
+    recent = utc_now() - timedelta(days=max(days - 1, 0))
+
+    def job(status: str) -> str:
+        record = create_queued_job(
+            kind="channel_run",
+            input={"channel_id": channel_id},
+            summary="retention",
+        )
+        if status == "succeeded":
+            assert claim_for_execution(record.id, claimed_by="test") is not None
+            assert mark_succeeded(record.id, result={"schema": "channel_run.v1"}) is not None
+        elif status == "cancelled":
+            assert mark_cancelled(record.id) is not None
+        return record.id
+
+    old_done = job("succeeded")
+    old_cancelled = job("cancelled")
+    unfinished = job("queued")
+    recent_done = job("succeeded")
+    store = get_run_store()
+
+    def insert(job_id: str, created_at) -> None:
+        store.insert_run(
+            ChannelRunRecord(
+                job_id=job_id,
+                channel_id=channel_id,
+                target="draft",
+                version=None,
+                draft_revision=1,
+                graph=TRIGGER,
+                trigger_node_id="nd_trigger",
+                ignore_checkpoints=False,
+                outcome="completed",
+                failed_node_id=None,
+                skipped_node_ids=[],
+                created_at=created_at,
+            )
+        )
+
+    insert(old_done, old)
+    insert(old_cancelled, old)
+    insert(unfinished, old)
+    insert(recent_done, recent)
+    old_exec = store.start_execution(old_done, "nd_read")
+    old_exec.status = "succeeded"
+    old_exec.finished_at = utc_now()
+    old_exec.output = {"rows": [{"n": 1}]}
+    old_exec.output_bytes = 1
+    store.finish_execution(old_exec)
+    rows = [{"n": index} for index in range(150)]
+    execution = store.start_execution(recent_done, "nd_read")
+    execution.status = "succeeded"
+    execution.finished_at = utc_now()
+    execution.output = {"rows": rows, "count": 150}
+    execution.output_bytes = 1
+    store.finish_execution(execution)
+    stored = store.get_execution(recent_done, 1)
+    assert stored is not None
+    assert len(output_preview(stored.output)["rows"]) == 100
+    page = output_page(stored.output, "rows", limit=50, offset=0)
+    assert page["total"] == 150
+    assert len(page["items"]) == 50
+
+    deleted = purge_expired_run_records()
+    assert deleted == 2
+    assert store.get_run(old_done) is None
+    assert store.get_run(old_cancelled) is None
+    assert store.get_execution(old_done, 1) is None
+    assert store.list_executions(old_done) == []
+    assert store.get_run(unfinished) is not None
+    assert store.get_run(recent_done) is not None
+    kept = store.get_execution(recent_done, 1)
+    assert kept is not None
+    assert len(output_preview(kept.output)["rows"]) == 100
+    jobs = get_job_store()
+    for job_id in (old_done, old_cancelled, unfinished, recent_done):
+        assert jobs.get(job_id) is not None
+
+
+def _editor(client: TestClient, channel_id: str, graph: dict, **body) -> object:
+    payload = {
+        "graph": graph,
+        "stop_at_node_id": body.pop("stop_at_node_id"),
+        "pinned": body.pop("pinned", []),
+    }
+    if "row_limit" in body:
+        payload["row_limit"] = body.pop("row_limit")
+    payload.update(body)
+    return client.post(f"/channels/{channel_id}/editor/execute", json=payload)
+
+
+def test_editor_execute_does_not_write(channel_client: TestClient) -> None:
+    from backend.core.time import utc_now
+    from backend.metadata.sources.store import SourceRecord, get_source_store, new_source_id
+    from backend.worker.app import celery_app
+
+    previous = celery_app.conf.task_always_eager
+    celery_app.conf.task_always_eager = True
+    try:
+        suffix = uuid.uuid4().hex[:8]
+        table = f"ed_{suffix}"
+        entity_id = _publish_entity(
+            channel_client,
+            table_name=table,
+            name="Editor",
+            attributes=[_string_attr("code", business_key=True), _string_attr("name")],
+        )
+        created_row = channel_client.post(
+            f"/entities/{table}/create", json={"values": {"code": "A", "name": "Bolt"}}
+        )
+        assert created_row.status_code == 201, created_row.text
+        created = channel_client.post(
+            "/channels", json={"name": "Editor", "description": None}
+        )
+        assert created.status_code == 201, created.text
+        channel_id = created.json()["channel"]["id"]
+        settings = {"run_timeout_sec": None, "error_channel_id": None}
+        graph = {
+            "nodes": [
+                _node("nd_trigger", "run_manually", "trigger.manual", "Run", 0, {}),
+                _node(
+                    "nd_sql",
+                    "sql_read",
+                    "read.sql",
+                    "SQL",
+                    40,
+                    {
+                        "source": {"kind": "entity"},
+                        "sql": f"UPDATE {table} SET name = 'hacked' WHERE code = 'A'",
+                    },
+                ),
+                _node(
+                    "nd_write",
+                    "written",
+                    "write.entity",
+                    "Write",
+                    80,
+                    {
+                        "entity_id": entity_id,
+                        "mode": "upsert",
+                        "match_key": None,
+                        "source": '[{"code": "A", "name": "Changed"}, {"code": "Z", "name": "Zinc"}]',
+                        "mapping": [],
+                        "on_incompatible_head": "fail",
+                    },
+                ),
+                _node(
+                    "nd_after",
+                    "after",
+                    "transform.set_fields",
+                    "After",
+                    120,
+                    {"fields": [{"name": "n", "value": "1"}]},
+                ),
+            ],
+            "edges": [
+                _edge("ed_sql", "nd_trigger", "nd_sql"),
+                _edge("ed_write", "nd_sql", "nd_write"),
+                _edge("ed_after", "nd_write", "nd_after"),
+            ],
+            "settings": settings,
+        }
+        response = _editor(channel_client, channel_id, graph, stop_at_node_id="nd_write")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["status"] == "succeeded", body
+        assert body["stopped_node_id"] is None
+        by_node = {item["node_id"]: item for item in body["node_executions"]}
+        assert set(by_node) == {"nd_trigger", "nd_sql", "nd_write"}
+        assert by_node["nd_write"]["output"]["dry_run"] is True
+        assert by_node["nd_write"]["output"]["updated"] == 1
+        assert by_node["nd_write"]["output"]["inserted"] == 1
+        assert by_node["nd_sql"]["started_at"].endswith("Z")
+        queried = channel_client.post(f"/entities/{table}/query", json={})
+        assert queried.status_code == 200, queried.text
+        items = queried.json()["items"]
+        assert len(items) == 1
+        assert items[0]["code"] == "A"
+        assert items[0]["name"] == "Bolt"
+
+        limited = {
+            "nodes": [
+                _node("nd_trigger", "run_manually", "trigger.manual", "Run", 0, {}),
+                _node(
+                    "nd_sql",
+                    "sql_read",
+                    "read.sql",
+                    "SQL",
+                    40,
+                    {
+                        "source": {"kind": "entity"},
+                        "sql": "SELECT g FROM generate_series(1, 20) AS t(g)",
+                    },
+                ),
+                _node(
+                    "nd_cut",
+                    "cut",
+                    "transform.set_fields",
+                    "Cut",
+                    80,
+                    {"fields": [{"name": "n", "value": "[1, 2, 3, 4, 5]"}]},
+                ),
+            ],
+            "edges": [
+                _edge("ed_sql", "nd_trigger", "nd_sql"),
+                _edge("ed_cut", "nd_sql", "nd_cut"),
+            ],
+            "settings": settings,
+        }
+        capped = _editor(
+            channel_client,
+            channel_id,
+            limited,
+            stop_at_node_id="nd_cut",
+            row_limit=3,
+        )
+        assert capped.status_code == 200, capped.text
+        capped_body = capped.json()
+        assert capped_body["status"] == "succeeded", capped_body
+        capped_nodes = {item["node_id"]: item for item in capped_body["node_executions"]}
+        assert len(capped_nodes["nd_sql"]["output"]["rows"]) == 3
+        assert capped_nodes["nd_sql"]["truncated"] is False
+        assert capped_nodes["nd_cut"]["output"]["n"] == [1, 2, 3]
+        assert capped_nodes["nd_cut"]["truncated"] is True
+
+        pinned_graph = {
+            "nodes": [
+                _node("nd_trigger", "run_manually", "trigger.manual", "Run", 0, {}),
+                _node(
+                    "nd_shape",
+                    "shape",
+                    "transform.set_fields",
+                    "Shape",
+                    40,
+                    {"fields": [{"name": "rows", "value": '[{"code": "REAL"}]'}]},
+                ),
+                _node(
+                    "nd_copy",
+                    "copy",
+                    "transform.set_fields",
+                    "Copy",
+                    80,
+                    {"fields": [{"name": "rows", "value": "{{ self.shape.output.rows }}"}]},
+                ),
+                _node(
+                    "nd_after",
+                    "after",
+                    "transform.set_fields",
+                    "After",
+                    120,
+                    {"fields": [{"name": "n", "value": "1"}]},
+                ),
+            ],
+            "edges": [
+                _edge("ed_shape", "nd_trigger", "nd_shape"),
+                _edge("ed_copy", "nd_shape", "nd_copy"),
+                _edge("ed_after", "nd_copy", "nd_after"),
+            ],
+            "settings": settings,
+        }
+        pinned = _editor(
+            channel_client,
+            channel_id,
+            pinned_graph,
+            stop_at_node_id="nd_copy",
+            pinned=[{"node_id": "nd_shape", "output": {"rows": [{"code": "Z"}]}}],
+        )
+        assert pinned.status_code == 200, pinned.text
+        pinned_body = pinned.json()
+        assert pinned_body["status"] == "succeeded", pinned_body
+        pinned_nodes = {item["node_id"]: item for item in pinned_body["node_executions"]}
+        assert set(pinned_nodes) == {"nd_trigger", "nd_shape", "nd_copy"}
+        assert pinned_nodes["nd_shape"]["status"] == "pinned"
+        assert pinned_nodes["nd_copy"]["output"]["rows"] == [{"code": "Z"}]
+
+        pinned_for = {
+            "nodes": [
+                _node("nd_trigger", "run_manually", "trigger.manual", "Run", 0, {}),
+                _node("nd_for", "each", "volume.for", "Each", 40, {"items": "[]"}),
+            ],
+            "edges": [_edge("ed_for", "nd_trigger", "nd_for")],
+            "settings": settings,
+        }
+        refused = _editor(
+            channel_client,
+            channel_id,
+            pinned_for,
+            stop_at_node_id="nd_for",
+            pinned=[{"node_id": "nd_for", "output": {}}],
+        )
+        assert refused.status_code == 422
+        assert refused.json()["code"] == "REQUEST_INVALID"
+
+        unknown = channel_client.post(
+            f"/channels/{channel_id}/editor/execute",
+            json={"graph": TRIGGER, "stop_at_node_id": "nd_trigger", "extra": True},
+        )
+        assert unknown.status_code == 422
+        assert unknown.json()["code"] == "REQUEST_INVALID"
+
+        missing = _editor(channel_client, channel_id, TRIGGER, stop_at_node_id="nd_missing")
+        assert missing.status_code == 422
+        assert missing.json()["code"] == "CHANNEL_GRAPH_INVALID"
+        assert missing.json()["problems"] == []
+
+        now = utc_now()
+        source = get_source_store().create_source(
+            SourceRecord(
+                id=new_source_id(),
+                key=f"ed{suffix}",
+                locator_key="pending",
+                name="Editor source",
+                kind="database",
+                status="active",
+                description=None,
+                engine="postgresql",
+                access_ciphertext="unused",
+                access_updated_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        source_graph = {
+            "nodes": [
+                _node("nd_trigger", "run_manually", "trigger.manual", "Run", 0, {}),
+                _node(
+                    "nd_sql",
+                    "sql_read",
+                    "read.sql",
+                    "SQL",
+                    40,
+                    {
+                        "source": {"kind": "source", "source_id": source.id},
+                        "sql": "UPDATE widgets SET name = 'x'",
+                    },
+                ),
+            ],
+            "edges": [_edge("ed_sql", "nd_trigger", "nd_sql")],
+            "settings": settings,
+        }
+        blocked = _editor(
+            channel_client, channel_id, source_graph, stop_at_node_id="nd_sql"
+        )
+        assert blocked.status_code == 200, blocked.text
+        blocked_body = blocked.json()
+        assert blocked_body["status"] == "failed"
+        assert blocked_body["error_message"] == "Editor execution only runs read-only SQL on a Source"
+        sql_node = next(
+            item for item in blocked_body["node_executions"] if item["node_id"] == "nd_sql"
+        )
+        assert sql_node["status"] == "failed"
+        assert sql_node["error_message"] == "Editor execution only runs read-only SQL on a Source"
+
+        listed = channel_client.get(f"/channels/{channel_id}/runs")
+        assert listed.status_code == 200, listed.text
+        assert listed.json()["total"] == 0
+    finally:
+        celery_app.conf.task_always_eager = previous

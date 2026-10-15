@@ -786,3 +786,71 @@ def test_set_fields_rejects_duplicate_names() -> None:
     )
     problems = validate(graph, FakeResolver())
     assert any(item.detail == "Field names are not unique" for item in problems)
+
+
+def test_code_syntax_error_names_the_line() -> None:
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node(
+                "nd_code",
+                "transform.code",
+                "Reshape",
+                {"code": "return ("},
+            ),
+        ],
+        [_edge("ed_1", "nd_trigger", "nd_code")],
+    )
+    problems = validate(graph, FakeResolver())
+    found = [item for item in problems if item.code == "CHANNEL_CODE_INVALID"]
+    assert len(found) == 1
+    assert found[0].node_id == "nd_code"
+    assert found[0].path == ("code",)
+    assert "line 1" in found[0].detail
+    valid = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node(
+                "nd_code",
+                "transform.code",
+                "Reshape",
+                {"code": "return {'ok': True}"},
+            ),
+        ],
+        [_edge("ed_1", "nd_trigger", "nd_code")],
+    )
+    assert "CHANNEL_CODE_INVALID" not in _codes(valid)
+
+
+def test_source_query_source_must_resolve() -> None:
+    missing = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node(
+                "nd_lookup",
+                "read.source_query",
+                "Lookup",
+                {"source_id": "src_missing", "sql": "SELECT 1"},
+            ),
+        ],
+        [_edge("ed_1", "nd_trigger", "nd_lookup")],
+    )
+    problems = validate(missing, FakeResolver())
+    found = [item for item in problems if item.code == "CHANNEL_REFERENCE_UNRESOLVED"]
+    assert found
+    assert found[0].node_id == "nd_lookup"
+    present = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node(
+                "nd_lookup",
+                "read.source_query",
+                "Lookup",
+                {"source_id": "src_ok", "sql": "SELECT 1"},
+            ),
+        ],
+        [_edge("ed_1", "nd_trigger", "nd_lookup")],
+    )
+    assert "CHANNEL_REFERENCE_UNRESOLVED" not in _codes(
+        present, FakeResolver(sources={"src_ok"})
+    )

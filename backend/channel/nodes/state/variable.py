@@ -28,6 +28,7 @@ def _refine(
                 "value": _JSON,
                 "applied": {"type": "boolean"},
                 "expires_at": {"type": ["string", "null"]},
+                "dry_run": {"type": "boolean"},
             },
         }
     }

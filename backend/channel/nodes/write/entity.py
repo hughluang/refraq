@@ -19,13 +19,14 @@ _COUNT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
     "required": ["inserted", "updated", "unchanged", "deleted", "unmatched"],
-    "properties": {
-        "inserted": {"type": "integer"},
-        "updated": {"type": "integer"},
-        "unchanged": {"type": "integer"},
-        "deleted": {"type": "integer"},
-        "unmatched": {"type": "integer"},
-    },
+        "properties": {
+            "inserted": {"type": "integer"},
+            "updated": {"type": "integer"},
+            "unchanged": {"type": "integer"},
+            "deleted": {"type": "integer"},
+            "unmatched": {"type": "integer"},
+            "dry_run": {"type": "boolean"},
+        },
 }
 
 

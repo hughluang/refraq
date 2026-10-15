@@ -31,6 +31,11 @@ from backend.worker.errors import (
     ScheduleSystemImmutable,
     ScheduleUndeletable,
 )
+from backend.channel.parameters import (
+    RUN_RECORD_INTERVAL_SECONDS,
+    RUN_RECORD_SCHEDULE_KEY,
+    RUN_RECORD_TASK_NAME,
+)
 from backend.entity.tasks import ACCESS_LOG_SCHEDULE_KEY, ACCESS_LOG_TASK_NAME
 from backend.worker.models import REAPER_SCHEDULE_KEY, REAPER_TASK_NAME
 from backend.worker.schemas.schedules import ScheduleOut, ScheduleRecentJobOut
@@ -93,6 +98,7 @@ def ensure_system_schedules() -> None:
             )
         )
         _ensure_access_log_schedule(store, now)
+        _ensure_run_record_schedule(store, now)
         return
     if existing.interval_seconds != interval:
         store.upsert(
@@ -103,6 +109,7 @@ def ensure_system_schedules() -> None:
             )
         )
     _ensure_access_log_schedule(store, now)
+    _ensure_run_record_schedule(store, now)
 
 
 def _ensure_access_log_schedule(store: object, now: datetime) -> None:
@@ -120,6 +127,36 @@ def _ensure_access_log_schedule(store: object, now: datetime) -> None:
             cron=None,
             commitment_timezone=current_schedule_timezone(),
             task_name=ACCESS_LOG_TASK_NAME,
+            args_json=[],
+            kwargs_json={},
+            hidden=True,
+            locked=True,
+            undeletable=True,
+            store_only=True,
+            owner_ref=None,
+            last_run_at=now,
+            next_run_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+
+def _ensure_run_record_schedule(store: object, now: datetime) -> None:
+    schedule_store = store
+    existing = schedule_store.get_by_key(RUN_RECORD_SCHEDULE_KEY)
+    if existing is not None:
+        return
+    schedule_store.upsert(
+        ScheduledTaskRecord(
+            id=f"sched_{uuid.uuid4().hex[:12]}",
+            key=RUN_RECORD_SCHEDULE_KEY,
+            name="Purge channel run records",
+            enabled=True,
+            interval_seconds=RUN_RECORD_INTERVAL_SECONDS,
+            cron=None,
+            commitment_timezone=current_schedule_timezone(),
+            task_name=RUN_RECORD_TASK_NAME,
             args_json=[],
             kwargs_json={},
             hidden=True,

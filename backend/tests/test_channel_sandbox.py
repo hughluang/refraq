@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.channel.sandbox import ExpressionError, SandboxSession
+from backend.channel.sandbox import CodeError, ExpressionError, SandboxSession
 
 
 def test_self_path_and_comprehension() -> None:
@@ -77,3 +77,78 @@ def test_drop_outputs_survives_restart() -> None:
         with pytest.raises(ExpressionError):
             sandbox.evaluate("self.read.output.n")
         assert sandbox.evaluate("self.keep.output.n") == 2
+
+
+def test_run_code_reads_rows_and_reuses_one_process() -> None:
+    with SandboxSession() as sandbox:
+        sandbox.set_context(channel={"id": "chn"}, run={"id": "job"}, platform={})
+        sandbox.put_output(
+            ref="read",
+            name="Read",
+            output={"rows": [{"id": "a"}, {"id": "b"}], "count": 2},
+        )
+        pid = sandbox._proc.pid
+        assert sandbox.run_code(
+            'return [row["id"] for row in self.read.output.rows]',
+            5,
+        ) == ["a", "b"]
+        assert sandbox.run_code("return self.read.output.count", 5) == 2
+        assert sandbox._proc.pid == pid
+
+
+def test_run_code_denies_network_and_import() -> None:
+    with SandboxSession() as sandbox:
+        sandbox.set_context(channel={}, run={}, platform={})
+        with pytest.raises(CodeError) as network:
+            sandbox.run_code("import socket\nsocket.socket()", 5)
+        with pytest.raises(CodeError) as imported:
+            sandbox.run_code("import os\nreturn os.getcwd()", 5)
+    assert network.value.reason == "network"
+    assert imported.value.reason == "import"
+    assert str(network.value) == "Code tried to use the network"
+    assert str(imported.value) == "Code imported a module that is not allowed"
+    assert network.value.detail["reason"] == "network"
+    assert imported.value.detail["reason"] == "import"
+
+
+def test_run_code_timeout_restarts_and_stays_usable() -> None:
+    with SandboxSession() as sandbox:
+        sandbox.set_context(channel={"id": "chn"}, run={"id": "job"}, platform={})
+        sandbox.put_output(ref="read", name="Read", output={"n": 7})
+        pid = sandbox._proc.pid
+        with pytest.raises(CodeError) as timed:
+            sandbox.run_code("while True:\n    pass", 1)
+        assert timed.value.reason == "timeout"
+        assert str(timed.value) == "Code exceeded the time limit"
+        assert sandbox._proc.pid != pid
+        restarted = sandbox._proc.pid
+        assert sandbox.run_code("return self.read.output.n", 5) == 7
+        assert sandbox.run_code("return 1", 5) == 1
+        assert sandbox._proc.pid == restarted
+
+
+def test_run_code_memory_is_distinct_and_restarts() -> None:
+    with SandboxSession() as sandbox:
+        sandbox.set_context(channel={}, run={}, platform={})
+        with pytest.raises(CodeError) as memory:
+            sandbox.run_code(
+                "blocks = []\n"
+                "for _ in range(80):\n"
+                "    blocks.append('x' * (8 * 1024 * 1024))\n"
+                "return len(blocks)",
+                30,
+            )
+        assert memory.value.reason == "memory"
+        assert str(memory.value) == "Code exceeded the memory limit"
+        assert sandbox.run_code("return 1", 5) == 1
+
+
+def test_run_code_error_names_the_author_line() -> None:
+    with SandboxSession() as sandbox:
+        sandbox.set_context(channel={}, run={}, platform={})
+        with pytest.raises(CodeError) as failed:
+            sandbox.run_code("x = 1\nreturn 1 / 0", 5)
+    assert failed.value.reason == "error"
+    assert failed.value.detail["type"] == "ZeroDivisionError"
+    assert failed.value.detail["line"] == 2
+    assert "line 2" in str(failed.value)

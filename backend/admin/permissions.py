@@ -40,6 +40,8 @@ Permission = Literal[
     "entity:data_write",
     "channel:read",
     "channel:write",
+    "channel:code_write",
+    "channel:source_query",
 ]
 
 ALL_PERMISSIONS: tuple[Permission, ...] = (
@@ -75,6 +77,8 @@ ALL_PERMISSIONS: tuple[Permission, ...] = (
     "entity:data_write",
     "channel:read",
     "channel:write",
+    "channel:code_write",
+    "channel:source_query",
 )
 
 PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
@@ -110,6 +114,8 @@ PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
     "entity:data_write": "Write Entity Data API rows (also requires entity:data_read)",
     "channel:read": "Read Data Channels, drafts, versions, and run lists",
     "channel:write": "Create, edit, save drafts, validate, publish, delete Data Channels, change the activation switch, start on-demand runs, and cancel channel runs",
+    "channel:code_write": "Add or edit a Data Channel Code node, and publish a draft that contains one",
+    "channel:source_query": "Add or edit a Data Channel live Source query node, and publish a draft that contains one",
 }
 
 CATALOG_SET: frozenset[str] = frozenset(ALL_PERMISSIONS)

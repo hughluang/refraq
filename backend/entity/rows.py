@@ -101,6 +101,7 @@ def write_rows(
     rows: Sequence[Mapping[str, Any]],
     user: UserRecord,
     statement_timeout_ms: int,
+    dry_run: bool = False,
 ) -> RowWriteResult:
     entity = get_entity_store().get_entity(entity_id)
     if entity is None:
@@ -119,17 +120,23 @@ def write_rows(
         )
     written_names = set(prepared[0][1]) if mode != "delete" else {key_name}
     try:
-        with data_sql.entity_connection() as conn:
+        with data_sql.entity_connection(rollback=dry_run) as conn:
             conn.execute(
                 text("SELECT set_config('statement_timeout', :ms, true)"),
                 {"ms": str(int(statement_timeout_ms))},
             )
             existing = _lock_existing(conn, target, key_name, keys)
             result = _apply(conn, target, mode, key_name, prepared, existing, access, written_names)
-        access.log(row_count=len(rows), outcome_code="ok", verb="channel-write")
+        if not dry_run:
+            access.log(row_count=len(rows), outcome_code="ok", verb="channel-write")
         return result
     except Exception as exc:
-        access.log(row_count=None, outcome_code=getattr(exc, "code", "error"), verb="channel-write")
+        if not dry_run:
+            access.log(
+                row_count=None,
+                outcome_code=getattr(exc, "code", "error"),
+                verb="channel-write",
+            )
         raise
 
 

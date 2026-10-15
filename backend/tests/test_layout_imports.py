@@ -66,6 +66,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "metadata.type_mappings.seeds",
             "metadata.parameters",
             "metadata.source_statements",
+            "metadata.query.service",
             "metadata.mcp_catalog",
             "metadata.mcp_server",
             "metadata.mcp_http",

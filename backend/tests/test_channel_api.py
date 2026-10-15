@@ -316,7 +316,9 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
     assert [item["type"] for item in items] == [
         "trigger.manual",
         "trigger.scheduled",
+        "read.source_query",
         "read.sql",
+        "transform.code",
         "transform.deduplicate",
         "transform.filter",
         "transform.if",
@@ -335,7 +337,22 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
     assert items[0]["outputs"][0]["coarse_type"] == "object"
     assert items[0]["outputs"][0]["description"]
     assert items[0]["type_version"] == 1
-    assert all(item["permission"] is None for item in items)
+    by_type = {item["type"]: item for item in items}
+    assert by_type["transform.code"]["permission"] == "channel:code_write"
+    assert by_type["read.source_query"]["permission"] == "channel:source_query"
+    assert (
+        by_type["transform.code"]["config_schema"]["properties"]["code"]["contentMediaType"]
+        == "text/x-python"
+    )
+    assert (
+        by_type["read.source_query"]["config_schema"]["properties"]["source_id"]["x-refraq-ref"]
+        == "source"
+    )
+    assert all(
+        item["permission"] is None
+        for item in items
+        if item["type"] not in {"transform.code", "read.source_query"}
+    )
     write = next(item for item in items if item["type"] == "write.entity")
     sql = next(item for item in items if item["type"] == "read.sql")
     assert "x-refraq-ref" in write["config_schema"]["properties"]["entity_id"]
@@ -465,3 +482,176 @@ def test_global_variable_list_and_delete(client: TestClient) -> None:
     assert client.get("/channel-variables").json()["items"] == []
     events, _cursor = get_audit_store().list_events(limit=20)
     assert any(event.action == "channel.variable_delete" for event in events)
+
+
+def _guarded_graph(type_id: str, config: dict, *, trigger_name: str = "Run manually") -> dict:
+    return {
+        "nodes": [
+            {
+                "id": "nd_trigger",
+                "ref": "run_manually",
+                "type": "trigger.manual",
+                "name": trigger_name,
+                "position": {"x": 0, "y": 0},
+                "config": {},
+                "on_error": "stop",
+                "retry": None,
+            },
+            {
+                "id": "nd_guard",
+                "ref": "guarded",
+                "type": type_id,
+                "name": "Guarded node",
+                "position": {"x": 240, "y": 0},
+                "config": config,
+                "on_error": "stop",
+                "retry": None,
+            },
+        ],
+        "edges": [
+            {
+                "id": "ed_guard",
+                "source": {"node_id": "nd_trigger", "port": "main"},
+                "target": {"node_id": "nd_guard", "port": "main"},
+            }
+        ],
+        "settings": {"run_timeout_sec": None, "error_channel_id": None},
+    }
+
+
+def _writer_client(account: str) -> TestClient:
+    role = create_role(
+        get_role_store(),
+        key=f"role_{account}",
+        name=account,
+        permissions=["console:access", "channel:read", "channel:write"],
+    )
+    get_user_store().create_user(
+        account=account,
+        display_name=account,
+        password_hash=hash_password("secret"),
+        role_id=role.id,
+        status="active",
+    )
+    client = TestClient(app)
+    client.__enter__()
+    _login(client, account, "secret")
+    return client
+
+
+@pytest.mark.parametrize(
+    ("type_id", "permission", "config", "edited"),
+    [
+        (
+            "transform.code",
+            "channel:code_write",
+            {"code": "return {'ok': True}"},
+            {"code": "return {'ok': False}"},
+        ),
+        (
+            "read.source_query",
+            "channel:source_query",
+            {"source_id": "src_missing", "sql": "SELECT 1"},
+            {"source_id": "src_missing", "sql": "SELECT 2"},
+        ),
+    ],
+)
+def test_guarded_node_save_and_publish_permissions(
+    client: TestClient,
+    type_id: str,
+    permission: str,
+    config: dict,
+    edited: dict,
+) -> None:
+    account = "writer_" + type_id.replace(".", "_")
+    writer = _writer_client(account)
+    try:
+        created = client.post("/channels", json={"name": type_id, "description": None})
+        assert created.status_code == 201, created.text
+        channel_id = created.json()["channel"]["id"]
+        graph = _guarded_graph(type_id, config)
+        added = writer.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": 1, "graph": graph},
+        )
+        body = assert_problem(added, status=403, code="AUTH_FORBIDDEN")
+        assert "Guarded node" in body["detail"]
+        assert permission in body["detail"]
+        assert writer.get(f"/channels/{channel_id}/draft").json()["draft_revision"] == 1
+        executed = writer.post(
+            f"/channels/{channel_id}/editor/execute",
+            json={"graph": graph, "stop_at_node_id": "nd_guard"},
+        )
+        body = assert_problem(executed, status=403, code="AUTH_FORBIDDEN")
+        assert permission in body["detail"]
+
+        saved = client.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": 1, "graph": graph},
+        )
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["draft_revision"] == 2
+
+        refused = writer.post(
+            f"/channels/{channel_id}/publish",
+            json={"draft_revision": 2},
+        )
+        body = assert_problem(refused, status=403, code="AUTH_FORBIDDEN")
+        assert "Guarded node" in body["detail"]
+        published = client.post(
+            f"/channels/{channel_id}/publish",
+            json={"draft_revision": 2},
+        )
+        if type_id == "transform.code":
+            assert published.status_code == 201, published.text
+        else:
+            assert_problem(published, status=422, code="CHANNEL_GRAPH_INVALID")
+
+        current = writer.get(f"/channels/{channel_id}/draft").json()
+        renamed = current["graph"]
+        trigger = next(node for node in renamed["nodes"] if node["id"] == "nd_trigger")
+        trigger["name"] = "Start"
+        kept = writer.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": current["draft_revision"], "graph": renamed},
+        )
+        assert kept.status_code == 200, kept.text
+
+        current = writer.get(f"/channels/{channel_id}/draft").json()
+        changed = current["graph"]
+        guard = next(node for node in changed["nodes"] if node["id"] == "nd_guard")
+        guard["config"] = edited
+        modified = writer.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": current["draft_revision"], "graph": changed},
+        )
+        body = assert_problem(modified, status=403, code="AUTH_FORBIDDEN")
+        assert "Guarded node" in body["detail"]
+        executed = writer.post(
+            f"/channels/{channel_id}/editor/execute",
+            json={"graph": changed, "stop_at_node_id": "nd_guard"},
+        )
+        assert_problem(executed, status=403, code="AUTH_FORBIDDEN")
+
+        current = writer.get(f"/channels/{channel_id}/draft").json()
+        bumped = current["graph"]
+        guard = next(node for node in bumped["nodes"] if node["id"] == "nd_guard")
+        guard["type_version"] = 2
+        versioned = writer.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": current["draft_revision"], "graph": bumped},
+        )
+        assert_problem(versioned, status=403, code="AUTH_FORBIDDEN")
+
+        current = writer.get(f"/channels/{channel_id}/draft").json()
+        removed = current["graph"]
+        removed["nodes"] = [node for node in removed["nodes"] if node["id"] != "nd_guard"]
+        removed["edges"] = []
+        deleted = writer.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": current["draft_revision"], "graph": removed},
+        )
+        assert deleted.status_code == 200, deleted.text
+        assert all(node["id"] != "nd_guard" for node in deleted.json()["graph"]["nodes"])
+    finally:
+        writer.__exit__(None, None, None)

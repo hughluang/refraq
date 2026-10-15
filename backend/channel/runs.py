@@ -21,7 +21,7 @@ from backend.channel.store import get_channel_store
 from backend.core.time import utc_now
 from backend.jobs.store import create_queued_job
 
-__all__ = ["start_run"]
+__all__ = ["refuse_invalid_closure", "require_stop_closure", "start_run"]
 
 
 def start_run(
@@ -48,17 +48,9 @@ def start_run(
         graph = channel.draft_graph
         version = None
         draft_revision = channel.draft_revision
-    closure = _require_closure(graph, stop_at_node_id)
+    closure = require_stop_closure(graph, stop_at_node_id)
     if target == "draft" or closure is not None:
-        problems = validate(graph, ChannelReferenceResolver(channel_id))
-        errors = [
-            problem
-            for problem in problems
-            if problem.severity == "error"
-            and (closure is None or problem.node_id is None or problem.node_id in closure)
-        ]
-        if errors:
-            raise ChannelGraphInvalid(errors[0].detail, problems=errors)
+        refuse_invalid_closure(graph, channel_id=channel_id, closure=closure)
     entry = _entry_node(graph)
     job = create_queued_job(
         kind="channel_run",
@@ -112,10 +104,36 @@ def _entry_node(graph: dict[str, Any]) -> str:
     return str(entries[0]["id"])
 
 
-def _require_closure(graph: dict[str, Any], stop_at_node_id: str | None) -> set[str] | None:
+def require_stop_closure(graph: dict[str, Any], stop_at_node_id: str | None) -> set[str] | None:
+    """Ancestor closure of the stop node, including it.
+
+    ``None`` when the run has no stop node. A missing stop node is
+    ``CHANNEL_GRAPH_INVALID`` with an empty ``problems`` list.
+    """
     if stop_at_node_id is None:
         return None
     closure = ancestor_closure(graph, stop_at_node_id)
     if closure is None:
         raise ChannelGraphInvalid("Stop node is not in the graph")
     return closure
+
+
+def refuse_invalid_closure(
+    graph: dict[str, Any],
+    *,
+    channel_id: str,
+    closure: set[str] | None,
+) -> None:
+    """Refuse errors inside the stop closure, and errors that name no node.
+
+    ``closure`` ``None`` refuses every error, which is a draft run with no stop node.
+    """
+    problems = validate(graph, ChannelReferenceResolver(channel_id))
+    errors = [
+        problem
+        for problem in problems
+        if problem.severity == "error"
+        and (closure is None or problem.node_id is None or problem.node_id in closure)
+    ]
+    if errors:
+        raise ChannelGraphInvalid(errors[0].detail, problems=errors)

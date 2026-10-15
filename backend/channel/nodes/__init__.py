@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import importlib
 
+from backend.channel.nodes.read.source_query import NODE_TYPE as READ_SOURCE_QUERY
 from backend.channel.nodes.read.sql import NODE_TYPE as READ_SQL
 from backend.channel.nodes.spec import NodeType
 from backend.channel.nodes.state.variable import NODE_TYPE as STATE_VARIABLE
+from backend.channel.nodes.transform.code import NODE_TYPE as CODE
 from backend.channel.nodes.transform.deduplicate import NODE_TYPE as DEDUPLICATE
 from backend.channel.nodes.transform.filter import NODE_TYPE as FILTER
 from backend.channel.nodes.transform.merge import NODE_TYPE as MERGE
@@ -41,7 +43,9 @@ _CATALOG: tuple[NodeType, ...] = (
     TRIGGER_MANUAL,
     TRIGGER_SCHEDULED,
     READ_SQL,
+    READ_SOURCE_QUERY,
     SET_FIELDS,
+    CODE,
     _IF,
     FILTER,
     MERGE,

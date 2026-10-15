@@ -416,6 +416,10 @@
     "channel.updated_at"
   ],
   "POST /channels/{channel_id}/draft/validate": [],
+  "POST /channels/{channel_id}/editor/execute": [
+    "node_executions[].finished_at",
+    "node_executions[].started_at"
+  ],
   "POST /channels/{channel_id}/publish": [
     "confirmation.runs_to_cancel[].started_at",
     "version.published_at"

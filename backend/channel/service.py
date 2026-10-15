@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Mapping
+from typing import Any
 
 from backend.admin.audit import persist_audit_event
+from backend.admin.errors import AuthForbidden
 from backend.admin.user_store import get_user_store
 from backend.channel.errors import (
     ChannelDraftConflict,
@@ -15,6 +17,7 @@ from backend.channel.errors import (
 )
 from backend.channel.graph import Problem, validate
 from backend.channel.ids import new_channel_id
+from backend.channel.nodes import list_node_types
 from backend.channel.references import ChannelReferenceResolver
 from backend.channel.schedules import (
     cancel_channel_jobs,
@@ -35,6 +38,7 @@ from backend.jobs.store import get_job_store
 from backend.worker.api import withdraw_schedules_by_owner_ref
 
 __all__ = [
+    "require_draft_permissions",
     "create_channel",
     "delete_channel",
     "get_channel",
@@ -192,10 +196,12 @@ def save_draft(
     graph: dict[str, Any],
     actor_user_id: str,
     actor_token_id: str | None,
+    permissions: Sequence[str] = (),
 ) -> ChannelRecord:
     current = _require(channel_id)
     if current.draft_revision != base_revision:
         raise ChannelDraftConflict()
+    require_draft_permissions(current.draft_graph, graph, permissions)
     saved = get_channel_store().replace_draft(
         channel_id,
         base_revision=base_revision,
@@ -228,10 +234,12 @@ def publish_channel(
     draft_revision: int,
     actor_user_id: str,
     actor_token_id: str | None,
+    permissions: Sequence[str] = (),
 ) -> tuple[ChannelVersionRecord, dict[str, Any]]:
     record = _require(channel_id)
     if record.draft_revision != draft_revision:
         raise ChannelDraftConflict()
+    _require_publish_permissions(record.draft_graph, permissions)
     problems = validate(record.draft_graph, ChannelReferenceResolver(channel_id))
     errors = [problem for problem in problems if problem.severity == "error"]
     if errors:
@@ -278,6 +286,77 @@ def display_names(user_ids: set[str]) -> dict[str, str]:
         if user is not None:
             names[user_id] = user.display_name
     return names
+
+
+def _graph_nodes(graph: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    nodes = graph.get("nodes")
+    if not isinstance(nodes, list):
+        return []
+    return [node for node in nodes if isinstance(node, dict)]
+
+
+def _type_version(node: Mapping[str, Any]) -> int:
+    value = node.get("type_version", 1)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return 1
+
+
+def _node_config(node: Mapping[str, Any]) -> Mapping[str, Any]:
+    config = node.get("config")
+    if isinstance(config, dict):
+        return config
+    return {}
+
+
+def _node_label(node: Mapping[str, Any]) -> str:
+    name = node.get("name")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return str(node.get("id") or "")
+
+
+def _guarded_changed(stored: Mapping[str, Any] | None, node: Mapping[str, Any]) -> bool:
+    if stored is None:
+        return True
+    if str(stored.get("type")) != str(node.get("type")):
+        return True
+    if _type_version(stored) != _type_version(node):
+        return True
+    return dict(_node_config(stored)) != dict(_node_config(node))
+
+
+def _require_permission_for(node: Mapping[str, Any], permission: str, held: set[str]) -> None:
+    if permission in held:
+        return
+    raise AuthForbidden(f"Node '{_node_label(node)}' requires {permission}")
+
+
+def require_draft_permissions(
+    stored: Mapping[str, Any],
+    submitted: Mapping[str, Any],
+    permissions: Sequence[str],
+) -> None:
+    catalog = {item.type_id: item for item in list_node_types()}
+    previous = {str(node.get("id")): node for node in _graph_nodes(stored)}
+    held = set(permissions)
+    for node in _graph_nodes(submitted):
+        spec = catalog.get(str(node.get("type")))
+        if spec is None or not spec.permission:
+            continue
+        if not _guarded_changed(previous.get(str(node.get("id"))), node):
+            continue
+        _require_permission_for(node, spec.permission, held)
+
+
+def _require_publish_permissions(graph: Mapping[str, Any], permissions: Sequence[str]) -> None:
+    catalog = {item.type_id: item for item in list_node_types()}
+    held = set(permissions)
+    for node in _graph_nodes(graph):
+        spec = catalog.get(str(node.get("type")))
+        if spec is None or not spec.permission:
+            continue
+        _require_permission_for(node, spec.permission, held)
 
 
 def _require(channel_id: str) -> ChannelRecord:

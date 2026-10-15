@@ -59,38 +59,79 @@ def _exactly_one_postgres_statement(sql: str) -> bool:
 
 
 def execute_entity_statement(
-    sql: str, *, timeout_sec: int, max_rows: int
+    sql: str,
+    *,
+    timeout_sec: int,
+    max_rows: int,
+    rollback: bool = False,
+    strict_limit: bool = True,
 ) -> EntityStatement:
     """Run ``sql`` as the entity owner with ``search_path`` set to ``entity_data``.
 
     The text must already be exactly one statement. The transaction commits when
-    this returns. A driver error or a result past ``max_rows`` rolls the
-    transaction back.
+    this returns, unless ``rollback`` is set: then the same statements run and
+    the transaction is always rolled back after the rows have been read.
+    A driver error rolls the transaction back. With ``strict_limit``, a result
+    past ``max_rows`` raises and rolls back. Without it, the first ``max_rows``
+    rows are returned.
     """
     if not _exactly_one_postgres_statement(sql):
         raise EntityStatementRejected()
+    engine = get_entity_engine()
+    if rollback:
+        with engine.connect() as conn:
+            transaction = conn.begin()
+            try:
+                return _run_statement(
+                    conn,
+                    sql,
+                    timeout_sec=timeout_sec,
+                    max_rows=max_rows,
+                    strict_limit=strict_limit,
+                )
+            finally:
+                transaction.rollback()
+    with engine.begin() as conn:
+        return _run_statement(
+            conn,
+            sql,
+            timeout_sec=timeout_sec,
+            max_rows=max_rows,
+            strict_limit=strict_limit,
+        )
+
+
+def _run_statement(
+    conn: Any,
+    sql: str,
+    *,
+    timeout_sec: int,
+    max_rows: int,
+    strict_limit: bool,
+) -> EntityStatement:
     timeout_ms = str(max(1, int(timeout_sec)) * 1000)
-    with get_entity_engine().begin() as conn:
-        conn.execute(
-            text("SELECT set_config('search_path', :path, true)"),
-            {"path": ENTITY_DATA_SCHEMA},
-        )
-        conn.execute(
-            text("SELECT set_config('statement_timeout', :ms, true)"),
-            {"ms": timeout_ms},
-        )
-        conn.execute(
-            text("SELECT set_config('lock_timeout', :ms, true)"),
-            {"ms": timeout_ms},
-        )
-        result = conn.exec_driver_sql(sql)
-        if not result.returns_rows:
-            return EntityStatement(rows=[], rowcount=_rowcount(result))
-        fetched = result.mappings().fetchmany(max_rows + 1)
-        if len(fetched) > max_rows:
+    conn.execute(
+        text("SELECT set_config('search_path', :path, true)"),
+        {"path": ENTITY_DATA_SCHEMA},
+    )
+    conn.execute(
+        text("SELECT set_config('statement_timeout', :ms, true)"),
+        {"ms": timeout_ms},
+    )
+    conn.execute(
+        text("SELECT set_config('lock_timeout', :ms, true)"),
+        {"ms": timeout_ms},
+    )
+    result = conn.exec_driver_sql(sql)
+    if not result.returns_rows:
+        return EntityStatement(rows=[], rowcount=_rowcount(result))
+    fetched = result.mappings().fetchmany(max_rows + 1)
+    if len(fetched) > max_rows:
+        if strict_limit:
             raise EntityStatementLimit(max_rows)
-        rows = [dict(row) for row in fetched]
-        return EntityStatement(rows=rows, rowcount=_rowcount(result))
+        fetched = fetched[:max_rows]
+    rows = [dict(row) for row in fetched]
+    return EntityStatement(rows=rows, rowcount=_rowcount(result))
 
 
 def _rowcount(result: Result[Any]) -> int | None:

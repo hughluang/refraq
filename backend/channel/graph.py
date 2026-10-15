@@ -16,6 +16,7 @@ from jsonschema import Draft202012Validator
 
 from backend.channel.nodes import list_node_types
 from backend.channel.nodes.spec import NodeType
+from backend.channel.sandbox.program import CODE_MAX_BYTES, author_line, function_source
 from backend.channel.template import (
     TemplateSyntaxError,
     TemplateTypeError,
@@ -109,6 +110,7 @@ def validate(
     problems.extend(_ref_problems(nodes))
     problems.extend(_policy_problems(nodes))
     problems.extend(_type_and_config_problems(nodes, by_type))
+    problems.extend(_code_problems(nodes, by_type))
     problems.extend(_expression_problems(nodes, edges, by_id, by_type, resolver))
     problems.extend(_payload_problems(nodes))
     problems.extend(_scheduled_problems(nodes))
@@ -396,6 +398,50 @@ def _declared_schema(
     if named is None:
         return None
     return attribute_value_schema(named.value_type)
+
+
+def _code_problems(
+    nodes: list[dict[str, Any]],
+    by_type: dict[str, NodeType],
+) -> list[Problem]:
+    spec = by_type.get("transform.code")
+    if spec is None:
+        return []
+    problems: list[Problem] = []
+    for node in nodes:
+        if str(node.get("type")) != "transform.code":
+            continue
+        config = node.get("config")
+        if _config_errors(spec.config_schema, config):
+            continue
+        if not isinstance(config, dict):
+            continue
+        code = config.get("code")
+        if not isinstance(code, str):
+            continue
+        if len(code.encode("utf-8")) > CODE_MAX_BYTES:
+            problems.append(
+                Problem(
+                    "CHANNEL_NODE_CONFIG_INVALID",
+                    "Code exceeds 64 KiB",
+                    node_id=str(node["id"]),
+                    path=("code",),
+                )
+            )
+            continue
+        try:
+            compile(function_source(code), "<code>", "exec")
+        except SyntaxError as exc:
+            line = author_line(exc.lineno)
+            problems.append(
+                Problem(
+                    "CHANNEL_CODE_INVALID",
+                    f"Syntax error on line {line}: {exc.msg}",
+                    node_id=str(node["id"]),
+                    path=("code",),
+                )
+            )
+    return problems
 
 
 def _payload_problems(nodes: list[dict[str, Any]]) -> list[Problem]:
@@ -749,6 +795,16 @@ def _reference_problems(
                         Problem(
                             "CHANNEL_REFERENCE_UNRESOLVED",
                             f"Entity does not resolve: {value}",
+                            node_id=str(node["id"]),
+                        )
+                    )
+                continue
+            if kind == "source":
+                if not resolver.source_exists(value):
+                    problems.append(
+                        Problem(
+                            "CHANNEL_REFERENCE_UNRESOLVED",
+                            f"Source does not resolve: {value}",
                             node_id=str(node["id"]),
                         )
                     )

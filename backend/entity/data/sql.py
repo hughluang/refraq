@@ -70,10 +70,23 @@ def require_entity_reader_capacity() -> Engine:
 
 
 @contextmanager
-def entity_connection() -> Iterator[Connection]:
-    """Owner connection for writes. Reads use ``entity_read_connection``."""
+def entity_connection(*, rollback: bool = False) -> Iterator[Connection]:
+    """Owner connection for writes. Reads use ``entity_read_connection``.
+
+    ``rollback`` runs the same transaction and always rolls it back, including
+    after a successful yield. Callers use it for a dry run that must count
+    real statement results and leave the table unchanged.
+    """
     engine = require_entity_capacity()
     try:
+        if rollback:
+            with engine.connect() as conn:
+                transaction = conn.begin()
+                try:
+                    yield conn
+                finally:
+                    transaction.rollback()
+            return
         with engine.begin() as conn:
             yield conn
     except Exception as exc:

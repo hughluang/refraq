@@ -15,8 +15,10 @@ from backend.entity.statements import (
     execute_entity_statement,
 )
 from backend.metadata.source_statements import (
+    SourceStatementNotReadonly,
     SourceStatementRejected,
     execute_source_statement,
+    guard_editor_source_sql,
 )
 
 __all__ = ["ITEM_LIMIT", "SqlReadError", "run_channel_sql"]
@@ -36,18 +38,29 @@ def run_channel_sql(
     *,
     source: Mapping[str, Any],
     statement_timeout_sec: int,
+    max_rows: int = ITEM_LIMIT,
+    rollback: bool = False,
+    strict_limit: bool = True,
+    editor: bool = False,
 ) -> dict[str, Any]:
     """Execute one statement and return ``{rows, count, rowcount}``.
 
     Text that is not exactly one statement fails before either driver runs.
-    More than ``ITEM_LIMIT`` rows fails the read. A database error fails the read
-    with the database message.
+    More than ``max_rows`` rows fails the read when ``strict_limit`` is set.
+    A database error fails the read with the database message. ``rollback``
+    applies only to the entity database: the statement runs and the transaction
+    is rolled back. ``editor`` on a registered Source requires the Controlled
+    Query read-only guard and does not send a rejected statement to the driver.
     """
     kind = source["kind"]
     try:
         if kind == "entity":
             page = execute_entity_statement(
-                statement, timeout_sec=statement_timeout_sec, max_rows=ITEM_LIMIT
+                statement,
+                timeout_sec=statement_timeout_sec,
+                max_rows=max_rows,
+                rollback=rollback,
+                strict_limit=strict_limit,
             )
             rows = [
                 {key: _jsonable(value) for key, value in row.items()}
@@ -55,16 +68,18 @@ def run_channel_sql(
             ]
             rowcount = page.rowcount
         else:
+            if editor:
+                guard_editor_source_sql(str(source["source_id"]), statement)
             page = execute_source_statement(
                 source["source_id"],
                 statement,
                 timeout_sec=statement_timeout_sec,
-                max_rows=ITEM_LIMIT,
+                max_rows=max_rows,
             )
-            if page.truncated:
+            if page.truncated and strict_limit:
                 raise SqlReadError(
                     "CHANNEL_ITEM_LIMIT_EXCEEDED",
-                    f"SQL returned more than {ITEM_LIMIT} rows",
+                    f"SQL returned more than {max_rows} rows",
                 )
             rows = [
                 {
@@ -76,6 +91,8 @@ def run_channel_sql(
             rowcount = page.rowcount
     except SqlReadError:
         raise
+    except SourceStatementNotReadonly as exc:
+        raise SqlReadError("CHANNEL_NODE_FAILED", str(exc)) from exc
     except (EntityStatementRejected, SourceStatementRejected):
         raise SqlReadError(
             "CHANNEL_SQL_NOT_ONE_STATEMENT",
@@ -84,7 +101,7 @@ def run_channel_sql(
     except EntityStatementLimit:
         raise SqlReadError(
             "CHANNEL_ITEM_LIMIT_EXCEEDED",
-            f"SQL returned more than {ITEM_LIMIT} rows",
+            f"SQL returned more than {max_rows} rows",
         ) from None
     except DBAPIError as exc:
         raise SqlReadError("CHANNEL_NODE_FAILED", _db_message(exc)) from exc

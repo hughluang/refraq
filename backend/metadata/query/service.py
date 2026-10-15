@@ -6,7 +6,7 @@ import hashlib
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Mapping
 
 from backend.admin.audit import persist_audit_event
 from backend.core.errors import AppError
@@ -228,6 +228,7 @@ def run_controlled_query(
     max_rows: int | None,
     actor_user_id: str | None,
     actor_token_id: str | None,
+    audit_detail: Mapping[str, Any] | None = None,
 ) -> QueryOutcome:
     platform_cap = query_max_rows()
     timeout_sec = query_timeout_sec()
@@ -256,6 +257,7 @@ def run_controlled_query(
             action="query.run",
             resource_type="source",
             resource_id=source_id,
+            extra_detail=dict(audit_detail or {}),
         ),
         started=started,
         get_sql=lambda: sql,

@@ -232,6 +232,25 @@ For configuration (`volume.for`):
 
 During an iteration the output is `{"current", "index", "count"}`. The stored output is that object plus `"results"`. `current` and `index` are null when `items` is empty. Ports: inputs `main` and `loop`; outputs `each` (`loop_back`) and `done`.
 
+Code configuration (`transform.code`):
+
+| Field | Rule |
+| --- | --- |
+| `code` | Python source, the body of `def main(self)`. 1 byte to 64 KiB. `contentMediaType` is `text/x-python`. Validation compiles it in the parent process and does not execute it. A syntax error is `CHANNEL_CODE_INVALID` with `path` `["code"]` and the author's line number in `detail` |
+| `timeout_sec` | Integer seconds from 1 to 300. Absent means 30 |
+
+The returned value is the node output and must be JSON. Ports: input `main`, output `main`. A run failure is `CHANNEL_NODE_FAILED`. `error_detail.reason` is `network` (any socket or network attempt; the audit hook is the guard), `import` (a module outside the allow list), `timeout` (wall-clock over `timeout_sec`; the sandbox is killed, restarted, and replayed), `memory` (MemoryError under the address-space limit; the sandbox restarts afterwards), or `error` (any other exception: `error_detail` also carries `type`, `message`, and `line` in the author's code). One sandbox subprocess is reused for the run. The process CPU limit is a safety net; each call's wall-clock limit governs.
+
+Live Source query configuration (`read.source_query`):
+
+| Field | Rule |
+| --- | --- |
+| `source_id` | A registered Source id. `x-refraq-ref` is `source`. A value that does not resolve is `CHANNEL_REFERENCE_UNRESOLVED` |
+| `sql` | A string template. Each `{{ }}` result is spliced as text. The rendered text is executed through Controlled Query (one read-only statement, `query_timeout_sec`, the row cap, and a `query.run` audit). The actor is the System Identity |
+| `row_cap` | Integer of at least 1. Absent means 100. A cap above the platform `query_max_rows` fails the node |
+
+A successful execution returns `{rows, count, truncated}`. `rows` is an array of objects keyed by column name. `count` is the length of `rows`. `truncated` is true when the result was cut at `row_cap`. Ports: input `main`, output `main`. A guard, timeout, or row-limit failure is `CHANNEL_NODE_FAILED` with the Controlled Query message. `error_detail.code` is that Controlled Query code. The node does not require `query:run`.
+
 `config_schema` may carry the custom keyword `x-refraq-ref`. It is ignored by JSON Schema validation and tells the Console which control to render, and tells validation how to resolve the value:
 
 | Value | Meaning |
@@ -241,6 +260,7 @@ During an iteration the output is `{"current", "index", "count"}`. The stored ou
 | `match_key` | A Write Entity match key: `null` or the name of a `unique` head attribute. Failure is `CHANNEL_MATCH_KEY_INVALID`, not an unresolved reference |
 | `json` | A JSON object. Used by the Manual trigger payload |
 | `sql_source` | The SQL node's `source` object. The Console renders one control listing the entity database and registered Sources |
+| `source` | A registered Source id. A value that does not resolve is `CHANNEL_REFERENCE_UNRESOLVED` |
 
 `config_schema` may also carry `x-refraq-template`. It is ignored by JSON Schema validation. Its value is the declared value type as a JSON Schema object, or `{ "from": "entity_attribute" }` when the type is the sibling attribute's **Attribute Type**. The stored value is always the template text. A template that does not parse is `CHANNEL_EXPRESSION_INVALID`. Text with no `{{ }}` that does not match the declared type is `CHANNEL_TEMPLATE_TYPE_MISMATCH`. A `self.<ref>` or `self.nodes["<name>"]` that is missing or not upstream is `CHANNEL_TEMPLATE_REF_INVALID`. A result whose type cannot be known until run time is `CHANNEL_TEMPLATE_TYPE_UNKNOWN` with severity `warning`.
 
@@ -373,7 +393,7 @@ Sections are empty lists, or `false`, when there is nothing to show.
 - Each port is `{ "port", "description", "coarse_type", "loop_back" }`. `port` is lower snake case. `coarse_type` is `object`, `items`, or `unknown`. `loop_back` is true on the output that starts a loop body (`each` on `volume.for`) and false otherwise. `main` is the primary data port. `error` is an output that carries items the node failed when `on_error` is `error_output`.
 - `type_version` is the current version of the node type. A node instance's `type_version` must match it.
 - `config_schema` is a JSON Schema object that the Console renders as the configuration panel and the server enforces at validate and publish. Every property, including properties nested under array items, has `title` and `description`.
-- `permission` names the extra Permission needed to add or edit a node of this type (`channel:code_write` for `transform.code`), or `null`.
+- `permission` names the extra Permission needed to add or edit a node of this type (`channel:code_write` for `transform.code`, `channel:source_query` for `read.source_query`), or `null`.
 - The Console prefers locale keys `channelNodeTypes.<type>.label` and `channelNodeTypes.<type>.summary`, and falls back to the served English `label` and `summary`.
 
 ## 4. Job Kind `channel_run`
@@ -424,6 +444,7 @@ On `succeeded` only:
 | `GET` | `/channels/{id}/runs/{job_id}` | `channel:read` | Read one run with its graph and node executions |
 | `GET` | `/channels/{id}/runs/{job_id}/executions/{seq}/output` | `channel:read` | Page one node execution's output |
 | `POST` | `/channels/{id}/runs/{job_id}/template-preview` | `channel:write` | Evaluate one template field against a run record |
+| `POST` | `/channels/{id}/editor/execute` | `channel:write` | Execute the graph on screen up to a node, without writing |
 
 ### 5.1 `GET /channel-node-types`
 
@@ -463,7 +484,7 @@ Any subset of `name` and `description`. Present `description` `null` clears it. 
 
 - `base_revision` must equal the stored `draft_revision`; otherwise `409 CHANNEL_DRAFT_CONFLICT`.
 - Save checks shape only: identifier rules, unique node and edge ids, field types and ranges in §3.2. It does not check node configuration against the catalog, references, or graph rules; a draft may be incomplete.
-- Adding a node whose type declares a `permission`, or changing such a node's `config`, requires that Permission (`403`).
+- Compared with the stored draft, a node whose type declares a `permission` requires that Permission when the node is added (its id is absent, or the stored node with that id had another type) or when its `type`, `type_version`, or `config` changes. An unchanged guarded node does not. Deleting a guarded node does not. Missing the Permission is `403 AUTH_FORBIDDEN`; `detail` names the node.
 - `200` `{ "draft_revision", "draft_updated_at", "graph" }` with `draft_revision` incremented by one. Save never changes a version or a schedule row.
 
 ### 5.7 `POST /channels/{id}/draft/validate`
@@ -507,7 +528,7 @@ Publish body:
 
 - `draft_revision` must equal the stored revision, so the published graph is the previewed graph; otherwise `409 CHANNEL_DRAFT_CONFLICT`.
 - An invalid draft is refused with `422 CHANNEL_GRAPH_INVALID`; `detail` names the first error. The body carries `problems`, the errors that blocked the request, each shaped as in §5.7. The full list, including warnings, comes from validate.
-- The caller must hold every Permission declared by node types present in the draft.
+- The caller must hold every Permission declared by node types present in the draft, including nodes that did not change. Missing one is `403 AUTH_FORBIDDEN`; `detail` names the node.
 - `201` `{ "version": { … }, "confirmation": { … } }`, where `confirmation` lists the running published runs the new version will stop between nodes. Publish stores the version and reconciles the schedule row. It does not change `active` and it does not cancel Jobs itself.
 
 ### 5.9 `GET /channels/{id}/versions` and `GET /channels/{id}/versions/{number}`
@@ -604,6 +625,65 @@ Evaluates the **Template Field** at `path` in node `node_id` of `graph` against 
 - `failed` and `missing` are `200` result documents, not Problem Details failures.
 - `node_id` and `path` that do not name a template field of `graph` are `422 REQUEST_INVALID`. A `graph` that fails the save shape is `422`. Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`.
 
+### 5.16 `POST /channels/{id}/editor/execute`
+
+Editor execution. It is not an on-demand run (§5.11). It does not create a Job, a run record, a checkpoint, or an audit event, and it does not write.
+
+```json
+{
+  "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "error_channel_id": null } },
+  "stop_at_node_id": "nd_write",
+  "row_limit": 100,
+  "pinned": [{ "node_id": "nd_read", "output": { "rows": [] } }]
+}
+```
+
+- `graph` is the draft save shape (§5.6). The stored draft is not written. `self.channel` still comes from the stored channel.
+- Guarded node types follow the draft save rule (§5.6): compared with the stored draft, an added or changed node whose type declares a `permission` requires that Permission. Missing it is `403 AUTH_FORBIDDEN`; `detail` names the node.
+- `stop_at_node_id` is required. The closure rule is the on-demand stop-node rule of §5.11: errors inside that node's ancestor closure, and errors that name no node, refuse the request with `422 CHANNEL_GRAPH_INVALID` and `problems`. A missing stop node refuses with an empty `problems`. A stop node that is not reachable from the trigger is the same refusal.
+- `row_limit` defaults to 100 and is an integer from 1 to 1000.
+- `pinned` defaults to `[]`. Each item is `{ "node_id", "output" }`. `node_id` must name a node in `graph`. A duplicate `node_id`, a missing node, or a `volume.for` node is `422 REQUEST_INVALID`.
+- Unknown fields are `422 REQUEST_INVALID`. A graph that fails the save shape is `422`. A missing channel is `404 CHANNEL_NOT_FOUND`. A graph that does not have exactly one trigger is `422 CHANNEL_TRIGGER_INVALID`.
+- The call is synchronous, in the API process, with a fresh expression sandbox and a 120 second wall limit. The graph setting `run_timeout_sec` is not the limit. When the wall limit elapses the response is `200` with `status` `failed` and `error_code` `CHANNEL_RUN_TIMEOUT`.
+- `self.run` uses a synthetic id prefixed `edx_`, `target` `draft`, the stored `draft_revision`, `trigger_kind` `user`, and `triggered_by` the caller. `self.platform` is the usual platform context.
+- A pinned node is not executed. Its `status` is `pinned` and its `output` is the pinned value. For `transform.if`, the live port is `true` when `bool(output["value"])` is true and `false` otherwise. A pinned If whose output is not an object with `value` fails that node with `CHANNEL_NODE_FAILED` and message `Pinned If output has no value`. Any other pinned node makes every outgoing port other than `error` live.
+- `read.sql` and `read.source_query` return at most `row_limit` rows. `volume.for` iterates at most `row_limit` times. A list inside any returned output is then cut to its first `row_limit` elements. `truncated` is true when any list in that output was cut.
+- Nothing is written:
+  - `read.sql` on the entity database runs in a transaction that is always rolled back.
+  - `read.sql` on a registered Source must be one read-only statement under the Controlled Query guard. Otherwise the node fails with `CHANNEL_NODE_FAILED` and message `Editor execution only runs read-only SQL on a Source`, and the statement is not sent to the driver.
+  - `write.entity` runs the same statements as a real write inside one transaction, returns the exact `inserted`, `updated`, `unchanged`, `deleted`, and `unmatched` counts, adds `"dry_run": true`, and rolls the transaction back. A failure, such as `create` on an existing key, fails the node as it would in a real run.
+  - `state.variable` writes are not stored. `applied` is computed from the current value: `set` is true; `set_if_absent` is true when the value is absent; `compare_and_set` is true when the current value equals `expected`; `delete` is true when the value is present. The output adds `"dry_run": true`. `get` is a real read and does not add `dry_run`.
+  - A Code node runs as usual. It cannot write.
+- A sandbox that cannot start is `200` with `status` `failed`, `error_code` `CHANNEL_SANDBOX_FAILED`, and the node executions collected before it failed.
+
+`200`:
+
+```json
+{
+  "status": "succeeded",
+  "error_code": null,
+  "error_message": null,
+  "failed_node_id": null,
+  "stopped_node_id": null,
+  "node_executions": [
+    {
+      "seq": 1,
+      "node_id": "nd_read",
+      "status": "succeeded",
+      "started_at": "2026-10-15T08:00:01Z",
+      "finished_at": "2026-10-15T08:00:02Z",
+      "output": { "rows": [], "count": 0, "rowcount": 0 },
+      "truncated": false,
+      "error_code": null,
+      "error_message": null,
+      "error_detail": null
+    }
+  ]
+}
+```
+
+`status` is `succeeded`, `failed`, or `cancelled`. `stopped_node_id` names the node a wall-limit or cancellation stopped before. It is null when the closure finishes. The request's `stop_at_node_id` is not copied into this field; nodes outside that closure are absent from `node_executions`. Instants are UTC with a `Z` suffix.
+
 ## 6. Errors
 
 ### 6.1 HTTP Problem Codes
@@ -613,11 +693,11 @@ Evaluates the **Template Field** at `path` in node `node_id` of `graph` against 
 | `CHANNEL_NOT_FOUND` | 404 | No Data Channel for this id |
 | `CHANNEL_VERSION_NOT_FOUND` | 404 | No version with this number on the channel |
 | `CHANNEL_DRAFT_CONFLICT` | 409 | `base_revision` or `draft_revision` is not the stored draft revision |
-| `CHANNEL_GRAPH_INVALID` | 422 | Publish or an on-demand run whose scope has a validation error; the body carries `problems` |
+| `CHANNEL_GRAPH_INVALID` | 422 | Publish, an on-demand run, or editor execution whose scope has a validation error; the body carries `problems` |
 | `CHANNEL_NOT_PUBLISHED` | 409 | On-demand run with target `published` of a channel with no published version |
 | `CHANNEL_TRIGGER_INVALID` | 422 | The graph does not have exactly one trigger node |
 | `CHANNEL_RUN_NOT_FOUND` | 404 | No run with this Job id on the channel |
-| `REQUEST_INVALID` | 422 | Unknown fields, malformed identifiers, out-of-range fields, or a Template Preview `node_id` and `path` that name no template field |
+| `REQUEST_INVALID` | 422 | Unknown fields, malformed identifiers, out-of-range fields, a Template Preview `node_id` and `path` that name no template field, or an editor pin that is duplicated, missing from the graph, or a For node |
 
 ### 6.2 Validation Problem Codes
 
@@ -632,6 +712,7 @@ Evaluates the **Template Field** at `path` in node `node_id` of `graph` against 
 | `CHANNEL_GRAPH_EDGE_INVALID` | An edge names an unknown node or port |
 | `CHANNEL_NODE_TYPE_UNKNOWN` | A node names an unknown node type |
 | `CHANNEL_NODE_CONFIG_INVALID` | A node configuration does not satisfy its `config_schema` |
+| `CHANNEL_CODE_INVALID` | A Code node's source does not compile. `path` is `["code"]`. `detail` includes the line number in the author's code |
 | `CHANNEL_NODE_NAME_DUP` | Two nodes share a name |
 | `CHANNEL_NODE_REF_INVALID` | A `ref` is missing, not a Python identifier, reserved, or duplicated |
 | `CHANNEL_REFERENCE_UNRESOLVED` | A configuration names an Entity, attribute, Catalog Object, Locator, Source, or Data Channel that does not resolve |
@@ -653,7 +734,7 @@ Evaluates the **Template Field** at `path` in node `node_id` of `graph` against 
 | `CHANNEL_WRITE_INCOMPATIBLE` | A write node with policy `fail` met a head its mapping is incompatible with |
 | `CHANNEL_ITEM_LIMIT_EXCEEDED` | One node execution exceeded the in-memory item limit |
 | `CHANNEL_SQL_NOT_ONE_STATEMENT` | The rendered SQL text is empty, unreadable, or more than one statement |
-| `CHANNEL_NODE_FAILED` | A node failed with `on_error` `stop`; the run record names the node and its error |
+| `CHANNEL_NODE_FAILED` | A node failed with `on_error` `stop`; the run record names the node and its error. A Code node sets `error_detail.reason` to `network`, `import`, `timeout`, `memory`, or `error` (and, for `error`, `type`, `message`, and `line`). A live Source query keeps the Controlled Query code in `error_detail.code` |
 | `CHANNEL_VALUE_TYPE_MISMATCH` | A template result does not match its declared value type |
 | `CHANNEL_OUTPUT_SCHEMA_MISMATCH` | A successful node output does not match its refined schema |
 | `CHANNEL_SANDBOX_FAILED` | The expression sandbox crashed or could not be restarted |
@@ -662,8 +743,7 @@ Evaluates the **Template Field** at `path` in node `node_id` of `graph` against 
 
 ## 7. Non-Goals
 
-1. Editor execution (execute up to a node, pinned data, write dry run).
-2. Rerun and resume endpoints.
-3. A channel-scoped cancel route; cancel is the platform Job cancel.
-4. Creating, editing, deleting, or running channel schedule rows through the schedule surface.
-5. MCP tools for Data Channel.
+1. Rerun and resume endpoints.
+2. A channel-scoped cancel route; cancel is the platform Job cancel.
+3. Creating, editing, deleting, or running channel schedule rows through the schedule surface.
+4. MCP tools for Data Channel.

@@ -132,6 +132,7 @@ The mechanism stores keys and values and never names an occupancy window, a Beat
 | `query_max_rows` | `metadata` | 1000 | 100–10000 | No | Next Controlled Query / `run_sql` `max_rows` and Catalog Sample `offset + limit`. Request default 100 and Sample page size stay product constants |
 | `entity_access.max_profile_combinations` | `entity` | 64 | 1–1024 | No | Per Business Entity cap on multi-profile **Profile View** combinations. Raising it lets the next regeneration create views that were refused; lowering it never drops existing views, and new combinations above the cap stay refused (`docs/business-entity-access.md` §11.2) |
 | `entity_access.access_log_retention_days` | `entity` | 90 | 7–3650 | No | Entity Access Log records older than the value are deleted by the next retention pass (`docs/business-entity-access.md` §16) |
+| `channel_run_record_retention_days` | `channel` | 30 | 1–3650 | No | Channel run records whose Job is terminal and whose `created_at` is older than the value are deleted, with their node executions, by the next hourly retention pass. Jobs stay (`docs/business-data-channel.md` §7.4) |
 
 Ownership follows business language, not the file that reads the value: occupancy lost-detection is a **Job** primitive, so `jobs` owns it even though `worker` reaps.
 
