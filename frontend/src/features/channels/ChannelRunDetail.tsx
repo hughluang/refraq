@@ -98,7 +98,9 @@ export function ChannelRunDetail({
         <ChannelCanvas
           graph={detail.graph}
           catalog={catalog}
-          editable={false}
+          appearance="browse"
+          mutable={false}
+          sessionRun={detail}
           problems={[]}
           onChange={() => undefined}
         />

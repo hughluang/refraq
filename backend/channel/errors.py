@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from backend.core.errors import AppError
 
 __all__ = [
@@ -9,6 +11,7 @@ __all__ = [
     "ChannelGraphInvalid",
     "ChannelNotFound",
     "ChannelNotPublished",
+    "ChannelRequestInvalid",
     "ChannelRunNotFound",
     "ChannelTriggerInvalid",
     "ChannelVariableNameInvalid",
@@ -48,6 +51,21 @@ class ChannelGraphInvalid(AppError):
     def __init__(self, message: str | None = None, *, problems: list | None = None) -> None:
         super().__init__(message)
         self.problems = problems or []
+
+    def extra_members(self) -> dict[str, Any]:
+        return {
+            "problems": [
+                {
+                    "code": problem.code,
+                    "node_id": problem.node_id,
+                    "edge_id": problem.edge_id,
+                    "path": list(problem.path),
+                    "detail": problem.detail,
+                    "severity": problem.severity,
+                }
+                for problem in self.problems
+            ]
+        }
 
     def _default_message(self) -> str:
         return "Draft graph is invalid"
@@ -91,4 +109,12 @@ class ChannelRunNotFound(AppError):
 
     def _default_message(self) -> str:
         return "Channel run not found"
+
+
+class ChannelRequestInvalid(AppError):
+    code = "REQUEST_INVALID"
+    http_status = 422
+
+    def _default_message(self) -> str:
+        return "Request validation failed"
 

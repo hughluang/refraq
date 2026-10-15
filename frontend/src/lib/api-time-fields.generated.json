@@ -428,6 +428,7 @@
     "run.finished_at",
     "run.started_at"
   ],
+  "POST /channels/{channel_id}/runs/{job_id}/template-preview": [],
   "POST /dictionaries": [
     "dictionary.created_at",
     "dictionary.deprecated_at",

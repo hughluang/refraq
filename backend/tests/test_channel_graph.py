@@ -389,6 +389,17 @@ def test_match_key_rules() -> None:
             assert expected in codes
 
 
+def test_mapping_without_match_key_is_valid() -> None:
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _write(match_key="sku", mapping=[]),
+        ],
+        [_edge("ed_1", "nd_trigger", "nd_write")],
+    )
+    assert _codes(graph, FakeResolver({"ent_dst": SKU})) == set()
+
+
 def test_repeated_mapping_attribute() -> None:
     graph = _graph(
         [

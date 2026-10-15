@@ -33,7 +33,9 @@ __all__ = [
     "RefinedPort",
     "ResolvedAttribute",
     "ResolvedEntity",
+    "TemplateSite",
     "refine_ports",
+    "template_site",
     "validate",
 ]
 
@@ -75,6 +77,13 @@ class ResolvedAttribute:
 @dataclass(frozen=True, slots=True)
 class ResolvedEntity:
     attributes: tuple[ResolvedAttribute, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TemplateSite:
+    text: str
+    value_schema: dict[str, Any] | None
+    problems: tuple[Problem, ...]
 
 
 class ReferenceResolver(Protocol):
@@ -207,6 +216,36 @@ def _expression_problems(
                 )
             )
     return problems
+
+
+def template_site(
+    graph: Mapping[str, Any],
+    node_id: str,
+    path: Sequence[str | int],
+    resolver: ReferenceResolver,
+) -> TemplateSite | None:
+    """The template at `path` in one node's configuration, as validation sees it.
+
+    `None` when the node or the path does not name a template field.
+    """
+    by_id = {str(node["id"]): node for node in graph["nodes"]}
+    node = by_id.get(node_id)
+    if node is None or not isinstance(node.get("config"), dict):
+        return None
+    spec = next((item for item in list_node_types() if item.type_id == node["type"]), None)
+    if spec is None:
+        return None
+    upstream = _ancestors(by_id, list(graph["edges"])).get(node_id, set())
+    wanted = tuple(path)
+    for text, value_schema, found in _template_fields(
+        spec.config_schema, node["config"], None, resolver
+    ):
+        if found == wanted:
+            problems = _template_problems(
+                text, value_schema, node_id, node, upstream, by_id, found
+            )
+            return TemplateSite(text, value_schema, tuple(problems))
+    return None
 
 
 def _template_problems(
@@ -757,11 +796,6 @@ def _match_key_problems(
         if head is None:
             continue
         match_key = config.get("match_key")
-        mapped = {
-            item.get("attribute")
-            for item in config.get("mapping") or []
-            if isinstance(item, dict)
-        }
         if match_key is None:
             marked = next((attr for attr in head.attributes if attr.business_key), None)
             if marked is None:
@@ -769,15 +803,6 @@ def _match_key_problems(
                     Problem(
                         "CHANNEL_MATCH_KEY_INVALID",
                         "Target head has no Business Key",
-                        node_id=str(node["id"]),
-                    )
-                )
-                continue
-            if config.get("mode") != "delete" and marked.name not in mapped:
-                problems.append(
-                    Problem(
-                        "CHANNEL_MATCH_KEY_INVALID",
-                        "Mapping does not include the match key",
                         node_id=str(node["id"]),
                     )
                 )
@@ -797,15 +822,6 @@ def _match_key_problems(
                 Problem(
                     "CHANNEL_MATCH_KEY_INVALID",
                     "Match key does not resolve",
-                    node_id=str(node["id"]),
-                )
-            )
-            continue
-        if config.get("mode") != "delete" and match_key not in mapped:
-            problems.append(
-                Problem(
-                    "CHANNEL_MATCH_KEY_INVALID",
-                    "Mapping does not include the match key",
                     node_id=str(node["id"]),
                 )
             )

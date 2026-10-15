@@ -92,6 +92,12 @@ def test_expression_refs_are_collected() -> None:
     assert named.node_names == frozenset({"Read suppliers"})
 
 
+def test_context_reads_are_collected_apart_from_refs() -> None:
+    template = parse("{{ self.run.id }}-{{ self.platform.now }}-{{ self.read.output }}")
+    assert template.contexts == frozenset({"run", "platform"})
+    assert template.refs == frozenset({"read"})
+
+
 def test_string_target_serializes_objects() -> None:
     assert render('{{ {"n": 1} }}', _eval, STRING) == '{"n": 1}'
 

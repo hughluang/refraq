@@ -485,7 +485,7 @@ Empty body. Computes, and does not store, the Data Channel write nodes whose map
 }
 ```
 
-`reasons` is a non-empty list drawn from `attribute_missing`, `match_key_not_unique`, `business_key_missing`, and `required_unmapped`. Only write nodes in each channel's current published version are listed. A version that cannot be published for another reason still returns this list. Missing entity or version is `404`.
+`reasons` is a non-empty list drawn from `attribute_missing`, `match_key_not_unique`, and `business_key_missing`. Only write nodes in each channel's current published version are listed. A version that cannot be published for another reason still returns this list. Missing entity or version is `404`.
 
 ## 6. Table Drop
 

@@ -109,6 +109,8 @@ def execute(
             )
         else:
             result = executor(node, hooks)
+        if result.status == "skipped" and result.output is None:
+            result.output = {"skipped": True, "reason": result.error_message}
         hooks.on_finish(seq, node, result)
         done.add(node_id)
         if result.status == "failed":
@@ -121,13 +123,7 @@ def execute(
             )
         if result.status == "skipped":
             skipped.append(node_id)
-            output = result.output if result.output is not None else {
-                "skipped": True,
-                "reason": result.error_message,
-            }
-        else:
-            output = result.output
-        hooks.on_output(node, output)
+        hooks.on_output(node, result.output)
         ready = [
             child
             for child in children.get(node_id, [])

@@ -77,8 +77,4 @@ def _reasons(config: dict[str, Any], attrs: list[dict[str, Any]]) -> list[str]:
     for name in mapped:
         if isinstance(name, str) and name not in by_name:
             reasons.append("attribute_missing")
-    if config.get("mode") in {"upsert", "create"}:
-        for attr in attrs:
-            if attr.get("required") and attr["name"] not in mapped:
-                reasons.append("required_unmapped")
     return list(dict.fromkeys(reasons))

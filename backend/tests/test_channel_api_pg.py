@@ -288,6 +288,66 @@ def test_enqueue_body_matches_finished_run(
         celery_app.conf.task_always_eager = previous
 
 
+def test_template_preview_reads_the_recorded_run(channel_client: TestClient) -> None:
+    from backend.worker.app import celery_app
+
+    graph = {
+        "nodes": [
+            TRIGGER["nodes"][0],
+            {
+                "id": "nd_keep",
+                "ref": "keep",
+                "type": "state.variable",
+                "name": "Keep",
+                "position": {"x": 10, "y": 120},
+                "config": {
+                    "operation": "set",
+                    "name": "lease",
+                    "value": "{{ [self.run.id, self.run_manually.output.triggered_by.name] }}",
+                },
+                "on_error": "stop",
+                "retry": None,
+            },
+        ],
+        "edges": [
+            {
+                "id": "ed_keep",
+                "source": {"node_id": "nd_trigger", "port": "main"},
+                "target": {"node_id": "nd_keep", "port": "main"},
+            }
+        ],
+        "settings": TRIGGER["settings"],
+    }
+    previous = celery_app.conf.task_always_eager
+    celery_app.conf.task_always_eager = True
+    try:
+        created = channel_client.post(
+            "/channels", json={"name": "Preview probe", "description": None}
+        )
+        assert created.status_code == 201, created.text
+        channel_id = created.json()["channel"]["id"]
+        _save_draft(channel_client, channel_id, graph, base_revision=1)
+        queued = channel_client.post(
+            f"/channels/{channel_id}/runs",
+            json={"target": "draft", "stop_at_node_id": "nd_trigger"},
+        )
+        assert queued.status_code == 202, queued.text
+        run = queued.json()["run"]
+        assert run["status"] == "succeeded"
+    finally:
+        celery_app.conf.task_always_eager = previous
+    preview = channel_client.post(
+        f"/channels/{channel_id}/runs/{run['job_id']}/template-preview",
+        json={"graph": graph, "node_id": "nd_keep", "path": ["value"]},
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json() == {
+        "state": "ok",
+        "value": [run["job_id"], "root"],
+        "truncated": False,
+    }
+
+
 def test_global_variable_writes_are_atomic(channel_client: TestClient) -> None:
     from concurrent.futures import ThreadPoolExecutor
 

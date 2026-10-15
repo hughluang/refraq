@@ -43,6 +43,10 @@ class AppError(Exception):
     def _default_message(self) -> str:
         return self.code
 
+    def extra_members(self) -> dict[str, Any]:
+        """Domain extension members for the Problem Details body. Fixed members win."""
+        return {}
+
     def extra_headers(self) -> dict[str, str]:
         if self.retry_after_sec is None:
             return {}
@@ -118,6 +122,7 @@ def problem_body(
     detail: str,
     details: list[ProblemFieldError] | None = None,
     request_id: str | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = ProblemDetails(
         type=problem_type(code),
@@ -127,7 +132,7 @@ def problem_body(
         request_id=request_id or get_request_id() or "",
         details=details or None,
     )
-    return payload.model_dump(exclude_none=True)
+    return {**(extra or {}), **payload.model_dump(exclude_none=True)}
 
 
 def problem_response(
@@ -138,8 +143,10 @@ def problem_response(
     details: list[ProblemFieldError] | None = None,
     request_id: str | None = None,
     headers: dict[str, str] | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> ProblemJSONResponse:
     body = problem_body(
+        extra=extra,
         status=status,
         code=code,
         detail=detail,

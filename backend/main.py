@@ -176,6 +176,7 @@ async def app_error_handler(_request: Request, exc: AppError) -> object:
         code=exc.code,
         detail=exc.message,
         headers=exc.extra_headers(),
+        extra=exc.extra_members(),
     )
 
 

@@ -62,8 +62,9 @@ import {
   type FlowNodeData,
 } from "@/features/channels/graphValidation";
 import { NodeConfigPanel } from "@/features/channels/NodeConfigPanel";
-import { NodeRunPanel } from "@/features/channels/NodeRunPanel";
+import { ResultRegion, UpstreamRegion } from "@/features/channels/NodeRunRegions";
 import { phaseByNode, samplesByNode, type NodeRunPhase } from "@/features/channels/runSession";
+import type { ChannelTemplatePreview } from "@/features/channels/TemplateRunPreview";
 import { nodeTypeLabel, nodeTypeSummary } from "@/features/channels/nodeTypeCopy";
 import {
   formatGraphProblem,
@@ -116,24 +117,33 @@ function highlightTargets(problem: GraphProblem, active: ProblemHighlight): bool
     ? problem.node_id === active.nodeId
     : problem.edge_id != null && problem.edge_id === active.edgeId;
 }
-const CanvasEditableContext = createContext(false);
+const CanvasSurfaceContext = createContext({ editing: false, mutable: false });
 const CanvasCatalogContext = createContext<readonly NodeTypeSpec[]>([]);
 const CanvasRunContext = createContext<{
   phases: ReadonlyMap<string, NodeRunPhase>;
-  onRunNode: (nodeId: string) => void;
-}>({ phases: new Map(), onRunNode: () => {} });
+  onRun: (nodeId: string) => void;
+}>({ phases: new Map(), onRun: () => {} });
 
 type Props = {
   graph: Graph;
   catalog: NodeTypeSpec[];
-  editable: boolean;
+  /** Edit page keeps authoring chrome. Browse hides it. */
+  appearance: "edit" | "browse";
+  /** Draft mutations are allowed. A running test keeps the edit appearance and sets this false. */
+  mutable: boolean;
+  /**
+   * Bumps after a draft save so the canvas adopts the stored graph without remounting.
+   * Selection, the open side panel, the viewport, and undo history stay.
+   */
+  adoptToken?: number;
   problems: GraphProblem[];
   ports?: readonly RefinedPort[];
   context?: ExpressionContext | null;
   onChange: (graph: Graph) => void;
   sessionRun?: ChannelRunDetail | null;
-  onRunNode?: (nodeId: string) => void;
-  runFocus?: { nodeId: string; token: number } | null;
+  /** Null hides the template previews. */
+  templatePreview?: ChannelTemplatePreview | null;
+  onRun?: (nodeId: string) => void;
 };
 
 export function ChannelCanvas(props: Props) {
@@ -147,14 +157,16 @@ export function ChannelCanvas(props: Props) {
 function ChannelCanvasBody({
   graph,
   catalog,
-  editable,
+  appearance,
+  mutable,
+  adoptToken = 0,
   problems,
   ports = [],
   context = null,
   onChange,
   sessionRun = null,
-  onRunNode = () => {},
-  runFocus = null,
+  templatePreview = null,
+  onRun = () => {},
 }: Props) {
   const t = useTranslate();
   const { screenToFlowPosition, setCenter, getInternalNode } = useReactFlow();
@@ -164,7 +176,7 @@ function ChannelCanvasBody({
   );
   const initial = useMemo(
     () => flowFromGraph(graph, entryTypes),
-    // The canvas owns edits after mount. Reload by remounting the parent key.
+    // The canvas owns edits after mount. The parent remounts only when a draft is loaded.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
@@ -173,7 +185,6 @@ function ChannelCanvasBody({
   const [nodes, setNodes] = useState<ChannelNode[]>(seededNodes);
   const [edges, setEdges] = useState<Edge[]>(seededEdges);
   const [configNodeId, setConfigNodeId] = useState<string | null>(null);
-  const [side, setSide] = useState<"config" | "run">("config");
   const [picker, setPicker] = useState<PickerState | null>(null);
   const [highlight, setHighlight] = useState<ProblemHighlight | null>(null);
   const [problemsDismissed, setProblemsDismissed] = useState(0);
@@ -315,8 +326,50 @@ function ChannelCanvasBody({
   undoRef.current = undo;
   redoRef.current = redo;
 
+  const adoptedToken = useRef(adoptToken);
   useEffect(() => {
-    if (!editable) return;
+    if (adoptedToken.current === adoptToken) return;
+    adoptedToken.current = adoptToken;
+    const nextGraph = graph;
+    if (JSON.stringify(graphNow()) === JSON.stringify(nextGraph)) return;
+    const selectedNodeIds = new Set(
+      nodesRef.current.filter((node) => node.selected).map((node) => node.id),
+    );
+    const selectedEdgeIds = new Set(
+      edgesRef.current.filter((edge) => edge.selected).map((edge) => edge.id),
+    );
+    const flow = flowFromGraph(nextGraph, entryTypes);
+    const adoptedNodes: ChannelNode[] = flow.nodes.map((node) => ({
+      ...node,
+      type: "channel",
+      selected: selectedNodeIds.has(node.id),
+    }));
+    const adoptedEdges = channelEdges(
+      flow.edges.map((edge) => ({
+        ...edge,
+        selected: selectedEdgeIds.has(edge.id),
+      })),
+    );
+    const painted = paintProblems(adoptedNodes, adoptedEdges);
+    nodesRef.current = painted.nodes;
+    edgesRef.current = painted.edges;
+    setNodes(painted.nodes);
+    setEdges(painted.edges);
+    setConfigNodeId((current) =>
+      current != null && painted.nodes.some((node) => node.id === current) ? current : null,
+    );
+    // The stored graph is one undo step ahead of the pre-save canvas, so undo
+    // returns to that unsaved graph.
+    pushSnap();
+  }, [adoptToken, entryTypes, graph]);
+
+  useEffect(() => {
+    if (mutable) return;
+    setPicker(null);
+  }, [mutable]);
+
+  useEffect(() => {
+    if (!mutable) return;
     const onKey = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.code !== "KeyZ") return;
       const target = event.target;
@@ -330,7 +383,7 @@ function ChannelCanvasBody({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [editable]);
+  }, [mutable]);
 
   const clearHighlight = () => {
     if (highlightRef.current == null) return;
@@ -400,7 +453,7 @@ function ChannelCanvasBody({
     position: { x: number; y: number },
     link?: { sourceId: string; sourceHandle: string },
   ) => {
-    if (!editable) return;
+    if (!mutable) return;
     clearHighlight();
     const label = nodeTypeLabel(t, spec);
     const count = nodesRef.current.filter((node) => node.data.nodeType === spec.type).length;
@@ -550,7 +603,7 @@ function ChannelCanvasBody({
   };
 
   const onConnect = (connection: Connection) => {
-    if (!editable || !connectionAllowed(graphNow(), catalog, connection)) return;
+    if (!connectionAllowed(graphNow(), catalog, connection)) return;
     const next = channelEdges(
       addEdge(connection, edgesRef.current, { getEdgeId: () => newGraphId("ed") }),
     );
@@ -569,7 +622,7 @@ function ChannelCanvasBody({
       fromHandle: { type: string; id?: string | null } | null;
     },
   ) => {
-    if (!editable || connectionState.isValid === true) return;
+    if (!mutable || connectionState.isValid === true) return;
     if (!connectionState.fromNode || connectionState.fromHandle?.type !== "source") return;
     const point = eventPoint(event);
     if (!point) return;
@@ -659,20 +712,12 @@ function ChannelCanvasBody({
     placeNode(spec, openPosition());
   };
 
-  const openNodeConfig = (nodeId: string, nextSide: "config" | "run" = "config") => {
+  const openNodeConfig = (nodeId: string) => {
     setConfigNodeId(nodeId);
-    setSide(nextSide === "run" && sessionRun ? "run" : "config");
     setPicker(null);
     const marked = highlightRef.current;
     if (marked && marked.nodeId !== nodeId) clearHighlight();
   };
-
-  useEffect(() => {
-    if (!runFocus) return;
-    setConfigNodeId(runFocus.nodeId);
-    setSide("run");
-    setPicker(null);
-  }, [runFocus?.token]);
 
   const onCanvasKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Enter") return;
@@ -685,13 +730,13 @@ function ChannelCanvasBody({
 
   return (
     <Stack gap={0} flex={1} mih={0} h="100%" w="100%" pos="relative">
-        <CanvasEditableContext.Provider value={editable}>
+        <CanvasSurfaceContext.Provider value={{ editing: appearance === "edit", mutable }}>
         <CanvasCatalogContext.Provider value={catalog}>
-        <CanvasRunContext.Provider value={{ phases, onRunNode }}>
+        <CanvasRunContext.Provider value={{ phases, onRun }}>
         <div
           ref={flowRootRef}
           className={
-            editable
+            appearance === "edit"
               ? "channel-canvas-stage"
               : "channel-canvas-stage channel-canvas-stage--browse"
           }
@@ -705,24 +750,24 @@ function ChannelCanvasBody({
             defaultEdgeOptions={{ type: CHANNEL_EDGE_TYPE }}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
-            onNodeClick={(_, node) => openNodeConfig(node.id, sessionRun ? "run" : "config")}
+            onNodeClick={(_, node) => openNodeConfig(node.id)}
             onConnect={onConnect}
             onConnectEnd={onConnectEnd}
             onPaneClick={clearSelection}
             isValidConnection={isValidConnection}
-            nodesDraggable={editable}
-            nodesConnectable={editable}
+            nodesDraggable={mutable}
+            nodesConnectable={mutable}
             elementsSelectable
             nodeDragThreshold={NODE_DRAG_THRESHOLD}
             nodeClickDistance={NODE_DRAG_THRESHOLD}
             multiSelectionKeyCode={null}
-            deleteKeyCode={editable ? ["Backspace", "Delete"] : null}
+            deleteKeyCode={mutable ? ["Backspace", "Delete"] : null}
             fitView
           >
-            {editable ? <Background /> : null}
+            {appearance === "edit" ? <Background /> : null}
             <Controls
               showZoom={false}
-              showInteractive={editable}
+              showInteractive={appearance === "edit" && mutable}
               className="channel-canvas-controls"
             >
               {problems.length > 0 ? (
@@ -734,34 +779,35 @@ function ChannelCanvasBody({
                   onFocus={focusProblem}
                 />
               ) : null}
-              {editable ? (
+              {appearance === "edit" ? (
                 <ControlButton
                   className="channel-canvas-add"
                   title={t("channels.canvas.add")}
                   aria-label={t("channels.canvas.add")}
                   aria-expanded={picker?.kind === "catalog"}
+                  disabled={!mutable}
                   onClick={openFullCatalog}
                 >
                   <PlusIcon />
                 </ControlButton>
               ) : null}
-              {editable ? (
+              {appearance === "edit" ? (
                 <ControlButton
                   className="channel-canvas-undo"
                   title={t("channels.canvas.undo")}
                   aria-label={t("channels.canvas.undo")}
-                  disabled={!canUndo}
+                  disabled={!mutable || !canUndo}
                   onClick={undo}
                 >
                   <HistoryIcon direction="undo" />
                 </ControlButton>
               ) : null}
-              {editable ? (
+              {appearance === "edit" ? (
                 <ControlButton
                   className="channel-canvas-redo"
                   title={t("channels.canvas.redo")}
                   aria-label={t("channels.canvas.redo")}
-                  disabled={!canRedo}
+                  disabled={!mutable || !canRedo}
                   onClick={redo}
                 >
                   <HistoryIcon direction="redo" />
@@ -776,7 +822,7 @@ function ChannelCanvasBody({
               p="sm"
               className={
                 selected
-                  ? "channel-node-config channel-node-config--wide"
+                  ? "channel-node-config channel-node-config--detail"
                   : "channel-node-config"
               }
               onPointerDown={(event) => event.stopPropagation()}
@@ -821,47 +867,13 @@ function ChannelCanvasBody({
                   </div>
                 </>
               ) : selected ? (
-                <Stack gap="sm" h="100%">
-                  {sessionRun ? (
-                    <Group gap={4} wrap="nowrap" justify="space-between">
-                      <Group gap={4} wrap="nowrap">
-                        <Button
-                          size="compact-xs"
-                          variant={side === "config" ? "filled" : "default"}
-                          onClick={() => setSide("config")}
-                        >
-                          {t("channels.run.config")}
-                        </Button>
-                        <Button
-                          size="compact-xs"
-                          variant={side === "run" ? "filled" : "default"}
-                          onClick={() => setSide("run")}
-                        >
-                          {t("channels.run.panel")}
-                        </Button>
-                      </Group>
-                      <CloseButton size="sm" aria-label={t("channels.node.close")} onClick={clearSelection} />
-                    </Group>
-                  ) : null}
-                  {side === "run" && sessionRun ? (
-                    <div className="channel-node-config__body">
-                      <NodeRunPanel
-                        nodeId={selected.id}
-                        nodes={nodes.map((node) => ({
-                          id: node.id,
-                          name: node.data.name,
-                          ref: node.data.ref,
-                        }))}
-                        detail={sessionRun}
-                      />
-                    </div>
-                  ) : (
                 <NodeConfigPanel
                   nodeId={selected.id}
                   data={selected.data}
                   spec={selectedSpec ?? null}
                   schema={(selectedSpec?.config_schema as SchemaObject | undefined) ?? null}
-                  editable={editable}
+                  editable={mutable}
+                  canRun={appearance === "edit" ? mutable : null}
                   revealKey={revealKey}
                   problems={problems.filter((problem) => problem.node_id === selected.id)}
                   graph={labelGraph}
@@ -879,6 +891,20 @@ function ChannelCanvasBody({
                       platform: context?.platform ?? null,
                     },
                   }}
+                  templatePreview={templatePreview}
+                  upstream={
+                    <UpstreamRegion
+                      nodeId={selected.id}
+                      nodes={nodes.map((node) => ({
+                        id: node.id,
+                        name: node.data.name,
+                        ref: node.data.ref,
+                      }))}
+                      hasUpstream={edges.some((edge) => edge.target === selected.id)}
+                      detail={sessionRun}
+                    />
+                  }
+                  result={<ResultRegion nodeId={selected.id} detail={sessionRun} />}
                   onClose={clearSelection}
                   onChange={(nodeId, data) => {
                     const next = nodesRef.current.map((node) =>
@@ -889,16 +915,15 @@ function ChannelCanvasBody({
                     emit(next, edgesRef.current);
                     commitNow();
                   }}
+                  onRun={onRun}
                 />
-                  )}
-                </Stack>
               ) : null}
             </Paper>
           ) : null}
         </div>
         </CanvasRunContext.Provider>
         </CanvasCatalogContext.Provider>
-        </CanvasEditableContext.Provider>
+        </CanvasSurfaceContext.Provider>
     </Stack>
   );
 
@@ -922,7 +947,7 @@ function ChannelCanvasBody({
   }
 
   function isValidConnection(connection: Connection | Edge) {
-    if (!editable) return false;
+    if (!mutable) return false;
     return connectionAllowed(graphNow(), catalog, connection);
   }
 }
@@ -1249,7 +1274,7 @@ function ChannelFlowEdge({
   deletable = true,
 }: EdgeProps) {
   const t = useTranslate();
-  const editable = useContext(CanvasEditableContext);
+  const { editing, mutable } = useContext(CanvasSurfaceContext);
   const { deleteElements } = useReactFlow();
   const [hovered, setHovered] = useState(false);
   const hideTimer = useRef<number | null>(null);
@@ -1286,7 +1311,7 @@ function ChannelFlowEdge({
     }, 80);
   };
 
-  const visible = editable && deletable && (Boolean(selected) || hovered);
+  const visible = editing && deletable && (Boolean(selected) || hovered);
 
   return (
     <>
@@ -1313,6 +1338,7 @@ function ChannelFlowEdge({
             className="channel-flow-edge__delete nodrag nopan"
             data-edge-id={id}
             aria-label={t("channels.node.delete")}
+            disabled={!mutable}
             onMouseEnter={enter}
             onMouseLeave={leave}
             onPointerDown={(event) => event.stopPropagation()}
@@ -1331,7 +1357,7 @@ function ChannelFlowEdge({
 
 function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   const t = useTranslate();
-  const editable = useContext(CanvasEditableContext);
+  const { editing, mutable } = useContext(CanvasSurfaceContext);
   const catalog = useContext(CanvasCatalogContext);
   const spec = catalog.find((item) => item.type === data.nodeType);
   const { deleteElements } = useReactFlow();
@@ -1339,7 +1365,7 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
     (item) => item.type === data.nodeType && item.outputs.some((port) => port.port === "error"),
   );
   const phase = useContext(CanvasRunContext).phases.get(id);
-  const onRunNode = useContext(CanvasRunContext).onRunNode;
+  const onRun = useContext(CanvasRunContext).onRun;
   const emphasis = data.problem
     ? "channel-flow-node--problem"
     : selected
@@ -1362,16 +1388,18 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
         background: "var(--mantine-color-body)",
       }}
     >
-      {editable ? (
+      {editing ? (
         <>
           <button
             type="button"
             className="channel-flow-node__run nodrag nopan"
             aria-label={t("channels.node.run")}
+            title={t("channels.node.run")}
+            disabled={!mutable}
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation();
-              onRunNode(id);
+              onRun(id);
             }}
           >
             <PlayIcon />
@@ -1380,6 +1408,7 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
             type="button"
             className="channel-flow-node__delete nodrag nopan"
             aria-label={t("channels.node.delete")}
+            disabled={!mutable}
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation();

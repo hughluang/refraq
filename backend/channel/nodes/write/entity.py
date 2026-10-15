@@ -44,7 +44,7 @@ NODE_TYPE = NodeType(
     label="Write Entity",
     summary="Creates, updates, upserts, or deletes rows of a Business Entity.",
     description=(
-        "Writes mapped attributes into the current head of one Business Entity. "
+        "Writes source-object keys as attributes into the current head of one Business Entity. "
         "The match key is the head's Business Key unless the node names a unique "
         "attribute. When the published head no longer matches, the node fails "
         "the item or skips it."
@@ -93,8 +93,8 @@ NODE_TYPE = NodeType(
                 "type": "array",
                 "title": "Mapping",
                 "description": (
-                    "Attributes to write and the source-object key for each. "
-                    "Delete ignores this list. The match key attribute is included."
+                    "Renames a source-object key to an attribute. Keys without an "
+                    "entry are written under their own name."
                 ),
                 "items": object_schema(
                     {

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SchemaObject } from "@/features/channels/configSchemaForm";
 import type { FlowNodeData } from "@/features/channels/graphValidation";
 import { problemIdentity } from "@/features/channels/problemLabel";
+import type { ChannelTemplatePreview } from "@/features/channels/TemplateRunPreview";
 import type { GraphProblem } from "@/features/channels/types";
 import { listEntities, listVersions } from "@/features/entities/api";
 import type { EntityAttribute, EntityVersion } from "@/features/entities/types";
@@ -18,13 +19,13 @@ const LABELS: Record<string, string> = {
   "channels.node.close": "Close",
   "channels.node.onError": "On error",
   "channels.node.onError.stop": "Stop",
+  "channels.node.onError.continue": "Continue",
   "channels.config.addItem": "Add",
   "channels.config.removeItem": "Remove",
   "channels.config.businessKey": "Business Key",
   "channels.config.noAttributes": "No attributes",
   "channels.config.pickEntity": "Choose an Entity",
   "channels.config.attributeLoadFailed": "Could not load attributes",
-  "channels.config.mapping.matchKeyMissing": "Mapping must include {{name}}",
   "channels.config.fields.entity_id": "Entity",
   "channels.config.fields.filters": "Filters",
   "channels.config.fields.attribute": "Attribute",
@@ -206,6 +207,7 @@ function renderPanel(
   problems: GraphProblem[] = [],
   editable = true,
   revealKey: string | null = null,
+  templatePreview: ChannelTemplatePreview | null = null,
 ) {
   return import("@/features/channels/NodeConfigPanel").then(({ NodeConfigPanel }) => {
     render(
@@ -218,11 +220,16 @@ function renderPanel(
           spec: null,
           schema,
           editable,
+          canRun: null,
           problems,
           revealKey,
           scope: { nodes: [], context: { channel: null, run: null, platform: null } },
+          templatePreview,
+          upstream: null,
+          result: null,
           onClose: vi.fn(),
           onChange,
+          onRun: vi.fn(),
         }) as ReactNode,
       ),
     );
@@ -330,7 +337,7 @@ describe("NodeConfigPanel grids", () => {
     );
   });
 
-  it("hides the mapping grid when the mode is delete and keeps the rows", async () => {
+  it("shows the mapping grid when the mode is delete", async () => {
     const onChange = await renderPanel(
       WRITE,
       node({
@@ -343,8 +350,7 @@ describe("NodeConfigPanel grids", () => {
       }),
     );
 
-    expect(screen.queryByText("Mapping")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(screen.queryByText("Mapping")).toBeTruthy();
     expect(onChange).not.toHaveBeenCalled();
   });
 
@@ -370,7 +376,6 @@ describe("NodeConfigPanel grids", () => {
       expect(within(list!).queryByRole("option", { name: "qty", hidden: true })).toBeTruthy();
       expect(within(list!).queryByRole("option", { name: "sku", hidden: true })).toBeNull();
     });
-    expect(screen.queryByText("Mapping must include sku")).toBeNull();
   });
 
   it("disables add when every head attribute is already mapped", async () => {
@@ -395,23 +400,6 @@ describe("NodeConfigPanel grids", () => {
         true,
       );
     });
-  });
-
-  it("prompts when the resolved match key is missing from the mapping", async () => {
-    await renderPanel(
-      WRITE,
-      node({
-        entity_id: "ent_1",
-        mode: "upsert",
-        match_key: null,
-        source: "rows",
-        mapping: [{ attribute: "name", key: "title" }],
-        on_incompatible_head: "fail",
-      }),
-    );
-
-    fireEvent.click(await screen.findByRole("button", { name: "Mapping Problems" }));
-    expect(screen.getByText("Mapping must include sku")).toBeTruthy();
   });
 
   it("keeps a repeated filter attribute available on every row", async () => {
@@ -497,6 +485,22 @@ describe("NodeConfigPanel integers", () => {
     expect(next.config).not.toHaveProperty("statement_timeout_sec");
   });
 
+  it("shows the only supported on-error policy as text after the node fields", async () => {
+    await renderPanel(PAYLOAD, node({ payload: {} }, "trigger.manual"));
+
+    expect(screen.queryByRole("combobox", { name: "On error" })).toBeNull();
+    expect(screen.getByText("Stop")).toBeTruthy();
+    const text = document.querySelector(".channel-node-detail")?.textContent ?? "";
+    expect(text.indexOf("Output")).toBeLessThan(text.indexOf("On error"));
+  });
+
+  it("lets an unsupported on-error value be reset to stop", async () => {
+    await renderPanel(PAYLOAD, { ...node({ payload: {} }, "trigger.manual"), onError: "continue" });
+
+    const select = screen.getByRole("combobox", { name: "On error" }) as HTMLInputElement;
+    expect(select.value).toBe("Continue");
+  });
+
   it("keeps a node-level problem on the title and opens it from the problem list", async () => {
     const problem: GraphProblem = {
       code: "CHANNEL_GRAPH_UNREACHABLE",
@@ -514,10 +518,46 @@ describe("NodeConfigPanel integers", () => {
       problemIdentity(problem),
     );
 
-    expect(document.querySelector(".channel-node-config__body")?.textContent ?? "").not.toContain(
+    expect(document.querySelector(".channel-node-detail")?.textContent ?? "").not.toContain(
       "A node is unreachable from the trigger",
     );
     expect(screen.getByText("A node is unreachable from the trigger")).toBeTruthy();
+  });
+
+  it("puts name and ref problems on their own labeled fields", async () => {
+    const duplicateRef: GraphProblem = {
+      code: "CHANNEL_NODE_REF_INVALID",
+      node_id: "n1",
+      edge_id: null,
+      path: [],
+      detail: "Node ref is duplicated",
+    };
+    await renderPanel(
+      { type: "object", properties: {} },
+      node({}),
+      vi.fn(),
+      [
+        {
+          code: "CHANNEL_NODE_NAME_DUP",
+          node_id: "n1",
+          edge_id: null,
+          path: [],
+          detail: "Node name is duplicated",
+        },
+        duplicateRef,
+      ],
+      true,
+      problemIdentity(duplicateRef),
+    );
+
+    expect(screen.getByText("Name").closest("label")).not.toBeNull();
+    expect(screen.getByText("Ref").closest("label")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Step Problems" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Name Problems" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ref Problems" })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Ref" }).getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByText("Node ref is duplicated")).toBeTruthy();
+    expect(screen.queryByText("Node name is duplicated")).toBeNull();
   });
 });
 
@@ -629,6 +669,32 @@ describe("NodeConfigPanel display mode", () => {
     expect(document.querySelector(".channel-template-field__editor")?.textContent ?? "").not.toContain(
       "A template expression does not parse",
     );
+  });
+
+  it("previews a calculated template field against the latest run", async () => {
+    const schema: SchemaObject = {
+      type: "object",
+      properties: {
+        sql: { type: "string", "x-refraq-template": { type: "string" } },
+      },
+    };
+    const evaluate = vi.fn().mockResolvedValue({ state: "ok", value: "select 6", truncated: false });
+    await renderPanel(schema, node({ sql: "select {{ 6 }}" }, "read.sql"), vi.fn(), [], true, null, {
+      run: { key: "run-1", evaluate },
+    });
+
+    await waitFor(() => {
+      expect(document.querySelector(".channel-template-field__value")?.textContent).toBe("select 6");
+    });
+    expect(evaluate).toHaveBeenCalledWith("n1", ["sql"]);
+
+    cleanup();
+    evaluate.mockClear();
+    await renderPanel(schema, node({ sql: "select 1" }, "read.sql"), vi.fn(), [], true, null, {
+      run: { key: "run-1", evaluate },
+    });
+    expect(document.querySelector(".channel-template-field__preview")).toBeNull();
+    expect(evaluate).not.toHaveBeenCalled();
   });
 
   it("shows an unclosed expression before a problem is attached", async () => {

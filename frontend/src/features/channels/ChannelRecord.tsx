@@ -49,6 +49,7 @@ import {
   listRuns,
   patchChannel,
   previewPublish,
+  previewTemplate,
   publishChannel,
   saveDraft,
   startRun,
@@ -56,7 +57,8 @@ import {
   type DraftValidation,
 } from "@/features/channels/api";
 import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
-import { isTerminalRun } from "@/features/channels/runSession";
+import { isTerminalRun, recordedKey } from "@/features/channels/runSession";
+import type { ChannelTemplatePreview } from "@/features/channels/TemplateRunPreview";
 import { ChannelRuns } from "@/features/channels/ChannelRuns";
 import { ChannelVersions } from "@/features/channels/ChannelVersions";
 import type { ExpressionContext, Graph, GraphProblem, RefinedPort } from "@/features/channels/types";
@@ -64,6 +66,7 @@ import {
   graphWithoutUnsetIntegers,
   validationContentKey,
   validationDelay,
+  refusedProblems,
   validationResultApplies,
 } from "@/features/channels/graphValidation";
 import { formatGraphProblem } from "@/features/channels/problemLabel";
@@ -91,6 +94,8 @@ type IdentityValues = {
 };
 
 class RecordInvalid extends Error {}
+
+type DraftAccess = "browse" | "edit" | "locked";
 
 type Props =
   | { mode: "create" }
@@ -196,9 +201,9 @@ function ChannelExisting({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const [descriptionOpen, setDescriptionOpen] = useState(false);
-  const [runOpen, setRunOpen] = useState(false);
+  const [runRequest, setRunRequest] = useState<{ stopAt: string | null } | null>(null);
   const [sessionRun, setSessionRun] = useState<ChannelRunDetail | null>(null);
-  const [runFocus, setRunFocus] = useState<{ nodeId: string; token: number } | null>(null);
+  const [adoptToken, setAdoptToken] = useState(0);
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [timeoutDraft, setTimeoutDraft] = useState<number | string>("");
   const nameEditorRef = useRef<ChannelNameHeadingHandle>(null);
@@ -287,6 +292,8 @@ function ChannelExisting({
 
   const writable = mode === "edit" && Boolean(canWrite?.can);
   const runActive = sessionRun != null && !isTerminalRun(sessionRun.run.status);
+  const draftAccess: DraftAccess = !writable ? "browse" : runActive ? "locked" : "edit";
+  const draftEditable = draftAccess === "edit";
   const canStop = Boolean(canWrite?.can || canJobs?.can);
   const runJobId = sessionRun?.run.job_id ?? null;
   const runStatus = sessionRun?.run.status ?? null;
@@ -354,7 +361,11 @@ function ChannelExisting({
     return () => window.clearTimeout(timer);
   }, [canWrite?.can, channelId, contentKey, draftEpoch]);
 
-  const reportBlockedGraph = (result: DraftValidation, source: Graph) => {
+  const reportBlockedGraph = (
+    result: DraftValidation,
+    source: Graph,
+    blocking: GraphProblem[] = [],
+  ) => {
     // A run or publish check can resolve after the canvas has moved on.
     // Applying that snapshot would replace the problems on screen and drop the newer check.
     if (!validationResultApplies(source, graphRef.current)) return;
@@ -363,7 +374,8 @@ function ChannelExisting({
     setPorts(result.ports);
     setExpressionContext(result.context);
     setPanel(null);
-    const firstError = result.problems.find((problem) => problem.severity !== "warning");
+    const firstError =
+      blocking[0] ?? result.problems.find((problem) => problem.severity !== "warning");
     open?.({
       type: "error",
       message: firstError
@@ -379,8 +391,11 @@ function ChannelExisting({
       return null;
     }
     setPreview(null);
-    setRunOpen(false);
-    return validateDraft(channelId, graph).then((result) => reportBlockedGraph(result, graph));
+    setRunRequest(null);
+    const blocking = refusedProblems(error);
+    return validateDraft(channelId, graph).then((result) =>
+      reportBlockedGraph(result, graph, blocking),
+    );
   };
 
   const catchFailure = (error: unknown) => {
@@ -450,20 +465,41 @@ function ChannelExisting({
       nextGraph = graphWithoutUnsetIntegers(saved.graph, catalog);
       setRevision(saved.draft_revision);
       setGraph(nextGraph);
-      setBaseline(JSON.stringify(saved.graph));
+      setBaseline(JSON.stringify(nextGraph));
+      setAdoptToken((token) => token + 1);
     }
     return { revision: nextRevision, graph: nextGraph };
   };
 
-  const rememberRun = async (jobId: string, nodeId?: string) => {
+  const rememberRun = async (jobId: string) => {
     const epoch = ++runEpoch.current;
     const detail = await getRun(channelId, jobId);
     if (runEpoch.current !== epoch) return;
     setSessionRun(detail);
-    if (nodeId) setRunFocus({ nodeId, token: Date.now() });
   };
 
+  const openRun = (stopAt: string | null) => {
+    setRunRequest({ stopAt });
+  };
+
+  const templatePreview: ChannelTemplatePreview | null = canWrite?.can
+    ? {
+        run: sessionRun
+          ? {
+              key: recordedKey(sessionRun),
+              evaluate: (nodeId, path) =>
+                previewTemplate(channelId, sessionRun.run.job_id, {
+                  graph,
+                  node_id: nodeId,
+                  path,
+                }),
+            }
+          : null,
+      }
+    : null;
+
   const launch = () => {
+    const stopAt = runRequest?.stopAt ?? null;
     if (!graph || runActive) return;
     const triggers = graph.nodes.filter((node) => node.type.startsWith("trigger."));
     if (triggers.length !== 1) {
@@ -472,26 +508,14 @@ function ChannelExisting({
     }
     setBusy(true);
     void (async () => {
-      if (writable) await persist();
-      const started = await startRun(channelId, { target: "draft", ignore_checkpoints: false });
-      await rememberRun(started.run.job_id);
-      setRunOpen(false);
-    })()
-      .catch(catchFailure)
-      .finally(() => setBusy(false));
-  };
-
-  const runNode = (nodeId: string) => {
-    if (runActive) return;
-    setBusy(true);
-    void (async () => {
-      if (writable) await persist();
+      await persist();
       const started = await startRun(channelId, {
         target: "draft",
         ignore_checkpoints: false,
-        stop_at_node_id: nodeId,
+        stop_at_node_id: stopAt,
       });
-      await rememberRun(started.run.job_id, nodeId);
+      await rememberRun(started.run.job_id);
+      setRunRequest(null);
     })()
       .catch(catchFailure)
       .finally(() => setBusy(false));
@@ -507,6 +531,10 @@ function ChannelExisting({
       .catch(catchFailure)
       .finally(() => setBusy(false));
   };
+
+  const runStopAt = runRequest?.stopAt ?? null;
+  const runNode = runStopAt ? graph.nodes.find((node) => node.id === runStopAt) : undefined;
+  const runNodeName = runNode ? runNode.name || runNode.ref : null;
 
   const showEdit = mode === "show" && Boolean(canWrite?.can);
   const showLifecycle = Boolean(canWrite?.can);
@@ -557,7 +585,7 @@ function ChannelExisting({
           ref={nameEditorRef}
           key={`${channel.id}:${channel.updated_at.toJSON()}`}
           name={form.values.name}
-          editable={writable && !busy}
+          editable={draftEditable && !busy}
           onCommit={(name) => form.setFieldValue("name", name)}
         />
       }
@@ -565,7 +593,7 @@ function ChannelExisting({
         <>
           <ChannelActiveStatus
             active={form.values.active}
-            editable={writable && !busy}
+            editable={draftEditable && !busy}
             onToggle={() => form.setFieldValue("active", !form.values.active)}
           />
           <Group gap={4} wrap="nowrap">
@@ -617,13 +645,13 @@ function ChannelExisting({
             >
               {t("channels.actions.back")}
             </Button>
-            {canWrite?.can ? (
+            {writable ? (
               <Button
                 size="sm"
                 variant="filled"
                 loading={busy}
-                disabled={runActive}
-                onClick={() => setRunOpen(true)}
+                disabled={!draftEditable}
+                onClick={() => openRun(null)}
               >
                 {t("channels.run.open")}
               </Button>
@@ -642,6 +670,7 @@ function ChannelExisting({
                   size="sm"
                   variant={mode === "show" ? "filled" : "light"}
                   loading={busy}
+                  disabled={draftAccess === "locked"}
                   onClick={() => {
                     setBusy(true);
                     void persist()
@@ -709,6 +738,7 @@ function ChannelExisting({
                 form={FORM_ID}
                 size="sm"
                 loading={busy}
+                disabled={!draftEditable}
               >
                 {t("channels.edit.submit")}
               </Button>
@@ -735,24 +765,34 @@ function ChannelExisting({
       />
       <FillColumn>
         <ChannelCanvas
-          key={baseline}
+          key={draftEpoch}
           graph={graph}
           catalog={catalog}
-          editable={writable && !runActive}
+          appearance={writable ? "edit" : "browse"}
+          mutable={draftEditable}
+          adoptToken={adoptToken}
           problems={problems}
           ports={ports}
           context={expressionContext}
           onChange={setGraph}
           sessionRun={sessionRun}
-          onRunNode={runNode}
-          runFocus={runFocus}
+          templatePreview={templatePreview}
+          onRun={openRun}
         />
       </FillColumn>
-      <Modal opened={runOpen} onClose={() => setRunOpen(false)} title={t("channels.run.open")}>
+      <Modal
+        opened={runRequest != null}
+        onClose={() => setRunRequest(null)}
+        title={runNodeName != null ? t("channels.run.upTo", { node: runNodeName }) : t("channels.run.open")}
+      >
         <Stack gap="sm">
-          <Text size="sm">{t("channels.run.writes")}</Text>
+          <Text size="sm">
+            {runNodeName != null
+              ? t("channels.run.writesUpTo", { node: runNodeName })
+              : t("channels.run.writes")}
+          </Text>
           <Group justify="flex-end">
-            <Button variant="default" disabled={busy} onClick={() => setRunOpen(false)}>
+            <Button variant="default" disabled={busy} onClick={() => setRunRequest(null)}>
               {t("common.cancel")}
             </Button>
             <Button loading={busy} onClick={() => launch()}>
@@ -766,7 +806,7 @@ function ChannelExisting({
         onClose={closeDescription}
         title={t("channels.details.title")}
       >
-        {writable ? (
+        {draftEditable ? (
           <Stack gap="sm">
             <Text size="sm" c="dimmed">
               {t("channels.description.hint")}

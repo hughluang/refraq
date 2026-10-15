@@ -571,7 +571,7 @@ Avoid **Entity Version**, a mutable published graph, and an unattended trigger r
 
 ### Channel Run
 
-One run of a **Data Channel**: exactly one **Job** of kind `channel_run`, executed in one worker child process, entered at the trigger node that minted it. An on-demand run may name a stop node and then execute only that node's ancestor closure, including the node. User cancel kills that child process. Minted by an on-demand run (target `draft` or `published`), a synced **Scheduled Task**, a platform event, or change arrival. A `draft` run freezes the draft it was queued from and never advances a **Checkpoint**. Runs of one channel may overlap; there is no execution lock. A run ends `succeeded` (outcome `completed` or `skipped`), `failed`, or `cancelled`; a newer published version cancels runs still executing an older published version and does not cancel a `draft` run. A rerun is a new Job. The run stores the graph it executed and each node execution's output.
+One run of a **Data Channel**: exactly one **Job** of kind `channel_run`, executed in one worker child process, entered at the trigger node that minted it. An on-demand run may name a stop node and then execute only that node's ancestor closure, including the node. User cancel kills that child process. Minted by an on-demand run (target `draft` or `published`), a synced **Scheduled Task**, a platform event, or change arrival. A `draft` run freezes the draft it was queued from and never advances a **Checkpoint**. Runs of one channel may overlap; there is no execution lock. A run ends `succeeded` (outcome `completed` or `skipped`), `failed`, or `cancelled`; a newer published version cancels runs still executing an older published version and does not cancel a `draft` run. A rerun is a new Job. The run stores the graph it executed, the **Expression Context** it evaluated with, and each node execution's output.
 Avoid Ingestion Job, sync job, a Scheduled Task, in-place retry, and **Kind execution lock** or `JOB_ALREADY_ACTIVE` for this kind. Avoid "execution" for the whole run; one node's step inside a run is a node execution. Avoid a dry run: an on-demand run writes Entity Tables.
 
 ### Node Ref
@@ -588,6 +588,11 @@ Avoid `item` as an implicit current row, credentials in the context, and naming 
 
 A **Data Channel** configuration value stored as text. `{{ }}` marks a calculation. Text with no calculation is static data, and the field's declared value type is what that text must become.
 Avoid requiring `{{ }}` around static JSON, and a separate literal mode.
+
+### Template Preview
+
+The value one **Template Field** takes against a recorded **Channel Run**: the run's recorded **Expression Context** and the recorded outputs of the upstream nodes the template names, evaluated in the run sandbox and converted to the declared value type as at run time. It executes no node and writes nothing. A named node with no recorded output is reported missing, not failed.
+Avoid a dry run or test run (an on-demand run executes nodes and writes Entity Tables), a sample value computed in the browser, and previewing against a node's refined schema.
 
 ### Coarse Port Type
 

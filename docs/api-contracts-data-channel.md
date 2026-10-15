@@ -141,7 +141,7 @@ Write Entity configuration (`write.entity`):
 | `mode` | `upsert`, `create`, `update`, or `delete` |
 | `match_key` | `null` means the target head's **Business Key**; otherwise the name of a `unique` attribute on the head. `row_id` is never accepted |
 | `source` | A template whose value is a list of objects. Static JSON is the text itself. `{{ }}` calculates |
-| `mapping` | List of `{ "attribute", "key" }`; `attribute` names a head attribute at most once and the list includes the match key attribute; `key` is the source-object key to copy. `delete` ignores the list |
+| `mapping` | List of `{ "attribute", "key" }`; `attribute` names a head attribute at most once; `key` is the source-object key renamed to it. Unmapped source keys are written under their own name. Every mode applies the list |
 | `on_incompatible_head` | `fail` (default) or `skip` |
 
 SQL configuration (`read.sql`):
@@ -369,6 +369,7 @@ On `succeeded` only:
 | `GET` | `/channels/{id}/runs` | `channel:read` | List this channel's runs (**Offset Page**) |
 | `GET` | `/channels/{id}/runs/{job_id}` | `channel:read` | Read one run with its graph and node executions |
 | `GET` | `/channels/{id}/runs/{job_id}/executions/{seq}/output` | `channel:read` | Page one node execution's output |
+| `POST` | `/channels/{id}/runs/{job_id}/template-preview` | `channel:write` | Evaluate one template field against a run record |
 
 ### 5.1 `GET /channel-node-types`
 
@@ -451,7 +452,7 @@ Publish body:
 ```
 
 - `draft_revision` must equal the stored revision, so the published graph is the previewed graph; otherwise `409 CHANNEL_DRAFT_CONFLICT`.
-- An invalid draft is refused with `422 CHANNEL_GRAPH_INVALID`; `detail` names the first error, and the full list, including warnings, comes from validate.
+- An invalid draft is refused with `422 CHANNEL_GRAPH_INVALID`; `detail` names the first error. The body carries `problems`, the errors that blocked the request, each shaped as in §5.7. The full list, including warnings, comes from validate.
 - The caller must hold every Permission declared by node types present in the draft.
 - `201` `{ "version": { … }, "confirmation": { … } }`, where `confirmation` lists the running published runs the new version will stop between nodes. Publish stores the version and reconciles the schedule row. It does not change `active` and it does not cancel Jobs itself.
 
@@ -470,7 +471,7 @@ Empty body. `200` `{ "channel": { … } }`. Idempotent: activating an active cha
 ```
 
 - `target` is `draft` or `published`. `draft` freezes the current draft, which must validate; `published` requires a published version.
-- `stop_at_node_id` is optional. Omit it, or send `null`, to execute every node reachable from the trigger. When set, the draft must be valid for that node's ancestor closure, including the node. Errors on nodes outside the closure do not refuse the start. A stop node that is missing or not reachable from the trigger is `422 CHANNEL_GRAPH_INVALID`.
+- `stop_at_node_id` is optional. Omit it, or send `null`, to execute every node reachable from the trigger. When set, the draft must be valid for that node's ancestor closure, including the node. Errors on nodes outside the closure do not refuse the start. A refusal carries `problems` as in the publish rule of §5.8, limited to errors inside the closure and errors that belong to no node; `detail` is the first of them. A missing stop node refuses with an empty `problems`. A stop node that is missing or not reachable from the trigger is `422 CHANNEL_GRAPH_INVALID`.
 - The run enters the graph's only trigger node.
 - `ignore_checkpoints` defaults to `false`. A `draft` run never advances checkpoints even when this is `false`.
 - Allowed while the channel is inactive.
@@ -514,6 +515,41 @@ Query: `path` (optional dot path into the output, such as `rows`), `limit` (defa
 
 When the value at `path` is a list, `200` is an **Offset Page** of its elements. Otherwise `200` is `{ "value": … }` and `limit` / `offset` are ignored. An unknown `seq` is `404 CHANNEL_RUN_NOT_FOUND`.
 
+### 5.15 `POST /channels/{id}/runs/{job_id}/template-preview`
+
+```json
+{
+  "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "error_channel_id": null } },
+  "node_id": "nd_write",
+  "path": ["source"]
+}
+```
+
+Evaluates the **Template Field** at `path` in node `node_id` of `graph` against run `job_id` of this channel (**Template Preview**, `docs/business-data-channel.md` §4.1). `graph` is the same shape as a draft save (§3.2), usually the graph on screen; the run may have executed an earlier graph. `path` is the configuration path, as in a problem entry (§3.4). The request executes no node and writes nothing. It does not record an audit event.
+
+- Template validation (§5.7) applies to that field of `graph`. A field with a validation error is `failed` with that problem's `code`, and its `detail` as `message`.
+- Each upstream node the template names by `ref` or name in `graph` reads the output of its latest `succeeded` or `skipped` execution in the run, matched by node id. `self.channel`, `self.run`, and `self.platform` are the values the run recorded at start.
+- Evaluation uses the run sandbox and the run's conversion to the declared value type. An expression failure is `failed` with `CHANNEL_NODE_FAILED`. A result that does not match the declared value type is `failed` with `CHANNEL_VALUE_TYPE_MISMATCH`. A sandbox that cannot start is `failed` with `CHANNEL_SANDBOX_FAILED`. `message` is the error the node would record.
+
+`200` is one of:
+
+```json
+{ "state": "ok", "value": [{ "code": "S-01" }], "truncated": false }
+```
+
+```json
+{ "state": "failed", "code": "CHANNEL_VALUE_TYPE_MISMATCH", "message": "Value does not match the declared type" }
+```
+
+```json
+{ "state": "missing", "node_ids": ["nd_read"], "context": false }
+```
+
+- `value` is the result with each list cut to its first 100 elements. `truncated` is true when a list was cut.
+- `node_ids` lists, in graph order, the named upstream nodes with no such execution in the run: not reached, failed, or still running. `context` is true when the template reads `self.channel`, `self.run`, or `self.platform` and the run has no recorded context, such as a run that has not started.
+- `failed` and `missing` are `200` result documents, not Problem Details failures.
+- `node_id` and `path` that do not name a template field of `graph` are `422 REQUEST_INVALID`. A `graph` that fails the save shape is `422`. Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`.
+
 ## 6. Errors
 
 ### 6.1 HTTP Problem Codes
@@ -523,11 +559,11 @@ When the value at `path` is a list, `200` is an **Offset Page** of its elements.
 | `CHANNEL_NOT_FOUND` | 404 | No Data Channel for this id |
 | `CHANNEL_VERSION_NOT_FOUND` | 404 | No version with this number on the channel |
 | `CHANNEL_DRAFT_CONFLICT` | 409 | `base_revision` or `draft_revision` is not the stored draft revision |
-| `CHANNEL_GRAPH_INVALID` | 422 | Publish of a draft that fails validation |
+| `CHANNEL_GRAPH_INVALID` | 422 | Publish or an on-demand run whose scope has a validation error; the body carries `problems` |
 | `CHANNEL_NOT_PUBLISHED` | 409 | On-demand run with target `published` of a channel with no published version |
 | `CHANNEL_TRIGGER_INVALID` | 422 | The graph does not have exactly one trigger node |
 | `CHANNEL_RUN_NOT_FOUND` | 404 | No run with this Job id on the channel |
-| `REQUEST_INVALID` | 422 | Unknown fields, malformed identifiers, or out-of-range fields |
+| `REQUEST_INVALID` | 422 | Unknown fields, malformed identifiers, out-of-range fields, or a Template Preview `node_id` and `path` that name no template field |
 
 ### 6.2 Validation Problem Codes
 
@@ -544,7 +580,7 @@ When the value at `path` is a list, `200` is an **Offset Page** of its elements.
 | `CHANNEL_NODE_NAME_DUP` | Two nodes share a name |
 | `CHANNEL_NODE_REF_INVALID` | A `ref` is missing, not a Python identifier, reserved, or duplicated |
 | `CHANNEL_REFERENCE_UNRESOLVED` | A configuration names an Entity, attribute, Catalog Object, Locator, Source, or Data Channel that does not resolve |
-| `CHANNEL_MATCH_KEY_INVALID` | A write node's match key does not resolve, or the mapping does not include the match key attribute |
+| `CHANNEL_MATCH_KEY_INVALID` | A write node's match key does not resolve |
 | `CHANNEL_EXPRESSION_INVALID` | A template expression does not parse |
 | `CHANNEL_TEMPLATE_TYPE_MISMATCH` | A template with no `{{ }}` does not match its declared value type |
 | `CHANNEL_TEMPLATE_REF_INVALID` | A template names a node that does not exist or is not upstream |

@@ -5,14 +5,15 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
-from backend.channel.errors import ChannelGraphInvalid, ChannelRunNotFound
+from backend.channel.errors import ChannelRunNotFound
 from backend.channel.run_store import get_run_store, output_page, output_preview
 from backend.channel.runs import start_run
+from backend.channel.schemas.channels import GraphIn
+from backend.channel.template_preview import preview_template
 from backend.core.pagination import PageParams, page_params
 from backend.core.time import Instant, format_instant
 from backend.jobs.store import get_job_store
@@ -26,6 +27,14 @@ class StartRunRequest(BaseModel):
     target: Literal["draft", "published"] = "published"
     ignore_checkpoints: bool = False
     stop_at_node_id: str | None = None
+
+
+class TemplatePreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    graph: GraphIn
+    node_id: str = Field(min_length=1, max_length=64)
+    path: list[str | int] = Field(min_length=1)
 
 
 class ChannelRunOut(BaseModel):
@@ -75,36 +84,14 @@ def http_start_run(
     actor: UserRecord = Depends(require_permission("channel:write")),
     actor_token_id: str | None = Depends(get_actor_token_id),
 ) -> Any:
-    try:
-        job, _queued = start_run(
-            channel_id=channel_id,
-            target=body.target,
-            ignore_checkpoints=body.ignore_checkpoints,
-            stop_at_node_id=body.stop_at_node_id,
-            actor=actor,
-            actor_token_id=actor_token_id,
-        )
-    except ChannelGraphInvalid as exc:
-        return JSONResponse(
-            status_code=exc.http_status,
-            content={
-                "type": f"urn:refraq:problem:{exc.code}",
-                "status": exc.http_status,
-                "code": exc.code,
-                "detail": exc.message,
-                "problems": [
-                    {
-                        "code": problem.code,
-                        "detail": problem.detail,
-                        "node_id": problem.node_id,
-                        "edge_id": problem.edge_id,
-                        "path": list(problem.path),
-                        "severity": problem.severity,
-                    }
-                    for problem in exc.problems
-                ],
-            },
-        )
+    job, _queued = start_run(
+        channel_id=channel_id,
+        target=body.target,
+        ignore_checkpoints=body.ignore_checkpoints,
+        stop_at_node_id=body.stop_at_node_id,
+        actor=actor,
+        actor_token_id=actor_token_id,
+    )
     job = get_job_store().get(job.id)
     stored = get_run_store().get_run(job.id)
     if stored is None:
@@ -181,6 +168,22 @@ def http_execution_output(
     if record is None:
         raise ChannelRunNotFound()
     return output_page(record.output, path, limit=limit, offset=offset)
+
+
+@router.post("/channels/{channel_id}/runs/{job_id}/template-preview")
+def http_preview_template(
+    channel_id: str,
+    job_id: str,
+    body: TemplatePreviewRequest,
+    _actor: UserRecord = Depends(require_permission("channel:write")),
+) -> dict[str, Any]:
+    return preview_template(
+        channel_id=channel_id,
+        job_id=job_id,
+        graph=body.graph.model_dump(mode="json"),
+        node_id=body.node_id,
+        path=body.path,
+    )
 
 
 def _owned(channel_id: str, job_id: str) -> Any:

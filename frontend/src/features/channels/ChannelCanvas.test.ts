@@ -1,11 +1,18 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { EMPTY_GRAPH, type Graph, type GraphProblem, type NodeTypeSpec } from "@/features/channels/types";
+import {
+  EMPTY_GRAPH,
+  type ChannelRunDetail,
+  type Graph,
+  type GraphProblem,
+  type NodeTypeSpec,
+} from "@/features/channels/types";
+import { Instant } from "@/lib/instant";
 
 const LABELS: Record<string, string> = {
   "channels.canvas.add": "Add",
@@ -13,6 +20,11 @@ const LABELS: Record<string, string> = {
   "channels.canvas.redo": "Redo",
   "channels.canvas.palette": "Nodes",
   "channels.canvas.problemsSummary": "{{errors}} errors, {{warnings}} warnings",
+  "channels.node.run": "Run node",
+  "channels.node.config": "Configuration",
+  "channels.run.upstream": "Upstream outputs",
+  "channels.run.result": "This node's result",
+  "channels.run.waiting": "Waiting for this node",
 };
 
 vi.mock("@refinedev/core", () => ({
@@ -88,8 +100,15 @@ const nodeGraph: Graph = {
 function renderCanvas(
   problems: GraphProblem[] = [],
   graph: Graph = EMPTY_GRAPH,
-  editable = true,
+  options: {
+    appearance?: "edit" | "browse";
+    mutable?: boolean;
+    sessionRun?: ChannelRunDetail | null;
+    onRun?: (nodeId: string) => void;
+  } = {},
 ) {
+  const appearance = options.appearance ?? "edit";
+  const mutable = options.mutable ?? appearance === "edit";
   return import("@/features/channels/ChannelCanvas").then(({ ChannelCanvas }) => {
     const element = (next: GraphProblem[]) =>
         createElement(
@@ -98,9 +117,12 @@ function renderCanvas(
           createElement(ChannelCanvas, {
           graph,
           catalog: [spec],
-          editable,
+          appearance,
+          mutable,
           problems: next,
           onChange: vi.fn(),
+          sessionRun: options.sessionRun,
+          onRun: options.onRun,
         }),
       );
     const view = render(element(problems));
@@ -153,7 +175,7 @@ describe("ChannelCanvas controls", () => {
     await renderCanvas(
       [{ code: "graph.empty", node_id: null, edge_id: null, path: [], detail: "Empty graph" }],
       nodeGraph,
-      false,
+      { appearance: "browse", mutable: false },
     );
 
     const panel = screen.getByTestId("rf__controls");
@@ -166,6 +188,12 @@ describe("ChannelCanvas controls", () => {
     expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Redo" })).toBeNull();
+
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+    expect(screen.getByRole("region", { name: "Configuration" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Run node" })).toBeNull();
   });
 
   it("puts the problem control in the panel with a count badge", async () => {
@@ -191,7 +219,7 @@ describe("ChannelCanvas controls", () => {
     expect(document.querySelector(".channel-flow-node--problem")).not.toBeNull();
     expect(screen.getByRole("button", { name: "channels.node.close" })).toBeTruthy();
     expect(screen.getByText("Empty graph")).toBeTruthy();
-    expect(document.querySelector(".channel-node-config__body")?.textContent ?? "").not.toContain(
+    expect(document.querySelector(".channel-node-detail")?.textContent ?? "").not.toContain(
       "Empty graph",
     );
 
@@ -282,5 +310,83 @@ describe("ChannelCanvas controls", () => {
     expect(
       screen.getByRole("button", { name: "Checked at run time (Start)" }).className,
     ).toContain("channel-canvas-problems__item--warning");
+  });
+
+  it("keeps edit chrome while a run lock disables authoring", async () => {
+    await renderCanvas([], nodeGraph, { appearance: "edit", mutable: false });
+
+    expect(document.querySelector(".channel-canvas-stage--browse")).toBeNull();
+    expect(document.querySelector(".react-flow__background")).not.toBeNull();
+    const add = screen.getByRole("button", { name: "Add" });
+    const undo = screen.getByRole("button", { name: "Undo" });
+    const redo = screen.getByRole("button", { name: "Redo" });
+    const run = document.querySelector(".channel-flow-node__run");
+    if (!(run instanceof HTMLButtonElement)) throw new Error("missing run button");
+    expect((add as HTMLButtonElement).disabled).toBe(true);
+    expect((undo as HTMLButtonElement).disabled).toBe(true);
+    expect((redo as HTMLButtonElement).disabled).toBe(true);
+    expect(run.disabled).toBe(true);
+
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+    const config = screen.getByRole("region", { name: "Configuration" });
+    const configRun = within(config).getByRole("button", { name: "Run node" });
+    expect((configRun as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("opens configuration when a node is clicked during a session run", async () => {
+    const now = Instant.parse("2026-01-01T00:00:00Z");
+    const sessionRun: ChannelRunDetail = {
+      run: {
+        job_id: "job_1",
+        status: "running",
+        outcome: null,
+        target: "draft",
+        version: null,
+        draft_revision: 1,
+        trigger_kind: "user",
+        trigger_ref: "manual",
+        trigger_node_id: "nd_1",
+        trigger_actor_name: null,
+        trigger_schedule_name: null,
+        ignore_checkpoints: false,
+        stop_at_node_id: "nd_1",
+        failed_node_id: null,
+        created_at: now,
+        started_at: now,
+        finished_at: null,
+        error_code: null,
+        error_message: null,
+      },
+      graph: nodeGraph,
+      node_executions: [],
+    };
+    const onRun = vi.fn();
+    await renderCanvas([], nodeGraph, { sessionRun, onRun });
+
+    const run = document.querySelector(".channel-flow-node__run");
+    if (!(run instanceof HTMLButtonElement)) throw new Error("missing run button");
+    fireEvent.click(run);
+    expect(onRun).toHaveBeenCalledTimes(1);
+    expect(onRun).toHaveBeenCalledWith("nd_1");
+    expect(screen.queryByText("Waiting for this node")).toBeNull();
+
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+    const header = document.querySelector(".channel-node-config__header");
+    if (!(header instanceof HTMLElement)) throw new Error("missing header");
+    expect(within(header).getByText("Manual")).toBeTruthy();
+    expect(within(header).getByText("Start here")).toBeTruthy();
+    const config = screen.getByRole("region", { name: "Configuration" });
+    const result = screen.getByRole("region", { name: "This node's result" });
+    expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
+    expect(screen.getByText("Waiting for this node")).toBeTruthy();
+    expect(within(result).queryByRole("button")).toBeNull();
+
+    fireEvent.click(within(config).getByRole("button", { name: "Run node" }));
+    expect(onRun).toHaveBeenCalledTimes(2);
+    expect(onRun).toHaveBeenLastCalledWith("nd_1");
   });
 });

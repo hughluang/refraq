@@ -91,6 +91,12 @@ export type ChannelRunDetail = {
   node_executions: NodeExecution[];
 };
 
+/** One template field evaluated against a recorded run. */
+export type TemplatePreviewResult =
+  | { state: "ok"; value: unknown; truncated: boolean }
+  | { state: "failed"; code: string; message: string }
+  | { state: "missing"; node_ids: string[]; context: boolean };
+
 export type ChannelVersion = {
   channel_id: string;
   number: number;

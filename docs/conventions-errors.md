@@ -31,6 +31,7 @@ Do not use `about:blank` as `type` for business errors (that would discard Probl
 | MCP JSON-RPC **protocol** `error.code` | Integer (JSON-RPC) | **Not** a Problem Code |
 | Job row | `error_code` / `error_message` on a success GET | Problem Code in `error_code` |
 | Source probe | HTTP 200 `{ "ok": false, "code", "message" }` | Problem Code in `code`. Result document, not a protocol failure (RFC 9457 §1) |
+| Data Channel Template Preview | HTTP 200 `{ "state": "failed", "code", "message" }` | Problem Code in `code`. Result document, not a protocol failure |
 | Process probes (`/healthz`, `/readyz`) | Probe JSON (`status`, …) | Not Problem Details |
 
 ## 3. HTTP Problem Details
@@ -77,7 +78,7 @@ Kernel codes owned by this contract:
 | `ADMISSION_CAPACITY_EXCEEDED` | 503 + `Retry-After` | Admission pool full (ADR 0045) |
 | `ADMISSION_ACTOR_LIMIT_EXCEEDED` | 429 + `Retry-After` | This actor already holds the admission share (ADR 0045) |
 
-Domain codes stay on `AppError` subclasses (`AUTH_*`, `SOURCE_*`, …).
+Domain codes stay on `AppError` subclasses (`AUTH_*`, `SOURCE_*`, …). A domain contract may define extension members for its own Problem Code and must list them in that contract. An extension member never reuses a frozen member name.
 
 ### 422 validation
 

@@ -159,7 +159,7 @@ def execute_write(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     except Exception as exc:  # noqa: BLE001
         return _expr_failed(config.get("source"), exc)
     mode = config["mode"]
-    projected, error = _project(source, config.get("mapping") or [], mode)
+    projected, error = _project(source, config.get("mapping") or [])
     if error is not None:
         return error
     try:
@@ -175,7 +175,11 @@ def execute_write(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
         return NodeResult(
             status="failed",
             error_code="CHANNEL_NODE_FAILED",
-            error_message=exc.message,
+            error_message=(
+                exc.message
+                if exc.row_index is None
+                else f"Source object {exc.row_index}: {exc.message}"
+            ),
             error_detail={
                 "row_index": exc.row_index,
                 "attribute": exc.attribute,
@@ -250,20 +254,23 @@ def _expr_failed(raw: Any, exc: Exception) -> NodeResult:
 def _project(
     source: list[dict[str, Any]],
     mapping: list[dict[str, Any]],
-    mode: str,
 ) -> tuple[list[dict[str, Any]], NodeResult | None]:
-    if mode == "delete":
-        return source, None
+    consumed = {entry["key"] for entry in mapping}
     rows: list[dict[str, Any]] = []
     for index, item in enumerate(source):
-        projected: dict[str, Any] = {}
+        projected: dict[str, Any] = {
+            key: value for key, value in item.items() if key not in consumed
+        }
         for entry in mapping:
             key = entry["key"]
             if key not in item:
                 return [], NodeResult(
                     status="failed",
                     error_code="CHANNEL_NODE_FAILED",
-                    error_message=f"Source object is missing key {key}",
+                    error_message=(
+                        f"Source object {index} has no key '{key}' "
+                        f"for attribute '{entry['attribute']}'"
+                    ),
                     error_detail={"row_index": index, "attribute": entry["attribute"]},
                 )
             projected[entry["attribute"]] = item[key]
@@ -295,10 +302,6 @@ def _incompatible(config: Mapping[str, Any], target: Any) -> list[str]:
     for name in mapped:
         if name not in attrs:
             reasons.append("attribute_missing")
-    if config.get("mode") in {"upsert", "create"}:
-        for attr in target.attributes:
-            if attr.required and attr.name not in mapped:
-                reasons.append("required_unmapped")
     return list(dict.fromkeys(reasons))
 
 

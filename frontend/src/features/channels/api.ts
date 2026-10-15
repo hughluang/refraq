@@ -13,6 +13,7 @@ import type {
   GraphProblem,
   NodeTypeSpec,
   RefinedPort,
+  TemplatePreviewResult,
 } from "@/features/channels/types";
 
 function querySuffix(
@@ -152,6 +153,18 @@ export function listRuns(
 
 export function getRun(id: string, jobId: string) {
   return apiClient<ChannelRunDetail>(`/channels/${id}/runs/${jobId}`);
+}
+
+export function previewTemplate(
+  id: string,
+  jobId: string,
+  body: { graph: Graph; node_id: string; path: readonly (string | number)[] },
+) {
+  return apiClient<TemplatePreviewResult>(`/channels/${id}/runs/${jobId}/template-preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 export function listVersions(

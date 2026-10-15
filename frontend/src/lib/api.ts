@@ -10,20 +10,35 @@ export class ApiError extends Error {
   readonly code: string;
   readonly detail: string;
   readonly requestId: string | null;
+  /** Domain members of the Problem Details body beyond the frozen ones. */
+  readonly extensions: Record<string, unknown>;
 
   constructor(
     status: number,
     code: string,
     detail: string,
     requestId: string | null = null,
+    extensions: Record<string, unknown> = {},
   ) {
     super(`${code}: ${detail}`);
     this.status = status;
     this.code = code;
     this.detail = detail;
     this.requestId = requestId;
+    this.extensions = extensions;
   }
 }
+
+const PROBLEM_FIXED_MEMBERS = new Set([
+  "type",
+  "status",
+  "detail",
+  "code",
+  "request_id",
+  "details",
+  "title",
+  "instance",
+]);
 
 type ApiErrorBody = {
   code?: unknown;
@@ -56,7 +71,11 @@ async function parseError(response: Response): Promise<ApiError> {
       typeof body.request_id === "string" && body.request_id.length > 0
         ? body.request_id
         : null;
-    return new ApiError(response.status, code, detail, requestId);
+    const extensions: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(body)) {
+      if (!PROBLEM_FIXED_MEMBERS.has(key)) extensions[key] = value;
+    }
+    return new ApiError(response.status, code, detail, requestId, extensions);
   }
 
   return new ApiError(

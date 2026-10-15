@@ -39,6 +39,8 @@ class ChannelRunRecord:
     created_at: datetime
     stopped_node_id: str | None = None
     stop_at_node_id: str | None = None
+    # `self.channel`, `self.run`, and `self.platform`; None until the run starts.
+    context: dict[str, Any] | None = None
 
 
 @dataclass
@@ -150,6 +152,7 @@ class SqlRunStore:
             row.stopped_node_id = record.stopped_node_id
             row.trigger_node_id = record.trigger_node_id
             row.skipped_node_ids = list(record.skipped_node_ids)
+            row.context = record.context
 
     def get_run(self, job_id: str) -> ChannelRunRecord | None:
         with session_scope() as session:
@@ -253,6 +256,7 @@ def _run_row(record: ChannelRunRecord) -> ChannelRunRow:
         stopped_node_id=record.stopped_node_id,
         stop_at_node_id=record.stop_at_node_id,
         skipped_node_ids=list(record.skipped_node_ids),
+        context=record.context,
         created_at=record.created_at,
     )
 
@@ -273,6 +277,7 @@ def _run_record(row: ChannelRunRow) -> ChannelRunRecord:
         created_at=row.created_at,
         stopped_node_id=row.stopped_node_id,
         stop_at_node_id=row.stop_at_node_id,
+        context=row.context,
     )
 
 

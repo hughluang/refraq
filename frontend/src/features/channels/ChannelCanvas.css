@@ -294,8 +294,88 @@
   overflow: hidden;
 }
 
-.channel-node-config--wide {
-  width: 480px;
+.channel-node-config--detail {
+  width: min(calc(100% - 16px), max(960px, 75%));
+  height: calc(100% - 16px);
+  container-type: inline-size;
+}
+
+.channel-node-detail {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: var(--mantine-spacing-sm);
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(440px, 2fr) minmax(240px, 1fr);
+  overflow: hidden;
+}
+
+.channel-node-region {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--mantine-color-default-border);
+}
+
+.channel-node-region:first-child {
+  border-left: none;
+}
+
+.channel-node-region--run {
+  background: var(--mantine-color-gray-light);
+}
+
+.channel-node-region__title {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mantine-spacing-xs);
+  min-height: 36px;
+  padding: 4px var(--mantine-spacing-sm);
+  border-bottom: 1px solid var(--mantine-color-default-border);
+}
+
+.channel-node-region__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: var(--mantine-spacing-sm);
+  overflow: auto;
+}
+
+.channel-node-header-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--mantine-spacing-xs);
+  max-width: 40rem;
+}
+
+@container (max-width: 960px) {
+  .channel-node-detail {
+    grid-template-columns: minmax(0, 1fr);
+    overflow: auto;
+  }
+
+  .channel-node-region {
+    border-left: none;
+    border-top: 1px solid var(--mantine-color-default-border);
+    flex: none;
+  }
+
+  .channel-node-region:first-child {
+    border-top: none;
+  }
+
+  .channel-node-region__title {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--mantine-color-body);
+  }
+
+  .channel-node-region__body {
+    overflow: visible;
+  }
 }
 
 .channel-config-grid {
@@ -394,4 +474,21 @@
 
 .channel-template-field__ref {
   color: var(--mantine-color-grape-filled);
+}
+
+.channel-template-field__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.channel-template-field__value {
+  max-height: 12rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.channel-template-field__preview[aria-busy="true"] .channel-template-field__value {
+  opacity: 0.6;
 }

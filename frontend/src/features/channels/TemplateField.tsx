@@ -23,6 +23,10 @@ import { FieldMarks } from "@/components/form/FieldChrome";
 import type { FieldNote } from "@/components/form/fieldNotes";
 import type { SchemaObject } from "@/features/channels/configSchemaForm";
 import type { FieldMessage } from "@/features/channels/problemLabel";
+import {
+  TemplateRunPreview,
+  type TemplatePreviewSource,
+} from "@/features/channels/TemplateRunPreview";
 import { scanTemplate } from "@/features/channels/templateScan";
 import {
   resolvedText,
@@ -45,6 +49,8 @@ type Props = {
   scope: SelfScope;
   messages?: readonly FieldMessage[];
   openSignal?: string | null;
+  /** Evaluates the field against a recorded run; `null` hides the preview. */
+  runPreview?: TemplatePreviewSource | null;
   onChange: (value: string) => void;
 };
 
@@ -97,6 +103,7 @@ export function TemplateField({
   scope,
   messages = [],
   openSignal = null,
+  runPreview = null,
   onChange,
 }: Props) {
   const schema: SchemaObject | null =
@@ -186,6 +193,7 @@ export function TemplateField({
   const preview = templatePreview(value, schema);
   const rule = templateRule(schema);
   const badge = typeBadge(valueSchema);
+  const scanned = scanTemplate(value);
   const t = useTranslate();
   const tone = label
     ? invalid
@@ -244,6 +252,14 @@ export function TemplateField({
         className="channel-template-field__editor"
         data-severity={tone}
       />
+      {label && runPreview && scanned.ok && scanned.hasExpression ? (
+        <TemplateRunPreview
+          source={runPreview}
+          text={value}
+          scopeKey={JSON.stringify(scope.nodes.map((node) => [node.ref, node.name]))}
+          raw={rule === "text"}
+        />
+      ) : null}
       {label && !description && rule === "text" ? (
         <Text size="xs" c="dimmed">
           {t("channels.template.ruleText")}

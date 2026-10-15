@@ -11,6 +11,7 @@ os.environ["REFRAQ_STORE_BACKEND"] = "memory"
 os.environ["REFRAQ_SECRETS_MASTER_KEY"] = "test-secrets-master-key"
 os.environ.setdefault("CELERY_BROKER_URL", "memory://")
 
+from backend.tests.problem import assert_problem  # noqa: E402
 from backend.admin.audit_store import get_audit_store  # noqa: E402
 from backend.admin.roles import create_role, seed_roles  # noqa: E402
 from backend.admin.role_store import get_role_store  # noqa: E402
@@ -140,10 +141,22 @@ def test_stop_at_ignores_errors_outside_the_closure(client: TestClient, monkeypa
         f"/channels/{channel_id}/runs",
         json={"target": "draft", "stop_at_node_id": "nd_missing"},
     )
-    assert refused.status_code == 422
-    assert refused.json()["code"] == "CHANNEL_GRAPH_INVALID"
-    publish = client.post(f"/channels/{channel_id}/publish")
-    assert publish.status_code == 422
+    body = assert_problem(refused, status=422, code="CHANNEL_GRAPH_INVALID")
+    assert body["problems"] == []
+    scoped = client.post(
+        f"/channels/{channel_id}/runs",
+        json={"target": "draft", "stop_at_node_id": "nd_bad"},
+    )
+    body = assert_problem(scoped, status=422, code="CHANNEL_GRAPH_INVALID")
+    assert body["problems"]
+    assert {item["node_id"] for item in body["problems"]} <= {"nd_bad", None}
+    assert all(item["severity"] == "error" for item in body["problems"])
+    whole = client.post(f"/channels/{channel_id}/runs", json={"target": "draft"})
+    body = assert_problem(whole, status=422, code="CHANNEL_GRAPH_INVALID")
+    assert body["problems"]
+    publish = client.post(f"/channels/{channel_id}/publish", json={"draft_revision": 2})
+    body = assert_problem(publish, status=422, code="CHANNEL_GRAPH_INVALID")
+    assert body["problems"]
 
 
 def test_create_rejects_unknown_fields(client: TestClient) -> None:

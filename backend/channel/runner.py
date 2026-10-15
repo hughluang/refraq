@@ -145,9 +145,14 @@ def run_channel_job(job_id: str) -> dict[str, str]:
     run.graph = graph
     run.version = version
     run.trigger_node_id = entry
-    store.update_run(run)
     started = utc_now()
     actor = _actor(claimed)
+    run.context = {
+        "channel": channel_context(channel, run),
+        "run": run_context(run, started, actor, claimed.trigger_kind),
+        "platform": platform_context(started),
+    }
+    store.update_run(run)
     user = ensure_system_user(get_user_store())
     elapsed = 0.0
     if claimed.started_at is not None:
@@ -157,11 +162,7 @@ def run_channel_job(job_id: str) -> dict[str, str]:
         )
     try:
         with SandboxSession() as sandbox:
-            sandbox.set_context(
-                channel=channel_context(channel, run),
-                run=run_context(run, started, actor, claimed.trigger_kind),
-                platform=platform_context(started),
-            )
+            sandbox.set_context(**run.context)
             hooks = _Hooks(
                 job_id=job_id,
                 sandbox=sandbox,

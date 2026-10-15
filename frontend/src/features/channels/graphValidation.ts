@@ -1,5 +1,12 @@
 import { omitUnsetIntegers, type SchemaObject } from "@/features/channels/configSchemaForm";
-import type { Graph, GraphNode, GraphSettings, NodeTypeSpec } from "@/features/channels/types";
+import type {
+  Graph,
+  GraphNode,
+  GraphProblem,
+  GraphSettings,
+  NodeTypeSpec,
+} from "@/features/channels/types";
+import { ApiError } from "@/lib/api";
 
 export type FlowNodeData = {
   nodeType: string;
@@ -251,4 +258,11 @@ export function outputTargetTypes<T extends ConnectionCatalogItem>(
       ),
     ),
   );
+}
+
+/** Problems the server named as blocking a refused run or publish (`CHANNEL_GRAPH_INVALID`). */
+export function refusedProblems(error: unknown): GraphProblem[] {
+  if (!(error instanceof ApiError) || error.code !== "CHANNEL_GRAPH_INVALID") return [];
+  const problems = error.extensions.problems;
+  return Array.isArray(problems) ? (problems as GraphProblem[]) : [];
 }

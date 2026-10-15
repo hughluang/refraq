@@ -106,6 +106,33 @@ def test_stop_failure_does_not_run_downstream() -> None:
     assert hooks.order == ["a", "b"]
 
 
+def test_skipped_node_records_the_output_later_nodes_read() -> None:
+    class FinishingHooks(RecordingHooks):
+        def __init__(self) -> None:
+            super().__init__()
+            self.recorded: dict[str, object] = {}
+
+        def on_finish(self, seq: int, node: dict, result: NodeResult) -> None:
+            del seq
+            self.recorded[str(node["id"])] = result.output
+
+    def skip(node: dict, hooks: EngineHooks) -> NodeResult:
+        if node["id"] == "a":
+            return NodeResult(status="skipped", error_message="nothing new")
+        return _ok(node, hooks)
+
+    graph = {
+        "nodes": [_node("a", 0), _node("b", 1)],
+        "edges": [_edge("a", "b")],
+        "settings": {},
+    }
+    hooks = FinishingHooks()
+    outcome = execute(graph, "a", {"fake": skip}, hooks)
+    assert outcome.skipped_node_ids == ["a"]
+    assert hooks.recorded["a"] == {"skipped": True, "reason": "nothing new"}
+    assert hooks.outputs["a"] == hooks.recorded["a"]
+
+
 def test_timeout_records_the_node_about_to_run() -> None:
     import time
 

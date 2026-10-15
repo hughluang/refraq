@@ -235,7 +235,7 @@ def publish_channel(
     problems = validate(record.draft_graph, ChannelReferenceResolver(channel_id))
     errors = [problem for problem in problems if problem.severity == "error"]
     if errors:
-        raise ChannelGraphInvalid(errors[0].detail, problems=list(problems))
+        raise ChannelGraphInvalid(errors[0].detail, problems=errors)
     version = get_channel_store().publish_version(
         channel_id,
         draft_revision=draft_revision,

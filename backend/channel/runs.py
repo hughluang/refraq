@@ -56,7 +56,7 @@ def start_run(
             and (closure is None or problem.node_id is None or problem.node_id in closure)
         ]
         if errors:
-            raise ChannelGraphInvalid(errors[0].detail, problems=list(problems))
+            raise ChannelGraphInvalid(errors[0].detail, problems=errors)
     entry = _entry_node(graph)
     job = create_queued_job(
         kind="channel_run",

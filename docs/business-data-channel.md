@@ -66,7 +66,7 @@ Validation is a pure function over a graph and a reference resolver. It reports 
 6. a node names an unknown node type;
 7. a node configuration does not satisfy its node type's configuration schema;
 8. a configuration names a **Business Entity**, attribute, **Catalog Object**, **Locator**, or **Source** that does not resolve;
-9. a write node has no resolvable match key, or its mapping does not include the match key attribute (§5.2);
+9. a write node has no resolvable match key (§5.2);
 10. node names are not unique;
 11. node `ref` values are not unique, are not Python identifiers, start with `_`, are Python keywords, or are the reserved names `nodes`, `channel`, `run`, or `platform`;
 12. a template field does not parse, names a node that does not exist or is not upstream, or contains no `{{ }}` and does not match its declared value type;
@@ -119,6 +119,7 @@ Deleting a Data Channel withdraws its Scheduled Task rows by `owner_ref` (`docs/
 - A **template field** is one configuration string. The node type declares which fields are templates and the declared value type of each result. `{{ }}` marks one Python expression; `\{{` is a literal `{{`. After trimming, a field that is exactly one `{{ expression }}` yields that expression's Python value. Any other text, including text with no `{{ }}`, is concatenation: each expression is evaluated, converted to text, and joined. Concatenated `None` becomes an empty string. A bare `None` is not a string. Joined text is the result when the declared type is string; otherwise it is parsed once as JSON. The result must already match the declared type. The only conversion of a Python value is into a declared string. A mismatch fails the node. Expressions evaluate in one sandbox subprocess reused for the run: no network, an allow-listed import set, and time and memory limits (ADR 0056). The only workflow name in scope is `self`.
 - `self.<ref>.output` is that node's output. `self.nodes["<node name>"].output` is the same value. `self.channel` carries `id`, `name`, `description`, `active`, and `settings` (`run_timeout_sec`, `error_channel_id`). `self.run` carries `id`, `target` (`draft` or `published`), `version`, `draft_revision`, `trigger_kind`, `started_at`, and `triggered_by` (`id`, `name`). `self.platform` carries `site_name`, `schedule_timezone`, `now`, and `parameters` (the current **System Parameter** values), all read-only. The validate response publishes the JSON Schema of these three objects (`docs/api-contracts-data-channel.md`). Global Variable values are not in `self`; a node reads and writes them. Credentials and other channels' run data are never in `self`.
 - Naming a node that did not run, or a path that does not resolve, fails the node that holds the expression.
+- A **Template Preview** evaluates one template field of a graph against one recorded **Channel Run** of the same channel. The run's recorded Expression Context and the recorded outputs of the upstream nodes the template names go into a fresh sandbox, and the result is converted to the declared value type as at run time. The graph may differ from the one the run executed; nodes match by id, and the template names them by their current `ref` and name. A template that validation rejects fails the preview with that problem. An expression or conversion failure is the error the node would record. A named node with no recorded output in that run, or a context the run did not record, is reported missing rather than failed. A Template Preview executes no node, reads no Source, and writes nothing.
 - A **Dataset Reference** is a value that names a run-scoped table in the entity database. Read and SQL nodes may return one instead of a list when the result is large; Materialize turns a list into one; Batch Read turns one into batches; write nodes accept one and write in bulk inside the database. Dataset References expire with run data retention (§6.9).
 - One node execution may hold at most a product-constant number of list elements in memory. Exceeding it fails that node execution with a message pointing to Batch Read.
 
@@ -161,7 +162,7 @@ A Write Entity node targets one **Business Entity**. One graph may hold several 
 | Mode | `upsert`, `create`, `update`, or `delete` |
 | Match key | §5.2 |
 | Source | One template whose value is a list of objects. Static JSON is written as text, without `{{ }}`. Shaping a calculated list is an upstream node's job |
-| Mapping | Target attribute names, each with the source-object key to copy. `delete` ignores it. The mapping includes the match key attribute |
+| Mapping | Optional renames: each entry names a target attribute and the source-object key that becomes it. The renamed key is consumed. Source keys without an entry are written under their own name, the match key included. An empty mapping writes source objects as they are. Every mode applies it |
 | On incompatible head | `fail` (default) or `skip` (§5.4) |
 
 Mode rules, for each source object, by the match key value:
@@ -169,13 +170,13 @@ Mode rules, for each source object, by the match key value:
 - `upsert` inserts a row when no row has the key and updates the mapped attributes of the matching row otherwise. A row whose mapped values already equal the source object is counted as unchanged and is not written.
 - `create` inserts a row. An object whose key already exists fails the node execution. The node's on-error setting applies when more than stop is supported (§6.8); until then the run fails.
 - `update` updates the mapped attributes of the matching row. An object with no matching row changes nothing and is counted as unmatched.
-- `delete` deletes the matching row. An object with no matching row changes nothing and is counted as unmatched. `delete` uses only the match key and ignores the mapping.
+- `delete` deletes the matching row. An object with no matching row changes nothing and is counted as unmatched. `delete` uses only the match key attribute of the projected object.
 
 One write-node execution is one database transaction. A failure rolls the whole execution back.
 
 Write rules:
 
-- Only mapped attributes are written. Unmapped attributes keep their values, so several workflows, or a workflow and the **Entity Data API**, may own different attributes of the same rows. A source object that omits a mapped key fails that execution.
+- Only attributes present in the projected object are written. Other attributes keep their values, so several workflows, or a workflow and the **Entity Data API**, may own different attributes of the same rows. Nothing about the source objects is checked before the node runs. At run time a failure names the source object index: a mapped key that is absent, a missing match key, a key that is not a head attribute (including `row_id`), or a missing `required` attribute under `upsert` or `create`.
 - Executing a write node again on the same input leaves the same table state. Under `create`, a re-execution fails on already-present keys.
 - The **Business Key** is not rewritten by `update` or `upsert`. An attempt fails the execution.
 - A write node appends to the target Entity's **Change Log** in the same transaction as the row write (§6.1). Self-writes are not filtered. The Change Log table is owned by Entity; a writer that cannot append yet still writes the row in that same transaction boundary.
@@ -198,8 +199,7 @@ A write node addresses the target by Entity id, not by version. Each execution r
 A mapping is **incompatible** with a head when:
 
 1. a mapped attribute or the match key is absent from the head;
-2. the match key is no longer `unique`, or the default match key is used and the head has no Business Key;
-3. under `upsert` or `create`, a `required` head attribute is unmapped.
+2. the match key is no longer `unique`, or the default match key is used and the head has no Business Key.
 
 A value that cannot be encoded as the attribute's **Attribute Type** is not an incompatibility. It fails that write execution when the row is written, naming the attribute, the source index, and the value. A template with no `{{ }}` is checked against its declared value type at publish. A template that calculates is checked when the node runs, because the result is not known before then.
 
@@ -283,7 +283,7 @@ A rerun of a run is a new Job on the same published version as the original, rea
 
 ### 6.9 Run Records
 
-Every run records the graph it executed and, for each node execution, its output, duration, status, and error, plus the last failed node. The output is stored in full. A list inside an output is paged when read. Dataset References in a record are pageable in full during the retention window. Run data retention is a System Parameter in days.
+Every run records the graph it executed, the Expression Context it evaluated with (`self.channel`, `self.run`, and `self.platform` as fixed at run start), and, for each node execution, its output, duration, status, and error, plus the last failed node. The output is stored in full. A recorded output is the value later expressions read, including the output of a skipped node. A list inside an output is paged when read. Dataset References in a record are pageable in full during the retention window. Run data retention is a System Parameter in days.
 
 Editor actions (execute up to a node, pinned data, write dry run) use real data with a row limit, never write Entity Tables, and never advance checkpoints. Their contract is outside this document.
 
@@ -381,7 +381,7 @@ All keys are `platform`-scoped.
 | Permission | Grants |
 | --- | --- |
 | `channel:read` | Read channels, drafts, versions, run lists, and run records; read **Source Mirror** data through read nodes and records |
-| `channel:write` | Create, edit, save drafts, validate, publish, and delete channels; Global Variable writes; on-demand runs (target `draft` or `published`) and rerun; cancel a `channel_run` Job |
+| `channel:write` | Create, edit, save drafts, validate, publish, and delete channels; Template Preview against a run record; Global Variable writes; on-demand runs (target `draft` or `published`) and rerun; cancel a `channel_run` Job |
 | `channel:code_write` | Create or edit a Code node; required in addition to `channel:write` |
 | `mirror:write` | Operate Source Mirrors (disable, delete data, resnapshot overrides) |
 
@@ -392,6 +392,12 @@ Channel schedule rows are locked, so `jobs:run` only observes them.
 ## 12. Management Console
 
 The Data Channel editor is a record authoring surface (`docs/ui-console-record-form.md`): create, show, and edit share one layout, and node configuration panels follow the record-form conventions. The canvas edits the draft. The channel page shows the activation switch, the version list, and the run list. The Console names a problem by the node's display name, and by the two endpoint names when the problem names an edge. It validates the graph on screen and has no separate validate action. Where the module mounts in Console Navigation is outside this document.
+
+An on-demand run starts only from the edit page. The header Run executes every node reachable from the trigger. A node's Run names that node as the stop node and executes only it and its ancestors, and only errors in those nodes refuse the start. Both open the same write confirmation, which names the node when there is a stop node. The show page lists runs and can cancel an unfinished run; it does not start one.
+
+Under a template field that holds a calculation, the node configuration panel shows its **Template Preview** against the channel's latest draft **Channel Run**, for a User with `channel:write`. It evaluates again after an edit pauses and when that run records more node executions. With no draft run, the panel says that running the upstream nodes provides the values. A missing result names the nodes that have no output in that run.
+
+While the channel's latest draft **Channel Run** has not ended `succeeded`, `failed`, or `cancelled`, the edit page keeps its editing chrome and refuses draft edits: the canvas, node configuration, name, activation switch, description, save, and publish. Refreshing the edit page applies the same lock, because the page loads that latest draft run. The lock follows the channel, not the user who started the run. Delete stays available and still requests cancel of the channel's unfinished runs.
 
 ## 13. Management Audit
 

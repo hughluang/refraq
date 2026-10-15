@@ -70,6 +70,15 @@ export function phaseByNode(detail: ChannelRunDetail, graph: Graph): Map<string,
   return phases;
 }
 
+/** Changes whenever the run's status or any node execution's status changes. */
+export function recordedKey(detail: ChannelRunDetail): string {
+  return [
+    detail.run.job_id,
+    detail.run.status,
+    ...detail.node_executions.map((item) => `${item.seq}:${item.status}`),
+  ].join("|");
+}
+
 export function samplesByNode(executions: readonly NodeExecution[]): Map<string, unknown> {
   const samples = new Map<string, unknown>();
   for (const item of executions) {

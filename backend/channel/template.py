@@ -20,7 +20,8 @@ __all__ = [
     "value_matches",
 ]
 
-_RESERVED_ATTRS = frozenset({"nodes", "channel", "run", "platform"})
+_CONTEXT_ATTRS = frozenset({"channel", "run", "platform"})
+_RESERVED_ATTRS = _CONTEXT_ATTRS | {"nodes"}
 
 
 class TemplateSyntaxError(ValueError):
@@ -44,6 +45,7 @@ class Template:
     whole_expression: str | None
     refs: frozenset[str]
     node_names: frozenset[str]
+    contexts: frozenset[str]
 
 
 def parse(text: str) -> Template:
@@ -55,18 +57,21 @@ def parse(text: str) -> Template:
     )
     refs: set[str] = set()
     names: set[str] = set()
+    contexts: set[str] = set()
     for segment in segments:
         if segment.kind != "expr":
             continue
-        found_refs, found_names = _names(segment.text)
+        found_refs, found_names, found_contexts = _names(segment.text)
         refs.update(found_refs)
         names.update(found_names)
+        contexts.update(found_contexts)
     return Template(
         raw=raw,
         segments=segments,
         whole_expression=whole,
         refs=frozenset(refs),
         node_names=frozenset(names),
+        contexts=frozenset(contexts),
     )
 
 
@@ -200,15 +205,18 @@ def _read_expression(text: str, start: int) -> tuple[str, int]:
     raise TemplateSyntaxError("Expression is not closed")
 
 
-def _names(body: str) -> tuple[set[str], set[str]]:
+def _names(body: str) -> tuple[set[str], set[str], set[str]]:
     tree = ast.parse(body, mode="eval")
     refs: set[str] = set()
     names: set[str] = set()
+    contexts: set[str] = set()
 
     class Visitor(ast.NodeVisitor):
         def visit_Attribute(self, node: ast.Attribute) -> None:
             if isinstance(node.value, ast.Name) and node.value.id == "self":
-                if node.attr not in _RESERVED_ATTRS:
+                if node.attr in _CONTEXT_ATTRS:
+                    contexts.add(node.attr)
+                elif node.attr not in _RESERVED_ATTRS:
                     refs.add(node.attr)
             self.generic_visit(node)
 
@@ -227,7 +235,7 @@ def _names(body: str) -> tuple[set[str], set[str]]:
             self.generic_visit(node)
 
     Visitor().visit(tree)
-    return refs, names
+    return refs, names, contexts
 
 
 def _joined_text(template: Template) -> str:

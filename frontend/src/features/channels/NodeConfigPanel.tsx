@@ -2,7 +2,7 @@
 
 import { ActionIcon, Button, CloseButton, Group, Stack, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 import { FieldDisclosureContext, FieldMarks } from "@/components/form/FieldChrome";
 import type { FieldNote } from "@/components/form/fieldNotes";
@@ -20,8 +20,8 @@ import {
 } from "@/features/channels/configSchemaForm";
 import { EntityAttributeSelect } from "@/features/channels/EntityAttributeSelect";
 import type { FlowNodeData } from "@/features/channels/graphValidation";
-import { resolvedMatchKeyName } from "@/features/channels/matchKeyName";
-import { nodeTypeSummary } from "@/features/channels/nodeTypeCopy";
+import { nodeTypeLabel, nodeTypeSummary } from "@/features/channels/nodeTypeCopy";
+import { NodeRegion } from "@/features/channels/NodeRegion";
 import {
   fieldMessages,
   formatGraphProblem,
@@ -31,6 +31,11 @@ import {
 } from "@/features/channels/problemLabel";
 import type { GraphProblem } from "@/features/channels/types";
 import { TemplateField } from "@/features/channels/TemplateField";
+import {
+  bindTemplatePreview,
+  type ChannelTemplatePreview,
+  type TemplatePreviewSource,
+} from "@/features/channels/TemplateRunPreview";
 import { attributeValueSchema } from "@/features/channels/templateLogic";
 import type { SelfScope } from "@/features/channels/templateScope";
 import type { NodeTypeSpec } from "@/features/channels/types";
@@ -44,12 +49,19 @@ type Props = {
   spec: NodeTypeSpec | null;
   schema: SchemaObject | null;
   editable: boolean;
+  /** Null hides the run button (browse appearance). */
+  canRun: boolean | null;
   revealKey?: string | null;
   problems?: readonly GraphProblem[];
   graph?: ProblemGraph;
   scope: SelfScope;
+  /** Null hides the template previews. */
+  templatePreview?: ChannelTemplatePreview | null;
+  upstream: ReactNode;
+  result: ReactNode;
   onClose: () => void;
   onChange: (nodeId: string, data: FlowNodeData) => void;
+  onRun: (nodeId: string) => void;
 };
 
 const EMPTY_GRAPH: ProblemGraph = { nodes: [], edges: [] };
@@ -66,14 +78,20 @@ export function NodeConfigPanel({
   spec,
   schema,
   editable,
+  canRun,
   revealKey = null,
   problems = [],
   graph = EMPTY_GRAPH,
   scope,
+  templatePreview = null,
+  upstream,
+  result,
   onClose,
   onChange,
+  onRun,
 }: Props) {
   const t = useTranslate();
+  const typeLabel = spec ? nodeTypeLabel(t, spec) : data.nodeType;
   const summary = spec ? nodeTypeSummary(t, spec) : "";
   const fields = (schema ? fieldsFromSchema(schema) : []).filter((field) =>
     data.nodeType === "trigger.scheduled"
@@ -88,20 +106,25 @@ export function NodeConfigPanel({
     attached.add("interval_seconds");
     attached.add("start_at");
   }
-  if (data.config.mode === "delete") attached.delete("mapping");
+  const nameProblems = problems.filter((problem) => problem.code === "CHANNEL_NODE_NAME_DUP");
+  const refProblems = problems.filter((problem) => problem.code === "CHANNEL_NODE_REF_INVALID");
   const headerProblems = problems.filter((problem) => {
+    if (nameProblems.includes(problem) || refProblems.includes(problem)) return false;
     const headKey = problem.path[0];
     return typeof headKey !== "string" || !attached.has(headKey);
   });
-  const headerNotes = toNotes(
-    headerProblems.map((problem) => ({
-      text: formatGraphProblem(t, problem, graph, { nodeName: false }),
-      severity: problem.severity === "warning" ? ("warning" as const) : ("error" as const),
-    })),
-  );
-  const headerSignal = headerProblems.some((problem) => problemIdentity(problem) === revealKey)
-    ? revealKey
-    : null;
+  const notesFor = (list: readonly GraphProblem[]) =>
+    toNotes(
+      list.map((problem) => ({
+        text: formatGraphProblem(t, problem, graph, { nodeName: false }),
+        severity: problem.severity === "warning" ? ("warning" as const) : ("error" as const),
+      })),
+    );
+  const revealIn = (list: readonly GraphProblem[]) =>
+    list.some((problem) => problemIdentity(problem) === revealKey) ? revealKey : null;
+  const headerNotes = notesFor(headerProblems);
+  const nodeName = (id: string) =>
+    graph.nodes.find((node) => node.id === id)?.name.trim() || id;
 
   const update = (patch: Partial<FlowNodeData>) => {
     onChange(nodeId, { ...data, ...patch });
@@ -117,56 +140,69 @@ export function NodeConfigPanel({
     update({ config: { ...data.config, [key]: value } });
   };
 
+  // Only stop is supported; another stored value stays selectable so it can be reset.
+  const onErrorOptions = [...new Set(["stop", data.onError])].map((value) => ({
+    value,
+    label: t(`channels.node.onError.${value}`),
+  }));
+
+  const runAction =
+    canRun === null ? undefined : (
+      <Button size="compact-xs" variant="light" disabled={!canRun} onClick={() => onRun(nodeId)}>
+        {t("channels.node.run")}
+      </Button>
+    );
+
   return (
     <FieldDisclosureContext.Provider value="quiet">
       <div className="channel-node-config__header">
-        <Group justify="space-between" align="flex-start" wrap="nowrap" gap="xs">
-          <Stack gap={4} style={{ flex: 1, minWidth: 0 }}>
+        <Stack gap="xs">
+          <Group justify="space-between" align="center" wrap="nowrap" gap="xs">
+            <Group gap="xs" align="baseline" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
+              <Text size="sm" fw={600} style={{ flex: "none" }}>
+                {typeLabel}
+              </Text>
+              {summary ? (
+                <Text size="xs" c="dimmed">
+                  {summary}
+                </Text>
+              ) : null}
+            </Group>
+            <Group gap={4} wrap="nowrap">
+              {headerNotes.length > 0 ? (
+                <FieldMarks
+                  label={data.name}
+                  notes={headerNotes}
+                  openSignal={revealIn(headerProblems)}
+                />
+              ) : null}
+              <CloseButton size="sm" aria-label={t("channels.node.close")} onClick={onClose} />
+            </Group>
+          </Group>
+          <div className="channel-node-header-fields">
             <TextField
               editable={editable}
-              aria-label={t("channels.node.name")}
-              placeholder={t("channels.node.name")}
+              label={t("channels.node.name")}
+              notes={notesFor(nameProblems)}
+              openSignal={revealIn(nameProblems)}
               value={data.name}
               onChange={(event) => update({ name: event.currentTarget.value })}
             />
             <TextField
               editable={editable}
               label={t("channels.node.ref")}
+              notes={notesFor(refProblems)}
+              openSignal={revealIn(refProblems)}
               value={data.ref}
               onChange={(event) => update({ ref: event.currentTarget.value })}
             />
-            {summary ? (
-              <Text size="xs" c="dimmed">
-                {summary}
-              </Text>
-            ) : null}
-          </Stack>
-          <Group gap={4} wrap="nowrap" align="flex-start">
-            {headerNotes.length > 0 ? (
-              <FieldMarks
-                label={data.name}
-                notes={headerNotes}
-                openSignal={headerSignal}
-              />
-            ) : null}
-            <CloseButton size="sm" aria-label={t("channels.node.close")} onClick={onClose} />
-          </Group>
-        </Group>
+          </div>
+        </Stack>
       </div>
-      <div className="channel-node-config__body">
+      <div className="channel-node-detail">
+        {upstream}
+        <NodeRegion title={t("channels.node.config")} action={runAction}>
         <Stack gap="sm">
-          <SelectField
-            editable={editable}
-            label={t("channels.node.onError")}
-            data={[{ value: "stop", label: t("channels.node.onError.stop") }]}
-            value={data.onError}
-            onChange={(next) => {
-              if (next === "stop" || next === "continue" || next === "error_output") {
-                update({ onError: next });
-              }
-            }}
-            allowDeselect={false}
-          />
           {data.nodeType === "trigger.scheduled" ? (
             <ScheduledCadenceFields
               config={data.config}
@@ -195,12 +231,29 @@ export function NodeConfigPanel({
               config={data.config}
               scope={data.config}
               templateScope={scope}
+              runPreview={
+                templatePreview
+                  ? bindTemplatePreview(templatePreview, nodeId, [field.key], nodeName)
+                  : null
+              }
               messages={fieldMessages(t, problems, field.key, graph)}
               openSignal={signalFor(problems, field.key, revealKey)}
               onChange={(value) => setConfig(field.key, value)}
             />
           ))}
+          <SelectField
+            editable={editable && data.onError !== "stop"}
+            label={t("channels.node.onError")}
+            data={onErrorOptions}
+            value={data.onError}
+            onChange={(next) => {
+              if (next === "stop") update({ onError: next });
+            }}
+            allowDeselect={false}
+          />
         </Stack>
+        </NodeRegion>
+        {result}
       </div>
     </FieldDisclosureContext.Provider>
   );
@@ -217,6 +270,7 @@ function ConfigField({
   config,
   scope,
   templateScope,
+  runPreview = null,
   messages = [],
   openSignal = null,
   onChange,
@@ -231,6 +285,7 @@ function ConfigField({
   config: Record<string, unknown>;
   scope: Record<string, unknown>;
   templateScope: SelfScope;
+  runPreview?: TemplatePreviewSource | null;
   messages?: readonly FieldMessage[];
   openSignal?: string | null;
   onChange: (value: unknown) => void;
@@ -377,6 +432,7 @@ function ConfigField({
         scope={templateScope}
         messages={messages}
         openSignal={openSignal}
+        runPreview={runPreview}
         onChange={onChange}
       />
     );
@@ -422,18 +478,11 @@ function ObjectListEditor({
   const t = useTranslate();
   const label = t(`channels.config.fields.${field.key}`);
   const rows = Array.isArray(value) ? value.filter(isRecord) : [];
-  if (field.key === "mapping" && config.mode === "delete") return null;
-
   const taken = attributeNames(rows);
   const addBlocked =
     field.key === "mapping" &&
     head.ready &&
     !head.attributes.some((attribute) => !taken.has(attribute.name));
-  const matchName =
-    field.key === "mapping" && head.ready
-      ? resolvedMatchKeyName(config.match_key, head.attributes)
-      : null;
-  const showMatchHint = matchName != null && !taken.has(matchName);
   const columnClass =
     field.fields.length === 3 ? "channel-config-grid--3" : "channel-config-grid--2";
 
@@ -451,14 +500,6 @@ function ObjectListEditor({
               ...notes,
               ...(head.failed && field.fields.some((child) => child.kind === "attribute")
                 ? [{ text: t("channels.config.attributeLoadFailed"), tone: "error" as const }]
-                : []),
-              ...(showMatchHint
-                ? [
-                    {
-                      text: t("channels.config.mapping.matchKeyMissing", { name: matchName }),
-                      tone: "error" as const,
-                    },
-                  ]
                 : []),
             ]}
             openSignal={openSignal}
