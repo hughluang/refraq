@@ -100,6 +100,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | `backend.jobs.api` | Seam policy only: `present_jobs` (JobRecord→JobOut), `revoke_queued_delivery`, schedule-name port bind (`bind_schedule_name_store` / `get_schedule_name_store`); composition injects the Scheduled Task name adapter so `jobs` never imports `worker` |
 | `backend.jobs.parameters` | Job-owned parameter specs and typed accessors (`job_lost_detection_sec`, reaper grace) |
 | `backend.jobs.store` | Store port used by domain facades and reaper (create/get/status transitions, `JobRecord`, `TERMINAL`, `append_job_log`, `format_job_log_line`; `create` / terminal CAS accept an optional SQLAlchemy session so a caller can join an existing transaction) |
+| `backend.jobs.supervise` | Run a claimed Job under supervision (`supervise`). Domain task modules call it so a cancel kills the worker child. Memory stores stay in-process. Not a store re-export |
 | `backend.jobs.errors` | Mechanism Job errors (`JobNotFound`, `JobNotCancellable`, …) |
 | `backend.jobs.schemas.*` | Mechanism Job response shapes (shared with domain facades) |
 | `backend.jobs.routers.*` | Mechanism-resource HTTP (by Job id); mounted by `main` |

@@ -7,6 +7,7 @@ import logging
 from celery import shared_task
 
 from backend.jobs.store import TERMINAL, append_job_log, get_job_store, mark_failed
+from backend.jobs.supervise import supervise
 from backend.metadata.join_detection_jobs.service import run_join_detection_job
 from backend.metadata.structure_jobs.service import run_structure_job
 
@@ -20,8 +21,6 @@ def run_job(job_id: str) -> dict[str, str]:
     """Dispatch Job kind handlers via domain runners."""
 
     try:
-        from backend.jobs.supervise import supervise
-
         return supervise(job_id, "backend.metadata.tasks:_dispatch_job")
     except Exception as exc:  # noqa: BLE001
         current = get_job_store().get(job_id)

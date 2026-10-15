@@ -51,6 +51,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "jobs.api",
             "jobs.parameters",
             "jobs.store",
+            "jobs.supervise",
             "jobs.errors",
             "jobs.schemas",
             "jobs.routers",

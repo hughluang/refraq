@@ -699,3 +699,90 @@ def test_manual_payload_reserved_key_points_at_payload() -> None:
         item for item in problems if item.detail == "Manual payload uses a reserved key"
     ]
     assert [item.path for item in reserved] == [("payload",)]
+
+
+def _walk_graph(extra_nodes: list[dict] | None = None, extra_edges: list[dict] | None = None) -> dict:
+    nodes = [
+        _node("nd_trigger", "trigger.manual", "Run"),
+        _node("nd_walk", "volume.for", "Walk", {"items": "[1]"}),
+        _node(
+            "nd_step",
+            "transform.set_fields",
+            "Step",
+            {"fields": [{"name": "n", "value": "1"}]},
+        ),
+    ]
+    edges = [
+        _edge("ed_in", "nd_trigger", "nd_walk"),
+        _edge("ed_each", "nd_walk", "nd_step", source_port="each"),
+        _edge("ed_back", "nd_step", "nd_walk", target_port="loop"),
+    ]
+    if extra_nodes:
+        nodes.extend(extra_nodes)
+    if extra_edges:
+        edges.extend(extra_edges)
+    return _graph(nodes, edges)
+
+
+def test_cycle_through_for_each_is_legal() -> None:
+    problems = validate(_walk_graph(), FakeResolver())
+    assert [item.code for item in problems if item.severity == "error"] == []
+
+
+def test_ancestor_edge_into_a_for_body_is_legal() -> None:
+    graph = _walk_graph(
+        extra_edges=[_edge("ed_from_trigger", "nd_trigger", "nd_step")],
+    )
+    problems = validate(graph, FakeResolver())
+    assert [item.code for item in problems if item.code == "CHANNEL_LOOP_BODY_INVALID"] == []
+
+
+def test_for_body_cannot_leave_or_take_two_returns() -> None:
+    left = _walk_graph(
+        extra_edges=[_edge("ed_escape", "nd_step", "nd_walk", target_port="main")],
+    )
+    escaped = [item for item in validate(left, FakeResolver()) if item.code == "CHANNEL_LOOP_BODY_INVALID"]
+    assert escaped
+    assert escaped[0].edge_id == "ed_escape"
+
+    other = _node(
+        "nd_other",
+        "transform.set_fields",
+        "Other",
+        {"fields": [{"name": "n", "value": "2"}]},
+    )
+    two = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_walk", "volume.for", "Walk", {"items": "[1]"}),
+            _node("nd_step", "transform.set_fields", "Step", {"fields": [{"name": "n", "value": "1"}]}),
+            other,
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_walk"),
+            _edge("ed_each", "nd_walk", "nd_step", source_port="each"),
+            _edge("ed_each_2", "nd_walk", "nd_other", source_port="each"),
+            _edge("ed_back", "nd_step", "nd_walk", target_port="loop"),
+            _edge("ed_back_2", "nd_other", "nd_walk", target_port="loop"),
+        ],
+    )
+    codes = [item.code for item in validate(two, FakeResolver())]
+    assert "CHANNEL_LOOP_BODY_INVALID" in codes
+    assert "CHANNEL_GRAPH_CYCLE" not in codes
+
+
+def test_set_fields_rejects_duplicate_names() -> None:
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node(
+                "nd_shape",
+                "transform.set_fields",
+                "Shape",
+                {"fields": [{"name": "n", "value": "1"}, {"name": "n", "value": "2"}]},
+            ),
+        ],
+        [_edge("ed_1", "nd_trigger", "nd_shape")],
+    )
+    problems = validate(graph, FakeResolver())
+    assert any(item.detail == "Field names are not unique" for item in problems)

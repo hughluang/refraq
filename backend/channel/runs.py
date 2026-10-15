@@ -13,7 +13,9 @@ from backend.channel.errors import (
     ChannelTriggerInvalid,
 )
 from backend.channel.graph import ancestor_closure, validate
+from backend.channel.nodes import list_node_types
 from backend.channel.references import ChannelReferenceResolver
+from backend.channel.tasks import run_job
 from backend.channel.run_store import ChannelRunRecord, get_run_store
 from backend.channel.store import get_channel_store
 from backend.core.time import utc_now
@@ -87,8 +89,6 @@ def start_run(
         stop_at_node_id=stop_at_node_id,
     )
     get_run_store().insert_run(record)
-    from backend.channel.tasks import run_job
-
     run_job.apply_async(args=[job.id], task_id=job.id)
     persist_audit_event(
         actor_user_id=actor.id,
@@ -103,8 +103,6 @@ def start_run(
 
 
 def _entry_node(graph: dict[str, Any]) -> str:
-    from backend.channel.nodes import list_node_types
-
     entry_types = {item.type_id for item in list_node_types() if item.entry}
     entries = [
         node for node in graph.get("nodes") or [] if node.get("type") in entry_types

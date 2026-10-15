@@ -10,6 +10,11 @@ import json
 import sys
 from typing import Any
 
+try:
+    import resource
+except ImportError:  # pragma: no cover - resource is present on Linux
+    resource = None  # type: ignore[assignment]
+
 
 SAFE_BUILTINS = {
     "len": len,
@@ -74,48 +79,26 @@ def _safe_import(name: str, globals=None, locals=None, fromlist=(), level: int =
     return __import__(name, globals, locals, fromlist, level)
 
 
-class Dotted:
-    """Dict keys are available as attributes and subscripts. Methods are not."""
+class AttrDict(dict):
+    """A dict whose keys are also attributes. A key wins over a dict method."""
 
-    def __init__(self, value: Any) -> None:
-        object.__setattr__(self, "_value", value)
-
-    def __getattr__(self, name: str) -> Any:
-        value = object.__getattribute__(self, "_value")
-        if isinstance(value, dict) and name in value:
-            return _wrap(value[name])
-        raise AttributeError(f"{name} does not resolve")
-
-    def __getitem__(self, key: Any) -> Any:
-        value = object.__getattribute__(self, "_value")
-        try:
-            return _wrap(value[key])
-        except (KeyError, IndexError, TypeError) as exc:
-            raise KeyError(f"{key} does not resolve") from exc
-
-    def __iter__(self):
-        value = object.__getattribute__(self, "_value")
-        return (_wrap(item) for item in value)
-
-    def __len__(self) -> int:
-        return len(object.__getattribute__(self, "_value"))
-
-    def __repr__(self) -> str:
-        return repr(object.__getattribute__(self, "_value"))
+    def __getattribute__(self, name: str) -> Any:
+        if name.startswith("__") and name.endswith("__"):
+            return object.__getattribute__(self, name)
+        if dict.__contains__(self, name):
+            return dict.__getitem__(self, name)
+        return object.__getattribute__(self, name)
 
 
 def _wrap(value: Any) -> Any:
-    if isinstance(value, (dict, list)):
-        return Dotted(value)
+    if isinstance(value, dict):
+        return AttrDict((key, _wrap(item)) for key, item in value.items())
+    if isinstance(value, list):
+        return [_wrap(item) for item in value]
     return value
 
 
 def _unwrap(value: Any) -> Any:
-    if isinstance(value, Dotted):
-        raw = object.__getattribute__(value, "_value")
-        if isinstance(raw, dict):
-            return {key: _unwrap(item) for key, item in raw.items()}
-        return [_unwrap(item) for item in raw]
     if isinstance(value, dict):
         return {key: _unwrap(item) for key, item in value.items()}
     if isinstance(value, list):
@@ -141,9 +124,9 @@ class NodesMap:
 
 class SelfProxy:
     def __init__(self) -> None:
-        self.channel: Any = Dotted({})
-        self.run: Any = Dotted({})
-        self.platform: Any = Dotted({})
+        self.channel: Any = _wrap({})
+        self.run: Any = _wrap({})
+        self.platform: Any = _wrap({})
         self._by_ref: dict[str, NodeView] = {}
         self.nodes = NodesMap(self._by_ref)
 
@@ -173,12 +156,16 @@ def _eval(expression: str) -> Any:
 def _handle(message: dict[str, Any]) -> dict[str, Any]:
     kind = message.get("op")
     if kind == "put_context":
-        SELF.channel = Dotted(message.get("channel") or {})
-        SELF.run = Dotted(message.get("run") or {})
-        SELF.platform = Dotted(message.get("platform") or {})
+        SELF.channel = _wrap(message.get("channel") or {})
+        SELF.run = _wrap(message.get("run") or {})
+        SELF.platform = _wrap(message.get("platform") or {})
         return {"op": "ok"}
     if kind == "put_output":
         _put_output(message)
+        return {"op": "ok"}
+    if kind == "drop_outputs":
+        for ref in message.get("refs") or []:
+            SELF._by_ref.pop(str(ref), None)
         return {"op": "ok"}
     if kind == "eval":
         try:
@@ -195,13 +182,12 @@ def _handle(message: dict[str, Any]) -> dict[str, Any]:
 
 
 def main() -> None:
-    try:
-        import resource
-
-        resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
-        resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
-    except (ImportError, ValueError, OSError):
-        pass
+    if resource is not None:
+        try:
+            resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
+            resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
+        except (ValueError, OSError):
+            pass
     sys.addaudithook(_audit)
     for line in sys.stdin:
         reply = _handle(json.loads(line))

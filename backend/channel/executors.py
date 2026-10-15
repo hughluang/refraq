@@ -6,6 +6,14 @@ from typing import Any, Mapping
 
 from backend.channel.engine import EngineHooks, NodeResult
 from backend.channel.nodes import list_node_types
+from backend.channel.reshape import (
+    run_deduplicate,
+    run_filter,
+    run_for,
+    run_if,
+    run_merge,
+    run_set_fields,
+)
 from backend.channel.references import ChannelReferenceResolver
 from backend.channel.sql_read import SqlReadError, run_channel_sql
 from backend.channel.template import TemplateTypeError, output_matches, render
@@ -223,14 +231,19 @@ def _checked(type_id: str, node: Mapping[str, Any], result: NodeResult) -> NodeR
         return result
     config = node.get("config") if isinstance(node.get("config"), dict) else {}
     refined = spec.refine(config, {}, ChannelReferenceResolver("_"))
-    schema = refined.get("main") if isinstance(refined, dict) else None
-    if not isinstance(schema, dict) or output_matches(result.output, schema):
+    if not isinstance(refined, dict):
         return result
-    return NodeResult(
-        status="failed",
-        error_code="CHANNEL_OUTPUT_SCHEMA_MISMATCH",
-        error_message="Output does not match the declared schema",
-    )
+    for port in spec.outputs:
+        if port.loop_back or port.port == "error":
+            continue
+        schema = refined.get(port.port)
+        if isinstance(schema, dict) and not output_matches(result.output, schema):
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_OUTPUT_SCHEMA_MISMATCH",
+                error_message="Output does not match the declared schema",
+            )
+    return result
 
 
 def _type_failed(raw: Any, exc: Exception) -> NodeResult:
@@ -278,6 +291,30 @@ def _project(
     return rows, None
 
 
+def execute_set_fields(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    return _checked("transform.set_fields", node, run_set_fields(node, hooks))
+
+
+def execute_if(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    return _checked("transform.if", node, run_if(node, hooks))
+
+
+def execute_filter(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    return _checked("transform.filter", node, run_filter(node, hooks))
+
+
+def execute_merge(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    return _checked("transform.merge", node, run_merge(node, hooks))
+
+
+def execute_deduplicate(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    return _checked("transform.deduplicate", node, run_deduplicate(node, hooks))
+
+
+def execute_for(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    return _checked("volume.for", node, run_for(node, hooks))
+
+
 def _incompatible(config: Mapping[str, Any], target: Any) -> list[str]:
     attrs = {attr.name: attr for attr in target.attributes}
     reasons: list[str] = []
@@ -309,6 +346,12 @@ EXECUTORS = {
     "trigger.manual": execute_manual,
     "trigger.scheduled": execute_scheduled,
     "read.sql": execute_sql,
+    "transform.set_fields": execute_set_fields,
+    "transform.if": execute_if,
+    "transform.filter": execute_filter,
+    "transform.merge": execute_merge,
+    "transform.deduplicate": execute_deduplicate,
+    "volume.for": execute_for,
     "state.variable": execute_variable,
     "write.entity": execute_write,
 }

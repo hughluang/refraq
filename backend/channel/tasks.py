@@ -6,7 +6,9 @@ import logging
 
 from celery import shared_task
 
+from backend.channel.run_store import note_killed_run
 from backend.jobs.store import TERMINAL, get_job_store, mark_failed
+from backend.jobs.supervise import supervise
 
 logger = logging.getLogger(__name__)
 
@@ -14,9 +16,6 @@ logger = logging.getLogger(__name__)
 @shared_task(name="backend.channel.tasks.run_job")
 def run_job(job_id: str) -> dict[str, str]:
     try:
-        from backend.channel.runner import note_killed_run
-        from backend.jobs.supervise import supervise
-
         result = supervise(job_id, "backend.channel.runner:run_channel_job")
         if result.get("status") == "cancelled":
             note_killed_run(job_id)

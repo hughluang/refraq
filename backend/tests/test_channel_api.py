@@ -317,6 +317,12 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
         "trigger.manual",
         "trigger.scheduled",
         "read.sql",
+        "transform.deduplicate",
+        "transform.filter",
+        "transform.if",
+        "transform.merge",
+        "transform.set_fields",
+        "volume.for",
         "state.variable",
         "write.entity",
     ]

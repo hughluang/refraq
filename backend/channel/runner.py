@@ -9,8 +9,8 @@ from backend.admin.user_store import ensure_system_user, get_user_store
 from backend.channel.context import channel_context, platform_context, run_context
 from backend.channel.engine import NodeResult, execute
 from backend.channel.executors import EXECUTORS
-from backend.channel.nodes import list_node_types
-from backend.channel.run_store import get_run_store, output_size
+from backend.channel.nodes import list_node_types, loop_ports
+from backend.channel.run_store import get_run_store, note_killed_run, output_size
 from backend.channel.sandbox import SandboxFailed, SandboxSession
 from backend.channel.schedules import schedule_key_for
 from backend.channel.store import get_channel_store
@@ -94,24 +94,8 @@ class _Hooks:
             output=output,
         )
 
-
-def note_killed_run(job_id: str) -> None:
-    """Record the node a killed child left running, when one exists."""
-    store = get_run_store()
-    run = store.get_run(job_id)
-    if run is None:
-        return
-    running = [item for item in store.list_executions(job_id) if item.status == "running"]
-    if not running:
-        return
-    current = running[-1]
-    current.status = "failed"
-    current.finished_at = utc_now()
-    current.error_message = "cancelled"
-    store.finish_execution(current)
-    if run.stopped_node_id is None:
-        run.stopped_node_id = current.node_id
-        store.update_run(run)
+    def drop_outputs(self, refs: list[str]) -> None:
+        self.sandbox.drop_outputs(refs)
 
 
 def run_channel_job(job_id: str) -> dict[str, str]:
@@ -183,6 +167,7 @@ def run_channel_job(job_id: str) -> dict[str, str]:
                 timeout_sec=timeout,
                 started=time.monotonic() - elapsed,
                 stop_at_node_id=run.stop_at_node_id,
+                loop_ports=loop_ports(),
             )
     except SandboxFailed as exc:
         mark_failed(job_id, error_code="CHANNEL_SANDBOX_FAILED", error_summary=str(exc))

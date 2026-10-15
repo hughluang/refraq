@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -248,12 +249,12 @@ def _enqueue_matches_get(client: TestClient, channel_id: str) -> dict:
     return posted
 
 
-def test_enqueue_body_matches_finished_run(
-    channel_client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Eager SQL runs return the stored outcome, not the pre-execution record."""
-    from backend.channel.engine import NodeResult
-    from backend.channel.executors import EXECUTORS
+def test_enqueue_body_matches_finished_run(channel_client: TestClient) -> None:
+    """Eager SQL runs return the stored outcome, not the pre-execution record.
+
+    A SQL store runs the Job in a child process, so a parent-process executor
+    patch never reaches it. The failing run is a real node error.
+    """
     from backend.worker.app import celery_app
 
     previous = celery_app.conf.task_always_eager
@@ -264,26 +265,41 @@ def test_enqueue_body_matches_finished_run(
         )
         assert created.status_code == 201, created.text
         channel_id = created.json()["channel"]["id"]
-        _save_draft(channel_client, channel_id, TRIGGER, base_revision=1)
+        revision = _save_draft(channel_client, channel_id, TRIGGER, base_revision=1)
 
         succeeded = _enqueue_matches_get(channel_client, channel_id)
         assert succeeded["status"] == "succeeded"
         assert succeeded["outcome"] == "completed"
         assert succeeded["failed_node_id"] is None
 
-        def _fail(node: dict, hooks: object) -> NodeResult:
-            del node, hooks
-            return NodeResult(
-                status="failed",
-                error_code="CHANNEL_NODE_FAILED",
-                error_message="forced",
-            )
-
-        monkeypatch.setitem(EXECUTORS, "trigger.manual", _fail)
+        failing = {
+            "nodes": [
+                TRIGGER["nodes"][0],
+                {
+                    "id": "nd_bad",
+                    "ref": "bad",
+                    "type": "transform.set_fields",
+                    "name": "Bad",
+                    "position": {"x": 10, "y": 80},
+                    "config": {"fields": [{"name": "n", "value": "{{ 1/0 }}"}]},
+                    "on_error": "stop",
+                    "retry": None,
+                },
+            ],
+            "edges": [
+                {
+                    "id": "ed_bad",
+                    "source": {"node_id": "nd_trigger", "port": "main"},
+                    "target": {"node_id": "nd_bad", "port": "main"},
+                }
+            ],
+            "settings": TRIGGER["settings"],
+        }
+        _save_draft(channel_client, channel_id, failing, base_revision=revision)
         failed = _enqueue_matches_get(channel_client, channel_id)
         assert failed["status"] == "failed"
         assert failed["outcome"] is None
-        assert failed["failed_node_id"] == "nd_trigger"
+        assert failed["failed_node_id"] == "nd_bad"
     finally:
         celery_app.conf.task_always_eager = previous
 
@@ -383,3 +399,334 @@ def test_global_variable_writes_are_atomic(channel_client: TestClient) -> None:
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(bump, range(4)))
     assert store.apply(operation="get", name="counter").value == {"n": 80}
+
+
+def _string_attr(name: str, *, business_key: bool = False) -> dict:
+    return {
+        "name": name,
+        "type": "string",
+        "required": business_key,
+        "unique": business_key,
+        "indexed": False,
+        "business_key": business_key,
+        "description": name,
+        "config": {"max_length": 64},
+    }
+
+
+def _integer_attr(name: str) -> dict:
+    return {
+        "name": name,
+        "type": "integer",
+        "required": False,
+        "unique": False,
+        "indexed": False,
+        "business_key": False,
+        "description": name,
+        "config": {},
+    }
+
+
+def _publish_entity(client: TestClient, *, table_name: str, name: str, attributes: list) -> str:
+    created = client.post(
+        "/entities",
+        json={
+            "table_name": table_name,
+            "name": name,
+            "description": name,
+            "attributes": attributes,
+        },
+    )
+    assert created.status_code == 201, created.text
+    entity = created.json()["entity"]
+    published = client.post(
+        f"/entities/{entity['id']}/versions/{entity['current_version']['id']}/publish"
+    )
+    assert published.status_code == 201, published.text
+    job = client.get(f"/jobs/{published.json()['job']['id']}")
+    assert job.status_code == 200, job.text
+    assert job.json()["job"]["status"] == "succeeded", job.text
+    return entity["id"]
+
+
+def _node(
+    node_id: str,
+    ref: str,
+    type_id: str,
+    name: str,
+    y: int,
+    config: dict,
+) -> dict:
+    return {
+        "id": node_id,
+        "ref": ref,
+        "type": type_id,
+        "name": name,
+        "position": {"x": 10, "y": y},
+        "config": config,
+        "on_error": "stop",
+        "retry": None,
+    }
+
+
+def _edge(edge_id: str, source: str, target: str, *, source_port: str = "main", target_port: str = "main") -> dict:
+    return {
+        "id": edge_id,
+        "source": {"node_id": source, "port": source_port},
+        "target": {"node_id": target, "port": target_port},
+    }
+
+
+def test_merge_entity_reads_write_a_third_entity(channel_client: TestClient) -> None:
+    from backend.worker.app import celery_app
+
+    suffix = uuid.uuid4().hex[:8]
+    names = f"nm_{suffix}"
+    prices = f"pr_{suffix}"
+    target = f"tg_{suffix}"
+    previous = celery_app.conf.task_always_eager
+    celery_app.conf.task_always_eager = True
+    try:
+        names_id = _publish_entity(
+            channel_client,
+            table_name=names,
+            name="Names",
+            attributes=[_string_attr("code", business_key=True), _string_attr("name")],
+        )
+        prices_id = _publish_entity(
+            channel_client,
+            table_name=prices,
+            name="Prices",
+            attributes=[_string_attr("code", business_key=True), _integer_attr("price")],
+        )
+        target_id = _publish_entity(
+            channel_client,
+            table_name=target,
+            name="Priced",
+            attributes=[
+                _string_attr("code", business_key=True),
+                _string_attr("name"),
+                _integer_attr("price"),
+            ],
+        )
+        for table, rows in (
+            (names, [{"code": "A", "name": " Bolt "}, {"code": "B", "name": "Nut"}]),
+            (
+                prices,
+                [
+                    {"code": "A", "price": 10},
+                    {"code": "B", "price": 1},
+                    {"code": "C", "price": 99},
+                ],
+            ),
+        ):
+            for row in rows:
+                created = channel_client.post(
+                    f"/entities/{table}/create", json={"values": row}
+                )
+                assert created.status_code == 201, created.text
+
+        created = channel_client.post(
+            "/channels", json={"name": "Combine prices", "description": None}
+        )
+        assert created.status_code == 201, created.text
+        channel_id = created.json()["channel"]["id"]
+        graph = {
+            "nodes": [
+                _node("nd_trigger", "run_manually", "trigger.manual", "Run", 0, {}),
+                _node(
+                    "nd_names",
+                    "names",
+                    "read.sql",
+                    "Names",
+                    40,
+                    {
+                        "source": {"kind": "entity"},
+                        "sql": f"SELECT code, name FROM {names}",
+                    },
+                ),
+                _node(
+                    "nd_prices",
+                    "prices",
+                    "read.sql",
+                    "Prices",
+                    80,
+                    {
+                        "source": {"kind": "entity"},
+                        "sql": f"SELECT code, price FROM {prices}",
+                    },
+                ),
+                _node(
+                    "nd_join",
+                    "joined",
+                    "transform.merge",
+                    "Join",
+                    120,
+                    {
+                        "mode": "by_key",
+                        "inputs": [
+                            "{{ self.names.output.rows }}",
+                            "{{ self.prices.output.rows }}",
+                        ],
+                        "key": "code",
+                        "join": "inner",
+                    },
+                ),
+                _node(
+                    "nd_keep",
+                    "kept",
+                    "transform.filter",
+                    "Keep",
+                    160,
+                    {
+                        "items": "{{ self.joined.output.rows }}",
+                        "combinator": "all",
+                        "conditions": [
+                            {"key": "price", "operator": "gt", "value": "5"}
+                        ],
+                    },
+                ),
+                _node(
+                    "nd_shape",
+                    "shape",
+                    "transform.set_fields",
+                    "Shape",
+                    200,
+                    {
+                        "fields": [
+                            {
+                                "name": "rows",
+                                "value": (
+                                    '{{ [dict(r, name=r["name"].strip()) '
+                                    "for r in self.kept.output.rows] }}"
+                                ),
+                            }
+                        ]
+                    },
+                ),
+                _node(
+                    "nd_write",
+                    "written",
+                    "write.entity",
+                    "Write",
+                    240,
+                    {
+                        "entity_id": target_id,
+                        "mode": "upsert",
+                        "match_key": None,
+                        "source": "{{ self.shape.output.rows }}",
+                        "mapping": [],
+                        "on_incompatible_head": "fail",
+                    },
+                ),
+            ],
+            "edges": [
+                _edge("ed_names", "nd_trigger", "nd_names"),
+                _edge("ed_prices", "nd_trigger", "nd_prices"),
+                _edge("ed_join_names", "nd_names", "nd_join"),
+                _edge("ed_join_prices", "nd_prices", "nd_join"),
+                _edge("ed_keep", "nd_join", "nd_keep"),
+                _edge("ed_shape", "nd_keep", "nd_shape"),
+                _edge("ed_write", "nd_shape", "nd_write"),
+            ],
+            "settings": {"run_timeout_sec": None, "error_channel_id": None},
+        }
+        _save_draft(channel_client, channel_id, graph, base_revision=1)
+        finished = _enqueue_matches_get(channel_client, channel_id)
+        assert finished["status"] == "succeeded", finished
+        assert finished["outcome"] == "completed"
+        del names_id, prices_id
+
+        queried = channel_client.post(f"/entities/{target}/query", json={})
+        assert queried.status_code == 200, queried.text
+        rows = queried.json()["items"]
+        assert len(rows) == 1
+        assert rows[0]["code"] == "A"
+        assert rows[0]["name"] == "Bolt"
+        assert rows[0]["price"] == 10
+        assert target_id
+    finally:
+        celery_app.conf.task_always_eager = previous
+
+
+def test_if_and_for_run_the_live_branch(channel_client: TestClient) -> None:
+    from backend.worker.app import celery_app
+
+    previous = celery_app.conf.task_always_eager
+    celery_app.conf.task_always_eager = True
+    try:
+        created = channel_client.post(
+            "/channels", json={"name": "Branch and loop", "description": None}
+        )
+        assert created.status_code == 201, created.text
+        channel_id = created.json()["channel"]["id"]
+        graph = {
+            "nodes": [
+                _node("nd_trigger", "run_manually", "trigger.manual", "Run", 0, {}),
+                _node(
+                    "nd_gate",
+                    "gate",
+                    "transform.if",
+                    "Gate",
+                    40,
+                    {"condition": "true"},
+                ),
+                _node(
+                    "nd_walk",
+                    "walk",
+                    "volume.for",
+                    "Walk",
+                    80,
+                    {"items": "[1, 2]"},
+                ),
+                _node(
+                    "nd_step",
+                    "step",
+                    "transform.set_fields",
+                    "Step",
+                    120,
+                    {
+                        "fields": [
+                            {
+                                "name": "n",
+                                "value": "{{ self.walk.output.current }}",
+                            }
+                        ]
+                    },
+                ),
+                _node(
+                    "nd_missed",
+                    "missed",
+                    "transform.set_fields",
+                    "Missed",
+                    160,
+                    {"fields": [{"name": "n", "value": "0"}]},
+                ),
+            ],
+            "edges": [
+                _edge("ed_gate", "nd_trigger", "nd_gate"),
+                _edge("ed_true", "nd_gate", "nd_walk", source_port="true"),
+                _edge("ed_false", "nd_gate", "nd_missed", source_port="false"),
+                _edge("ed_each", "nd_walk", "nd_step", source_port="each"),
+                _edge("ed_back", "nd_step", "nd_walk", target_port="loop"),
+            ],
+            "settings": {"run_timeout_sec": None, "error_channel_id": None},
+        }
+        _save_draft(channel_client, channel_id, graph, base_revision=1)
+        finished = _enqueue_matches_get(channel_client, channel_id)
+        assert finished["status"] == "succeeded", finished
+        detail = channel_client.get(
+            f"/channels/{channel_id}/runs/{finished['job_id']}"
+        )
+        assert detail.status_code == 200, detail.text
+        executions = detail.json()["node_executions"]
+        by_node: dict[str, list] = {}
+        for item in executions:
+            by_node.setdefault(item["node_id"], []).append(item)
+        assert "nd_missed" not in by_node
+        assert len(by_node["nd_step"]) == 2
+        walk = by_node["nd_walk"]
+        assert len(walk) == 1
+        assert walk[0]["output_preview"]["results"] == [{"n": 1}, {"n": 2}]
+    finally:
+        celery_app.conf.task_always_eager = previous

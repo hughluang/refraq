@@ -45,6 +45,11 @@ class SandboxSession:
         self._outputs.append(message)
         self._send(message)
 
+    def drop_outputs(self, refs: list[str]) -> None:
+        banned = {str(ref) for ref in refs}
+        self._outputs = [item for item in self._outputs if str(item.get("ref")) not in banned]
+        self._send({"op": "drop_outputs", "refs": [str(ref) for ref in refs]})
+
     def evaluate(self, expression: str) -> Any:
         self._seq += 1
         ident = self._seq

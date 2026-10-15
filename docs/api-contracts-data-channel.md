@@ -178,6 +178,60 @@ Manual trigger configuration (`trigger.manual`):
 | --- | --- |
 | `payload` | A JSON object copied into the node's output. The keys `triggered_by` and `triggered_at` are reserved and rejected. Absent means `{}` |
 
+Set Fields configuration (`transform.set_fields`):
+
+| Field | Rule |
+| --- | --- |
+| `fields` | Array of `{name, value}`. `name` is 1–128 characters and unique. `value` is a JSON template (`x-refraq-template` any JSON value) |
+
+Output is one object, keys in list order. Ports: input `main`, output `main`.
+
+If configuration (`transform.if`):
+
+| Field | Rule |
+| --- | --- |
+| `condition` | A boolean template |
+
+Output is `{"value": bool}`. Ports: input `main`, outputs `true` and `false`. The live output is `true` or `false`.
+
+Filter configuration (`transform.filter`):
+
+| Field | Rule |
+| --- | --- |
+| `items` | A template whose value is a list of objects |
+| `combinator` | `all` (default) or `any` |
+| `conditions` | Array of `{key, operator, value}`. `operator` is `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`, `contains`, `starts_with`, `ends_with`, `is_null`, or `is_not_null`. `value` is a JSON template, evaluated once, and is omitted for `is_null` and `is_not_null` |
+
+Output is `{"rows", "count", "dropped"}`. Ports: input `main`, output `main`.
+
+Merge configuration (`transform.merge`):
+
+| Field | Rule |
+| --- | --- |
+| `mode` | `append`, `by_key`, or `by_position` |
+| `inputs` | At least two templates, each a list of objects |
+| `key` | A field name, or null. Required, and a non-empty string, when `mode` is `by_key` |
+| `join` | `inner` (default), `left`, or `full`. `append` ignores it |
+
+Output is `{"rows", "count"}`. Ports: input `main` (more than one incoming edge is allowed), output `main`.
+
+Deduplicate configuration (`transform.deduplicate`):
+
+| Field | Rule |
+| --- | --- |
+| `items` | A template whose value is a list of objects |
+| `keys` | At least one field name |
+
+Output is `{"rows", "count", "removed"}`. Ports: input `main`, output `main`.
+
+For configuration (`volume.for`):
+
+| Field | Rule |
+| --- | --- |
+| `items` | A JSON array template. Each element is any JSON value. More than 100000 elements fails the node with `CHANNEL_ITEM_LIMIT_EXCEEDED` |
+
+During an iteration the output is `{"current", "index", "count"}`. The stored output is that object plus `"results"`. `current` and `index` are null when `items` is empty. Ports: inputs `main` and `loop`; outputs `each` (`loop_back`) and `done`.
+
 `config_schema` may carry the custom keyword `x-refraq-ref`. It is ignored by JSON Schema validation and tells the Console which control to render, and tells validation how to resolve the value:
 
 | Value | Meaning |
@@ -210,7 +264,7 @@ Manual trigger configuration (`trigger.manual`):
 Validation reports problems as result documents, not as Problem Details:
 
 ```json
-{ "code": "CHANNEL_GRAPH_CYCLE", "node_id": "nd_read", "edge_id": "ed_2", "path": [], "detail": "Cycle does not pass through a Loop node", "severity": "error" }
+{ "code": "CHANNEL_GRAPH_CYCLE", "node_id": "nd_read", "edge_id": "ed_2", "path": [], "detail": "Cycle does not pass through a loop node", "severity": "error" }
 ```
 
 `severity` is `error` or `warning`. Only `error` makes the graph invalid.
@@ -316,7 +370,7 @@ Sections are empty lists, or `false`, when there is nothing to show.
 - `family` is `trigger`, `read`, `transform`, `volume`, `state`, or `write`.
 - `label`, `summary`, and `description` are English. `summary` is one sentence. `description` states the type's function and its place in a workflow.
 - `entry` is `true` for trigger types; they declare no inputs.
-- Each port is `{ "port", "description", "coarse_type" }`. `port` is lower snake case. `coarse_type` is `object`, `items`, or `unknown`. `main` is the primary data port. `error` is an output that carries items the node failed when `on_error` is `error_output`.
+- Each port is `{ "port", "description", "coarse_type", "loop_back" }`. `port` is lower snake case. `coarse_type` is `object`, `items`, or `unknown`. `loop_back` is true on the output that starts a loop body (`each` on `volume.for`) and false otherwise. `main` is the primary data port. `error` is an output that carries items the node failed when `on_error` is `error_output`.
 - `type_version` is the current version of the node type. A node instance's `type_version` must match it.
 - `config_schema` is a JSON Schema object that the Console renders as the configuration panel and the server enforces at validate and publish. Every property, including properties nested under array items, has `title` and `description`.
 - `permission` names the extra Permission needed to add or edit a node of this type (`channel:code_write` for `transform.code`), or `null`.
@@ -573,7 +627,8 @@ Evaluates the **Template Field** at `path` in node `node_id` of `graph` against 
 | `CHANNEL_GRAPH_MULTIPLE_TRIGGERS` | The graph has more than one trigger node |
 | `CHANNEL_GRAPH_TRIGGER_INPUT` | A trigger node has an inbound edge |
 | `CHANNEL_GRAPH_UNREACHABLE` | A node is not reachable from any trigger node |
-| `CHANNEL_GRAPH_CYCLE` | A cycle does not pass through a Loop node |
+| `CHANNEL_GRAPH_CYCLE` | A cycle does not pass through a loop node's loop-back port |
+| `CHANNEL_LOOP_BODY_INVALID` | A loop body edge enters from outside the loop port, the body, and the loop's ancestors; a body edge leaves to somewhere other than the body or the loop input; or the loop input has more than one return edge, or that edge does not start in the body |
 | `CHANNEL_GRAPH_EDGE_INVALID` | An edge names an unknown node or port |
 | `CHANNEL_NODE_TYPE_UNKNOWN` | A node names an unknown node type |
 | `CHANNEL_NODE_CONFIG_INVALID` | A node configuration does not satisfy its `config_schema` |

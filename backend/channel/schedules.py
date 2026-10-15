@@ -11,6 +11,7 @@ from typing import Any
 from celery import shared_task
 
 from backend.channel.run_store import ChannelRunRecord, get_run_store
+from backend.channel.tasks import run_job
 from backend.channel.store import ChannelRecord, get_channel_store
 from backend.core.config import get_settings
 from backend.core.db import session_scope
@@ -351,13 +352,9 @@ def fire_scheduled_channel_run(
         if isinstance(job, JobRecord) and job.status == "queued":
             fresh = get_schedule_store().get_by_id(schedule_id)
             if fresh is not None and fresh.enabled:
-                from backend.channel.tasks import run_job
-
                 run_job.apply_async(args=[job.id], task_id=job.id)
         return {"status": "already_minted", "job_id": str(minted.get("job_id") or "")}
     if status != "queued" or not isinstance(job, JobRecord):
         return {"status": str(status)}
-    from backend.channel.tasks import run_job
-
     run_job.apply_async(args=[job.id], task_id=job.id)
     return {"status": "queued", "job_id": job.id}

@@ -14,6 +14,7 @@ from backend.entity.align import run_entity_table_job
 from backend.entity.parameters import access_log_retention_days
 from backend.entity.entity_db import open_entity_pool_when_persistent, reset_entity_engine
 from backend.jobs.store import TERMINAL, append_job_log, get_job_store, mark_failed
+from backend.jobs.supervise import supervise
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +42,6 @@ def init_worker_entity_pool() -> None:
 @shared_task(name="backend.entity.tasks.run_job")
 def run_job(job_id: str) -> dict[str, str]:
     try:
-        from backend.jobs.supervise import supervise
-
         return supervise(job_id, "backend.entity.align:run_entity_table_job")
     except Exception as exc:  # noqa: BLE001
         current = get_job_store().get(job_id)

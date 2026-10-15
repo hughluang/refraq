@@ -830,7 +830,6 @@ def test_write_rows_upsert_is_idempotent_and_channel_run_writes(data_client) -> 
     job, _record = start_run(
         channel_id=created.id,
         target="draft",
-        trigger_node_id="nd_trigger",
         ignore_checkpoints=False,
         actor=admin,
         actor_token_id=None,

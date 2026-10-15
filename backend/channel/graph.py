@@ -2,8 +2,8 @@
 
 `validate` reports every problem it finds. It does not read stores; callers
 pass a reference resolver. A cycle is legal only when one of its edges leaves
-a Loop node's loop-back port. This slice's catalog has no Loop type, so any
-cycle is rejected unless a test catalog declares one.
+a Loop node's loop-back port. A loop body may only be entered from that port,
+from another body node, or from an ancestor of the loop.
 """
 
 from __future__ import annotations
@@ -116,6 +116,7 @@ def validate(
     problems.extend(_trigger_problems(nodes, edges, by_id, by_type))
     problems.extend(_reachability_problems(nodes, edges, by_id, by_type))
     problems.extend(_cycle_problems(nodes, edges, by_id, by_type))
+    problems.extend(_loop_body_problems(nodes, edges, by_id, by_type))
     problems.extend(_reference_problems(nodes, by_type, resolver))
     problems.extend(_sql_source_problems(nodes, by_type, resolver))
     problems.extend(_match_key_problems(nodes, by_type, resolver))
@@ -485,7 +486,7 @@ def _type_and_config_problems(
                     )
                 )
             continue
-        repeated = _repeated_mapping(node["config"])
+        repeated = _repeated_mapping(node["config"]) or _repeated_fields(node["config"])
         if repeated is not None:
             problems.append(
                 Problem(
@@ -521,6 +522,20 @@ def _missing_required(error: Any) -> str:
         for name in error.validator_value
         if name not in error.instance and message.startswith(repr(name))
     )
+
+
+def _repeated_fields(config: Any) -> str | None:
+    fields = config.get("fields") if isinstance(config, dict) else None
+    if not isinstance(fields, list):
+        return None
+    names = [
+        item["name"]
+        for item in fields
+        if isinstance(item, dict) and isinstance(item.get("name"), str) and "value" in item
+    ]
+    if len(names) != len(set(names)):
+        return "Field names are not unique"
+    return None
 
 
 def _repeated_mapping(config: Any) -> str | None:
@@ -699,7 +714,7 @@ def _cycle_problems(
                     problems.append(
                         Problem(
                             "CHANNEL_GRAPH_CYCLE",
-                            "Cycle does not pass through a Loop node",
+                            "Cycle does not pass through a loop node",
                             node_id=str(edge["source"]["node_id"]),
                             edge_id=str(edge["id"]),
                         )
@@ -896,6 +911,147 @@ def _outgoing(
 def _is_trigger(node: Mapping[str, Any], by_type: dict[str, NodeType]) -> bool:
     spec = by_type.get(str(node["type"]))
     return spec is not None and spec.entry
+
+
+def _loop_body_problems(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    by_id: dict[str, dict[str, Any]],
+    by_type: dict[str, NodeType],
+) -> list[Problem]:
+    problems: list[Problem] = []
+    outgoing = _outgoing(edges, by_id)
+    ancestors = _control_ancestors(by_id, edges, by_type)
+    for node in nodes:
+        spec = by_type.get(str(node["type"]))
+        if spec is None:
+            continue
+        loop_ports = [port.port for port in spec.outputs if port.loop_back]
+        if not loop_ports:
+            continue
+        loop_id = str(node["id"])
+        loop_port = loop_ports[0]
+        body = _loop_body(loop_id, loop_port, outgoing)
+        anc = ancestors.get(loop_id, set())
+        backs = [
+            edge
+            for edge in edges
+            if str(edge["target"]["node_id"]) == loop_id
+            and str(edge["target"]["port"]) != "main"
+            and str(edge["source"]["node_id"]) in by_id
+            and str(edge["target"]["node_id"]) in by_id
+        ]
+        if len(backs) > 1:
+            problems.append(
+                Problem(
+                    "CHANNEL_LOOP_BODY_INVALID",
+                    "Loop input has more than one return edge",
+                    node_id=loop_id,
+                    edge_id=str(backs[1]["id"]),
+                )
+            )
+        for edge in backs:
+            if str(edge["source"]["node_id"]) not in body:
+                problems.append(
+                    Problem(
+                        "CHANNEL_LOOP_BODY_INVALID",
+                        "Loop return edge does not start in the loop body",
+                        node_id=str(edge["source"]["node_id"]),
+                        edge_id=str(edge["id"]),
+                    )
+                )
+        for edge in edges:
+            source_id = str(edge["source"]["node_id"])
+            target_id = str(edge["target"]["node_id"])
+            if source_id not in by_id or target_id not in by_id:
+                continue
+            if source_id in body:
+                returns = target_id == loop_id and str(edge["target"]["port"]) != "main"
+                if target_id not in body and not returns:
+                    problems.append(
+                        Problem(
+                            "CHANNEL_LOOP_BODY_INVALID",
+                            "Loop body edge leaves the body",
+                            node_id=source_id,
+                            edge_id=str(edge["id"]),
+                        )
+                    )
+            if target_id in body:
+                from_loop = source_id == loop_id and str(edge["source"]["port"]) == loop_port
+                if not from_loop and source_id not in body and source_id not in anc:
+                    problems.append(
+                        Problem(
+                            "CHANNEL_LOOP_BODY_INVALID",
+                            "Loop body edge does not come from the loop, the body, or an ancestor",
+                            node_id=target_id,
+                            edge_id=str(edge["id"]),
+                        )
+                    )
+    return problems
+
+
+def _loop_body(
+    loop_id: str,
+    loop_port: str,
+    outgoing: dict[str, list[dict[str, Any]]],
+) -> set[str]:
+    seen: set[str] = set()
+    stack = [
+        str(edge["target"]["node_id"])
+        for edge in outgoing.get(loop_id, [])
+        if str(edge["source"]["port"]) == loop_port
+    ]
+    while stack:
+        node_id = stack.pop()
+        if node_id == loop_id or node_id in seen:
+            continue
+        seen.add(node_id)
+        for edge in outgoing.get(node_id, []):
+            stack.append(str(edge["target"]["node_id"]))
+    return seen
+
+
+def _control_ancestors(
+    by_id: dict[str, dict[str, Any]],
+    edges: list[dict[str, Any]],
+    by_type: dict[str, NodeType],
+) -> dict[str, set[str]]:
+    """Ancestors along forward edges. A loop return edge is not a forward edge."""
+    incoming: dict[str, set[str]] = {node_id: set() for node_id in by_id}
+    for edge in edges:
+        source_id = str(edge["source"]["node_id"])
+        target_id = str(edge["target"]["node_id"])
+        if source_id not in by_id or target_id not in by_id:
+            continue
+        if _is_loop_input(edge, by_id, by_type):
+            continue
+        incoming[target_id].add(source_id)
+    found: dict[str, set[str]] = {}
+    for node_id in by_id:
+        seen: set[str] = set()
+        stack = list(incoming[node_id])
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            stack.extend(incoming.get(current, ()))
+        found[node_id] = seen
+    return found
+
+
+def _is_loop_input(
+    edge: Mapping[str, Any],
+    by_id: dict[str, dict[str, Any]],
+    by_type: dict[str, NodeType],
+) -> bool:
+    target = by_id.get(str(edge["target"]["node_id"]))
+    if target is None:
+        return False
+    spec = by_type.get(str(target["type"]))
+    if spec is None or not any(port.loop_back for port in spec.outputs):
+        return False
+    return str(edge["target"]["port"]) != "main"
 
 
 def _is_loop_back(

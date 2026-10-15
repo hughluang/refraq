@@ -20,6 +20,7 @@ __all__ = [
     "ChannelRunRecord",
     "NodeExecutionRecord",
     "get_run_store",
+    "note_killed_run",
 ]
 
 
@@ -344,6 +345,25 @@ def _cut(value: Any, cap: int) -> Any:
     if isinstance(value, dict):
         return {key: _cut(item, cap) for key, item in value.items()}
     return value
+
+
+def note_killed_run(job_id: str) -> None:
+    """Record the node a killed child left running, when one exists."""
+    store = get_run_store()
+    run = store.get_run(job_id)
+    if run is None:
+        return
+    running = [item for item in store.list_executions(job_id) if item.status == "running"]
+    if not running:
+        return
+    current = running[-1]
+    current.status = "failed"
+    current.finished_at = utc_now()
+    current.error_message = "cancelled"
+    store.finish_execution(current)
+    if run.stopped_node_id is None:
+        run.stopped_node_id = current.node_id
+        store.update_run(run)
 
 
 def output_size(output: Any) -> int:

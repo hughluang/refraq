@@ -56,8 +56,18 @@ NODE_TYPE = NodeType(
                 "x-refraq-ref": "sql_source",
                 "required": ["kind"],
                 "properties": {
-                    "kind": {"type": "string", "enum": ["entity", "source"]},
-                    "source_id": {"type": "string", "minLength": 1},
+                    "kind": {
+                        "type": "string",
+                        "enum": ["entity", "source"],
+                        "title": "Kind",
+                        "description": "entity selects the entity database. source selects a registered Source.",
+                    },
+                    "source_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "title": "Source",
+                        "description": "Registered Source id. Required when kind is source.",
+                    },
                 },
                 "allOf": [
                     {
