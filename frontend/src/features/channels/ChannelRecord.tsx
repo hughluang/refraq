@@ -766,6 +766,7 @@ function ChannelExisting({
       <FillColumn>
         <ChannelCanvas
           key={draftEpoch}
+          channelId={channelId}
           graph={graph}
           catalog={catalog}
           appearance={writable ? "edit" : "browse"}

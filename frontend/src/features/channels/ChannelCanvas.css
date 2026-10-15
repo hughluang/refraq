@@ -198,6 +198,17 @@
   opacity: 0.72;
 }
 
+.channel-flow-node--pinned {
+  border-color: var(--mantine-color-grape-6);
+}
+
+.channel-flow-node__pin {
+  display: inline-block;
+  margin-top: 4px;
+  color: var(--mantine-color-grape-7);
+  font-weight: 600;
+}
+
 .channel-flow-node .react-flow__handle.channel-flow-handle--loop {
   width: 8px;
   height: 8px;
@@ -236,6 +247,7 @@
 }
 
 .channel-flow-node__run,
+.channel-flow-node__test,
 .channel-flow-node__delete {
   position: absolute;
   top: -8px;
@@ -271,8 +283,14 @@
   right: 16px;
 }
 
+.channel-flow-node__test {
+  right: 40px;
+}
+
 .channel-flow-node:hover > .channel-flow-node__run,
 .channel-flow-node:focus-within > .channel-flow-node__run,
+.channel-flow-node:hover > .channel-flow-node__test,
+.channel-flow-node:focus-within > .channel-flow-node__test,
 .channel-flow-node:hover > .channel-flow-node__delete,
 .channel-flow-node:focus-within > .channel-flow-node__delete {
   opacity: 1;
@@ -287,7 +305,13 @@
   color: var(--mantine-color-white);
 }
 
+.channel-flow-node__test:hover {
+  border-color: var(--mantine-color-blue-6);
+  color: var(--mantine-color-blue-6);
+}
+
 .channel-flow-node__run:focus-visible,
+.channel-flow-node__test:focus-visible,
 .channel-flow-node__delete:focus-visible,
 .channel-flow-edge__delete:focus-visible {
   outline: 2px solid var(--mantine-color-blue-6);

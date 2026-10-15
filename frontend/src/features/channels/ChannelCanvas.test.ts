@@ -13,8 +13,14 @@ import {
   type NodeTypeSpec,
 } from "@/features/channels/types";
 import { Instant } from "@/lib/instant";
+import { ApiError } from "@/lib/api";
 
 const sessionPermissions = vi.hoisted(() => ({ current: [] as string[] }));
+const executeEditor = vi.hoisted(() => vi.fn());
+
+vi.mock("@/features/channels/api", () => ({
+  executeEditor,
+}));
 
 const LABELS: Record<string, string> = {
   "channels.canvas.add": "Add",
@@ -29,6 +35,35 @@ const LABELS: Record<string, string> = {
   "channels.canvas.palette": "Nodes",
   "channels.canvas.problemsSummary": "{{errors}} errors, {{warnings}} warnings",
   "channels.node.run": "Run node",
+  "channels.editor.test": "Test up to here",
+  "channels.editor.testNode": "Test up to here: {{node}}",
+  "channels.editor.testing": "Testing…",
+  "channels.editor.hint":
+    "Runs the graph on screen up to this node. The draft is not saved and nothing is written.",
+  "channels.editor.region": "Editor test",
+  "channels.editor.idle": "Test up to here to see this node's output. Nothing is written.",
+  "channels.editor.notReached": "This node was not reached.",
+  "channels.editor.truncated": "The output was cut at the row limit.",
+  "channels.editor.pin": "Pin output",
+  "channels.editor.unpin": "Unpin output",
+  "channels.editor.pinned": "Pinned",
+  "channels.editor.dryRun": "Nothing was written.",
+  "channels.editor.failed": "The test did not finish",
+  "channels.editor.rowLimit": "Row limit",
+  "channels.editor.rowLimitHint": "SQL, live queries, and For loops stop after this many rows (1–1000).",
+  "channels.editor.counts.inserted": "Would insert {{count}}",
+  "channels.editor.counts.updated": "Would update {{count}}",
+  "channels.editor.counts.unchanged": "Would leave {{count}} unchanged",
+  "channels.editor.counts.deleted": "Would delete {{count}}",
+  "channels.editor.counts.unmatched": "Would leave {{count}} unmatched",
+  "channels.editor.counts.applied": "Would apply: {{applied}}",
+  "channels.editor.applied.true": "yes",
+  "channels.editor.applied.false": "no",
+  "channels.editor.status.succeeded": "Succeeded",
+  "channels.editor.status.failed": "Failed",
+  "channels.editor.status.skipped": "Skipped",
+  "channels.editor.status.pinned": "Pinned",
+  "channels.editor.status.cancelled": "Cancelled",
   "channels.node.config": "Configuration",
   "channels.run.upstream": "Upstream outputs",
   "channels.run.result": "This node's result",
@@ -212,6 +247,7 @@ function renderCanvas(
     onRun?: (nodeId: string) => void;
     catalog?: NodeTypeSpec[];
     onChange?: (graph: Graph) => void;
+    channelId?: string;
   } = {},
 ) {
   const appearance = options.appearance ?? "edit";
@@ -230,6 +266,7 @@ function renderCanvas(
           onChange: options.onChange ?? vi.fn(),
           sessionRun: options.sessionRun,
           onRun: options.onRun,
+          channelId: options.channelId,
         }),
       );
     const view = render(element(problems));
@@ -870,5 +907,328 @@ describe("guarded node authoring", () => {
     expect((screen.getByRole("textbox", { name: "Timeout (seconds)" }) as HTMLInputElement).value).toBe(
       "45",
     );
+  });
+});
+
+const WRITE_SPEC = catalogSpec("write.entity", [{ port: "main", description: "" }], [
+  { port: "main", description: "" },
+]);
+const VARIABLE_SPEC = catalogSpec("state.variable", [{ port: "main", description: "" }], [
+  { port: "main", description: "" },
+]);
+const TRIGGER_SPEC = catalogSpec(
+  "trigger.manual",
+  [],
+  [{ port: "main", description: "" }],
+  true,
+);
+
+function editorResult(
+  executions: {
+    node_id: string;
+    status: string;
+    output?: unknown;
+    seq?: number;
+    truncated?: boolean;
+    error_message?: string | null;
+    error_code?: string | null;
+  }[],
+) {
+  return {
+    status: executions.some((item) => item.status === "failed") ? "failed" : "succeeded",
+    error_code: null,
+    error_message: null,
+    failed_node_id: executions.find((item) => item.status === "failed")?.node_id ?? null,
+    stopped_node_id: null,
+    node_executions: executions.map((item, index) => ({
+      seq: item.seq ?? index + 1,
+      node_id: item.node_id,
+      status: item.status,
+      started_at: null,
+      finished_at: null,
+      output: item.output ?? null,
+      truncated: item.truncated ?? false,
+      error_code: item.error_code ?? null,
+      error_message: item.error_message ?? null,
+      error_detail: null,
+    })),
+  };
+}
+
+function shownButton(name: string) {
+  return screen.findByRole("button", { name });
+}
+
+describe("editor execution", () => {
+  beforeEach(() => {
+    stubDomApis();
+    sessionPermissions.current = ["channel:write"];
+    sessionStorage.clear();
+    executeEditor.mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("keeps Test up to here separate from Run up to this node and posts the on-screen graph", async () => {
+    const onRun = vi.fn();
+    const onChange = vi.fn();
+    executeEditor.mockResolvedValue(editorResult([{ node_id: "nd_1", status: "succeeded", output: { ok: true } }]));
+    await renderCanvas([], nodeGraph, { channelId: "chn_1", onRun, onChange });
+
+    fireEvent.click(await shownButton("Run node"));
+    expect(onRun).toHaveBeenCalledTimes(1);
+    expect(onRun).toHaveBeenCalledWith("nd_1");
+    expect(executeEditor).not.toHaveBeenCalled();
+
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      target: { value: "Renamed" },
+    });
+    const editor = screen.getByRole("region", { name: "Editor test" });
+    expect(editor.textContent).toContain("nothing is written");
+    expect(within(editor).queryByRole("button", { name: "Run node" })).toBeNull();
+    fireEvent.click(within(editor).getByRole("button", { name: "Test up to here" }));
+
+    await waitFor(() => expect(executeEditor).toHaveBeenCalledTimes(1));
+    expect(onRun).toHaveBeenCalledTimes(1);
+    expect(executeEditor).toHaveBeenCalledWith(
+      "chn_1",
+      expect.objectContaining({
+        stop_at_node_id: "nd_1",
+        row_limit: 100,
+        pinned: [],
+      }),
+    );
+    const body = executeEditor.mock.calls[0]?.[1] as { graph: Graph };
+    expect(body.graph.nodes[0]?.name).toBe("Renamed");
+    expect(onChange).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.getByRole("region", { name: "Editor test" }).textContent).toContain("Succeeded");
+      expect(screen.getByRole("region", { name: "Editor test" }).textContent).toContain('"ok"');
+    });
+  });
+
+  it("colours the canvas and shows dry-run counts without writing", async () => {
+    const graph: Graph = {
+      ...EMPTY_GRAPH,
+      nodes: [
+        placed("start", "trigger.manual", "Start", 20),
+        placed("read", "read.sql", "Read", 180),
+        placed("write", "write.entity", "Write", 360),
+        placed("bad", "read.sql", "Bad", 540),
+        placed("later", "read.sql", "Later", 720),
+      ],
+      edges: [
+        { id: "e1", source: { node_id: "start", port: "main" }, target: { node_id: "read", port: "main" } },
+        { id: "e2", source: { node_id: "read", port: "main" }, target: { node_id: "write", port: "main" } },
+        { id: "e3", source: { node_id: "write", port: "main" }, target: { node_id: "bad", port: "main" } },
+        { id: "e4", source: { node_id: "bad", port: "main" }, target: { node_id: "later", port: "main" } },
+      ],
+    };
+    executeEditor.mockResolvedValue(
+      editorResult([
+        { node_id: "start", status: "succeeded", output: {} },
+        { node_id: "read", status: "pinned", output: { rows: [1] } },
+        {
+          node_id: "write",
+          status: "succeeded",
+          truncated: true,
+          output: {
+            inserted: 2,
+            updated: 1,
+            unchanged: 4,
+            deleted: 0,
+            unmatched: 3,
+            dry_run: true,
+          },
+        },
+        {
+          node_id: "bad",
+          status: "failed",
+          error_code: "CHANNEL_NODE_FAILED",
+          error_message: "bad sql",
+          output: null,
+        },
+      ]),
+    );
+    await renderCanvas([], graph, {
+      channelId: "chn_1",
+      catalog: [TRIGGER_SPEC, READ_SPEC, WRITE_SPEC],
+    });
+
+    fireEvent.click(await shownButton("Test up to here: Write"));
+    const region = await screen.findByRole("region", { name: "Editor test" });
+    await waitFor(() => expect(region.textContent).toContain("Nothing was written."));
+    expect(region.textContent).toContain("Would insert 2");
+    expect(region.textContent).toContain("Would update 1");
+    expect(region.textContent).toContain("Would leave 4 unchanged");
+    expect(region.textContent).toContain("Would delete 0");
+    expect(region.textContent).toContain("Would leave 3 unmatched");
+    expect(region.textContent).toContain("The output was cut at the row limit.");
+
+    const node = (id: string) => document.querySelector(`.react-flow__node[data-id='${id}']`);
+    expect(node("start")?.querySelector(".channel-flow-node--succeeded")).not.toBeNull();
+    expect(node("read")?.querySelector(".channel-flow-node--pinned")).not.toBeNull();
+    expect(node("write")?.querySelector(".channel-flow-node--succeeded")).not.toBeNull();
+    expect(node("bad")?.querySelector(".channel-flow-node--failed")).not.toBeNull();
+    expect(node("later")?.querySelector(".channel-flow-node--dead")).not.toBeNull();
+    expect(node("later")?.textContent).toContain("Not run");
+
+    const bad = node("bad");
+    if (!(bad instanceof HTMLElement)) throw new Error("missing bad node");
+    fireEvent.click(bad);
+    await waitFor(() => {
+      expect(screen.getByRole("region", { name: "Editor test" }).textContent).toContain("bad sql");
+    });
+  });
+
+  it("shows a variable dry run as not stored", async () => {
+    executeEditor.mockResolvedValue(
+      editorResult([
+        {
+          node_id: "var",
+          status: "succeeded",
+          output: { applied: false, dry_run: true },
+        },
+      ]),
+    );
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [placed("var", "state.variable", "Flag", 40)],
+    }, { channelId: "chn_1", catalog: [VARIABLE_SPEC] });
+
+    fireEvent.click(await shownButton("Test up to here: Flag"));
+    const region = await screen.findByRole("region", { name: "Editor test" });
+    await waitFor(() => expect(region.textContent).toContain("Nothing was written."));
+    expect(region.textContent).toContain("Would apply: no");
+  });
+
+  it("shows a busy state until the synchronous test returns", async () => {
+    let finish: (value: ReturnType<typeof editorResult>) => void = () => {};
+    executeEditor.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    await renderCanvas([], nodeGraph, { channelId: "chn_1" });
+    fireEvent.click(await shownButton("Test up to here: Start"));
+
+    const busy = await screen.findByRole("button", { name: "Testing…" });
+    expect((busy as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("region", { name: "Editor test" }).textContent).toContain("Testing…");
+
+    finish(editorResult([{ node_id: "nd_1", status: "succeeded", output: { ready: true } }]));
+    await waitFor(() => {
+      expect(screen.getByRole("region", { name: "Editor test" }).textContent).toContain('"ready"');
+    });
+    expect((screen.getByRole("button", { name: "Test up to here: Start" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it("sends a pinned output on the next test and marks the node", async () => {
+    executeEditor.mockResolvedValue(
+      editorResult([{ node_id: "nd_1", status: "succeeded", output: { rows: [1], count: 1 } }]),
+    );
+    await renderCanvas([], nodeGraph, { channelId: "chn_1" });
+    fireEvent.click(await shownButton("Test up to here: Start"));
+    const pin = await screen.findByRole("button", { name: "Pin output" });
+    fireEvent.click(pin);
+
+    const node = document.querySelector(".react-flow__node");
+    expect(node?.textContent).toContain("Pinned");
+    expect(screen.getByRole("button", { name: "Unpin output" })).toBeTruthy();
+
+    executeEditor.mockResolvedValue(
+      editorResult([{ node_id: "nd_1", status: "pinned", output: { rows: [1], count: 1 } }]),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Test up to here" }));
+    await waitFor(() => {
+      expect(executeEditor).toHaveBeenCalledTimes(2);
+      expect(node?.querySelector(".channel-flow-node--pinned")).not.toBeNull();
+    });
+    expect(executeEditor.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        pinned: [{ node_id: "nd_1", output: { rows: [1], count: 1 } }],
+      }),
+    );
+  });
+
+  it("does not offer a pin for a For node", async () => {
+    sessionStorage.setItem(
+      "refraq.channel.editor-pins.chn_1",
+      JSON.stringify([{ node_id: "walk", output: { current: 0 } }]),
+    );
+    executeEditor.mockResolvedValue(
+      editorResult([{ node_id: "walk", status: "succeeded", output: { current: 1, index: 0, count: 1 } }]),
+    );
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [placed("walk", "volume.for", "Walk", 40)],
+    }, { channelId: "chn_1", catalog: [FOR_SPEC] });
+
+    expect(document.querySelector(".channel-flow-node__pin")).toBeNull();
+    fireEvent.click(await shownButton("Test up to here: Walk"));
+    const region = await screen.findByRole("region", { name: "Editor test" });
+    await waitFor(() => expect(region.textContent).toContain('"current"'));
+    expect(within(region).queryByRole("button", { name: "Pin output" })).toBeNull();
+    expect(within(region).queryByRole("button", { name: "Unpin output" })).toBeNull();
+    expect(executeEditor.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ pinned: [] }));
+  });
+
+  it("shows graph problems and a forbidden detail", async () => {
+    executeEditor.mockRejectedValueOnce(
+      new ApiError(422, "CHANNEL_GRAPH_INVALID", "The graph is not valid", null, {
+        problems: [
+          {
+            code: "CHANNEL_NODE_CONFIG_INVALID",
+            node_id: "nd_1",
+            edge_id: null,
+            path: [],
+            detail: "SQL is empty",
+          },
+        ],
+      }),
+    );
+    await renderCanvas([], nodeGraph, { channelId: "chn_1" });
+    fireEvent.click(await shownButton("Test up to here: Start"));
+
+    const region = await screen.findByRole("region", { name: "Editor test" });
+    await waitFor(() => expect(region.textContent).toContain("The graph is not valid"));
+    expect(region.textContent).toContain("SQL is empty");
+    fireEvent.click(screen.getByRole("button", { name: "1 errors, 0 warnings" }));
+    expect(screen.getByRole("button", { name: "SQL is empty (Start)" })).toBeTruthy();
+
+    executeEditor.mockRejectedValueOnce(
+      new ApiError(403, "AUTH_FORBIDDEN", "Missing channel:code_write for Start", null),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Test up to here" }));
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toContain("Missing channel:code_write for Start");
+    });
+  });
+
+  it("hides the editor test without channel:write and while browsing", async () => {
+    sessionPermissions.current = [];
+    await renderCanvas([], nodeGraph, { channelId: "chn_1" });
+    expect(await shownButton("Run node")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Test up to here: Start" })).toBeNull();
+    cleanup();
+
+    sessionPermissions.current = ["channel:write"];
+    await renderCanvas([], nodeGraph, { channelId: "chn_1", appearance: "browse", mutable: false });
+    expect(await screen.findByText("Start")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Test up to here: Start" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Run node" })).toBeNull();
+  });
+
+  it("keeps the editor test available while a real run locks the canvas", async () => {
+    await renderCanvas([], nodeGraph, { channelId: "chn_1", mutable: false });
+    expect((await shownButton("Run node") as HTMLButtonElement).disabled).toBe(true);
+    expect((await shownButton("Test up to here: Start") as HTMLButtonElement).disabled).toBe(false);
   });
 });

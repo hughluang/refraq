@@ -1,6 +1,7 @@
 import { apiClient } from "@/lib/api";
 import type { OffsetPage } from "@/lib/pagination";
 
+import type { EditorPin } from "@/features/channels/editorSession";
 import type {
   Channel,
   ChannelDraft,
@@ -8,6 +9,7 @@ import type {
   ChannelRunDetail,
   ChannelVersion,
   Confirmation,
+  EditorExecution,
   ExpressionContext,
   Graph,
   GraphProblem,
@@ -15,6 +17,9 @@ import type {
   RefinedPort,
   TemplatePreviewResult,
 } from "@/features/channels/types";
+
+/** Server wall is 120s and still answers 200. Wait long enough to receive that. */
+const EDITOR_EXECUTE_TIMEOUT_MS = 130_000;
 
 function querySuffix(
   params?: Record<string, string | number | boolean | undefined>,
@@ -127,6 +132,23 @@ export function publishChannel(id: string, draftRevision: number) {
       body: JSON.stringify({ draft_revision: draftRevision }),
     },
   );
+}
+
+export function executeEditor(
+  id: string,
+  body: {
+    graph: Graph;
+    stop_at_node_id: string;
+    row_limit: number;
+    pinned: readonly EditorPin[];
+  },
+) {
+  return apiClient<EditorExecution>(`/channels/${id}/editor/execute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    timeoutMs: EDITOR_EXECUTE_TIMEOUT_MS,
+  });
 }
 
 export function startRun(

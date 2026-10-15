@@ -63,6 +63,7 @@ type Props = {
   templatePreview?: ChannelTemplatePreview | null;
   upstream: ReactNode;
   result: ReactNode;
+  editor?: ReactNode;
   onClose: () => void;
   onChange: (nodeId: string, data: FlowNodeData) => void;
   onRun: (nodeId: string) => void;
@@ -90,6 +91,7 @@ export function NodeConfigPanel({
   templatePreview = null,
   upstream,
   result,
+  editor = null,
   onClose,
   onChange,
   onRun,
@@ -271,6 +273,7 @@ export function NodeConfigPanel({
           />
         </Stack>
         </NodeRegion>
+        {editor}
         {result}
       </div>
     </FieldDisclosureContext.Provider>
