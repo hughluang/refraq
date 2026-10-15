@@ -23,6 +23,7 @@ vi.mock("@refinedev/core", () => ({
     options?.defaultValue ?? key,
   useNotification: () => ({ open: vi.fn() }),
   useCan: () => ({ data: { can: true } }),
+  usePermissions: () => ({ data: [] as string[] }),
   useBreadcrumb: () => ({ breadcrumbs: [] }),
 }));
 

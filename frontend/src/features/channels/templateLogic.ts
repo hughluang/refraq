@@ -1,4 +1,5 @@
 import type { SchemaObject } from "@/features/channels/configSchemaForm";
+import { isLoopReturn } from "@/features/channels/portLayout";
 import { scanTemplate, templatePosition } from "@/features/channels/templateScan";
 import {
   memberOptions,
@@ -120,35 +121,60 @@ export function templateCompletions(
   };
 }
 
+export type ScopeEdge = {
+  source: string;
+  target: string;
+  /** Output port the edge leaves. Selects that port's refined schema. */
+  sourcePort?: string;
+  /** Input port the edge enters. A loop return is not an upstream dependency. */
+  targetPort?: string;
+};
+
 export function upstreamOutputs(
   nodeId: string,
   nodes: readonly { id: string; ref: string; name: string }[],
-  edges: readonly { source: string; target: string }[],
+  edges: readonly ScopeEdge[],
   schemas: ReadonlyMap<string, SchemaObject | null>,
   samples: ReadonlyMap<string, unknown> = new Map(),
 ): ScopeNodeOutput[] {
-  const incoming = new Map<string, string[]>();
+  const incoming = new Map<string, ScopeEdge[]>();
   for (const edge of edges) {
+    if (isLoopReturn(edge.targetPort)) continue;
     const list = incoming.get(edge.target) ?? [];
-    list.push(edge.source);
+    list.push(edge);
     incoming.set(edge.target, list);
   }
   const seen = new Set<string>();
+  const portByNode = new Map<string, string | undefined>();
   const stack = [...(incoming.get(nodeId) ?? [])];
   while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current || seen.has(current)) continue;
-    seen.add(current);
-    stack.push(...(incoming.get(current) ?? []));
+    const edge = stack.pop();
+    if (!edge || seen.has(edge.source)) continue;
+    seen.add(edge.source);
+    portByNode.set(edge.source, edge.sourcePort);
+    stack.push(...(incoming.get(edge.source) ?? []));
   }
   return nodes
     .filter((node) => seen.has(node.id) && node.ref)
     .map((node) => ({
       ref: node.ref,
       name: node.name,
-      schema: schemas.get(node.id) ?? null,
+      schema: schemaAt(schemas, node.id, portByNode.get(node.id)),
       sample: samples.get(node.id),
     }));
+}
+
+function schemaAt(
+  schemas: ReadonlyMap<string, SchemaObject | null>,
+  nodeId: string,
+  port: string | undefined,
+): SchemaObject | null {
+  if (port) {
+    const keyed = schemas.get(`${nodeId}:${port}`);
+    if (keyed !== undefined) return keyed;
+  }
+  const nodeSchema = schemas.get(nodeId);
+  return nodeSchema === undefined ? null : nodeSchema;
 }
 
 function applyMember(text: string, cursor: number, access: AccessChain, member: string): string {

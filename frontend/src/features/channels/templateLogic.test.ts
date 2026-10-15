@@ -228,6 +228,17 @@ describe("completion", () => {
   });
 });
 
+const STEP = {
+  type: "object",
+  additionalProperties: false,
+  properties: { current: {}, index: {}, count: {} },
+} as const;
+const DONE = {
+  type: "object",
+  additionalProperties: false,
+  properties: { current: {}, index: {}, count: {}, results: {} },
+} as const;
+
 describe("upstreamOutputs", () => {
   it("lists ancestors and not the node itself", () => {
     const found = upstreamOutputs(
@@ -249,5 +260,41 @@ describe("upstreamOutputs", () => {
       "rows",
     );
     expect(found.find((item) => item.ref === "run_manually")?.sample).toEqual({ test: "x" });
+  });
+
+  it("offers the For step inside the body and results after it", () => {
+    const nodes = [
+      { id: "trigger", ref: "run_manually", name: "Run" },
+      { id: "loop", ref: "walk", name: "Walk" },
+      { id: "body", ref: "step", name: "Step" },
+      { id: "after", ref: "after", name: "After" },
+    ];
+    const edges = [
+      { source: "trigger", target: "loop", sourcePort: "main", targetPort: "main" },
+      { source: "loop", target: "body", sourcePort: "each", targetPort: "main" },
+      { source: "body", target: "loop", sourcePort: "main", targetPort: "loop" },
+      { source: "loop", target: "after", sourcePort: "done", targetPort: "main" },
+    ];
+    const schemas = new Map<string, { type: string; properties: Record<string, unknown> } | null>([
+      ["loop:each", STEP],
+      ["loop:done", DONE],
+    ]);
+    const inside = upstreamOutputs("body", nodes, edges, schemas);
+    expect(inside.map((item) => item.ref).sort()).toEqual(["run_manually", "walk"]);
+    expect(inside.find((item) => item.ref === "walk")?.schema).toEqual(STEP);
+    const text = "{{ self.walk.output.";
+    expect(templateCompletions(text, text.length, false, scopeOf(inside))?.options).toEqual([
+      "self.walk.output.current",
+      "self.walk.output.index",
+      "self.walk.output.count",
+    ]);
+
+    const after = upstreamOutputs("after", nodes, edges, schemas);
+    expect(after.map((item) => item.ref)).not.toContain("step");
+    expect(after.find((item) => item.ref === "walk")?.schema).toEqual(DONE);
+    const doneText = "{{ self.walk.output.";
+    expect(templateCompletions(doneText, doneText.length, false, scopeOf(after))?.options).toContain(
+      "self.walk.output.results",
+    );
   });
 });

@@ -32,4 +32,33 @@ describe("channel node type locales", () => {
       expect(zhMessages[key]).not.toBe("");
     }
   });
+
+  it("keeps code and source-query field copy in both languages", () => {
+    const keys = [
+      "channelNodeTypes.transform.code.label",
+      "channelNodeTypes.transform.code.summary",
+      "channelNodeTypes.read.source_query.label",
+      "channelNodeTypes.read.source_query.summary",
+      "channels.config.fields.transform.code.code",
+      "channels.config.fields.transform.code.code.description",
+      "channels.config.fields.transform.code.timeout_sec",
+      "channels.config.fields.transform.code.timeout_sec.description",
+      "channels.config.fields.read.source_query.source_id",
+      "channels.config.fields.read.source_query.source_id.description",
+      "channels.config.fields.read.source_query.sql",
+      "channels.config.fields.read.source_query.sql.description",
+      "channels.config.fields.read.source_query.row_cap",
+      "channels.config.fields.read.source_query.row_cap.description",
+      "channels.canvas.permissionRequired",
+      "channels.node.permissionReadOnly",
+      "channels.config.source.placeholder",
+      "channels.config.source.loadFailed",
+    ];
+    const enMessages = en as Record<string, string>;
+    const zhMessages = zh as Record<string, string>;
+    for (const key of keys) {
+      expect(enMessages[key]).toBeTruthy();
+      expect(zhMessages[key]).toBeTruthy();
+    }
+  });
 });

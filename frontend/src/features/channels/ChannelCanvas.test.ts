@@ -14,8 +14,16 @@ import {
 } from "@/features/channels/types";
 import { Instant } from "@/lib/instant";
 
+const sessionPermissions = vi.hoisted(() => ({ current: [] as string[] }));
+
 const LABELS: Record<string, string> = {
   "channels.canvas.add": "Add",
+  "channels.canvas.permissionRequired": "Requires {{permission}}",
+  "channels.node.permissionReadOnly":
+    "This configuration is view only. Editing it requires {{permission}}.",
+  "channels.node.name": "Name",
+  "channels.config.fields.transform.code.code": "Code",
+  "channels.config.fields.transform.code.timeout_sec": "Timeout (seconds)",
   "channels.canvas.undo": "Undo",
   "channels.canvas.redo": "Redo",
   "channels.canvas.palette": "Nodes",
@@ -25,6 +33,18 @@ const LABELS: Record<string, string> = {
   "channels.run.upstream": "Upstream outputs",
   "channels.run.result": "This node's result",
   "channels.run.waiting": "Waiting for this node",
+  "channels.run.notRun": "Not run",
+  "channels.run.executions": "{{count}} executions",
+  "channels.canvas.handle": "{{node}} {{port}} {{side}}",
+  "channels.canvas.input": "input",
+  "channels.canvas.output": "output",
+  "channels.canvas.edge": "{{source}} to {{target}}",
+  "channels.canvas.ports.main": "Main",
+  "channels.canvas.ports.true": "True",
+  "channels.canvas.ports.false": "False",
+  "channels.canvas.ports.each": "Each",
+  "channels.canvas.ports.done": "Done",
+  "channels.canvas.ports.loop": "Loop",
 };
 
 vi.mock("@refinedev/core", () => ({
@@ -34,9 +54,11 @@ vi.mock("@refinedev/core", () => ({
     if (!options) return template;
     return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options[name] ?? ""));
   },
+  usePermissions: () => ({ data: sessionPermissions.current }),
 }));
 
 function stubDomApis() {
+  sessionPermissions.current = [];
   Object.defineProperty(window, "matchMedia", {
     writable: true,
     value: (query: string) => ({
@@ -46,12 +68,95 @@ function stubDomApis() {
       removeEventListener: vi.fn(),
     }),
   });
+  // React Flow hides a node until ResizeObserver reports a size, and it only
+  // draws an edge once both ends have measured handle bounds.
   class ResizeObserverStub {
-    observe() {}
+    private readonly callback: ResizeObserverCallback;
+
+    constructor(callback: ResizeObserverCallback) {
+      this.callback = callback;
+    }
+
+    observe(target: Element) {
+      queueMicrotask(() => {
+        this.callback(
+          [{ target, contentRect: target.getBoundingClientRect() } as ResizeObserverEntry],
+          this as unknown as ResizeObserver,
+        );
+      });
+    }
+
     unobserve() {}
     disconnect() {}
   }
   globalThis.ResizeObserver = ResizeObserverStub;
+  const layoutSize = (element: Element): { width: number; height: number } | null => {
+    if (!(element instanceof HTMLElement)) return null;
+    if (element.classList.contains("react-flow__node")) return { width: 160, height: 88 };
+    if (element.classList.contains("react-flow__handle")) return { width: 8, height: 8 };
+    return null;
+  };
+  for (const key of ["offsetWidth", "offsetHeight"] as const) {
+    Object.defineProperty(HTMLElement.prototype, key, {
+      configurable: true,
+      get() {
+        const box = layoutSize(this);
+        return box ? box[key === "offsetWidth" ? "width" : "height"] : 0;
+      },
+    });
+  }
+  Document.prototype.elementFromPoint = () => null;
+  if (document.fonts == null) {
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: { addEventListener() {}, removeEventListener() {} },
+    });
+  }
+  const rect = () => ({
+    x: 0,
+    y: 0,
+    top: 0,
+    left: 0,
+    bottom: 0,
+    right: 0,
+    width: 0,
+    height: 0,
+    toJSON() {
+      return {};
+    },
+  });
+  Range.prototype.getBoundingClientRect = rect;
+  Range.prototype.getClientRects = () =>
+    ({
+      length: 0,
+      item: () => null,
+      [Symbol.iterator]: function* empty() {
+        yield* [];
+      },
+    }) as unknown as () => DOMRectList;
+  if (typeof window.DOMMatrixReadOnly === "undefined") {
+    class DOMMatrixReadOnlyStub {
+      m11 = 1;
+      m12 = 0;
+      m21 = 0;
+      m22 = 1;
+      m41 = 0;
+      m42 = 0;
+
+      constructor(init?: string) {
+        const matrix = typeof init === "string" ? /matrix\(([^)]+)\)/.exec(init) : null;
+        if (!matrix) return;
+        const [a, b, c, d, e, f] = matrix[1].split(",").map((part) => Number(part.trim()));
+        this.m11 = a || 1;
+        this.m12 = b || 0;
+        this.m21 = c || 0;
+        this.m22 = d || 1;
+        this.m41 = e || 0;
+        this.m42 = f || 0;
+      }
+    }
+    window.DOMMatrixReadOnly = DOMMatrixReadOnlyStub as unknown as typeof DOMMatrixReadOnly;
+  }
   if (!SVGElement.prototype.getBBox) {
     SVGElement.prototype.getBBox = () => ({
       x: 0,
@@ -105,6 +210,8 @@ function renderCanvas(
     mutable?: boolean;
     sessionRun?: ChannelRunDetail | null;
     onRun?: (nodeId: string) => void;
+    catalog?: NodeTypeSpec[];
+    onChange?: (graph: Graph) => void;
   } = {},
 ) {
   const appearance = options.appearance ?? "edit";
@@ -116,11 +223,11 @@ function renderCanvas(
           { env: "test" },
           createElement(ChannelCanvas, {
           graph,
-          catalog: [spec],
+          catalog: options.catalog ?? [spec],
           appearance,
           mutable,
           problems: next,
-          onChange: vi.fn(),
+          onChange: options.onChange ?? vi.fn(),
           sessionRun: options.sessionRun,
           onRun: options.onRun,
         }),
@@ -388,5 +495,380 @@ describe("ChannelCanvas controls", () => {
     fireEvent.click(within(config).getByRole("button", { name: "Run node" }));
     expect(onRun).toHaveBeenCalledTimes(2);
     expect(onRun).toHaveBeenLastCalledWith("nd_1");
+  });
+});
+
+function catalogSpec(
+  type: string,
+  inputs: NodeTypeSpec["inputs"],
+  outputs: NodeTypeSpec["outputs"],
+  entry = false,
+): NodeTypeSpec {
+  return {
+    type,
+    family: type.split(".")[0] ?? "transform",
+    label: type,
+    summary: type,
+    description: "",
+    entry,
+    inputs,
+    outputs,
+    config_schema: {},
+    permission: null,
+  };
+}
+
+function placed(
+  id: string,
+  type: string,
+  name: string,
+  x: number,
+): Graph["nodes"][number] {
+  return {
+    id,
+    ref: id,
+    type,
+    name,
+    position: { x, y: 40 },
+    config: {},
+    on_error: "stop",
+    retry: null,
+  };
+}
+
+const IF_SPEC = catalogSpec("transform.if", [{ port: "main", description: "" }], [
+  { port: "true", description: "", loop_back: false },
+  { port: "false", description: "", loop_back: false },
+]);
+const FOR_SPEC = catalogSpec(
+  "volume.for",
+  [
+    { port: "main", description: "" },
+    { port: "loop", description: "" },
+  ],
+  [
+    { port: "each", description: "", loop_back: true },
+    { port: "done", description: "", loop_back: false },
+  ],
+);
+const READ_SPEC = catalogSpec("read.sql", [{ port: "main", description: "" }], [
+  { port: "main", description: "", loop_back: false },
+]);
+const MERGE_SPEC = catalogSpec("transform.merge", [{ port: "main", description: "" }], [
+  { port: "main", description: "", loop_back: false },
+]);
+
+describe("channel ports", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  async function port(name: string) {
+    return waitFor(() => screen.getByRole("button", { name }));
+  }
+
+  it("shows true and false outputs on If", async () => {
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [placed("check", "transform.if", "Check", 40)],
+    }, { catalog: [IF_SPEC] });
+
+    expect(await port("Check True output")).toBeTruthy();
+    expect(await port("Check False output")).toBeTruthy();
+    expect(screen.getByText("True")).toBeTruthy();
+    expect(screen.getByText("False")).toBeTruthy();
+    expect((await port("Check True output")).getAttribute("data-handleid")).toBe("true");
+  });
+
+  it("shows For inputs and the loop-back output", async () => {
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [placed("walk", "volume.for", "Walk", 40)],
+    }, { catalog: [FOR_SPEC] });
+
+    expect(await port("Walk Main input")).toBeTruthy();
+    expect((await port("Walk Loop input")).getAttribute("data-handlepos")).toBe("bottom");
+    const each = await port("Walk Each output");
+    expect(each.className).toContain("channel-flow-handle--loop");
+    expect(await port("Walk Done output")).toBeTruthy();
+    expect(screen.getByText("Each")).toBeTruthy();
+    expect(screen.getByText("Loop")).toBeTruthy();
+  });
+
+  it("keeps a non-main port when an edge is created, including through undo", async () => {
+    const onChange = vi.fn();
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [placed("check", "transform.if", "Check", 20), placed("read", "read.sql", "Read", 280)],
+    }, { catalog: [IF_SPEC, READ_SPEC], onChange });
+
+    fireEvent.click(await port("Check True output"));
+    fireEvent.click(await port("Read Main input"));
+
+    expect(await screen.findByRole("group", { name: "True to Main" })).toBeTruthy();
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    expect(saved.edges).toEqual([
+      expect.objectContaining({
+        source: { node_id: "check", port: "true" },
+        target: { node_id: "read", port: "main" },
+      }),
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("group", { name: "True to Main" })).toBeNull();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+    expect(await screen.findByRole("group", { name: "True to Main" })).toBeTruthy();
+  });
+
+  it("lets Merge accept two incoming edges", async () => {
+    const onChange = vi.fn();
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [
+        placed("left", "read.sql", "Left", 20),
+        placed("right", "read.sql", "Right", 20),
+        placed("merge", "transform.merge", "Merge", 280),
+      ],
+    }, { catalog: [READ_SPEC, MERGE_SPEC], onChange });
+
+    fireEvent.click(await port("Left Main output"));
+    fireEvent.click(await port("Merge Main input"));
+    fireEvent.click(await port("Right Main output"));
+    fireEvent.click(await port("Merge Main input"));
+
+    expect(await screen.findAllByRole("group", { name: "Main to Main" })).toHaveLength(2);
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    expect(saved.edges.map((edge) => [edge.source.node_id, edge.target.port])).toEqual([
+      ["left", "main"],
+      ["right", "main"],
+    ]);
+  });
+
+  it("marks a return into the loop input", async () => {
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [placed("walk", "volume.for", "Walk", 20), placed("step", "read.sql", "Step", 280)],
+      edges: [
+        {
+          id: "back",
+          source: { node_id: "step", port: "main" },
+          target: { node_id: "walk", port: "loop" },
+        },
+      ],
+    }, { catalog: [FOR_SPEC, READ_SPEC] });
+
+    await waitFor(() => {
+      expect(document.querySelector(".channel-flow-edge--return")).not.toBeNull();
+    });
+    expect(screen.getByRole("group", { name: "Main to Loop" })).toBeTruthy();
+  });
+
+  it("counts repeated executions and marks a node that did not run", async () => {
+    const now = Instant.parse("2026-01-01T00:00:00Z");
+    const ran: Graph = {
+      ...EMPTY_GRAPH,
+      nodes: [
+        placed("trigger", "trigger.manual", "Start", 20),
+        placed("body", "read.sql", "Body", 200),
+        placed("skip", "read.sql", "Skip", 380),
+      ],
+      edges: [
+        {
+          id: "e1",
+          source: { node_id: "trigger", port: "main" },
+          target: { node_id: "body", port: "main" },
+        },
+        {
+          id: "e2",
+          source: { node_id: "body", port: "main" },
+          target: { node_id: "skip", port: "main" },
+        },
+      ],
+    };
+    const sessionRun: ChannelRunDetail = {
+      run: {
+        job_id: "job_1",
+        status: "succeeded",
+        outcome: "completed",
+        target: "draft",
+        version: null,
+        draft_revision: 1,
+        trigger_kind: "user",
+        trigger_ref: "trigger",
+        trigger_node_id: "trigger",
+        trigger_actor_name: null,
+        trigger_schedule_name: null,
+        ignore_checkpoints: false,
+        stop_at_node_id: null,
+        failed_node_id: null,
+        created_at: now,
+        started_at: now,
+        finished_at: now,
+        error_code: null,
+        error_message: null,
+      },
+      graph: ran,
+      node_executions: [
+        {
+          seq: 1,
+          node_id: "trigger",
+          status: "succeeded",
+          started_at: now,
+          finished_at: now,
+          output_bytes: 2,
+          output_preview: {},
+          error_code: null,
+          error_message: null,
+          error_detail: null,
+        },
+        {
+          seq: 2,
+          node_id: "body",
+          status: "succeeded",
+          started_at: now,
+          finished_at: now,
+          output_bytes: 2,
+          output_preview: { current: 0 },
+          error_code: null,
+          error_message: null,
+          error_detail: null,
+        },
+        {
+          seq: 3,
+          node_id: "body",
+          status: "succeeded",
+          started_at: now,
+          finished_at: now,
+          output_bytes: 2,
+          output_preview: { current: 1 },
+          error_code: null,
+          error_message: null,
+          error_detail: null,
+        },
+      ],
+    };
+    await renderCanvas([], ran, {
+      catalog: [
+        catalogSpec(
+          "trigger.manual",
+          [],
+          [{ port: "main", description: "" }],
+          true,
+        ),
+        READ_SPEC,
+      ],
+      sessionRun,
+      appearance: "browse",
+      mutable: false,
+    });
+
+    const body = document.querySelector(".react-flow__node[data-id='body']");
+    const skip = document.querySelector(".react-flow__node[data-id='skip']");
+    expect(body?.textContent).toContain("2 executions");
+    expect(body?.querySelector(".channel-flow-node--succeeded")).not.toBeNull();
+    expect(skip?.textContent).toContain("Not run");
+    expect(skip?.querySelector(".channel-flow-node--dead")).not.toBeNull();
+  });
+});
+
+const CODE_SPEC: NodeTypeSpec = {
+  ...catalogSpec(
+    "transform.code",
+    [{ port: "main", description: "" }],
+    [{ port: "main", description: "" }],
+  ),
+  label: "Code",
+  summary: "Runs Python",
+  permission: "channel:code_write",
+  config_schema: {
+    type: "object",
+    required: ["code"],
+    properties: {
+      code: {
+        type: "string",
+        description: "Body",
+        contentMediaType: "text/x-python",
+      },
+      timeout_sec: {
+        type: "integer",
+        minimum: 1,
+        maximum: 300,
+        description: "Seconds",
+      },
+    },
+  },
+};
+
+function codeGraph(): Graph {
+  return {
+    nodes: [
+      {
+        id: "nd_code",
+        ref: "code",
+        type: "transform.code",
+        name: "Normalize",
+        position: { x: 40, y: 40 },
+        config: { code: "return 1" },
+        on_error: "stop",
+        retry: null,
+      },
+    ],
+    edges: [],
+    settings: EMPTY_GRAPH.settings,
+  };
+}
+
+describe("guarded node authoring", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  it("does not add a guarded node when the session lacks its permission", async () => {
+    await renderCanvas([], EMPTY_GRAPH, { catalog: [spec, CODE_SPEC] });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    const guarded = screen.getByRole("button", { name: /Requires channel:code_write/ });
+    expect(guarded.textContent).toContain("Code");
+    expect((guarded as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(guarded);
+    expect(document.querySelectorAll(".react-flow__node")).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /Manual/ }));
+    expect(document.querySelectorAll(".react-flow__node")).toHaveLength(1);
+  });
+
+  it("shows an existing guarded node read-only without the permission", async () => {
+    await renderCanvas([], codeGraph(), { catalog: [CODE_SPEC] });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+
+    const editor = await screen.findByRole("textbox", { name: "Code" });
+    expect(editor.getAttribute("contenteditable")).toBe("false");
+    expect(
+      [...document.querySelectorAll(".cm-line")].map((line) => line.textContent),
+    ).toEqual(["return 1"]);
+    expect(screen.queryByRole("textbox", { name: "Timeout (seconds)" })).toBeNull();
+    expect(
+      screen.getByText("This configuration is view only. Editing it requires channel:code_write."),
+    ).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Name" })).toBeTruthy();
+  });
+
+  it("lets the session edit a guarded node when it holds the permission", async () => {
+    sessionPermissions.current = ["channel:code_write"];
+    await renderCanvas([], codeGraph(), { catalog: [CODE_SPEC] });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+
+    const editor = await screen.findByRole("textbox", { name: "Code" });
+    expect(editor.getAttribute("contenteditable")).toBe("true");
+    expect(screen.queryByText(/view only/i)).toBeNull();
+    const timeout = screen.getByRole("textbox", { name: "Timeout (seconds)" });
+    fireEvent.change(timeout, { target: { value: "45" } });
+    expect((screen.getByRole("textbox", { name: "Timeout (seconds)" }) as HTMLInputElement).value).toBe(
+      "45",
+    );
   });
 });

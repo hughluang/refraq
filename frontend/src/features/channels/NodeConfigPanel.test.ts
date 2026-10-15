@@ -11,6 +11,8 @@ import { problemIdentity } from "@/features/channels/problemLabel";
 import type { ChannelTemplatePreview } from "@/features/channels/TemplateRunPreview";
 import type { GraphProblem } from "@/features/channels/types";
 import { listEntities, listVersions } from "@/features/entities/api";
+import { listSources } from "@/features/sources/api/sources";
+import type { Source } from "@/features/sources/types";
 import type { EntityAttribute, EntityVersion } from "@/features/entities/types";
 
 const LABELS: Record<string, string> = {
@@ -42,6 +44,28 @@ const LABELS: Record<string, string> = {
   "channels.config.fields.source": "Source",
   "channels.config.fields.statement_timeout_sec": "Statement timeout",
   "channels.config.fields.key": "Source key",
+  "channels.config.listItem": "{{label}} {{n}}",
+  "channels.config.fields.transform.filter.items": "Items",
+  "channels.config.fields.transform.filter.combinator": "Combinator",
+  "channels.config.fields.transform.filter.conditions": "Conditions",
+  "channels.config.fields.transform.filter.key": "Field",
+  "channels.config.fields.transform.filter.operator": "Operator",
+  "channels.config.fields.transform.filter.value": "Value",
+  "channels.config.fields.transform.merge.mode": "Mode",
+  "channels.config.fields.transform.merge.inputs": "Inputs",
+  "channels.config.fields.transform.merge.key": "Key",
+  "channels.config.fields.transform.merge.join": "Join",
+  "channels.config.fields.transform.set_fields.fields": "Fields",
+  "channels.config.fields.transform.set_fields.name": "Name",
+  "channels.config.fields.transform.set_fields.value": "Value",
+  "channels.config.fields.transform.deduplicate.items": "Items",
+  "channels.config.fields.transform.deduplicate.keys": "Keys",
+  "channels.config.options.combinator.all": "All",
+  "channels.config.options.operator.eq": "Equals",
+  "channels.config.options.operator.is_null": "Is empty",
+  "channels.config.options.mode.append": "Append",
+  "channels.config.options.mode.by_key": "By key",
+  "channels.config.options.join.inner": "Inner",
   "channels.config.fields.on_incompatible_head": "Incompatible head",
   "channels.config.options.mode.upsert": "Upsert",
   "channels.config.options.mode.delete": "Delete",
@@ -52,6 +76,12 @@ const LABELS: Record<string, string> = {
     "The result type is string. Quotes inside an expression are not part of the result.",
   "channels.template.ruleText": "The whole text is the value. Quotes are not needed.",
   "channels.config.fields.sql": "SQL",
+  "channels.config.fields.transform.code.code": "Code",
+  "channels.config.fields.transform.code.code.description": "Python body of main.",
+  "channels.config.fields.read.source_query.source_id": "Source",
+  "channels.config.fields.read.source_query.source_id.description": "Registered Source.",
+  "channels.config.source.placeholder": "Select a source",
+  "channels.config.source.loadFailed": "Could not load sources",
   "form.field.description": "Description",
   "form.field.status": "Problems",
   "problems.CHANNEL_NODE_CONFIG_INVALID": "A node configuration is invalid",
@@ -66,6 +96,11 @@ vi.mock("@refinedev/core", () => ({
     if (!values) return template;
     return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(values[name] ?? ""));
   },
+  usePermissions: () => ({ data: [] as string[] }),
+}));
+
+vi.mock("@/features/sources/api/sources", () => ({
+  listSources: vi.fn(async () => ({ items: [], total: 0, limit: 100, offset: 0 })),
 }));
 
 vi.mock("@/features/entities/api", () => ({
@@ -792,5 +827,276 @@ describe("NodeConfigPanel display mode", () => {
     expect(screen.queryByText(/reserved key/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Output Problems" }));
     expect(screen.getByText(/added by the run/)).toBeTruthy();
+  });
+});
+
+const ANY_TEMPLATE = { type: "string", "x-refraq-template": { type: "string" } } as const;
+
+const FILTER_SCHEMA: SchemaObject = {
+  type: "object",
+  properties: {
+    items: { type: "string", "x-refraq-template": { type: "array", items: { type: "object" } } },
+    combinator: { type: "string", enum: ["all", "any"], default: "all" },
+    conditions: {
+      type: "array",
+      description: "Comparisons.",
+      items: {
+        type: "object",
+        required: ["key", "operator"],
+        properties: {
+          key: { type: "string" },
+          operator: {
+            type: "string",
+            enum: ["eq", "is_null", "is_not_null"],
+          },
+          value: ANY_TEMPLATE,
+        },
+        allOf: [
+          {
+            if: { properties: { operator: { enum: ["eq"] } }, required: ["operator"] },
+            then: { required: ["value"] },
+          },
+        ],
+      },
+    },
+  },
+};
+
+const MERGE_SCHEMA: SchemaObject = {
+  type: "object",
+  properties: {
+    mode: { type: "string", enum: ["append", "by_key", "by_position"] },
+    inputs: {
+      type: "array",
+      description: "Lists to fold.",
+      items: {
+        type: "string",
+        description: "One list.",
+        "x-refraq-template": { type: "array", items: { type: "object" } },
+      },
+    },
+    key: { type: ["string", "null"] },
+    join: {
+      type: "string",
+      enum: ["inner", "left", "full"],
+      default: "inner",
+      description: "append ignores it.",
+    },
+  },
+  allOf: [
+    {
+      if: { properties: { mode: { const: "by_key" } }, required: ["mode"] },
+      then: { required: ["key"] },
+    },
+  ],
+};
+
+describe("reshape node configuration", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  it("edits filter conditions and hides the value for an emptiness check", async () => {
+    const onChange = await renderPanel(
+      FILTER_SCHEMA,
+      node(
+        {
+          items: "{{ self.read.output.rows }}",
+          combinator: "all",
+          conditions: [{ key: "code", operator: "eq", value: '"A"' }],
+        },
+        "transform.filter",
+      ),
+    );
+
+    expect(screen.getByRole("combobox", { name: "Combinator" })).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Field" })).toBeTruthy();
+    expect((screen.getByRole("combobox", { name: "Operator" }) as HTMLInputElement).value).toBe(
+      "Equals",
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "Value" })).toBeTruthy();
+    });
+
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: "Operator" }));
+    const lists = screen.getAllByRole("listbox", { hidden: true });
+    const list = lists.find((item) => within(item).queryByRole("option", { name: "Is empty", hidden: true }));
+    if (!list) throw new Error("missing operator list");
+    fireEvent.click(within(list).getByRole("option", { name: "Is empty", hidden: true }));
+    const changed = onChange.mock.calls.at(-1)?.[1] as FlowNodeData;
+    expect(changed.config.conditions).toEqual([{ key: "code", operator: "is_null", value: '"A"' }]);
+
+    cleanup();
+    await renderPanel(
+      FILTER_SCHEMA,
+      node(
+        {
+          items: "{{ self.read.output.rows }}",
+          combinator: "all",
+          conditions: [{ key: "code", operator: "is_null" }],
+        },
+        "transform.filter",
+      ),
+    );
+    expect(screen.queryByRole("textbox", { name: "Value" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Field" })).toBeTruthy();
+  });
+
+  it("edits merge inputs and shows the key only for a key join", async () => {
+    const onChange = await renderPanel(
+      MERGE_SCHEMA,
+      node({ mode: "append", inputs: ["{{ self.left.output.rows }}"], key: null, join: "inner" }, "transform.merge"),
+    );
+    expect(screen.queryByRole("textbox", { name: "Key" })).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Join" })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "Inputs 1" })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    const next = onChange.mock.calls.at(-1)?.[1] as FlowNodeData;
+    expect(next.config.inputs).toEqual(["{{ self.left.output.rows }}", ""]);
+
+    cleanup();
+    await renderPanel(
+      MERGE_SCHEMA,
+      node({ mode: "by_key", inputs: [], key: "code", join: "inner" }, "transform.merge"),
+    );
+    expect((screen.getByRole("textbox", { name: "Key" }) as HTMLInputElement).value).toBe("code");
+    expect((screen.getByRole("combobox", { name: "Join" }) as HTMLInputElement).value).toBe("Inner");
+  });
+
+  it("adds a set-fields entry with a name and a template value", async () => {
+    const onChange = await renderPanel(
+      {
+        type: "object",
+        properties: {
+          fields: {
+            type: "array",
+            description: "Keys to write.",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+                value: ANY_TEMPLATE,
+              },
+            },
+          },
+        },
+      },
+      node({ fields: [{ name: "code", value: '"A"' }] }, "transform.set_fields"),
+    );
+    expect(screen.getAllByRole("textbox", { name: "Name" }).length).toBeGreaterThan(1);
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "Value" })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    const next = onChange.mock.calls.at(-1)?.[1] as FlowNodeData;
+    expect(next.config.fields).toEqual([
+      { name: "code", value: '"A"' },
+      { name: "", value: "" },
+    ]);
+  });
+
+  it("adds a deduplicate key", async () => {
+    const onChange = await renderPanel(
+      {
+        type: "object",
+        properties: {
+          items: { type: "string", "x-refraq-template": { type: "array" } },
+          keys: { type: "array", description: "Identity fields.", items: { type: "string" } },
+        },
+      },
+      node({ items: "{{ self.read.output.rows }}", keys: ["code"] }, "transform.deduplicate"),
+    );
+    const key = screen.getByRole("textbox", { name: "Keys 1" }) as HTMLInputElement;
+    expect(key.value).toBe("code");
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    const next = onChange.mock.calls.at(-1)?.[1] as FlowNodeData;
+    expect(next.config.keys).toEqual(["code", ""]);
+  });
+});
+
+function listedSource(id: string, name: string): Source {
+  return {
+    id,
+    key: id,
+    locator_key: id,
+    name,
+    kind: "database",
+    status: "active",
+    description: null,
+    engine: "postgresql",
+    access: null,
+    has_access: true,
+    access_updated_at: null,
+  };
+}
+
+describe("code and source query fields", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  it("renders python in a code editor named by the field label", async () => {
+    await renderPanel(
+      {
+        type: "object",
+        properties: {
+          code: {
+            type: "string",
+            description: "Schema description",
+            contentMediaType: "text/x-python",
+          },
+        },
+      },
+      node({ code: "return 1" }, "transform.code"),
+    );
+
+    const editor = screen.getByRole("textbox", { name: "Code" });
+    expect(editor.getAttribute("contenteditable")).toBe("true");
+    expect(
+      [...document.querySelectorAll(".cm-line")].map((line) => line.textContent),
+    ).toEqual(["return 1"]);
+    fireEvent.click(screen.getByRole("button", { name: "Code Description" }));
+    expect(screen.getByText("Python body of main.")).toBeTruthy();
+    expect(screen.queryByText("Schema description")).toBeNull();
+  });
+
+  it("lists registered sources and stores the chosen id", async () => {
+    vi.mocked(listSources).mockResolvedValue({
+      items: [listedSource("src_wh", "Warehouse"), listedSource("src_arc", "Archive")],
+      total: 2,
+      limit: 100,
+      offset: 0,
+    });
+    const onChange = await renderPanel(
+      {
+        type: "object",
+        properties: {
+          source_id: {
+            type: "string",
+            description: "Schema description",
+            "x-refraq-ref": "source",
+          },
+        },
+      },
+      node({ source_id: "src_wh" }, "read.source_query"),
+    );
+
+    await waitFor(() => {
+      expect((screen.getByRole("combobox", { name: "Source" }) as HTMLInputElement).value).toBe(
+        "Warehouse",
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Source Description" }));
+    expect(screen.getByText("Registered Source.")).toBeTruthy();
+
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: "Source" }));
+    const lists = screen.getAllByRole("listbox", { hidden: true });
+    const list = lists.find((item) =>
+      within(item).queryByRole("option", { name: "Archive", hidden: true }),
+    );
+    if (!list) throw new Error("missing source list");
+    fireEvent.click(within(list).getByRole("option", { name: "Archive", hidden: true }));
+    const changed = onChange.mock.calls.at(-1)?.[1] as FlowNodeData;
+    expect(changed.config.source_id).toBe("src_arc");
   });
 });

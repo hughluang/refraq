@@ -14,10 +14,16 @@ const LABELS: Record<string, string> = {
   "channels.run.notReached": "Not reached",
   "channels.run.waiting": "Waiting",
   "channels.run.running": "Running",
+  "channels.run.executions": "{{count}} executions",
+  "channels.run.execution": "Execution {{seq}}",
 };
 
 vi.mock("@refinedev/core", () => ({
-  useTranslate: () => (key: string) => LABELS[key] ?? key,
+  useTranslate: () => (key: string, options?: Record<string, unknown>) => {
+    const template = LABELS[key] ?? key;
+    if (!options) return template;
+    return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options[name] ?? ""));
+  },
 }));
 
 const graph = {
@@ -69,6 +75,23 @@ describe("node run regions", () => {
   it("says not reached once a finished run skipped the node", () => {
     mount(createElement(ResultRegion, { nodeId: "b", detail: detail("failed", []) }));
     expect(screen.getByText("Not reached")).toBeTruthy();
+  });
+
+  it("lists every execution of a node and the count", () => {
+    mount(
+      createElement(ResultRegion, {
+        nodeId: "b",
+        detail: detail("succeeded", [
+          { seq: 2, node_id: "b", status: "succeeded", output_preview: { current: "a" } },
+          { seq: 5, node_id: "b", status: "succeeded", output_preview: { current: "b" } },
+        ]),
+      }),
+    );
+    expect(screen.getByText("2 executions")).toBeTruthy();
+    expect(screen.getByText("Execution 2")).toBeTruthy();
+    expect(screen.getByText("Execution 5")).toBeTruthy();
+    expect(screen.getByText(/"current": "a"/)).toBeTruthy();
+    expect(screen.getByText(/"current": "b"/)).toBeTruthy();
   });
 
   it("shows waiting and running states", () => {

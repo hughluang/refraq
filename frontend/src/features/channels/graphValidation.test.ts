@@ -174,6 +174,66 @@ describe("connectionAllowed", () => {
     ).toBe(true);
   });
 
+  it("allows a cycle through a loop-back port and several edges into one input", () => {
+    const catalog: ConnectionCatalogItem[] = [
+      ...CATALOG,
+      {
+        type: "volume.for",
+        inputs: [{ port: "main" }, { port: "loop" }],
+        outputs: [{ port: "each" }, { port: "done" }],
+      },
+      {
+        type: "transform.merge",
+        inputs: [{ port: "main" }],
+        outputs: [{ port: "main" }],
+      },
+      {
+        type: "transform.if",
+        inputs: [{ port: "main" }],
+        outputs: [{ port: "true" }, { port: "false" }],
+      },
+    ];
+    const nodes = [
+      node("nd_for", "volume.for"),
+      node("nd_body", "read.sql"),
+      node("nd_left", "read.sql"),
+      node("nd_right", "read.sql"),
+      node("nd_merge", "transform.merge"),
+    ];
+    expect(
+      connectionAllowed(
+        {
+          nodes,
+          edges: [edge("ed_each", "nd_for", "nd_body", "each", "main")],
+        },
+        catalog,
+        {
+          source: "nd_body",
+          target: "nd_for",
+          sourceHandle: "main",
+          targetHandle: "loop",
+        },
+      ),
+    ).toBe(true);
+    const merged = {
+      nodes,
+      edges: [edge("ed_left", "nd_left", "nd_merge")],
+    };
+    expect(
+      connectionAllowed(merged, catalog, {
+        source: "nd_right",
+        target: "nd_merge",
+        sourceHandle: "main",
+        targetHandle: "main",
+      }),
+    ).toBe(true);
+    expect(
+      outputTargetTypes({ nodes: [node("nd_if", "transform.if")], edges: [] }, catalog, "nd_if", "true").map(
+        (item) => item.type,
+      ),
+    ).toContain("read.sql");
+  });
+
   it("lists node types that can accept an output", () => {
     const types = outputTargetTypes(
       { nodes: [node("nd_trigger", "trigger.manual")], edges: [] },

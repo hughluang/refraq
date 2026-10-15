@@ -1,7 +1,7 @@
 import type { Graph, GraphEdge } from "@/features/channels/types";
 import type { ChannelRunDetail, NodeExecution } from "@/features/channels/types";
 
-export type NodeRunPhase = "waiting" | "running" | "succeeded" | "failed";
+export type NodeRunPhase = "waiting" | "running" | "succeeded" | "failed" | "dead";
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
 
@@ -53,21 +53,39 @@ export function executionScope(graph: Graph, stopAt: string | null): Set<string>
 export function phaseByNode(detail: ChannelRunDetail, graph: Graph): Map<string, NodeRunPhase> {
   const scope = executionScope(graph, detail.run.stop_at_node_id ?? null);
   const terminal = isTerminalRun(detail.run.status);
-  const byId = new Map(detail.node_executions.map((item) => [item.node_id, item]));
+  const grouped = new Map<string, NodeExecution[]>();
+  for (const item of detail.node_executions) {
+    const list = grouped.get(item.node_id) ?? [];
+    list.push(item);
+    grouped.set(item.node_id, list);
+  }
   const phases = new Map<string, NodeRunPhase>();
   for (const id of scope) {
-    const execution = byId.get(id);
-    if (!execution) {
-      if (!terminal) phases.set(id, "waiting");
-      continue;
-    }
-    if (execution.status === "running") phases.set(id, "running");
-    else if (execution.status === "failed") phases.set(id, "failed");
-    else if (execution.status === "succeeded" || execution.status === "skipped") {
-      phases.set(id, "succeeded");
-    }
+    const phase = phaseOf(grouped.get(id) ?? []);
+    if (phase) phases.set(id, phase);
+    else if (terminal) phases.set(id, "dead");
+    else phases.set(id, "waiting");
   }
   return phases;
+}
+
+function phaseOf(items: readonly NodeExecution[]): NodeRunPhase | null {
+  if (items.length === 0) return null;
+  if (items.some((item) => item.status === "running")) return "running";
+  const latest = items.reduce((best, item) => (item.seq > best.seq ? item : best));
+  if (latest.status === "failed") return "failed";
+  if (latest.status === "succeeded" || latest.status === "skipped") return "succeeded";
+  return "waiting";
+}
+
+export function executionCountByNode(
+  executions: readonly Pick<NodeExecution, "node_id">[],
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const item of executions) {
+    counts.set(item.node_id, (counts.get(item.node_id) ?? 0) + 1);
+  }
+  return counts;
 }
 
 /** Changes whenever the run's status or any node execution's status changes. */
@@ -81,7 +99,8 @@ export function recordedKey(detail: ChannelRunDetail): string {
 
 export function samplesByNode(executions: readonly NodeExecution[]): Map<string, unknown> {
   const samples = new Map<string, unknown>();
-  for (const item of executions) {
+  const ordered = [...executions].sort((left, right) => left.seq - right.seq);
+  for (const item of ordered) {
     if (item.output_preview == null) continue;
     samples.set(item.node_id, item.output_preview);
   }

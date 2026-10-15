@@ -1,7 +1,7 @@
 "use client";
 
 import { Button, CloseButton, Group, Paper, Popover, Stack, Text } from "@mantine/core";
-import { useTranslate } from "@refinedev/core";
+import { usePermissions, useTranslate } from "@refinedev/core";
 import {
   Background,
   BaseEdge,
@@ -26,6 +26,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import {
+  Fragment,
   createContext,
   useContext,
   useEffect,
@@ -63,9 +64,22 @@ import {
 } from "@/features/channels/graphValidation";
 import { NodeConfigPanel } from "@/features/channels/NodeConfigPanel";
 import { ResultRegion, UpstreamRegion } from "@/features/channels/NodeRunRegions";
-import { phaseByNode, samplesByNode, type NodeRunPhase } from "@/features/channels/runSession";
+import {
+  executionCountByNode,
+  phaseByNode,
+  samplesByNode,
+  type NodeRunPhase,
+} from "@/features/channels/runSession";
 import type { ChannelTemplatePreview } from "@/features/channels/TemplateRunPreview";
+import { canAuthorNodeType } from "@/features/channels/nodePermission";
 import { nodeTypeLabel, nodeTypeSummary } from "@/features/channels/nodeTypeCopy";
+import {
+  isLoopReturn,
+  layoutNodePorts,
+  returnEdgePath,
+  type HandleSide,
+  type PortPlacement,
+} from "@/features/channels/portLayout";
 import {
   formatGraphProblem,
   problemColor,
@@ -121,8 +135,9 @@ const CanvasSurfaceContext = createContext({ editing: false, mutable: false });
 const CanvasCatalogContext = createContext<readonly NodeTypeSpec[]>([]);
 const CanvasRunContext = createContext<{
   phases: ReadonlyMap<string, NodeRunPhase>;
+  counts: ReadonlyMap<string, number>;
   onRun: (nodeId: string) => void;
-}>({ phases: new Map(), onRun: () => {} });
+}>({ phases: new Map(), counts: new Map(), onRun: () => {} });
 
 type Props = {
   graph: Graph;
@@ -169,6 +184,7 @@ function ChannelCanvasBody({
   onRun = () => {},
 }: Props) {
   const t = useTranslate();
+  const { data: heldPermissions } = usePermissions<string[]>({});
   const { screenToFlowPosition, setCenter, getInternalNode } = useReactFlow();
   const entryTypes = useMemo(
     () => new Set(catalog.filter((item) => item.entry).map((item) => item.type)),
@@ -453,7 +469,7 @@ function ChannelCanvasBody({
     position: { x: number; y: number },
     link?: { sourceId: string; sourceHandle: string },
   ) => {
-    if (!mutable) return;
+    if (!mutable || !canAuthorNodeType(spec.permission, heldPermissions)) return;
     clearHighlight();
     const label = nodeTypeLabel(t, spec);
     const count = nodesRef.current.filter((node) => node.data.nodeType === spec.type).length;
@@ -680,11 +696,12 @@ function ChannelCanvasBody({
   const labelGraph = problemGraphOf(nodes, edges);
   const revealKey =
     selected != null && highlight?.nodeId === selected.id ? highlight.key : null;
-  const outputSchemas = new Map(
-    ports
-      .filter((port) => port.direction === "output" && port.port === "main")
-      .map((port) => [port.node_id, port.schema] as const),
-  );
+  const outputSchemas = new Map<string, SchemaObject | null>();
+  for (const port of ports) {
+    if (port.direction !== "output") continue;
+    outputSchemas.set(`${port.node_id}:${port.port}`, port.schema);
+    if (port.port === "main") outputSchemas.set(port.node_id, port.schema);
+  }
   const samples = useMemo(
     () => (sessionRun ? samplesByNode(sessionRun.node_executions) : new Map<string, unknown>()),
     [sessionRun],
@@ -692,6 +709,13 @@ function ChannelCanvasBody({
   const phases = useMemo(
     () => (sessionRun ? phaseByNode(sessionRun, sessionRun.graph ?? graph) : new Map()),
     [sessionRun, graph],
+  );
+  const counts = useMemo(
+    () =>
+      sessionRun
+        ? executionCountByNode(sessionRun.node_executions)
+        : new Map<string, number>(),
+    [sessionRun],
   );
   const showCatalog = picker !== null && selected == null;
   const hasTrigger = nodes.some((node) => node.data.entry);
@@ -732,7 +756,7 @@ function ChannelCanvasBody({
     <Stack gap={0} flex={1} mih={0} h="100%" w="100%" pos="relative">
         <CanvasSurfaceContext.Provider value={{ editing: appearance === "edit", mutable }}>
         <CanvasCatalogContext.Provider value={catalog}>
-        <CanvasRunContext.Provider value={{ phases, onRun }}>
+        <CanvasRunContext.Provider value={{ phases, counts, onRun }}>
         <div
           ref={flowRootRef}
           className={
@@ -744,7 +768,19 @@ function ChannelCanvasBody({
         >
           <ReactFlow
             nodes={nodes}
-            edges={edges}
+            edges={edges.map((edge) => ({
+              ...edge,
+              ariaLabel: t("channels.canvas.edge", {
+                source: portLabel(t, edge.sourceHandle || "main"),
+                target: portLabel(t, edge.targetHandle || "main"),
+              }),
+              className: [
+                edge.className,
+                isLoopReturn(edge.targetHandle) ? "channel-flow-edge--return" : "",
+              ]
+                .filter(Boolean)
+                .join(" ") || undefined,
+            }))}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             defaultEdgeOptions={{ type: CHANNEL_EDGE_TYPE }}
@@ -843,26 +879,43 @@ function ChannelCanvasBody({
                   </div>
                   <div className="channel-node-config__body">
                     <Stack gap={4}>
-                      {catalogSpecs.map((spec) => (
-                        <Button
-                          key={spec.type}
-                          type="button"
-                          className="channel-node-picker__option"
-                          variant="subtle"
-                          size="xs"
-                          justify="flex-start"
-                          onClick={() => chooseSpec(spec)}
-                        >
-                          <span className="channel-node-picker__copy">
-                            <span className="channel-node-picker__label">
-                              {nodeTypeLabel(t, spec)}
+                      {catalogSpecs.map((spec) => {
+                        const allowed = canAuthorNodeType(spec.permission, heldPermissions);
+                        const reason =
+                          !allowed && spec.permission
+                            ? t("channels.canvas.permissionRequired", {
+                                permission: spec.permission,
+                              })
+                            : "";
+                        return (
+                          <Button
+                            key={spec.type}
+                            type="button"
+                            className="channel-node-picker__option"
+                            variant="subtle"
+                            size="xs"
+                            justify="flex-start"
+                            disabled={!allowed}
+                            title={reason || undefined}
+                            onClick={() => {
+                              if (!allowed) return;
+                              chooseSpec(spec);
+                            }}
+                          >
+                            <span className="channel-node-picker__copy">
+                              <span className="channel-node-picker__label">
+                                {nodeTypeLabel(t, spec)}
+                              </span>
+                              <span className="channel-node-picker__summary">
+                                {nodeTypeSummary(t, spec)}
+                              </span>
+                              {reason ? (
+                                <span className="channel-node-picker__summary">{reason}</span>
+                              ) : null}
                             </span>
-                            <span className="channel-node-picker__summary">
-                              {nodeTypeSummary(t, spec)}
-                            </span>
-                          </span>
-                        </Button>
-                      ))}
+                          </Button>
+                        );
+                      })}
                     </Stack>
                   </div>
                 </>
@@ -881,7 +934,12 @@ function ChannelCanvasBody({
                     nodes: upstreamOutputs(
                       selected.id,
                       nodes.map((node) => ({ id: node.id, ref: node.data.ref, name: node.data.name })),
-                      edges.map((edge) => ({ source: edge.source, target: edge.target })),
+                      edges.map((edge) => ({
+                        source: edge.source,
+                        target: edge.target,
+                        sourcePort: edge.sourceHandle ?? undefined,
+                        targetPort: edge.targetHandle ?? undefined,
+                      })),
                       outputSchemas,
                       samples,
                     ),
@@ -1266,6 +1324,7 @@ function ChannelFlowEdge({
   targetY,
   sourcePosition,
   targetPosition,
+  targetHandleId,
   selected,
   style,
   markerEnd,
@@ -1278,14 +1337,19 @@ function ChannelFlowEdge({
   const { deleteElements } = useReactFlow();
   const [hovered, setHovered] = useState(false);
   const hideTimer = useRef<number | null>(null);
-  const [path, labelX, labelY] = getBezierPath({
-    sourceX,
-    sourceY,
-    sourcePosition,
-    targetX,
-    targetY,
-    targetPosition,
-  });
+  const [path, labelX, labelY] = isLoopReturn(targetHandleId)
+    ? (() => {
+        const routed = returnEdgePath(sourceX, sourceY, targetX, targetY);
+        return [routed.path, routed.labelX, routed.labelY] as const;
+      })()
+    : getBezierPath({
+        sourceX,
+        sourceY,
+        sourcePosition,
+        targetX,
+        targetY,
+        targetPosition,
+      });
 
   useEffect(
     () => () => {
@@ -1361,11 +1425,19 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   const catalog = useContext(CanvasCatalogContext);
   const spec = catalog.find((item) => item.type === data.nodeType);
   const { deleteElements } = useReactFlow();
-  const errorAnchor = catalog.some(
-    (item) => item.type === data.nodeType && item.outputs.some((port) => port.port === "error"),
+  const inputs = spec ? spec.inputs : data.entry ? [] : [{ port: "main", description: "" }];
+  const outputs = spec ? spec.outputs : [{ port: "main", description: "" }];
+  const laid = layoutNodePorts(inputs, outputs);
+  const errorAnchor = outputs.some((port) => port.port === "error");
+  const run = useContext(CanvasRunContext);
+  const phase = run.phases.get(id);
+  const count = run.counts.get(id) ?? 0;
+  const onRun = run.onRun;
+  const depth = Math.max(
+    laid.inputs.filter((port) => port.position !== "bottom").length,
+    laid.outputs.length,
+    1,
   );
-  const phase = useContext(CanvasRunContext).phases.get(id);
-  const onRun = useContext(CanvasRunContext).onRun;
   const emphasis = data.problem
     ? "channel-flow-node--problem"
     : selected
@@ -1383,6 +1455,7 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
       className={className}
       style={{
         minWidth: 148,
+        minHeight: depth > 1 ? 24 + depth * 28 : undefined,
         padding: "8px 12px",
         borderRadius: 8,
         background: "var(--mantine-color-body)",
@@ -1419,19 +1492,30 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
           </button>
         </>
       ) : null}
-      {data.entry ? null : <Handle type="target" position={Position.Left} id="main" />}
+      <PortHandles ports={laid.inputs} nodeName={data.name} kind="target" />
       <Text size="xs" c="dimmed">
         {spec ? nodeTypeLabel(t, spec) : data.nodeType}
       </Text>
       <Text size="sm" fw={600}>
         {data.name}
       </Text>
-      <Handle type="source" position={Position.Right} id="main" />
+      {count > 1 ? (
+        <Text size="xs" c="dimmed" className="channel-flow-node__count">
+          {t("channels.run.executions", { count })}
+        </Text>
+      ) : null}
+      {phase === "dead" ? (
+        <Text size="xs" c="dimmed" className="channel-flow-node__status">
+          {t("channels.run.notRun")}
+        </Text>
+      ) : null}
+      <PortHandles ports={laid.outputs} nodeName={data.name} kind="source" />
       {errorAnchor ? (
         <Handle
           type="source"
           position={Position.Bottom}
           id="error"
+          aria-hidden
           isConnectable={false}
           isConnectableStart={false}
           isConnectableEnd={false}
@@ -1448,4 +1532,64 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
       ) : null}
     </div>
   );
+}
+
+function PortHandles({
+  ports,
+  nodeName,
+  kind,
+}: {
+  ports: readonly PortPlacement[];
+  nodeName: string;
+  kind: "target" | "source";
+}) {
+  const t = useTranslate();
+  return (
+    <>
+      {ports.map((port) => {
+        const name = portLabel(t, port.port);
+        return (
+          <Fragment key={`${kind}-${port.port}`}>
+            <Handle
+              type={kind}
+              position={flowPosition(port.position)}
+              id={port.port}
+              className={port.loopBack ? "channel-flow-handle--loop" : undefined}
+              style={port.position === "bottom" ? { left: "50%" } : { top: port.top }}
+              aria-label={t("channels.canvas.handle", {
+                node: nodeName,
+                port: name,
+                side: t(kind === "target" ? "channels.canvas.input" : "channels.canvas.output"),
+              })}
+              role="button"
+            />
+            {port.labelled ? (
+              <span
+                className={`channel-flow-port channel-flow-port--${port.position}`}
+                style={port.position === "bottom" ? undefined : { top: port.top }}
+              >
+                {name}
+              </span>
+            ) : null}
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
+
+function flowPosition(side: HandleSide): Position {
+  if (side === "left") return Position.Left;
+  if (side === "right") return Position.Right;
+  return Position.Bottom;
+}
+
+function portLabel(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  port: string,
+): string {
+  const key = `channels.canvas.ports.${port}`;
+  const text = t(key, { defaultValue: "" });
+  if (!text || text === key) return port;
+  return text;
 }

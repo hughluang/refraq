@@ -1,12 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
 import { useTranslate } from "@refinedev/core";
 
 import { SelectField } from "@/components/form/SelectField";
 import type { FieldNote } from "@/components/form/fieldNotes";
-import { listSources } from "@/features/sources/api/sources";
+import { useSourceOptions } from "@/features/channels/RegisteredSourceField";
 
 const ENTITY = "entity";
 
@@ -32,33 +30,8 @@ export function SqlSourceField({
   onChange: (value: SourceValue) => void;
 }) {
   const t = useTranslate();
-  const [options, setOptions] = useState<{ value: string; label: string }[]>([
-    { value: ENTITY, label: t("channels.config.sqlSource.entity") },
-  ]);
-  const [loadFailed, setLoadFailed] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    listSources({ limit: 100 })
-      .then((page) => {
-        if (cancelled) return;
-        const sources = page.items.map((source) => ({
-          value: source.id,
-          label: source.name,
-        }));
-        setLoadFailed(false);
-        setOptions([
-          { value: ENTITY, label: t("channels.config.sqlSource.entity") },
-          ...sources,
-        ]);
-      })
-      .catch(() => {
-        if (!cancelled) setLoadFailed(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [t]);
+  const { options: sources, loadFailed } = useSourceOptions();
+  const options = [{ value: ENTITY, label: t("channels.config.sqlSource.entity") }, ...sources];
 
   const selected = selectedValue(value);
   const data = options.some((option) => option.value === selected)

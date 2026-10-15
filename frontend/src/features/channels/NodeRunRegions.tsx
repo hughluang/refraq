@@ -106,17 +106,42 @@ export function ResultRegion({
     const scope = detail.graph
       ? executionScope(detail.graph, detail.run.stop_at_node_id ?? null)
       : null;
-    const mine = detail.node_executions.find((item) => item.node_id === nodeId) ?? null;
-    if (mine == null && scope != null && !scope.has(nodeId)) {
+    const mine = detail.node_executions
+      .filter((item) => item.node_id === nodeId)
+      .slice()
+      .sort((left, right) => left.seq - right.seq);
+    if (mine.length === 0 && scope != null && !scope.has(nodeId)) {
       body = t("channels.run.absent");
-    } else if (mine == null) {
+    } else if (mine.length === 0) {
       body = isTerminalRun(detail.run.status)
         ? t("channels.run.notReached")
         : t("channels.run.waiting");
-    } else if (mine.status === "running") {
+    } else if (mine.length === 1 && mine[0]?.status === "running") {
       body = t("channels.run.running");
+    } else if (mine.length === 1 && mine[0]) {
+      body = <ExecutionOutput item={mine[0]} />;
     } else {
-      body = <ExecutionOutput item={mine} />;
+      body = (
+        <Stack gap="sm">
+          <Text size="xs" c="dimmed">
+            {t("channels.run.executions", { count: mine.length })}
+          </Text>
+          {mine.map((item) => (
+            <Stack key={item.seq} gap={4}>
+              <Text size="xs" fw={600}>
+                {t("channels.run.execution", { seq: item.seq })}
+              </Text>
+              {item.status === "running" ? (
+                <Text size="sm" c="dimmed">
+                  {t("channels.run.running")}
+                </Text>
+              ) : (
+                <ExecutionOutput item={item} />
+              )}
+            </Stack>
+          ))}
+        </Stack>
+      );
     }
   }
   return (

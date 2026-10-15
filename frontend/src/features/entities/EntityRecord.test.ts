@@ -84,6 +84,7 @@ vi.mock("@/features/entities/api", () => ({
   listVersions: vi.fn(),
   getVersion: vi.fn(),
   publishVersion: vi.fn(),
+  previewEntityPublish: vi.fn(async () => ({ incompatible_write_nodes: [] })),
   deprecateEntity: vi.fn(),
   createEntity: vi.fn(),
   deleteEntity: vi.fn(),
@@ -275,6 +276,12 @@ describe("EntityRecord lifecycle confirms", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Publish" }));
     const confirmDialog = await screen.findByRole("dialog");
+    await waitFor(() => {
+      expect(
+        (within(confirmDialog).getByRole("button", { name: "Publish" }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(false);
+    });
     fireEvent.click(within(confirmDialog).getByRole("button", { name: "Publish" }));
     await waitFor(() => {
       expect(publishVersion).toHaveBeenCalledWith("ent_1", "encv_1");

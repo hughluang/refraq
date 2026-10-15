@@ -140,6 +140,8 @@ export type NodeTypePort = {
   port: string;
   description: string;
   coarse_type?: string;
+  /** True on the output that starts a loop body. */
+  loop_back?: boolean;
 };
 
 export type NodeTypeSpec = {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   defaultConfig,
+  fieldVisible,
   fieldsFromSchema,
   omitUnsetIntegers,
   type SchemaObject,
@@ -247,6 +248,154 @@ describe("defaultConfig", () => {
       nullable: false,
       description: "Seconds before the statement is cancelled. Default 30.",
     });
+  });
+});
+
+const FILTER: SchemaObject = {
+  type: "object",
+  required: ["items", "conditions"],
+  properties: {
+    items: {
+      type: "string",
+      "x-refraq-template": { type: "array" },
+    },
+    combinator: { type: "string", enum: ["all", "any"], default: "all" },
+    conditions: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["key", "operator"],
+        properties: {
+          key: { type: "string" },
+          operator: { type: "string", enum: ["eq", "is_null", "is_not_null"] },
+          value: { type: "string", "x-refraq-template": { type: "string" } },
+        },
+        allOf: [
+          {
+            if: { properties: { operator: { enum: ["eq"] } }, required: ["operator"] },
+            then: { required: ["key", "operator", "value"] },
+          },
+        ],
+      },
+    },
+  },
+};
+
+const MERGE: SchemaObject = {
+  type: "object",
+  required: ["mode", "inputs"],
+  properties: {
+    mode: { type: "string", enum: ["append", "by_key", "by_position"] },
+    inputs: {
+      type: "array",
+      items: {
+        type: "string",
+        description: "One list.",
+        "x-refraq-template": { type: "array" },
+      },
+    },
+    key: {
+      type: ["string", "null"],
+      description: "Field matched by by_key.",
+    },
+    join: {
+      type: "string",
+      enum: ["inner", "left", "full"],
+      default: "inner",
+      description: "inner, left, or full. Default inner. append ignores it.",
+    },
+  },
+  allOf: [
+    {
+      if: { properties: { mode: { const: "by_key" } }, required: ["mode"] },
+      then: { required: ["key"] },
+    },
+  ],
+};
+
+describe("reshape config schemas", () => {
+  it("maps string lists, template lists, nullable strings, and enum defaults", () => {
+    const fields = fieldsFromSchema({
+      type: "object",
+      properties: {
+        keys: { type: "array", description: "Field names.", items: { type: "string" } },
+        inputs: MERGE.properties?.inputs,
+        key: MERGE.properties?.key,
+        join: { type: "string", enum: ["inner", "left"], default: "left" },
+      },
+    });
+    expect(fields.map((field) => field.kind)).toEqual([
+      "stringList",
+      "templateList",
+      "string",
+      "enum",
+    ]);
+    expect(fields[2]).toMatchObject({ kind: "string", nullable: true });
+    expect(fields[3]).toMatchObject({ kind: "enum", fallback: "left" });
+    expect(defaultConfig(MERGE)).toEqual({
+      mode: "append",
+      inputs: [],
+      key: null,
+      join: "inner",
+    });
+    expect(defaultConfig(FILTER).combinator).toBe("all");
+  });
+
+  it("shows a condition value only when the operator needs one and hides the merge key outside by_key", () => {
+    const conditions = fieldsFromSchema(FILTER).find((field) => field.key === "conditions");
+    expect(conditions?.kind).toBe("objectList");
+    if (conditions?.kind !== "objectList") return;
+    const value = conditions.fields.find((field) => field.key === "value");
+    expect(fieldVisible(value ?? {}, { operator: "eq" })).toBe(true);
+    expect(fieldVisible(value ?? {}, { operator: "is_null" })).toBe(false);
+    expect(fieldVisible(value ?? {}, { operator: "is_not_null" })).toBe(false);
+
+    const merge = fieldsFromSchema(MERGE);
+    const key = merge.find((field) => field.key === "key") ?? {};
+    const join = merge.find((field) => field.key === "join") ?? {};
+    expect(fieldVisible(key, { mode: "append" })).toBe(false);
+    expect(fieldVisible(join, { mode: "append" })).toBe(true);
+    expect(fieldVisible(key, { mode: "by_key" })).toBe(true);
+    expect(fieldVisible(join, { mode: "by_key" })).toBe(true);
+    expect(fieldVisible(key, { mode: "by_position" })).toBe(false);
+    expect(fieldVisible(join, { mode: "by_position" })).toBe(true);
+  });
+});
+
+describe("code and source query config", () => {
+  it("maps a source id and python source to their editors and omits the defaulted timeout", () => {
+    const schema: SchemaObject = {
+      type: "object",
+      required: ["source_id", "code"],
+      properties: {
+        source_id: {
+          type: "string",
+          description: "Which Source",
+          "x-refraq-ref": "source",
+        },
+        code: {
+          type: "string",
+          description: "Body of main",
+          contentMediaType: "text/x-python",
+        },
+        timeout_sec: { type: "integer", minimum: 1, maximum: 300 },
+      },
+    };
+    expect(fieldsFromSchema(schema).map((field) => [field.kind, field.key])).toEqual([
+      ["source", "source_id"],
+      ["python", "code"],
+      ["integer", "timeout_sec"],
+    ]);
+    expect(fieldsFromSchema(schema)[0]).toMatchObject({
+      kind: "source",
+      description: "Which Source",
+      required: true,
+    });
+    expect(fieldsFromSchema(schema)[1]).toMatchObject({
+      kind: "python",
+      description: "Body of main",
+    });
+    expect(defaultConfig(schema)).toEqual({ source_id: "", code: "" });
   });
 });
 

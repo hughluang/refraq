@@ -1,7 +1,7 @@
 "use client";
 
 import { ActionIcon, Button, CloseButton, Group, Stack, Text } from "@mantine/core";
-import { useTranslate } from "@refinedev/core";
+import { usePermissions, useTranslate } from "@refinedev/core";
 import { useEffect, useRef, type ReactNode } from "react";
 
 import { FieldDisclosureContext, FieldMarks } from "@/components/form/FieldChrome";
@@ -10,10 +10,14 @@ import { JsonField } from "@/components/form/JsonField";
 import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
 import { TextField } from "@/components/form/TextField";
+import { canAuthorNodeType } from "@/features/channels/nodePermission";
+import { PythonCodeField } from "@/features/channels/PythonCodeField";
+import { RegisteredSourceField } from "@/features/channels/RegisteredSourceField";
 import { ScheduledCadenceFields } from "@/features/channels/ScheduledCadenceFields";
 import { SqlSourceField } from "@/features/channels/SqlSourceField";
 import {
   emptyRow,
+  fieldVisible,
   fieldsFromSchema,
   type FieldSpec,
   type SchemaObject,
@@ -91,13 +95,21 @@ export function NodeConfigPanel({
   onRun,
 }: Props) {
   const t = useTranslate();
+  const { data: heldPermissions } = usePermissions<string[]>({});
+  const permission = spec?.permission ?? null;
+  const configLocked = !canAuthorNodeType(permission, heldPermissions);
+  const configEditable = editable && !configLocked;
   const typeLabel = spec ? nodeTypeLabel(t, spec) : data.nodeType;
   const summary = spec ? nodeTypeSummary(t, spec) : "";
-  const fields = (schema ? fieldsFromSchema(schema) : []).filter((field) =>
-    data.nodeType === "trigger.scheduled"
-      ? !["cron", "interval_seconds", "start_at"].includes(field.key)
-      : true,
-  );
+  const fields = (schema ? fieldsFromSchema(schema) : []).filter((field) => {
+    if (
+      data.nodeType === "trigger.scheduled" &&
+      ["cron", "interval_seconds", "start_at"].includes(field.key)
+    ) {
+      return false;
+    }
+    return fieldVisible(field, data.config);
+  });
   const entityId = typeof data.config.entity_id === "string" ? data.config.entity_id : "";
   const head = useEntityHeadAttributes(entityId);
   const attached = new Set<string>(fields.map((field) => field.key));
@@ -203,10 +215,15 @@ export function NodeConfigPanel({
         {upstream}
         <NodeRegion title={t("channels.node.config")} action={runAction}>
         <Stack gap="sm">
+          {configLocked && permission ? (
+            <Text size="xs" c="dimmed">
+              {t("channels.node.permissionReadOnly", { permission })}
+            </Text>
+          ) : null}
           {data.nodeType === "trigger.scheduled" ? (
             <ScheduledCadenceFields
               config={data.config}
-              editable={editable}
+              editable={configEditable}
               notes={{
                 cron: toNotes(fieldMessages(t, problems, "cron", graph)),
                 interval_seconds: toNotes(fieldMessages(t, problems, "interval_seconds", graph)),
@@ -224,9 +241,10 @@ export function NodeConfigPanel({
             <ConfigField
               key={field.key}
               field={field}
+              nodeType={data.nodeType}
               value={data.config[field.key]}
               entityId={entityId}
-              editable={editable}
+              editable={configEditable}
               head={head}
               config={data.config}
               scope={data.config}
@@ -261,6 +279,7 @@ export function NodeConfigPanel({
 
 function ConfigField({
   field,
+  nodeType,
   value,
   entityId,
   editable,
@@ -276,6 +295,7 @@ function ConfigField({
   onChange,
 }: {
   field: FieldSpec;
+  nodeType: string;
   value: unknown;
   entityId: string;
   editable: boolean;
@@ -291,7 +311,7 @@ function ConfigField({
   onChange: (value: unknown) => void;
 }) {
   const t = useTranslate();
-  const caption = t(`channels.config.fields.${field.key}`);
+  const caption = fieldCaption(t, nodeType, field.key);
   const labelProps = labeled ? { label: caption } : { "aria-label": caption };
   const notes = toNotes(messages);
   const bare = !labeled;
@@ -299,7 +319,21 @@ function ConfigField({
     return (
       <SqlSourceField
         label={caption}
-        description={field.description}
+        description={fieldDescription(t, nodeType, field.key, field.description)}
+        value={value}
+        editable={editable}
+        notes={notes}
+        openSignal={openSignal}
+        bare={bare}
+        onChange={onChange}
+      />
+    );
+  }
+  if (field.kind === "source") {
+    return (
+      <RegisteredSourceField
+        label={caption}
+        description={fieldDescription(t, nodeType, field.key, field.description)}
         value={value}
         editable={editable}
         notes={notes}
@@ -373,6 +407,7 @@ function ConfigField({
     return (
       <ObjectListEditor
         field={field}
+        nodeType={nodeType}
         value={value}
         entityId={entityId}
         editable={editable}
@@ -385,12 +420,39 @@ function ConfigField({
       />
     );
   }
+  if (field.kind === "stringList") {
+    return (
+      <StringListEditor
+        field={field}
+        nodeType={nodeType}
+        value={value}
+        editable={editable}
+        notes={notes}
+        openSignal={openSignal}
+        onChange={onChange}
+      />
+    );
+  }
+  if (field.kind === "templateList") {
+    return (
+      <TemplateListEditor
+        field={field}
+        nodeType={nodeType}
+        value={value}
+        editable={editable}
+        templateScope={templateScope}
+        notes={notes}
+        openSignal={openSignal}
+        onChange={onChange}
+      />
+    );
+  }
   if (field.kind === "integer") {
     return (
       <NumberField
         editable={editable}
         {...labelProps}
-        description={field.description}
+        description={fieldDescription(t, nodeType, field.key, field.description)}
         notes={notes}
         openSignal={openSignal}
         bare={bare}
@@ -425,7 +487,7 @@ function ConfigField({
       <TemplateField
         label={labeled ? caption : undefined}
         ariaLabel={labeled ? undefined : caption}
-        description={field.description}
+        description={fieldDescription(t, nodeType, field.key, field.description)}
         valueSchema={valueSchema}
         value={typeof value === "string" ? value : ""}
         editable={editable}
@@ -433,6 +495,19 @@ function ConfigField({
         messages={messages}
         openSignal={openSignal}
         runPreview={runPreview}
+        onChange={onChange}
+      />
+    );
+  }
+  if (field.kind === "python") {
+    return (
+      <PythonCodeField
+        label={caption}
+        description={fieldDescription(t, nodeType, field.key, field.description)}
+        value={typeof value === "string" ? value : ""}
+        editable={editable}
+        notes={notes}
+        openSignal={openSignal}
         onChange={onChange}
       />
     );
@@ -447,13 +522,17 @@ function ConfigField({
       notes={notes}
       openSignal={openSignal}
       bare={bare}
-      onChange={(event) => onChange(event.currentTarget.value)}
+      onChange={(event) => {
+        const text = event.currentTarget.value;
+        onChange(field.nullable && text === "" ? null : text);
+      }}
     />
   );
 }
 
 function ObjectListEditor({
   field,
+  nodeType,
   value,
   entityId,
   editable,
@@ -465,6 +544,7 @@ function ObjectListEditor({
   onChange,
 }: {
   field: Extract<FieldSpec, { kind: "objectList" }>;
+  nodeType: string;
   value: unknown;
   entityId: string;
   editable: boolean;
@@ -476,15 +556,20 @@ function ObjectListEditor({
   onChange: (value: unknown) => void;
 }) {
   const t = useTranslate();
-  const label = t(`channels.config.fields.${field.key}`);
+  const label = fieldCaption(t, nodeType, field.key);
   const rows = Array.isArray(value) ? value.filter(isRecord) : [];
+  const columns = field.fields.filter((child) => rows.some((row) => fieldVisible(child, row)));
   const taken = attributeNames(rows);
   const addBlocked =
     field.key === "mapping" &&
     head.ready &&
     !head.attributes.some((attribute) => !taken.has(attribute.name));
   const columnClass =
-    field.fields.length === 3 ? "channel-config-grid--3" : "channel-config-grid--2";
+    columns.length >= 3
+      ? "channel-config-grid--3"
+      : columns.length === 1
+        ? "channel-config-grid--1"
+        : "channel-config-grid--2";
 
   return (
     <Stack gap="xs">
@@ -517,7 +602,7 @@ function ObjectListEditor({
           </Button>
         ) : null}
       </Group>
-      {rows.length > 0 ? (
+      {columns.length > 0 ? (
         <div
           className={[
             "channel-config-grid",
@@ -527,9 +612,9 @@ function ObjectListEditor({
             .filter(Boolean)
             .join(" ")}
         >
-          {field.fields.map((child) => (
+          {columns.map((child) => (
             <Text key={child.key} size="xs" fw={500} c="dimmed">
-              {t(`channels.config.fields.${child.key}`)}
+              {fieldCaption(t, nodeType, child.key)}
             </Text>
           ))}
           {editable ? <span /> : null}
@@ -537,6 +622,8 @@ function ObjectListEditor({
             <ListRow
               key={`${field.key}-${index}`}
               field={field}
+              columns={columns}
+              nodeType={nodeType}
               row={row}
               index={index}
               rows={rows}
@@ -554,8 +641,165 @@ function ObjectListEditor({
   );
 }
 
+function StringListEditor({
+  field,
+  nodeType,
+  value,
+  editable,
+  notes,
+  openSignal = null,
+  onChange,
+}: {
+  field: Extract<FieldSpec, { kind: "stringList" }>;
+  nodeType: string;
+  value: unknown;
+  editable: boolean;
+  notes: readonly FieldNote[];
+  openSignal?: string | null;
+  onChange: (value: unknown) => void;
+}) {
+  const t = useTranslate();
+  const label = fieldCaption(t, nodeType, field.key);
+  const items = Array.isArray(value) ? value.map((item) => (typeof item === "string" ? item : "")) : [];
+  return (
+    <Stack gap="xs">
+      <ListHeading
+        label={label}
+        description={field.description}
+        notes={notes}
+        openSignal={openSignal}
+        editable={editable}
+        onAdd={() => onChange([...items, ""])}
+      />
+      {items.map((item, index) => (
+        <Group key={`${field.key}-${index}`} gap="xs" wrap="nowrap" align="center">
+          <TextField
+            editable={editable}
+            aria-label={t("channels.config.listItem", { label, n: index + 1 })}
+            value={item}
+            bare
+            style={{ flex: 1 }}
+            onChange={(event) => {
+              const next = [...items];
+              next[index] = event.currentTarget.value;
+              onChange(next);
+            }}
+          />
+          {editable ? <RemoveItem onClick={() => onChange(items.filter((_, itemIndex) => itemIndex !== index))} /> : null}
+        </Group>
+      ))}
+    </Stack>
+  );
+}
+
+function TemplateListEditor({
+  field,
+  nodeType,
+  value,
+  editable,
+  templateScope,
+  notes,
+  openSignal = null,
+  onChange,
+}: {
+  field: Extract<FieldSpec, { kind: "templateList" }>;
+  nodeType: string;
+  value: unknown;
+  editable: boolean;
+  templateScope: SelfScope;
+  notes: readonly FieldNote[];
+  openSignal?: string | null;
+  onChange: (value: unknown) => void;
+}) {
+  const t = useTranslate();
+  const label = fieldCaption(t, nodeType, field.key);
+  const items = Array.isArray(value) ? value.map((item) => (typeof item === "string" ? item : "")) : [];
+  return (
+    <Stack gap="xs">
+      <ListHeading
+        label={label}
+        description={field.description}
+        notes={notes}
+        openSignal={openSignal}
+        editable={editable}
+        onAdd={() => onChange([...items, ""])}
+      />
+      {items.map((item, index) => (
+        <Group key={`${field.key}-${index}`} gap="xs" wrap="nowrap" align="flex-start">
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <TemplateField
+              ariaLabel={t("channels.config.listItem", { label, n: index + 1 })}
+              description={field.itemDescription}
+              valueSchema={field.valueSchema}
+              value={item}
+              editable={editable}
+              scope={templateScope}
+              onChange={(next) => {
+                const copy = [...items];
+                copy[index] = next;
+                onChange(copy);
+              }}
+            />
+          </div>
+          {editable ? <RemoveItem onClick={() => onChange(items.filter((_, itemIndex) => itemIndex !== index))} /> : null}
+        </Group>
+      ))}
+    </Stack>
+  );
+}
+
+function ListHeading({
+  label,
+  description,
+  notes,
+  openSignal,
+  editable,
+  onAdd,
+}: {
+  label: string;
+  description: string;
+  notes: readonly FieldNote[];
+  openSignal?: string | null;
+  editable: boolean;
+  onAdd: () => void;
+}) {
+  const t = useTranslate();
+  return (
+    <Group justify="space-between">
+      <Group gap={4} wrap="nowrap">
+        <Text size="sm" fw={500}>
+          {label}
+        </Text>
+        <FieldMarks label={label} description={description} notes={notes} openSignal={openSignal} />
+      </Group>
+      {editable ? (
+        <Button type="button" size="xs" variant="light" onClick={onAdd}>
+          {t("channels.config.addItem")}
+        </Button>
+      ) : null}
+    </Group>
+  );
+}
+
+function RemoveItem({ onClick }: { onClick: () => void }) {
+  const t = useTranslate();
+  return (
+    <ActionIcon
+      variant="subtle"
+      color="red"
+      size="sm"
+      aria-label={t("channels.config.removeItem")}
+      onClick={onClick}
+    >
+      ×
+    </ActionIcon>
+  );
+}
+
 function ListRow({
   field,
+  columns,
+  nodeType,
   row,
   index,
   rows,
@@ -567,6 +811,8 @@ function ListRow({
   onChange,
 }: {
   field: Extract<FieldSpec, { kind: "objectList" }>;
+  columns: FieldSpec[];
+  nodeType: string;
   row: Record<string, unknown>;
   index: number;
   rows: Record<string, unknown>[];
@@ -593,25 +839,28 @@ function ListRow({
   };
   return (
     <>
-      {field.fields.map((child) => (
+      {columns.map((child) => (
         <div key={child.key} className="channel-config-grid__cell">
-          <ConfigField
-            field={child}
-            value={row[child.key]}
-            entityId={entityId}
-            editable={editable}
-            labeled={false}
-            exclude={
-              field.key === "mapping" && child.kind === "attribute"
-                ? otherAttributeNames(rows, index)
-                : []
-            }
-            head={head}
-            config={config}
-            scope={row}
-            templateScope={templateScope}
-            onChange={(next) => replace(child.key, next)}
-          />
+          {fieldVisible(child, row) ? (
+            <ConfigField
+              field={child}
+              nodeType={nodeType}
+              value={row[child.key]}
+              entityId={entityId}
+              editable={editable}
+              labeled={false}
+              exclude={
+                field.key === "mapping" && child.kind === "attribute"
+                  ? otherAttributeNames(rows, index)
+                  : []
+              }
+              head={head}
+              config={config}
+              scope={row}
+              templateScope={templateScope}
+              onChange={(next) => replace(child.key, next)}
+            />
+          ) : null}
         </div>
       ))}
       {editable ? (
@@ -669,6 +918,35 @@ function signalFor(
   )
     ? revealKey
     : null;
+}
+
+function fieldDescription(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  nodeType: string,
+  key: string,
+  fallback: string,
+): string {
+  return lookupCaption(t, `channels.config.fields.${nodeType}.${key}.description`) ?? fallback;
+}
+
+function fieldCaption(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  nodeType: string,
+  key: string,
+): string {
+  const specific = lookupCaption(t, `channels.config.fields.${nodeType}.${key}`);
+  if (specific) return specific;
+  const general = lookupCaption(t, `channels.config.fields.${key}`);
+  return general ?? key;
+}
+
+function lookupCaption(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  key: string,
+): string | null {
+  const text = t(key, { defaultValue: "" });
+  if (!text || text === key) return null;
+  return text;
 }
 
 function optionLabel(
