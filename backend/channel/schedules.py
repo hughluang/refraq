@@ -10,8 +10,7 @@ from typing import Any
 
 from celery import shared_task
 
-from backend.channel.run_store import ChannelRunRecord, get_run_store
-from backend.channel.tasks import run_job
+from backend.channel.channel_run import dispatch, mint_scheduled_run
 from backend.channel.store import ChannelRecord, get_channel_store
 from backend.core.config import get_settings
 from backend.core.db import session_scope
@@ -20,9 +19,6 @@ from backend.jobs.api import revoke_queued_delivery
 from backend.jobs.store import (
     TERMINAL,
     JobRecord,
-    UniqueScheduledForError,
-    create_queued_job,
-    format_job_log_line,
     get_job_store,
     mark_cancelled,
 )
@@ -235,73 +231,6 @@ def _resolve_due_at(due_at: str | datetime | None) -> datetime | None:
     return None
 
 
-def _mint_due(
-    *,
-    schedule_id: str,
-    channel_id: str | None,
-    node_id: str | None,
-    scheduled_for: datetime,
-    now: datetime,
-    cancel_immediately: bool,
-    cadence: ScheduledTaskRecord | None,
-    session: Any,
-) -> dict[str, Any]:
-    if not channel_id:
-        return {"status": "missing_channel"}
-    already = False
-    try:
-        job = create_queued_job(
-            kind=CHANNEL_RUN_KIND,
-            input={
-                "channel_id": channel_id,
-                "target": "published",
-                "ignore_checkpoints": False,
-            },
-            created_by=None,
-            summary=f"channel_run {channel_id}",
-            trigger_kind="schedule",
-            trigger_ref=schedule_id,
-            log_body=format_job_log_line(level="info", message="queued channel run", at=now),
-            scheduled_for=scheduled_for,
-            running_timeout_sec=None,
-            session=session,
-            created_at=now,
-        )
-    except UniqueScheduledForError as exc:
-        already = True
-        job = get_job_store().get(exc.existing_job_id or "", session=session)
-        if job is None:
-            return {"status": "already_minted", "job_id": exc.existing_job_id or ""}
-
-    if not already and get_channel_store().get(channel_id) is not None:
-        get_run_store().insert_run(
-            ChannelRunRecord(
-                job_id=job.id,
-                channel_id=channel_id,
-                target="published",
-                version=None,
-                draft_revision=None,
-                graph=None,
-                trigger_node_id=node_id or "",
-                ignore_checkpoints=False,
-                outcome=None,
-                failed_node_id=None,
-                skipped_node_ids=[],
-                created_at=now,
-            )
-        )
-    mint_at = job.created_at if already else now
-    if cadence is not None:
-        commit_due_mint(cadence, now=now, session=session, mint_at=mint_at)
-    if cancel_immediately and job.status not in TERMINAL:
-        cancelled = mark_cancelled(job.id, session=session)
-        job = cancelled or job
-        return {"status": "cancelled", "job_id": job.id, "job": job}
-    if already:
-        return {"status": "already_minted", "job_id": job.id, "job": job}
-    return {"status": "queued", "job_id": job.id, "job": job}
-
-
 @shared_task(name=ENQUEUE_TASK_NAME)
 def fire_scheduled_channel_run(
     schedule_id: str | None = None,
@@ -327,16 +256,24 @@ def fire_scheduled_channel_run(
         if isinstance(record, ScheduledTaskRecord):
             minted_channel = record.kwargs_json.get("channel_id") or minted_channel
             minted_node = record.kwargs_json.get("node_id") or minted_node
-        return _mint_due(
+        minted = mint_scheduled_run(
             schedule_id=schedule_id,
             channel_id=minted_channel if isinstance(minted_channel, str) else None,
             node_id=minted_node if isinstance(minted_node, str) else None,
             scheduled_for=outcome["scheduled_for"],
             now=outcome["now"],
-            cancel_immediately=bool(outcome.get("cancel_immediately")),
-            cadence=record if isinstance(record, ScheduledTaskRecord) else None,
             session=session,
         )
+        job = minted.job
+        if job is None or minted.mint_at is None:
+            return {"status": minted.status, "job_id": minted.job_id}
+        if isinstance(record, ScheduledTaskRecord):
+            commit_due_mint(record, now=outcome["now"], session=session, mint_at=minted.mint_at)
+        if bool(outcome.get("cancel_immediately")) and job.status not in TERMINAL:
+            cancelled = mark_cancelled(job.id, session=session)
+            job = cancelled or job
+            return {"status": "cancelled", "job_id": job.id, "job": job}
+        return {"status": minted.status, "job_id": job.id, "job": job}
 
     if get_settings().store_backend == "memory":
         minted = _decide(None)
@@ -352,9 +289,9 @@ def fire_scheduled_channel_run(
         if isinstance(job, JobRecord) and job.status == "queued":
             fresh = get_schedule_store().get_by_id(schedule_id)
             if fresh is not None and fresh.enabled:
-                run_job.apply_async(args=[job.id], task_id=job.id)
+                dispatch(job.id)
         return {"status": "already_minted", "job_id": str(minted.get("job_id") or "")}
     if status != "queued" or not isinstance(job, JobRecord):
         return {"status": str(status)}
-    run_job.apply_async(args=[job.id], task_id=job.id)
+    dispatch(job.id)
     return {"status": "queued", "job_id": job.id}

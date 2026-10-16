@@ -250,15 +250,15 @@ def _enqueue_matches_get(client: TestClient, channel_id: str) -> dict:
 
 
 def test_enqueue_body_matches_finished_run(channel_client: TestClient) -> None:
-    """Eager SQL runs return the stored outcome, not the pre-execution record.
+    """An on-demand run returns the stored outcome, not the pre-execution record.
 
     A SQL store runs the Job in a child process, so a parent-process executor
     patch never reaches it. The failing run is a real node error.
     """
-    from backend.worker.app import celery_app
+    from backend.channel.channel_run import set_dispatcher
+    from backend.channel.tasks import run_job
 
-    previous = celery_app.conf.task_always_eager
-    celery_app.conf.task_always_eager = True
+    previous = set_dispatcher(run_job)
     try:
         created = channel_client.post(
             "/channels", json={"name": "Enqueue probe", "description": None}
@@ -301,11 +301,12 @@ def test_enqueue_body_matches_finished_run(channel_client: TestClient) -> None:
         assert failed["outcome"] is None
         assert failed["failed_node_id"] == "nd_bad"
     finally:
-        celery_app.conf.task_always_eager = previous
+        set_dispatcher(previous)
 
 
 def test_template_preview_reads_the_recorded_run(channel_client: TestClient) -> None:
-    from backend.worker.app import celery_app
+    from backend.channel.channel_run import set_dispatcher
+    from backend.channel.tasks import run_job
 
     graph = {
         "nodes": [
@@ -334,8 +335,7 @@ def test_template_preview_reads_the_recorded_run(channel_client: TestClient) -> 
         ],
         "settings": TRIGGER["settings"],
     }
-    previous = celery_app.conf.task_always_eager
-    celery_app.conf.task_always_eager = True
+    previous = set_dispatcher(run_job)
     try:
         created = channel_client.post(
             "/channels", json={"name": "Preview probe", "description": None}
@@ -351,7 +351,7 @@ def test_template_preview_reads_the_recorded_run(channel_client: TestClient) -> 
         run = queued.json()["run"]
         assert run["status"] == "succeeded"
     finally:
-        celery_app.conf.task_always_eager = previous
+        set_dispatcher(previous)
     preview = channel_client.post(
         f"/channels/{channel_id}/runs/{run['job_id']}/template-preview",
         json={"graph": graph, "node_id": "nd_keep", "path": ["value"]},
@@ -428,6 +428,8 @@ def _integer_attr(name: str) -> dict:
 
 
 def _publish_entity(client: TestClient, *, table_name: str, name: str, attributes: list) -> str:
+    from backend.worker.app import celery_app
+
     created = client.post(
         "/entities",
         json={
@@ -439,9 +441,14 @@ def _publish_entity(client: TestClient, *, table_name: str, name: str, attribute
     )
     assert created.status_code == 201, created.text
     entity = created.json()["entity"]
-    published = client.post(
-        f"/entities/{entity['id']}/versions/{entity['current_version']['id']}/publish"
-    )
+    previous = celery_app.conf.task_always_eager
+    celery_app.conf.task_always_eager = True
+    try:
+        published = client.post(
+            f"/entities/{entity['id']}/versions/{entity['current_version']['id']}/publish"
+        )
+    finally:
+        celery_app.conf.task_always_eager = previous
     assert published.status_code == 201, published.text
     job = client.get(f"/jobs/{published.json()['job']['id']}")
     assert job.status_code == 200, job.text
@@ -478,14 +485,14 @@ def _edge(edge_id: str, source: str, target: str, *, source_port: str = "main", 
 
 
 def test_merge_entity_reads_write_a_third_entity(channel_client: TestClient) -> None:
-    from backend.worker.app import celery_app
+    from backend.channel.channel_run import set_dispatcher
+    from backend.channel.tasks import run_job
 
     suffix = uuid.uuid4().hex[:8]
     names = f"nm_{suffix}"
     prices = f"pr_{suffix}"
     target = f"tg_{suffix}"
-    previous = celery_app.conf.task_always_eager
-    celery_app.conf.task_always_eager = True
+    previous = set_dispatcher(run_job)
     try:
         names_id = _publish_entity(
             channel_client,
@@ -646,14 +653,14 @@ def test_merge_entity_reads_write_a_third_entity(channel_client: TestClient) -> 
         assert rows[0]["price"] == 10
         assert target_id
     finally:
-        celery_app.conf.task_always_eager = previous
+        set_dispatcher(previous)
 
 
 def test_if_and_for_run_the_live_branch(channel_client: TestClient) -> None:
-    from backend.worker.app import celery_app
+    from backend.channel.channel_run import set_dispatcher
+    from backend.channel.tasks import run_job
 
-    previous = celery_app.conf.task_always_eager
-    celery_app.conf.task_always_eager = True
+    previous = set_dispatcher(run_job)
     try:
         created = channel_client.post(
             "/channels", json={"name": "Branch and loop", "description": None}
@@ -729,7 +736,7 @@ def test_if_and_for_run_the_live_branch(channel_client: TestClient) -> None:
         assert len(walk) == 1
         assert walk[0]["output_preview"]["results"] == [{"n": 1}, {"n": 2}]
     finally:
-        celery_app.conf.task_always_eager = previous
+        set_dispatcher(previous)
 
 
 def _physical_rows(entity_id: str) -> list[dict]:
@@ -749,12 +756,12 @@ def _physical_rows(entity_id: str) -> list[dict]:
 
 def test_write_rows_dry_run_counts_and_leaves_the_table(channel_client: TestClient) -> None:
     from backend.admin.user_store import get_user_store
+    from backend.channel.channel_run import set_dispatcher
+    from backend.channel.tasks import run_job
     from backend.entity.errors import EntityRowWriteFailed
     from backend.entity.rows import write_rows
-    from backend.worker.app import celery_app
 
-    previous = celery_app.conf.task_always_eager
-    celery_app.conf.task_always_eager = True
+    previous = set_dispatcher(run_job)
     try:
         suffix = uuid.uuid4().hex[:8]
         table = f"dry_{suffix}"
@@ -810,7 +817,7 @@ def test_write_rows_dry_run_counts_and_leaves_the_table(channel_client: TestClie
         attempt("delete", [{"code": "A"}], deleted=1)
         attempt("delete", [{"code": "M"}], unmatched=1)
     finally:
-        celery_app.conf.task_always_eager = previous
+        set_dispatcher(previous)
 
 
 def test_run_record_preview_and_retention(channel_client: TestClient) -> None:
@@ -932,12 +939,12 @@ def _editor(client: TestClient, channel_id: str, graph: dict, **body) -> object:
 
 
 def test_editor_execute_does_not_write(channel_client: TestClient) -> None:
+    from backend.channel.channel_run import set_dispatcher
+    from backend.channel.tasks import run_job
     from backend.core.time import utc_now
     from backend.metadata.sources.store import SourceRecord, get_source_store, new_source_id
-    from backend.worker.app import celery_app
 
-    previous = celery_app.conf.task_always_eager
-    celery_app.conf.task_always_eager = True
+    previous = set_dispatcher(run_job)
     try:
         suffix = uuid.uuid4().hex[:8]
         table = f"ed_{suffix}"
@@ -1197,4 +1204,4 @@ def test_editor_execute_does_not_write(channel_client: TestClient) -> None:
         assert listed.status_code == 200, listed.text
         assert listed.json()["total"] == 0
     finally:
-        celery_app.conf.task_always_eager = previous
+        set_dispatcher(previous)

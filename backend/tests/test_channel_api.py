@@ -96,10 +96,17 @@ def test_read_permission_cannot_write() -> None:
     assert denied.status_code == 403
 
 
-def test_stop_at_ignores_errors_outside_the_closure(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    import backend.channel.tasks as tasks
+def test_stop_at_ignores_errors_outside_the_closure(client: TestClient) -> None:
+    from backend.channel.channel_run import set_dispatcher
 
-    monkeypatch.setattr(tasks.run_job, "apply_async", lambda *args, **kwargs: None)
+    previous = set_dispatcher(lambda _job_id: None)
+    try:
+        _stop_at_ignores_errors_outside_the_closure(client)
+    finally:
+        set_dispatcher(previous)
+
+
+def _stop_at_ignores_errors_outside_the_closure(client: TestClient) -> None:
     created = client.post("/channels", json={"name": "Material", "description": None})
     assert created.status_code == 201, created.text
     channel_id = created.json()["channel"]["id"]

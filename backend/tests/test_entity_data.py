@@ -725,6 +725,7 @@ def test_masked_writer_never_sees_the_raw_value(data_client) -> None:
 def test_write_rows_upsert_is_idempotent_and_channel_run_writes(data_client) -> None:
     _client, _stem, _physical, entity_id = data_client
     from backend.admin.user_store import get_user_store
+    from backend.channel.channel_run import set_dispatcher
     from backend.channel.runs import start_run
     from backend.channel.tasks import run_job
     from backend.entity.access.seed import ensure_system_grant
@@ -822,18 +823,17 @@ def test_write_rows_upsert_is_idempotent_and_channel_run_writes(data_client) -> 
         actor_token_id=None,
     )
 
-    def _inline(args, task_id=None):
-        del task_id
-        return run_job(args[0])
-
-    run_job.apply_async = _inline  # type: ignore[method-assign]
-    job, _record = start_run(
-        channel_id=created.id,
-        target="draft",
-        ignore_checkpoints=False,
-        actor=admin,
-        actor_token_id=None,
-    )
+    previous = set_dispatcher(run_job)
+    try:
+        job, _record = start_run(
+            channel_id=created.id,
+            target="draft",
+            ignore_checkpoints=False,
+            actor=admin,
+            actor_token_id=None,
+        )
+    finally:
+        set_dispatcher(previous)
     finished = get_job_store().get(job.id)
     assert finished is not None
     assert finished.status == "succeeded", finished.error_summary

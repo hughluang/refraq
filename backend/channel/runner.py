@@ -6,6 +6,7 @@ import time
 from typing import Any, Mapping
 
 from backend.admin.user_store import UserRecord, ensure_system_user, get_user_store
+from backend.channel.channel_run import entry_node_id
 from backend.channel.context import channel_context, platform_context, run_context
 from backend.channel.engine import execute
 from backend.channel.nodes import list_node_types
@@ -125,7 +126,7 @@ def run_channel_job(job_id: str) -> dict[str, str]:
     if graph is None:
         _cancel(job_id, run, None)
         return {"status": "cancelled"}
-    entry = _entry_id(graph)
+    entry = entry_node_id(graph)
     entry_node = next((node for node in graph["nodes"] if node["id"] == entry), None)
     if entry is None or entry_node is None:
         _cancel(job_id, run, None)
@@ -230,14 +231,6 @@ def _resolve_graph(run: Any) -> tuple[dict[str, Any] | None, int | None]:
         return None, None
     latest = versions[0]
     return latest.graph, latest.number
-
-
-def _entry_id(graph: dict[str, Any]) -> str | None:
-    entry_types = {item.type_id for item in list_node_types() if item.entry}
-    entries = [node for node in graph.get("nodes") or [] if node.get("type") in entry_types]
-    if len(entries) != 1:
-        return None
-    return str(entries[0]["id"])
 
 
 def _actor(job: Any) -> dict[str, str]:

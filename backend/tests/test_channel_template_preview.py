@@ -79,24 +79,27 @@ def _login(client: TestClient, account: str) -> None:
 
 
 @pytest.fixture()
-def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    import backend.channel.tasks as tasks
+def client() -> TestClient:
+    from backend.channel.channel_run import set_dispatcher
 
-    monkeypatch.setattr(tasks.run_job, "apply_async", lambda *args, **kwargs: None)
-    roles = get_role_store()
-    seed_roles(roles)
-    admin = roles.get_by_key("super_admin")
-    assert admin is not None
-    get_user_store().create_user(
-        account="admin",
-        display_name="Admin",
-        password_hash=hash_password("secret"),
-        role_id=admin.id,
-        status="active",
-    )
-    with TestClient(app) as test_client:
-        _login(test_client, "admin")
-        yield test_client
+    previous = set_dispatcher(lambda _job_id: None)
+    try:
+        roles = get_role_store()
+        seed_roles(roles)
+        admin = roles.get_by_key("super_admin")
+        assert admin is not None
+        get_user_store().create_user(
+            account="admin",
+            display_name="Admin",
+            password_hash=hash_password("secret"),
+            role_id=admin.id,
+            status="active",
+        )
+        with TestClient(app) as test_client:
+            _login(test_client, "admin")
+            yield test_client
+    finally:
+        set_dispatcher(previous)
 
 
 def _run_trigger_only(client: TestClient) -> tuple[str, str]:

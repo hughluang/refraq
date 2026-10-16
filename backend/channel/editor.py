@@ -13,14 +13,15 @@ from datetime import datetime
 from typing import Any, Mapping, Sequence
 
 from backend.admin.user_store import UserRecord, ensure_system_user, get_user_store
+from backend.channel.channel_run import entry_node_id
 from backend.channel.context import channel_context, platform_context, run_context
 from backend.channel.engine import execute
-from backend.channel.errors import ChannelNotFound, ChannelRequestInvalid
+from backend.channel.errors import ChannelNotFound, ChannelRequestInvalid, ChannelTriggerInvalid
 from backend.channel.nodes import list_node_types
 from backend.channel.nodes.spec import EditorOptions, NodeResult, PinnedOutput
 from backend.channel.references import ChannelReferenceResolver
 from backend.channel.run_store import ChannelRunRecord
-from backend.channel.runs import _entry_node, refuse_invalid_closure, require_stop_closure
+from backend.channel.runs import refuse_invalid_closure, require_stop_closure
 from backend.channel.sandbox import SandboxFailed, SandboxSession
 from backend.channel.schedules import schedule_key_for
 from backend.channel.service import require_draft_permissions
@@ -132,7 +133,9 @@ def execute_editor(
     pinned_map = _pinned(graph, pinned)
     closure = require_stop_closure(graph, stop_at_node_id)
     refuse_invalid_closure(graph, channel_id=channel_id, closure=closure)
-    entry = _entry_node(graph)
+    entry = entry_node_id(graph)
+    if entry is None:
+        raise ChannelTriggerInvalid()
     started = utc_now()
     run_id = f"edx_{uuid.uuid4().hex[:12]}"
     actor_ctx = {"id": actor.id, "name": actor.display_name}
