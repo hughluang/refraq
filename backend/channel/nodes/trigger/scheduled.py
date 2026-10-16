@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from backend.channel.nodes.spec import MAIN_OUTPUT, NodeType
+from backend.channel.nodes.spec import MAIN_OUTPUT, EngineHooks, NodeResult, NodeType
 
 __all__ = ["NODE_TYPE"]
 
@@ -27,6 +27,19 @@ def _refine(
             },
         }
     }
+
+
+def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    del node
+    schedule = hooks.schedule
+    return NodeResult(
+        status="succeeded",
+        output={
+            "schedule_id": schedule.get("schedule_id"),
+            "name": schedule.get("name"),
+            "scheduled_for": schedule.get("scheduled_for"),
+        },
+    )
 
 
 NODE_TYPE = NodeType(
@@ -66,5 +79,6 @@ NODE_TYPE = NodeType(
         },
         "required": [],
     },
+    execute=_execute,
     refine=_refine,
 )

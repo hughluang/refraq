@@ -27,7 +27,6 @@ _FOR = importlib.import_module("backend.channel.nodes.volume.for").NODE_TYPE
 
 __all__ = [
     "list_node_types",
-    "loop_ports",
 ]
 
 _FAMILY_ORDER = {
@@ -61,14 +60,3 @@ def list_node_types() -> list[NodeType]:
         _CATALOG,
         key=lambda item: (_FAMILY_ORDER[item.family], item.type_id),
     )
-
-
-def loop_ports() -> dict[str, str]:
-    """type id to the loop-back output port, for types that declare one."""
-    found: dict[str, str] = {}
-    for spec in _CATALOG:
-        for port in spec.outputs:
-            if port.loop_back:
-                found[spec.type_id] = port.port
-                break
-    return found

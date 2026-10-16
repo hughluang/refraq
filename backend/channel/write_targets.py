@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from backend.channel.graph import ResolvedAttribute, ResolvedEntity
+from backend.channel.nodes.spec import ResolvedAttribute, ResolvedEntity
 from backend.channel.store import get_channel_store
 from backend.channel.write_compatibility import write_reasons
 

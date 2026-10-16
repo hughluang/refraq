@@ -2,9 +2,38 @@
 
 from __future__ import annotations
 
-from backend.channel.nodes.spec import MAIN_INPUT, MAIN_OUTPUT, NodeType, object_schema
+from typing import Any, Mapping
+
+from backend.channel.nodes.spec import MAIN_INPUT, MAIN_OUTPUT, EngineHooks, NodeResult, NodeType, object_schema
+from backend.channel.sandbox import CodeError
 
 __all__ = ["NODE_TYPE"]
+
+
+def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    config = node["config"]
+    source = config.get("code")
+    if not isinstance(source, str):
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_NODE_FAILED",
+            error_message="Code is missing",
+            error_detail={"reason": "error"},
+        )
+    timeout = config.get("timeout_sec", 30)
+    if not isinstance(timeout, int) or isinstance(timeout, bool):
+        timeout = 30
+    try:
+        value = hooks.run_code(source, float(timeout))
+    except CodeError as exc:
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_NODE_FAILED",
+            error_message=str(exc),
+            error_detail=exc.detail,
+        )
+    return NodeResult(status="succeeded", output=value)
+
 
 NODE_TYPE = NodeType(
     type_id="transform.code",
@@ -48,5 +77,6 @@ NODE_TYPE = NodeType(
         },
         ["code"],
     ),
+    execute=_execute,
     permission="channel:code_write",
 )

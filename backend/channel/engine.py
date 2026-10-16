@@ -6,7 +6,7 @@ whose incoming edges are all dead does not run. Among ready siblings, the
 smaller canvas y, then x, is explored first, and that branch finishes before
 the next sibling.
 
-A loop-type node (its type is in ``loop_ports``) runs its body once per
+A loop-type node (its type declares a loop-back output) runs its body once per
 iteration. Edges into a non-``main`` input of a loop node are return edges:
 they do not gate the loop, and they collect one result per iteration.
 """
@@ -15,30 +15,16 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Mapping, Sequence
 
-from backend.admin.user_store import UserRecord
-from backend.channel.graph import ancestor_closure
+from backend.channel.graph import ReferenceResolver, ancestor_closure, refine_ports
+from backend.channel.nodes.spec import EngineHooks, NodeResult, NodeType
+from backend.channel.template import output_matches
 
 __all__ = [
-    "EditorOptions",
-    "EngineHooks",
-    "NodeResult",
-    "PinnedOutput",
     "RunOutcome",
     "execute",
 ]
-
-
-@dataclass
-class NodeResult:
-    status: str
-    output: Any = None
-    error_code: str | None = None
-    error_message: str | None = None
-    error_detail: dict[str, Any] | None = None
-    ports: frozenset[str] | None = None
-    iterations: list[Any] | None = None
 
 
 @dataclass
@@ -53,62 +39,6 @@ class RunOutcome:
 
 
 @dataclass(frozen=True)
-class EditorOptions:
-    """Row limit for an editor execution."""
-
-    row_limit: int
-
-
-@dataclass(frozen=True, slots=True)
-class PinnedOutput:
-    value: Any
-
-
-class EngineHooks(Protocol):
-    def cancelled(self) -> bool: ...
-
-    def superseded(self) -> bool: ...
-
-    def on_start(self, node: Mapping[str, Any]) -> int: ...
-
-    def on_finish(self, seq: int, node: Mapping[str, Any], result: NodeResult) -> None: ...
-
-    def on_output(self, node: Mapping[str, Any], output: Any) -> None: ...
-
-    def drop_outputs(self, refs: list[str]) -> None: ...
-
-    def evaluate(self, expression: str) -> Any: ...
-
-    def run_code(self, source: str, timeout_sec: float) -> Any: ...
-
-    @property
-    def run_id(self) -> str: ...
-
-    @property
-    def channel_id(self) -> str: ...
-
-    @property
-    def actor(self) -> Mapping[str, str]: ...
-
-    @property
-    def started_at(self) -> str: ...
-
-    @property
-    def user(self) -> UserRecord: ...
-
-    @property
-    def schedule(self) -> Mapping[str, Any]: ...
-
-    @property
-    def editor(self) -> EditorOptions | None: ...
-
-    def pinned_output(self, node: Mapping[str, Any]) -> PinnedOutput | None: ...
-
-
-Executor = Callable[[Mapping[str, Any], EngineHooks], NodeResult]
-
-
-@dataclass(frozen=True)
 class _Link:
     source: str
     source_port: str
@@ -120,7 +50,8 @@ class _Run:
     def __init__(
         self,
         graph: Mapping[str, Any],
-        executors: Mapping[str, Executor],
+        by_type: Mapping[str, NodeType],
+        schemas: Mapping[str, Mapping[str, Any]],
         hooks: EngineHooks,
         loop_ports: Mapping[str, str],
         reachable: set[str],
@@ -129,7 +60,8 @@ class _Run:
         clock: float,
     ) -> None:
         self.nodes = {str(node["id"]): node for node in graph["nodes"]}
-        self.executors = executors
+        self.by_type = by_type
+        self.schemas = schemas
         self.hooks = hooks
         self.loop_ports = dict(loop_ports)
         self.reachable = reachable
@@ -390,15 +322,20 @@ class _Run:
     def _start(self, node_id: str) -> tuple[int, NodeResult]:
         node = self.nodes[node_id]
         seq = self.hooks.on_start(node)
-        executor = self.executors.get(str(node["type"]))
-        if executor is None:
+        spec = self.by_type.get(str(node["type"]))
+        if spec is None:
             result = NodeResult(
                 status="failed",
                 error_code="CHANNEL_NODE_FAILED",
                 error_message=f"No executor for {node['type']}",
             )
         else:
-            result = executor(node, self.hooks)
+            pinned = self.hooks.pinned_output(node)
+            if pinned is not None:
+                result = spec.pinned(node, pinned.value)
+            else:
+                result = spec.execute(node, self.hooks)
+                result = _apply_output_check(node_id, spec, result, self.schemas)
         if result.status == "skipped" and result.output is None:
             result.output = {"skipped": True, "reason": result.error_message}
         return seq, result
@@ -428,13 +365,13 @@ class _Run:
 def execute(
     graph: Mapping[str, Any],
     entry_node_id: str,
-    executors: Mapping[str, Executor],
+    catalog: Sequence[NodeType],
+    resolver: ReferenceResolver,
     hooks: EngineHooks,
     *,
     timeout_sec: int | None = None,
     started: float | None = None,
     stop_at_node_id: str | None = None,
-    loop_ports: Mapping[str, str] | None = None,
 ) -> RunOutcome:
     nodes = {str(node["id"]): node for node in graph["nodes"]}
     if entry_node_id not in nodes:
@@ -449,11 +386,13 @@ def execute(
         closure = ancestor_closure(graph, stop_at_node_id)
         reachable &= closure if closure is not None else set()
     clock = time.monotonic() if started is None else started
+    types = list(catalog)
     runner = _Run(
         graph,
-        executors,
+        {item.type_id: item for item in types},
+        _output_schemas(refine_ports(graph, resolver, types)),
         hooks,
-        loop_ports or {},
+        _loop_ports(types),
         reachable,
         timeout_sec=timeout_sec,
         clock=clock,
@@ -466,6 +405,47 @@ def execute(
         outcome="completed",
         skipped_node_ids=list(runner.skipped),
     )
+
+
+def _loop_ports(catalog: Sequence[NodeType]) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for spec in catalog:
+        for port in spec.outputs:
+            if port.loop_back:
+                found[spec.type_id] = port.port
+                break
+    return found
+
+
+def _output_schemas(ports: Sequence[Any]) -> dict[str, dict[str, Any]]:
+    found: dict[str, dict[str, Any]] = {}
+    for port in ports:
+        if port.direction != "output":
+            continue
+        found.setdefault(port.node_id, {})[port.port] = port.schema
+    return found
+
+
+def _apply_output_check(
+    node_id: str,
+    spec: NodeType,
+    result: NodeResult,
+    schemas: Mapping[str, Mapping[str, Any]],
+) -> NodeResult:
+    if result.status != "succeeded":
+        return result
+    produced = schemas.get(node_id, {})
+    for port in spec.outputs:
+        if port.loop_back or port.port == "error":
+            continue
+        schema = produced.get(port.port)
+        if isinstance(schema, dict) and not output_matches(result.output, schema):
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_OUTPUT_SCHEMA_MISMATCH",
+                error_message="Output does not match the declared schema",
+            )
+    return result
 
 
 def _links(graph: Mapping[str, Any], nodes: dict[str, Mapping[str, Any]]) -> list[_Link]:

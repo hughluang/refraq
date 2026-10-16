@@ -1,13 +1,18 @@
-"""Helpers shared by node executors."""
+"""Helpers shared by several node types."""
 
 from __future__ import annotations
 
+import json
 from typing import Any, Mapping
 
-from backend.channel.engine import EngineHooks, NodeResult
+from backend.channel.nodes.spec import EngineHooks, NodeResult
 from backend.channel.template import TemplateTypeError, render
 
-__all__ = ["render_field"]
+__all__ = ["canonical_json", "render_field"]
+
+
+def canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 def render_field(

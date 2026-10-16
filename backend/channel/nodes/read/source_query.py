@@ -4,8 +4,18 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from backend.channel.nodes.spec import MAIN_INPUT, MAIN_OUTPUT, NodeType, object_schema
+from backend.channel.node_support import render_field
+from backend.channel.nodes.spec import (
+    MAIN_INPUT,
+    MAIN_OUTPUT,
+    EngineHooks,
+    NodeResult,
+    NodeType,
+    object_schema,
+)
 from backend.channel.values import LIST_OF_OBJECTS
+from backend.core.errors import AppError
+from backend.metadata.query.service import run_controlled_query
 
 __all__ = ["NODE_TYPE"]
 
@@ -28,6 +38,50 @@ def _refine(
 ) -> dict[str, Any]:
     del config, upstream, resolver
     return {"main": _ROWS}
+
+
+def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    config = node["config"]
+    statement, error = render_field(hooks, config.get("sql"), {"type": "string"})
+    if error is not None:
+        return error
+    row_cap = config.get("row_cap", 100)
+    if not isinstance(row_cap, int) or isinstance(row_cap, bool):
+        row_cap = 100
+    editor = hooks.editor
+    if editor is not None:
+        row_cap = min(row_cap, editor.row_limit)
+    user = hooks.user
+    audit_detail = {
+        key: value
+        for key, value in {
+            "channel_id": hooks.channel_id,
+            "job_id": hooks.run_id,
+            "node_id": node.get("id"),
+        }.items()
+        if value
+    }
+    try:
+        outcome = run_controlled_query(
+            source_id=str(config["source_id"]),
+            sql=str(statement),
+            max_rows=row_cap,
+            actor_user_id=user.id,
+            actor_token_id=None,
+            audit_detail=audit_detail or None,
+        )
+    except AppError as exc:
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_NODE_FAILED",
+            error_message=exc.message,
+            error_detail={"code": exc.code},
+        )
+    rows = [dict(zip(outcome.columns, row)) for row in outcome.rows]
+    return NodeResult(
+        status="succeeded",
+        output={"rows": rows, "count": len(rows), "truncated": outcome.truncated},
+    )
 
 
 NODE_TYPE = NodeType(
@@ -76,6 +130,7 @@ NODE_TYPE = NodeType(
         },
         ["source_id", "sql"],
     ),
+    execute=_execute,
     permission="channel:source_query",
     refine=_refine,
 )

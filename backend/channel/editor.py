@@ -1,8 +1,8 @@
 """Synchronous editor execution. Not a Channel Run.
 
-The request uses the same engine and executors as a run. Executors see editor
-mode only through ``hooks.editor``. Nothing is written, and no Job, run record,
-checkpoint, or audit event is created.
+The request uses the same engine and node catalog as a run. Node types see
+editor mode only through ``hooks.editor``. Nothing is written, and no Job, run
+record, checkpoint, or audit event is created.
 """
 
 from __future__ import annotations
@@ -14,17 +14,11 @@ from typing import Any, Mapping, Sequence
 
 from backend.admin.user_store import UserRecord, ensure_system_user, get_user_store
 from backend.channel.context import channel_context, platform_context, run_context
-from backend.channel.engine import (
-    EditorOptions,
-    EngineHooks,
-    Executor,
-    NodeResult,
-    PinnedOutput,
-    execute,
-)
+from backend.channel.engine import execute
 from backend.channel.errors import ChannelNotFound, ChannelRequestInvalid
-from backend.channel.executors import EXECUTORS
-from backend.channel.nodes import loop_ports
+from backend.channel.nodes import list_node_types
+from backend.channel.nodes.spec import EditorOptions, NodeResult, PinnedOutput
+from backend.channel.references import ChannelReferenceResolver
 from backend.channel.run_store import ChannelRunRecord
 from backend.channel.runs import _entry_node, refuse_invalid_closure, require_stop_closure
 from backend.channel.sandbox import SandboxFailed, SandboxSession
@@ -36,7 +30,6 @@ from backend.worker.schedules import get_schedule_store
 
 __all__ = [
     "EDITOR_TIMEOUT_SEC",
-    "editor_executors",
     "execute_editor",
 ]
 
@@ -122,11 +115,6 @@ class _EditorHooks:
         self.sandbox.drop_outputs(refs)
 
 
-def editor_executors(executors: Mapping[str, Executor]) -> dict[str, Executor]:
-    """Run pinned nodes from their pinned output. Other nodes use ``executors``."""
-    return {type_id: _pin_or_run(executor) for type_id, executor in executors.items()}
-
-
 def execute_editor(
     *,
     channel_id: str,
@@ -188,11 +176,11 @@ def execute_editor(
             outcome = execute(
                 graph,
                 entry,
-                editor_executors(EXECUTORS),
+                list_node_types(),
+                ChannelReferenceResolver(channel.id),
                 hooks,
                 timeout_sec=EDITOR_TIMEOUT_SEC,
                 stop_at_node_id=stop_at_node_id,
-                loop_ports=loop_ports(),
             )
     except SandboxFailed as exc:
         return _response(
@@ -217,6 +205,7 @@ def execute_editor(
 
 def _pinned(graph: Mapping[str, Any], pinned: list[dict[str, Any]]) -> dict[str, Any]:
     by_id = {str(node["id"]): node for node in graph.get("nodes") or []}
+    by_type = {item.type_id: item for item in list_node_types()}
     found: dict[str, Any] = {}
     for item in pinned:
         node_id = str(item["node_id"])
@@ -225,33 +214,11 @@ def _pinned(graph: Mapping[str, Any], pinned: list[dict[str, Any]]) -> dict[str,
         node = by_id.get(node_id)
         if node is None:
             raise ChannelRequestInvalid("Pinned node is not in the graph")
-        if node.get("type") == "volume.for":
+        spec = by_type.get(str(node.get("type")))
+        if spec is not None and not spec.pinnable:
             raise ChannelRequestInvalid("A For node cannot be pinned")
         found[node_id] = item.get("output")
     return found
-
-
-def _pin_or_run(executor: Executor) -> Executor:
-    def run(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
-        pinned = hooks.pinned_output(node)
-        if pinned is not None:
-            return _pinned_result(node, pinned.value)
-        return executor(node, hooks)
-
-    return run
-
-
-def _pinned_result(node: Mapping[str, Any], output: Any) -> NodeResult:
-    ports = None
-    if node.get("type") == "transform.if":
-        if not isinstance(output, dict) or "value" not in output:
-            return NodeResult(
-                status="failed",
-                error_code="CHANNEL_NODE_FAILED",
-                error_message="Pinned If output has no value",
-            )
-        ports = frozenset({"true" if bool(output["value"]) else "false"})
-    return NodeResult(status="pinned", output=output, ports=ports)
 
 
 def _schedule(channel_id: str, node: Mapping[str, Any], started: datetime) -> dict[str, Any]:

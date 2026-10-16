@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from backend.channel.nodes.spec import MAIN_INPUT, NodeType, PortSpec, object_schema
+from backend.channel.node_support import render_field
+from backend.channel.nodes.spec import MAIN_INPUT, EngineHooks, NodeResult, NodeType, PortSpec, object_schema
 
 __all__ = ["NODE_TYPE"]
 
+_BOOL = {"type": "boolean"}
 _VALUE: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -23,6 +25,30 @@ def _refine(
 ) -> dict[str, Any]:
     del config, upstream, resolver
     return {"true": _VALUE, "false": _VALUE}
+
+
+def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    value, error = render_field(hooks, node["config"].get("condition"), _BOOL)
+    if error is not None:
+        return error
+    live = "true" if value else "false"
+    return NodeResult(
+        status="succeeded",
+        output={"value": value},
+        ports=frozenset({live}),
+    )
+
+
+def _pinned(node: Mapping[str, Any], output: Any) -> NodeResult:
+    del node
+    if not isinstance(output, dict) or "value" not in output:
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_NODE_FAILED",
+            error_message="Pinned If output has no value",
+        )
+    ports = frozenset({"true" if bool(output["value"]) else "false"})
+    return NodeResult(status="pinned", output=output, ports=ports)
 
 
 NODE_TYPE = NodeType(
@@ -53,5 +79,7 @@ NODE_TYPE = NodeType(
         },
         ["condition"],
     ),
+    execute=_execute,
     refine=_refine,
+    pinned=_pinned,
 )

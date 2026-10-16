@@ -6,9 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.channel.executors import EXECUTORS
-from backend.channel.graph import ResolvedAttribute, ResolvedEntity, validate
+from backend.channel.graph import validate
+from backend.channel.nodes import list_node_types
+from backend.channel.nodes.spec import ResolvedAttribute, ResolvedEntity
 from backend.channel.store import ChannelRecord, get_channel_store
+from backend.tests.channel_hooks_fake import FakeHooks
 from backend.channel.write_compatibility import write_reasons
 from backend.channel.write_targets import incompatible_writers
 from backend.core.time import utc_now
@@ -186,7 +188,7 @@ def test_write_node_fails_or_skips_with_the_same_codes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "backend.channel.executors.head_target",
+        "backend.channel.nodes.write.entity.head_target",
         lambda entity_id: SimpleNamespace(
             attributes=tuple(
                 SimpleNamespace(
@@ -199,10 +201,10 @@ def test_write_node_fails_or_skips_with_the_same_codes(
             )
         ),
     )
-    execute = EXECUTORS["write.entity"]
+    execute = next(item.execute for item in list_node_types() if item.type_id == "write.entity")
     failed = execute(
         _node("nd_write", "write.entity", "Write materials", _write_config("fail")),
-        SimpleNamespace(),
+        FakeHooks(),
     )
     assert failed.status == "failed"
     assert failed.error_code == "CHANNEL_WRITE_INCOMPATIBLE"
@@ -210,7 +212,7 @@ def test_write_node_fails_or_skips_with_the_same_codes(
 
     skipped = execute(
         _node("nd_write", "write.entity", "Write materials", _write_config("skip")),
-        SimpleNamespace(),
+        FakeHooks(),
     )
     assert skipped.status == "skipped"
     assert skipped.output == {"skipped": True, "reasons": AGREED_CODES}

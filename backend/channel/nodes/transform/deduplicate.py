@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from backend.channel.nodes.spec import MAIN_INPUT, MAIN_OUTPUT, NodeType, object_schema
+from backend.channel.node_support import canonical_json, render_field
+from backend.channel.nodes.spec import MAIN_INPUT, MAIN_OUTPUT, EngineHooks, NodeResult, NodeType, object_schema
 from backend.channel.values import LIST_OF_OBJECTS
 
 __all__ = ["NODE_TYPE"]
@@ -28,6 +29,28 @@ def _refine(
 ) -> dict[str, Any]:
     del config, upstream, resolver
     return {"main": _ROWS}
+
+
+def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    config = node["config"]
+    items, error = render_field(hooks, config.get("items"), LIST_OF_OBJECTS)
+    if error is not None:
+        return error
+    keys = [str(key) for key in config["keys"]]
+    seen: set[str] = set()
+    kept: list[Any] = []
+    for row in items:
+        token = canonical_json(
+            [row.get(key) if isinstance(row, dict) else None for key in keys]
+        )
+        if token in seen:
+            continue
+        seen.add(token)
+        kept.append(row)
+    return NodeResult(
+        status="succeeded",
+        output={"rows": kept, "count": len(kept), "removed": len(items) - len(kept)},
+    )
 
 
 NODE_TYPE = NodeType(
@@ -67,5 +90,6 @@ NODE_TYPE = NodeType(
         },
         ["items", "keys"],
     ),
+    execute=_execute,
     refine=_refine,
 )

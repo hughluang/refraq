@@ -2,8 +2,64 @@
 
 from __future__ import annotations
 
-from backend.channel.engine import EngineHooks, NodeResult, execute
+from collections.abc import Callable
+
+from backend.channel.engine import execute
+from backend.channel.nodes import list_node_types
+from backend.channel.nodes.spec import EngineHooks, NodeResult, NodeType, PortSpec
 from backend.tests.channel_hooks_fake import FakeHooks
+
+
+class _Resolver:
+    def entity_head(self, entity_id: str) -> None:
+        return None
+
+    def channel_exists(self, channel_id: str) -> bool:
+        return False
+
+    def source_exists(self, source_id: str) -> bool:
+        return False
+
+
+_RESOLVER = _Resolver()
+
+
+def _type(
+    type_id: str,
+    run: Callable[..., NodeResult],
+    *,
+    loop_port: str | None = None,
+    refine: Callable[..., dict] | None = None,
+) -> NodeType:
+    if loop_port is None:
+        outputs = (PortSpec("main", "Output."),)
+    else:
+        outputs = (
+            PortSpec(loop_port, "Loop.", loop_back=True),
+            PortSpec("done", "Done."),
+        )
+    return NodeType(
+        type_id=type_id,
+        family="test",
+        label=type_id,
+        summary="Test node.",
+        description="Test node. Used only by the engine suite.",
+        entry=False,
+        inputs=(PortSpec("main", "Input."), PortSpec("loop", "Loop return.")),
+        outputs=outputs,
+        config_schema={"type": "object"},
+        execute=run,
+        refine=refine,
+    )
+
+
+def _catalog(
+    bound: dict[str, Callable[..., NodeResult]],
+    *,
+    loops: dict[str, str] | None = None,
+) -> list[NodeType]:
+    loops = loops or {}
+    return [_type(type_id, run, loop_port=loops.get(type_id)) for type_id, run in bound.items()]
 
 
 def _node(node_id: str, y: float, x: float = 0, type_id: str = "fake") -> dict:
@@ -50,7 +106,7 @@ def test_stop_at_runs_both_incoming_branches_and_not_downstream() -> None:
         "settings": {},
     }
     hooks = FakeHooks()
-    outcome = execute(graph, "a", {"fake": _ok}, hooks, stop_at_node_id="d")
+    outcome = execute(graph, "a", _catalog({"fake": _ok}), _RESOLVER, hooks, stop_at_node_id="d")
     assert outcome.status == "succeeded"
     assert outcome.outcome == "completed"
     assert outcome.stopped_node_id is None
@@ -65,7 +121,7 @@ def test_branch_finishes_before_the_next_sibling() -> None:
         "settings": {},
     }
     hooks = FakeHooks()
-    outcome = execute(graph, "a", {"fake": _ok}, hooks)
+    outcome = execute(graph, "a", _catalog({"fake": _ok}), _RESOLVER, hooks)
     assert outcome.status == "succeeded"
     assert hooks.order == ["a", "b", "d", "c"]
 
@@ -82,7 +138,7 @@ def test_stop_failure_does_not_run_downstream() -> None:
         "settings": {},
     }
     hooks = FakeHooks()
-    outcome = execute(graph, "a", {"fake": fail}, hooks)
+    outcome = execute(graph, "a", _catalog({"fake": fail}), _RESOLVER, hooks)
     assert outcome.status == "failed"
     assert outcome.failed_node_id == "b"
     assert hooks.order == ["a", "b"]
@@ -109,7 +165,7 @@ def test_skipped_node_records_the_output_later_nodes_read() -> None:
         "settings": {},
     }
     hooks = FinishingHooks()
-    outcome = execute(graph, "a", {"fake": skip}, hooks)
+    outcome = execute(graph, "a", _catalog({"fake": skip}), _RESOLVER, hooks)
     assert outcome.skipped_node_ids == ["a"]
     assert hooks.recorded["a"] == {"skipped": True, "reason": "nothing new"}
     assert hooks.outputs["a"] == hooks.recorded["a"]
@@ -127,7 +183,7 @@ def test_timeout_records_the_node_about_to_run() -> None:
     outcome = execute(
         graph,
         "a",
-        {"fake": _ok},
+        _catalog({"fake": _ok}), _RESOLVER,
         hooks,
         timeout_sec=1,
         started=time.monotonic() - 5,
@@ -149,7 +205,7 @@ def test_supersede_stops_before_the_next_node() -> None:
         "settings": {},
     }
     hooks = Superseding()
-    outcome = execute(graph, "a", {"fake": _ok}, hooks)
+    outcome = execute(graph, "a", _catalog({"fake": _ok}), _RESOLVER, hooks)
     assert outcome.status == "cancelled"
     assert outcome.stopped_node_id == "b"
     assert hooks.order == ["a"]
@@ -167,7 +223,7 @@ def test_timeout_records_the_node_that_would_run() -> None:
     outcome = execute(
         graph,
         "a",
-        {"fake": _ok},
+        _catalog({"fake": _ok}), _RESOLVER,
         hooks,
         timeout_sec=1,
         started=time.monotonic() - 5,
@@ -189,7 +245,7 @@ def test_supersede_stops_before_the_next_node() -> None:
         "settings": {},
     }
     hooks = Superseding()
-    outcome = execute(graph, "a", {"fake": _ok}, hooks)
+    outcome = execute(graph, "a", _catalog({"fake": _ok}), _RESOLVER, hooks)
     assert outcome.status == "cancelled"
     assert outcome.stopped_node_id == "b"
     assert hooks.order == ["a"]
@@ -203,7 +259,7 @@ def test_cancel_between_nodes() -> None:
     }
     hooks = FakeHooks()
     hooks.cancel_after = "a"
-    outcome = execute(graph, "a", {"fake": _ok}, hooks)
+    outcome = execute(graph, "a", _catalog({"fake": _ok}), _RESOLVER, hooks)
     assert outcome.status == "cancelled"
     assert outcome.stopped_node_id == "b"
     assert hooks.order == ["a"]
@@ -252,7 +308,7 @@ def test_if_dead_branch_does_not_run_and_the_join_does() -> None:
     gate = graph["nodes"][0]
     gate["config"] = {"live": "true"}
     hooks = FakeHooks()
-    outcome = execute(graph, "gate", {"transform.if": _branch, "fake": _branch}, hooks)
+    outcome = execute(graph, "gate", _catalog({"transform.if": _branch, "fake": _branch}), _RESOLVER, hooks)
     assert outcome.status == "succeeded"
     assert hooks.order == ["gate", "live", "join"]
     assert "dead" not in hooks.order
@@ -266,7 +322,7 @@ def test_join_waits_for_both_inputs() -> None:
         "settings": {},
     }
     hooks = FakeHooks()
-    outcome = execute(graph, "s", {"fake": _ok}, hooks)
+    outcome = execute(graph, "s", _catalog({"fake": _ok}), _RESOLVER, hooks)
     assert outcome.status == "succeeded"
     assert hooks.order.index("m") > hooks.order.index("a2")
     assert hooks.order.index("m") > hooks.order.index("b")
@@ -286,7 +342,7 @@ def test_for_runs_the_body_once_per_element_and_collects_results() -> None:
         "settings": {},
     }
     hooks = FakeHooks()
-    outcome = execute(graph, "walk", {"volume.for": _walk, "fake": _walk}, hooks, loop_ports={"volume.for": "each"})
+    outcome = execute(graph, "walk", _catalog({"volume.for": _walk, "fake": _walk}, loops={"volume.for": "each"}), _RESOLVER, hooks)
     assert outcome.status == "succeeded"
     assert hooks.order == ["walk", "step", "step", "after"]
     assert hooks.outputs["walk"]["results"] == [{"saw": "a", "id": "step"}, {"saw": "b", "id": "step"}]
@@ -307,7 +363,7 @@ def test_for_empty_list_skips_the_body() -> None:
         "settings": {},
     }
     hooks = FakeHooks()
-    outcome = execute(graph, "walk", {"volume.for": _walk, "fake": _walk}, hooks, loop_ports={"volume.for": "each"})
+    outcome = execute(graph, "walk", _catalog({"volume.for": _walk, "fake": _walk}, loops={"volume.for": "each"}), _RESOLVER, hooks)
     assert outcome.status == "succeeded"
     assert hooks.order == ["walk"]
     assert hooks.outputs["walk"]["results"] == []
@@ -335,9 +391,9 @@ def test_nested_for_collects_inner_results() -> None:
     outcome = execute(
         graph,
         "outer",
-        {"volume.for": _walk, "fake": _walk},
+        _catalog({"volume.for": _walk, "fake": _walk}, loops={"volume.for": "each"}),
+        _RESOLVER,
         hooks,
-        loop_ports={"volume.for": "each"},
     )
     assert outcome.status == "succeeded"
     assert hooks.order == ["outer", "inner", "leaf", "inner", "leaf"]
@@ -359,7 +415,7 @@ def test_cancel_inside_a_for_body() -> None:
     }
     hooks = FakeHooks()
     hooks.cancel_after = "step"
-    outcome = execute(graph, "walk", {"volume.for": _walk, "fake": _ok}, hooks, loop_ports={"volume.for": "each"})
+    outcome = execute(graph, "walk", _catalog({"volume.for": _walk, "fake": _ok}, loops={"volume.for": "each"}), _RESOLVER, hooks)
     assert outcome.status == "cancelled"
     assert outcome.stopped_node_id == "tail"
     assert hooks.order == ["walk", "step"]
@@ -384,10 +440,10 @@ def test_stop_at_inside_a_for_body_excludes_the_rest() -> None:
     outcome = execute(
         graph,
         "start",
-        {"fake": _ok, "volume.for": _walk},
+        _catalog({"fake": _ok, "volume.for": _walk}, loops={"volume.for": "each"}),
+        _RESOLVER,
         hooks,
         stop_at_node_id="step",
-        loop_ports={"volume.for": "each"},
     )
     assert outcome.status == "succeeded"
     assert hooks.order == ["start", "walk", "step"]
@@ -418,12 +474,120 @@ def test_timeout_inside_a_for_body() -> None:
     outcome = execute(
         graph,
         "walk",
-        {"volume.for": _walk, "fake": slow},
+        _catalog({"volume.for": _walk, "fake": slow}, loops={"volume.for": "each"}),
+        _RESOLVER,
         hooks,
         timeout_sec=0.01,
-        loop_ports={"volume.for": "each"},
     )
     assert outcome.status == "failed"
     assert outcome.error_code == "CHANNEL_RUN_TIMEOUT"
     assert outcome.stopped_node_id == "tail"
     assert hooks.order == ["walk", "step"]
+
+
+_STRICT = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {"n": {"type": "integer"}},
+    "required": ["n"],
+}
+_OPEN = {"type": "object"}
+
+
+def test_output_check_uses_the_upstream_refined_schema() -> None:
+    def source_refine(config: dict, upstream: dict, resolver: object) -> dict:
+        del config, upstream, resolver
+        return {"main": _STRICT}
+
+    def sink_refine(config: dict, upstream: dict, resolver: object) -> dict:
+        del config, resolver
+        produced = upstream.get("src")
+        if isinstance(produced, dict) and produced.get("main") == _STRICT:
+            return {"main": _STRICT}
+        return {"main": _OPEN}
+
+    def emit(node: dict, hooks: EngineHooks, value: dict) -> NodeResult:
+        del hooks
+        if node["id"] == "src":
+            return NodeResult(status="succeeded", output={"n": 1})
+        return NodeResult(status="succeeded", output=value)
+
+    graph = {
+        "nodes": [_node("src", 0, type_id="source"), _node("sink", 1, type_id="sink")],
+        "edges": [_edge("src", "sink")],
+        "settings": {},
+    }
+
+    def catalog(value: dict) -> list[NodeType]:
+        return [
+            _type("source", lambda node, hooks: emit(node, hooks, value), refine=source_refine),
+            _type("sink", lambda node, hooks: emit(node, hooks, value), refine=sink_refine),
+        ]
+
+    mismatch = execute(graph, "src", catalog({"n": "x"}), _RESOLVER, FakeHooks())
+    assert mismatch.status == "failed"
+    assert mismatch.error_code == "CHANNEL_OUTPUT_SCHEMA_MISMATCH"
+    assert mismatch.error_message == "Output does not match the declared schema"
+    assert mismatch.failed_node_id == "sink"
+
+    matched = execute(graph, "src", catalog({"n": 1}), _RESOLVER, FakeHooks())
+    assert matched.status == "succeeded"
+
+
+def test_pinned_output_bypasses_execute() -> None:
+    def ran(node: dict, hooks: EngineHooks) -> NodeResult:
+        del node, hooks
+        return NodeResult(status="failed", error_code="CHANNEL_NODE_FAILED", error_message="ran")
+
+    hooks = FakeHooks(pinned={"a": {"kept": True}})
+    outcome = execute(
+        {"nodes": [_node("a", 0)], "edges": [], "settings": {}},
+        "a",
+        [_type("fake", ran)],
+        _RESOLVER,
+        hooks,
+    )
+    assert outcome.status == "succeeded"
+    assert hooks.outputs["a"] == {"kept": True}
+    assert ("a", "pinned") in hooks.statuses
+
+
+def test_pinned_if_selects_the_branch_from_value() -> None:
+    if_type = next(item for item in list_node_types() if item.type_id == "transform.if")
+
+    def ran(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        return NodeResult(status="succeeded", output={"id": node["id"]})
+
+    def graph() -> dict:
+        return {
+            "nodes": [
+                _node("g", 0, type_id="transform.if"),
+                _node("yes", 1),
+                _node("no", 2),
+            ],
+            "edges": [_edge("g", "yes", "true"), _edge("g", "no", "false")],
+            "settings": {},
+        }
+
+    catalog = [if_type, _type("fake", ran)]
+    true_hooks = FakeHooks(pinned={"g": {"value": True}})
+    true_outcome = execute(graph(), "g", catalog, _RESOLVER, true_hooks)
+    assert true_outcome.status == "succeeded"
+    assert true_hooks.order == ["g", "yes"]
+
+    false_hooks = FakeHooks(pinned={"g": {"value": False}})
+    false_outcome = execute(graph(), "g", catalog, _RESOLVER, false_hooks)
+    assert false_outcome.status == "succeeded"
+    assert false_hooks.order == ["g", "no"]
+
+    missing = execute(
+        {"nodes": [_node("g", 0, type_id="transform.if")], "edges": [], "settings": {}},
+        "g",
+        [if_type],
+        _RESOLVER,
+        FakeHooks(pinned={"g": {}}),
+    )
+    assert missing.status == "failed"
+    assert missing.error_code == "CHANNEL_NODE_FAILED"
+    assert missing.error_message == "Pinned If output has no value"

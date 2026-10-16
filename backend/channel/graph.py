@@ -15,7 +15,7 @@ from typing import Any, Mapping, Protocol, Sequence
 from jsonschema import Draft202012Validator
 
 from backend.channel.nodes import list_node_types
-from backend.channel.nodes.spec import NodeType
+from backend.channel.nodes.spec import NodeType, ResolvedEntity
 from backend.channel.sandbox.program import CODE_MAX_BYTES, author_line, function_source
 from backend.channel.template import (
     TemplateSyntaxError,
@@ -33,8 +33,6 @@ __all__ = [
     "Problem",
     "ReferenceResolver",
     "RefinedPort",
-    "ResolvedAttribute",
-    "ResolvedEntity",
     "TemplateSite",
     "refine_ports",
     "template_site",
@@ -66,19 +64,6 @@ class RefinedPort:
     direction: str
     coarse_type: str
     schema: dict[str, Any] | None
-
-
-@dataclass(frozen=True, slots=True)
-class ResolvedAttribute:
-    name: str
-    unique: bool
-    business_key: bool
-    value_type: str = "string"
-
-
-@dataclass(frozen=True, slots=True)
-class ResolvedEntity:
-    attributes: tuple[ResolvedAttribute, ...]
 
 
 @dataclass(frozen=True, slots=True)

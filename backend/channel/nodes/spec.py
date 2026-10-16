@@ -1,22 +1,32 @@
-"""Shared declaration for a Data Channel node type.
+"""Declaration and runtime value types for a Data Channel node type.
 
-Node modules depend on this module only. The catalog in ``nodes`` is the
-registry; it is not imported from here.
+Node modules import this module for the type declaration and the values they
+return from execute. The catalog in ``nodes`` is the registry and is not
+imported from here.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
+
+from backend.admin.user_store import UserRecord
 
 __all__ = [
     "ERROR_OUTPUT",
+    "EditorOptions",
+    "EngineHooks",
     "MAIN_INPUT",
     "MAIN_OUTPUT",
+    "NodeResult",
     "NodeType",
+    "PinnedOutput",
     "PortSpec",
+    "ResolvedAttribute",
+    "ResolvedEntity",
     "object_schema",
+    "pin_output",
 ]
 
 
@@ -28,10 +38,94 @@ class PortSpec:
     coarse_type: str = "unknown"
 
 
+@dataclass
+class NodeResult:
+    status: str
+    output: Any = None
+    error_code: str | None = None
+    error_message: str | None = None
+    error_detail: dict[str, Any] | None = None
+    ports: frozenset[str] | None = None
+    iterations: list[Any] | None = None
+
+
+@dataclass(frozen=True)
+class EditorOptions:
+    """Row limit for an editor execution."""
+
+    row_limit: int
+
+
+@dataclass(frozen=True, slots=True)
+class PinnedOutput:
+    value: Any
+
+
+class EngineHooks(Protocol):
+    def cancelled(self) -> bool: ...
+
+    def superseded(self) -> bool: ...
+
+    def on_start(self, node: Mapping[str, Any]) -> int: ...
+
+    def on_finish(self, seq: int, node: Mapping[str, Any], result: NodeResult) -> None: ...
+
+    def on_output(self, node: Mapping[str, Any], output: Any) -> None: ...
+
+    def drop_outputs(self, refs: list[str]) -> None: ...
+
+    def evaluate(self, expression: str) -> Any: ...
+
+    def run_code(self, source: str, timeout_sec: float) -> Any: ...
+
+    @property
+    def run_id(self) -> str: ...
+
+    @property
+    def channel_id(self) -> str: ...
+
+    @property
+    def actor(self) -> Mapping[str, str]: ...
+
+    @property
+    def started_at(self) -> str: ...
+
+    @property
+    def user(self) -> UserRecord: ...
+
+    @property
+    def schedule(self) -> Mapping[str, Any]: ...
+
+    @property
+    def editor(self) -> EditorOptions | None: ...
+
+    def pinned_output(self, node: Mapping[str, Any]) -> PinnedOutput | None: ...
+
+
+def pin_output(node: Mapping[str, Any], output: Any) -> NodeResult:
+    del node
+    return NodeResult(status="pinned", output=output)
+
+
+Execute = Callable[[Mapping[str, Any], EngineHooks], NodeResult]
+Pinned = Callable[[Mapping[str, Any], Any], NodeResult]
 Refine = Callable[
     [Mapping[str, Any], Mapping[str, Any], Any],
     dict[str, Any],
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedAttribute:
+    name: str
+    unique: bool
+    business_key: bool
+    value_type: str = "string"
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedEntity:
+    attributes: tuple[ResolvedAttribute, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,9 +139,12 @@ class NodeType:
     inputs: tuple[PortSpec, ...]
     outputs: tuple[PortSpec, ...]
     config_schema: dict[str, Any]
+    execute: Execute
     permission: str | None = None
     type_version: int = 1
     refine: Refine | None = None
+    pinned: Pinned = pin_output
+    pinnable: bool = True
 
 
 MAIN_INPUT = PortSpec(

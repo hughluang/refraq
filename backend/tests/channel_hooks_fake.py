@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Mapping
 
 from backend.admin.user_store import UserRecord
-from backend.channel.engine import EditorOptions, NodeResult, PinnedOutput
+from backend.channel.nodes.spec import EditorOptions, NodeResult, PinnedOutput
 
 _ACTOR = {"id": "usr_system", "name": "System"}
 

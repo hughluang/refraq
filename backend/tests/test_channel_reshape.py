@@ -1,18 +1,15 @@
-"""Executors for Set Fields, If, Filter, Merge, Deduplicate, and For."""
+"""Execute for Set Fields, If, Filter, Merge, Deduplicate, and For."""
 
 from __future__ import annotations
 
 import pytest
 
-from backend.channel.reshape import (
-    run_deduplicate,
-    run_filter,
-    run_for,
-    run_if,
-    run_merge,
-    run_set_fields,
-)
+from backend.channel.nodes import list_node_types
 from backend.tests.channel_hooks_fake import FakeHooks
+
+
+def _run(type_id: str):
+    return next(item.execute for item in list_node_types() if item.type_id == type_id)
 
 
 def Hooks(values: dict | None = None) -> FakeHooks:
@@ -31,7 +28,7 @@ def _node(type_id: str, config: dict) -> dict:
 
 
 def test_set_fields_keeps_order_and_parses_json() -> None:
-    result = run_set_fields(
+    result = _run("transform.set_fields")(
         _node(
             "transform.set_fields",
             {"fields": [{"name": "b", "value": "1"}, {"name": "a", "value": '"x"'}]},
@@ -44,7 +41,7 @@ def test_set_fields_keeps_order_and_parses_json() -> None:
 
 
 def test_set_fields_evaluates_a_template() -> None:
-    result = run_set_fields(
+    result = _run("transform.set_fields")(
         _node("transform.set_fields", {"fields": [{"name": "n", "value": "{{ nums }}"}]}),
         Hooks({"nums": [1, 2]}),
     )
@@ -52,18 +49,18 @@ def test_set_fields_evaluates_a_template() -> None:
 
 
 def test_if_selects_the_live_port() -> None:
-    yes = run_if(_node("transform.if", {"condition": "true"}), Hooks())
-    no = run_if(_node("transform.if", {"condition": "{{ flag }}"}), Hooks({"flag": False}))
+    yes = _run("transform.if")(_node("transform.if", {"condition": "true"}), Hooks())
+    no = _run("transform.if")(_node("transform.if", {"condition": "{{ flag }}"}), Hooks({"flag": False}))
     assert yes.output == {"value": True}
     assert yes.ports == frozenset({"true"})
     assert no.ports == frozenset({"false"})
-    bad = run_if(_node("transform.if", {"condition": "1"}), Hooks())
+    bad = _run("transform.if")(_node("transform.if", {"condition": "1"}), Hooks())
     assert bad.error_code == "CHANNEL_VALUE_TYPE_MISMATCH"
 
 
 def test_filter_operators_bool_and_incomparable() -> None:
     rows = [{"n": True}, {"n": 1}, {"n": 2}, {"label": "Ab"}]
-    kept = run_filter(
+    kept = _run("transform.filter")(
         _node(
             "transform.filter",
             {
@@ -77,7 +74,7 @@ def test_filter_operators_bool_and_incomparable() -> None:
     assert kept.output["rows"] == [{"n": 1}]
     assert kept.output["dropped"] == 3
 
-    nulls = run_filter(
+    nulls = _run("transform.filter")(
         _node(
             "transform.filter",
             {
@@ -89,7 +86,7 @@ def test_filter_operators_bool_and_incomparable() -> None:
     )
     assert nulls.output["count"] == 2
 
-    any_match = run_filter(
+    any_match = _run("transform.filter")(
         _node(
             "transform.filter",
             {
@@ -105,13 +102,13 @@ def test_filter_operators_bool_and_incomparable() -> None:
     )
     assert any_match.output["rows"] == [{"name": "bolt"}]
 
-    empty = run_filter(
+    empty = _run("transform.filter")(
         _node("transform.filter", {"items": "{{ rows }}", "conditions": []}),
         Hooks({"rows": [{"a": 1}]}),
     )
     assert empty.output["dropped"] == 0
 
-    failed = run_filter(
+    failed = _run("transform.filter")(
         _node(
             "transform.filter",
             {
@@ -124,7 +121,7 @@ def test_filter_operators_bool_and_incomparable() -> None:
     assert failed.status == "failed"
     assert failed.error_detail["row_index"] == 0
 
-    contained = run_filter(
+    contained = _run("transform.filter")(
         _node(
             "transform.filter",
             {
@@ -136,7 +133,7 @@ def test_filter_operators_bool_and_incomparable() -> None:
     )
     assert contained.output["rows"] == [{"code": "ABC"}]
 
-    member = run_filter(
+    member = _run("transform.filter")(
         _node(
             "transform.filter",
             {
@@ -150,7 +147,7 @@ def test_filter_operators_bool_and_incomparable() -> None:
 
 
 def test_merge_modes_and_null_keys() -> None:
-    many = run_merge(
+    many = _run("transform.merge")(
         _node(
             "transform.merge",
             {
@@ -171,7 +168,7 @@ def test_merge_modes_and_null_keys() -> None:
     assert {row["n"] for row in many.output["rows"]} == {1, 2}
     assert {row["p"] for row in many.output["rows"]} == {10, 20}
 
-    nulls = run_merge(
+    nulls = _run("transform.merge")(
         _node(
             "transform.merge",
             {
@@ -195,7 +192,7 @@ def test_merge_modes_and_null_keys() -> None:
     ]
     assert any(row.get("p") == 9 and "n" not in row for row in nulls.output["rows"])
 
-    left_join = run_merge(
+    left_join = _run("transform.merge")(
         _node(
             "transform.merge",
             {"mode": "by_key", "key": "code", "join": "left", "inputs": ["{{ left }}", "{{ right }}"]},
@@ -204,7 +201,7 @@ def test_merge_modes_and_null_keys() -> None:
     )
     assert left_join.output["rows"][1] == {"code": "b", "n": 2}
 
-    position = run_merge(
+    position = _run("transform.merge")(
         _node(
             "transform.merge",
             {"mode": "by_position", "join": "full", "key": None, "inputs": ["{{ left }}", "{{ right }}"]},
@@ -213,7 +210,7 @@ def test_merge_modes_and_null_keys() -> None:
     )
     assert position.output["rows"] == [{"a": 1, "b": 2}, {"b": 3}]
 
-    inner = run_merge(
+    inner = _run("transform.merge")(
         _node(
             "transform.merge",
             {"mode": "by_position", "join": "inner", "inputs": ["{{ left }}", "{{ right }}"]},
@@ -222,7 +219,7 @@ def test_merge_modes_and_null_keys() -> None:
     )
     assert inner.output["rows"] == [{"a": 1, "b": 2}]
 
-    appended = run_merge(
+    appended = _run("transform.merge")(
         _node(
             "transform.merge",
             {"mode": "append", "join": "inner", "inputs": ["{{ left }}", "{{ right }}"]},
@@ -231,7 +228,7 @@ def test_merge_modes_and_null_keys() -> None:
     )
     assert appended.output["rows"] == [{"a": 1}, {"a": 2}]
 
-    missing = run_merge(
+    missing = _run("transform.merge")(
         _node(
             "transform.merge",
             {"mode": "append", "inputs": ["{{ left }}", "{{ gone }}"]},
@@ -243,7 +240,7 @@ def test_merge_modes_and_null_keys() -> None:
 
 
 def test_deduplicate_keeps_the_first_row() -> None:
-    result = run_deduplicate(
+    result = _run("transform.deduplicate")(
         _node(
             "transform.deduplicate",
             {"items": "{{ rows }}", "keys": ["k"]},
@@ -255,7 +252,7 @@ def test_deduplicate_keeps_the_first_row() -> None:
 
 
 def test_for_exposes_iterations_and_rejects_the_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    result = run_for(_node("volume.for", {"items": '["a", "b"]'}), Hooks())
+    result = _run("volume.for")(_node("volume.for", {"items": '["a", "b"]'}), Hooks())
     assert result.iterations == [
         {"current": "a", "index": 0, "count": 2},
         {"current": "b", "index": 1, "count": 2},
@@ -263,10 +260,10 @@ def test_for_exposes_iterations_and_rejects_the_limit(monkeypatch: pytest.Monkey
     assert result.output["current"] == "b"
     assert result.output["results"] == []
     assert result.ports == frozenset({"done"})
-    empty = run_for(_node("volume.for", {"items": "[]"}), Hooks())
+    empty = _run("volume.for")(_node("volume.for", {"items": "[]"}), Hooks())
     assert empty.iterations == []
     assert empty.output["current"] is None
     assert empty.output["index"] is None
-    monkeypatch.setattr("backend.channel.reshape._ITEM_LIMIT", 1)
-    limited = run_for(_node("volume.for", {"items": "[1, 2]"}), Hooks())
+    monkeypatch.setattr("backend.channel.nodes.volume.for._ITEM_LIMIT", 1)
+    limited = _run("volume.for")(_node("volume.for", {"items": "[1, 2]"}), Hooks())
     assert limited.error_code == "CHANNEL_ITEM_LIMIT_EXCEEDED"

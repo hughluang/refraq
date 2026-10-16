@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from backend.channel.nodes.spec import MAIN_INPUT, NodeType, PortSpec, object_schema
+from backend.channel.node_support import render_field
+from backend.channel.nodes.spec import MAIN_INPUT, EngineHooks, NodeResult, NodeType, PortSpec, object_schema
 
 __all__ = ["NODE_TYPE"]
+
+_ITEM_LIMIT = 100_000
+_ARRAY = {"type": "array"}
 
 _ANY: dict[str, Any] = {
     "type": ["object", "array", "string", "number", "boolean", "null"],
@@ -41,6 +45,37 @@ def _refine(
 ) -> dict[str, Any]:
     del config, upstream, resolver
     return {"each": _STEP, "done": _DONE}
+
+
+def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    items, error = render_field(hooks, node["config"].get("items"), _ARRAY)
+    if error is not None:
+        return error
+    if len(items) > _ITEM_LIMIT:
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_ITEM_LIMIT_EXCEEDED",
+            error_message="For items exceed 100000 elements",
+        )
+    editor = hooks.editor
+    if editor is not None and len(items) > editor.row_limit:
+        items = list(items[: editor.row_limit])
+    count = len(items)
+    iterations = [
+        {"current": item, "index": index, "count": count} for index, item in enumerate(items)
+    ]
+    if count == 0:
+        current: Any = None
+        index: int | None = None
+    else:
+        current = items[-1]
+        index = count - 1
+    return NodeResult(
+        status="succeeded",
+        output={"current": current, "index": index, "count": count, "results": []},
+        iterations=iterations,
+        ports=frozenset({"done"}),
+    )
 
 
 NODE_TYPE = NodeType(
@@ -83,5 +118,7 @@ NODE_TYPE = NodeType(
         },
         ["items"],
     ),
+    execute=_execute,
     refine=_refine,
+    pinnable=False,
 )

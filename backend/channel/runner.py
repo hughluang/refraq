@@ -7,9 +7,10 @@ from typing import Any, Mapping
 
 from backend.admin.user_store import UserRecord, ensure_system_user, get_user_store
 from backend.channel.context import channel_context, platform_context, run_context
-from backend.channel.engine import NodeResult, PinnedOutput, execute
-from backend.channel.executors import EXECUTORS
-from backend.channel.nodes import list_node_types, loop_ports
+from backend.channel.engine import execute
+from backend.channel.nodes import list_node_types
+from backend.channel.nodes.spec import NodeResult, PinnedOutput
+from backend.channel.references import ChannelReferenceResolver
 from backend.channel.run_store import get_run_store, note_killed_run, output_size
 from backend.channel.sandbox import SandboxFailed, SandboxSession
 from backend.channel.schedules import schedule_key_for
@@ -170,12 +171,12 @@ def run_channel_job(job_id: str) -> dict[str, str]:
             outcome = execute(
                 graph,
                 entry,
-                EXECUTORS,
+                list_node_types(),
+                ChannelReferenceResolver(channel.id),
                 hooks,
                 timeout_sec=timeout,
                 started=time.monotonic() - elapsed,
                 stop_at_node_id=run.stop_at_node_id,
-                loop_ports=loop_ports(),
             )
     except SandboxFailed as exc:
         mark_failed(job_id, error_code="CHANNEL_SANDBOX_FAILED", error_summary=str(exc))

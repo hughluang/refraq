@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from backend.channel.nodes.spec import MAIN_INPUT, MAIN_OUTPUT, NodeType
+from backend.channel.node_support import render_field
+from backend.channel.nodes.spec import MAIN_INPUT, MAIN_OUTPUT, EngineHooks, NodeResult, NodeType
+from backend.channel.sql_read import ITEM_LIMIT, SqlReadError, run_channel_sql
 from backend.channel.values import LIST_OF_OBJECTS
 
 __all__ = ["NODE_TYPE"]
@@ -28,6 +30,27 @@ def _refine(
 ) -> dict[str, Any]:
     del config, upstream, resolver
     return {"main": _ROWS}
+
+
+def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    config = node["config"]
+    statement, error = render_field(hooks, config.get("sql"), {"type": "string"})
+    if error is not None:
+        return error
+    editor = hooks.editor
+    try:
+        output = run_channel_sql(
+            str(statement),
+            source=config["source"],
+            statement_timeout_sec=config.get("statement_timeout_sec", 30),
+            max_rows=editor.row_limit if editor is not None else ITEM_LIMIT,
+            rollback=editor is not None,
+            strict_limit=editor is None,
+            editor=editor is not None,
+        )
+    except SqlReadError as exc:
+        return NodeResult(status="failed", error_code=exc.code, error_message=exc.message)
+    return NodeResult(status="succeeded", output=output)
 
 
 NODE_TYPE = NodeType(
@@ -107,5 +130,6 @@ NODE_TYPE = NodeType(
         },
         "required": ["source", "sql"],
     },
+    execute=_execute,
     refine=_refine,
 )

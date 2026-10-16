@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping
 
-from backend.channel.nodes.spec import MAIN_INPUT, MAIN_OUTPUT, NodeType, object_schema
+from backend.channel.node_support import render_field
+from backend.channel.nodes.spec import MAIN_INPUT, MAIN_OUTPUT, EngineHooks, NodeResult, NodeType, object_schema
 
 __all__ = ["NODE_TYPE"]
 
@@ -77,6 +78,16 @@ def _refine(
     }
 
 
+def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    output: dict[str, Any] = {}
+    for field in node["config"]["fields"]:
+        value, error = render_field(hooks, field.get("value"), _ANY)
+        if error is not None:
+            return error
+        output[str(field["name"])] = value
+    return NodeResult(status="succeeded", output=output)
+
+
 NODE_TYPE = NodeType(
     type_id="transform.set_fields",
     family="transform",
@@ -121,5 +132,6 @@ NODE_TYPE = NodeType(
         },
         ["fields"],
     ),
+    execute=_execute,
     refine=_refine,
 )

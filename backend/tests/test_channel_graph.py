@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from backend.channel.graph import (
-    ResolvedAttribute,
-    ResolvedEntity,
-    refine_ports,
-    validate,
-)
+from backend.channel.graph import refine_ports, validate
 from backend.channel.nodes import list_node_types
-from backend.channel.nodes.spec import NodeType, PortSpec
+from backend.channel.nodes.spec import NodeType, PortSpec, ResolvedAttribute, ResolvedEntity
+
+
+def _idle(node: object, hooks: object) -> object:
+    raise AssertionError("not executed")
 
 
 class FakeResolver:
@@ -194,6 +193,7 @@ def test_cycle_not_through_loop() -> None:
 
 def test_cycle_through_loop_back_port_is_legal() -> None:
     loop = NodeType(
+        execute=_idle,
         type_id="volume.loop",
         family="volume",
         label="Loop",
@@ -490,6 +490,7 @@ def test_template_problem_names_each_property() -> None:
 
 def test_template_problem_path_includes_a_list_index() -> None:
     nested = NodeType(
+        execute=_idle,
         type_id="test.nested",
         family="trigger",
         label="Nested",
@@ -535,6 +536,7 @@ def test_template_problem_path_includes_a_list_index() -> None:
 
 def test_incompatible_coarse_port_types() -> None:
     items = NodeType(
+        execute=_idle,
         type_id="test.items",
         family="trigger",
         label="Items",
@@ -629,6 +631,7 @@ def test_refine_upstream_names_only_ancestors_with_ref() -> None:
         return {}
 
     sink = NodeType(
+        execute=_idle,
         type_id="test.sink",
         family="test",
         label="Sink",

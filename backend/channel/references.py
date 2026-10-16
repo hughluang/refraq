@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from backend.channel.graph import ResolvedAttribute, ResolvedEntity
+from backend.channel.nodes.spec import ResolvedAttribute, ResolvedEntity
 from backend.channel.store import get_channel_store
 from backend.entity.heads import get_entity_head
 from backend.metadata.source_statements import source_exists as source_record_exists

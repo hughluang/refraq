@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from backend.channel.nodes.spec import MAIN_OUTPUT, NodeType, object_schema
+from backend.channel.nodes.spec import MAIN_OUTPUT, EngineHooks, NodeResult, NodeType, object_schema
 
 __all__ = ["NODE_TYPE"]
 
@@ -67,6 +67,14 @@ def _refine(
     }
 
 
+def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
+    payload = dict((node.get("config") or {}).get("payload") or {})
+    actor = hooks.actor
+    payload["triggered_by"] = {"id": actor["id"], "name": actor["name"]}
+    payload["triggered_at"] = hooks.started_at
+    return NodeResult(status="succeeded", output=payload)
+
+
 NODE_TYPE = NodeType(
     type_id="trigger.manual",
     family="trigger",
@@ -94,5 +102,6 @@ NODE_TYPE = NodeType(
         },
         [],
     ),
+    execute=_execute,
     refine=_refine,
 )

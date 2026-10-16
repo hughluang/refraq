@@ -17,7 +17,7 @@ from backend.admin.roles import seed_roles  # noqa: E402
 from backend.admin.role_store import get_role_store, reset_role_store  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import ensure_system_user, get_user_store, reset_user_store  # noqa: E402
-from backend.channel.executors import EXECUTORS  # noqa: E402
+from backend.channel.nodes import list_node_types  # noqa: E402
 from backend.tests.channel_hooks_fake import FakeHooks  # noqa: E402
 from backend.core.config import reset_settings_cache  # noqa: E402
 from backend.main import app  # noqa: E402
@@ -128,7 +128,7 @@ def test_source_query_node_uses_controlled_query(
         run_id="job_channel_query",
         channel_id="chn_channel_query",
     )
-    execute = EXECUTORS["read.source_query"]
+    execute = next(item.execute for item in list_node_types() if item.type_id == "read.source_query")
 
     write_connector = _RecordingConnector(rows=[["1"]], columns=["n"])
     monkeypatch.setattr(

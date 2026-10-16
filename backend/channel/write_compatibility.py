@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 
 if TYPE_CHECKING:
-    from backend.channel.graph import ResolvedAttribute, ResolvedEntity
+    from backend.channel.nodes.spec import ResolvedAttribute, ResolvedEntity
 
 ReasonCode = Literal[
     "business_key_missing",

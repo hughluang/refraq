@@ -11,8 +11,10 @@ import re
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from backend.channel.nodes import list_node_types
-from backend.channel.nodes.spec import NodeType
+from backend.channel.nodes.spec import NodeType, PortSpec
 
 _PORT_NAME = re.compile(r"^[a-z][a-z0-9]*(_[a-z0-9]+)*$")
 _SUMMARY_MAX = 160
@@ -40,6 +42,29 @@ def test_every_type_states_its_function_and_ports() -> None:
             assert port.loop_back is False
             assert "error_output" in port.description
         _assert_property_docs(node.config_schema)
+
+
+def test_every_registered_type_has_execute_and_only_for_is_unpinnable() -> None:
+    types = list_node_types()
+    assert types
+    for node in types:
+        assert callable(node.execute)
+    assert [node.type_id for node in types if not node.pinnable] == ["volume.for"]
+
+
+def test_a_node_type_requires_execute() -> None:
+    with pytest.raises(TypeError):
+        NodeType(
+            type_id="test.bare",
+            family="test",
+            label="Bare",
+            summary="Has no execute function.",
+            description="Test type. Constructing it without execute fails.",
+            entry=False,
+            inputs=(),
+            outputs=(PortSpec("main", "Output."),),
+            config_schema={"type": "object"},
+        )
 
 
 def test_every_node_module_is_registered_and_exports_only_node_type() -> None:

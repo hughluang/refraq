@@ -2,12 +2,41 @@
 
 from __future__ import annotations
 
-from backend.channel.editor import editor_executors
-from backend.channel.engine import EditorOptions, EngineHooks, NodeResult, execute
-from backend.channel.executors import execute_variable
-from backend.channel.reshape import run_for
+from backend.channel.engine import execute
+from backend.channel.nodes import list_node_types
+from backend.channel.nodes.spec import EditorOptions, EngineHooks, NodeResult, NodeType, PortSpec
 from backend.channel.variables import get_variable_store
 from backend.tests.channel_hooks_fake import FakeHooks
+
+
+class _Resolver:
+    def entity_head(self, entity_id: str) -> None:
+        return None
+
+    def channel_exists(self, channel_id: str) -> bool:
+        return False
+
+    def source_exists(self, source_id: str) -> bool:
+        return False
+
+
+def _type(type_id: str, run) -> NodeType:
+    return NodeType(
+        type_id=type_id,
+        family="test",
+        label=type_id,
+        summary="Test node.",
+        description="Test node. Used only by the editor suite.",
+        entry=False,
+        inputs=(PortSpec("main", "Input."),),
+        outputs=(PortSpec("main", "Output."),),
+        config_schema={"type": "object"},
+        execute=run,
+    )
+
+
+def _execute(type_id: str):
+    return next(item.execute for item in list_node_types() if item.type_id == type_id)
 
 
 def _called(node: dict, hooks: EngineHooks, seen: list[str]) -> NodeResult:
@@ -66,16 +95,16 @@ def _pin_if(value: bool) -> tuple[list[str], list[tuple[str, str]]]:
         editor=EditorOptions(row_limit=10),
         pinned={"g": {"value": value}},
     )
+    if_type = next(item for item in list_node_types() if item.type_id == "transform.if")
     outcome = execute(
         _if_graph(),
         "t",
-        editor_executors(
-            {
-                "trigger.manual": fake,
-                "transform.if": fake,
-                "transform.set_fields": fake,
-            }
-        ),
+        [
+            if_type,
+            _type("trigger.manual", fake),
+            _type("transform.set_fields", fake),
+        ],
+        _Resolver(),
         hooks,
     )
     assert outcome.status == "succeeded"
@@ -106,14 +135,14 @@ def test_variable_writes_are_dry_and_reads_are_real() -> None:
     hooks = FakeHooks(editor=EditorOptions(row_limit=100))
     store = get_variable_store()
 
-    written = execute_variable(_variable("set", value='"kept"'), hooks)
+    written = _execute("state.variable")(_variable("set", value='"kept"'), hooks)
     assert written.status == "succeeded"
     assert written.output["applied"] is True
     assert written.output["dry_run"] is True
     assert written.output["value"] == "kept"
     assert store.apply(operation="get", name="lease").found is False
 
-    absent = execute_variable(
+    absent = _execute("state.variable")(
         _variable("set_if_absent", name="other", value='"new"'), hooks
     )
     assert absent.output["applied"] is True
@@ -121,29 +150,29 @@ def test_variable_writes_are_dry_and_reads_are_real() -> None:
     assert store.apply(operation="get", name="other").found is False
 
     store.apply(operation="set", name="lease", value="kept")
-    held = execute_variable(_variable("set_if_absent", value='"other"'), hooks)
+    held = _execute("state.variable")(_variable("set_if_absent", value='"other"'), hooks)
     assert held.output["applied"] is False
     assert held.output["value"] == "kept"
     assert held.output["dry_run"] is True
 
-    matched = execute_variable(
+    matched = _execute("state.variable")(
         _variable("compare_and_set", value='"next"', expected='"kept"'), hooks
     )
     assert matched.output["applied"] is True
     assert matched.output["dry_run"] is True
-    missed = execute_variable(
+    missed = _execute("state.variable")(
         _variable("compare_and_set", value='"next"', expected='"nope"'), hooks
     )
     assert missed.output["applied"] is False
     assert store.apply(operation="get", name="lease").value == "kept"
 
-    removed = execute_variable(_variable("delete"), hooks)
+    removed = _execute("state.variable")(_variable("delete"), hooks)
     assert removed.output["applied"] is True
     assert removed.output["found"] is False
     assert removed.output["dry_run"] is True
     assert store.apply(operation="get", name="lease").value == "kept"
 
-    read = execute_variable(_variable("get"), hooks)
+    read = _execute("state.variable")(_variable("get"), hooks)
     assert read.output["found"] is True
     assert read.output["value"] == "kept"
     assert "dry_run" not in read.output
@@ -151,10 +180,10 @@ def test_variable_writes_are_dry_and_reads_are_real() -> None:
 
 def test_editor_for_iterates_at_most_row_limit() -> None:
     node = {"id": "nd_for", "config": {"items": "[1, 2, 3, 4, 5]"}}
-    capped = run_for(node, FakeHooks(editor=EditorOptions(row_limit=2)))
+    capped = _execute("volume.for")(node, FakeHooks(editor=EditorOptions(row_limit=2)))
     assert capped.output["count"] == 2
     assert capped.iterations is not None
     assert [step["current"] for step in capped.iterations] == [1, 2]
 
-    full = run_for(node, FakeHooks())
+    full = _execute("volume.for")(node, FakeHooks())
     assert full.output["count"] == 5
