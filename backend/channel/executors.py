@@ -6,6 +6,7 @@ from datetime import timedelta
 from typing import Any, Mapping
 
 from backend.channel.engine import EngineHooks, NodeResult
+from backend.channel.graph import ResolvedAttribute, ResolvedEntity
 from backend.channel.nodes import list_node_types
 from backend.channel.references import ChannelReferenceResolver
 from backend.channel.reshape import (
@@ -21,6 +22,7 @@ from backend.channel.sql_read import ITEM_LIMIT, SqlReadError, run_channel_sql
 from backend.channel.template import TemplateTypeError, output_matches, render
 from backend.channel.values import LIST_OF_OBJECTS
 from backend.channel.variables import VALUE_MAX_BYTES, get_variable_store, valid_name, value_size
+from backend.channel.write_compatibility import write_reasons
 from backend.core.errors import AppError
 from backend.core.time import format_instant, utc_now
 from backend.entity.errors import EntityRowWriteFailed
@@ -165,7 +167,16 @@ def execute_write(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             error_code="CHANNEL_NODE_FAILED",
             error_message="Target entity has no head",
         )
-    reasons = _incompatible(config, target)
+    reasons = list(
+        dict.fromkeys(
+            reason.code
+            for reason in write_reasons(
+                config.get("match_key"),
+                config.get("mapping") or [],
+                _resolved_head(target),
+            )
+        )
+    )
     if reasons:
         if config.get("on_incompatible_head") == "skip":
             return NodeResult(
@@ -472,31 +483,17 @@ def execute_for(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     return _checked("volume.for", node, run_for(node, hooks))
 
 
-def _incompatible(config: Mapping[str, Any], target: Any) -> list[str]:
-    attrs = {attr.name: attr for attr in target.attributes}
-    reasons: list[str] = []
-    mapped = {
-        item["attribute"]
-        for item in config.get("mapping") or []
-        if isinstance(item, dict) and "attribute" in item
-    }
-    match = config.get("match_key")
-    if match is None:
-        marked = next((attr for attr in target.attributes if attr.business_key), None)
-        if marked is None:
-            reasons.append("business_key_missing")
-        else:
-            match = marked.name
-    if isinstance(match, str):
-        attr = attrs.get(match)
-        if attr is None:
-            reasons.append("attribute_missing")
-        elif not attr.unique:
-            reasons.append("match_key_not_unique")
-    for name in mapped:
-        if name not in attrs:
-            reasons.append("attribute_missing")
-    return list(dict.fromkeys(reasons))
+def _resolved_head(target: Any) -> ResolvedEntity:
+    return ResolvedEntity(
+        attributes=tuple(
+            ResolvedAttribute(
+                name=attr.name,
+                unique=bool(attr.unique),
+                business_key=bool(attr.business_key),
+            )
+            for attr in target.attributes
+        )
+    )
 
 
 EXECUTORS = {

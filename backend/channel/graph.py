@@ -24,6 +24,7 @@ from backend.channel.template import (
     static_check,
 )
 from backend.channel.values import attribute_value_schema
+from backend.channel.write_compatibility import write_reasons
 from backend.core.time import parse_instant
 from backend.worker.api import validate_cadence, validate_start_at
 from backend.worker.errors import ScheduleCadenceInvalid, ScheduleStartAtInvalid
@@ -866,36 +867,31 @@ def _match_key_problems(
         head = resolver.entity_head(config["entity_id"])
         if head is None:
             continue
-        match_key = config.get("match_key")
-        if match_key is None:
-            marked = next((attr for attr in head.attributes if attr.business_key), None)
-            if marked is None:
-                problems.append(
-                    Problem(
-                        "CHANNEL_MATCH_KEY_INVALID",
-                        "Target head has no Business Key",
-                        node_id=str(node["id"]),
-                    )
+        reason = next(
+            (
+                item
+                for item in write_reasons(
+                    config.get("match_key"),
+                    config.get("mapping") or [],
+                    head,
                 )
+                if item.subject == "match_key"
+            ),
+            None,
+        )
+        if reason is None:
             continue
-        if match_key == "row_id":
-            problems.append(
-                Problem(
-                    "CHANNEL_MATCH_KEY_INVALID",
-                    "Match key does not resolve",
-                    node_id=str(node["id"]),
-                )
+        problems.append(
+            Problem(
+                "CHANNEL_MATCH_KEY_INVALID",
+                (
+                    "Target head has no Business Key"
+                    if reason.code == "business_key_missing"
+                    else "Match key does not resolve"
+                ),
+                node_id=str(node["id"]),
             )
-            continue
-        named = next((attr for attr in head.attributes if attr.name == match_key), None)
-        if named is None or not named.unique:
-            problems.append(
-                Problem(
-                    "CHANNEL_MATCH_KEY_INVALID",
-                    "Match key does not resolve",
-                    node_id=str(node["id"]),
-                )
-            )
+        )
     return problems
 
 
