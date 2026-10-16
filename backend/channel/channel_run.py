@@ -1,17 +1,24 @@
-"""One home for a Channel Run's entry rule, minting, and dispatch."""
+"""One home for a Channel Run's entry rule, minting, dispatch, and engine hooks."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
+from backend.admin.user_store import UserRecord, ensure_system_user, get_user_store
+from backend.channel.context import channel_context, platform_context, run_context
+from backend.channel.engine import RunOutcome, execute
 from backend.channel.nodes import list_node_types
-from backend.channel.run_store import ChannelRunRecord, get_run_store
+from backend.channel.nodes.spec import EditorOptions, EngineHooks, NodeResult, PinnedOutput
+from backend.channel.references import ChannelReferenceResolver
+from backend.channel.run_store import ChannelRunRecord, get_run_store, output_size
+from backend.channel.sandbox import SandboxSession
 from backend.channel.store import get_channel_store
 from backend.channel.tasks import run_job
-from backend.core.time import utc_now
+from backend.core.time import format_instant, utc_now
 from backend.jobs.store import (
     JobRecord,
     UniqueScheduledForError,
@@ -19,15 +26,22 @@ from backend.jobs.store import (
     format_job_log_line,
     get_job_store,
 )
+from backend.worker.schedules import get_schedule_store
 
 Dispatcher = Callable[[str], object]
 
 __all__ = [
+    "EditorExecution",
     "ScheduledMint",
     "dispatch",
     "entry_node_id",
+    "execute_channel_run",
+    "execute_editor_graph",
+    "expression_context",
     "mint_on_demand_run",
     "mint_scheduled_run",
+    "schedule_context",
+    "schedule_key_for",
     "set_dispatcher",
 ]
 
@@ -197,3 +211,329 @@ def set_dispatcher(dispatcher: Dispatcher) -> Dispatcher:
 
 def dispatch(job_id: str) -> None:
     _dispatcher(job_id)
+
+
+def schedule_key_for(channel_id: str) -> str:
+    return f"channel_run:{channel_id}"
+
+
+def expression_context(
+    channel: Any,
+    run: Any,
+    started: datetime,
+    actor: dict[str, str],
+    trigger_kind: str | None,
+) -> dict[str, Any]:
+    return {
+        "channel": channel_context(channel, run),
+        "run": run_context(run, started, actor, trigger_kind),
+        "platform": platform_context(started),
+    }
+
+
+def schedule_context(
+    *,
+    channel_id: str,
+    node: Mapping[str, Any],
+    trigger_kind: str | None,
+    when: datetime | None,
+    trigger_ref: str | None = None,
+    scheduled_for: datetime | None = None,
+) -> dict[str, Any]:
+    row = get_schedule_store().get_by_key(schedule_key_for(channel_id))
+    node_name = str(node.get("name") or "")
+    if trigger_kind == "schedule":
+        instant = scheduled_for or when
+        schedule_id = trigger_ref
+    else:
+        instant = when
+        schedule_id = row.id if row is not None else None
+    return {
+        "schedule_id": schedule_id,
+        "name": row.name if row is not None else node_name,
+        "scheduled_for": format_instant(instant) if instant is not None else "",
+    }
+
+
+@dataclass
+class EditorExecution:
+    seq: int
+    node_id: str
+    status: str
+    started_at: datetime
+    finished_at: datetime | None = None
+    output: Any = None
+    error_code: str | None = None
+    error_message: str | None = None
+    error_detail: dict[str, Any] | None = None
+
+
+def execute_channel_run(
+    *,
+    graph: Mapping[str, Any],
+    entry_node_id: str,
+    entry_node: Mapping[str, Any],
+    run: ChannelRunRecord,
+    context: dict[str, Any],
+    actor: dict[str, str],
+    started_at: str,
+    job: JobRecord,
+    timeout_sec: int | None,
+    started: float | None,
+) -> RunOutcome:
+    user = ensure_system_user(get_user_store())
+    schedule = schedule_context(
+        channel_id=run.channel_id,
+        node=entry_node,
+        trigger_kind=job.trigger_kind,
+        when=job.created_at,
+        trigger_ref=job.trigger_ref,
+        scheduled_for=job.scheduled_for,
+    )
+    with _sandbox_session(context) as sandbox:
+        hooks = _RunHooks(
+            sandbox,
+            run_id=run.job_id,
+            actor=actor,
+            started_at=started_at,
+            user=user,
+            schedule=schedule,
+            target=run.target,
+            channel_id=run.channel_id,
+            run_version=run.version,
+        )
+        return _execute_graph(
+            graph,
+            entry_node_id,
+            run.channel_id,
+            hooks,
+            timeout_sec=timeout_sec,
+            started=started,
+            stop_at_node_id=run.stop_at_node_id,
+        )
+
+
+def execute_editor_graph(
+    *,
+    graph: Mapping[str, Any],
+    entry_node_id: str,
+    entry_node: Mapping[str, Any],
+    run: ChannelRunRecord,
+    context: dict[str, Any],
+    actor: dict[str, str],
+    started_at: str,
+    started: datetime,
+    row_limit: int,
+    pinned: Mapping[str, Any],
+    executions: list[EditorExecution],
+    timeout_sec: int | None,
+) -> RunOutcome:
+    user = ensure_system_user(get_user_store())
+    schedule = schedule_context(
+        channel_id=run.channel_id,
+        node=entry_node,
+        trigger_kind="user",
+        when=started,
+    )
+    with _sandbox_session(context) as sandbox:
+        hooks = _EditorHooks(
+            sandbox,
+            editor=EditorOptions(row_limit=row_limit),
+            actor=actor,
+            started_at=started_at,
+            user=user,
+            schedule=schedule,
+            run_id=run.job_id,
+            channel_id=run.channel_id,
+            pinned=pinned,
+            executions=executions,
+        )
+        return _execute_graph(
+            graph,
+            entry_node_id,
+            run.channel_id,
+            hooks,
+            timeout_sec=timeout_sec,
+            started=None,
+            stop_at_node_id=run.stop_at_node_id,
+        )
+
+
+class _SandboxHooks:
+    def __init__(self, sandbox: SandboxSession) -> None:
+        self._sandbox = sandbox
+
+    def evaluate(self, expression: str) -> Any:
+        return self._sandbox.evaluate(expression)
+
+    def run_code(self, source: str, timeout_sec: float) -> Any:
+        return self._sandbox.run_code(source, timeout_sec)
+
+    def on_output(self, node: Mapping[str, Any], output: Any) -> None:
+        self._sandbox.put_output(
+            ref=str(node.get("ref") or node["id"]),
+            name=str(node.get("name") or ""),
+            output=output,
+        )
+
+    def drop_outputs(self, refs: list[str]) -> None:
+        self._sandbox.drop_outputs(refs)
+
+
+class _RunHooks(_SandboxHooks):
+    def __init__(
+        self,
+        sandbox: SandboxSession,
+        *,
+        run_id: str,
+        actor: dict[str, str],
+        started_at: str,
+        user: UserRecord,
+        schedule: dict[str, Any],
+        target: str,
+        channel_id: str,
+        run_version: int | None,
+    ) -> None:
+        super().__init__(sandbox)
+        self.run_id = run_id
+        self.actor = actor
+        self.started_at = started_at
+        self.user = user
+        self.schedule = schedule
+        self.editor: EditorOptions | None = None
+        self.channel_id = channel_id
+        self._target = target
+        self._run_version = run_version
+
+    def cancelled(self) -> bool:
+        record = get_job_store().get(self.run_id)
+        return record is not None and record.status == "cancelled"
+
+    def superseded(self) -> bool:
+        if self._target != "published" or self._run_version is None:
+            return False
+        versions, _total = get_channel_store().list_versions(
+            self.channel_id, limit=1, offset=0
+        )
+        if not versions:
+            return False
+        return versions[0].number > self._run_version
+
+    def pinned_output(self, node: Mapping[str, Any]) -> PinnedOutput | None:
+        del node
+        return None
+
+    def on_start(self, node: Mapping[str, Any]) -> int:
+        record = get_run_store().start_execution(self.run_id, str(node["id"]))
+        return record.seq
+
+    def on_finish(self, seq: int, node: Mapping[str, Any], result: NodeResult) -> None:
+        del node
+        store = get_run_store()
+        record = store.get_execution(self.run_id, seq)
+        if record is None:
+            return
+        record.status = result.status
+        record.finished_at = utc_now()
+        record.output = result.output
+        record.output_bytes = output_size(result.output)
+        record.error_code = result.error_code
+        record.error_message = result.error_message
+        record.error_detail = result.error_detail
+        store.finish_execution(record)
+
+
+class _EditorHooks(_SandboxHooks):
+    def __init__(
+        self,
+        sandbox: SandboxSession,
+        *,
+        editor: EditorOptions,
+        actor: dict[str, str],
+        started_at: str,
+        user: UserRecord,
+        schedule: dict[str, Any],
+        run_id: str,
+        channel_id: str,
+        pinned: Mapping[str, Any],
+        executions: list[EditorExecution],
+    ) -> None:
+        super().__init__(sandbox)
+        self.editor: EditorOptions | None = editor
+        self.actor = actor
+        self.started_at = started_at
+        self.user = user
+        self.schedule = schedule
+        self.run_id = run_id
+        self.channel_id = channel_id
+        self._pinned = pinned
+        self.executions = executions
+
+    def cancelled(self) -> bool:
+        return False
+
+    def superseded(self) -> bool:
+        return False
+
+    def pinned_output(self, node: Mapping[str, Any]) -> PinnedOutput | None:
+        node_id = str(node["id"])
+        if node_id not in self._pinned:
+            return None
+        return PinnedOutput(self._pinned[node_id])
+
+    def on_start(self, node: Mapping[str, Any]) -> int:
+        seq = len(self.executions) + 1
+        self.executions.append(
+            EditorExecution(
+                seq=seq,
+                node_id=str(node["id"]),
+                status="running",
+                started_at=utc_now(),
+            )
+        )
+        return seq
+
+    def on_finish(self, seq: int, node: Mapping[str, Any], result: NodeResult) -> None:
+        del node
+        record = next((item for item in self.executions if item.seq == seq), None)
+        if record is None:
+            return
+        record.status = result.status
+        record.finished_at = utc_now()
+        record.output = result.output
+        record.error_code = result.error_code
+        record.error_message = result.error_message
+        record.error_detail = result.error_detail
+
+
+@contextmanager
+def _sandbox_session(context: dict[str, Any]) -> Iterator[SandboxSession]:
+    with SandboxSession() as sandbox:
+        sandbox.set_context(
+            channel=context["channel"],
+            run=context["run"],
+            platform=context["platform"],
+        )
+        yield sandbox
+
+
+def _execute_graph(
+    graph: Mapping[str, Any],
+    entry_node_id: str,
+    channel_id: str,
+    hooks: EngineHooks,
+    *,
+    timeout_sec: int | None,
+    started: float | None,
+    stop_at_node_id: str | None,
+) -> RunOutcome:
+    return execute(
+        graph,
+        entry_node_id,
+        list_node_types(),
+        ChannelReferenceResolver(channel_id),
+        hooks,
+        timeout_sec=timeout_sec,
+        started=started,
+        stop_at_node_id=stop_at_node_id,
+    )

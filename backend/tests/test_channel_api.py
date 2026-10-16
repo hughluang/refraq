@@ -17,8 +17,10 @@ from backend.admin.roles import create_role, seed_roles  # noqa: E402
 from backend.admin.role_store import get_role_store  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import get_user_store  # noqa: E402
+from backend.channel.run_store import get_run_store  # noqa: E402
 from backend.channel.store import get_channel_store  # noqa: E402
 from backend.core.time import utc_now  # noqa: E402
+from backend.jobs.store import get_job_store  # noqa: E402
 from backend.main import app  # noqa: E402
 
 TRIGGER_GRAPH = {
@@ -662,3 +664,42 @@ def test_guarded_node_save_and_publish_permissions(
         assert all(node["id"] != "nd_guard" for node in deleted.json()["graph"]["nodes"])
     finally:
         writer.__exit__(None, None, None)
+
+
+def _audit_count() -> int:
+    total = 0
+    cursor: str | None = None
+    while True:
+        events, cursor = get_audit_store().list_events(limit=200, cursor=cursor)
+        total += len(events)
+        if cursor is None:
+            return total
+
+
+def _persisted_counts(channel_id: str) -> tuple[int, int, int, int]:
+    jobs, job_total = get_job_store().list()
+    runs, run_total = get_run_store().list_runs(
+        channel_id, status=None, target=None, limit=100, offset=0
+    )
+    job_ids = {job.id for job in jobs}
+    executions = sum(len(get_run_store().list_executions(job_id)) for job_id in job_ids)
+    for run in runs:
+        if run.job_id not in job_ids:
+            executions += len(get_run_store().list_executions(run.job_id))
+    return job_total, run_total, executions, _audit_count()
+
+
+def test_editor_execution_creates_no_run_state(client: TestClient) -> None:
+    created = client.post("/channels", json={"name": "Editor", "description": None})
+    assert created.status_code == 201, created.text
+    channel_id = created.json()["channel"]["id"]
+    before = _persisted_counts(channel_id)
+    response = client.post(
+        f"/channels/{channel_id}/editor/execute",
+        json={"graph": TRIGGER_GRAPH, "stop_at_node_id": "nd_trigger"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "succeeded"
+    assert [item["node_id"] for item in body["node_executions"]] == ["nd_trigger"]
+    assert _persisted_counts(channel_id) == before

@@ -16,13 +16,18 @@ from backend.admin.role_store import get_role_store  # noqa: E402
 from backend.admin.roles import seed_roles  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import get_user_store  # noqa: E402
-from backend.channel.channel_run import set_dispatcher  # noqa: E402
-from backend.channel.run_store import get_run_store  # noqa: E402
-from backend.channel.schedules import fire_scheduled_channel_run  # noqa: E402
+from backend.channel.channel_run import (  # noqa: E402
+    expression_context,
+    schedule_context,
+    set_dispatcher,
+)
+from backend.channel.run_store import ChannelRunRecord, get_run_store  # noqa: E402
+from backend.channel.schedules import fire_scheduled_channel_run, schedule_key_for  # noqa: E402
+from backend.channel.store import ChannelRecord  # noqa: E402
 from backend.core.time import FixedClock, parse_instant, reset_clock, set_clock  # noqa: E402
 from backend.jobs.store import get_job_store  # noqa: E402
 from backend.main import app  # noqa: E402
-from backend.worker.schedules import get_schedule_store  # noqa: E402
+from backend.worker.schedules import ScheduledTaskRecord, get_schedule_store  # noqa: E402
 
 NOW = parse_instant("2026-08-15T02:00:05Z")
 SLOT = parse_instant("2026-08-15T02:00:00Z")
@@ -347,3 +352,150 @@ def test_on_demand_run_persists_draft_and_published_records_and_dispatches_once(
         assert record.failed_node_id is None
         assert record.skipped_node_ids == []
     assert dispatched == [draft_body["job_id"], published_body["job_id"]]
+
+
+def test_run_and_editor_contexts_agree_for_equivalent_inputs() -> None:
+    started = parse_instant("2026-10-16T05:43:07.123456Z")
+    when = parse_instant("2026-10-16T05:00:00Z")
+    due = parse_instant("2026-10-16T04:00:00Z")
+    graph = {
+        "nodes": [],
+        "edges": [],
+        "settings": {"run_timeout_sec": 30, "error_channel_id": None},
+    }
+    channel = ChannelRecord(
+        id="chn_ctx",
+        name="Orders",
+        description="Nightly orders",
+        active=True,
+        draft_graph={"settings": {"run_timeout_sec": 1, "error_channel_id": "chn_other"}},
+        draft_revision=4,
+        draft_updated_at=started,
+        created_at=started,
+        updated_at=started,
+    )
+    actor = {"id": "usr_ada", "name": "Ada"}
+    shared = dict(
+        channel_id=channel.id,
+        target="draft",
+        version=None,
+        draft_revision=4,
+        graph=graph,
+        trigger_node_id="nd_trigger",
+        outcome=None,
+        failed_node_id=None,
+        skipped_node_ids=[],
+    )
+    run_record = ChannelRunRecord(
+        job_id="job_on_demand",
+        ignore_checkpoints=False,
+        created_at=when,
+        **shared,
+    )
+    editor_record = ChannelRunRecord(
+        job_id="edx_editor",
+        ignore_checkpoints=True,
+        created_at=started,
+        **shared,
+    )
+    run_ctx = expression_context(channel, run_record, started, actor, "user")
+    editor_ctx = expression_context(channel, editor_record, started, actor, "user")
+    assert run_ctx["channel"] == editor_ctx["channel"] == {
+        "id": "chn_ctx",
+        "name": "Orders",
+        "description": "Nightly orders",
+        "active": True,
+        "settings": {"run_timeout_sec": 30, "error_channel_id": None},
+    }
+    assert run_ctx["platform"] == editor_ctx["platform"]
+    assert run_ctx["platform"]["now"] == "2026-10-16T05:43:07.123456Z"
+    assert run_ctx["platform"]["site_name"] == ""
+    assert run_ctx["run"] == {
+        "id": "job_on_demand",
+        "target": "draft",
+        "version": None,
+        "draft_revision": 4,
+        "trigger_kind": "user",
+        "started_at": "2026-10-16T05:43:07.123456Z",
+        "triggered_by": {"id": "usr_ada", "name": "Ada"},
+    }
+    assert editor_ctx["run"] == {
+        "id": "edx_editor",
+        "target": "draft",
+        "version": None,
+        "draft_revision": 4,
+        "trigger_kind": "user",
+        "started_at": "2026-10-16T05:43:07.123456Z",
+        "triggered_by": {"id": "usr_ada", "name": "Ada"},
+    }
+
+    node = {"id": "nd_hourly", "name": "Hourly"}
+    get_schedule_store().upsert(
+        ScheduledTaskRecord(
+            id="sch_nightly",
+            key=schedule_key_for(channel.id),
+            name="Nightly",
+            enabled=True,
+            interval_seconds=None,
+            cron="0 * * * *",
+            task_name="backend.channel.schedules.fire_scheduled_channel_run",
+        )
+    )
+    on_demand = schedule_context(
+        channel_id=channel.id,
+        node=node,
+        trigger_kind="user",
+        when=when,
+    )
+    editor = schedule_context(
+        channel_id=channel.id,
+        node=node,
+        trigger_kind="user",
+        when=when,
+    )
+    assert on_demand == editor == {
+        "schedule_id": "sch_nightly",
+        "name": "Nightly",
+        "scheduled_for": "2026-10-16T05:00:00Z",
+    }
+    scheduled = schedule_context(
+        channel_id=channel.id,
+        node=node,
+        trigger_kind="schedule",
+        when=when,
+        trigger_ref="sch_from_job",
+        scheduled_for=due,
+    )
+    assert scheduled == {
+        "schedule_id": "sch_from_job",
+        "name": "Nightly",
+        "scheduled_for": "2026-10-16T04:00:00Z",
+    }
+    scheduled_fallback = schedule_context(
+        channel_id=channel.id,
+        node=node,
+        trigger_kind="schedule",
+        when=when,
+        trigger_ref="sch_from_job",
+        scheduled_for=None,
+    )
+    assert scheduled_fallback["scheduled_for"] == "2026-10-16T05:00:00Z"
+    missing = schedule_context(
+        channel_id="chn_absent",
+        node=node,
+        trigger_kind="user",
+        when=None,
+    )
+    assert missing == {"schedule_id": None, "name": "Hourly", "scheduled_for": ""}
+    missing_schedule = schedule_context(
+        channel_id="chn_absent",
+        node=node,
+        trigger_kind="schedule",
+        when=None,
+        trigger_ref="sch_from_job",
+    )
+    assert missing_schedule == {
+        "schedule_id": "sch_from_job",
+        "name": "Hourly",
+        "scheduled_for": "",
+    }

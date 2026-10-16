@@ -10,7 +10,7 @@ from typing import Any
 
 from celery import shared_task
 
-from backend.channel.channel_run import dispatch, mint_scheduled_run
+from backend.channel.channel_run import dispatch, mint_scheduled_run, schedule_key_for
 from backend.channel.store import ChannelRecord, get_channel_store
 from backend.core.config import get_settings
 from backend.core.db import session_scope
@@ -40,10 +40,6 @@ __all__ = [
     "set_channel_schedule_enabled",
     "sync_published_schedule",
 ]
-
-
-def schedule_key_for(channel_id: str) -> str:
-    return f"channel_run:{channel_id}"
 
 
 def owner_ref_for(channel_id: str) -> str:

@@ -8,26 +8,23 @@ record, checkpoint, or audit event is created.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Mapping, Sequence
 
-from backend.admin.user_store import UserRecord, ensure_system_user, get_user_store
-from backend.channel.channel_run import entry_node_id
-from backend.channel.context import channel_context, platform_context, run_context
-from backend.channel.engine import execute
+from backend.admin.user_store import UserRecord
+from backend.channel.channel_run import (
+    EditorExecution,
+    entry_node_id,
+    execute_editor_graph,
+    expression_context,
+)
 from backend.channel.errors import ChannelNotFound, ChannelRequestInvalid, ChannelTriggerInvalid
 from backend.channel.nodes import list_node_types
-from backend.channel.nodes.spec import EditorOptions, NodeResult, PinnedOutput
-from backend.channel.references import ChannelReferenceResolver
 from backend.channel.run_store import ChannelRunRecord
 from backend.channel.runs import refuse_invalid_closure, require_stop_closure
-from backend.channel.sandbox import SandboxFailed, SandboxSession
-from backend.channel.schedules import schedule_key_for
+from backend.channel.sandbox import SandboxFailed
 from backend.channel.service import require_draft_permissions
 from backend.channel.store import get_channel_store
 from backend.core.time import format_instant, utc_now
-from backend.worker.schedules import get_schedule_store
 
 __all__ = [
     "EDITOR_TIMEOUT_SEC",
@@ -35,85 +32,6 @@ __all__ = [
 ]
 
 EDITOR_TIMEOUT_SEC = 120
-
-
-@dataclass
-class _NodeExecution:
-    seq: int
-    node_id: str
-    status: str
-    started_at: datetime
-    finished_at: datetime | None = None
-    output: Any = None
-    error_code: str | None = None
-    error_message: str | None = None
-    error_detail: dict[str, Any] | None = None
-
-
-@dataclass
-class _EditorHooks:
-    editor: EditorOptions
-    sandbox: SandboxSession
-    actor: dict[str, str]
-    started_at: str
-    user: UserRecord
-    schedule: dict[str, Any]
-    run_id: str
-    channel_id: str
-    pinned: dict[str, Any]
-    executions: list[_NodeExecution] = field(default_factory=list)
-
-    def cancelled(self) -> bool:
-        return False
-
-    def superseded(self) -> bool:
-        return False
-
-    def evaluate(self, expression: str) -> Any:
-        return self.sandbox.evaluate(expression)
-
-    def run_code(self, source: str, timeout_sec: float) -> Any:
-        return self.sandbox.run_code(source, timeout_sec)
-
-    def pinned_output(self, node: Mapping[str, Any]) -> PinnedOutput | None:
-        node_id = str(node["id"])
-        if node_id not in self.pinned:
-            return None
-        return PinnedOutput(self.pinned[node_id])
-
-    def on_start(self, node: Mapping[str, Any]) -> int:
-        seq = len(self.executions) + 1
-        self.executions.append(
-            _NodeExecution(
-                seq=seq,
-                node_id=str(node["id"]),
-                status="running",
-                started_at=utc_now(),
-            )
-        )
-        return seq
-
-    def on_finish(self, seq: int, node: Mapping[str, Any], result: NodeResult) -> None:
-        del node
-        record = next((item for item in self.executions if item.seq == seq), None)
-        if record is None:
-            return
-        record.status = result.status
-        record.finished_at = utc_now()
-        record.output = result.output
-        record.error_code = result.error_code
-        record.error_message = result.error_message
-        record.error_detail = result.error_detail
-
-    def on_output(self, node: Mapping[str, Any], output: Any) -> None:
-        self.sandbox.put_output(
-            ref=str(node.get("ref") or node["id"]),
-            name=str(node.get("name") or ""),
-            output=output,
-        )
-
-    def drop_outputs(self, refs: list[str]) -> None:
-        self.sandbox.drop_outputs(refs)
 
 
 def execute_editor(
@@ -154,37 +72,24 @@ def execute_editor(
         created_at=started,
         stop_at_node_id=stop_at_node_id,
     )
-    context = {
-        "channel": channel_context(channel, run),
-        "run": run_context(run, started, actor_ctx, "user"),
-        "platform": platform_context(started),
-    }
+    context = expression_context(channel, run, started, actor_ctx, "user")
     entry_node = next(node for node in graph["nodes"] if node["id"] == entry)
-    user = ensure_system_user(get_user_store())
-    hooks: _EditorHooks | None = None
+    executions: list[EditorExecution] = []
     try:
-        with SandboxSession() as sandbox:
-            sandbox.set_context(**context)
-            hooks = _EditorHooks(
-                editor=EditorOptions(row_limit=row_limit),
-                sandbox=sandbox,
-                actor=actor_ctx,
-                started_at=format_instant(started),
-                user=user,
-                schedule=_schedule(channel.id, entry_node, started),
-                run_id=run_id,
-                channel_id=channel.id,
-                pinned=pinned_map,
-            )
-            outcome = execute(
-                graph,
-                entry,
-                list_node_types(),
-                ChannelReferenceResolver(channel.id),
-                hooks,
-                timeout_sec=EDITOR_TIMEOUT_SEC,
-                stop_at_node_id=stop_at_node_id,
-            )
+        outcome = execute_editor_graph(
+            graph=graph,
+            entry_node_id=entry,
+            entry_node=entry_node,
+            run=run,
+            context=context,
+            actor=actor_ctx,
+            started_at=format_instant(started),
+            started=started,
+            row_limit=row_limit,
+            pinned=pinned_map,
+            executions=executions,
+            timeout_sec=EDITOR_TIMEOUT_SEC,
+        )
     except SandboxFailed as exc:
         return _response(
             status="failed",
@@ -192,7 +97,7 @@ def execute_editor(
             error_message=str(exc),
             failed_node_id=None,
             stopped_node_id=None,
-            executions=[] if hooks is None else hooks.executions,
+            executions=executions,
             row_limit=row_limit,
         )
     return _response(
@@ -201,7 +106,7 @@ def execute_editor(
         error_message=outcome.error_message,
         failed_node_id=outcome.failed_node_id,
         stopped_node_id=outcome.stopped_node_id,
-        executions=hooks.executions,
+        executions=executions,
         row_limit=row_limit,
     )
 
@@ -224,16 +129,6 @@ def _pinned(graph: Mapping[str, Any], pinned: list[dict[str, Any]]) -> dict[str,
     return found
 
 
-def _schedule(channel_id: str, node: Mapping[str, Any], started: datetime) -> dict[str, Any]:
-    row = get_schedule_store().get_by_key(schedule_key_for(channel_id))
-    node_name = str(node.get("name") or "")
-    return {
-        "schedule_id": row.id if row is not None else None,
-        "name": row.name if row is not None else node_name,
-        "scheduled_for": format_instant(started),
-    }
-
-
 def _response(
     *,
     status: str,
@@ -241,7 +136,7 @@ def _response(
     error_message: str | None,
     failed_node_id: str | None,
     stopped_node_id: str | None,
-    executions: list[_NodeExecution],
+    executions: list[EditorExecution],
     row_limit: int,
 ) -> dict[str, Any]:
     if status not in {"succeeded", "failed", "cancelled"}:
