@@ -5,7 +5,15 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from backend.channel.node_support import render_field
-from backend.channel.nodes.spec import MAIN_INPUT, MAIN_OUTPUT, EngineHooks, NodeResult, NodeType
+from backend.channel.nodes.spec import (
+    MAIN_INPUT,
+    MAIN_OUTPUT,
+    EngineHooks,
+    NodeResult,
+    NodeType,
+    Problem,
+    ReferenceResolver,
+)
 from backend.channel.sql_read import ITEM_LIMIT, SqlReadError, run_channel_sql
 from backend.channel.values import LIST_OF_OBJECTS
 
@@ -51,6 +59,21 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     except SqlReadError as exc:
         return NodeResult(status="failed", error_code=exc.code, error_message=exc.message)
     return NodeResult(status="succeeded", output=output)
+
+
+def _check(config: Mapping[str, Any], resolver: ReferenceResolver) -> list[Problem]:
+    source = config["source"]
+    if source.get("kind") != "source":
+        return []
+    source_id = source["source_id"]
+    if resolver.source_exists(source_id):
+        return []
+    return [
+        Problem(
+            "CHANNEL_REFERENCE_UNRESOLVED",
+            f"Source does not resolve: {source_id}",
+        )
+    ]
 
 
 NODE_TYPE = NodeType(
@@ -132,4 +155,5 @@ NODE_TYPE = NodeType(
     },
     execute=_execute,
     refine=_refine,
+    check=_check,
 )

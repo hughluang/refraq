@@ -4,8 +4,18 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from backend.channel.nodes.spec import MAIN_INPUT, MAIN_OUTPUT, EngineHooks, NodeResult, NodeType, object_schema
+from backend.channel.nodes.spec import (
+    MAIN_INPUT,
+    MAIN_OUTPUT,
+    EngineHooks,
+    NodeResult,
+    NodeType,
+    Problem,
+    ReferenceResolver,
+    object_schema,
+)
 from backend.channel.sandbox import CodeError
+from backend.channel.sandbox.program import CODE_MAX_BYTES, author_line, function_source
 
 __all__ = ["NODE_TYPE"]
 
@@ -33,6 +43,31 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             error_detail=exc.detail,
         )
     return NodeResult(status="succeeded", output=value)
+
+
+def _check(config: Mapping[str, Any], resolver: ReferenceResolver) -> list[Problem]:
+    del resolver
+    code = config["code"]
+    if len(code.encode("utf-8")) > CODE_MAX_BYTES:
+        return [
+            Problem(
+                "CHANNEL_NODE_CONFIG_INVALID",
+                "Code exceeds 64 KiB",
+                path=("code",),
+            )
+        ]
+    try:
+        compile(function_source(code), "<code>", "exec")
+    except SyntaxError as exc:
+        line = author_line(exc.lineno)
+        return [
+            Problem(
+                "CHANNEL_CODE_INVALID",
+                f"Syntax error on line {line}: {exc.msg}",
+                path=("code",),
+            )
+        ]
+    return []
 
 
 NODE_TYPE = NodeType(
@@ -79,4 +114,5 @@ NODE_TYPE = NodeType(
     ),
     execute=_execute,
     permission="channel:code_write",
+    check=_check,
 )

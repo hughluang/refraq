@@ -23,6 +23,8 @@ __all__ = [
     "NodeType",
     "PinnedOutput",
     "PortSpec",
+    "Problem",
+    "ReferenceResolver",
     "ResolvedAttribute",
     "ResolvedEntity",
     "object_schema",
@@ -129,6 +131,27 @@ class ResolvedEntity:
 
 
 @dataclass(frozen=True, slots=True)
+class Problem:
+    code: str
+    detail: str
+    node_id: str | None = None
+    edge_id: str | None = None
+    severity: str = "error"
+    path: tuple[str | int, ...] = ()
+
+
+class ReferenceResolver(Protocol):
+    def entity_head(self, entity_id: str) -> ResolvedEntity | None: ...
+
+    def channel_exists(self, channel_id: str) -> bool: ...
+
+    def source_exists(self, source_id: str) -> bool: ...
+
+
+Check = Callable[[Mapping[str, Any], ReferenceResolver], list[Problem]]
+
+
+@dataclass(frozen=True, slots=True)
 class NodeType:
     type_id: str
     family: str
@@ -145,6 +168,7 @@ class NodeType:
     refine: Refine | None = None
     pinned: Pinned = pin_output
     pinnable: bool = True
+    check: Check | None = None
 
 
 MAIN_INPUT = PortSpec(

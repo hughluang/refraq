@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from backend.channel.graph import refine_ports, validate
 from backend.channel.nodes import list_node_types
-from backend.channel.nodes.spec import NodeType, PortSpec, ResolvedAttribute, ResolvedEntity
+from backend.channel.nodes.spec import (
+    NodeType,
+    PortSpec,
+    Problem,
+    ResolvedAttribute,
+    ResolvedEntity,
+)
 
 
 def _idle(node: object, hooks: object) -> object:
@@ -857,3 +863,54 @@ def test_source_query_source_must_resolve() -> None:
     assert "CHANNEL_REFERENCE_UNRESOLVED" not in _codes(
         present, FakeResolver(sources={"src_ok"})
     )
+
+
+def _flagged(*, required: list[str], check) -> NodeType:
+    return NodeType(
+        execute=_idle,
+        check=check,
+        type_id="test.flagged",
+        family="test",
+        label="Flagged",
+        summary="Reports a configuration problem from its own check.",
+        description=(
+            "Test type. Validation asks its check only after the configuration "
+            "passes the JSON Schema."
+        ),
+        entry=True,
+        inputs=(),
+        outputs=(PortSpec("main", "Output."),),
+        config_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"name": {"type": "string"}},
+            "required": required,
+        },
+    )
+
+
+def test_catalog_type_check_problem_is_reported_on_the_node() -> None:
+    def check(config: object, resolver: object) -> list[Problem]:
+        del config, resolver
+        return [Problem("CHANNEL_TEST_CHECK", "Name is reserved", path=("name",))]
+
+    graph = _graph([_node("nd_flag", "test.flagged", "Flag", {"name": "x"})])
+    assert validate(graph, FakeResolver(), [_flagged(required=[], check=check)]) == [
+        Problem(
+            "CHANNEL_TEST_CHECK",
+            "Name is reserved",
+            node_id="nd_flag",
+            path=("name",),
+        )
+    ]
+
+
+def test_catalog_type_check_does_not_run_when_schema_fails() -> None:
+    def check(config: object, resolver: object) -> list[Problem]:
+        raise AssertionError("check ran")
+
+    graph = _graph([_node("nd_flag", "test.flagged", "Flag", {})])
+    problems = validate(graph, FakeResolver(), [_flagged(required=["name"], check=check)])
+    assert [item.path for item in problems if item.code == "CHANNEL_NODE_CONFIG_INVALID"] == [
+        ("name",)
+    ]

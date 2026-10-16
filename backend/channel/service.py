@@ -15,9 +15,10 @@ from backend.channel.errors import (
     ChannelNotFound,
     ChannelVersionNotFound,
 )
-from backend.channel.graph import Problem, validate
+from backend.channel.graph import validate
 from backend.channel.ids import new_channel_id
 from backend.channel.nodes import list_node_types
+from backend.channel.nodes.spec import Problem
 from backend.channel.references import ChannelReferenceResolver
 from backend.channel.schedules import (
     cancel_channel_jobs,

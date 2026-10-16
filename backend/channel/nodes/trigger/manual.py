@@ -4,9 +4,19 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from backend.channel.nodes.spec import MAIN_OUTPUT, EngineHooks, NodeResult, NodeType, object_schema
+from backend.channel.nodes.spec import (
+    MAIN_OUTPUT,
+    EngineHooks,
+    NodeResult,
+    NodeType,
+    Problem,
+    ReferenceResolver,
+    object_schema,
+)
 
 __all__ = ["NODE_TYPE"]
+
+_RESERVED_PAYLOAD = frozenset({"triggered_by", "triggered_at"})
 
 
 def _json_schema(value: Any) -> dict[str, Any]:
@@ -45,7 +55,7 @@ def _refine(
     properties = {
         key: _json_schema(value)
         for key, value in payload.items()
-        if key not in {"triggered_by", "triggered_at"}
+        if key not in _RESERVED_PAYLOAD
     }
     properties["triggered_by"] = {
         "type": "object",
@@ -73,6 +83,20 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     payload["triggered_by"] = {"id": actor["id"], "name": actor["name"]}
     payload["triggered_at"] = hooks.started_at
     return NodeResult(status="succeeded", output=payload)
+
+
+def _check(config: Mapping[str, Any], resolver: ReferenceResolver) -> list[Problem]:
+    del resolver
+    payload = config.get("payload") or {}
+    if _RESERVED_PAYLOAD & set(payload):
+        return [
+            Problem(
+                "CHANNEL_NODE_CONFIG_INVALID",
+                "Manual payload uses a reserved key",
+                path=("payload",),
+            )
+        ]
+    return []
 
 
 NODE_TYPE = NodeType(
@@ -104,4 +128,5 @@ NODE_TYPE = NodeType(
     ),
     execute=_execute,
     refine=_refine,
+    check=_check,
 )

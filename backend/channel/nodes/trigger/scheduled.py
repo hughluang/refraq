@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from backend.channel.nodes.spec import MAIN_OUTPUT, EngineHooks, NodeResult, NodeType
+from backend.channel.nodes.spec import (
+    MAIN_OUTPUT,
+    EngineHooks,
+    NodeResult,
+    NodeType,
+    Problem,
+    ReferenceResolver,
+)
+from backend.core.time import parse_instant
+from backend.worker.api import validate_cadence, validate_start_at
+from backend.worker.errors import ScheduleCadenceInvalid, ScheduleStartAtInvalid
 
 __all__ = ["NODE_TYPE"]
 
@@ -40,6 +50,24 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             "scheduled_for": schedule.get("scheduled_for"),
         },
     )
+
+
+def _check(config: Mapping[str, Any], resolver: ReferenceResolver) -> list[Problem]:
+    del resolver
+    cron = config.get("cron")
+    cron_text = str(cron).strip() if isinstance(cron, str) and str(cron).strip() else None
+    interval = config.get("interval_seconds")
+    seconds = interval if isinstance(interval, int) else None
+    start = None
+    raw_start = config.get("start_at")
+    try:
+        if isinstance(raw_start, str) and raw_start.strip():
+            start = parse_instant(raw_start)
+        start = validate_start_at(start)
+        validate_cadence(cron=cron_text, interval_seconds=seconds, start_at=start)
+    except (ScheduleCadenceInvalid, ScheduleStartAtInvalid, ValueError) as exc:
+        return [Problem("CHANNEL_NODE_CONFIG_INVALID", str(exc))]
+    return []
 
 
 NODE_TYPE = NodeType(
@@ -81,4 +109,5 @@ NODE_TYPE = NodeType(
     },
     execute=_execute,
     refine=_refine,
+    check=_check,
 )

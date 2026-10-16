@@ -9,14 +9,13 @@ from another body node, or from an ancestor of the loop.
 from __future__ import annotations
 
 import keyword
-from dataclasses import dataclass
-from typing import Any, Mapping, Protocol, Sequence
+from dataclasses import dataclass, replace
+from typing import Any, Mapping, Sequence
 
 from jsonschema import Draft202012Validator
 
 from backend.channel.nodes import list_node_types
-from backend.channel.nodes.spec import NodeType, ResolvedEntity
-from backend.channel.sandbox.program import CODE_MAX_BYTES, author_line, function_source
+from backend.channel.nodes.spec import NodeType, Problem, ReferenceResolver
 from backend.channel.template import (
     TemplateSyntaxError,
     TemplateTypeError,
@@ -24,14 +23,8 @@ from backend.channel.template import (
     static_check,
 )
 from backend.channel.values import attribute_value_schema
-from backend.channel.write_compatibility import write_reasons
-from backend.core.time import parse_instant
-from backend.worker.api import validate_cadence, validate_start_at
-from backend.worker.errors import ScheduleCadenceInvalid, ScheduleStartAtInvalid
 
 __all__ = [
-    "Problem",
-    "ReferenceResolver",
     "RefinedPort",
     "TemplateSite",
     "refine_ports",
@@ -40,21 +33,10 @@ __all__ = [
 ]
 
 _RESERVED_REFS = frozenset({"nodes", "channel", "run", "platform"})
-_RESERVED_PAYLOAD = frozenset({"triggered_by", "triggered_at"})
 
 _WHITE = 0
 _GRAY = 1
 _BLACK = 2
-
-
-@dataclass(frozen=True, slots=True)
-class Problem:
-    code: str
-    detail: str
-    node_id: str | None = None
-    edge_id: str | None = None
-    severity: str = "error"
-    path: tuple[str | int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,14 +55,6 @@ class TemplateSite:
     problems: tuple[Problem, ...]
 
 
-class ReferenceResolver(Protocol):
-    def entity_head(self, entity_id: str) -> ResolvedEntity | None: ...
-
-    def channel_exists(self, channel_id: str) -> bool: ...
-
-    def source_exists(self, source_id: str) -> bool: ...
-
-
 def validate(
     graph: Mapping[str, Any],
     resolver: ReferenceResolver,
@@ -96,18 +70,14 @@ def validate(
     problems.extend(_ref_problems(nodes))
     problems.extend(_policy_problems(nodes))
     problems.extend(_type_and_config_problems(nodes, by_type))
-    problems.extend(_code_problems(nodes, by_type))
+    problems.extend(_configuration_problems(nodes, by_type, resolver))
     problems.extend(_expression_problems(nodes, edges, by_id, by_type, resolver))
-    problems.extend(_payload_problems(nodes))
-    problems.extend(_scheduled_problems(nodes))
     problems.extend(_edge_problems(edges, by_id, by_type))
     problems.extend(_trigger_problems(nodes, edges, by_id, by_type))
     problems.extend(_reachability_problems(nodes, edges, by_id, by_type))
     problems.extend(_cycle_problems(nodes, edges, by_id, by_type))
     problems.extend(_loop_body_problems(nodes, edges, by_id, by_type))
     problems.extend(_reference_problems(nodes, by_type, resolver))
-    problems.extend(_sql_source_problems(nodes, by_type, resolver))
-    problems.extend(_match_key_problems(nodes, by_type, resolver))
     problems.extend(_settings_problems(graph["settings"], resolver))
     return problems
 
@@ -386,101 +356,6 @@ def _declared_schema(
     return attribute_value_schema(named.value_type)
 
 
-def _code_problems(
-    nodes: list[dict[str, Any]],
-    by_type: dict[str, NodeType],
-) -> list[Problem]:
-    spec = by_type.get("transform.code")
-    if spec is None:
-        return []
-    problems: list[Problem] = []
-    for node in nodes:
-        if str(node.get("type")) != "transform.code":
-            continue
-        config = node.get("config")
-        if _config_errors(spec.config_schema, config):
-            continue
-        if not isinstance(config, dict):
-            continue
-        code = config.get("code")
-        if not isinstance(code, str):
-            continue
-        if len(code.encode("utf-8")) > CODE_MAX_BYTES:
-            problems.append(
-                Problem(
-                    "CHANNEL_NODE_CONFIG_INVALID",
-                    "Code exceeds 64 KiB",
-                    node_id=str(node["id"]),
-                    path=("code",),
-                )
-            )
-            continue
-        try:
-            compile(function_source(code), "<code>", "exec")
-        except SyntaxError as exc:
-            line = author_line(exc.lineno)
-            problems.append(
-                Problem(
-                    "CHANNEL_CODE_INVALID",
-                    f"Syntax error on line {line}: {exc.msg}",
-                    node_id=str(node["id"]),
-                    path=("code",),
-                )
-            )
-    return problems
-
-
-def _payload_problems(nodes: list[dict[str, Any]]) -> list[Problem]:
-    problems: list[Problem] = []
-    for node in nodes:
-        if str(node.get("type")) != "trigger.manual":
-            continue
-        config = node.get("config")
-        if not isinstance(config, dict):
-            continue
-        payload = config.get("payload") or {}
-        if not isinstance(payload, dict):
-            continue
-        if _RESERVED_PAYLOAD & set(payload):
-            problems.append(
-                Problem(
-                    "CHANNEL_NODE_CONFIG_INVALID",
-                    "Manual payload uses a reserved key",
-                    node_id=str(node["id"]),
-                    path=("payload",),
-                )
-            )
-    return problems
-
-
-def _scheduled_problems(nodes: list[dict[str, Any]]) -> list[Problem]:
-    problems: list[Problem] = []
-    for node in nodes:
-        if str(node.get("type")) != "trigger.scheduled":
-            continue
-        config = node.get("config") if isinstance(node.get("config"), dict) else {}
-        cron = config.get("cron")
-        cron_text = str(cron).strip() if isinstance(cron, str) and str(cron).strip() else None
-        interval = config.get("interval_seconds")
-        seconds = interval if isinstance(interval, int) else None
-        start = None
-        raw_start = config.get("start_at")
-        try:
-            if isinstance(raw_start, str) and raw_start.strip():
-                start = parse_instant(raw_start)
-            start = validate_start_at(start)
-            validate_cadence(cron=cron_text, interval_seconds=seconds, start_at=start)
-        except (ScheduleCadenceInvalid, ScheduleStartAtInvalid, ValueError) as exc:
-            problems.append(
-                Problem(
-                    "CHANNEL_NODE_CONFIG_INVALID",
-                    str(exc),
-                    node_id=str(node["id"]),
-                )
-            )
-    return problems
-
-
 def _type_and_config_problems(
     nodes: list[dict[str, Any]],
     by_type: dict[str, NodeType],
@@ -527,6 +402,25 @@ def _type_and_config_problems(
                     node_id=str(node["id"]),
                 )
             )
+    return problems
+
+
+def _configuration_problems(
+    nodes: list[dict[str, Any]],
+    by_type: dict[str, NodeType],
+    resolver: ReferenceResolver,
+) -> list[Problem]:
+    problems: list[Problem] = []
+    for node in nodes:
+        spec = by_type.get(str(node["type"]))
+        if spec is None or spec.check is None:
+            continue
+        if _config_errors(spec.config_schema, node["config"]):
+            continue
+        node_id = str(node["id"])
+        problems.extend(
+            replace(problem, node_id=node_id) for problem in spec.check(node["config"], resolver)
+        )
     return problems
 
 
@@ -806,77 +700,6 @@ def _reference_problems(
                         node_id=str(node["id"]),
                     )
                 )
-    return problems
-
-
-def _sql_source_problems(
-    nodes: list[dict[str, Any]],
-    by_type: dict[str, NodeType],
-    resolver: ReferenceResolver,
-) -> list[Problem]:
-    problems: list[Problem] = []
-    for node in nodes:
-        if str(node["type"]) != "read.sql":
-            continue
-        spec = by_type.get("read.sql")
-        if spec is None or _config_errors(spec.config_schema, node["config"]):
-            continue
-        source = node["config"].get("source")
-        if not isinstance(source, dict) or source.get("kind") != "source":
-            continue
-        source_id = source["source_id"]
-        if not resolver.source_exists(source_id):
-            problems.append(
-                Problem(
-                    "CHANNEL_REFERENCE_UNRESOLVED",
-                    f"Source does not resolve: {source_id}",
-                    node_id=str(node["id"]),
-                )
-            )
-    return problems
-
-
-def _match_key_problems(
-    nodes: list[dict[str, Any]],
-    by_type: dict[str, NodeType],
-    resolver: ReferenceResolver,
-) -> list[Problem]:
-    problems: list[Problem] = []
-    for node in nodes:
-        if str(node["type"]) != "write.entity":
-            continue
-        spec = by_type.get("write.entity")
-        if spec is None or _config_errors(spec.config_schema, node["config"]):
-            continue
-        config = node["config"]
-        head = resolver.entity_head(config["entity_id"])
-        if head is None:
-            continue
-        reason = next(
-            (
-                item
-                for item in write_reasons(
-                    config.get("match_key"),
-                    config.get("mapping") or [],
-                    head,
-                )
-                if item.subject == "match_key"
-            ),
-            None,
-        )
-        if reason is None:
-            continue
-        problems.append(
-            Problem(
-                "CHANNEL_MATCH_KEY_INVALID",
-                (
-                    "Target head has no Business Key"
-                    if reason.code == "business_key_missing"
-                    else "Match key does not resolve"
-                ),
-                node_id=str(node["id"]),
-            )
-        )
     return problems
 
 

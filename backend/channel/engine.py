@@ -17,8 +17,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
-from backend.channel.graph import ReferenceResolver, ancestor_closure, refine_ports
-from backend.channel.nodes.spec import EngineHooks, NodeResult, NodeType
+from backend.channel.graph import ancestor_closure, refine_ports
+from backend.channel.nodes.spec import EngineHooks, NodeResult, NodeType, ReferenceResolver
 from backend.channel.template import output_matches
 
 __all__ = [

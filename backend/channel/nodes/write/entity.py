@@ -12,6 +12,8 @@ from backend.channel.nodes.spec import (
     EngineHooks,
     NodeResult,
     NodeType,
+    Problem,
+    ReferenceResolver,
     ResolvedAttribute,
     ResolvedEntity,
     object_schema,
@@ -160,6 +162,36 @@ def _project(
     return rows, None
 
 
+def _check(config: Mapping[str, Any], resolver: ReferenceResolver) -> list[Problem]:
+    head = resolver.entity_head(config["entity_id"])
+    if head is None:
+        return []
+    reason = next(
+        (
+            item
+            for item in write_reasons(
+                config.get("match_key"),
+                config.get("mapping") or [],
+                head,
+            )
+            if item.subject == "match_key"
+        ),
+        None,
+    )
+    if reason is None:
+        return []
+    return [
+        Problem(
+            "CHANNEL_MATCH_KEY_INVALID",
+            (
+                "Target head has no Business Key"
+                if reason.code == "business_key_missing"
+                else "Match key does not resolve"
+            ),
+        )
+    ]
+
+
 def _resolved_head(target: Any) -> ResolvedEntity:
     return ResolvedEntity(
         attributes=tuple(
@@ -266,4 +298,5 @@ NODE_TYPE = NodeType(
     ),
     execute=_execute,
     refine=_refine,
+    check=_check,
 )
