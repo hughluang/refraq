@@ -14,7 +14,14 @@ from typing import Any, Mapping, Sequence
 
 from backend.admin.user_store import UserRecord, ensure_system_user, get_user_store
 from backend.channel.context import channel_context, platform_context, run_context
-from backend.channel.engine import EngineHooks, Executor, NodeResult, execute
+from backend.channel.engine import (
+    EditorOptions,
+    EngineHooks,
+    Executor,
+    NodeResult,
+    PinnedOutput,
+    execute,
+)
 from backend.channel.errors import ChannelNotFound, ChannelRequestInvalid
 from backend.channel.executors import EXECUTORS
 from backend.channel.nodes import loop_ports
@@ -29,20 +36,11 @@ from backend.worker.schedules import get_schedule_store
 
 __all__ = [
     "EDITOR_TIMEOUT_SEC",
-    "EditorOptions",
     "editor_executors",
     "execute_editor",
 ]
 
 EDITOR_TIMEOUT_SEC = 120
-
-
-@dataclass(frozen=True)
-class EditorOptions:
-    """What an editor execution changes about the executors."""
-
-    row_limit: int
-    pinned: Mapping[str, Any]
 
 
 @dataclass
@@ -64,10 +62,11 @@ class _EditorHooks:
     sandbox: SandboxSession
     actor: dict[str, str]
     started_at: str
-    user: Any
+    user: UserRecord
     schedule: dict[str, Any]
-    job_id: str
-    _channel_id: str
+    run_id: str
+    channel_id: str
+    pinned: dict[str, Any]
     executions: list[_NodeExecution] = field(default_factory=list)
 
     def cancelled(self) -> bool:
@@ -78,6 +77,15 @@ class _EditorHooks:
 
     def evaluate(self, expression: str) -> Any:
         return self.sandbox.evaluate(expression)
+
+    def run_code(self, source: str, timeout_sec: float) -> Any:
+        return self.sandbox.run_code(source, timeout_sec)
+
+    def pinned_output(self, node: Mapping[str, Any]) -> PinnedOutput | None:
+        node_id = str(node["id"])
+        if node_id not in self.pinned:
+            return None
+        return PinnedOutput(self.pinned[node_id])
 
     def on_start(self, node: Mapping[str, Any]) -> int:
         seq = len(self.executions) + 1
@@ -161,21 +169,21 @@ def execute_editor(
         "platform": platform_context(started),
     }
     entry_node = next(node for node in graph["nodes"] if node["id"] == entry)
-    options = EditorOptions(row_limit=row_limit, pinned=pinned_map)
     user = ensure_system_user(get_user_store())
     hooks: _EditorHooks | None = None
     try:
         with SandboxSession() as sandbox:
             sandbox.set_context(**context)
             hooks = _EditorHooks(
-                editor=options,
+                editor=EditorOptions(row_limit=row_limit),
                 sandbox=sandbox,
                 actor=actor_ctx,
                 started_at=format_instant(started),
                 user=user,
                 schedule=_schedule(channel.id, entry_node, started),
-                job_id=run_id,
-                _channel_id=channel.id,
+                run_id=run_id,
+                channel_id=channel.id,
+                pinned=pinned_map,
             )
             outcome = execute(
                 graph,
@@ -225,9 +233,9 @@ def _pinned(graph: Mapping[str, Any], pinned: list[dict[str, Any]]) -> dict[str,
 
 def _pin_or_run(executor: Executor) -> Executor:
     def run(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
-        editor = getattr(hooks, "editor", None)
-        if editor is not None and str(node["id"]) in editor.pinned:
-            return _pinned_result(node, editor.pinned[str(node["id"])])
+        pinned = hooks.pinned_output(node)
+        if pinned is not None:
+            return _pinned_result(node, pinned.value)
         return executor(node, hooks)
 
     return run

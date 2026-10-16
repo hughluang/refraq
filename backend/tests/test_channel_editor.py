@@ -2,41 +2,12 @@
 
 from __future__ import annotations
 
-from backend.channel.editor import EditorOptions, editor_executors
-from backend.channel.engine import EngineHooks, NodeResult, execute
+from backend.channel.editor import editor_executors
+from backend.channel.engine import EditorOptions, EngineHooks, NodeResult, execute
 from backend.channel.executors import execute_variable
 from backend.channel.reshape import run_for
 from backend.channel.variables import get_variable_store
-
-
-class _Hooks:
-    def __init__(self, editor: EditorOptions | None) -> None:
-        self.editor = editor
-        self.statuses: list[tuple[str, str]] = []
-
-    def cancelled(self) -> bool:
-        return False
-
-    def superseded(self) -> bool:
-        return False
-
-    def on_start(self, node: dict) -> int:
-        self.statuses.append((str(node["id"]), "running"))
-        return len(self.statuses)
-
-    def on_finish(self, seq: int, node: dict, result: NodeResult) -> None:
-        del node
-        node_id, _status = self.statuses[seq - 1]
-        self.statuses[seq - 1] = (node_id, result.status)
-
-    def on_output(self, node: dict, output: object) -> None:
-        del node, output
-
-    def drop_outputs(self, refs: list[str]) -> None:
-        del refs
-
-    def evaluate(self, expression: str) -> object:
-        raise AssertionError(expression)
+from backend.tests.channel_hooks_fake import FakeHooks
 
 
 def _called(node: dict, hooks: EngineHooks, seen: list[str]) -> NodeResult:
@@ -91,7 +62,10 @@ def _pin_if(value: bool) -> tuple[list[str], list[tuple[str, str]]]:
     def fake(node: dict, hooks: EngineHooks) -> NodeResult:
         return _called(node, hooks, seen)
 
-    hooks = _Hooks(EditorOptions(row_limit=10, pinned={"g": {"value": value}}))
+    hooks = FakeHooks(
+        editor=EditorOptions(row_limit=10),
+        pinned={"g": {"value": value}},
+    )
     outcome = execute(
         _if_graph(),
         "t",
@@ -129,7 +103,7 @@ def _variable(operation: str, **config: object) -> dict:
 
 
 def test_variable_writes_are_dry_and_reads_are_real() -> None:
-    hooks = _Hooks(EditorOptions(row_limit=100, pinned={}))
+    hooks = FakeHooks(editor=EditorOptions(row_limit=100))
     store = get_variable_store()
 
     written = execute_variable(_variable("set", value='"kept"'), hooks)
@@ -177,10 +151,10 @@ def test_variable_writes_are_dry_and_reads_are_real() -> None:
 
 def test_editor_for_iterates_at_most_row_limit() -> None:
     node = {"id": "nd_for", "config": {"items": "[1, 2, 3, 4, 5]"}}
-    capped = run_for(node, _Hooks(EditorOptions(row_limit=2, pinned={})))
+    capped = run_for(node, FakeHooks(editor=EditorOptions(row_limit=2)))
     assert capped.output["count"] == 2
     assert capped.iterations is not None
     assert [step["current"] for step in capped.iterations] == [1, 2]
 
-    full = run_for(node, _Hooks(None))
+    full = run_for(node, FakeHooks())
     assert full.output["count"] == 5

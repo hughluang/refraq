@@ -12,16 +12,18 @@ from backend.channel.reshape import (
     run_merge,
     run_set_fields,
 )
+from backend.tests.channel_hooks_fake import FakeHooks
 
 
-class Hooks:
-    def __init__(self, values: dict | None = None) -> None:
-        self.values = values or {}
+def Hooks(values: dict | None = None) -> FakeHooks:
+    table = values or {}
 
-    def evaluate(self, expression: str):
-        if expression not in self.values:
+    def evaluate(expression: str) -> object:
+        if expression not in table:
             raise RuntimeError(expression)
-        return self.values[expression]
+        return table[expression]
+
+    return FakeHooks(evaluate=evaluate)
 
 
 def _node(type_id: str, config: dict) -> dict:

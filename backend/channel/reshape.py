@@ -6,7 +6,7 @@ import json
 from typing import Any, Mapping
 
 from backend.channel.engine import EngineHooks, NodeResult
-from backend.channel.template import TemplateTypeError, render
+from backend.channel.node_support import render_field
 from backend.channel.values import LIST_OF_OBJECTS
 
 __all__ = [
@@ -34,7 +34,7 @@ class _RowCompare(Exception):
 def run_set_fields(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     output: dict[str, Any] = {}
     for field in node["config"]["fields"]:
-        value, error = _render(hooks, field.get("value"), _ANY)
+        value, error = render_field(hooks, field.get("value"), _ANY)
         if error is not None:
             return error
         output[str(field["name"])] = value
@@ -42,7 +42,7 @@ def run_set_fields(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
 
 
 def run_if(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
-    value, error = _render(hooks, node["config"].get("condition"), _BOOL)
+    value, error = render_field(hooks, node["config"].get("condition"), _BOOL)
     if error is not None:
         return error
     live = "true" if value else "false"
@@ -55,7 +55,7 @@ def run_if(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
 
 def run_filter(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
-    items, error = _render(hooks, config.get("items"), LIST_OF_OBJECTS)
+    items, error = render_field(hooks, config.get("items"), LIST_OF_OBJECTS)
     if error is not None:
         return error
     combinator = str(config.get("combinator") or "all")
@@ -65,7 +65,7 @@ def run_filter(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
         operator = str(condition["operator"])
         value = None
         if operator not in {"is_null", "is_not_null"}:
-            value, error = _render(hooks, condition.get("value"), _ANY)
+            value, error = render_field(hooks, condition.get("value"), _ANY)
             if error is not None:
                 return error
         prepared.append((str(condition["key"]), operator, value))
@@ -91,7 +91,7 @@ def run_merge(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
     groups: list[list[Any]] = []
     for text in config["inputs"]:
-        rows, error = _render(hooks, text, LIST_OF_OBJECTS)
+        rows, error = render_field(hooks, text, LIST_OF_OBJECTS)
         if error is not None:
             return error
         groups.append(rows)
@@ -117,7 +117,7 @@ def run_merge(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
 
 def run_deduplicate(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
-    items, error = _render(hooks, config.get("items"), LIST_OF_OBJECTS)
+    items, error = render_field(hooks, config.get("items"), LIST_OF_OBJECTS)
     if error is not None:
         return error
     keys = [str(key) for key in config["keys"]]
@@ -136,7 +136,7 @@ def run_deduplicate(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
 
 
 def run_for(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
-    items, error = _render(hooks, node["config"].get("items"), _ARRAY)
+    items, error = render_field(hooks, node["config"].get("items"), _ARRAY)
     if error is not None:
         return error
     if len(items) > _ITEM_LIMIT:
@@ -145,7 +145,7 @@ def run_for(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             error_code="CHANNEL_ITEM_LIMIT_EXCEEDED",
             error_message="For items exceed 100000 elements",
         )
-    editor = getattr(hooks, "editor", None)
+    editor = hooks.editor
     if editor is not None and len(items) > editor.row_limit:
         items = list(items[: editor.row_limit])
     count = len(items)
@@ -286,28 +286,3 @@ def _key_token(row: Any, key: str) -> str | None:
 
 def _canon(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
-
-
-def _render(
-    hooks: EngineHooks,
-    raw: Any,
-    schema: Mapping[str, Any],
-) -> tuple[Any, NodeResult | None]:
-    try:
-        if not isinstance(raw, str):
-            raise TemplateTypeError("Template value must be text")
-        return render(raw, hooks.evaluate, schema), None  # type: ignore[attr-defined]
-    except TemplateTypeError as exc:
-        return None, NodeResult(
-            status="failed",
-            error_code="CHANNEL_VALUE_TYPE_MISMATCH",
-            error_message=str(exc),
-            error_detail={"expression": raw},
-        )
-    except Exception as exc:  # noqa: BLE001
-        return None, NodeResult(
-            status="failed",
-            error_code="CHANNEL_NODE_FAILED",
-            error_message=str(exc),
-            error_detail={"expression": raw},
-        )

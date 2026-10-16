@@ -3,38 +3,7 @@
 from __future__ import annotations
 
 from backend.channel.engine import EngineHooks, NodeResult, execute
-
-
-class RecordingHooks:
-    def __init__(self) -> None:
-        self.order: list[str] = []
-        self.outputs: dict[str, object] = {}
-        self.history: list[tuple[str, object]] = []
-        self.dropped: list[list[str]] = []
-        self.cancel_after: str | None = None
-
-    def cancelled(self) -> bool:
-        return bool(self.cancel_after and self.cancel_after in self.order)
-
-    def superseded(self) -> bool:
-        return False
-
-    def on_start(self, node: dict) -> int:
-        self.order.append(str(node["id"]))
-        return len(self.order)
-
-    def on_finish(self, seq: int, node: dict, result: NodeResult) -> None:
-        del seq, node, result
-
-    def on_output(self, node: dict, output: object) -> None:
-        self.outputs[str(node["id"])] = output
-        self.history.append((str(node["id"]), output))
-
-    def drop_outputs(self, refs: list[str]) -> None:
-        self.dropped.append(list(refs))
-
-    def evaluate(self, expression: str) -> object:
-        return expression
+from backend.tests.channel_hooks_fake import FakeHooks
 
 
 def _node(node_id: str, y: float, x: float = 0, type_id: str = "fake") -> dict:
@@ -80,7 +49,7 @@ def test_stop_at_runs_both_incoming_branches_and_not_downstream() -> None:
         ],
         "settings": {},
     }
-    hooks = RecordingHooks()
+    hooks = FakeHooks()
     outcome = execute(graph, "a", {"fake": _ok}, hooks, stop_at_node_id="d")
     assert outcome.status == "succeeded"
     assert outcome.outcome == "completed"
@@ -95,7 +64,7 @@ def test_branch_finishes_before_the_next_sibling() -> None:
         "edges": [_edge("a", "b"), _edge("a", "c"), _edge("b", "d")],
         "settings": {},
     }
-    hooks = RecordingHooks()
+    hooks = FakeHooks()
     outcome = execute(graph, "a", {"fake": _ok}, hooks)
     assert outcome.status == "succeeded"
     assert hooks.order == ["a", "b", "d", "c"]
@@ -112,7 +81,7 @@ def test_stop_failure_does_not_run_downstream() -> None:
         "edges": [_edge("a", "b"), _edge("b", "c")],
         "settings": {},
     }
-    hooks = RecordingHooks()
+    hooks = FakeHooks()
     outcome = execute(graph, "a", {"fake": fail}, hooks)
     assert outcome.status == "failed"
     assert outcome.failed_node_id == "b"
@@ -120,7 +89,7 @@ def test_stop_failure_does_not_run_downstream() -> None:
 
 
 def test_skipped_node_records_the_output_later_nodes_read() -> None:
-    class FinishingHooks(RecordingHooks):
+    class FinishingHooks(FakeHooks):
         def __init__(self) -> None:
             super().__init__()
             self.recorded: dict[str, object] = {}
@@ -154,7 +123,7 @@ def test_timeout_records_the_node_about_to_run() -> None:
         "edges": [_edge("a", "b")],
         "settings": {},
     }
-    hooks = RecordingHooks()
+    hooks = FakeHooks()
     outcome = execute(
         graph,
         "a",
@@ -170,7 +139,7 @@ def test_timeout_records_the_node_about_to_run() -> None:
 
 
 def test_supersede_stops_before_the_next_node() -> None:
-    class Superseding(RecordingHooks):
+    class Superseding(FakeHooks):
         def superseded(self) -> bool:
             return "a" in self.order
 
@@ -194,7 +163,7 @@ def test_timeout_records_the_node_that_would_run() -> None:
         "edges": [_edge("a", "b")],
         "settings": {},
     }
-    hooks = RecordingHooks()
+    hooks = FakeHooks()
     outcome = execute(
         graph,
         "a",
@@ -210,7 +179,7 @@ def test_timeout_records_the_node_that_would_run() -> None:
 
 
 def test_supersede_stops_before_the_next_node() -> None:
-    class Superseding(RecordingHooks):
+    class Superseding(FakeHooks):
         def superseded(self) -> bool:
             return "a" in self.order
 
@@ -232,7 +201,7 @@ def test_cancel_between_nodes() -> None:
         "edges": [_edge("a", "b")],
         "settings": {},
     }
-    hooks = RecordingHooks()
+    hooks = FakeHooks()
     hooks.cancel_after = "a"
     outcome = execute(graph, "a", {"fake": _ok}, hooks)
     assert outcome.status == "cancelled"
@@ -282,7 +251,7 @@ def test_if_dead_branch_does_not_run_and_the_join_does() -> None:
     }
     gate = graph["nodes"][0]
     gate["config"] = {"live": "true"}
-    hooks = RecordingHooks()
+    hooks = FakeHooks()
     outcome = execute(graph, "gate", {"transform.if": _branch, "fake": _branch}, hooks)
     assert outcome.status == "succeeded"
     assert hooks.order == ["gate", "live", "join"]
@@ -296,7 +265,7 @@ def test_join_waits_for_both_inputs() -> None:
         "edges": [_edge("s", "a"), _edge("s", "b"), _edge("a", "a2"), _edge("a2", "m"), _edge("b", "m")],
         "settings": {},
     }
-    hooks = RecordingHooks()
+    hooks = FakeHooks()
     outcome = execute(graph, "s", {"fake": _ok}, hooks)
     assert outcome.status == "succeeded"
     assert hooks.order.index("m") > hooks.order.index("a2")
@@ -316,7 +285,7 @@ def test_for_runs_the_body_once_per_element_and_collects_results() -> None:
         ],
         "settings": {},
     }
-    hooks = RecordingHooks()
+    hooks = FakeHooks()
     outcome = execute(graph, "walk", {"volume.for": _walk, "fake": _walk}, hooks, loop_ports={"volume.for": "each"})
     assert outcome.status == "succeeded"
     assert hooks.order == ["walk", "step", "step", "after"]
@@ -337,7 +306,7 @@ def test_for_empty_list_skips_the_body() -> None:
         ],
         "settings": {},
     }
-    hooks = RecordingHooks()
+    hooks = FakeHooks()
     outcome = execute(graph, "walk", {"volume.for": _walk, "fake": _walk}, hooks, loop_ports={"volume.for": "each"})
     assert outcome.status == "succeeded"
     assert hooks.order == ["walk"]
@@ -362,7 +331,7 @@ def test_nested_for_collects_inner_results() -> None:
         ],
         "settings": {},
     }
-    hooks = RecordingHooks()
+    hooks = FakeHooks()
     outcome = execute(
         graph,
         "outer",
@@ -388,7 +357,7 @@ def test_cancel_inside_a_for_body() -> None:
         ],
         "settings": {},
     }
-    hooks = RecordingHooks()
+    hooks = FakeHooks()
     hooks.cancel_after = "step"
     outcome = execute(graph, "walk", {"volume.for": _walk, "fake": _ok}, hooks, loop_ports={"volume.for": "each"})
     assert outcome.status == "cancelled"
@@ -411,7 +380,7 @@ def test_stop_at_inside_a_for_body_excludes_the_rest() -> None:
         ],
         "settings": {},
     }
-    hooks = RecordingHooks()
+    hooks = FakeHooks()
     outcome = execute(
         graph,
         "start",
@@ -445,7 +414,7 @@ def test_timeout_inside_a_for_body() -> None:
         ],
         "settings": {},
     }
-    hooks = RecordingHooks()
+    hooks = FakeHooks()
     outcome = execute(
         graph,
         "walk",

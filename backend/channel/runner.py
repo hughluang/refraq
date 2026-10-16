@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Mapping
 
-from backend.admin.user_store import ensure_system_user, get_user_store
+from backend.admin.user_store import UserRecord, ensure_system_user, get_user_store
 from backend.channel.context import channel_context, platform_context, run_context
-from backend.channel.engine import NodeResult, execute
+from backend.channel.engine import NodeResult, PinnedOutput, execute
 from backend.channel.executors import EXECUTORS
 from backend.channel.nodes import list_node_types, loop_ports
 from backend.channel.run_store import get_run_store, note_killed_run, output_size
@@ -32,35 +32,36 @@ class _Hooks:
     def __init__(
         self,
         *,
-        job_id: str,
+        run_id: str,
         sandbox: SandboxSession,
         actor: dict[str, str],
         started_at: str,
-        user: Any,
+        user: UserRecord,
         schedule: dict[str, Any],
         target: str,
         channel_id: str,
         run_version: int | None,
     ) -> None:
-        self.job_id = job_id
+        self.run_id = run_id
         self.sandbox = sandbox
         self.actor = actor
         self.started_at = started_at
         self.user = user
         self.schedule = schedule
+        self.editor = None
         self._target = target
-        self._channel_id = channel_id
+        self.channel_id = channel_id
         self._run_version = run_version
 
     def cancelled(self) -> bool:
-        record = get_job_store().get(self.job_id)
+        record = get_job_store().get(self.run_id)
         return record is not None and record.status == "cancelled"
 
     def superseded(self) -> bool:
         if self._target != "published" or self._run_version is None:
             return False
         versions, _total = get_channel_store().list_versions(
-            self._channel_id, limit=1, offset=0
+            self.channel_id, limit=1, offset=0
         )
         if not versions:
             return False
@@ -69,13 +70,20 @@ class _Hooks:
     def evaluate(self, expression: str) -> Any:
         return self.sandbox.evaluate(expression)
 
-    def on_start(self, node: dict[str, Any]) -> int:
-        record = get_run_store().start_execution(self.job_id, str(node["id"]))
+    def run_code(self, source: str, timeout_sec: float) -> Any:
+        return self.sandbox.run_code(source, timeout_sec)
+
+    def pinned_output(self, node: Mapping[str, Any]) -> PinnedOutput | None:
+        del node
+        return None
+
+    def on_start(self, node: Mapping[str, Any]) -> int:
+        record = get_run_store().start_execution(self.run_id, str(node["id"]))
         return record.seq
 
-    def on_finish(self, seq: int, node: dict[str, Any], result: NodeResult) -> None:
+    def on_finish(self, seq: int, node: Mapping[str, Any], result: NodeResult) -> None:
         store = get_run_store()
-        record = store.get_execution(self.job_id, seq)
+        record = store.get_execution(self.run_id, seq)
         if record is None:
             return
         record.status = result.status
@@ -87,7 +95,7 @@ class _Hooks:
         record.error_detail = result.error_detail
         store.finish_execution(record)
 
-    def on_output(self, node: dict[str, Any], output: Any) -> None:
+    def on_output(self, node: Mapping[str, Any], output: Any) -> None:
         self.sandbox.put_output(
             ref=str(node.get("ref") or node["id"]),
             name=str(node.get("name") or ""),
@@ -148,7 +156,7 @@ def run_channel_job(job_id: str) -> dict[str, str]:
         with SandboxSession() as sandbox:
             sandbox.set_context(**run.context)
             hooks = _Hooks(
-                job_id=job_id,
+                run_id=job_id,
                 sandbox=sandbox,
                 actor=actor,
                 started_at=started.isoformat().replace("+00:00", "Z"),

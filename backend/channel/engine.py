@@ -17,9 +17,17 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Protocol
 
+from backend.admin.user_store import UserRecord
 from backend.channel.graph import ancestor_closure
 
-__all__ = ["EngineHooks", "NodeResult", "RunOutcome", "execute"]
+__all__ = [
+    "EditorOptions",
+    "EngineHooks",
+    "NodeResult",
+    "PinnedOutput",
+    "RunOutcome",
+    "execute",
+]
 
 
 @dataclass
@@ -44,6 +52,18 @@ class RunOutcome:
     skipped_node_ids: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class EditorOptions:
+    """Row limit for an editor execution."""
+
+    row_limit: int
+
+
+@dataclass(frozen=True, slots=True)
+class PinnedOutput:
+    value: Any
+
+
 class EngineHooks(Protocol):
     def cancelled(self) -> bool: ...
 
@@ -56,6 +76,33 @@ class EngineHooks(Protocol):
     def on_output(self, node: Mapping[str, Any], output: Any) -> None: ...
 
     def drop_outputs(self, refs: list[str]) -> None: ...
+
+    def evaluate(self, expression: str) -> Any: ...
+
+    def run_code(self, source: str, timeout_sec: float) -> Any: ...
+
+    @property
+    def run_id(self) -> str: ...
+
+    @property
+    def channel_id(self) -> str: ...
+
+    @property
+    def actor(self) -> Mapping[str, str]: ...
+
+    @property
+    def started_at(self) -> str: ...
+
+    @property
+    def user(self) -> UserRecord: ...
+
+    @property
+    def schedule(self) -> Mapping[str, Any]: ...
+
+    @property
+    def editor(self) -> EditorOptions | None: ...
+
+    def pinned_output(self, node: Mapping[str, Any]) -> PinnedOutput | None: ...
 
 
 Executor = Callable[[Mapping[str, Any], EngineHooks], NodeResult]

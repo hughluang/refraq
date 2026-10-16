@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 from backend.channel.engine import EngineHooks, NodeResult
 from backend.channel.graph import ResolvedAttribute, ResolvedEntity
+from backend.channel.node_support import render_field
 from backend.channel.nodes import list_node_types
 from backend.channel.references import ChannelReferenceResolver
 from backend.channel.reshape import (
@@ -19,7 +20,7 @@ from backend.channel.reshape import (
 )
 from backend.channel.sandbox import CodeError
 from backend.channel.sql_read import ITEM_LIMIT, SqlReadError, run_channel_sql
-from backend.channel.template import TemplateTypeError, output_matches, render
+from backend.channel.template import output_matches
 from backend.channel.values import LIST_OF_OBJECTS
 from backend.channel.variables import VALUE_MAX_BYTES, get_variable_store, valid_name, value_size
 from backend.channel.write_compatibility import write_reasons
@@ -36,18 +37,17 @@ __all__ = ["EXECUTORS"]
 
 
 def execute_manual(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
-    ctx = hooks  # type: ignore[attr-defined]
     payload = dict((node.get("config") or {}).get("payload") or {})
-    actor = ctx.actor
+    actor = hooks.actor
     payload["triggered_by"] = {"id": actor["id"], "name": actor["name"]}
-    payload["triggered_at"] = ctx.started_at
+    payload["triggered_at"] = hooks.started_at
     return _checked(
         "trigger.manual", node, NodeResult(status="succeeded", output=payload)
     )
 
 
 def execute_scheduled(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
-    schedule = getattr(hooks, "schedule")
+    schedule = hooks.schedule
     return _checked(
         "trigger.scheduled",
         node,
@@ -64,13 +64,10 @@ def execute_scheduled(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult
 
 def execute_sql(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
-    try:
-        statement = _value(hooks, config.get("sql"), {"type": "string"})
-    except TemplateTypeError as exc:
-        return _type_failed(config.get("sql"), exc)
-    except Exception as exc:  # noqa: BLE001
-        return _expr_failed(config.get("sql"), exc)
-    editor = _editor(hooks)
+    statement, error = render_field(hooks, config.get("sql"), {"type": "string"})
+    if error is not None:
+        return error
+    editor = hooks.editor
     try:
         output = run_channel_sql(
             str(statement),
@@ -89,12 +86,10 @@ def execute_sql(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
 def execute_variable(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
     operation = str(config.get("operation") or "")
-    try:
-        name = str(_value(hooks, config.get("name"), {"type": "string"}))
-    except TemplateTypeError as exc:
-        return _type_failed(config.get("name"), exc)
-    except Exception as exc:  # noqa: BLE001
-        return _expr_failed(config.get("name"), exc)
+    rendered, error = render_field(hooks, config.get("name"), {"type": "string"})
+    if error is not None:
+        return error
+    name = str(rendered)
     if not valid_name(name):
         return NodeResult(
             status="failed",
@@ -105,12 +100,9 @@ def execute_variable(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     expected = None
     writes = operation in {"set", "set_if_absent", "compare_and_set"}
     if writes:
-        try:
-            value = _value(hooks, config.get("value"), _JSON)
-        except TemplateTypeError as exc:
-            return _type_failed(config.get("value"), exc)
-        except Exception as exc:  # noqa: BLE001
-            return _expr_failed(config.get("value"), exc)
+        value, error = render_field(hooks, config.get("value"), _JSON)
+        if error is not None:
+            return error
         if value_size(value) > VALUE_MAX_BYTES:
             return NodeResult(
                 status="failed",
@@ -118,14 +110,11 @@ def execute_variable(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
                 error_message="Variable value exceeds 64 KiB",
             )
     if operation == "compare_and_set":
-        try:
-            expected = _value(hooks, config.get("expected"), _JSON)
-        except TemplateTypeError as exc:
-            return _type_failed(config.get("expected"), exc)
-        except Exception as exc:  # noqa: BLE001
-            return _expr_failed(config.get("expected"), exc)
+        expected, error = render_field(hooks, config.get("expected"), _JSON)
+        if error is not None:
+            return error
     ttl_sec = config.get("ttl_sec") if writes else None
-    if _editor(hooks) is not None and operation != "get":
+    if hooks.editor is not None and operation != "get":
         output = _dry_variable(
             operation=operation,
             name=name,
@@ -190,24 +179,21 @@ def execute_write(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             error_message="Write mapping is incompatible with the current head",
             error_detail={"reasons": reasons},
         )
-    try:
-        source = _value(hooks, config.get("source"), LIST_OF_OBJECTS)
-    except TemplateTypeError as exc:
-        return _type_failed(config.get("source"), exc)
-    except Exception as exc:  # noqa: BLE001
-        return _expr_failed(config.get("source"), exc)
+    source, error = render_field(hooks, config.get("source"), LIST_OF_OBJECTS)
+    if error is not None:
+        return error
     mode = config["mode"]
     projected, error = _project(source, config.get("mapping") or [])
     if error is not None:
         return error
     try:
-        dry_run = _editor(hooks) is not None
+        dry_run = hooks.editor is not None
         result = write_rows(
             str(config["entity_id"]),
             mode=mode,
             match_key=config.get("match_key"),
             rows=projected,
-            user=hooks.user,  # type: ignore[attr-defined]
+            user=hooks.user,
             statement_timeout_ms=STATEMENT_TIMEOUT_MS,
             dry_run=dry_run,
         )
@@ -240,18 +226,13 @@ def execute_write(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
         "deleted": result.deleted,
         "unmatched": result.unmatched,
     }
-    if _editor(hooks) is not None:
+    if hooks.editor is not None:
         output["dry_run"] = True
     return _checked(
         "write.entity",
         node,
         NodeResult(status="succeeded", output=output),
     )
-
-
-def _editor(hooks: EngineHooks) -> Any | None:
-    """Editor options on the hooks, or None for a real Channel Run."""
-    return getattr(hooks, "editor", None)
 
 
 def _dry_variable(
@@ -309,12 +290,6 @@ def _dry_applied(operation: str, found: bool, current: Any, expected: Any) -> bo
     return False
 
 
-def _value(hooks: EngineHooks, raw: Any, schema: Mapping[str, Any]) -> Any:
-    if not isinstance(raw, str):
-        raise TemplateTypeError("Template value must be text")
-    return render(raw, hooks.evaluate, schema)  # type: ignore[attr-defined]
-
-
 def _checked(type_id: str, node: Mapping[str, Any], result: NodeResult) -> NodeResult:
     if result.status != "succeeded":
         return result
@@ -336,24 +311,6 @@ def _checked(type_id: str, node: Mapping[str, Any], result: NodeResult) -> NodeR
                 error_message="Output does not match the declared schema",
             )
     return result
-
-
-def _type_failed(raw: Any, exc: Exception) -> NodeResult:
-    return NodeResult(
-        status="failed",
-        error_code="CHANNEL_VALUE_TYPE_MISMATCH",
-        error_message=str(exc),
-        error_detail={"expression": raw},
-    )
-
-
-def _expr_failed(raw: Any, exc: Exception) -> NodeResult:
-    return NodeResult(
-        status="failed",
-        error_code="CHANNEL_NODE_FAILED",
-        error_message=str(exc),
-        error_detail={"expression": raw},
-    )
 
 
 def _project(
@@ -397,7 +354,7 @@ def execute_code(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     if not isinstance(timeout, int) or isinstance(timeout, bool):
         timeout = 30
     try:
-        value = hooks.sandbox.run_code(source, float(timeout))  # type: ignore[attr-defined]
+        value = hooks.run_code(source, float(timeout))
     except CodeError as exc:
         return NodeResult(
             status="failed",
@@ -410,24 +367,21 @@ def execute_code(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
 
 def execute_source_query(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
-    try:
-        statement = _value(hooks, config.get("sql"), {"type": "string"})
-    except TemplateTypeError as exc:
-        return _type_failed(config.get("sql"), exc)
-    except Exception as exc:  # noqa: BLE001
-        return _expr_failed(config.get("sql"), exc)
+    statement, error = render_field(hooks, config.get("sql"), {"type": "string"})
+    if error is not None:
+        return error
     row_cap = config.get("row_cap", 100)
     if not isinstance(row_cap, int) or isinstance(row_cap, bool):
         row_cap = 100
-    editor = _editor(hooks)
+    editor = hooks.editor
     if editor is not None:
         row_cap = min(row_cap, editor.row_limit)
-    user = hooks.user  # type: ignore[attr-defined]
+    user = hooks.user
     audit_detail = {
         key: value
         for key, value in {
-            "channel_id": getattr(hooks, "_channel_id", None),
-            "job_id": getattr(hooks, "job_id", None),
+            "channel_id": hooks.channel_id,
+            "job_id": hooks.run_id,
             "node_id": node.get("id"),
         }.items()
         if value
