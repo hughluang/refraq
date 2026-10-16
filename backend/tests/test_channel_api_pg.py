@@ -754,72 +754,6 @@ def _physical_rows(entity_id: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-def test_write_rows_dry_run_counts_and_leaves_the_table(channel_client: TestClient) -> None:
-    from backend.admin.user_store import get_user_store
-    from backend.channel.channel_run import set_dispatcher
-    from backend.channel.tasks import run_job
-    from backend.entity.errors import EntityRowWriteFailed
-    from backend.entity.rows import write_rows
-
-    previous = set_dispatcher(run_job)
-    try:
-        suffix = uuid.uuid4().hex[:8]
-        table = f"dry_{suffix}"
-        entity_id = _publish_entity(
-            channel_client,
-            table_name=table,
-            name="Dry",
-            attributes=[_string_attr("code", business_key=True), _string_attr("name")],
-        )
-        created = channel_client.post(
-            f"/entities/{table}/create", json={"values": {"code": "A", "name": "Bolt"}}
-        )
-        assert created.status_code == 201, created.text
-        user = get_user_store().get_by_account("root")
-        assert user is not None
-        before = _physical_rows(entity_id)
-
-        def attempt(mode: str, rows: list[dict], **counts: int) -> None:
-            result = write_rows(
-                entity_id,
-                mode=mode,  # type: ignore[arg-type]
-                match_key=None,
-                rows=rows,
-                user=user,
-                statement_timeout_ms=5000,
-                dry_run=True,
-            )
-            assert result.inserted == counts.get("inserted", 0)
-            assert result.updated == counts.get("updated", 0)
-            assert result.unchanged == counts.get("unchanged", 0)
-            assert result.deleted == counts.get("deleted", 0)
-            assert result.unmatched == counts.get("unmatched", 0)
-            assert _physical_rows(entity_id) == before
-
-        attempt("upsert", [{"code": "A", "name": "Bolt"}], unchanged=1)
-        attempt("upsert", [{"code": "A", "name": "Changed"}], updated=1)
-        attempt("upsert", [{"code": "B", "name": "Nut"}], inserted=1)
-        attempt("create", [{"code": "C", "name": "Cog"}], inserted=1)
-        with pytest.raises(EntityRowWriteFailed) as raised:
-            write_rows(
-                entity_id,
-                mode="create",
-                match_key=None,
-                rows=[{"code": "A", "name": "Bolt"}],
-                user=user,
-                statement_timeout_ms=5000,
-                dry_run=True,
-            )
-        assert raised.value.reason == "key_exists"
-        assert _physical_rows(entity_id) == before
-        attempt("update", [{"code": "A", "name": "Changed"}], updated=1)
-        attempt("update", [{"code": "M", "name": "Missing"}], unmatched=1)
-        attempt("delete", [{"code": "A"}], deleted=1)
-        attempt("delete", [{"code": "M"}], unmatched=1)
-    finally:
-        set_dispatcher(previous)
-
-
 def test_run_record_preview_and_retention(channel_client: TestClient) -> None:
     from datetime import timedelta
 
@@ -926,19 +860,32 @@ def test_run_record_preview_and_retention(channel_client: TestClient) -> None:
         assert jobs.get(job_id) is not None
 
 
-def _editor(client: TestClient, channel_id: str, graph: dict, **body) -> object:
-    payload = {
-        "graph": graph,
-        "stop_at_node_id": body.pop("stop_at_node_id"),
-        "pinned": body.pop("pinned", []),
-    }
-    if "row_limit" in body:
-        payload["row_limit"] = body.pop("row_limit")
-    payload.update(body)
-    return client.post(f"/channels/{channel_id}/editor/execute", json=payload)
+def _test_run(client: TestClient, channel_id: str, graph: dict, **body) -> object:
+    stop_at_node_id = body.pop("stop_at_node_id")
+    pinned = body.pop("pinned", [])
+    draft = client.get(f"/channels/{channel_id}/draft").json()
+    saved = client.put(
+        f"/channels/{channel_id}/draft",
+        json={"base_revision": draft["draft_revision"], "graph": graph},
+    )
+    if saved.status_code != 200:
+        return saved
+    started = client.post(
+        f"/channels/{channel_id}/runs",
+        json={
+            "target": "draft",
+            "stop_at_node_id": stop_at_node_id,
+            "pinned": pinned,
+            **body,
+        },
+    )
+    if started.status_code != 202:
+        return started
+    job_id = started.json()["run"]["job_id"]
+    return client.get(f"/channels/{channel_id}/runs/{job_id}")
 
 
-def test_editor_execute_does_not_write(channel_client: TestClient) -> None:
+def test_test_run_is_a_recorded_run_and_writes(channel_client: TestClient) -> None:
     from backend.channel.channel_run import set_dispatcher
     from backend.channel.tasks import run_job
     from backend.core.time import utc_now
@@ -1009,23 +956,23 @@ def test_editor_execute_does_not_write(channel_client: TestClient) -> None:
             ],
             "settings": settings,
         }
-        response = _editor(channel_client, channel_id, graph, stop_at_node_id="nd_write")
+        response = _test_run(channel_client, channel_id, graph, stop_at_node_id="nd_write")
         assert response.status_code == 200, response.text
         body = response.json()
-        assert body["status"] == "succeeded", body
-        assert body["stopped_node_id"] is None
+        assert body["run"]["status"] == "succeeded", body
+        assert body["run"]["stopped_node_id"] is None
         by_node = {item["node_id"]: item for item in body["node_executions"]}
         assert set(by_node) == {"nd_trigger", "nd_sql", "nd_write"}
-        assert by_node["nd_write"]["output"]["dry_run"] is True
-        assert by_node["nd_write"]["output"]["updated"] == 1
-        assert by_node["nd_write"]["output"]["inserted"] == 1
+        assert "dry_run" not in by_node["nd_write"]["output_preview"]
+        assert by_node["nd_write"]["output_preview"]["updated"] == 1
+        assert by_node["nd_write"]["output_preview"]["inserted"] == 1
         assert by_node["nd_sql"]["started_at"].endswith("Z")
         queried = channel_client.post(f"/entities/{table}/query", json={})
         assert queried.status_code == 200, queried.text
         items = queried.json()["items"]
-        assert len(items) == 1
+        assert len(items) == 2
         assert items[0]["code"] == "A"
-        assert items[0]["name"] == "Bolt"
+        assert items[0]["name"] == "Changed"
 
         limited = {
             "nodes": [
@@ -1056,21 +1003,20 @@ def test_editor_execute_does_not_write(channel_client: TestClient) -> None:
             ],
             "settings": settings,
         }
-        capped = _editor(
+        capped = _test_run(
             channel_client,
             channel_id,
             limited,
             stop_at_node_id="nd_cut",
-            row_limit=3,
         )
         assert capped.status_code == 200, capped.text
         capped_body = capped.json()
-        assert capped_body["status"] == "succeeded", capped_body
+        assert capped_body["run"]["status"] == "succeeded", capped_body
         capped_nodes = {item["node_id"]: item for item in capped_body["node_executions"]}
-        assert len(capped_nodes["nd_sql"]["output"]["rows"]) == 3
-        assert capped_nodes["nd_sql"]["truncated"] is False
-        assert capped_nodes["nd_cut"]["output"]["n"] == [1, 2, 3]
-        assert capped_nodes["nd_cut"]["truncated"] is True
+        assert len(capped_nodes["nd_sql"]["output_preview"]["rows"]) == 20
+        assert capped_nodes["nd_sql"]["output_truncated"] is False
+        assert capped_nodes["nd_cut"]["output_preview"]["n"] == [1, 2, 3, 4, 5]
+        assert capped_nodes["nd_cut"]["output_truncated"] is False
 
         pinned_graph = {
             "nodes": [
@@ -1107,7 +1053,7 @@ def test_editor_execute_does_not_write(channel_client: TestClient) -> None:
             ],
             "settings": settings,
         }
-        pinned = _editor(
+        pinned = _test_run(
             channel_client,
             channel_id,
             pinned_graph,
@@ -1116,11 +1062,11 @@ def test_editor_execute_does_not_write(channel_client: TestClient) -> None:
         )
         assert pinned.status_code == 200, pinned.text
         pinned_body = pinned.json()
-        assert pinned_body["status"] == "succeeded", pinned_body
+        assert pinned_body["run"]["status"] == "succeeded", pinned_body
         pinned_nodes = {item["node_id"]: item for item in pinned_body["node_executions"]}
         assert set(pinned_nodes) == {"nd_trigger", "nd_shape", "nd_copy"}
         assert pinned_nodes["nd_shape"]["status"] == "pinned"
-        assert pinned_nodes["nd_copy"]["output"]["rows"] == [{"code": "Z"}]
+        assert pinned_nodes["nd_copy"]["output_preview"]["rows"] == [{"code": "Z"}]
 
         pinned_for = {
             "nodes": [
@@ -1130,7 +1076,7 @@ def test_editor_execute_does_not_write(channel_client: TestClient) -> None:
             "edges": [_edge("ed_for", "nd_trigger", "nd_for")],
             "settings": settings,
         }
-        refused = _editor(
+        refused = _test_run(
             channel_client,
             channel_id,
             pinned_for,
@@ -1141,13 +1087,15 @@ def test_editor_execute_does_not_write(channel_client: TestClient) -> None:
         assert refused.json()["code"] == "REQUEST_INVALID"
 
         unknown = channel_client.post(
-            f"/channels/{channel_id}/editor/execute",
-            json={"graph": TRIGGER, "stop_at_node_id": "nd_trigger", "extra": True},
+            f"/channels/{channel_id}/runs",
+            json={"target": "draft", "stop_at_node_id": "nd_trigger", "extra": True},
         )
         assert unknown.status_code == 422
         assert unknown.json()["code"] == "REQUEST_INVALID"
 
-        missing = _editor(channel_client, channel_id, TRIGGER, stop_at_node_id="nd_missing")
+        missing = _test_run(
+            channel_client, channel_id, TRIGGER, stop_at_node_id="nd_missing"
+        )
         assert missing.status_code == 422
         assert missing.json()["code"] == "CHANNEL_GRAPH_INVALID"
         assert missing.json()["problems"] == []
@@ -1187,21 +1135,19 @@ def test_editor_execute_does_not_write(channel_client: TestClient) -> None:
             "edges": [_edge("ed_sql", "nd_trigger", "nd_sql")],
             "settings": settings,
         }
-        blocked = _editor(
+        blocked = _test_run(
             channel_client, channel_id, source_graph, stop_at_node_id="nd_sql"
         )
         assert blocked.status_code == 200, blocked.text
         blocked_body = blocked.json()
-        assert blocked_body["status"] == "failed"
-        assert blocked_body["error_message"] == "Editor execution only runs read-only SQL on a Source"
+        assert blocked_body["run"]["status"] == "failed"
         sql_node = next(
             item for item in blocked_body["node_executions"] if item["node_id"] == "nd_sql"
         )
         assert sql_node["status"] == "failed"
-        assert sql_node["error_message"] == "Editor execution only runs read-only SQL on a Source"
 
         listed = channel_client.get(f"/channels/{channel_id}/runs")
         assert listed.status_code == 200, listed.text
-        assert listed.json()["total"] == 0
+        assert listed.json()["total"] > 0
     finally:
         set_dispatcher(previous)

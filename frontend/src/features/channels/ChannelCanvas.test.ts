@@ -16,10 +16,18 @@ import { Instant } from "@/lib/instant";
 import { ApiError } from "@/lib/api";
 
 const sessionPermissions = vi.hoisted(() => ({ current: [] as string[] }));
-const executeEditor = vi.hoisted(() => vi.fn());
+const startRun = vi.hoisted(() => vi.fn());
+const getRun = vi.hoisted(() => vi.fn());
+const cancelJob = vi.hoisted(() => vi.fn());
 
 vi.mock("@/features/channels/api", () => ({
-  executeEditor,
+  startRun,
+  getRun,
+  getExecutionOutput: vi.fn(),
+}));
+
+vi.mock("@/features/jobs/api", () => ({
+  cancelJob,
 }));
 
 const LABELS: Record<string, string> = {
@@ -39,26 +47,18 @@ const LABELS: Record<string, string> = {
   "channels.editor.testNode": "Test up to here: {{node}}",
   "channels.editor.testing": "Testing…",
   "channels.editor.hint":
-    "Runs the graph on screen up to this node. The draft is not saved and nothing is written.",
-  "channels.editor.region": "Editor test",
-  "channels.editor.idle": "Test up to here to see this node's output. Nothing is written.",
+    "Saves the current draft, then runs it up to this node. This is a real run.",
+  "channels.editor.region": "Editor test run",
+  "channels.editor.idle": "Test up to here to save and run the current draft.",
   "channels.editor.notReached": "This node was not reached.",
-  "channels.editor.truncated": "The output was cut at the row limit.",
   "channels.editor.pin": "Pin output",
   "channels.editor.unpin": "Unpin output",
   "channels.editor.pinned": "Pinned",
-  "channels.editor.dryRun": "Nothing was written.",
   "channels.editor.failed": "The test did not finish",
-  "channels.editor.rowLimit": "Row limit",
-  "channels.editor.rowLimitHint": "SQL, live queries, and For loops stop after this many rows (1–1000).",
-  "channels.editor.counts.inserted": "Would insert {{count}}",
-  "channels.editor.counts.updated": "Would update {{count}}",
-  "channels.editor.counts.unchanged": "Would leave {{count}} unchanged",
-  "channels.editor.counts.deleted": "Would delete {{count}}",
-  "channels.editor.counts.unmatched": "Would leave {{count}} unmatched",
-  "channels.editor.counts.applied": "Would apply: {{applied}}",
-  "channels.editor.applied.true": "yes",
-  "channels.editor.applied.false": "no",
+  "channels.editor.cancelFailed": "Cancel failed",
+  "channels.run.showFullOutput": "Show full output",
+  "channels.run.outputFailed": "Output failed",
+  "common.cancel": "Cancel",
   "channels.editor.status.succeeded": "Succeeded",
   "channels.editor.status.failed": "Failed",
   "channels.editor.status.skipped": "Skipped",
@@ -248,6 +248,7 @@ function renderCanvas(
     catalog?: NodeTypeSpec[];
     onChange?: (graph: Graph) => void;
     channelId?: string;
+    onPersistForTest?: (graph: Graph) => Promise<void>;
   } = {},
 ) {
   const appearance = options.appearance ?? "edit";
@@ -267,6 +268,9 @@ function renderCanvas(
           sessionRun: options.sessionRun,
           onRun: options.onRun,
           channelId: options.channelId,
+          onPersistForTest:
+            options.onPersistForTest ??
+            (options.channelId ? vi.fn().mockResolvedValue(undefined) : undefined),
         }),
       );
     const view = render(element(problems));
@@ -935,19 +939,25 @@ function editorResult(
   }[],
 ) {
   return {
-    status: executions.some((item) => item.status === "failed") ? "failed" : "succeeded",
-    error_code: null,
-    error_message: null,
-    failed_node_id: executions.find((item) => item.status === "failed")?.node_id ?? null,
-    stopped_node_id: null,
+    run: {
+      job_id: "job_test",
+      status: executions.some((item) => item.status === "failed") ? "failed" : "succeeded",
+      stop_at_node_id: "nd_1",
+      error_code: null,
+      error_message: null,
+      failed_node_id: executions.find((item) => item.status === "failed")?.node_id ?? null,
+      stopped_node_id: null,
+    },
+    graph: null,
     node_executions: executions.map((item, index) => ({
       seq: item.seq ?? index + 1,
       node_id: item.node_id,
       status: item.status,
       started_at: null,
       finished_at: null,
-      output: item.output ?? null,
-      truncated: item.truncated ?? false,
+      output_bytes: 0,
+      output_preview: item.output ?? null,
+      output_truncated: item.truncated ?? false,
       error_code: item.error_code ?? null,
       error_message: item.error_message ?? null,
       error_detail: null,
@@ -959,28 +969,39 @@ function shownButton(name: string) {
   return screen.findByRole("button", { name });
 }
 
-describe("editor execution", () => {
+describe("editor test runs", () => {
   beforeEach(() => {
     stubDomApis();
     sessionPermissions.current = ["channel:write"];
     sessionStorage.clear();
-    executeEditor.mockReset();
+    startRun.mockReset();
+    getRun.mockReset();
+    cancelJob.mockReset();
+    startRun.mockResolvedValue({ run: { job_id: "job_test", status: "queued" } });
   });
 
   afterEach(() => {
     cleanup();
   });
 
-  it("keeps Test up to here separate from Run up to this node and posts the on-screen graph", async () => {
+  it("saves the on-screen graph before starting and polling a draft run", async () => {
     const onRun = vi.fn();
     const onChange = vi.fn();
-    executeEditor.mockResolvedValue(editorResult([{ node_id: "nd_1", status: "succeeded", output: { ok: true } }]));
-    await renderCanvas([], nodeGraph, { channelId: "chn_1", onRun, onChange });
+    const onPersistForTest = vi.fn().mockResolvedValue(undefined);
+    getRun.mockResolvedValue(
+      editorResult([{ node_id: "nd_1", status: "succeeded", output: { ok: true } }]),
+    );
+    await renderCanvas([], nodeGraph, {
+      channelId: "chn_1",
+      onRun,
+      onChange,
+      onPersistForTest,
+    });
 
     fireEvent.click(await shownButton("Run node"));
     expect(onRun).toHaveBeenCalledTimes(1);
     expect(onRun).toHaveBeenCalledWith("nd_1");
-    expect(executeEditor).not.toHaveBeenCalled();
+    expect(startRun).not.toHaveBeenCalled();
 
     const node = document.querySelector(".react-flow__node");
     if (!(node instanceof HTMLElement)) throw new Error("missing node");
@@ -988,31 +1009,34 @@ describe("editor execution", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
       target: { value: "Renamed" },
     });
-    const editor = screen.getByRole("region", { name: "Editor test" });
-    expect(editor.textContent).toContain("nothing is written");
+    const editor = screen.getByRole("region", { name: "Editor test run" });
+    expect(editor.textContent).toContain("real run");
     expect(within(editor).queryByRole("button", { name: "Run node" })).toBeNull();
     fireEvent.click(within(editor).getByRole("button", { name: "Test up to here" }));
 
-    await waitFor(() => expect(executeEditor).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(startRun).toHaveBeenCalledTimes(1));
     expect(onRun).toHaveBeenCalledTimes(1);
-    expect(executeEditor).toHaveBeenCalledWith(
-      "chn_1",
-      expect.objectContaining({
-        stop_at_node_id: "nd_1",
-        row_limit: 100,
-        pinned: [],
-      }),
+    expect(onPersistForTest).toHaveBeenCalledTimes(1);
+    const savedGraph = onPersistForTest.mock.calls[0]?.[0] as Graph;
+    expect(savedGraph.nodes[0]?.name).toBe("Renamed");
+    expect(onPersistForTest.mock.invocationCallOrder[0]).toBeLessThan(
+      startRun.mock.invocationCallOrder[0] ?? 0,
     );
-    const body = executeEditor.mock.calls[0]?.[1] as { graph: Graph };
-    expect(body.graph.nodes[0]?.name).toBe("Renamed");
+    expect(startRun).toHaveBeenCalledWith("chn_1", {
+      target: "draft",
+      ignore_checkpoints: false,
+      stop_at_node_id: "nd_1",
+      pinned: [],
+    });
+    expect(getRun).toHaveBeenCalledWith("chn_1", "job_test");
     expect(onChange).toHaveBeenCalled();
     await waitFor(() => {
-      expect(screen.getByRole("region", { name: "Editor test" }).textContent).toContain("Succeeded");
-      expect(screen.getByRole("region", { name: "Editor test" }).textContent).toContain('"ok"');
+      expect(screen.getByRole("region", { name: "Editor test run" }).textContent).toContain("Succeeded");
+      expect(screen.getByRole("region", { name: "Editor test run" }).textContent).toContain('"ok"');
     });
   });
 
-  it("colours the canvas and shows dry-run counts without writing", async () => {
+  it("colours the canvas and shows recorded node output", async () => {
     const graph: Graph = {
       ...EMPTY_GRAPH,
       nodes: [
@@ -1029,7 +1053,7 @@ describe("editor execution", () => {
         { id: "e4", source: { node_id: "bad", port: "main" }, target: { node_id: "later", port: "main" } },
       ],
     };
-    executeEditor.mockResolvedValue(
+    getRun.mockResolvedValue(
       editorResult([
         { node_id: "start", status: "succeeded", output: {} },
         { node_id: "read", status: "pinned", output: { rows: [1] } },
@@ -1043,7 +1067,6 @@ describe("editor execution", () => {
             unchanged: 4,
             deleted: 0,
             unmatched: 3,
-            dry_run: true,
           },
         },
         {
@@ -1061,14 +1084,9 @@ describe("editor execution", () => {
     });
 
     fireEvent.click(await shownButton("Test up to here: Write"));
-    const region = await screen.findByRole("region", { name: "Editor test" });
-    await waitFor(() => expect(region.textContent).toContain("Nothing was written."));
-    expect(region.textContent).toContain("Would insert 2");
-    expect(region.textContent).toContain("Would update 1");
-    expect(region.textContent).toContain("Would leave 4 unchanged");
-    expect(region.textContent).toContain("Would delete 0");
-    expect(region.textContent).toContain("Would leave 3 unmatched");
-    expect(region.textContent).toContain("The output was cut at the row limit.");
+    const region = await screen.findByRole("region", { name: "Editor test run" });
+    await waitFor(() => expect(region.textContent).toContain('"inserted": 2'));
+    expect(region.textContent).toContain("Show full output");
 
     const node = (id: string) => document.querySelector(`.react-flow__node[data-id='${id}']`);
     expect(node("start")?.querySelector(".channel-flow-node--succeeded")).not.toBeNull();
@@ -1082,17 +1100,17 @@ describe("editor execution", () => {
     if (!(bad instanceof HTMLElement)) throw new Error("missing bad node");
     fireEvent.click(bad);
     await waitFor(() => {
-      expect(screen.getByRole("region", { name: "Editor test" }).textContent).toContain("bad sql");
+      expect(screen.getByRole("region", { name: "Editor test run" }).textContent).toContain("bad sql");
     });
   });
 
-  it("shows a variable dry run as not stored", async () => {
-    executeEditor.mockResolvedValue(
+  it("shows a variable node's recorded output", async () => {
+    getRun.mockResolvedValue(
       editorResult([
         {
           node_id: "var",
           status: "succeeded",
-          output: { applied: false, dry_run: true },
+          output: { applied: true },
         },
       ]),
     );
@@ -1102,14 +1120,13 @@ describe("editor execution", () => {
     }, { channelId: "chn_1", catalog: [VARIABLE_SPEC] });
 
     fireEvent.click(await shownButton("Test up to here: Flag"));
-    const region = await screen.findByRole("region", { name: "Editor test" });
-    await waitFor(() => expect(region.textContent).toContain("Nothing was written."));
-    expect(region.textContent).toContain("Would apply: no");
+    const region = await screen.findByRole("region", { name: "Editor test run" });
+    await waitFor(() => expect(region.textContent).toContain('"applied": true'));
   });
 
-  it("shows a busy state until the synchronous test returns", async () => {
+  it("shows a busy state until the polled run becomes terminal", async () => {
     let finish: (value: ReturnType<typeof editorResult>) => void = () => {};
-    executeEditor.mockReturnValue(
+    getRun.mockReturnValue(
       new Promise((resolve) => {
         finish = resolve;
       }),
@@ -1119,19 +1136,35 @@ describe("editor execution", () => {
 
     const busy = await screen.findByRole("button", { name: "Testing…" });
     expect((busy as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByRole("region", { name: "Editor test" }).textContent).toContain("Testing…");
+    expect(screen.getByRole("region", { name: "Editor test run" }).textContent).toContain("Testing…");
 
     finish(editorResult([{ node_id: "nd_1", status: "succeeded", output: { ready: true } }]));
     await waitFor(() => {
-      expect(screen.getByRole("region", { name: "Editor test" }).textContent).toContain('"ready"');
+      expect(screen.getByRole("region", { name: "Editor test run" }).textContent).toContain('"ready"');
     });
     expect((screen.getByRole("button", { name: "Test up to here: Start" }) as HTMLButtonElement).disabled).toBe(
       false,
     );
   });
 
+  it("cancels an in-flight test through the Job API", async () => {
+    getRun
+      .mockImplementationOnce(() => new Promise(() => undefined))
+      .mockResolvedValueOnce(editorResult([]));
+    cancelJob.mockResolvedValue({ job: { id: "job_test", status: "cancel_requested" } });
+    await renderCanvas([], nodeGraph, { channelId: "chn_1" });
+
+    fireEvent.click(await shownButton("Test up to here: Start"));
+    const cancel = await screen.findByRole("button", { name: "Cancel" });
+    await waitFor(() => expect((cancel as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(cancel);
+
+    await waitFor(() => expect(cancelJob).toHaveBeenCalledWith("job_test"));
+    expect(getRun).toHaveBeenLastCalledWith("chn_1", "job_test");
+  });
+
   it("sends a pinned output on the next test and marks the node", async () => {
-    executeEditor.mockResolvedValue(
+    getRun.mockResolvedValue(
       editorResult([{ node_id: "nd_1", status: "succeeded", output: { rows: [1], count: 1 } }]),
     );
     await renderCanvas([], nodeGraph, { channelId: "chn_1" });
@@ -1143,15 +1176,15 @@ describe("editor execution", () => {
     expect(node?.textContent).toContain("Pinned");
     expect(screen.getByRole("button", { name: "Unpin output" })).toBeTruthy();
 
-    executeEditor.mockResolvedValue(
+    getRun.mockResolvedValue(
       editorResult([{ node_id: "nd_1", status: "pinned", output: { rows: [1], count: 1 } }]),
     );
     fireEvent.click(screen.getByRole("button", { name: "Test up to here" }));
     await waitFor(() => {
-      expect(executeEditor).toHaveBeenCalledTimes(2);
+      expect(startRun).toHaveBeenCalledTimes(2);
       expect(node?.querySelector(".channel-flow-node--pinned")).not.toBeNull();
     });
-    expect(executeEditor.mock.calls[1]?.[1]).toEqual(
+    expect(startRun.mock.calls[1]?.[1]).toEqual(
       expect.objectContaining({
         pinned: [{ node_id: "nd_1", output: { rows: [1], count: 1 } }],
       }),
@@ -1163,7 +1196,7 @@ describe("editor execution", () => {
       "refraq.channel.editor-pins.chn_1",
       JSON.stringify([{ node_id: "walk", output: { current: 0 } }]),
     );
-    executeEditor.mockResolvedValue(
+    getRun.mockResolvedValue(
       editorResult([{ node_id: "walk", status: "succeeded", output: { current: 1, index: 0, count: 1 } }]),
     );
     await renderCanvas([], {
@@ -1173,15 +1206,15 @@ describe("editor execution", () => {
 
     expect(document.querySelector(".channel-flow-node__pin")).toBeNull();
     fireEvent.click(await shownButton("Test up to here: Walk"));
-    const region = await screen.findByRole("region", { name: "Editor test" });
+    const region = await screen.findByRole("region", { name: "Editor test run" });
     await waitFor(() => expect(region.textContent).toContain('"current"'));
     expect(within(region).queryByRole("button", { name: "Pin output" })).toBeNull();
     expect(within(region).queryByRole("button", { name: "Unpin output" })).toBeNull();
-    expect(executeEditor.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ pinned: [] }));
+    expect(startRun.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ pinned: [] }));
   });
 
   it("shows graph problems and a forbidden detail", async () => {
-    executeEditor.mockRejectedValueOnce(
+    startRun.mockRejectedValueOnce(
       new ApiError(422, "CHANNEL_GRAPH_INVALID", "The graph is not valid", null, {
         problems: [
           {
@@ -1197,13 +1230,13 @@ describe("editor execution", () => {
     await renderCanvas([], nodeGraph, { channelId: "chn_1" });
     fireEvent.click(await shownButton("Test up to here: Start"));
 
-    const region = await screen.findByRole("region", { name: "Editor test" });
+    const region = await screen.findByRole("region", { name: "Editor test run" });
     await waitFor(() => expect(region.textContent).toContain("The graph is not valid"));
     expect(region.textContent).toContain("SQL is empty");
     fireEvent.click(screen.getByRole("button", { name: "1 errors, 0 warnings" }));
     expect(screen.getByRole("button", { name: "SQL is empty (Start)" })).toBeTruthy();
 
-    executeEditor.mockRejectedValueOnce(
+    startRun.mockRejectedValueOnce(
       new ApiError(403, "AUTH_FORBIDDEN", "Missing channel:code_write for Start", null),
     );
     fireEvent.click(screen.getByRole("button", { name: "Test up to here" }));

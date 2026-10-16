@@ -561,7 +561,7 @@ Avoid **Management Audit Event** for data access, or treating it as a database s
 
 ### Data Channel
 
-The product domain of user-orchestrated, versioned data workflows, and one such workflow. A Data Channel is a graph of trigger, read, transform, volume, state, and write nodes joined by edges that order execution. It owns the mapping, transform, and lineage that a **Business Entity** definition does not carry, and one Data Channel may write several **Entity Table**s. Its draft is edited freely. Unattended triggers run only a published **Channel Version**. An on-demand **Channel Run** may execute a frozen draft and still writes Entity Tables. The author orchestrates increments, deletes, concurrency, and error handling with nodes; the platform does not derive them. It guarantees instead that **Checkpoint**s never move backwards, that a run reads up to an upper bound fixed at its start, and that write nodes are safe to re-execute. An `active` switch outside versions decides whether schedules and event triggers fire. A delivery target outside the Entity Table is another write target kind on this domain, not a second write implementation. Rules: `docs/business-data-channel.md`.
+The product domain of user-orchestrated, versioned data workflows, and one such workflow. A Data Channel is a graph of trigger, read, transform, volume, state, and write nodes joined by edges that order execution. It owns the mapping, transform, and lineage that a **Business Entity** definition does not carry, and one Data Channel may write several **Entity Table**s. Its draft is edited freely. Unattended triggers run only a published **Channel Version**. An on-demand **Channel Run** may execute a frozen draft and still writes Entity Tables. The author orchestrates increments, deletes, concurrency, checkpoint policy, and error handling with nodes; the platform does not derive them. Write nodes are safe to re-execute. An `active` switch outside versions decides whether schedules and event triggers fire. A delivery target outside the Entity Table is another write target kind on this domain, not a second write implementation. Rules: `docs/business-data-channel.md`.
 Avoid conflating it with **Job** or **Scheduled Task**, or with structure collection (which reads a **Source** into the catalog). Avoid "one declared target table". Avoid platform-derived dirty keys, grain checks, or fan-out thresholds as Data Channel behaviour. Avoid an execution lock as a platform guarantee. Avoid a general automation engine with network side effects. Avoid an Entity-only name. Avoid reading "channel load" as request load in the load-shedding sense. Avoid treating the **Entity Data API** as a Data Channel, and avoid "Ingestion Job" or "sync task". Avoid treating an edge as a carrier of rows.
 
 ### Channel Version
@@ -571,8 +571,8 @@ Avoid **Entity Version**, a mutable published graph, and an unattended trigger r
 
 ### Channel Run
 
-One run of a **Data Channel**: exactly one **Job** of kind `channel_run`, executed in one worker child process, entered at the trigger node that minted it. An on-demand run may name a stop node and then execute only that node's ancestor closure, including the node. User cancel kills that child process. Minted by an on-demand run (target `draft` or `published`), a synced **Scheduled Task**, a platform event, or change arrival. A `draft` run freezes the draft it was queued from and never advances a **Checkpoint**. Runs of one channel may overlap; there is no execution lock. A run ends `succeeded` (outcome `completed` or `skipped`), `failed`, or `cancelled`; a newer published version cancels runs still executing an older published version and does not cancel a `draft` run. A rerun is a new Job. The run stores the graph it executed, the **Expression Context** it evaluated with, and each node execution's output.
-Avoid Ingestion Job, sync job, a Scheduled Task, in-place retry, and **Kind execution lock** or `JOB_ALREADY_ACTIVE` for this kind. Avoid "execution" for the whole run; one node's step inside a run is a node execution. Avoid a dry run: an on-demand run writes Entity Tables.
+One run of a **Data Channel**: exactly one **Job** of kind `channel_run`, executed in one worker child process, entered at the trigger node that minted it. An on-demand run may name a stop node and then execute only that node's ancestor closure, including the node; it may pin outputs inside that closure. A pinned node is not executed, and its supplied output and `pinned` node execution are persisted. Testing is an on-demand run and follows the same asynchronous, writing, auditable path. User cancel kills the worker child process. Runs may target a frozen draft or the published version and may overlap; there is no execution lock. A run ends `succeeded` (outcome `completed` or `skipped`), `failed`, or `cancelled`; a newer published version cancels runs still executing an older published version and does not cancel a `draft` run. A rerun is a new Job. The run stores the graph it executed, pinned inputs, the **Expression Context** it evaluated with, and each node execution's output.
+Avoid Ingestion Job, sync job, a Scheduled Task, in-place retry, and **Kind execution lock** or `JOB_ALREADY_ACTIVE` for this kind. Avoid "execution" for the whole run; one node's step inside a run is a node execution. Avoid a dry-run interpretation: every unpinned node performs its normal effects.
 
 ### Node Ref
 
@@ -592,7 +592,7 @@ Avoid requiring `{{ }}` around static JSON, and a separate literal mode.
 ### Template Preview
 
 The value one **Template Field** takes against a recorded **Channel Run**: the run's recorded **Expression Context** and the recorded outputs of the upstream nodes the template names, evaluated in the run sandbox and converted to the declared value type as at run time. It executes no node and writes nothing. A named node with no recorded output is reported missing, not failed.
-Avoid a dry run or test run (an on-demand run executes nodes and writes Entity Tables), a sample value computed in the browser, and previewing against a node's refined schema.
+Avoid a dry run, an on-demand test run, a sample value computed in the browser, and previewing against a node's refined schema.
 
 ### Coarse Port Type
 
@@ -606,8 +606,8 @@ Avoid a permission bypass, a human account, and `super_admin` as a stand-in for 
 
 ### Checkpoint
 
-The cursor a **Data Channel** keeps per (channel, Read Changes node, stream) into a **Change Log**. It advances only when a **Channel Run** with target `published` succeeds with outcome `completed`, to the greater of its stored position and the upper bound fixed at run start, so it never moves backwards. A failed, cancelled, or skipped run advances none. A run with target `draft` never advances a cursor. It becomes invalid when the log was cleaned past it or the mirror was resnapshotted.
-Avoid watermark, treating `last_run_at` or `scheduled_for` as a checkpoint, a per-schedule cursor, advancing on partial success, and a platform-derived dirty-key set.
+A durable cursor owned by a concrete **Data Channel** business node that reads an incremental stream. That node's configuration defines when it reads the cursor, fixes an upper bound, advances, and handles invalid state. The Channel Run framework does not derive those effects from `draft` versus `published`, testing intent, a stop node, or pinned outputs.
+Avoid watermark, treating `last_run_at` or `scheduled_for` as a checkpoint, a per-schedule cursor, a framework-wide advancement rule, and a platform-derived dirty-key set.
 
 ### Dataset Reference
 
@@ -626,7 +626,7 @@ Avoid replica, staging table, ODS, snapshot, a per-channel copy, **Catalog Objec
 
 ### Change Log
 
-An append-only record of row changes to one **Source Mirror** or one **Business Entity**, written in the same transaction as the row write, with before and after values and a sequence number; entity entries also carry the write origin. Mirror entries are written only when values changed. Cleaned once every published Read Changes node has consumed an entry, bounded by a maximum-retention **System Parameter**.
+An append-only record of row changes to one **Source Mirror** or one **Business Entity**, written in the same transaction as the row write, with before and after values and a sequence number; entity entries also carry the write origin. Mirror entries are written only when values changed. Cleanup follows the retention contract of checkpoint-owning business nodes and is bounded by a maximum-retention **System Parameter**.
 Avoid **Structure Diff**, **Semantics Change**, **Join Change**, **Management Audit Event**, the Entity Access Log, a Kafka topic, and the source database's own CDC log.
 
 ## Auth Concepts

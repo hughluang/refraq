@@ -2,9 +2,9 @@
 
 ## 1. Purpose
 
-This document defines the HTTP contract for **Data Channel** definitions and runs: the node type catalog, channel create, read, edit, and delete, draft save, validate, publish with its confirmation list, **Channel Version** reads, the activation switch, on-demand runs, the run list, and node-execution reads. Paths address a channel by opaque `id`.
+This document defines the HTTP contract for **Data Channel** definitions and runs: the node type catalog, channel create, read, edit, and delete, draft save, validate, publish with its confirmation list, **Channel Version** reads, the activation switch, on-demand runs with optional pinned outputs, the run list, and node-execution reads. Paths address a channel by opaque `id`.
 
-Editor execution (execute up to a node, pinned data, write dry run), **Source Mirror**s, and the **Notification Channel** are not defined here. Global Variable HTTP is `docs/api-contracts-global-variables.md`.
+**Source Mirror**s and the **Notification Channel** are not defined here. Global Variable HTTP is `docs/api-contracts-global-variables.md`.
 
 Related boundaries:
 
@@ -405,10 +405,10 @@ A `channel_run` Job follows the platform Job lifecycle (`docs/business-jobs.md`)
 ### 4.2 Input
 
 ```json
-{ "channel_id": "chn_01HZX", "target": "published", "ignore_checkpoints": false, "stop_at_node_id": null }
+{ "channel_id": "chn_01HZX", "target": "published", "ignore_checkpoints": false, "stop_at_node_id": null, "pinned": [] }
 ```
 
-The input carries no version. A `published` run resolves the current published version at start. A `draft` run executes the snapshot stored on the run record. `stop_at_node_id` is optional. When set, the run enters the graph's only trigger and executes that node's ancestor closure, including the node. Unattended runs set `target` to `published`, omit `stop_at_node_id`, and omit a user-chosen trigger when the schedule names the node.
+The input carries no version. A `published` run resolves the current published version at start. A `draft` run executes the snapshot stored on the run record. `stop_at_node_id` is optional. When set, the run enters the graph's only trigger and executes that node's ancestor closure, including the node. `pinned` is present only for an on-demand run. Unattended runs set `target` to `published`, omit `stop_at_node_id` and `pinned`, and omit a user-chosen trigger when the schedule names the node.
 
 ### 4.3 Result
 
@@ -444,7 +444,6 @@ On `succeeded` only:
 | `GET` | `/channels/{id}/runs/{job_id}` | `channel:read` | Read one run with its graph and node executions |
 | `GET` | `/channels/{id}/runs/{job_id}/executions/{seq}/output` | `channel:read` | Page one node execution's output |
 | `POST` | `/channels/{id}/runs/{job_id}/template-preview` | `channel:write` | Evaluate one template field against a run record |
-| `POST` | `/channels/{id}/editor/execute` | `channel:write` | Execute the graph on screen up to a node, without writing |
 
 ### 5.1 `GET /channel-node-types`
 
@@ -542,13 +541,23 @@ Empty body. `200` `{ "channel": { … } }`. Idempotent: activating an active cha
 ### 5.11 `POST /channels/{id}/runs`
 
 ```json
-{ "target": "draft", "ignore_checkpoints": false, "stop_at_node_id": "nd_write" }
+{
+  "target": "draft",
+  "ignore_checkpoints": false,
+  "stop_at_node_id": "nd_write",
+  "pinned": [
+    { "node_id": "nd_read", "output": { "rows": [{ "code": "S-01" }], "count": 1 } }
+  ]
+}
 ```
 
 - `target` is `draft` or `published`. `draft` freezes the current draft, which must validate; `published` requires a published version.
-- `stop_at_node_id` is optional. Omit it, or send `null`, to execute every node reachable from the trigger. When set, the draft must be valid for that node's ancestor closure, including the node. Errors on nodes outside the closure do not refuse the start. A refusal carries `problems` as in the publish rule of §5.8, limited to errors inside the closure and errors that belong to no node; `detail` is the first of them. A missing stop node refuses with an empty `problems`. A stop node that is missing or not reachable from the trigger is `422 CHANNEL_GRAPH_INVALID`.
+- `stop_at_node_id` is optional. Omit it, or send `null`, to execute every node reachable from the trigger. When set, the selected draft snapshot or published graph must be valid for that node's ancestor closure, including the node. Errors on nodes outside the closure do not refuse the start. A refusal carries `problems` as in the publish rule of §5.8, limited to errors inside the closure and errors that belong to no node; `detail` is the first of them. A missing stop node refuses with an empty `problems`. A stop node that is missing or not reachable from the trigger is `422 CHANNEL_GRAPH_INVALID`.
+- `pinned` defaults to `[]`. Each item is `{ "node_id", "output" }`. A pinned node is not executed; its node execution has status `pinned` and stores the supplied output. Pins must have unique node ids, must name nodes inside the selected stop closure, and must not name `volume.for`. A duplicate, missing, out-of-closure, or unpinnable node is `422 REQUEST_INVALID`.
+- Pinned outputs are allowed for both `draft` and `published` on-demand runs. Unattended runs never carry them.
 - The run enters the graph's only trigger node.
-- `ignore_checkpoints` defaults to `false`. A `draft` run never advances checkpoints even when this is `false`.
+- `ignore_checkpoints` defaults to `false`. Checkpoint-aware node types define how this override affects their configured read and advance policy.
+- The framework does not provide a dry-run mode or an execution row limit. Every unpinned node performs its normal effects.
 - Allowed while the channel is inactive.
 - `202` `{ "run": { … } }` (§3.6). `trigger_kind` is `user` and `trigger_ref` is the acting User. The body is the Channel Run as stored when the handler returns, the same read as a following GET. `status` is `queued` and `outcome` is null when the worker has not finished. When the worker has already finished inside the request, `status`, `outcome`, and `failed_node_id` match that GET and §3.6.
 - Target `published` with no published version is `409 CHANNEL_NOT_PUBLISHED`. A graph that does not have exactly one trigger is `422 CHANNEL_TRIGGER_INVALID`. An invalid draft is `422 CHANNEL_GRAPH_INVALID`.
@@ -574,6 +583,7 @@ Query: `status` (optional Job status), `target` (`draft` | `published` | omitted
       "finished_at": "2026-10-09T08:00:02Z",
       "output_bytes": 1204,
       "output_preview": { "rows": [], "count": 0 },
+      "output_truncated": false,
       "error_code": null,
       "error_message": null,
       "error_detail": null
@@ -582,7 +592,7 @@ Query: `status` (optional Job status), `target` (`draft` | `published` | omitted
 }
 ```
 
-`graph` is the snapshot the run executes, or `null` before a `published` run has resolved a version. `output_preview` is the output with each list cut to its first 100 elements. Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`.
+`graph` is the snapshot the run executes, or `null` before a `published` run has resolved a version. Node execution status `pinned` means the run used the supplied output without executing the node. `output_preview` is the output with each list cut to its first 100 elements. `output_truncated` is true when any list in that preview was cut; it is a presentation fact and does not mean execution was row-limited. Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`.
 
 ### 5.14 `GET /channels/{id}/runs/{job_id}/executions/{seq}/output`
 
@@ -603,7 +613,7 @@ When the value at `path` is a list, `200` is an **Offset Page** of its elements.
 Evaluates the **Template Field** at `path` in node `node_id` of `graph` against run `job_id` of this channel (**Template Preview**, `docs/business-data-channel.md` §4.1). `graph` is the same shape as a draft save (§3.2), usually the graph on screen; the run may have executed an earlier graph. `path` is the configuration path, as in a problem entry (§3.4). The request executes no node and writes nothing. It does not record an audit event.
 
 - Template validation (§5.7) applies to that field of `graph`. A field with a validation error is `failed` with that problem's `code`, and its `detail` as `message`.
-- Each upstream node the template names by `ref` or name in `graph` reads the output of its latest `succeeded` or `skipped` execution in the run, matched by node id. `self.channel`, `self.run`, and `self.platform` are the values the run recorded at start.
+- Each upstream node the template names by `ref` or name in `graph` reads the output of its latest `succeeded`, `skipped`, or `pinned` execution in the run, matched by node id. `self.channel`, `self.run`, and `self.platform` are the values the run recorded at start.
 - Evaluation uses the run sandbox and the run's conversion to the declared value type. An expression failure is `failed` with `CHANNEL_NODE_FAILED`. A result that does not match the declared value type is `failed` with `CHANNEL_VALUE_TYPE_MISMATCH`. A sandbox that cannot start is `failed` with `CHANNEL_SANDBOX_FAILED`. `message` is the error the node would record.
 
 `200` is one of:
@@ -625,65 +635,6 @@ Evaluates the **Template Field** at `path` in node `node_id` of `graph` against 
 - `failed` and `missing` are `200` result documents, not Problem Details failures.
 - `node_id` and `path` that do not name a template field of `graph` are `422 REQUEST_INVALID`. A `graph` that fails the save shape is `422`. Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`.
 
-### 5.16 `POST /channels/{id}/editor/execute`
-
-Editor execution. It is not an on-demand run (§5.11). It does not create a Job, a run record, a checkpoint, or an audit event, and it does not write.
-
-```json
-{
-  "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "error_channel_id": null } },
-  "stop_at_node_id": "nd_write",
-  "row_limit": 100,
-  "pinned": [{ "node_id": "nd_read", "output": { "rows": [] } }]
-}
-```
-
-- `graph` is the draft save shape (§5.6). The stored draft is not written. `self.channel` still comes from the stored channel.
-- Guarded node types follow the draft save rule (§5.6): compared with the stored draft, an added or changed node whose type declares a `permission` requires that Permission. Missing it is `403 AUTH_FORBIDDEN`; `detail` names the node.
-- `stop_at_node_id` is required. The closure rule is the on-demand stop-node rule of §5.11: errors inside that node's ancestor closure, and errors that name no node, refuse the request with `422 CHANNEL_GRAPH_INVALID` and `problems`. A missing stop node refuses with an empty `problems`. A stop node that is not reachable from the trigger is the same refusal.
-- `row_limit` defaults to 100 and is an integer from 1 to 1000.
-- `pinned` defaults to `[]`. Each item is `{ "node_id", "output" }`. `node_id` must name a node in `graph`. A duplicate `node_id`, a missing node, or a `volume.for` node is `422 REQUEST_INVALID`.
-- Unknown fields are `422 REQUEST_INVALID`. A graph that fails the save shape is `422`. A missing channel is `404 CHANNEL_NOT_FOUND`. A graph that does not have exactly one trigger is `422 CHANNEL_TRIGGER_INVALID`.
-- The call is synchronous, in the API process, with a fresh expression sandbox and a 120 second wall limit. The graph setting `run_timeout_sec` is not the limit. When the wall limit elapses the response is `200` with `status` `failed` and `error_code` `CHANNEL_RUN_TIMEOUT`.
-- `self.run` uses a synthetic id prefixed `edx_`, `target` `draft`, the stored `draft_revision`, `trigger_kind` `user`, and `triggered_by` the caller. `self.platform` is the usual platform context.
-- A pinned node is not executed. Its `status` is `pinned` and its `output` is the pinned value. For `transform.if`, the live port is `true` when `bool(output["value"])` is true and `false` otherwise. A pinned If whose output is not an object with `value` fails that node with `CHANNEL_NODE_FAILED` and message `Pinned If output has no value`. Any other pinned node makes every outgoing port other than `error` live.
-- `read.sql` and `read.source_query` return at most `row_limit` rows. `volume.for` iterates at most `row_limit` times. A list inside any returned output is then cut to its first `row_limit` elements. `truncated` is true when any list in that output was cut.
-- Nothing is written:
-  - `read.sql` on the entity database runs in a transaction that is always rolled back.
-  - `read.sql` on a registered Source must be one read-only statement under the Controlled Query guard. Otherwise the node fails with `CHANNEL_NODE_FAILED` and message `Editor execution only runs read-only SQL on a Source`, and the statement is not sent to the driver.
-  - `write.entity` runs the same statements as a real write inside one transaction, returns the exact `inserted`, `updated`, `unchanged`, `deleted`, and `unmatched` counts, adds `"dry_run": true`, and rolls the transaction back. A failure, such as `create` on an existing key, fails the node as it would in a real run.
-  - `state.variable` writes are not stored. `applied` is computed from the current value: `set` is true; `set_if_absent` is true when the value is absent; `compare_and_set` is true when the current value equals `expected`; `delete` is true when the value is present. The output adds `"dry_run": true`. `get` is a real read and does not add `dry_run`.
-  - A Code node runs as usual. It cannot write.
-- A sandbox that cannot start is `200` with `status` `failed`, `error_code` `CHANNEL_SANDBOX_FAILED`, and the node executions collected before it failed.
-
-`200`:
-
-```json
-{
-  "status": "succeeded",
-  "error_code": null,
-  "error_message": null,
-  "failed_node_id": null,
-  "stopped_node_id": null,
-  "node_executions": [
-    {
-      "seq": 1,
-      "node_id": "nd_read",
-      "status": "succeeded",
-      "started_at": "2026-10-15T08:00:01Z",
-      "finished_at": "2026-10-15T08:00:02Z",
-      "output": { "rows": [], "count": 0, "rowcount": 0 },
-      "truncated": false,
-      "error_code": null,
-      "error_message": null,
-      "error_detail": null
-    }
-  ]
-}
-```
-
-`status` is `succeeded`, `failed`, or `cancelled`. `stopped_node_id` names the node a wall-limit or cancellation stopped before. It is null when the closure finishes. The request's `stop_at_node_id` is not copied into this field; nodes outside that closure are absent from `node_executions`. Instants are UTC with a `Z` suffix.
-
 ## 6. Errors
 
 ### 6.1 HTTP Problem Codes
@@ -693,11 +644,11 @@ Editor execution. It is not an on-demand run (§5.11). It does not create a Job,
 | `CHANNEL_NOT_FOUND` | 404 | No Data Channel for this id |
 | `CHANNEL_VERSION_NOT_FOUND` | 404 | No version with this number on the channel |
 | `CHANNEL_DRAFT_CONFLICT` | 409 | `base_revision` or `draft_revision` is not the stored draft revision |
-| `CHANNEL_GRAPH_INVALID` | 422 | Publish, an on-demand run, or editor execution whose scope has a validation error; the body carries `problems` |
+| `CHANNEL_GRAPH_INVALID` | 422 | Publish or an on-demand run whose scope has a validation error; the body carries `problems` |
 | `CHANNEL_NOT_PUBLISHED` | 409 | On-demand run with target `published` of a channel with no published version |
 | `CHANNEL_TRIGGER_INVALID` | 422 | The graph does not have exactly one trigger node |
 | `CHANNEL_RUN_NOT_FOUND` | 404 | No run with this Job id on the channel |
-| `REQUEST_INVALID` | 422 | Unknown fields, malformed identifiers, out-of-range fields, a Template Preview `node_id` and `path` that name no template field, or an editor pin that is duplicated, missing from the graph, or a For node |
+| `REQUEST_INVALID` | 422 | Unknown fields, malformed identifiers, out-of-range fields, a Template Preview `node_id` and `path` that name no template field, or an on-demand pin that is duplicated, missing from the graph, outside the run closure, or unpinnable |
 
 ### 6.2 Validation Problem Codes
 

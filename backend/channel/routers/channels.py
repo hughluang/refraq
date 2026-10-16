@@ -32,8 +32,6 @@ from backend.channel.schemas.channels import (
     ProblemOut,
     PublishRequest,
     PublishResponse,
-    EditorExecuteRequest,
-    EditorExecuteResponse,
     ValidateRequest,
     ValidateResponse,
     VersionListResponse,
@@ -42,7 +40,6 @@ from backend.channel.schemas.channels import (
     VersionSummaryOut,
 )
 from backend.channel.context import context_schema
-from backend.channel.editor import execute_editor
 from backend.channel.graph import refine_ports
 from backend.channel.references import ChannelReferenceResolver
 from backend.channel.service import (
@@ -299,28 +296,6 @@ def http_put_draft(
         permissions=resolve_user_permissions(user, roles),
     )
     return _draft_out(saved)
-
-
-@router.post(
-    "/channels/{channel_id}/editor/execute",
-    response_model=EditorExecuteResponse,
-)
-def http_editor_execute(
-    channel_id: str,
-    body: EditorExecuteRequest,
-    user: UserRecord = Depends(require_permission("channel:write")),
-    roles: RoleStore = Depends(get_role_store),
-) -> EditorExecuteResponse:
-    result = execute_editor(
-        channel_id=channel_id,
-        graph=body.graph.model_dump(mode="json"),
-        stop_at_node_id=body.stop_at_node_id,
-        row_limit=body.row_limit,
-        pinned=[item.model_dump(mode="json") for item in body.pinned],
-        actor=user,
-        permissions=resolve_user_permissions(user, roles),
-    )
-    return EditorExecuteResponse.model_validate(result)
 
 
 @router.post("/channels/{channel_id}/draft/validate", response_model=ValidateResponse)

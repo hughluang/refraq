@@ -1,40 +1,27 @@
 "use client";
 
-import { Code, Stack, Text } from "@mantine/core";
+import { Stack, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 
 import { NodeRegion } from "@/features/channels/NodeRegion";
-import { RunErrorText } from "@/features/channels/RunErrorText";
+import { RunExecutionOutput } from "@/features/channels/RunExecutionOutput";
 import {
   ancestorIds,
   executionScope,
   isTerminalRun,
 } from "@/features/channels/runSession";
-import type { ChannelRunDetail, GraphNode, NodeExecution } from "@/features/channels/types";
+import type { ChannelRunDetail, GraphNode } from "@/features/channels/types";
 
 type NodeInfo = Pick<GraphNode, "id" | "name" | "ref">;
 
-function previewText(value: unknown): string {
-  return JSON.stringify(value, null, 2);
-}
-
-function ExecutionOutput({ item }: { item: NodeExecution }) {
-  if (item.status === "failed" || item.error_message) {
-    return (
-      <Text size="xs" c="red">
-        <RunErrorText code={item.error_code} message={item.error_message} />
-      </Text>
-    );
-  }
-  return <Code block>{previewText(item.output_preview)}</Code>;
-}
-
 export function UpstreamRegion({
+  channelId,
   nodeId,
   nodes,
   hasUpstream,
   detail,
 }: {
+  channelId: string;
   nodeId: string;
   nodes: readonly NodeInfo[];
   /** Whether the node has an incoming edge on the canvas, independent of any run. */
@@ -71,7 +58,11 @@ export function UpstreamRegion({
                     {`self.${node.ref}.output`}
                   </Text>
                 ) : null}
-                <ExecutionOutput item={item} />
+                <RunExecutionOutput
+                  channelId={channelId}
+                  jobId={detail.run.job_id}
+                  item={item}
+                />
               </Stack>
             );
           })}
@@ -92,9 +83,11 @@ export function UpstreamRegion({
 }
 
 export function ResultRegion({
+  channelId,
   nodeId,
   detail,
 }: {
+  channelId: string;
   nodeId: string;
   detail: ChannelRunDetail | null;
 }) {
@@ -119,7 +112,13 @@ export function ResultRegion({
     } else if (mine.length === 1 && mine[0]?.status === "running") {
       body = t("channels.run.running");
     } else if (mine.length === 1 && mine[0]) {
-      body = <ExecutionOutput item={mine[0]} />;
+      body = (
+        <RunExecutionOutput
+          channelId={channelId}
+          jobId={detail.run.job_id}
+          item={mine[0]}
+        />
+      );
     } else {
       body = (
         <Stack gap="sm">
@@ -136,7 +135,11 @@ export function ResultRegion({
                   {t("channels.run.running")}
                 </Text>
               ) : (
-                <ExecutionOutput item={item} />
+                <RunExecutionOutput
+                  channelId={channelId}
+                  jobId={detail.run.job_id}
+                  item={item}
+                />
               )}
             </Stack>
           ))}

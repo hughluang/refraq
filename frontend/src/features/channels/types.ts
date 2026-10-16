@@ -80,6 +80,7 @@ export type NodeExecution = {
   finished_at: Instant | null;
   output_bytes: number;
   output_preview: unknown;
+  output_truncated: boolean;
   error_code: string | null;
   error_message: string | null;
   error_detail: Record<string, unknown> | null;
@@ -91,28 +92,9 @@ export type ChannelRunDetail = {
   node_executions: NodeExecution[];
 };
 
-/** One node in a synchronous editor execution. Absent nodes were not reached. */
-export type EditorNodeExecution = {
-  seq: number;
-  node_id: string;
-  status: string;
-  started_at: Instant | null;
-  finished_at: Instant | null;
-  output: unknown;
-  truncated: boolean;
-  error_code: string | null;
-  error_message: string | null;
-  error_detail: Record<string, unknown> | null;
-};
-
-export type EditorExecution = {
-  status: string;
-  error_code: string | null;
-  error_message: string | null;
-  failed_node_id: string | null;
-  stopped_node_id: string | null;
-  node_executions: EditorNodeExecution[];
-};
+export type ExecutionOutputPage =
+  | { value: unknown }
+  | { items: unknown[]; total: number; limit: number; offset: number };
 
 /** One template field evaluated against a recorded run. */
 export type TemplatePreviewResult =

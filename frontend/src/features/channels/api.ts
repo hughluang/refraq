@@ -9,7 +9,7 @@ import type {
   ChannelRunDetail,
   ChannelVersion,
   Confirmation,
-  EditorExecution,
+  ExecutionOutputPage,
   ExpressionContext,
   Graph,
   GraphProblem,
@@ -17,9 +17,6 @@ import type {
   RefinedPort,
   TemplatePreviewResult,
 } from "@/features/channels/types";
-
-/** Server wall is 120s and still answers 200. Wait long enough to receive that. */
-const EDITOR_EXECUTE_TIMEOUT_MS = 130_000;
 
 function querySuffix(
   params?: Record<string, string | number | boolean | undefined>,
@@ -134,29 +131,13 @@ export function publishChannel(id: string, draftRevision: number) {
   );
 }
 
-export function executeEditor(
-  id: string,
-  body: {
-    graph: Graph;
-    stop_at_node_id: string;
-    row_limit: number;
-    pinned: readonly EditorPin[];
-  },
-) {
-  return apiClient<EditorExecution>(`/channels/${id}/editor/execute`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    timeoutMs: EDITOR_EXECUTE_TIMEOUT_MS,
-  });
-}
-
 export function startRun(
   id: string,
   body: {
     target: "draft" | "published";
     ignore_checkpoints?: boolean;
     stop_at_node_id?: string | null;
+    pinned?: readonly EditorPin[];
   },
 ) {
   return apiClient<{ run: ChannelRun }>(`/channels/${id}/runs`, {
@@ -175,6 +156,17 @@ export function listRuns(
 
 export function getRun(id: string, jobId: string) {
   return apiClient<ChannelRunDetail>(`/channels/${id}/runs/${jobId}`);
+}
+
+export function getExecutionOutput(
+  id: string,
+  jobId: string,
+  seq: number,
+  params?: { path?: string; limit?: number; offset?: number },
+) {
+  return apiClient<ExecutionOutputPage>(
+    `/channels/${id}/runs/${jobId}/executions/${seq}/output${querySuffix(params)}`,
+  );
 }
 
 export function previewTemplate(

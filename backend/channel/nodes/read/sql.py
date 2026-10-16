@@ -14,7 +14,7 @@ from backend.channel.nodes.spec import (
     Problem,
     ReferenceResolver,
 )
-from backend.channel.sql_read import ITEM_LIMIT, SqlReadError, run_channel_sql
+from backend.channel.sql_read import SqlReadError, run_channel_sql
 from backend.channel.values import LIST_OF_OBJECTS
 
 __all__ = ["NODE_TYPE"]
@@ -45,16 +45,11 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     statement, error = render_field(hooks, config.get("sql"), {"type": "string"})
     if error is not None:
         return error
-    editor = hooks.editor
     try:
         output = run_channel_sql(
             str(statement),
             source=config["source"],
             statement_timeout_sec=config.get("statement_timeout_sec", 30),
-            max_rows=editor.row_limit if editor is not None else ITEM_LIMIT,
-            rollback=editor is not None,
-            strict_limit=editor is None,
-            editor=editor is not None,
         )
     except SqlReadError as exc:
         return NodeResult(status="failed", error_code=exc.code, error_message=exc.message)

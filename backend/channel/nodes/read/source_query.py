@@ -48,9 +48,6 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     row_cap = config.get("row_cap", 100)
     if not isinstance(row_cap, int) or isinstance(row_cap, bool):
         row_cap = 100
-    editor = hooks.editor
-    if editor is not None:
-        row_cap = min(row_cap, editor.row_limit)
     user = hooks.user
     audit_detail = {
         key: value

@@ -57,9 +57,6 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             error_code="CHANNEL_ITEM_LIMIT_EXCEEDED",
             error_message="For items exceed 100000 elements",
         )
-    editor = hooks.editor
-    if editor is not None and len(items) > editor.row_limit:
-        items = list(items[: editor.row_limit])
     count = len(items)
     iterations = [
         {"current": item, "index": index, "count": count} for index, item in enumerate(items)

@@ -12,7 +12,7 @@ from backend.admin.user_store import UserRecord, ensure_system_user, get_user_st
 from backend.channel.context import channel_context, platform_context, run_context
 from backend.channel.engine import RunOutcome, execute
 from backend.channel.nodes import list_node_types
-from backend.channel.nodes.spec import EditorOptions, EngineHooks, NodeResult, PinnedOutput
+from backend.channel.nodes.spec import EngineHooks, NodeResult, PinnedOutput
 from backend.channel.references import ChannelReferenceResolver
 from backend.channel.run_store import ChannelRunRecord, get_run_store, output_size
 from backend.channel.sandbox import SandboxSession
@@ -31,12 +31,10 @@ from backend.worker.schedules import get_schedule_store
 Dispatcher = Callable[[str], object]
 
 __all__ = [
-    "EditorExecution",
     "ScheduledMint",
     "dispatch",
     "entry_node_id",
     "execute_channel_run",
-    "execute_editor_graph",
     "expression_context",
     "mint_on_demand_run",
     "mint_scheduled_run",
@@ -76,6 +74,7 @@ def mint_on_demand_run(
     draft_revision: int | None,
     graph: dict[str, Any] | None,
     stop_at_node_id: str | None,
+    pinned: list[dict[str, Any]],
 ) -> tuple[JobRecord, ChannelRunRecord]:
     job = create_queued_job(
         kind="channel_run",
@@ -84,6 +83,7 @@ def mint_on_demand_run(
             "target": target,
             "ignore_checkpoints": ignore_checkpoints,
             "stop_at_node_id": stop_at_node_id,
+            "pinned": pinned,
         },
         trigger_kind="user",
         trigger_ref=actor_id,
@@ -101,6 +101,7 @@ def mint_on_demand_run(
         ignore_checkpoints=ignore_checkpoints,
         created_at=utc_now(),
         stop_at_node_id=stop_at_node_id,
+        pinned=pinned,
     )
     get_run_store().insert_run(record)
     return job, record
@@ -176,6 +177,7 @@ def _channel_run_record(
     ignore_checkpoints: bool,
     created_at: datetime,
     stop_at_node_id: str | None = None,
+    pinned: list[dict[str, Any]] | None = None,
 ) -> ChannelRunRecord:
     return ChannelRunRecord(
         job_id=job_id,
@@ -191,6 +193,7 @@ def _channel_run_record(
         skipped_node_ids=[],
         created_at=created_at,
         stop_at_node_id=stop_at_node_id,
+        pinned=list(pinned or []),
     )
 
 
@@ -255,19 +258,6 @@ def schedule_context(
     }
 
 
-@dataclass
-class EditorExecution:
-    seq: int
-    node_id: str
-    status: str
-    started_at: datetime
-    finished_at: datetime | None = None
-    output: Any = None
-    error_code: str | None = None
-    error_message: str | None = None
-    error_detail: dict[str, Any] | None = None
-
-
 def execute_channel_run(
     *,
     graph: Mapping[str, Any],
@@ -301,6 +291,7 @@ def execute_channel_run(
             target=run.target,
             channel_id=run.channel_id,
             run_version=run.version,
+            pinned=run.pinned,
         )
         return _execute_graph(
             graph,
@@ -313,55 +304,33 @@ def execute_channel_run(
         )
 
 
-def execute_editor_graph(
-    *,
-    graph: Mapping[str, Any],
-    entry_node_id: str,
-    entry_node: Mapping[str, Any],
-    run: ChannelRunRecord,
-    context: dict[str, Any],
-    actor: dict[str, str],
-    started_at: str,
-    started: datetime,
-    row_limit: int,
-    pinned: Mapping[str, Any],
-    executions: list[EditorExecution],
-    timeout_sec: int | None,
-) -> RunOutcome:
-    user = ensure_system_user(get_user_store())
-    schedule = schedule_context(
-        channel_id=run.channel_id,
-        node=entry_node,
-        trigger_kind="user",
-        when=started,
-    )
-    with _sandbox_session(context) as sandbox:
-        hooks = _EditorHooks(
-            sandbox,
-            editor=EditorOptions(row_limit=row_limit),
-            actor=actor,
-            started_at=started_at,
-            user=user,
-            schedule=schedule,
-            run_id=run.job_id,
-            channel_id=run.channel_id,
-            pinned=pinned,
-            executions=executions,
-        )
-        return _execute_graph(
-            graph,
-            entry_node_id,
-            run.channel_id,
-            hooks,
-            timeout_sec=timeout_sec,
-            started=None,
-            stop_at_node_id=run.stop_at_node_id,
-        )
-
-
-class _SandboxHooks:
-    def __init__(self, sandbox: SandboxSession) -> None:
+class _RunHooks:
+    def __init__(
+        self,
+        sandbox: SandboxSession,
+        *,
+        run_id: str,
+        actor: dict[str, str],
+        started_at: str,
+        user: UserRecord,
+        schedule: dict[str, Any],
+        target: str,
+        channel_id: str,
+        run_version: int | None,
+        pinned: list[dict[str, Any]],
+    ) -> None:
         self._sandbox = sandbox
+        self.run_id = run_id
+        self.actor = actor
+        self.started_at = started_at
+        self.user = user
+        self.schedule = schedule
+        self.channel_id = channel_id
+        self._target = target
+        self._run_version = run_version
+        self._pinned = {
+            str(item["node_id"]): item.get("output") for item in pinned
+        }
 
     def evaluate(self, expression: str) -> Any:
         return self._sandbox.evaluate(expression)
@@ -379,32 +348,6 @@ class _SandboxHooks:
     def drop_outputs(self, refs: list[str]) -> None:
         self._sandbox.drop_outputs(refs)
 
-
-class _RunHooks(_SandboxHooks):
-    def __init__(
-        self,
-        sandbox: SandboxSession,
-        *,
-        run_id: str,
-        actor: dict[str, str],
-        started_at: str,
-        user: UserRecord,
-        schedule: dict[str, Any],
-        target: str,
-        channel_id: str,
-        run_version: int | None,
-    ) -> None:
-        super().__init__(sandbox)
-        self.run_id = run_id
-        self.actor = actor
-        self.started_at = started_at
-        self.user = user
-        self.schedule = schedule
-        self.editor: EditorOptions | None = None
-        self.channel_id = channel_id
-        self._target = target
-        self._run_version = run_version
-
     def cancelled(self) -> bool:
         record = get_job_store().get(self.run_id)
         return record is not None and record.status == "cancelled"
@@ -420,8 +363,10 @@ class _RunHooks(_SandboxHooks):
         return versions[0].number > self._run_version
 
     def pinned_output(self, node: Mapping[str, Any]) -> PinnedOutput | None:
-        del node
-        return None
+        node_id = str(node["id"])
+        if node_id not in self._pinned:
+            return None
+        return PinnedOutput(self._pinned[node_id])
 
     def on_start(self, node: Mapping[str, Any]) -> int:
         record = get_run_store().start_execution(self.run_id, str(node["id"]))
@@ -441,69 +386,6 @@ class _RunHooks(_SandboxHooks):
         record.error_message = result.error_message
         record.error_detail = result.error_detail
         store.finish_execution(record)
-
-
-class _EditorHooks(_SandboxHooks):
-    def __init__(
-        self,
-        sandbox: SandboxSession,
-        *,
-        editor: EditorOptions,
-        actor: dict[str, str],
-        started_at: str,
-        user: UserRecord,
-        schedule: dict[str, Any],
-        run_id: str,
-        channel_id: str,
-        pinned: Mapping[str, Any],
-        executions: list[EditorExecution],
-    ) -> None:
-        super().__init__(sandbox)
-        self.editor: EditorOptions | None = editor
-        self.actor = actor
-        self.started_at = started_at
-        self.user = user
-        self.schedule = schedule
-        self.run_id = run_id
-        self.channel_id = channel_id
-        self._pinned = pinned
-        self.executions = executions
-
-    def cancelled(self) -> bool:
-        return False
-
-    def superseded(self) -> bool:
-        return False
-
-    def pinned_output(self, node: Mapping[str, Any]) -> PinnedOutput | None:
-        node_id = str(node["id"])
-        if node_id not in self._pinned:
-            return None
-        return PinnedOutput(self._pinned[node_id])
-
-    def on_start(self, node: Mapping[str, Any]) -> int:
-        seq = len(self.executions) + 1
-        self.executions.append(
-            EditorExecution(
-                seq=seq,
-                node_id=str(node["id"]),
-                status="running",
-                started_at=utc_now(),
-            )
-        )
-        return seq
-
-    def on_finish(self, seq: int, node: Mapping[str, Any], result: NodeResult) -> None:
-        del node
-        record = next((item for item in self.executions if item.seq == seq), None)
-        if record is None:
-            return
-        record.status = result.status
-        record.finished_at = utc_now()
-        record.output = result.output
-        record.error_code = result.error_code
-        record.error_message = result.error_message
-        record.error_detail = result.error_detail
 
 
 @contextmanager

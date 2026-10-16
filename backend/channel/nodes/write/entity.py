@@ -37,7 +37,6 @@ _COUNT_SCHEMA: dict[str, Any] = {
             "unchanged": {"type": "integer"},
             "deleted": {"type": "integer"},
             "unmatched": {"type": "integer"},
-            "dry_run": {"type": "boolean"},
         },
 }
 
@@ -91,7 +90,6 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     if error is not None:
         return error
     try:
-        dry_run = hooks.editor is not None
         result = write_rows(
             str(config["entity_id"]),
             mode=mode,
@@ -99,7 +97,6 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             rows=projected,
             user=hooks.user,
             statement_timeout_ms=STATEMENT_TIMEOUT_MS,
-            dry_run=dry_run,
         )
     except EntityRowWriteFailed as exc:
         return NodeResult(
@@ -130,8 +127,6 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
         "deleted": result.deleted,
         "unmatched": result.unmatched,
     }
-    if hooks.editor is not None:
-        output["dry_run"] = True
     return NodeResult(status="succeeded", output=output)
 
 

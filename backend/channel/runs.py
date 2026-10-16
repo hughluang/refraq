@@ -11,9 +11,11 @@ from backend.channel.errors import (
     ChannelGraphInvalid,
     ChannelNotFound,
     ChannelNotPublished,
+    ChannelRequestInvalid,
     ChannelTriggerInvalid,
 )
 from backend.channel.graph import ancestor_closure, validate
+from backend.channel.nodes import list_node_types
 from backend.channel.references import ChannelReferenceResolver
 from backend.channel.store import get_channel_store
 
@@ -28,6 +30,7 @@ def start_run(
     actor: UserRecord,
     actor_token_id: str | None,
     stop_at_node_id: str | None = None,
+    pinned: list[dict[str, Any]] | None = None,
 ) -> Any:
     store = get_channel_store()
     channel = store.get(channel_id)
@@ -50,6 +53,7 @@ def start_run(
     entry = entry_node_id(graph)
     if entry is None:
         raise ChannelTriggerInvalid()
+    pinned_items = validate_pinned(graph, pinned or [], closure=closure)
     job, record = mint_on_demand_run(
         channel_id=channel_id,
         channel_name=channel.name,
@@ -61,6 +65,7 @@ def start_run(
         draft_revision=draft_revision,
         graph=graph,
         stop_at_node_id=stop_at_node_id,
+        pinned=pinned_items,
     )
     dispatch(job.id)
     persist_audit_event(
@@ -73,6 +78,33 @@ def start_run(
         detail={"job_id": job.id, "target": target},
     )
     return job, record
+
+
+def validate_pinned(
+    graph: dict[str, Any],
+    pinned: list[dict[str, Any]],
+    *,
+    closure: set[str] | None,
+) -> list[dict[str, Any]]:
+    by_id = {str(node["id"]): node for node in graph.get("nodes") or []}
+    by_type = {item.type_id: item for item in list_node_types()}
+    found: set[str] = set()
+    result: list[dict[str, Any]] = []
+    for item in pinned:
+        node_id = str(item["node_id"])
+        if node_id in found:
+            raise ChannelRequestInvalid("Pinned node is duplicated")
+        node = by_id.get(node_id)
+        if node is None:
+            raise ChannelRequestInvalid("Pinned node is not in the graph")
+        if closure is not None and node_id not in closure:
+            raise ChannelRequestInvalid("Pinned node is outside the run scope")
+        spec = by_type.get(str(node.get("type")))
+        if spec is not None and not spec.pinnable:
+            raise ChannelRequestInvalid("A For node cannot be pinned")
+        found.add(node_id)
+        result.append({"node_id": node_id, "output": item.get("output")})
+    return result
 
 
 def require_stop_closure(graph: dict[str, Any], stop_at_node_id: str | None) -> set[str] | None:

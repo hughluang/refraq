@@ -416,9 +416,9 @@ function ChannelExisting({
   }
   if (mode === "edit" && canWrite?.can === false) return <PageBodySkeleton />;
 
-  const persist = async (): Promise<{ revision: number; graph: Graph }> => {
+  const persist = async (draftGraph?: Graph): Promise<{ revision: number; graph: Graph }> => {
     let nextRevision = revision;
-    let nextGraph = graph;
+    let nextGraph = draftGraph ?? graph;
     const nameError = nameEditorRef.current?.commit() ?? null;
     if (nameError) {
       throw new RecordInvalid(nameError);
@@ -779,6 +779,9 @@ function ChannelExisting({
           sessionRun={sessionRun}
           templatePreview={templatePreview}
           onRun={openRun}
+          onPersistForTest={async (screenGraph) => {
+            await persist(screenGraph);
+          }}
         />
       </FillColumn>
       <Modal

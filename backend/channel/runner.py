@@ -10,7 +10,7 @@ from backend.channel.channel_run import entry_node_id, execute_channel_run, expr
 from backend.channel.run_store import get_run_store, note_killed_run
 from backend.channel.sandbox import SandboxFailed
 from backend.channel.store import get_channel_store
-from backend.core.time import ensure_aware_utc, utc_now
+from backend.core.time import ensure_aware_utc, format_instant, utc_now
 from backend.jobs.store import (
     append_job_log,
     claim_for_execution,
@@ -75,7 +75,7 @@ def run_channel_job(job_id: str) -> dict[str, str]:
             run=run,
             context=context,
             actor=actor,
-            started_at=started.isoformat().replace("+00:00", "Z"),
+            started_at=format_instant(started),
             job=claimed,
             timeout_sec=timeout,
             started=time.monotonic() - elapsed,

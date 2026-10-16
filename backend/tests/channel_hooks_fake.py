@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Mapping
 
 from backend.admin.user_store import UserRecord
-from backend.channel.nodes.spec import EditorOptions, NodeResult, PinnedOutput
+from backend.channel.nodes.spec import NodeResult, PinnedOutput
 
 _ACTOR = {"id": "usr_system", "name": "System"}
 
@@ -20,7 +20,6 @@ class FakeHooks:
         started_at: str = "1970-01-01T00:00:00Z",
         user: UserRecord | None = None,
         schedule: Mapping[str, Any] | None = None,
-        editor: EditorOptions | None = None,
         pinned: Mapping[str, Any] | None = None,
         evaluate: Callable[[str], Any] | None = None,
         run_code: Callable[[str, float], Any] | None = None,
@@ -39,7 +38,6 @@ class FakeHooks:
                 "scheduled_for": started_at,
             }
         )
-        self.editor = editor
         self._pinned = dict(pinned) if pinned is not None else {}
         self._evaluate = evaluate
         self._run_code = run_code

@@ -192,8 +192,8 @@ Responsibilities:
 - Execution engine with n8n v1 semantics; it knows nothing about specific node types, storage, or Celery. With no stop node it runs every node reachable from the entry. With a stop node it runs that node's ancestor closure, including the node
 - Expression evaluator and Code node sandbox (one reused subprocess per run; no network; allow-listed modules; time and memory limits)
 - **Dataset Reference**s: run-scoped tables in the entity database and their expiry
-- Entity writer: modes, match key, mapped attributes only, head compatibility, dry run; writes through Entity's published row-write port
-- **Checkpoint** store: per (channel, Read Changes node, stream) cursors, run upper bounds, monotonic advance on whole-run success
+- Entity writer: modes, match key, mapped attributes only, and head compatibility; writes through Entity's published row-write port
+- **Checkpoint** store: per (channel, checkpoint-capable node, stream) cursors; each business node declares when and how it advances its cursor
 - Run records: node executions, truncated item samples, last failed node and edge
 - **Channel Run** runner and triggers: `channel_run` Job kind, version resolution at start, run-timeout checks between node executions, version supersede, error workflow, persistent-failure flag. User cancel kills the run's child process
 - Schedule sync of Scheduled nodes to `channel_run` **Scheduled Task** rows, and the `channel_run` schedule projection adapter

@@ -10,9 +10,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
 from backend.channel.errors import ChannelRunNotFound
-from backend.channel.run_store import get_run_store, output_page, output_preview
+from backend.channel.run_store import (
+    get_run_store,
+    output_page,
+    output_preview_with_truncated,
+)
 from backend.channel.runs import start_run
-from backend.channel.schemas.channels import GraphIn
+from backend.channel.schemas.channels import GraphIn, PinnedInput
 from backend.channel.template_preview import preview_template
 from backend.core.pagination import PageParams, page_params
 from backend.core.time import Instant, format_instant
@@ -27,6 +31,7 @@ class StartRunRequest(BaseModel):
     target: Literal["draft", "published"] = "published"
     ignore_checkpoints: bool = False
     stop_at_node_id: str | None = None
+    pinned: list[PinnedInput] = Field(default_factory=list)
 
 
 class TemplatePreviewRequest(BaseModel):
@@ -89,6 +94,7 @@ def http_start_run(
         target=body.target,
         ignore_checkpoints=body.ignore_checkpoints,
         stop_at_node_id=body.stop_at_node_id,
+        pinned=[item.model_dump(mode="json") for item in body.pinned],
         actor=actor,
         actor_token_id=actor_token_id,
     )
@@ -136,6 +142,7 @@ def http_get_run(
     job = get_job_store().get(job_id)
     executions = []
     for item in get_run_store().list_executions(job_id):
+        preview, truncated = output_preview_with_truncated(item.output)
         executions.append(
             {
                 "seq": item.seq,
@@ -144,7 +151,8 @@ def http_get_run(
                 "started_at": format_instant(item.started_at) if item.started_at else None,
                 "finished_at": format_instant(item.finished_at) if item.finished_at else None,
                 "output_bytes": item.output_bytes,
-                "output_preview": output_preview(item.output),
+                "output_preview": preview,
+                "output_truncated": truncated,
                 "error_code": item.error_code,
                 "error_message": item.error_message,
                 "error_detail": item.error_detail,
@@ -208,6 +216,7 @@ def _present(job: Any, record: Any) -> dict[str, Any]:
         "trigger_schedule_name": None,
         "ignore_checkpoints": record.ignore_checkpoints,
         "stop_at_node_id": record.stop_at_node_id,
+        "pinned": record.pinned,
         "failed_node_id": record.failed_node_id,
         "stopped_node_id": record.stopped_node_id,
         "created_at": format_instant(record.created_at),

@@ -15,7 +15,6 @@ from backend.admin.user_store import UserRecord
 
 __all__ = [
     "ERROR_OUTPUT",
-    "EditorOptions",
     "EngineHooks",
     "MAIN_INPUT",
     "MAIN_OUTPUT",
@@ -49,13 +48,6 @@ class NodeResult:
     error_detail: dict[str, Any] | None = None
     ports: frozenset[str] | None = None
     iterations: list[Any] | None = None
-
-
-@dataclass(frozen=True)
-class EditorOptions:
-    """Row limit for an editor execution."""
-
-    row_limit: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,9 +89,6 @@ class EngineHooks(Protocol):
 
     @property
     def schedule(self) -> Mapping[str, Any]: ...
-
-    @property
-    def editor(self) -> EditorOptions | None: ...
 
     def pinned_output(self, node: Mapping[str, Any]) -> PinnedOutput | None: ...
 

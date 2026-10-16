@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
 from typing import Any, Mapping
 
 from backend.channel.node_support import render_field
 from backend.channel.nodes.spec import MAIN_INPUT, MAIN_OUTPUT, EngineHooks, NodeResult, NodeType
 from backend.channel.variables import VALUE_MAX_BYTES, get_variable_store, valid_name, value_size
-from backend.core.time import format_instant, utc_now
+from backend.core.time import format_instant
 
 __all__ = ["NODE_TYPE"]
 
@@ -32,7 +31,6 @@ def _refine(
                 "value": _JSON,
                 "applied": {"type": "boolean"},
                 "expires_at": {"type": ["string", "null"]},
-                "dry_run": {"type": "boolean"},
             },
         }
     }
@@ -69,15 +67,6 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
         if error is not None:
             return error
     ttl_sec = config.get("ttl_sec") if writes else None
-    if hooks.editor is not None and operation != "get":
-        output = _dry_variable(
-            operation=operation,
-            name=name,
-            value=value,
-            expected=expected,
-            ttl_sec=ttl_sec,
-        )
-        return NodeResult(status="succeeded", output=output)
     result = get_variable_store().apply(
         operation=operation,
         name=name,
@@ -96,61 +85,6 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             "expires_at": expires,
         },
     )
-
-
-def _dry_variable(
-    *,
-    operation: str,
-    name: str,
-    value: Any,
-    expected: Any,
-    ttl_sec: int | None,
-) -> dict[str, Any]:
-    """The write result computed from the current value, without storing it."""
-    current = get_variable_store().apply(operation="get", name=name)
-    applied = _dry_applied(operation, current.found, current.value, expected)
-    if operation == "delete":
-        return {
-            "name": name,
-            "found": False,
-            "value": None,
-            "applied": applied,
-            "expires_at": None,
-            "dry_run": True,
-        }
-    if applied:
-        expires = None if ttl_sec is None else utc_now() + timedelta(seconds=int(ttl_sec))
-        return {
-            "name": name,
-            "found": True,
-            "value": value,
-            "applied": True,
-            "expires_at": format_instant(expires) if expires is not None else None,
-            "dry_run": True,
-        }
-    expires_at = format_instant(current.expires_at) if current.expires_at is not None else None
-    return {
-        "name": name,
-        "found": current.found,
-        "value": current.value,
-        "applied": False,
-        "expires_at": expires_at,
-        "dry_run": True,
-    }
-
-
-def _dry_applied(operation: str, found: bool, current: Any, expected: Any) -> bool:
-    if operation == "set":
-        return True
-    if operation == "set_if_absent":
-        return not found
-    if operation == "compare_and_set":
-        return found and current == expected
-    if operation == "delete":
-        return found
-    return False
-
-
 NODE_TYPE = NodeType(
     type_id="state.variable",
     family="state",

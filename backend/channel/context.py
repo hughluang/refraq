@@ -12,6 +12,7 @@ from typing import Any
 from backend.admin.system_parameters.registry import list_registered_specs
 from backend.admin.system_parameters.resolver import resolve_int, resolve_str
 from backend.admin.system_parameters.spec import IntConstraint
+from backend.core.time import format_instant
 
 __all__ = [
     "channel_context",
@@ -43,7 +44,7 @@ def run_context(
         "version": run.version,
         "draft_revision": run.draft_revision,
         "trigger_kind": trigger_kind or "user",
-        "started_at": started.isoformat().replace("+00:00", "Z"),
+        "started_at": format_instant(started),
         "triggered_by": actor,
     }
 
@@ -58,7 +59,7 @@ def platform_context(started: datetime) -> dict[str, Any]:
     return {
         "site_name": "",
         "schedule_timezone": parameters["schedule_timezone"],
-        "now": started.isoformat().replace("+00:00", "Z"),
+        "now": format_instant(started),
         "parameters": parameters,
     }
 

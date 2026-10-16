@@ -321,34 +321,3 @@ class PinnedInput(BaseModel):
 
     node_id: str = Field(min_length=1, max_length=64)
     output: Any
-
-
-class EditorExecuteRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    graph: GraphIn
-    stop_at_node_id: str = Field(min_length=1, max_length=64)
-    row_limit: int = Field(default=100, ge=1, le=1000)
-    pinned: list[PinnedInput] = Field(default_factory=list)
-
-
-class EditorNodeExecutionOut(BaseModel):
-    seq: int
-    node_id: str
-    status: str
-    started_at: Instant
-    finished_at: Instant | None = None
-    output: Any = None
-    truncated: bool
-    error_code: str | None = None
-    error_message: str | None = None
-    error_detail: dict[str, Any] | None = None
-
-
-class EditorExecuteResponse(BaseModel):
-    status: Literal["succeeded", "failed", "cancelled"]
-    error_code: str | None = None
-    error_message: str | None = None
-    failed_node_id: str | None = None
-    stopped_node_id: str | None = None
-    node_executions: list[EditorNodeExecutionOut]

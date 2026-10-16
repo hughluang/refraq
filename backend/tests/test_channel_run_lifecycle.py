@@ -50,6 +50,45 @@ MANUAL_GRAPH = {
     "settings": {"run_timeout_sec": None, "error_channel_id": None},
 }
 
+PINNED_GRAPH = {
+    "nodes": [
+        MANUAL_GRAPH["nodes"][0],
+        {
+            "id": "nd_shape",
+            "ref": "shape",
+            "type": "transform.set_fields",
+            "name": "Shape",
+            "position": {"x": 40, "y": 0},
+            "config": {"fields": [{"name": "rows", "value": "[]"}]},
+            "on_error": "stop",
+            "retry": None,
+        },
+        {
+            "id": "nd_copy",
+            "ref": "copy",
+            "type": "transform.set_fields",
+            "name": "Copy",
+            "position": {"x": 80, "y": 0},
+            "config": {"fields": [{"name": "rows", "value": "{{ self.shape.output.rows }}"}]},
+            "on_error": "stop",
+            "retry": None,
+        },
+    ],
+    "edges": [
+        {
+            "id": "ed_shape",
+            "source": {"node_id": "nd_trigger", "port": "main"},
+            "target": {"node_id": "nd_shape", "port": "main"},
+        },
+        {
+            "id": "ed_copy",
+            "source": {"node_id": "nd_shape", "port": "main"},
+            "target": {"node_id": "nd_copy", "port": "main"},
+        },
+    ],
+    "settings": {"run_timeout_sec": None, "error_channel_id": None},
+}
+
 SCHEDULED_GRAPH = {
     "nodes": [
         {
@@ -338,6 +377,7 @@ def test_on_demand_run_persists_draft_and_published_records_and_dispatches_once(
             "target": target,
             "ignore_checkpoints": False,
             "stop_at_node_id": None,
+            "pinned": [],
         }
         assert job.summary == "channel_run Material"
         assert job.trigger_kind == "user"
@@ -354,7 +394,47 @@ def test_on_demand_run_persists_draft_and_published_records_and_dispatches_once(
     assert dispatched == [draft_body["job_id"], published_body["job_id"]]
 
 
-def test_run_and_editor_contexts_agree_for_equivalent_inputs() -> None:
+def test_on_demand_run_persists_pinned_outputs_inside_its_scope(
+    client: TestClient, dispatched: list[str]
+) -> None:
+    created = client.post("/channels", json={"name": "Pinned", "description": None})
+    channel_id = created.json()["channel"]["id"]
+    _save_draft(client, channel_id, PINNED_GRAPH)
+    pinned = [{"node_id": "nd_shape", "output": {"rows": [{"code": "P"}]}}]
+
+    started = client.post(
+        f"/channels/{channel_id}/runs",
+        json={
+            "target": "draft",
+            "stop_at_node_id": "nd_copy",
+            "pinned": pinned,
+        },
+    )
+
+    assert started.status_code == 202, started.text
+    body = started.json()["run"]
+    assert body["pinned"] == pinned
+    record = get_run_store().get_run(body["job_id"])
+    assert record is not None
+    assert record.pinned == pinned
+    job = get_job_store().get(body["job_id"])
+    assert job is not None
+    assert job.input["pinned"] == pinned
+    assert dispatched == [body["job_id"]]
+
+    outside = client.post(
+        f"/channels/{channel_id}/runs",
+        json={
+            "target": "draft",
+            "stop_at_node_id": "nd_shape",
+            "pinned": [{"node_id": "nd_copy", "output": {}}],
+        },
+    )
+    assert outside.status_code == 422
+    assert outside.json()["code"] == "REQUEST_INVALID"
+
+
+def test_run_contexts_agree_for_equivalent_inputs() -> None:
     started = parse_instant("2026-10-16T05:43:07.123456Z")
     when = parse_instant("2026-10-16T05:00:00Z")
     due = parse_instant("2026-10-16T04:00:00Z")
@@ -392,23 +472,23 @@ def test_run_and_editor_contexts_agree_for_equivalent_inputs() -> None:
         created_at=when,
         **shared,
     )
-    editor_record = ChannelRunRecord(
-        job_id="edx_editor",
+    second_record = ChannelRunRecord(
+        job_id="job_second",
         ignore_checkpoints=True,
         created_at=started,
         **shared,
     )
     run_ctx = expression_context(channel, run_record, started, actor, "user")
-    editor_ctx = expression_context(channel, editor_record, started, actor, "user")
-    assert run_ctx["channel"] == editor_ctx["channel"] == {
+    second_ctx = expression_context(channel, second_record, started, actor, "user")
+    assert run_ctx["channel"] == second_ctx["channel"] == {
         "id": "chn_ctx",
         "name": "Orders",
         "description": "Nightly orders",
         "active": True,
         "settings": {"run_timeout_sec": 30, "error_channel_id": None},
     }
-    assert run_ctx["platform"] == editor_ctx["platform"]
-    assert run_ctx["platform"]["now"] == "2026-10-16T05:43:07.123456Z"
+    assert run_ctx["platform"] == second_ctx["platform"]
+    assert run_ctx["platform"]["now"] == "2026-10-16T05:43:07Z"
     assert run_ctx["platform"]["site_name"] == ""
     assert run_ctx["run"] == {
         "id": "job_on_demand",
@@ -416,16 +496,16 @@ def test_run_and_editor_contexts_agree_for_equivalent_inputs() -> None:
         "version": None,
         "draft_revision": 4,
         "trigger_kind": "user",
-        "started_at": "2026-10-16T05:43:07.123456Z",
+        "started_at": "2026-10-16T05:43:07Z",
         "triggered_by": {"id": "usr_ada", "name": "Ada"},
     }
-    assert editor_ctx["run"] == {
-        "id": "edx_editor",
+    assert second_ctx["run"] == {
+        "id": "job_second",
         "target": "draft",
         "version": None,
         "draft_revision": 4,
         "trigger_kind": "user",
-        "started_at": "2026-10-16T05:43:07.123456Z",
+        "started_at": "2026-10-16T05:43:07Z",
         "triggered_by": {"id": "usr_ada", "name": "Ada"},
     }
 
@@ -447,13 +527,13 @@ def test_run_and_editor_contexts_agree_for_equivalent_inputs() -> None:
         trigger_kind="user",
         when=when,
     )
-    editor = schedule_context(
+    second = schedule_context(
         channel_id=channel.id,
         node=node,
         trigger_kind="user",
         when=when,
     )
-    assert on_demand == editor == {
+    assert on_demand == second == {
         "schedule_id": "sch_nightly",
         "name": "Nightly",
         "scheduled_for": "2026-10-16T05:00:00Z",

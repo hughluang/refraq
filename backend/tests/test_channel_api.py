@@ -587,13 +587,6 @@ def test_guarded_node_save_and_publish_permissions(
         assert "Guarded node" in body["detail"]
         assert permission in body["detail"]
         assert writer.get(f"/channels/{channel_id}/draft").json()["draft_revision"] == 1
-        executed = writer.post(
-            f"/channels/{channel_id}/editor/execute",
-            json={"graph": graph, "stop_at_node_id": "nd_guard"},
-        )
-        body = assert_problem(executed, status=403, code="AUTH_FORBIDDEN")
-        assert permission in body["detail"]
-
         saved = client.put(
             f"/channels/{channel_id}/draft",
             json={"base_revision": 1, "graph": graph},
@@ -636,12 +629,6 @@ def test_guarded_node_save_and_publish_permissions(
         )
         body = assert_problem(modified, status=403, code="AUTH_FORBIDDEN")
         assert "Guarded node" in body["detail"]
-        executed = writer.post(
-            f"/channels/{channel_id}/editor/execute",
-            json={"graph": changed, "stop_at_node_id": "nd_guard"},
-        )
-        assert_problem(executed, status=403, code="AUTH_FORBIDDEN")
-
         current = writer.get(f"/channels/{channel_id}/draft").json()
         bumped = current["graph"]
         guard = next(node for node in bumped["nodes"] if node["id"] == "nd_guard")
@@ -689,17 +676,45 @@ def _persisted_counts(channel_id: str) -> tuple[int, int, int, int]:
     return job_total, run_total, executions, _audit_count()
 
 
-def test_editor_execution_creates_no_run_state(client: TestClient) -> None:
-    created = client.post("/channels", json={"name": "Editor", "description": None})
+def test_test_run_creates_run_state(client: TestClient) -> None:
+    from backend.channel.channel_run import set_dispatcher
+    from backend.channel.tasks import run_job
+
+    created = client.post("/channels", json={"name": "Test run", "description": None})
     assert created.status_code == 201, created.text
     channel_id = created.json()["channel"]["id"]
-    before = _persisted_counts(channel_id)
-    response = client.post(
-        f"/channels/{channel_id}/editor/execute",
-        json={"graph": TRIGGER_GRAPH, "stop_at_node_id": "nd_trigger"},
+    draft = client.put(
+        f"/channels/{channel_id}/draft",
+        json={"base_revision": 1, "graph": TRIGGER_GRAPH},
     )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["status"] == "succeeded"
+    assert draft.status_code == 200, draft.text
+    before = _persisted_counts(channel_id)
+    previous = set_dispatcher(run_job)
+    try:
+        response = client.post(
+            f"/channels/{channel_id}/runs",
+            json={"target": "draft", "stop_at_node_id": "nd_trigger"},
+        )
+    finally:
+        set_dispatcher(previous)
+    assert response.status_code == 202, response.text
+    job_id = response.json()["run"]["job_id"]
+    detail = client.get(f"/channels/{channel_id}/runs/{job_id}")
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["run"]["status"] == "succeeded"
     assert [item["node_id"] for item in body["node_executions"]] == ["nd_trigger"]
-    assert _persisted_counts(channel_id) == before
+    execution = get_run_store().get_execution(job_id, 1)
+    assert execution is not None
+    execution.output = {"rows": [{"n": index} for index in range(101)]}
+    execution.output_bytes = 1
+    get_run_store().finish_execution(execution)
+    detailed = client.get(f"/channels/{channel_id}/runs/{job_id}").json()
+    shown = detailed["node_executions"][0]
+    assert len(shown["output_preview"]["rows"]) == 100
+    assert shown["output_truncated"] is True
+    after = _persisted_counts(channel_id)
+    assert after[0] == before[0] + 1
+    assert after[1] == before[1] + 1
+    assert after[2] == before[2] + 1
+    assert after[3] == before[3] + 1

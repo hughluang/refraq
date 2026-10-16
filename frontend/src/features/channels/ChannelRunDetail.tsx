@@ -12,6 +12,7 @@ import { getRun, listNodeTypes } from "@/features/channels/api";
 import { formatFailedNode, formatRunSubject } from "@/features/channels/formatRunSubject";
 import { formatRunError } from "@/features/channels/problemLabel";
 import { RunErrorText } from "@/features/channels/RunErrorText";
+import { RunExecutionOutput } from "@/features/channels/RunExecutionOutput";
 import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
 import type { ChannelRunDetail as Detail, NodeTypeSpec } from "@/features/channels/types";
 import { ApiError } from "@/lib/api";
@@ -96,6 +97,7 @@ export function ChannelRunDetail({
       </Stack>
       <div style={{ flex: 1, minHeight: 360 }}>
         <ChannelCanvas
+          channelId={channelId}
           graph={detail.graph}
           catalog={catalog}
           appearance="browse"
@@ -106,11 +108,13 @@ export function ChannelRunDetail({
         />
       </div>
       {detail.node_executions.map((item) => (
-        <Text key={item.seq} size="sm">
-          {item.node_id} {item.status}{" "}
-          <RunErrorText code={item.error_code} message={item.error_message} />{" "}
-          {JSON.stringify(item.output_preview)}
-        </Text>
+        <Stack key={item.seq} gap={4}>
+          <Text size="sm">
+            {item.node_id} {item.status}{" "}
+            <RunErrorText code={item.error_code} message={item.error_message} />
+          </Text>
+          <RunExecutionOutput channelId={channelId} jobId={jobId} item={item} />
+        </Stack>
       ))}
     </Stack>
   );

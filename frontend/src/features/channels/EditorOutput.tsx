@@ -1,36 +1,31 @@
 "use client";
 
-import { Button, Code, Stack, Text } from "@mantine/core";
+import { Button, Stack, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 
-import { NumberField } from "@/components/form/NumberField";
-import {
-  EDITOR_ROW_LIMIT_MAX,
-  EDITOR_ROW_LIMIT_MIN,
-  canPinNode,
-  dryRunSummary,
-  type DryRunSummary,
-} from "@/features/channels/editorSession";
+import { canPinNode } from "@/features/channels/editorSession";
 import { NodeRegion } from "@/features/channels/NodeRegion";
-import { RunErrorText } from "@/features/channels/RunErrorText";
-import type { EditorExecution, EditorNodeExecution } from "@/features/channels/types";
+import { RunExecutionOutput } from "@/features/channels/RunExecutionOutput";
+import type { ChannelRunDetail, NodeExecution } from "@/features/channels/types";
 
 type Props = {
+  channelId: string;
   nodeId: string;
   nodeType: string;
-  result: EditorExecution | null;
+  result: ChannelRunDetail | null;
   busy: boolean;
   error: string | null;
   problemTexts: readonly string[];
   pinned: boolean;
-  rowLimit: number | string;
-  onRowLimit: (value: number | string) => void;
+  canCancel: boolean;
   onTest: (nodeId: string) => void;
+  onCancel: () => void;
   onPin: (nodeId: string, output: unknown) => void;
   onUnpin: (nodeId: string) => void;
 };
 
 export function EditorOutputRegion({
+  channelId,
   nodeId,
   nodeType,
   result,
@@ -38,9 +33,9 @@ export function EditorOutputRegion({
   error,
   problemTexts,
   pinned,
-  rowLimit,
-  onRowLimit,
+  canCancel,
   onTest,
+  onCancel,
   onPin,
   onUnpin,
 }: Props) {
@@ -53,7 +48,7 @@ export function EditorOutputRegion({
   const allowPin = canPinNode(nodeType) && latest != null;
 
   let body;
-  if (busy) {
+  if (busy && result == null) {
     body = (
       <Text size="sm" c="dimmed">
         {t("channels.editor.testing")}
@@ -65,6 +60,12 @@ export function EditorOutputRegion({
     body = (
       <Text size="sm" c="dimmed">
         {t("channels.editor.idle")}
+      </Text>
+    );
+  } else if (mine.length === 0 && busy) {
+    body = (
+      <Text size="sm" c="dimmed">
+        {t("channels.editor.testing")}
       </Text>
     );
   } else if (mine.length === 0) {
@@ -82,7 +83,13 @@ export function EditorOutputRegion({
           </Text>
         ) : null}
         {mine.map((item) => (
-          <ExecutionBlock key={item.seq} item={item} nodeType={nodeType} many={mine.length > 1} />
+          <ExecutionBlock
+            key={item.seq}
+            channelId={channelId}
+            jobId={result.run.job_id}
+            item={item}
+            many={mine.length > 1}
+          />
         ))}
         {allowPin ? (
           <Button
@@ -90,7 +97,7 @@ export function EditorOutputRegion({
             variant={pinned ? "filled" : "default"}
             onClick={() => {
               if (pinned) onUnpin(nodeId);
-              else if (latest) onPin(nodeId, latest.output);
+              else if (latest) onPin(nodeId, latest.output_preview);
             }}
           >
             {pinned ? t("channels.editor.unpin") : t("channels.editor.pin")}
@@ -105,31 +112,27 @@ export function EditorOutputRegion({
       title={t("channels.editor.region")}
       tone="run"
       action={
-        <Button
-          size="compact-xs"
-          variant="light"
-          loading={busy}
-          disabled={busy}
-          onClick={() => onTest(nodeId)}
-        >
-          {t("channels.editor.test")}
-        </Button>
+        busy ? (
+          <Button
+            size="compact-xs"
+            color="red"
+            variant="light"
+            disabled={!canCancel}
+            onClick={onCancel}
+          >
+            {t("common.cancel")}
+          </Button>
+        ) : (
+          <Button size="compact-xs" variant="light" onClick={() => onTest(nodeId)}>
+            {t("channels.editor.test")}
+          </Button>
+        )
       }
     >
       <Stack gap="sm">
         <Text size="xs" c="dimmed">
           {t("channels.editor.hint")}
         </Text>
-        <NumberField
-          editable={!busy}
-          label={t("channels.editor.rowLimit")}
-          description={t("channels.editor.rowLimitHint")}
-          min={EDITOR_ROW_LIMIT_MIN}
-          max={EDITOR_ROW_LIMIT_MAX}
-          w={180}
-          value={rowLimit}
-          onChange={onRowLimit}
-        />
         {error ? (
           <Text role="alert" size="sm" c="red">
             {error}
@@ -147,17 +150,17 @@ export function EditorOutputRegion({
 }
 
 function ExecutionBlock({
+  channelId,
+  jobId,
   item,
-  nodeType,
   many,
 }: {
-  item: EditorNodeExecution;
-  nodeType: string;
+  channelId: string;
+  jobId: string;
+  item: NodeExecution;
   many: boolean;
 }) {
   const t = useTranslate();
-  const failed = item.status === "failed" || item.error_message != null;
-  const summary = dryRunSummary(nodeType, item.output);
   return (
     <Stack gap={4}>
       {many ? (
@@ -168,48 +171,7 @@ function ExecutionBlock({
       <Text size="xs" fw={600}>
         {statusLabel(t, item.status)}
       </Text>
-      {failed ? (
-        <Text size="xs" c="red">
-          <RunErrorText code={item.error_code} message={item.error_message} />
-        </Text>
-      ) : null}
-      {summary ? <DryRunNotice summary={summary} /> : null}
-      {item.truncated ? (
-        <Text size="xs">{t("channels.editor.truncated")}</Text>
-      ) : null}
-      <Code block>{JSON.stringify(item.output, null, 2)}</Code>
-    </Stack>
-  );
-}
-
-function DryRunNotice({ summary }: { summary: DryRunSummary }) {
-  const t = useTranslate();
-  const lines =
-    summary.kind === "state.variable"
-      ? [
-          t("channels.editor.counts.applied", {
-            applied: t(`channels.editor.applied.${summary.applied}`),
-          }),
-        ]
-      : (
-          [
-            ["inserted", summary.inserted],
-            ["updated", summary.updated],
-            ["unchanged", summary.unchanged],
-            ["deleted", summary.deleted],
-            ["unmatched", summary.unmatched],
-          ] as const
-        ).map(([key, count]) => t(`channels.editor.counts.${key}`, { count }));
-  return (
-    <Stack gap={2}>
-      <Text size="sm" fw={600}>
-        {t("channels.editor.dryRun")}
-      </Text>
-      {lines.map((line) => (
-        <Text key={line} size="sm">
-          {line}
-        </Text>
-      ))}
+      <RunExecutionOutput channelId={channelId} jobId={jobId} item={item} />
     </Stack>
   );
 }

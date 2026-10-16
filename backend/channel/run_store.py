@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select, text, text
+from sqlalchemy import func, select, text
 
 from backend.channel.models import ChannelNodeExecutionRow, ChannelRunRow
 from backend.core.config import get_settings
@@ -42,6 +42,7 @@ class ChannelRunRecord:
     created_at: datetime
     stopped_node_id: str | None = None
     stop_at_node_id: str | None = None
+    pinned: list[dict[str, Any]] = field(default_factory=list)
     # `self.channel`, `self.run`, and `self.platform`; None until the run starts.
     context: dict[str, Any] | None = None
 
@@ -301,6 +302,7 @@ def _run_row(record: ChannelRunRecord) -> ChannelRunRow:
         failed_node_id=record.failed_node_id,
         stopped_node_id=record.stopped_node_id,
         stop_at_node_id=record.stop_at_node_id,
+        pinned=list(record.pinned),
         skipped_node_ids=list(record.skipped_node_ids),
         context=record.context,
         created_at=record.created_at,
@@ -323,6 +325,7 @@ def _run_record(row: ChannelRunRow) -> ChannelRunRecord:
         created_at=row.created_at,
         stopped_node_id=row.stopped_node_id,
         stop_at_node_id=row.stop_at_node_id,
+        pinned=list(row.pinned),
         context=row.context,
     )
 
@@ -381,15 +384,28 @@ def output_page(output: Any, path: str | None, *, limit: int, offset: int) -> di
 
 
 def output_preview(output: Any, *, cap: int = 100) -> Any:
+    return output_preview_with_truncated(output, cap=cap)[0]
+
+
+def output_preview_with_truncated(
+    output: Any, *, cap: int = 100
+) -> tuple[Any, bool]:
     return _cut(output, cap)
 
 
-def _cut(value: Any, cap: int) -> Any:
+def _cut(value: Any, cap: int) -> tuple[Any, bool]:
     if isinstance(value, list):
-        return [_cut(item, cap) for item in value[:cap]]
+        items = [_cut(item, cap) for item in value[:cap]]
+        return [item for item, _truncated in items], (
+            len(value) > cap or any(truncated for _item, truncated in items)
+        )
     if isinstance(value, dict):
-        return {key: _cut(item, cap) for key, item in value.items()}
-    return value
+        items = {key: _cut(item, cap) for key, item in value.items()}
+        return (
+            {key: item for key, (item, _truncated) in items.items()},
+            any(truncated for _item, truncated in items.values()),
+        )
+    return value, False
 
 
 def note_killed_run(job_id: str) -> None:

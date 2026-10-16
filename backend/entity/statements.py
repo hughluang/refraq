@@ -63,42 +63,17 @@ def execute_entity_statement(
     *,
     timeout_sec: int,
     max_rows: int,
-    rollback: bool = False,
-    strict_limit: bool = True,
 ) -> EntityStatement:
     """Run ``sql`` as the entity owner with ``search_path`` set to ``entity_data``.
 
     The text must already be exactly one statement. The transaction commits when
-    this returns, unless ``rollback`` is set: then the same statements run and
-    the transaction is always rolled back after the rows have been read.
-    A driver error rolls the transaction back. With ``strict_limit``, a result
-    past ``max_rows`` raises and rolls back. Without it, the first ``max_rows``
-    rows are returned.
+    this returns. A driver error rolls the transaction back. A result past
+    ``max_rows`` raises and rolls back.
     """
     if not _exactly_one_postgres_statement(sql):
         raise EntityStatementRejected()
-    engine = get_entity_engine()
-    if rollback:
-        with engine.connect() as conn:
-            transaction = conn.begin()
-            try:
-                return _run_statement(
-                    conn,
-                    sql,
-                    timeout_sec=timeout_sec,
-                    max_rows=max_rows,
-                    strict_limit=strict_limit,
-                )
-            finally:
-                transaction.rollback()
-    with engine.begin() as conn:
-        return _run_statement(
-            conn,
-            sql,
-            timeout_sec=timeout_sec,
-            max_rows=max_rows,
-            strict_limit=strict_limit,
-        )
+    with get_entity_engine().begin() as conn:
+        return _run_statement(conn, sql, timeout_sec=timeout_sec, max_rows=max_rows)
 
 
 def _run_statement(
@@ -107,7 +82,6 @@ def _run_statement(
     *,
     timeout_sec: int,
     max_rows: int,
-    strict_limit: bool,
 ) -> EntityStatement:
     timeout_ms = str(max(1, int(timeout_sec)) * 1000)
     conn.execute(
@@ -127,9 +101,7 @@ def _run_statement(
         return EntityStatement(rows=[], rowcount=_rowcount(result))
     fetched = result.mappings().fetchmany(max_rows + 1)
     if len(fetched) > max_rows:
-        if strict_limit:
-            raise EntityStatementLimit(max_rows)
-        fetched = fetched[:max_rows]
+        raise EntityStatementLimit(max_rows)
     rows = [dict(row) for row in fetched]
     return EntityStatement(rows=rows, rowcount=_rowcount(result))
 

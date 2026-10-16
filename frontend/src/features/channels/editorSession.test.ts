@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  EDITOR_ROW_LIMIT,
-  clampRowLimit,
-  dryRunSummary,
   editorPhaseByNode,
-  latestEditorExecution,
   loadPins,
   pinsForGraph,
   savePins,
@@ -33,16 +29,7 @@ function memoryStorage(): Storage {
   };
 }
 
-describe("editor execution helpers", () => {
-  it("clamps the row limit to the contract range", () => {
-    expect(clampRowLimit("")).toBe(EDITOR_ROW_LIMIT);
-    expect(clampRowLimit(null)).toBe(EDITOR_ROW_LIMIT);
-    expect(clampRowLimit(1.5)).toBe(EDITOR_ROW_LIMIT);
-    expect(clampRowLimit(0)).toBe(1);
-    expect(clampRowLimit(5000)).toBe(1000);
-    expect(clampRowLimit("25")).toBe(25);
-  });
-
+describe("editor run helpers", () => {
   it("derives succeeded, failed, pinned, and not-reached colours", () => {
     const phases = editorPhaseByNode(
       ["start", "read", "write", "later"],
@@ -66,46 +53,6 @@ describe("editor execution helpers", () => {
     );
     expect(pinned.get("kept")).toBe("pinned");
     expect(pinned.get("gone")).toBe("dead");
-  });
-
-  it("keeps the latest execution for a node", () => {
-    const latest = latestEditorExecution(
-      [
-        { seq: 1, node_id: "body", output: { n: 1 } },
-        { seq: 4, node_id: "other", output: { n: 9 } },
-        { seq: 3, node_id: "body", output: { n: 3 } },
-      ],
-      "body",
-    );
-    expect(latest?.output).toEqual({ n: 3 });
-    expect(latestEditorExecution([], "body")).toBeNull();
-  });
-
-  it("summarises dry-run counts and ignores real reads", () => {
-    expect(
-      dryRunSummary("write.entity", {
-        inserted: 2,
-        updated: 1,
-        unchanged: 4,
-        deleted: 0,
-        unmatched: 3,
-        dry_run: true,
-      }),
-    ).toEqual({
-      kind: "write.entity",
-      inserted: 2,
-      updated: 1,
-      unchanged: 4,
-      deleted: 0,
-      unmatched: 3,
-    });
-    expect(dryRunSummary("write.entity", { inserted: 1, dry_run: true })).toBeNull();
-    expect(dryRunSummary("state.variable", { applied: false, dry_run: true })).toEqual({
-      kind: "state.variable",
-      applied: false,
-    });
-    expect(dryRunSummary("state.variable", { value: 1 })).toBeNull();
-    expect(dryRunSummary("read.sql", { rows: [], dry_run: true })).toBeNull();
   });
 
   it("stores pins per channel and drops nodes that are gone or For", () => {
@@ -151,5 +98,9 @@ describe("editor execution helpers", () => {
     expect(zhMessages["channels.editor.test"]).not.toBe(zhMessages["channels.node.run"]);
     expect(enMessages["channels.editor.hint"]).not.toBe(enMessages["channels.run.writesUpTo"]);
     expect(zhMessages["channels.editor.hint"]).not.toBe(zhMessages["channels.run.writesUpTo"]);
+    expect(enMessages["channels.editor.hint"]).toContain("real run");
+    expect(zhMessages["channels.editor.hint"]).toContain(
+      "\u771f\u5b9e\u8fd0\u884c",
+    );
   });
 });
