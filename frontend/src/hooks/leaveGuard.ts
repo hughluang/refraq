@@ -1,5 +1,3 @@
-export const LEAVE_GUARD_ALLOW = "allow";
-
 export function isLeaveHref(currentHref: string, nextHref: string): boolean {
   const current = new URL(currentHref);
   const next = new URL(nextHref, currentHref);

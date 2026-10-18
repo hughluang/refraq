@@ -10,7 +10,7 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Literal, Protocol
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -51,6 +51,8 @@ class UserStore(Protocol):
         limit: int | None = None,
         offset: int = 0,
         include_system: bool = False,
+        q: str | None = None,
+        identity_source: IdentitySource | None = None,
     ) -> tuple[list[UserRecord], int]: ...
 
     def count_by_role_id(self, role_id: str) -> int: ...
@@ -98,6 +100,33 @@ class UserStore(Protocol):
         session: Session | None = None,
     ) -> UserRecord | None: ...
 
+
+def _query_needle(q: str | None) -> str:
+    return (q or "").strip()
+
+
+def _user_matches_query(record: UserRecord, needle: str) -> bool:
+    if not needle:
+        return True
+    email = record.email or ""
+    return (
+        needle in record.account.lower()
+        or needle in record.display_name.lower()
+        or needle in email.lower()
+    )
+
+
+def _user_query_sql(q: str | None):
+    needle = _query_needle(q)
+    if not needle:
+        return None
+    return or_(
+        UserRow.account.icontains(needle, autoescape=True),
+        UserRow.display_name.icontains(needle, autoescape=True),
+        UserRow.email.icontains(needle, autoescape=True),
+    )
+
+
 class MemoryUserStore:
     def __init__(self) -> None:
         self._by_id: dict[str, UserRecord] = {}
@@ -125,13 +154,21 @@ class MemoryUserStore:
         limit: int | None = None,
         offset: int = 0,
         include_system: bool = False,
+        q: str | None = None,
+        identity_source: IdentitySource | None = None,
     ) -> tuple[list[UserRecord], int]:
+        needle = _query_needle(q).lower()
         with self._lock:
             items = sorted(
                 (
                     record
                     for record in self._by_id.values()
-                    if include_system or record.identity_source != "system"
+                    if (include_system or record.identity_source != "system")
+                    and (
+                        identity_source is None
+                        or record.identity_source == identity_source
+                    )
+                    and _user_matches_query(record, needle)
                 ),
                 key=lambda record: (record.created_at, record.id),
             )
@@ -278,11 +315,18 @@ class SqlUserStore:
         limit: int | None = None,
         offset: int = 0,
         include_system: bool = False,
+        q: str | None = None,
+        identity_source: IdentitySource | None = None,
     ) -> tuple[list[UserRecord], int]:
         with session_scope() as session:
             base = select(UserRow)
             if not include_system:
                 base = base.where(UserRow.identity_source != "system")
+            if identity_source is not None:
+                base = base.where(UserRow.identity_source == identity_source)
+            match = _user_query_sql(q)
+            if match is not None:
+                base = base.where(match)
             total = int(
                 session.scalar(select(func.count()).select_from(base.subquery())) or 0
             )

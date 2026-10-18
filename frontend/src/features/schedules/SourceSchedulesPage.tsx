@@ -1,17 +1,14 @@
 "use client";
 
 import { Button, Group, Modal, Table, Text } from "@mantine/core";
-import { useNotification, useTranslate } from "@refinedev/core";
-import Link from "next/link";
+import { useTranslate } from "@refinedev/core";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { useCallback, useEffect, useState } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
-import { SwitchField } from "@/components/form/SwitchField";
 import { PageChrome } from "@/components/layout/PageChrome";
-import {
-  listSourceSchedules,
-  patchSchedule,
-} from "@/features/schedules/api";
+import { listSourceSchedules } from "@/features/schedules/api";
+import { ScheduleEnabledControl } from "@/features/schedules/ScheduleEnabledControl";
 import { ScheduleCadence } from "@/features/schedules/ScheduleCadence";
 import { ScheduleFormModal } from "@/features/schedules/ScheduleFormModal";
 import { ScheduleIdentityCell } from "@/features/schedules/ScheduleIdentityCell";
@@ -25,7 +22,7 @@ import type { ScheduledTask } from "@/features/schedules/types";
 import { getSource } from "@/features/sources/api/sources";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { problemMessage } from "@/lib/problem";
+import { useListQuery } from "@/hooks/useListQuery";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
@@ -36,7 +33,6 @@ type Props = {
 
 export function SourceSchedulesPage({ sourceId }: Props) {
   const t = useTranslate();
-  const { open } = useNotification();
   const formatInstant = useFormatInstant();
 
   const [sourceLabel, setSourceLabel] = useState<string | null>(null);
@@ -44,6 +40,7 @@ export function SourceSchedulesPage({ sourceId }: Props) {
   const [editing, setEditing] = useState<ScheduledTask | null>(null);
   const [jobsTask, setJobsTask] = useState<ScheduledTask | null>(null);
   const [cronTimezone, setCronTimezone] = useState<string | null>(null);
+  const query = useListQuery({ search: false });
 
   const fetchPage = useCallback(
     async (query: PageQuery) => {
@@ -57,6 +54,8 @@ export function SourceSchedulesPage({ sourceId }: Props) {
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
     resetDeps: [sourceId],
+    page: query.page,
+    onPageChange: query.setPage,
   });
   const { items, loading, reload } = list;
 
@@ -68,9 +67,19 @@ export function SourceSchedulesPage({ sourceId }: Props) {
       .catch(() => setSourceLabel(null));
   }, [sourceId]);
 
+  const createSchedule = (
+    <Button
+      size="sm"
+      disabled={cronTimezone === null}
+      onClick={() => setCreating(true)}
+    >
+      {t("schedules.create")}
+    </Button>
+  );
+
   const title = sourceLabel
     ? `${t("schedules.related.title")} · ${sourceLabel}`
-    : `${t("schedules.related.title")} · ${sourceId}`;
+    : t("schedules.related.title");
 
   return (
     <>
@@ -80,7 +89,7 @@ export function SourceSchedulesPage({ sourceId }: Props) {
         actions={
           <Group gap="xs">
             <Button
-              component={Link}
+              component={ConsoleLink}
               href="/console/sources"
               variant="default"
               size="sm"
@@ -95,13 +104,7 @@ export function SourceSchedulesPage({ sourceId }: Props) {
             >
               {t("schedules.refresh")}
             </Button>
-            <Button
-              size="sm"
-              disabled={cronTimezone === null}
-              onClick={() => setCreating(true)}
-            >
-              {t("schedules.create")}
-            </Button>
+            {createSchedule}
           </Group>
         }
       >
@@ -109,6 +112,7 @@ export function SourceSchedulesPage({ sourceId }: Props) {
             list={list}
             columnCount={6}
             emptyMessage={t("schedules.related.empty")}
+            emptyAction={createSchedule}
             head={<ScheduleTableHead />}
           >
             {items.map((task) => (
@@ -120,23 +124,11 @@ export function SourceSchedulesPage({ sourceId }: Props) {
                   <ScheduleCadence task={task} cronTimezone={cronTimezone} />
                 </Table.Td>
                 <Table.Td>
-                  <SwitchField
+                  <ScheduleEnabledControl
+                    task={task}
                     editable
-                    checked={task.enabled}
-                    onChange={async (event) => {
-                      try {
-                        await patchSchedule(task.id, {
-                          enabled: event.currentTarget.checked,
-                        });
-                        await reload();
-                      } catch (err) {
-                        open?.({
-                          type: "error",
-                          message:
-                            problemMessage(t, err, String(err)),
-                        });
-                      }
-                    }}
+                    recordName={scheduleIdentityLabel(task, "source")}
+                    onChanged={() => reload()}
                   />
                 </Table.Td>
                 <Table.Td>
@@ -151,6 +143,7 @@ export function SourceSchedulesPage({ sourceId }: Props) {
                 <Table.Td>
                   <ScheduleRunStrip
                     jobs={task.recent_jobs}
+                    kind={task.work_kind}
                     onOpenJobs={() => setJobsTask(task)}
                   />
                 </Table.Td>

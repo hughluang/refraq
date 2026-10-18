@@ -67,7 +67,7 @@ Source probe completed-failure remains HTTP 200 `{ "ok": false, "code", "message
 
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/sources` | `sources:read` | List Sources (projected `access`; **Offset Page**) |
+| `GET` | `/sources` | `sources:read` | List Sources (projected `access`; **Offset Page**; optional `q`, `engine`) |
 | `GET` | `/sources/access-schema/{engine}` | `sources:read` | Connector Spec (JSON Schema) for SpecTree + validation |
 | `POST` | `/sources` | `sources:write` | Create (database kind requires engine + full `access` including secrets and dialect scope) |
 | `GET` | `/sources/{id}` | `sources:read` | Get (projected `access`) |
@@ -81,7 +81,9 @@ There is **no** `PUT /sources/{id}/secret`. Credential changes are a full `acces
 
 ### `GET /sources`
 
-**Offset Page** (`key ASC`, `id ASC`). Query params: `limit` (default **100**, max **500**), `offset` (default **0**).
+**Offset Page** (`key ASC`, `id ASC`). Query params: `limit` (default **100**, max **500**), `offset` (default **0**), optional `q`, optional `engine`.
+
+`q` is a case-insensitive substring of `key`, `name`, or `locator_key`. A blank or whitespace-only `q` is the same as omitting it. `%` and `_` match themselves. `engine`, when present, is an exact match of a supported engine code (`postgresql`, `mssql`, `oracle`). Any other value is `422 REQUEST_INVALID`. It combines with `q`. `total` counts the filtered set. Ordering and the envelope are unchanged.
 
 Response: `{ "items": […], "total": N, "limit": L, "offset": O }`. Items use the projected Source shape.
 

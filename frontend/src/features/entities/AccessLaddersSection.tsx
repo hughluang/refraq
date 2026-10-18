@@ -1,6 +1,6 @@
 "use client";
 
-import { Badge, Button, Collapse, Group, NumberInput, Select, Stack, Text, TextInput } from "@mantine/core";
+import { Badge, Button, Collapse, Group, NumberInput, Select, Stack, Table, Text, TextInput } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useEffect, useState } from "react";
 
@@ -19,9 +19,11 @@ import {
 } from "@/features/entities/accessLogic";
 import type { AccessRun } from "@/features/entities/accessSession";
 import type { AccessLevel, AccessSummary } from "@/features/entities/accessTypes";
+import { ListTable } from "@/components/display/ListTable";
+import { RowActions } from "@/components/display/RowActions";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
-import { EmptyState } from "@/components/feedback/EmptyState";
 import { SectionHeader } from "@/components/layout/SectionHeader";
+import { localListSession } from "@/lib/list-state";
 
 type RemoveTarget = {
   attributeId: string;
@@ -32,11 +34,14 @@ type RemoveTarget = {
 
 type Props = {
   entityId: string;
-  summary: AccessSummary;
+  summary: AccessSummary | null;
   busyId: string | null;
   run: AccessRun;
   focusId: AccessSectionId;
   focusNonce: number;
+  loading?: boolean;
+  error?: string | null;
+  onReload?: () => void | Promise<void>;
 };
 
 function maskMode(
@@ -75,10 +80,18 @@ export function AccessLaddersSection({
   run,
   focusId,
   focusNonce,
+  loading = false,
+  error = null,
+  onReload,
 }: Props) {
   const t = useTranslate();
-  const clearOnly = laddersClearOnly(summary.ladders);
-  const [sectionOpen, setSectionOpen] = useState(() => !laddersClearOnly(summary.ladders));
+  const ladders = summary?.ladders ?? [];
+  const profiles = summary?.profiles ?? [];
+  const restrictions = summary?.restrictions ?? [];
+  const clearOnly = laddersClearOnly(ladders);
+  const [sectionOpen, setSectionOpen] = useState(
+    () => summary != null && !laddersClearOnly(summary.ladders),
+  );
   const [openAttribute, setOpenAttribute] = useState<string | null>(null);
   const [levelKey, setLevelKey] = useState("");
   const [maskType, setMaskType] = useState<(typeof MASK_KINDS)[number]>("null");
@@ -89,8 +102,8 @@ export function AccessLaddersSection({
 
   const referrers = removeTarget
     ? levelReferrers(
-        summary.profiles,
-        summary.restrictions,
+        profiles,
+        restrictions,
         removeTarget.attributeId,
         removeTarget.levelKey,
       )
@@ -100,6 +113,7 @@ export function AccessLaddersSection({
     removeTarget != null && busyId === `ladder-remove:${removeTarget.attributeId}`;
 
   useEffect(() => {
+    if (!summary) return;
     if (!laddersClearOnly(summary.ladders)) setSectionOpen(true);
   }, [summary]);
 
@@ -121,18 +135,35 @@ export function AccessLaddersSection({
           ) : null
         }
       />
-      {summary.ladders.length === 0 ? (
-        <EmptyState message={t("entities.access.ladders.empty")} />
-      ) : !sectionOpen ? (
+      {clearOnly && !sectionOpen && !loading && !error ? (
         <Text size="sm" c="dimmed">
           {t("entities.access.ladders.clearOnly")}
         </Text>
       ) : (
-        summary.ladders.map((ladder) => {
+        <ListTable
+          embedded
+          list={localListSession({
+            total: ladders.length,
+            loading,
+            error,
+            reload: onReload,
+          })}
+          columnCount={1}
+          minWidth={640}
+          emptyMessage={t("entities.access.ladders.empty")}
+          head={
+            <Table.Tr>
+              <Table.Th>{t("entities.access.ladders")}</Table.Th>
+            </Table.Tr>
+          }
+        >
+          {ladders.map((ladder) => {
           const open = openAttribute === ladder.attribute_id;
           const adding = busyId === `ladder-add:${ladder.attribute_id}`;
           return (
-            <Stack key={ladder.attribute_id} gap="xs">
+            <Table.Tr key={ladder.attribute_id}>
+            <Table.Td>
+            <Stack gap="xs">
               <Group justify="space-between" align="flex-start" wrap="wrap">
                 <Stack gap={2}>
                   <Text fw={600}>{ladder.attribute_name}</Text>
@@ -147,8 +178,8 @@ export function AccessLaddersSection({
                       level.key,
                     );
                     const usedBy = levelReferrers(
-                      summary.profiles,
-                      summary.restrictions,
+                      profiles,
+                      restrictions,
                       ladder.attribute_id,
                       level.key,
                     );
@@ -172,22 +203,25 @@ export function AccessLaddersSection({
                           </Text>
                         ) : null}
                         {level.key === "clear" ? null : (
-                          <Button
-                            size="xs"
-                            variant="subtle"
-                            color="red"
-                            disabled={busyId !== null}
-                            onClick={() =>
-                              setRemoveTarget({
-                                attributeId: ladder.attribute_id,
-                                attributeName: ladder.attribute_name,
-                                levelKey: level.key,
-                                levelLabel: label,
-                              })
-                            }
-                          >
-                            {t("entities.access.ladders.remove")}
-                          </Button>
+                          <RowActions
+                            recordName={label}
+                            verbs={[
+                              {
+                                key: "remove",
+                                label: t("entities.access.ladders.remove"),
+                                color: "red",
+                                disabledReason: busyId !== null ? t("common.loading") : undefined,
+                                onClick: () =>
+                                  setRemoveTarget({
+                                    attributeId: ladder.attribute_id,
+                                    attributeName: ladder.attribute_name,
+                                    levelKey: level.key,
+                                    levelLabel: label,
+                                  }),
+                                safety: "confirm",
+                              },
+                            ]}
+                          />
                         )}
                       </Group>
                     );
@@ -286,8 +320,11 @@ export function AccessLaddersSection({
                 </Stack>
               </Collapse>
             </Stack>
+            </Table.Td>
+            </Table.Tr>
           );
-        })
+        })}
+        </ListTable>
       )}
       <ConfirmActionModal
         opened={removeTarget !== null}
@@ -320,7 +357,7 @@ export function AccessLaddersSection({
         }
         onConfirm={() => {
           if (!removeTarget || blocked) return;
-          const ladder = summary.ladders.find(
+          const ladder = ladders.find(
             (item) => item.attribute_id === removeTarget.attributeId,
           );
           if (!ladder) return;

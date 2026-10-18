@@ -9,11 +9,10 @@ import {
   Text,
 } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import Link from "next/link";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
-import { PageError } from "@/components/feedback/PageError";
+import { JobReference } from "@/components/display/JobReference";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { JobDetailModal } from "@/features/jobs/JobDetailModal";
 import { getStructureDiff } from "@/features/sources/api/structure-diffs";
@@ -23,6 +22,7 @@ import {
   groupChanges,
 } from "@/features/sources/structure-diffs/groupChanges";
 import type { StructureDiff } from "@/features/sources/types";
+import { useSourceName } from "@/features/sources/structure-diffs/useSourceName";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { problemMessage } from "@/lib/problem";
 
@@ -81,41 +81,44 @@ export function StructureDiffDetail({ sourceId, diffId }: Props) {
   }, [load]);
 
   const groups = useMemo(() => groupChanges(diff?.changes), [diff?.changes]);
-
-  const title = `${t("structureDiffs.detailTitle")} · ${sourceId}`;
+  const sourceName = useSourceName(sourceId);
+  const title = sourceName.name
+    ? `${t("structureDiffs.detailTitle")} · ${sourceName.name}`
+    : t("structureDiffs.detailTitle");
+  const description = sourceName.failed
+    ? t("common.error.loadFailed")
+    : t("structureDiffs.detailDescription");
 
   if (loading) {
     return (
       <PageChrome
         title={title}
-        description={t("structureDiffs.detailDescription")}
-      >
-        <PageBodySkeleton />
-      </PageChrome>
+        description={description}
+        status="loading"
+      />
     );
   }
 
-  if (error) {
+  if (error || !diff) {
     return (
       <PageChrome
         title={title}
-        description={t("structureDiffs.detailDescription")}
-      >
-        <PageError message={error} onRetry={() => void load()} />
-      </PageChrome>
+        description={description}
+        status={error ? "error" : "notFound"}
+        errorMessage={error ?? undefined}
+        onRetry={error ? () => void load() : undefined}
+      />
     );
   }
-
-  if (!diff) return null;
 
   return (
     <PageChrome
       title={title}
-      description={t("structureDiffs.detailDescription")}
+      description={description}
       actions={
         <Group gap="xs">
           <Button
-            component={Link}
+            component={ConsoleLink}
             href={`/console/sources/${sourceId}/structure-diffs`}
             variant="default"
             size="sm"
@@ -137,13 +140,12 @@ export function StructureDiffDetail({ sourceId, diffId }: Props) {
           <Text size="sm" c="dimmed">
             {formatInstant(diff.created_at)}
           </Text>
-          <Button
-            size="compact-xs"
-            variant="light"
-            onClick={() => setJobOpened(true)}
-          >
-            {t("structureDiffs.openJob")}: {diff.job_id}
-          </Button>
+          <JobReference
+            jobId={diff.job_id}
+            kind="structure"
+            status="succeeded"
+            onOpen={() => setJobOpened(true)}
+          />
         </Group>
 
         <Table withTableBorder>

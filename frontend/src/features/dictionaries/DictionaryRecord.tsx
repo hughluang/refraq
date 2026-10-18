@@ -1,16 +1,23 @@
 "use client";
 
-import { Anchor, Badge, Button, Divider, Group, Stack, Table, Text } from "@mantine/core";
-import { useForm } from "@mantine/form";
+import { Badge, Button, Group, Stack, Table, Text } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import {
+  FormErrorSummary,
+  saveFailureFrom,
+  type SaveFailure,
+} from "@/components/form/FormErrorSummary";
+import { useConsoleForm } from "@/components/form/useConsoleForm";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
+import { suppressLeaveGuard } from "@/components/navigation/leaveGuard";
+import { useConsoleNavigation } from "@/components/navigation/useConsoleNavigation";
+import { useCallback, useEffect, useState } from "react";
 
-import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
-import { EmptyState } from "@/components/feedback/EmptyState";
-import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
-import { PageError } from "@/components/feedback/PageError";
+import { ListTable } from "@/components/display/ListTable";
+import { RecordReference } from "@/components/display/RecordReference";
+import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
+import { localListSession } from "@/lib/list-state";
+import { HeaderAction, HeaderActions } from "@/components/layout/HeaderActions";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { DictionaryFormFields } from "@/features/dictionaries/DictionaryFormFields";
 import { DictionaryStatusBadge } from "@/features/dictionaries/DictionaryStatusBadge";
@@ -28,9 +35,6 @@ import {
 } from "@/features/dictionaries/dictionaryForm";
 import type { Dictionary, DictionaryFormValues } from "@/features/dictionaries/types";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
-import { LEAVE_GUARD_ALLOW } from "@/hooks/leaveGuard";
-import { useConfirmAction } from "@/hooks/useConfirmAction";
-import { useLeaveGuard } from "@/hooks/useLeaveGuard";
 import { problemMessage } from "@/lib/problem";
 
 const DICTIONARY_FORM_ID = "dictionary-record-form";
@@ -59,18 +63,14 @@ export function DictionaryRecord(props: Props) {
 function DictionaryCreateForm() {
   const t = useTranslate();
   const { open } = useNotification();
-  const [busy, setBusy] = useState(false);
-  const form = useForm<DictionaryFormValues>({
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const form = useConsoleForm<DictionaryFormValues>({
     initialValues: EMPTY_DICTIONARY_FORM,
+    onValuesChange: () => setSaveFailure(null),
     validate: (values) => dictionaryFormErrors(values, t),
-  });
-  const leaveGuard = useLeaveGuard({
-    enabled: form.isDirty(),
-    message: t("common.leaveUnsaved"),
   });
 
   const submit = async (values: DictionaryFormValues) => {
-    setBusy(true);
     try {
       const description = values.description.trim();
       const created = await createDictionary({
@@ -79,19 +79,16 @@ function DictionaryCreateForm() {
         ...(description ? { description } : {}),
         entries: entriesFromForm(values.entries),
       });
-      form.resetDirty();
-      leaveGuard.bypass();
+      form.markSaved();
+      suppressLeaveGuard();
       open?.({ type: "success", message: t("dictionaries.create.success") });
       window.location.replace(
         `/console/dictionaries/${created.dictionary.id}/edit`,
       );
     } catch (err) {
-      open?.({
-        type: "error",
-        message: problemMessage(t, err, String(err)),
-      });
-    } finally {
-      setBusy(false);
+      setSaveFailure(
+        saveFailureFrom(t, err, form.applyApiError(err), String(err)),
+      );
     }
   };
 
@@ -99,32 +96,41 @@ function DictionaryCreateForm() {
     <PageChrome
       title={t("dictionaries.create.title")}
       actions={
-        <Group
-          gap="xs"
-          wrap="nowrap"
-          aria-label={t("dictionaries.actions.standard")}
-        >
-          <Button
-            component={Link}
-            href="/console/dictionaries"
-            variant="default"
-            size="sm"
-            data-leave-guard={LEAVE_GUARD_ALLOW}
-          >
-            {t("common.cancel")}
-          </Button>
-          <Button type="submit" form={DICTIONARY_FORM_ID} size="sm" loading={busy}>
-            {t("dictionaries.create.submit")}
-          </Button>
-        </Group>
+        <HeaderActions
+          standard={
+            <>
+              <Button
+                component={ConsoleLink}
+                href="/console/dictionaries"
+                variant="default"
+                size="sm"
+              >
+                {t("common.cancel")}
+              </Button>
+              <HeaderAction primary>
+                <Button
+                  type="submit"
+                  form={DICTIONARY_FORM_ID}
+                  size="sm"
+                  loading={form.submitting}
+                >
+                  {t("dictionaries.create.submit")}
+                </Button>
+              </HeaderAction>
+            </>
+          }
+        />
       }
     >
       <form
         id={DICTIONARY_FORM_ID}
         noValidate
-        onSubmit={form.onSubmit((values) => void submit(values))}
+        onSubmit={form.onSubmit((values) => submit(values))}
       >
-        <DictionaryFormFields form={form} editable nameEditable />
+        <Stack gap="sm">
+          <FormErrorSummary failure={saveFailure} />
+          <DictionaryFormFields form={form} editable nameEditable />
+        </Stack>
       </form>
     </PageChrome>
   );
@@ -132,7 +138,7 @@ function DictionaryCreateForm() {
 
 function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
   const t = useTranslate();
-  const router = useRouter();
+  const { replace } = useConsoleNavigation();
   const { open } = useNotification();
   const { data: canWrite } = useCan({
     resource: ModuleId.dictionaries,
@@ -142,15 +148,12 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const deleteConfirm = useConfirmAction<true>();
-  const deprecateConfirm = useConfirmAction<true>();
-  const form = useForm<DictionaryFormValues>({
+  const recordAction = useConsoleMutation();
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const form = useConsoleForm<DictionaryFormValues>({
     initialValues: EMPTY_DICTIONARY_FORM,
+    onValuesChange: () => setSaveFailure(null),
     validate: (values) => dictionaryFormErrors(values, t),
-  });
-  const leaveGuard = useLeaveGuard({
-    enabled: mode !== "show" && form.isDirty(),
-    message: t("common.leaveUnsaved"),
   });
 
   const load = useCallback(async () => {
@@ -160,7 +163,7 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
       const response = await getDictionary(dictionaryId);
       setRecord(response.dictionary);
       form.setValues(formFromDictionary(response.dictionary));
-      form.resetDirty();
+      form.markSaved();
     } catch (err) {
       setRecord(null);
       setError(problemMessage(t, err, String(err)));
@@ -176,8 +179,9 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
   useEffect(() => {
     if (mode !== "edit") return;
     if (canWrite?.can !== false) return;
-    router.replace(`/console/dictionaries/${dictionaryId}`);
-  }, [canWrite?.can, dictionaryId, mode, router]);
+    suppressLeaveGuard();
+    replace(`/console/dictionaries/${dictionaryId}`);
+  }, [canWrite?.can, dictionaryId, mode, replace]);
 
   const notifyError = (err: unknown, fallback: string) => {
     open?.({
@@ -192,7 +196,6 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
   const inUse = (record?.usages?.length ?? 0) > 0;
 
   const submit = async (values: DictionaryFormValues) => {
-    setBusy(true);
     try {
       const description = values.description.trim();
       await patchDictionary(dictionaryId, {
@@ -200,118 +203,111 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
         description: description || null,
         entries: entriesFromForm(values.entries),
       });
-      form.resetDirty();
+      form.markSaved();
+      setSaveFailure(null);
       open?.({ type: "success", message: t("dictionaries.update.success") });
       await load();
     } catch (err) {
-      notifyError(err, t("dictionaries.update.failed"));
-    } finally {
-      setBusy(false);
+      setSaveFailure(
+        saveFailureFrom(
+          t,
+          err,
+          form.applyApiError(err),
+          t("dictionaries.update.failed"),
+        ),
+      );
     }
   };
 
-  const confirmDelete = async () => {
-    setBusy(true);
-    try {
-      await deleteDictionary(dictionaryId);
-      deleteConfirm.close();
-      leaveGuard.bypass();
-      open?.({ type: "success", message: t("dictionaries.delete.success") });
-      router.replace("/console/dictionaries");
-    } catch (err) {
-      notifyError(err, t("dictionaries.delete.failed"));
-    } finally {
-      setBusy(false);
-    }
-  };
+  function onDelete() {
+    const name = record?.display_name ?? "";
+    recordAction.run({
+      safety: "confirm",
+      key: "delete",
+      recordName: name,
+      title: t("dictionaries.delete.confirmTitle"),
+      consequence: t("dictionaries.delete.consequence"),
+      confirmLabel: t("actions.delete"),
+      confirmColor: "red",
+      outcome: t("dictionaries.delete.success"),
+      execute: async () => {
+        await deleteDictionary(dictionaryId);
+        suppressLeaveGuard();
+        replace("/console/dictionaries");
+      },
+    });
+  }
 
-  const confirmDeprecate = async () => {
-    setBusy(true);
-    try {
-      await patchDictionary(dictionaryId, { deprecated: true });
-      deprecateConfirm.close();
-      open?.({ type: "success", message: t("dictionaries.deprecate.success") });
-      await load();
-    } catch (err) {
-      notifyError(err, t("dictionaries.update.failed"));
-    } finally {
-      setBusy(false);
-    }
-  };
+  function onDeprecate() {
+    const name = record?.display_name ?? "";
+    recordAction.run({
+      safety: "confirm",
+      key: "deprecate",
+      recordName: name,
+      title: t("dictionaries.deprecate.confirmTitle"),
+      consequence: t("dictionaries.deprecate.consequence"),
+      confirmLabel: t("dictionaries.deprecate"),
+      confirmColor: "red",
+      outcome: t("dictionaries.deprecate.success"),
+      execute: () => patchDictionary(dictionaryId, { deprecated: true }),
+      onSuccess: () => load(),
+    });
+  }
 
-  const restore = async () => {
-    setBusy(true);
-    try {
-      await patchDictionary(dictionaryId, { deprecated: false });
-      open?.({ type: "success", message: t("dictionaries.restore.success") });
-      await load();
-    } catch (err) {
-      notifyError(err, t("dictionaries.update.failed"));
-    } finally {
-      setBusy(false);
-    }
-  };
+  function onRestore() {
+    const name = record?.display_name ?? "";
+    recordAction.run({
+      safety: "undoable",
+      key: "restore",
+      recordName: name,
+      outcome: t("dictionaries.restore.success"),
+      execute: () => patchDictionary(dictionaryId, { deprecated: false }),
+      undo: () => patchDictionary(dictionaryId, { deprecated: true }),
+      onSuccess: () => load(),
+    });
+  }
 
   if (loading) {
-    return (
-      <PageChrome title={t("dictionaries.title")}>
-        <PageBodySkeleton />
-      </PageChrome>
-    );
+    return <PageChrome title={t("dictionaries.title")} status="loading" />;
   }
 
   if (error) {
     return (
-      <PageChrome title={t("dictionaries.title")}>
-        <PageError message={error} onRetry={() => void load()} />
-      </PageChrome>
+      <PageChrome
+        title={t("dictionaries.title")}
+        status="error"
+        errorMessage={error}
+        onRetry={() => void load()}
+      />
     );
   }
 
   if (mode === "edit" && canWrite?.can === false) {
-    return (
-      <PageChrome title={t("dictionaries.edit.title")}>
-        <PageBodySkeleton />
-      </PageChrome>
-    );
+    return <PageChrome title={t("dictionaries.edit.title")} status="loading" />;
   }
 
-  const title =
-    mode === "edit"
-      ? t("dictionaries.edit.title")
-      : (record?.display_name ?? t("dictionaries.title"));
+  const recordTitle = record?.display_name;
+  const title = t("dictionaries.title");
 
-  const clusters: ReactNode[] = [];
-  clusters.push(
-    <Group
-      key="navigation"
-      gap="xs"
-      wrap="nowrap"
-      aria-label={t("dictionaries.actions.navigation")}
-    >
-      <Button component={Link} href="/console/dictionaries" variant="default" size="sm">
+  const navigationActions = (
+    <Group gap="xs" wrap="nowrap" aria-label={t("dictionaries.actions.navigation")}>
+      <Button component={ConsoleLink} href="/console/dictionaries" variant="default" size="sm">
         {t("dictionaries.backToList")}
       </Button>
       <Button variant="default" size="sm" onClick={() => void load()}>
         {t("jobs.refresh")}
       </Button>
-    </Group>,
+    </Group>
   );
-  if (canWrite?.can) {
-    clusters.push(
-      <Group
-        key="lifecycle"
-        gap="xs"
-        wrap="nowrap"
-        aria-label={t("dictionaries.actions.lifecycle")}
-      >
+  const lifecycleActions = canWrite?.can ? (
+      <Group gap="xs" wrap="nowrap" aria-label={t("dictionaries.actions.lifecycle")}>
         {deprecated ? (
           <Button
             size="sm"
             variant="light"
-            loading={busy}
+            loading={busy || recordAction.isSubmitting("restore")}
             disabled={dirty}
-            onClick={() => void restore()}
+            onClick={onRestore}
           >
             {t("dictionaries.restore")}
           </Button>
@@ -320,30 +316,23 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
             size="sm"
             variant="light"
             color="red"
-            loading={busy}
+            loading={busy || recordAction.isSubmitting("deprecate")}
             disabled={dirty}
-            onClick={() => deprecateConfirm.open(true)}
+            onClick={onDeprecate}
           >
             {t("dictionaries.deprecate")}
           </Button>
         )}
-      </Group>,
-    );
-  }
+      </Group>
+  ) : null;
   const showEdit = mode === "show" && Boolean(canWrite?.can);
   const showDelete = !inUse && Boolean(canWrite?.can);
   const showSave = mode !== "show";
-  if (showEdit || showDelete || showSave) {
-    clusters.push(
-      <Group
-        key="standard"
-        gap="xs"
-        wrap="nowrap"
-        aria-label={t("dictionaries.actions.standard")}
-      >
+  const standardActions = showEdit || showDelete || showSave ? (
+      <Group gap="xs" wrap="nowrap" aria-label={t("dictionaries.actions.standard")}>
         {mode === "show" && canWrite?.can ? (
           <Button
-            component={Link}
+            component={ConsoleLink}
             href={`/console/dictionaries/${dictionaryId}/edit`}
             size="sm"
             variant="light"
@@ -356,42 +345,38 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
             size="sm"
             color="red"
             variant="light"
-            onClick={() => deleteConfirm.open(true)}
+            loading={recordAction.isSubmitting("delete")}
+            onClick={onDelete}
           >
             {t("actions.delete")}
           </Button>
         ) : null}
         {showSave ? (
           <Button
-            component={Link}
+            component={ConsoleLink}
             href={`/console/dictionaries/${dictionaryId}`}
             variant="default"
             size="sm"
-            data-leave-guard={LEAVE_GUARD_ALLOW}
           >
             {t("common.cancel")}
           </Button>
         ) : null}
         {showSave ? (
-          <Button type="submit" form={DICTIONARY_FORM_ID} size="sm" loading={busy}>
-            {t("dictionaries.edit.submit")}
-          </Button>
+          <HeaderAction primary>
+            <Button type="submit" form={DICTIONARY_FORM_ID} size="sm" loading={form.submitting}>
+              {t("dictionaries.edit.submit")}
+            </Button>
+          </HeaderAction>
         ) : null}
-      </Group>,
-    );
-  }
+      </Group>
+  ) : null;
 
   const headerActions = (
-    <Group gap="xs" wrap="wrap" align="center">
-      {clusters.flatMap((cluster, index) =>
-        index === 0
-          ? [cluster]
-          : [
-              <Divider key={`divider-${index}`} orientation="vertical" h={28} />,
-              cluster,
-            ],
-      )}
-    </Group>
+    <HeaderActions
+      navigation={navigationActions}
+      lifecycle={lifecycleActions}
+      standard={standardActions}
+    />
   );
 
   const usages = record?.usages ?? [];
@@ -404,45 +389,42 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
       />
       <Stack gap="xs">
         <Text fw={500}>{t("dictionaries.usages.title")}</Text>
-        {usages.length === 0 ? (
-          <EmptyState message={t("dictionaries.usages.empty")} />
-        ) : (
-          <Table horizontalSpacing="sm" verticalSpacing="xs">
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>{t("entities.fields.tableName")}</Table.Th>
-                <Table.Th>{t("entities.fields.attributeName")}</Table.Th>
-                <Table.Th>{t("entities.fields.version")}</Table.Th>
-                <Table.Th />
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {usages.map((usage) => (
-                <Table.Tr key={`${usage.version_id}:${usage.attribute_name}`}>
-                  <Table.Td>
-                    <Anchor
-                      component={Link}
-                      href={`/console/entities/${usage.entity_id}`}
-                      size="sm"
-                      ff="monospace"
-                    >
-                      {usage.table_name}
-                    </Anchor>
-                  </Table.Td>
-                  <Table.Td>{usage.attribute_name}</Table.Td>
-                  <Table.Td>{usage.version}</Table.Td>
-                  <Table.Td>
-                    {usage.behind ? (
-                      <Badge color="orange" variant="light">
-                        {t("dictionaries.usages.behind")}
-                      </Badge>
-                    ) : null}
-                  </Table.Td>
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
-        )}
+        <ListTable
+          embedded
+          list={localListSession({ total: usages.length })}
+          columnCount={4}
+          minWidth={640}
+          emptyMessage={t("dictionaries.usages.empty")}
+          head={
+            <Table.Tr>
+              <Table.Th>{t("entities.fields.tableName")}</Table.Th>
+              <Table.Th>{t("entities.fields.attributeName")}</Table.Th>
+              <Table.Th>{t("entities.fields.version")}</Table.Th>
+              <Table.Th />
+            </Table.Tr>
+          }
+        >
+          {usages.map((usage) => (
+            <Table.Tr key={`${usage.version_id}:${usage.attribute_name}`}>
+              <Table.Td>
+                <RecordReference
+                  name={usage.entity_name}
+                  recordKey={usage.table_name}
+                  href={`/console/entities/${usage.entity_id}`}
+                />
+              </Table.Td>
+              <Table.Td>{usage.attribute_name}</Table.Td>
+              <Table.Td>{usage.version}</Table.Td>
+              <Table.Td>
+                {usage.behind ? (
+                  <Badge color="orange" variant="light">
+                    {t("dictionaries.usages.behind")}
+                  </Badge>
+                ) : null}
+              </Table.Td>
+            </Table.Tr>
+          ))}
+        </ListTable>
       </Stack>
     </Stack>
   );
@@ -450,6 +432,12 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
   return (
     <PageChrome
       title={title}
+      recordTitle={recordTitle}
+      recent={
+        recordTitle
+          ? { moduleId: "dictionaries", title: recordTitle }
+          : undefined
+      }
       titleExtra={
         deprecated ? <DictionaryStatusBadge deprecated /> : undefined
       }
@@ -461,35 +449,13 @@ function ExistingDictionaryRecord({ mode, dictionaryId }: ExistingProps) {
         <form
           id={DICTIONARY_FORM_ID}
           noValidate
-          onSubmit={form.onSubmit((values) => void submit(values))}
+          onSubmit={form.onSubmit((values) => submit(values))}
         >
+          <FormErrorSummary failure={saveFailure} />
           {body}
         </form>
       )}
-      <ConfirmActionModal
-        opened={deleteConfirm.opened}
-        onClose={deleteConfirm.close}
-        title={t("dictionaries.delete.confirmTitle")}
-        body={t("dictionaries.delete.confirmBody", {
-          name: record?.display_name ?? "",
-        })}
-        confirmColor="red"
-        loading={busy}
-        confirmLabel={t("actions.delete")}
-        onConfirm={() => void confirmDelete()}
-      />
-      <ConfirmActionModal
-        opened={deprecateConfirm.opened}
-        onClose={deprecateConfirm.close}
-        title={t("dictionaries.deprecate.confirmTitle")}
-        body={t("dictionaries.deprecate.confirmBody", {
-          name: record?.display_name ?? "",
-        })}
-        confirmColor="red"
-        loading={busy}
-        confirmLabel={t("dictionaries.deprecate")}
-        onConfirm={() => void confirmDeprecate()}
-      />
+      {recordAction.dialog}
     </PageChrome>
   );
 }

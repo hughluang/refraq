@@ -1,24 +1,14 @@
 "use client";
 
-import { Badge } from "@mantine/core";
-import { useTranslate } from "@refinedev/core";
-
-const CLASS_COLOR: Record<string, string> = {
-  breaking: "red",
-  non_breaking: "blue",
-  unchanged: "gray",
-};
+import { StatusBadge } from "@/components/display/StatusBadge";
+import { presentStructureDiffClass } from "@/components/display/statusTone";
 
 type Props = {
   value: string | null | undefined;
 };
 
 export function StructureDiffClassBadge({ value }: Props) {
-  const t = useTranslate();
   if (!value) return null;
-  return (
-    <Badge color={CLASS_COLOR[value] ?? "gray"} variant="light">
-      {t(`structureDiffs.class.${value}`)}
-    </Badge>
-  );
+  const presentation = presentStructureDiffClass(value);
+  return <StatusBadge tone={presentation.tone} labelKey={presentation.labelKey} />;
 }

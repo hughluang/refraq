@@ -6,6 +6,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "dashboard",
     "label_key": "layout.nav.home",
+    "icon": "layout-dashboard",
     "routes": {
       "list": "/console",
       "create": null,
@@ -25,6 +26,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "users",
     "label_key": "users.title",
+    "icon": "users",
     "routes": {
       "list": "/console/users",
       "create": "/console/users/new",
@@ -44,6 +46,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "user-groups",
     "label_key": "userGroups.title",
+    "icon": "users-group",
     "routes": {
       "list": "/console/user-groups",
       "create": null,
@@ -63,6 +66,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "subject-attributes",
     "label_key": "subjectAttributes.title",
+    "icon": "id-badge",
     "routes": {
       "list": "/console/subject-attributes",
       "create": null,
@@ -82,6 +86,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "identity-providers",
     "label_key": "identityProviders.title",
+    "icon": "plug",
     "routes": {
       "list": "/console/identity-providers",
       "create": null,
@@ -101,6 +106,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "roles",
     "label_key": "roles.title",
+    "icon": "shield-lock",
     "routes": {
       "list": "/console/roles",
       "create": "/console/roles/new",
@@ -120,6 +126,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "tokens",
     "label_key": "tokens.title",
+    "icon": "key",
     "routes": {
       "list": null,
       "create": null,
@@ -139,6 +146,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "sources",
     "label_key": "sources.title",
+    "icon": "database",
     "routes": {
       "list": "/console/sources",
       "create": null,
@@ -163,6 +171,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "catalog",
     "label_key": "catalog.title",
+    "icon": "table",
     "routes": {
       "list": "/console/catalog",
       "create": null,
@@ -182,6 +191,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "business-domains",
     "label_key": "businessDomains.title",
+    "icon": "category",
     "routes": {
       "list": "/console/business-domains",
       "create": "/console/business-domains",
@@ -201,6 +211,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "type-mappings",
     "label_key": "typeMappings.title",
+    "icon": "arrows-exchange",
     "routes": {
       "list": "/console/type-mappings",
       "create": null,
@@ -220,6 +231,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "entities",
     "label_key": "entities.title",
+    "icon": "box",
     "routes": {
       "list": "/console/entities",
       "create": "/console/entities/new",
@@ -239,6 +251,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "dictionaries",
     "label_key": "dictionaries.title",
+    "icon": "book",
     "routes": {
       "list": "/console/dictionaries",
       "create": "/console/dictionaries/new",
@@ -258,6 +271,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "channels",
     "label_key": "channels.title",
+    "icon": "route",
     "routes": {
       "list": "/console/channels",
       "create": "/console/channels/new",
@@ -282,6 +296,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "channel-variables",
     "label_key": "channelVariables.title",
+    "icon": "variable",
     "routes": {
       "list": "/console/channel-variables",
       "create": null,
@@ -301,6 +316,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "jobs",
     "label_key": "jobs.title",
+    "icon": "list-check",
     "routes": {
       "list": "/console/jobs",
       "create": null,
@@ -320,6 +336,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "schedules",
     "label_key": "schedules.title",
+    "icon": "clock",
     "routes": {
       "list": "/console/schedules",
       "create": null,
@@ -339,6 +356,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "settings",
     "label_key": "settings.title",
+    "icon": "settings",
     "routes": {
       "list": "/console/settings",
       "create": null,
@@ -358,6 +376,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "branding",
     "label_key": "branding.title",
+    "icon": "palette",
     "routes": {
       "list": "/console/branding",
       "create": null,
@@ -377,6 +396,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "model-services",
     "label_key": "modelServices.title",
+    "icon": "brain",
     "routes": {
       "list": "/console/model-services",
       "create": "/console/model-services",
@@ -396,6 +416,7 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
   {
     "id": "account",
     "label_key": "account.title",
+    "icon": "user-circle",
     "routes": {
       "list": null,
       "create": null,

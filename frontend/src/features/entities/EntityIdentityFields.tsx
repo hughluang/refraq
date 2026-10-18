@@ -6,7 +6,7 @@ import { TextareaField } from "@/components/form/TextareaField";
 import { TextField } from "@/components/form/TextField";
 
 type IdentityFormApi = {
-  getInputProps: (path: string) => object;
+  fieldProps: (path: string) => object;
 };
 
 type Props = {
@@ -31,21 +31,21 @@ export function EntityIdentityFields({ form, tableName, editable }: Props) {
           label={t("entities.fields.tableName")}
           required
           editable={editable}
-          {...form.getInputProps("table_name")}
+          {...form.fieldProps("table_name")}
         />
       )}
       <TextField
         label={t("entities.fields.name")}
         required={editable}
         editable={editable}
-        {...form.getInputProps("name")}
+        {...form.fieldProps("name")}
       />
       <TextareaField
         label={t("entities.fields.description")}
         required={editable}
         editable={editable}
         minRows={2}
-        {...form.getInputProps("description")}
+        {...form.fieldProps("description")}
       />
     </>
   );

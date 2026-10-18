@@ -1,9 +1,9 @@
 "use client";
 
-import { Tabs } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import type { ReactNode } from "react";
 
+import { PageTabs, type PageTabItem } from "@/components/layout/consoleTabs";
 import {
   parseEntityDetailTab,
   type EntityDetailTab,
@@ -19,6 +19,7 @@ type Props = {
   data?: ReactNode;
   showAccess?: boolean;
   showData?: boolean;
+  children: (slots: { list: ReactNode; panels: ReactNode }) => ReactNode;
 };
 
 export function EntityTabs({
@@ -31,45 +32,28 @@ export function EntityTabs({
   data,
   showAccess = false,
   showData = false,
+  children,
 }: Props) {
   const t = useTranslate();
+  const tabs: PageTabItem[] = [
+    { value: "overview", label: t("entities.tabs.overview"), panel: overview },
+    { value: "attributes", label: t("entities.tabs.attributes"), panel: attributes },
+    { value: "versions", label: t("entities.tabs.versions"), panel: versions },
+  ];
+  if (showAccess) {
+    tabs.push({ value: "access", label: t("entities.tabs.access"), panel: access });
+  }
+  if (showData) {
+    tabs.push({ value: "data", label: t("entities.tabs.data"), panel: data });
+  }
 
   return (
-    <Tabs
+    <PageTabs
+      tabs={tabs}
       value={value}
-      keepMounted
       onChange={(next) => onChange(parseEntityDetailTab(next))}
     >
-      <Tabs.List>
-        <Tabs.Tab value="overview">{t("entities.tabs.overview")}</Tabs.Tab>
-        <Tabs.Tab value="attributes">{t("entities.tabs.attributes")}</Tabs.Tab>
-        <Tabs.Tab value="versions">{t("entities.tabs.versions")}</Tabs.Tab>
-        {showAccess ? (
-          <Tabs.Tab value="access">{t("entities.tabs.access")}</Tabs.Tab>
-        ) : null}
-        {showData ? (
-          <Tabs.Tab value="data">{t("entities.tabs.data")}</Tabs.Tab>
-        ) : null}
-      </Tabs.List>
-      <Tabs.Panel value="overview" pt="md">
-        {overview}
-      </Tabs.Panel>
-      <Tabs.Panel value="attributes" pt="md">
-        {attributes}
-      </Tabs.Panel>
-      <Tabs.Panel value="versions" pt="md">
-        {versions}
-      </Tabs.Panel>
-      {showAccess ? (
-        <Tabs.Panel value="access" pt="md">
-          {access}
-        </Tabs.Panel>
-      ) : null}
-      {showData ? (
-        <Tabs.Panel value="data" pt="md">
-          {data}
-        </Tabs.Panel>
-      ) : null}
-    </Tabs>
+      {children}
+    </PageTabs>
   );
 }

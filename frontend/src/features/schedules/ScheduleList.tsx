@@ -1,13 +1,13 @@
 "use client";
 
-import { Button, Table, Text, Tooltip } from "@mantine/core";
-import { useNotification, useTranslate } from "@refinedev/core";
+import { Button, Table, Text } from "@mantine/core";
+import { useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
-import { SwitchField } from "@/components/form/SwitchField";
 import { PageChrome } from "@/components/layout/PageChrome";
-import { listSchedules, patchSchedule } from "@/features/schedules/api";
+import { listSchedules } from "@/features/schedules/api";
+import { ScheduleEnabledControl } from "@/features/schedules/ScheduleEnabledControl";
 import { ScheduleCadence } from "@/features/schedules/ScheduleCadence";
 import { ScheduleFormModal } from "@/features/schedules/ScheduleFormModal";
 import { ScheduleIdentityCell } from "@/features/schedules/ScheduleIdentityCell";
@@ -23,27 +23,29 @@ import {
 import type { ScheduledTask } from "@/features/schedules/types";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { problemMessage } from "@/lib/problem";
+import { useListQuery } from "@/hooks/useListQuery";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
 
 export function ScheduleList() {
   const t = useTranslate();
-  const { open } = useNotification();
   const formatInstant = useFormatInstant();
   const [editing, setEditing] = useState<ScheduledTask | null>(null);
   const [jobsTask, setJobsTask] = useState<ScheduledTask | null>(null);
   const [cronTimezone, setCronTimezone] = useState<string | null>(null);
+  const query = useListQuery({ search: false });
 
-  const fetchPage = useCallback(async (query: PageQuery) => {
-    const page = await listSchedules(query);
-    setCronTimezone(page.cron_timezone);
-    return page;
+  const fetchPage = useCallback(async (page: PageQuery) => {
+    const result = await listSchedules(page);
+    setCronTimezone(result.cron_timezone);
+    return result;
   }, []);
   const list = useConsolePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
+    page: query.page,
+    onPageChange: query.setPage,
   });
   const { items, reload } = list;
 
@@ -72,23 +74,11 @@ export function ScheduleList() {
               <ScheduleCadence task={task} cronTimezone={cronTimezone} />
             </Table.Td>
             <Table.Td>
-              <SwitchField
+              <ScheduleEnabledControl
+                task={task}
                 editable={!isChannelRunSchedule(task)}
-                checked={task.enabled}
-                onChange={async (event) => {
-                  try {
-                    await patchSchedule(task.id, {
-                      enabled: event.currentTarget.checked,
-                    });
-                    await reload();
-                  } catch (err) {
-                    open?.({
-                      type: "error",
-                      message:
-                        problemMessage(t, err, String(err)),
-                    });
-                  }
-                }}
+                recordName={scheduleIdentityLabel(task, "platform")}
+                onChanged={() => reload()}
               />
             </Table.Td>
             <Table.Td>
@@ -103,6 +93,7 @@ export function ScheduleList() {
             <Table.Td>
               <ScheduleRunStrip
                 jobs={task.recent_jobs}
+                kind={task.work_kind}
                 onOpenJobs={() => setJobsTask(task)}
               />
             </Table.Td>

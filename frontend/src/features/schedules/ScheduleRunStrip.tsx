@@ -2,9 +2,12 @@
 
 import { Box, Flex, Stack, Text, Tooltip, UnstyledButton } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
-import { JOB_STATUS_COLOR, JobStatusBadge } from "@/features/jobs/JobStatusBadge";
+import { JobReference } from "@/components/display/JobReference";
+import { presentJobStatus, toneVariable } from "@/components/display/statusTone";
+import { JobDetailModal } from "@/features/jobs/JobDetailModal";
+import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
 import { barHeightRatio, buildRunSlots } from "@/features/schedules/runStrip";
 import type { ScheduleRecentJob } from "@/features/schedules/types";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
@@ -12,14 +15,18 @@ import { formatDurationMs, runDurationMs } from "@/lib/datetime";
 
 const STRIP_HEIGHT = 24;
 
+const LIVE_JOB = new Set(["queued", "running"]);
+
 type Props = {
   jobs: ScheduleRecentJob[];
+  kind?: string | null;
   onOpenJobs: () => void;
 };
 
-export function ScheduleRunStrip({ jobs, onOpenJobs }: Props) {
+export function ScheduleRunStrip({ jobs, kind, onOpenJobs }: Props) {
   const t = useTranslate();
   const formatInstant = useFormatInstant();
+  const [detailId, setDetailId] = useState<string | null>(null);
   const { slots, maxMs } = useMemo(() => {
     const at = Date.now();
     const built = buildRunSlots(jobs);
@@ -31,6 +38,7 @@ export function ScheduleRunStrip({ jobs, onOpenJobs }: Props) {
   }, [jobs]);
 
   return (
+    <>
     <UnstyledButton
       onClick={onOpenJobs}
       aria-label={t("schedules.fields.recentRuns")}
@@ -47,19 +55,30 @@ export function ScheduleRunStrip({ jobs, onOpenJobs }: Props) {
                   minWidth: 0,
                   height: STRIP_HEIGHT * 0.2,
                   borderRadius: 1,
-                  background: "var(--mantine-color-gray-2)",
+                  background: "var(--refraq-tone-neutral-muted)",
                 }}
               />
             );
           }
-          const color = JOB_STATUS_COLOR[job.status];
+          const presentation = presentJobStatus(job.status);
+          const live = LIVE_JOB.has(job.status);
           return (
             <Tooltip
               key={job.id}
               withArrow
+              interactive={live}
               label={
                 <Stack gap={2}>
-                  <JobStatusBadge status={job.status} />
+                  {live ? (
+                    <JobReference
+                      jobId={job.id}
+                      kind={kind ?? ""}
+                      status={job.status}
+                      onOpen={setDetailId}
+                    />
+                  ) : (
+                    <JobStatusBadge status={job.status} />
+                  )}
                   <Text size="xs">
                     {t("jobs.fields.started")}: {formatInstant(job.started_at)}
                   </Text>
@@ -80,7 +99,7 @@ export function ScheduleRunStrip({ jobs, onOpenJobs }: Props) {
                   minWidth: 0,
                   height: STRIP_HEIGHT * barHeightRatio(ms, maxMs),
                   borderRadius: 1,
-                  background: `var(--mantine-color-${color}-6)`,
+                  background: toneVariable(presentation.tone),
                 }}
               />
             </Tooltip>
@@ -88,5 +107,11 @@ export function ScheduleRunStrip({ jobs, onOpenJobs }: Props) {
         })}
       </Flex>
     </UnstyledButton>
+    <JobDetailModal
+      jobId={detailId}
+      opened={detailId != null}
+      onClose={() => setDetailId(null)}
+    />
+    </>
   );
 }

@@ -1,23 +1,24 @@
 "use client";
 
-import { Anchor, Button, Group, MultiSelect, Table, Text, TextInput } from "@mantine/core";
+import { Table, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import Link from "next/link";
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
 import { ListTable } from "@/components/display/ListTable";
+import { ListToolbar } from "@/components/display/ListToolbar";
+import { RecordReference } from "@/components/display/RecordReference";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleId } from "@/features/console/module-identity";
 import { listDictionaries } from "@/features/dictionaries/api";
 import { DictionaryStatusBadge } from "@/features/dictionaries/DictionaryStatusBadge";
 import {
   DEFAULT_DICTIONARY_LIST_STATUSES,
-  dictionaryListIsFiltered,
   type DictionaryListStatus,
 } from "@/features/dictionaries/dictionaryListFilter";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useListQuery } from "@/hooks/useListQuery";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
@@ -25,101 +26,85 @@ const PAGE_SIZE = 50;
 export function DictionaryList() {
   const t = useTranslate();
   const formatInstant = useFormatInstant();
-  const [q, setQ] = useState("");
-  const [statuses, setStatuses] = useState<DictionaryListStatus[]>([
-    ...DEFAULT_DICTIONARY_LIST_STATUSES,
-  ]);
+  const query = useListQuery({
+    filters: [
+      {
+        key: "status",
+        type: "multi",
+        defaultValue: DEFAULT_DICTIONARY_LIST_STATUSES,
+      },
+    ],
+  });
+  const statuses = query.multi("status") as readonly DictionaryListStatus[];
 
   const fetchPage = useCallback(
-    (query: PageQuery) => {
+    (page: PageQuery) => {
       if (statuses.length === 0) {
         return {
           items: [],
           total: 0,
-          limit: query.limit,
-          offset: query.offset,
+          limit: page.limit,
+          offset: page.offset,
         };
       }
       return listDictionaries({
-        q: q.trim() || undefined,
+        q: query.search || undefined,
         status: statuses,
-        ...query,
+        ...page,
       });
     },
-    [q, statuses],
+    [query.search, statuses],
   );
 
-  const filtered = dictionaryListIsFiltered(q, statuses);
   const list = useConsolePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
-    resetDeps: [q, statuses],
-    filtered,
+    resetDeps: [query.search, statuses],
+    filtered: query.isFiltered,
+    page: query.page,
+    onPageChange: query.setPage,
   });
+
+  const createAction = (
+    <CreateListAction
+      resource={ModuleId.dictionaries}
+      href="/console/dictionaries/new"
+    >
+      {t("dictionaries.create")}
+    </CreateListAction>
+  );
 
   return (
     <PageChrome
       title={t("dictionaries.title")}
       description={t("dictionaries.description")}
-      actions={
-        <CreateListAction
-          resource={ModuleId.dictionaries}
-          href="/console/dictionaries/new"
-        >
-          {t("dictionaries.create")}
-        </CreateListAction>
+      actions={createAction}
+      toolbar={
+        <ListToolbar
+          query={query}
+          searchPlaceholder={t("dictionaries.search")}
+          filters={[
+            {
+              key: "status",
+              label: t("dictionaries.fields.status"),
+              options: [
+                { value: "available", label: t("dictionaries.status.available") },
+                { value: "deprecated", label: t("dictionaries.status.deprecated") },
+              ],
+            },
+          ]}
+        />
       }
     >
-      <Group>
-        <TextInput
-          placeholder={t("dictionaries.search")}
-          value={q}
-          onChange={(event) => setQ(event.currentTarget.value)}
-          w={280}
-        />
-        <MultiSelect
-          placeholder={
-            statuses.length === 0 ? t("dictionaries.fields.status") : undefined
-          }
-          data={[
-            { value: "available", label: t("dictionaries.status.available") },
-            { value: "deprecated", label: t("dictionaries.status.deprecated") },
-          ]}
-          value={statuses}
-          onChange={(value) => setStatuses(value as DictionaryListStatus[])}
-          searchable={false}
-          clearable
-          w="max-content"
-          miw={280}
-          styles={{
-            root: { flexShrink: 0 },
-            wrapper: { width: "max-content" },
-            input: { width: "max-content", minWidth: 280 },
-            pillsList: { flexWrap: "nowrap" },
-            pill: { flexShrink: 0, maxWidth: "none" },
-          }}
-        />
-        {filtered ? (
-          <Button
-            variant="subtle"
-            size="xs"
-            onClick={() => {
-              setQ("");
-              setStatuses([...DEFAULT_DICTIONARY_LIST_STATUSES]);
-            }}
-          >
-            {t("common.filters.clear")}
-          </Button>
-        ) : null}
-      </Group>
       <ListTable
         list={list}
-        columnCount={5}
+        columnCount={4}
         emptyMessage={t("dictionaries.list.empty")}
+        emptyAction={createAction}
         noMatchMessage={t("dictionaries.list.noMatch")}
+        onClearFilters={query.clear}
         head={
           <Table.Tr>
-            <Table.Th>{t("dictionaries.fields.name")}</Table.Th>
             <Table.Th>{t("dictionaries.fields.displayName")}</Table.Th>
             <Table.Th>{t("dictionaries.fields.revision")}</Table.Th>
             <Table.Th>{t("dictionaries.fields.status")}</Table.Th>
@@ -130,16 +115,12 @@ export function DictionaryList() {
         {list.items.map((row) => (
           <Table.Tr key={row.id}>
             <Table.Td>
-              <Anchor
-                component={Link}
+              <RecordReference
+                name={row.display_name}
+                recordKey={row.name}
                 href={`/console/dictionaries/${row.id}`}
-                size="sm"
-                ff="monospace"
-              >
-                {row.name}
-              </Anchor>
+              />
             </Table.Td>
-            <Table.Td>{row.display_name}</Table.Td>
             <Table.Td>{row.revision}</Table.Td>
             <Table.Td>
               <DictionaryStatusBadge deprecated={row.deprecated_at != null} />

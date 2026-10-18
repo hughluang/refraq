@@ -2,7 +2,7 @@
 
 import { Button, Group, Modal, Stack, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 type ConfirmActionModalProps = {
   opened: boolean;
@@ -40,6 +40,14 @@ export function ConfirmActionModal({
   centered = true,
 }: ConfirmActionModalProps) {
   const t = useTranslate();
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!opened) return;
+    const id = window.setTimeout(() => {
+      cancelRef.current?.focus();
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [opened]);
   const bodyNode =
     body == null || body === false ? null : typeof body === "string" ? (
       <Text size="sm">{body}</Text>
@@ -60,7 +68,9 @@ export function ConfirmActionModal({
         {children}
         <Group justify="flex-end">
           <Button
+            ref={cancelRef}
             variant="default"
+            data-autofocus
             onClick={onClose}
             disabled={cancelDisabled ?? loading}
           >

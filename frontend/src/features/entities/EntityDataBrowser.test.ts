@@ -248,7 +248,7 @@ describe("EntityDataBrowser", () => {
     expect(screen.queryByText("narrow group is not an identity of the subject")).toBeNull();
   });
 
-  it("keeps an empty result out of the table cells", async () => {
+  it("shows an empty status row under the columns", async () => {
     vi.mocked(queryDataRows).mockResolvedValue({
       items: [],
       total: 0,
@@ -259,9 +259,9 @@ describe("EntityDataBrowser", () => {
 
     expect(await screen.findByText("entities.data.empty")).toBeTruthy();
     const table = screen.getByRole("table");
-    expect(within(table).queryByText("entities.data.empty")).toBeNull();
+    expect(within(table).getByText("entities.data.empty")).toBeTruthy();
     expect(within(table).getByRole("columnheader", { name: "sku" })).toBeTruthy();
-    expect(screen.queryByText("common.showing")).toBeNull();
+    expect(screen.getByText("common.showing")).toBeTruthy();
   });
 
   it("offers full access again when a narrowed view has no rows", async () => {

@@ -158,8 +158,10 @@ class MemoryChannelStore:
     ) -> tuple[list[ChannelRecord], int]:
         with self._lock:
             rows = list(self._channels.values())
-        if q:
-            rows = [row for row in rows if q in row.name]
+        needle = (q or "").strip()
+        if needle:
+            folded = needle.lower()
+            rows = [row for row in rows if folded in row.name.lower()]
         if active is not None:
             rows = [row for row in rows if row.active is active]
         rows.sort(key=lambda row: (row.created_at, row.id), reverse=True)
@@ -330,8 +332,9 @@ class SqlChannelStore:
     ) -> tuple[list[ChannelRecord], int]:
         with session_scope() as session:
             stmt = select(ChannelRow)
-            if q:
-                stmt = stmt.where(ChannelRow.name.contains(q))
+            needle = (q or "").strip()
+            if needle:
+                stmt = stmt.where(ChannelRow.name.icontains(needle, autoescape=True))
             if active is not None:
                 stmt = stmt.where(ChannelRow.active.is_(active))
             total = int(

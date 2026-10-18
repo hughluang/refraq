@@ -1,23 +1,23 @@
 "use client";
 
+import { Stack, Table } from "@mantine/core";
+import { FormDialog } from "@/components/form/FormDialog";
 import {
-  Badge,
-  Button,
-  Code,
-  Group,
-  Modal,
-  Stack,
-  Table,
-  Text,
-} from "@mantine/core";
-import { useForm } from "@mantine/form";
-import { CanAccess, useNotification, useTranslate } from "@refinedev/core";
+  FormErrorSummary,
+  saveFailureFrom,
+  type SaveFailure,
+} from "@/components/form/FormErrorSummary";
+import { useConsoleForm } from "@/components/form/useConsoleForm";
+import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
+import { StatusBadge } from "@/components/display/StatusBadge";
+import { presentTokenStatus } from "@/components/display/statusTone";
 import { TextField } from "@/components/form/TextField";
 import { ListTable } from "@/components/display/ListTable";
-import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
+import { RecordReference } from "@/components/display/RecordReference";
+import { RowActions } from "@/components/display/RowActions";
 import { SectionHeader } from "@/components/layout/SectionHeader";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
@@ -28,22 +28,15 @@ import {
   restoreToken,
 } from "@/features/tokens/api";
 import { defaultExpiresWall, tokenStatus } from "@/features/tokens/status";
-import type { TokenMetadata, TokenStatus } from "@/features/tokens/types";
-import { useConfirmAction } from "@/hooks/useConfirmAction";
+import type { TokenMetadata } from "@/features/tokens/types";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
+import { useListQuery } from "@/hooks/useListQuery";
 import { useEntryZone, useFormatInstant } from "@/hooks/useFormatInstant";
-import { copyText } from "@/lib/copy-text";
+import { SecretRevealDialog } from "@/features/tokens/SecretRevealDialog";
 import type { PageQuery } from "@/lib/pagination";
-import { problemMessage } from "@/lib/problem";
 import { wallToInstant } from "@/lib/wall-time";
 
 const PAGE_SIZE = 50;
-
-const STATUS_COLOR: Record<TokenStatus, string> = {
-  active: "green",
-  expired: "gray",
-  deactivated: "yellow",
-};
 
 type CreateFormValues = {
   name: string;
@@ -56,25 +49,30 @@ export function TokenList() {
   const { open } = useNotification();
   const formatInstant = useFormatInstant();
   const zone = useEntryZone();
-  const fetchPage = useCallback((query: PageQuery) => listTokens(query), []);
+  const { data: canDelete } = useCan({
+    resource: ModuleId.tokens,
+    action: ModuleAction.delete,
+  });
+  const query = useListQuery({ search: false });
+  const fetchPage = useCallback((page: PageQuery) => listTokens(page), []);
   const list = useConsolePagedList<TokenMetadata>({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
+    page: query.page,
+    onPageChange: query.setPage,
   });
   const { items: rows, reload } = list;
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [creating, setCreating] = useState(false);
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const [secret, setSecret] = useState<string | null>(null);
-  const deactivateConfirm = useConfirmAction<TokenMetadata>();
-  const deleteConfirm = useConfirmAction<TokenMetadata>();
-  const [actionBusy, setActionBusy] = useState(false);
 
-  const form = useForm<CreateFormValues>({
+  const form = useConsoleForm<CreateFormValues>({
     initialValues: {
       name: "",
       expires_at: defaultExpiresWall(zone),
     },
+    onValuesChange: () => setSaveFailure(null),
     validate: {
       name: (value) =>
         value.trim().length > 0 ? null : t("tokens.validation.required"),
@@ -96,19 +94,28 @@ export function TokenList() {
       name: "",
       expires_at: defaultExpiresWall(zone),
     });
+    form.markSaved();
     form.clearErrors();
+    setSaveFailure(null);
     setCreateOpen(true);
+  }
+
+  function closeCreate() {
+    setCreateOpen(false);
+    setSaveFailure(null);
+    form.reset();
   }
 
   async function onCreate(values: CreateFormValues) {
     const expiresAt = wallToInstant(values.expires_at, zone);
     if (!expiresAt) return;
-    setCreating(true);
     try {
       const result = await createToken({
         name: values.name.trim(),
         expires_at: expiresAt,
       });
+      form.markSaved();
+      setSaveFailure(null);
       setCreateOpen(false);
       setSecret(result.secret);
       open?.({
@@ -118,102 +125,9 @@ export function TokenList() {
       });
       await reload();
     } catch (err) {
-      open?.({
-        type: "error",
-        message: t("tokens.title"),
-        description:
-          problemMessage(t, err, t("tokens.create.error")),
-      });
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  async function confirmDeactivate() {
-    const pending = deactivateConfirm.pending;
-    if (!pending) return;
-    setActionBusy(true);
-    try {
-      await deactivateToken(pending.id);
-      open?.({
-        type: "success",
-        message: t("tokens.title"),
-        description: t("tokens.deactivate.success"),
-      });
-      deactivateConfirm.close();
-      await reload();
-    } catch (err) {
-      open?.({
-        type: "error",
-        message: t("tokens.title"),
-        description:
-          problemMessage(t, err, t("tokens.deactivate.error")),
-      });
-    } finally {
-      setActionBusy(false);
-    }
-  }
-
-  async function onRestore(row: TokenMetadata) {
-    setActionBusy(true);
-    try {
-      await restoreToken(row.id);
-      open?.({
-        type: "success",
-        message: t("tokens.title"),
-        description: t("tokens.restore.success"),
-      });
-      await reload();
-    } catch (err) {
-      open?.({
-        type: "error",
-        message: t("tokens.title"),
-        description:
-          problemMessage(t, err, t("tokens.restore.error")),
-      });
-    } finally {
-      setActionBusy(false);
-    }
-  }
-
-  async function confirmDelete() {
-    const pending = deleteConfirm.pending;
-    if (!pending) return;
-    setActionBusy(true);
-    try {
-      await deleteToken(pending.id);
-      open?.({
-        type: "success",
-        message: t("tokens.title"),
-        description: t("tokens.delete.success"),
-      });
-      deleteConfirm.close();
-      await reload();
-    } catch (err) {
-      open?.({
-        type: "error",
-        message: t("tokens.title"),
-        description:
-          problemMessage(t, err, t("tokens.delete.error")),
-      });
-    } finally {
-      setActionBusy(false);
-    }
-  }
-
-  async function copySecret() {
-    if (!secret) return;
-    try {
-      await copyText(secret);
-      open?.({
-        type: "success",
-        message: t("common.copy.success"),
-      });
-    } catch {
-      open?.({
-        type: "error",
-        message: t("common.copy.failed"),
-      });
+      setSaveFailure(
+        saveFailureFrom(t, err, form.applyApiError(err), t("tokens.create.error")),
+      );
     }
   }
 
@@ -237,11 +151,12 @@ export function TokenList() {
 
       <ListTable
         list={list}
-        columnCount={7}
+        columnCount={6}
+        emptyMessage={t("tokens.list.empty")}
+        emptyAction={createAction}
         head={
           <Table.Tr>
             <Table.Th>{t("tokens.fields.name")}</Table.Th>
-            <Table.Th>{t("tokens.fields.prefix")}</Table.Th>
             <Table.Th>{t("tokens.fields.status")}</Table.Th>
             <Table.Th>{t("tokens.fields.expiresAt")}</Table.Th>
             <Table.Th>{t("tokens.fields.createdAt")}</Table.Th>
@@ -252,159 +167,165 @@ export function TokenList() {
       >
         {rows.map((row) => {
           const status = tokenStatus(row);
+          const statusTone = presentTokenStatus(status);
           const isDeactivated = status === "deactivated";
           return (
             <Table.Tr key={row.id}>
-              <Table.Td>{row.name}</Table.Td>
               <Table.Td>
-                <Code>{row.prefix}</Code>
+                <RecordReference name={row.name} recordKey={row.prefix} />
               </Table.Td>
               <Table.Td>
-                <Badge
+                <StatusBadge
                   size="xs"
-                  color={STATUS_COLOR[status]}
-                  variant="light"
-                >
-                  {t(`tokens.status.${status}`)}
-                </Badge>
+                  tone={statusTone.tone}
+                  labelKey={statusTone.labelKey}
+                />
               </Table.Td>
               <Table.Td>{formatInstant(row.expires_at)}</Table.Td>
               <Table.Td>{formatInstant(row.created_at)}</Table.Td>
               <Table.Td>{formatInstant(row.last_used_at)}</Table.Td>
               <Table.Td>
-                <CanAccess
-                  resource={ModuleId.tokens}
-                  action={ModuleAction.delete}
-                >
-                  <Group gap="xs" wrap="nowrap">
-                    {isDeactivated ? (
-                      <>
-                        <Button
-                          size="xs"
-                          variant="light"
-                          disabled={actionBusy}
-                          onClick={() => void onRestore(row)}
-                        >
-                          {t("tokens.restore")}
-                        </Button>
-                        <Button
-                          size="xs"
-                          variant="light"
-                          color="red"
-                          disabled={actionBusy}
-                          onClick={() => deleteConfirm.open(row)}
-                        >
-                          {t("tokens.delete")}
-                        </Button>
-                      </>
-                    ) : (
-                      <Button
-                        size="xs"
-                        variant="light"
-                        disabled={actionBusy}
-                        onClick={() => deactivateConfirm.open(row)}
-                      >
-                        {t("tokens.deactivate")}
-                      </Button>
-                    )}
-                  </Group>
-                </CanAccess>
+                <RowActions
+                  recordName={row.name}
+                  verbs={
+                    isDeactivated
+                      ? [
+                          {
+                            key: "restore",
+                            label: t("tokens.restore"),
+                            hidden: !canDelete?.can,
+                            action: {
+                              safety: "undoable" as const,
+                              recordName: row.name,
+                              outcome: t("tokens.restore.outcome"),
+                              execute: () => restoreToken(row.id),
+                              undo: () => deactivateToken(row.id),
+                              onSuccess: () => reload(),
+                            },
+                          },
+                          {
+                            key: "delete",
+                            label: t("tokens.delete"),
+                            color: "red",
+                            hidden: !canDelete?.can,
+                            action: {
+                              safety: "confirm" as const,
+                              recordName: row.name,
+                              title: t("tokens.delete.confirmTitle"),
+                              consequence: t("tokens.delete.consequence"),
+                              confirmLabel: t("tokens.delete"),
+                              confirmColor: "red",
+                              outcome: t("tokens.delete.success"),
+                              execute: () => deleteToken(row.id),
+                              onSuccess: () => reload(),
+                            },
+                          },
+                          {
+                            key: "deactivate",
+                            label: t("tokens.deactivate"),
+                            hidden: !canDelete?.can,
+                            disabledReason: t("tokens.deactivate.unavailable"),
+                            action: {
+                              safety: "confirm" as const,
+                              recordName: row.name,
+                              title: t("tokens.deactivate.confirmTitle"),
+                              consequence: t("tokens.deactivate.consequence"),
+                              confirmLabel: t("tokens.deactivate"),
+                              confirmColor: "red",
+                              outcome: t("tokens.deactivate.success"),
+                              execute: () => deactivateToken(row.id),
+                              onSuccess: () => reload(),
+                            },
+                          },
+                        ]
+                      : [
+                          {
+                            key: "deactivate",
+                            label: t("tokens.deactivate"),
+                            hidden: !canDelete?.can,
+                            action: {
+                              safety: "confirm" as const,
+                              recordName: row.name,
+                              title: t("tokens.deactivate.confirmTitle"),
+                              consequence: t("tokens.deactivate.consequence"),
+                              confirmLabel: t("tokens.deactivate"),
+                              confirmColor: "red",
+                              outcome: t("tokens.deactivate.success"),
+                              execute: () => deactivateToken(row.id),
+                              onSuccess: () => reload(),
+                            },
+                          },
+                          {
+                            key: "restore",
+                            label: t("tokens.restore"),
+                            hidden: !canDelete?.can,
+                            disabledReason: t("tokens.restore.unavailable"),
+                            action: {
+                              safety: "undoable" as const,
+                              recordName: row.name,
+                              outcome: t("tokens.restore.outcome"),
+                              execute: () => restoreToken(row.id),
+                              undo: () => deactivateToken(row.id),
+                              onSuccess: () => reload(),
+                            },
+                          },
+                          {
+                            key: "delete",
+                            label: t("tokens.delete"),
+                            color: "red",
+                            hidden: !canDelete?.can,
+                            disabledReason: t("tokens.delete.unavailable"),
+                            action: {
+                              safety: "confirm" as const,
+                              recordName: row.name,
+                              title: t("tokens.delete.confirmTitle"),
+                              consequence: t("tokens.delete.consequence"),
+                              confirmLabel: t("tokens.delete"),
+                              confirmColor: "red",
+                              outcome: t("tokens.delete.success"),
+                              execute: () => deleteToken(row.id),
+                              onSuccess: () => reload(),
+                            },
+                          },
+                        ]
+                  }
+                />
               </Table.Td>
             </Table.Tr>
           );
         })}
       </ListTable>
 
-      <Modal
+      <FormDialog
         opened={createOpen}
-        onClose={() => setCreateOpen(false)}
+        onClose={closeCreate}
         title={t("tokens.create.title")}
-        centered
-      >
-        <form onSubmit={form.onSubmit(onCreate)}>
-          <Stack gap="md">
-            <TextField
-              editable
-              label={t("tokens.fields.name")}
-              placeholder={t("tokens.fields.name.placeholder")}
-              withAsterisk
-              {...form.getInputProps("name")}
-            />
-            <TextField
-              editable
-              type="datetime-local"
-              label={t("tokens.fields.expiresAt")}
-              description={t("tokens.fields.expiresAt.hint", { zone })}
-              withAsterisk
-              {...form.getInputProps("expires_at")}
-            />
-            <Group justify="flex-end">
-              <Button
-                variant="default"
-                onClick={() => setCreateOpen(false)}
-                disabled={creating}
-              >
-                {t("common.cancel")}
-              </Button>
-              <Button type="submit" loading={creating}>
-                {t("tokens.create.submit")}
-              </Button>
-            </Group>
-          </Stack>
-        </form>
-      </Modal>
-
-      <Modal
-        opened={secret !== null}
-        onClose={() => setSecret(null)}
-        title={t("tokens.secret.title")}
-        centered
-        closeOnClickOutside={false}
+        dirty={form.dirty}
+        submitting={form.submitting}
+        submitLabel={t("tokens.create.submit")}
+        summary={<FormErrorSummary failure={saveFailure} />}
+        onSubmit={() => void form.submit(onCreate)}
       >
         <Stack gap="md">
-          <Text size="sm">{t("tokens.secret.warning")}</Text>
-          <Code block style={{ wordBreak: "break-all" }}>
-            {secret}
-          </Code>
-          <Group justify="flex-end">
-            <Button variant="light" onClick={() => void copySecret()}>
-              {t("tokens.secret.copy")}
-            </Button>
-            <Button onClick={() => setSecret(null)}>
-              {t("tokens.secret.done")}
-            </Button>
-          </Group>
+          <TextField
+            editable
+            label={t("tokens.fields.name")}
+            placeholder={t("tokens.fields.name.placeholder")}
+            withAsterisk
+            {...form.fieldProps("name")}
+          />
+          <TextField
+            editable
+            type="datetime-local"
+            label={t("tokens.fields.expiresAt")}
+            description={t("tokens.fields.expiresAt.hint", { zone })}
+            withAsterisk
+            {...form.fieldProps("expires_at")}
+          />
         </Stack>
-      </Modal>
+      </FormDialog>
 
-      <ConfirmActionModal
-        opened={deactivateConfirm.opened}
-        onClose={deactivateConfirm.close}
-        title={t("tokens.deactivate.confirmTitle")}
-        body={
-          deactivateConfirm.pending
-            ? t("tokens.deactivate.confirmBody", {
-                name: deactivateConfirm.pending.name,
-              })
-            : null
-        }
-        loading={actionBusy}
-        onConfirm={() => void confirmDeactivate()}
-      />
-
-      <ConfirmActionModal
-        opened={deleteConfirm.opened}
-        onClose={deleteConfirm.close}
-        title={t("tokens.delete.confirmTitle")}
-        body={
-          deleteConfirm.pending
-            ? t("tokens.delete.confirmBody", { name: deleteConfirm.pending.name })
-            : null
-        }
-        confirmColor="red"
-        loading={actionBusy}
-        onConfirm={() => void confirmDelete()}
-      />
+      <SecretRevealDialog secret={secret} onClose={() => setSecret(null)} />
     </Stack>
   );
 }

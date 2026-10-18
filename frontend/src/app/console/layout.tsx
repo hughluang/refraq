@@ -5,6 +5,7 @@ import { useEffect, type ReactNode } from "react";
 
 import { PageCanAccess } from "@/components/access/PageCanAccess";
 import { ConsoleShell } from "@/components/layout/ConsoleShell";
+import { LeaveGuardProvider } from "@/components/navigation/leaveGuard";
 import { ModuleIdentityGate } from "@/features/console/module-identity";
 
 /**
@@ -27,10 +28,12 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   }
 
   return (
-    <ConsoleShell>
-      <ModuleIdentityGate>
-        <PageCanAccess>{children}</PageCanAccess>
-      </ModuleIdentityGate>
-    </ConsoleShell>
+    <LeaveGuardProvider>
+      <ConsoleShell>
+        <ModuleIdentityGate>
+          <PageCanAccess>{children}</PageCanAccess>
+        </ModuleIdentityGate>
+      </ConsoleShell>
+    </LeaveGuardProvider>
   );
 }

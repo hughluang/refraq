@@ -2,7 +2,7 @@
 
 import { Anchor, Breadcrumbs, Text } from "@mantine/core";
 import { useBreadcrumb, useTranslate } from "@refinedev/core";
-import Link from "next/link";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 
 import { shouldRenderBreadcrumbTrail } from "@/components/layout/breadcrumb-trail";
 
@@ -37,7 +37,7 @@ export function PageBreadcrumb() {
           return (
             <Anchor
               key={`${item.label}-${index}`}
-              component={Link}
+              component={ConsoleLink}
               href={item.href}
               size="sm"
             >

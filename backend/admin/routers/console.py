@@ -76,6 +76,7 @@ def get_module_identities(
                     show=module.actions.show,
                     sample=module.actions.sample,
                 ),
+                icon=module.icon,
             )
             for module in identities
         ]

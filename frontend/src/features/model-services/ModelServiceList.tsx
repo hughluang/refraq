@@ -2,28 +2,31 @@
 
 import {
   Alert,
-  Badge,
   Button,
   Group,
   Modal,
   Stack,
   Table,
-  Tabs,
   Text,
 } from "@mantine/core";
-import {
-  CanAccess,
-  useCan,
-  useNotification,
-  useTranslate,
-} from "@refinedev/core";
-import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCan, useNotification, useTranslate } from "@refinedev/core";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
 import { ListTable } from "@/components/display/ListTable";
+import { RecordReference } from "@/components/display/RecordReference";
+import { RowActions } from "@/components/display/RowActions";
+import { StatusBadge } from "@/components/display/StatusBadge";
+import {
+  presentIndexStatus,
+  presentModelServiceOpen,
+  presentModelServiceUse,
+} from "@/components/display/statusTone";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { PageChrome } from "@/components/layout/PageChrome";
+import { PageTabs } from "@/components/layout/consoleTabs";
+import { useConsoleTab } from "@/components/layout/consoleTabs";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
   activateModelService,
@@ -49,30 +52,27 @@ import type {
 } from "@/features/model-services/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
+import { useListQuery } from "@/hooks/useListQuery";
 import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
-
-function indexColor(status: PurposeState["index_status"]): string {
-  if (status === "ready") return "green";
-  if (status === "indexing") return "blue";
-  if (status === "failed") return "red";
-  return "gray";
-}
 
 export function ModelServiceList() {
   const t = useTranslate();
   const { open } = useNotification();
   const { data: canWrite } = useCan({
     resource: ModuleId.modelServices,
-    action: ModuleAction.create,
+    action: ModuleAction.edit,
+  });
+  const { data: canDelete } = useCan({
+    resource: ModuleId.modelServices,
+    action: ModuleAction.delete,
   });
 
   const [purpose, setPurpose] = useState<PurposeState | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<ModelService | undefined>();
-  const [busy, setBusy] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<ModelServiceTestResult | null>(
     null,
@@ -82,7 +82,11 @@ export function ModelServiceList() {
   const [cleaning, setCleaning] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [activatingId, setActivatingId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<string | null>("configure");
+  const serviceTabs = useMemo(
+    () => [{ value: "configure" }, { value: "status" }],
+    [],
+  );
+  const { value: activeTab, setTab } = useConsoleTab(serviceTabs);
   const openConfirm = useConfirmAction<true>();
   const closeConfirm = useConfirmAction<true>();
   const cleanupConfirm = useConfirmAction<true>();
@@ -93,16 +97,19 @@ export function ModelServiceList() {
     action: ModuleAction.list,
   });
 
+  const query = useListQuery({ search: false });
   const fetchPage = useCallback(
-    (query: PageQuery) => listModelServices(query),
+    (page: PageQuery) => listModelServices(page),
     [],
   );
   const list = useConsolePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
+    page: query.page,
+    onPageChange: query.setPage,
   });
   const { items, reload } = list;
-  const showActions = Boolean(canWrite?.can);
+  const showActions = Boolean(canWrite?.can || canDelete?.can);
 
   const notifyError = (err: unknown, fallback: string) => {
     open?.({
@@ -130,30 +137,23 @@ export function ModelServiceList() {
   };
 
   const save = async (values: ModelServiceFormValues) => {
-    setBusy(true);
-    try {
-      const payload = servicePayload(values);
-      if (editing) {
-        await patchModelService(editing.id, payload);
-        open?.({
-          type: "success",
-          message: t("modelServices.update.success"),
-        });
-      } else {
-        await createModelService(payload);
-        open?.({
-          type: "success",
-          message: t("modelServices.create.success"),
-        });
-      }
-      setFormOpen(false);
-      setEditing(undefined);
-      await refreshAll();
-    } catch (err) {
-      notifyError(err, t("common.error.loadFailed"));
-    } finally {
-      setBusy(false);
+    const payload = servicePayload(values);
+    if (editing) {
+      await patchModelService(editing.id, payload);
+      open?.({
+        type: "success",
+        message: t("modelServices.update.success"),
+      });
+    } else {
+      await createModelService(payload);
+      open?.({
+        type: "success",
+        message: t("modelServices.create.success"),
+      });
     }
+    setFormOpen(false);
+    setEditing(undefined);
+    await refreshAll();
   };
 
   const runTest = async (row: ModelService) => {
@@ -274,24 +274,21 @@ export function ModelServiceList() {
   );
 
   return (
-    <PageChrome
-      title={t("modelServices.title")}
-      description={t("modelServices.description")}
-    >
-      <Tabs value={activeTab} onChange={setActiveTab}>
-        <Tabs.List>
-          <Tabs.Tab value="configure">
-            {t("modelServices.tabs.configure")}
-          </Tabs.Tab>
-          <Tabs.Tab value="status">{t("modelServices.tabs.status")}</Tabs.Tab>
-        </Tabs.List>
-        <Tabs.Panel value="configure" pt="md">
+    <PageTabs
+      value={activeTab}
+      onChange={setTab}
+      tabs={[
+        {
+          value: "configure",
+          label: t("modelServices.tabs.configure"),
+          panel: (
           <Stack gap="md">
             <Group justify="flex-end">{createAction}</Group>
             <ListTable
               list={list}
               columnCount={showActions ? 7 : 6}
               emptyMessage={t("modelServices.empty")}
+              emptyAction={createAction}
               head={
                 <Table.Tr>
                   <Table.Th>{t("modelServices.fields.display_name")}</Table.Th>
@@ -309,7 +306,7 @@ export function ModelServiceList() {
               {items.map((row) => (
                 <Table.Tr key={row.id}>
                   <Table.Td>
-                    <Text fw={600}>{row.display_name}</Text>
+                    <RecordReference name={row.display_name} recordKey={row.model} />
                   </Table.Td>
                   <Table.Td>{t(`modelServices.protocol.${row.protocol}`)}</Table.Td>
                   <Table.Td>
@@ -319,11 +316,10 @@ export function ModelServiceList() {
                   </Table.Td>
                   <Table.Td>{row.model}</Table.Td>
                   <Table.Td>
-                    <Badge color={row.in_use ? "green" : "gray"} variant="light">
-                      {row.in_use
-                        ? t("modelServices.status.inUse")
-                        : t("modelServices.status.draft")}
-                    </Badge>
+                    <StatusBadge
+                      tone={presentModelServiceUse(row.in_use).tone}
+                      labelKey={presentModelServiceUse(row.in_use).labelKey}
+                    />
                   </Table.Td>
                   <Table.Td>
                     {row.has_secret
@@ -332,92 +328,76 @@ export function ModelServiceList() {
                   </Table.Td>
                   {showActions ? (
                     <Table.Td>
-                      <Group gap="xs" wrap="wrap">
-                        <CanAccess
-                          resource={ModuleId.modelServices}
-                          action={ModuleAction.edit}
-                        >
-                          <Button
-                            size="compact-xs"
-                            variant="light"
-                            onClick={() => {
+                      <RowActions
+                        recordName={row.display_name}
+                        verbs={[
+                          {
+                            key: "edit",
+                            label: t("actions.edit"),
+                            hidden: !canWrite?.can,
+                            safety: "immediate",
+                            onClick: () => {
                               setEditing(row);
                               setFormOpen(true);
-                            }}
-                          >
-                            {t("actions.edit")}
-                          </Button>
-                        </CanAccess>
-                        <CanAccess
-                          resource={ModuleId.modelServices}
-                          action={ModuleAction.edit}
-                        >
-                          <Button
-                            size="compact-xs"
-                            variant="light"
-                            loading={testingId === row.id}
-                            onClick={() => void runTest(row)}
-                          >
-                            {t("modelServices.test")}
-                          </Button>
-                        </CanAccess>
-                        {!row.in_use ? (
-                          <CanAccess
-                            resource={ModuleId.modelServices}
-                            action={ModuleAction.edit}
-                          >
-                            <Button
-                              size="compact-xs"
-                              variant="light"
-                              loading={activatingId === row.id}
-                              onClick={() => void openActivate(row)}
-                            >
-                              {t("modelServices.activate")}
-                            </Button>
-                          </CanAccess>
-                        ) : null}
-                        <CanAccess
-                          resource={ModuleId.modelServices}
-                          action={ModuleAction.delete}
-                        >
-                          <Button
-                            size="compact-xs"
-                            variant="light"
-                            color="red"
-                            onClick={() => deleteConfirm.open(row)}
-                          >
-                            {t("actions.delete")}
-                          </Button>
-                        </CanAccess>
-                      </Group>
+                            },
+                          },
+                          {
+                            key: "test",
+                            label: t("modelServices.test"),
+                            hidden: !canWrite?.can,
+                            disabledReason:
+                              testingId === row.id
+                                ? t("modelServices.test")
+                                : undefined,
+                            safety: "immediate",
+                            onClick: () => void runTest(row),
+                          },
+                          {
+                            key: "activate",
+                            label: t("modelServices.activate"),
+                            hidden: !canWrite?.can,
+                            disabledReason: row.in_use
+                              ? t("modelServices.activate.inUse")
+                              : activatingId === row.id
+                                ? t("modelServices.activate")
+                                : undefined,
+                            safety: "confirm",
+                            onClick: () => void openActivate(row),
+                          },
+                          {
+                            key: "delete",
+                            label: t("actions.delete"),
+                            color: "red",
+                            hidden: !canDelete?.can,
+                            safety: "confirm",
+                            onClick: () => deleteConfirm.open(row),
+                          },
+                        ]}
+                      />
                     </Table.Td>
                   ) : null}
                 </Table.Tr>
               ))}
             </ListTable>
           </Stack>
-        </Tabs.Panel>
-        <Tabs.Panel value="status" pt="md">
+          ),
+        },
+        {
+          value: "status",
+          label: t("modelServices.tabs.status"),
+          panel: (
           <Stack gap="md">
             <Group justify="space-between" align="center">
               <Group gap="xs" align="center">
                 <Text fw={600}>{t("modelServices.purpose.embedding")}</Text>
-                <Badge
-                  color={purpose?.closed ? "gray" : "green"}
-                  variant="light"
-                >
-                  {purpose?.closed
-                    ? t("modelServices.status.closed")
-                    : t("modelServices.status.open")}
-                </Badge>
-                <Badge
-                  color={indexColor(purpose?.index_status ?? "none")}
-                  variant="light"
-                >
-                  {t(
-                    `modelServices.index.${purpose?.index_status ?? "none"}`,
-                  )}
-                </Badge>
+                <StatusBadge
+                  tone={presentModelServiceOpen(Boolean(purpose?.closed)).tone}
+                  labelKey={presentModelServiceOpen(Boolean(purpose?.closed)).labelKey}
+                />
+                <StatusBadge
+                  tone={presentIndexStatus(purpose?.index_status ?? "none").tone}
+                  labelKey={presentIndexStatus(purpose?.index_status ?? "none").labelKey}
+                />
               </Group>
               {showActions || showScheduleLink ? (
                 <Group gap="xs">
@@ -455,7 +435,7 @@ export function ModelServiceList() {
                     <Button
                       size="compact-sm"
                       variant="default"
-                      component={Link}
+                      component={ConsoleLink}
                       href="/console/schedules"
                     >
                       {t("schedules.title")}
@@ -470,27 +450,29 @@ export function ModelServiceList() {
               </Alert>
             ) : null}
           </Stack>
-        </Tabs.Panel>
-      </Tabs>
+          ),
+        },
+      ]}
+    >
+      {({ list, panels }) => (
+    <PageChrome
+      title={t("modelServices.title")}
+      description={t("modelServices.description")}
+      tabs={list}
+    >
+      {panels}
 
       <Modal.Stack>
-        <Modal
-          stackId="model-service-form"
+        <ModelServiceForm
+          key={editing?.id ?? "create"}
           opened={formOpen}
-          onClose={() => setFormOpen(false)}
-          title={
-            editing ? t("modelServices.edit") : t("modelServices.create")
-          }
-          size="lg"
-        >
-          <ModelServiceForm
-            key={editing?.id ?? "create"}
-            service={editing}
-            loading={busy}
-            onSubmit={(values) => void save(values)}
-            onCancel={() => setFormOpen(false)}
-          />
-        </Modal>
+          service={editing}
+          onSubmit={save}
+          onClose={() => {
+            setFormOpen(false);
+            setEditing(undefined);
+          }}
+        />
 
         <Modal
           stackId="model-service-test"
@@ -583,5 +565,7 @@ export function ModelServiceList() {
         />
       </Modal.Stack>
     </PageChrome>
+      )}
+    </PageTabs>
   );
 }

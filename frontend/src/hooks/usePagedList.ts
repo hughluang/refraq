@@ -21,6 +21,12 @@ export type UsePagedListOptions<T> = {
   /** First paint is a skeleton unless this is false (local Offset Page adapters). */
   initialLoading?: boolean;
   onError?: (message: string) => void;
+  /**
+   * URL page from `useListQuery`. With `onPageChange`, the pager writes that
+   * page; omitted, the page stays inside the hook.
+   */
+  page?: number;
+  onPageChange?: (page: number) => void;
 };
 
 export type UsePagedListResult<T> = {
@@ -44,8 +50,18 @@ export function usePagedList<T>({
   filtered = false,
   initialLoading = true,
   onError,
+  page: pageProp,
+  onPageChange,
 }: UsePagedListOptions<T>): UsePagedListResult<T> {
-  const [page, setPage] = useState(1);
+  const [internalPage, setInternalPage] = useState(1);
+  const controlled = pageProp !== undefined;
+  const onPageChangeRef = useRef(onPageChange);
+  onPageChangeRef.current = onPageChange;
+  const heldPage = useRef<number | null>(null);
+  if (controlled && heldPage.current != null && pageProp === heldPage.current) {
+    heldPage.current = null;
+  }
+  const page = heldPage.current ?? (controlled ? pageProp : internalPage);
   const [items, setItems] = useState<T[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(initialLoading);
@@ -59,10 +75,14 @@ export function usePagedList<T>({
     previousKey: resetKeyRef.current,
     page,
   });
+  const resetNotice = controlled && reset.shouldSetPage;
   if (resetKeyRef.current !== resetKey) {
     resetKeyRef.current = resetKey;
-    if (reset.shouldSetPage) {
-      setPage(1);
+    if (reset.shouldSetPage && !controlled) {
+      setInternalPage(1);
+    }
+    if (reset.shouldSetPage && controlled) {
+      heldPage.current = 1;
     }
   }
   const fetchPage = reset.fetchPage;
@@ -121,8 +141,24 @@ export function usePagedList<T>({
   }, [applyResult, enabled, fetch, fetchPage, pageSize, resetKey]);
 
   useLayoutEffect(() => {
+    if (!resetNotice) return;
+    onPageChangeRef.current?.(1);
+  }, [resetNotice, resetKey]);
+
+  useLayoutEffect(() => {
     void load();
   }, [load]);
+
+  const setPage = useCallback(
+    (next: number) => {
+      if (controlled) {
+        onPageChangeRef.current?.(next);
+        return;
+      }
+      setInternalPage(next);
+    },
+    [controlled],
+  );
 
   return {
     items,

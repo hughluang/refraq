@@ -1,11 +1,11 @@
 "use client";
 
-import { Button, Group } from "@mantine/core";
+import { Group } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 
 import { DisplayField } from "@/components/display/DisplayField";
 import type { BusinessEntity } from "@/features/entities/types";
-import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
+import { JobReference } from "@/components/display/JobReference";
 import type { Instant } from "@/lib/instant";
 
 type Props = {
@@ -32,19 +32,12 @@ export function EntityOverviewTab({
         <DisplayField
           label={t("entities.fields.publishJob")}
           value={
-            <Group gap="xs">
-              {current.alignment.latest_job_status &&
-              current.publish_status === "publishing" ? (
-                <JobStatusBadge status={current.alignment.latest_job_status} />
-              ) : null}
-              <Button
-                size="compact-xs"
-                variant="light"
-                onClick={() => onOpenJob(current.alignment.latest_job_id)}
-              >
-                {current.alignment.latest_job_id}
-              </Button>
-            </Group>
+            <JobReference
+              jobId={current.alignment.latest_job_id}
+              kind="entity_reconcile"
+              status={current.alignment.latest_job_status}
+              onOpen={onOpenJob}
+            />
           }
         />
       ) : null}

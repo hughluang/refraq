@@ -1,10 +1,17 @@
 "use client";
 
-import { Button, Checkbox, Group, Stack, Text, TextInput } from "@mantine/core";
+import { Checkbox, Stack, Text, TextInput } from "@mantine/core";
+import { useState } from "react";
 
+import { FormDialog } from "@/components/form/FormDialog";
 import { NumberField } from "@/components/form/NumberField";
+import {
+  FormErrorSummary,
+  saveFailureFrom,
+  type SaveFailure,
+} from "@/components/form/FormErrorSummary";
 import { TextField } from "@/components/form/TextField";
-import { useForm } from "@mantine/form";
+import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { useTranslate } from "@refinedev/core";
 
 import type {
@@ -14,10 +21,10 @@ import type {
 } from "@/features/model-services/types";
 
 type Props = {
+  opened: boolean;
   service?: ModelService;
-  loading?: boolean;
-  onSubmit: (values: ModelServiceFormValues) => void;
-  onCancel: () => void;
+  onSubmit: (values: ModelServiceFormValues) => Promise<void>;
+  onClose: () => void;
 };
 
 export function emptyValues(): ModelServiceFormValues {
@@ -63,14 +70,16 @@ export function servicePayload(
 }
 
 export function ModelServiceForm({
+  opened,
   service,
-  loading,
   onSubmit,
-  onCancel,
+  onClose,
 }: Props) {
   const t = useTranslate();
-  const form = useForm<ModelServiceFormValues>({
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const form = useConsoleForm<ModelServiceFormValues>({
     initialValues: valuesFromService(service),
+    onValuesChange: () => setSaveFailure(null),
     validate: {
       display_name: (value) =>
         value.trim() ? null : t("modelServices.validation.required"),
@@ -90,14 +99,47 @@ export function ModelServiceForm({
   const urlChanged = service != null && form.values.url.trim() !== service.url;
   const wireLocked = Boolean(service?.in_use);
 
+  const close = () => {
+    setSaveFailure(null);
+    form.reset();
+    onClose();
+  };
+
   return (
-    <form onSubmit={form.onSubmit(onSubmit)}>
+    <FormDialog
+      opened={opened}
+      onClose={close}
+      size="lg"
+      title={service ? t("modelServices.edit") : t("modelServices.create")}
+      dirty={form.dirty}
+      submitting={form.submitting}
+      submitLabel={t("actions.save")}
+      summary={<FormErrorSummary failure={saveFailure} />}
+      onSubmit={() =>
+        void form.submit(async (values) => {
+          try {
+            await onSubmit(values);
+            form.markSaved();
+            setSaveFailure(null);
+          } catch (error) {
+            setSaveFailure(
+              saveFailureFrom(
+                t,
+                error,
+                form.applyApiError(error),
+                t("common.error.loadFailed"),
+              ),
+            );
+          }
+        })
+      }
+    >
       <Stack gap="sm">
         <TextField
           label={t("modelServices.fields.display_name")}
           required
           editable
-          {...form.getInputProps("display_name")}
+          {...form.fieldProps("display_name")}
         />
         <TextField
           label={t("modelServices.fields.purpose")}
@@ -114,7 +156,7 @@ export function ModelServiceForm({
           description={t("modelServices.fields.url.help")}
           required
           editable
-          {...form.getInputProps("url")}
+          {...form.fieldProps("url")}
         />
         <TextField
           label={t("modelServices.fields.model")}
@@ -123,7 +165,7 @@ export function ModelServiceForm({
           description={
             wireLocked ? t("modelServices.fields.model.locked") : undefined
           }
-          {...form.getInputProps("model")}
+          {...form.fieldProps("model")}
         />
         <NumberField
           label={t("modelServices.fields.timeout_sec")}
@@ -133,7 +175,7 @@ export function ModelServiceForm({
           min={15}
           max={300}
           allowDecimal={false}
-          {...form.getInputProps("timeout_sec")}
+          {...form.fieldProps("timeout_sec")}
         />
         <TextInput
           label={t("modelServices.fields.api_key")}
@@ -144,12 +186,12 @@ export function ModelServiceForm({
               ? t("modelServices.fields.api_key.configured")
               : t("modelServices.fields.api_key.help")
           }
-          {...form.getInputProps("api_key")}
+          {...form.fieldProps("api_key")}
         />
         {service ? (
           <Checkbox
             label={t("modelServices.fields.clear_api_key")}
-            {...form.getInputProps("clear_api_key", { type: "checkbox" })}
+            {...form.fieldProps("clear_api_key", { type: "checkbox" })}
           />
         ) : null}
         {urlChanged ? (
@@ -157,15 +199,7 @@ export function ModelServiceForm({
             {t("modelServices.fields.url.secretRequired")}
           </Text>
         ) : null}
-        <Group justify="flex-end" mt="sm">
-          <Button variant="default" onClick={onCancel} disabled={loading}>
-            {t("actions.cancel")}
-          </Button>
-          <Button type="submit" loading={loading}>
-            {t("actions.save")}
-          </Button>
-        </Group>
       </Stack>
-    </form>
+    </FormDialog>
   );
 }

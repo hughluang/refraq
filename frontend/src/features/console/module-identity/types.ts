@@ -24,6 +24,8 @@ export type ModuleActions = {
 export type ModuleIdentity = {
   id: string;
   label_key: string;
+  /** Kebab-case Tabler icon name. Null when the seed omits one. */
+  icon?: string | null;
   routes: ModuleRoutes;
   actions: ModuleActions;
 };

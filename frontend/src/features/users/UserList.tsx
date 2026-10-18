@@ -1,44 +1,48 @@
 "use client";
 
-import {
-  Badge,
-  Button,
-  Stack,
-  Text,
-  Group,
-  Modal,
-  PasswordInput,
-  Table,
-  Tabs,
-} from "@mantine/core";
+import { Badge, Stack, Text, Group, PasswordInput, Table } from "@mantine/core";
 import {
   useCan,
   useGetIdentity,
-  useList,
   useNotification,
   useTranslate,
   useUpdate,
 } from "@refinedev/core";
-import Link from "next/link";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
+import { FormDialog } from "@/components/form/FormDialog";
+import {
+  FormErrorSummary,
+  saveFailureFrom,
+  type SaveFailure,
+} from "@/components/form/FormErrorSummary";
+import { RecordPicker } from "@/components/form/RecordPicker";
+import {
+  roleRecordAdapter,
+  userRecordAdapter,
+} from "@/components/form/recordPickerAdapters";
 import { SegmentedField } from "@/components/form/SegmentedField";
-import { SelectField } from "@/components/form/SelectField";
+import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { TextField } from "@/components/form/TextField";
 import { ListTable } from "@/components/display/ListTable";
+import { ListToolbar } from "@/components/display/ListToolbar";
+import { RecordReference } from "@/components/display/RecordReference";
+import { RowActions } from "@/components/display/RowActions";
+import { PageTabs, useConsoleTab } from "@/components/layout/consoleTabs";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
+import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
 import { FillColumn } from "@/components/layout/FillColumn";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { PendingFederatedIdentityTable } from "@/features/users/PendingFederatedIdentityTable";
 import { UserRoleBadge } from "@/features/users/UserRoleBadge";
 import { listUsers } from "@/features/users/api";
-import type { RoleRow } from "@/features/roles/types";
 import type { UserRow, UserStatus } from "@/features/users/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
+import { useListQuery } from "@/hooks/useListQuery";
 import { problemMessage } from "@/lib/problem";
 import {
   claimPendingFederatedIdentity,
@@ -60,35 +64,70 @@ export function UserList() {
     resource: ModuleId.users,
     action: ModuleAction.create,
   });
-  const rolesQuery = useList<RoleRow>({
-    resource: ModuleId.roles,
-    pagination: { mode: "off" },
-  });
-  const claimUsersQuery = useList<UserRow>({
-    resource: ModuleId.users,
-    pagination: { mode: "off" },
-    queryOptions: { enabled: Boolean(canWrite?.can) },
-  });
-  const { mutate: updateStatus, mutation } = useUpdate<UserRow>();
-  const statusConfirm = useConfirmAction<UserRow>();
+  const { mutate: updateStatus } = useUpdate<UserRow>();
+  const statusAction = useConsoleMutation();
   const unfederateConfirm = useConfirmAction<UserRow>();
   const [unfederatePassword, setUnfederatePassword] = useState("");
   const [unfederateBusy, setUnfederateBusy] = useState(false);
   const [claimTarget, setClaimTarget] = useState<PendingFederatedIdentity | null>(
     null,
   );
-  const [claimMode, setClaimMode] = useState<"existing" | "create">("create");
-  const [claimAccount, setClaimAccount] = useState("");
-  const [claimDisplayName, setClaimDisplayName] = useState("");
-  const [claimUserId, setClaimUserId] = useState<string | null>(null);
-  const [claimRoleId, setClaimRoleId] = useState<string | null>(null);
-  const [claimBusy, setClaimBusy] = useState(false);
-  const [activeTab, setActiveTab] = useState<string | null>("users");
+  const [claimFailure, setClaimFailure] = useState<SaveFailure | null>(null);
+  const claimForm = useConsoleForm<{
+    mode: "create" | "existing";
+    account: string;
+    display_name: string;
+    role_id: string | null;
+    user_id: string | null;
+  }>({
+    initialValues: {
+      mode: "create",
+      account: "",
+      display_name: "",
+      role_id: null,
+      user_id: null,
+    },
+    onValuesChange: () => setClaimFailure(null),
+    validate: {
+      account: (value, values) =>
+        values.mode === "create" && !value.trim()
+          ? t("users.validation.required")
+          : null,
+      display_name: (value, values) =>
+        values.mode === "create" && !value.trim()
+          ? t("users.validation.required")
+          : null,
+      role_id: (value, values) =>
+        values.mode === "create" && !value ? t("users.validation.required") : null,
+      user_id: (value, values) =>
+        values.mode === "existing" && !value
+          ? t("users.validation.required")
+          : null,
+    },
+  });
+  const userTabs = useMemo(
+    () =>
+      canWrite?.can
+        ? [{ value: "users" }, { value: "pending" }]
+        : [{ value: "users" }],
+    [canWrite?.can],
+  );
+  const { value: activeTab, setTab } = useConsoleTab(userTabs);
+  const usersQuery = useListQuery();
+  const pendingQuery = useListQuery({ search: false, pageKey: "pending" });
 
-  const fetchUsers = useCallback((query: PageQuery) => listUsers(query), []);
+  const fetchUsers = useCallback(
+    (page: PageQuery) =>
+      listUsers({ ...page, q: usersQuery.search || undefined }),
+    [usersQuery.search],
+  );
   const users = useConsolePagedList<UserRow>({
     pageSize: PAGE_SIZE,
     fetch: fetchUsers,
+    resetDeps: [usersQuery.search],
+    filtered: usersQuery.isFiltered,
+    page: usersQuery.page,
+    onPageChange: usersQuery.setPage,
   });
   const { items: rows, reload } = users;
 
@@ -100,6 +139,8 @@ export function UserList() {
     pageSize: PAGE_SIZE,
     fetch: fetchPending,
     enabled: Boolean(canWrite?.can),
+    page: pendingQuery.page,
+    onPageChange: pendingQuery.setPage,
   });
 
   const notifyError = (err: unknown, fallback: string) => {
@@ -113,36 +154,53 @@ export function UserList() {
     await pendingList.reload();
   };
 
-  function confirmToggle() {
-    const pending = statusConfirm.pending;
-    if (!pending) return;
-    const next: UserStatus =
-      pending.status === "active" ? "disabled" : "active";
-    updateStatus(
-      {
-        resource: ModuleId.users,
-        id: pending.id,
-        values: { status: next },
-        meta: { action: "status" },
-        successNotification: {
-          message: t("users.title"),
-          description: t("users.status.update.success"),
-          type: "success",
+  function setUserStatus(row: UserRow, status: UserStatus) {
+    return new Promise<void>((resolve, reject) => {
+      updateStatus(
+        {
+          resource: ModuleId.users,
+          id: row.id,
+          values: { status },
+          meta: { action: "status" },
+          successNotification: false,
+          errorNotification: false,
         },
-        errorNotification: (err) => ({
-          message: t("users.title"),
-          description:
-            problemMessage(t, err, t("users.status.update.error")),
-          type: "error",
-        }),
-      },
-      {
-        onSuccess: () => {
-          void reload();
+        {
+          onSuccess: () => resolve(),
+          onError: (error) => reject(error),
         },
-        onSettled: () => statusConfirm.close(),
-      },
-    );
+      );
+    });
+  }
+
+  function onStatus(row: UserRow, next: string) {
+    if (statusAction.submitting) return;
+    if (next !== "active" && next !== "disabled") return;
+    if (next === row.status) return;
+    const recordName = row.display_name || row.account;
+    if (next === "disabled") {
+      statusAction.run({
+        safety: "confirm",
+        key: row.id,
+        recordName,
+        title: t("users.status.disable.confirmTitle", { name: recordName }),
+        consequence: t("users.status.disable.consequence"),
+        confirmLabel: t("users.status.disable"),
+        confirmColor: "red",
+        outcome: t("users.status.disabled.outcome"),
+        execute: () => setUserStatus(row, "disabled"),
+        onSuccess: () => reload(),
+      });
+      return;
+    }
+    statusAction.run({
+      safety: "immediate",
+      key: row.id,
+      recordName,
+      outcome: t("users.status.enabled.outcome"),
+      execute: () => setUserStatus(row, "active"),
+      onSuccess: () => reload(),
+    });
   }
 
   const createAction = (
@@ -151,63 +209,62 @@ export function UserList() {
     </CreateListAction>
   );
 
-  const roleOptions = (rolesQuery.result?.data ?? []).map((role) => ({
-    value: role.id,
-    label: role.name,
-  }));
-  const claimableUsers = (claimUsersQuery.result?.data ?? [])
-    .filter((row) => row.identity_source === "local")
-    .map((row) => ({ value: row.id, label: row.account }));
-
   const openClaim = (item: PendingFederatedIdentity) => {
+    claimForm.setValues({
+      mode: "create",
+      account: item.account_hint,
+      display_name: item.display_name ?? item.account_hint,
+      role_id: null,
+      user_id: null,
+    });
+    claimForm.markSaved();
+    setClaimFailure(null);
     setClaimTarget(item);
-    setClaimMode("create");
-    setClaimAccount(item.account_hint);
-    setClaimDisplayName(item.display_name ?? item.account_hint);
-    setClaimUserId(null);
-    setClaimRoleId(null);
   };
 
   const closeClaim = () => {
     setClaimTarget(null);
-    setClaimBusy(false);
+    setClaimFailure(null);
+    claimForm.reset();
   };
 
-  async function submitClaim() {
+  async function submitClaim(values: {
+    mode: "create" | "existing";
+    account: string;
+    display_name: string;
+    role_id: string | null;
+    user_id: string | null;
+  }) {
     if (!claimTarget) return;
-    if (claimMode === "existing") {
-      if (!claimUserId) return;
-      setClaimBusy(true);
-      try {
-        await claimPendingFederatedIdentity(claimTarget.id, {
-          user_id: claimUserId,
-        });
-        closeClaim();
-        await reloadPendingList();
-        await reload();
-      } catch (err) {
-        notifyError(err, t("common.error.loadFailed"));
-        setClaimBusy(false);
-      }
-      return;
-    }
-    if (!claimRoleId || !claimAccount.trim() || !claimDisplayName.trim()) return;
-    setClaimBusy(true);
     try {
-      await claimPendingFederatedIdentity(claimTarget.id, {
-        create_user: {
-          account: claimAccount.trim(),
-          display_name: claimDisplayName.trim(),
-          email: claimTarget.email,
-          role_id: claimRoleId,
-        },
-      });
+      if (values.mode === "existing") {
+        await claimPendingFederatedIdentity(claimTarget.id, {
+          user_id: values.user_id ?? "",
+        });
+      } else {
+        await claimPendingFederatedIdentity(claimTarget.id, {
+          create_user: {
+            account: values.account.trim(),
+            display_name: values.display_name.trim(),
+            email: claimTarget.email,
+            role_id: values.role_id ?? "",
+          },
+        });
+      }
+      claimForm.markSaved();
+      setClaimFailure(null);
       closeClaim();
       await reloadPendingList();
       await reload();
     } catch (err) {
-      notifyError(err, t("common.error.loadFailed"));
-      setClaimBusy(false);
+      setClaimFailure(
+        saveFailureFrom(
+          t,
+          err,
+          claimForm.applyApiError(err),
+          t("common.error.loadFailed"),
+        ),
+      );
     }
   }
 
@@ -229,10 +286,13 @@ export function UserList() {
   const userTable = (
     <ListTable
       list={users}
-      columnCount={7}
+      columnCount={6}
+      emptyMessage={t("users.list.empty")}
+      emptyAction={createAction}
+      noMatchMessage={t("users.list.noMatch")}
+      onClearFilters={usersQuery.clear}
       head={
         <Table.Tr>
-          <Table.Th>{t("users.fields.account")}</Table.Th>
           <Table.Th>{t("users.fields.displayName")}</Table.Th>
           <Table.Th>{t("users.fields.role")}</Table.Th>
           <Table.Th>{t("users.fields.status")}</Table.Th>
@@ -246,8 +306,13 @@ export function UserList() {
         const isSelf = identity?.id === row.id;
         return (
           <Table.Tr key={row.id}>
-            <Table.Td>{row.account}</Table.Td>
-            <Table.Td>{row.display_name}</Table.Td>
+            <Table.Td>
+              <RecordReference
+                name={row.display_name || row.account}
+                recordKey={row.account}
+                href={`/console/users/${row.id}`}
+              />
+            </Table.Td>
             <Table.Td>
               <UserRoleBadge
                 roleName={row.role_name}
@@ -268,38 +333,29 @@ export function UserList() {
                   { value: "disabled", label: t("users.status.disabled") },
                 ]}
                 value={row.status}
-                onChange={() => statusConfirm.open(row)}
+                onChange={(value) => onStatus(row, value)}
               />
             </Table.Td>
             <Table.Td>
-              <Group gap="xs">
-                <Text size="sm">
-                  {t(`identitySource.${row.identity_source}`)}
-                </Text>
-                {row.identity_source === "oidc" && canWrite?.can ? (
-                  <Button
-                    size="compact-xs"
-                    variant="subtle"
-                    onClick={() => {
-                      unfederateConfirm.open(row);
-                      setUnfederatePassword("");
-                    }}
-                  >
-                    {t("users.federation.unfederate.title")}
-                  </Button>
-                ) : null}
-              </Group>
+              <Text size="sm">{t(`identitySource.${row.identity_source}`)}</Text>
             </Table.Td>
             <Table.Td>{formatInstant(row.last_login_at)}</Table.Td>
             <Table.Td>
-              <Button
-                component={Link}
-                href={`/console/users/${row.id}`}
-                size="xs"
-                variant="light"
-              >
-                {t("users.show")}
-              </Button>
+              <RowActions
+                recordName={row.display_name || row.account}
+                verbs={[
+                  {
+                    key: "unfederate",
+                    label: t("users.federation.unfederate.title"),
+                    hidden: row.identity_source !== "oidc" || !canWrite?.can,
+                    safety: "confirm",
+                    onClick: () => {
+                      unfederateConfirm.open(row);
+                      setUnfederatePassword("");
+                    },
+                  },
+                ]}
+              />
             </Table.Td>
           </Table.Tr>
         );
@@ -314,71 +370,56 @@ export function UserList() {
       </Badge>
     ) : undefined;
 
-  const content = canWrite?.can ? (
-    <FillColumn>
-      <Tabs
-        value={activeTab}
-        onChange={setActiveTab}
-        keepMounted
-        style={{
-          flex: 1,
-          minHeight: 0,
-          display: "flex",
-          flexDirection: "column",
-        }}
-        styles={{
-          panel: {
-            flex: 1,
-            minHeight: 0,
-            overflow: "auto",
-            display: "flex",
-            flexDirection: "column",
-          },
-        }}
-      >
-        <Tabs.List>
-          <Tabs.Tab value="users">{t("users.tabs.users")}</Tabs.Tab>
-          <Tabs.Tab value="pending" rightSection={pendingBadge}>
-            {t("users.pending.title")}
-          </Tabs.Tab>
-        </Tabs.List>
-        <Tabs.Panel value="users" pt="md" style={{ overflow: "hidden" }}>
-          {userTable}
-        </Tabs.Panel>
-        <Tabs.Panel value="pending" pt="md" style={{ overflow: "hidden" }}>
-          <PendingFederatedIdentityTable
-            list={pendingList}
-            onClaim={openClaim}
-          />
-        </Tabs.Panel>
-      </Tabs>
-    </FillColumn>
-  ) : (
-    userTable
-  );
+  const listTabs = canWrite?.can
+    ? [
+        { value: "users", label: t("users.tabs.users"), panel: userTable },
+        {
+          value: "pending",
+          label: (
+            <Group gap={6} wrap="nowrap">
+              {t("users.pending.title")}
+              {pendingBadge}
+            </Group>
+          ),
+          panel: (
+            <PendingFederatedIdentityTable list={pendingList} onClaim={openClaim} />
+          ),
+        },
+      ]
+    : [];
 
-  return (
+  const frame = (tabs: ReactNode, body: ReactNode) => (
     <PageChrome
       title={t("users.title")}
       description={t("users.description")}
       actions={createAction}
+      fill={Boolean(canWrite?.can)}
+      tabs={tabs}
+      toolbar={
+        !canWrite?.can || activeTab === "users" ? (
+          <ListToolbar
+            query={usersQuery}
+            searchPlaceholder={t("users.search")}
+          />
+        ) : undefined
+      }
     >
-      {content}
+      {body}
 
-      <Modal
+      <FormDialog
         opened={claimTarget !== null}
         onClose={closeClaim}
         title={t("users.pending.claimTitle")}
-        centered
+        dirty={claimForm.dirty}
+        submitting={claimForm.submitting}
+        submitLabel={t("users.pending.claim")}
+        summary={<FormErrorSummary failure={claimFailure} />}
+        onSubmit={() => void claimForm.submit(submitClaim)}
       >
         <Stack gap="sm">
           <SegmentedField
             editable
             fullWidth
-            value={claimMode}
-            onChange={(value) =>
-              setClaimMode(value === "existing" ? "existing" : "create")
-            }
             data={[
               {
                 value: "create",
@@ -389,64 +430,42 @@ export function UserList() {
                 label: t("users.pending.claimExisting"),
               },
             ]}
+            {...claimForm.fieldProps("mode")}
+            value={claimForm.values.mode}
           />
-          {claimMode === "existing" ? (
-            <SelectField
+          {claimForm.values.mode === "existing" ? (
+            <RecordPicker
               editable
               label={t("users.pending.claimExisting")}
-              data={claimableUsers}
+              adapter={userRecordAdapter({ identitySource: "local" })}
               clearable
-              value={claimUserId}
-              onChange={setClaimUserId}
+              {...claimForm.fieldProps("user_id")}
             />
           ) : (
             <>
               <TextField
                 editable
                 label={t("users.fields.account")}
-                value={claimAccount}
-                onChange={(event) => setClaimAccount(event.currentTarget.value)}
                 required
+                {...claimForm.fieldProps("account")}
               />
               <TextField
                 editable
                 label={t("users.fields.displayName")}
-                value={claimDisplayName}
-                onChange={(event) =>
-                  setClaimDisplayName(event.currentTarget.value)
-                }
                 required
+                {...claimForm.fieldProps("display_name")}
               />
-              <SelectField
+              <RecordPicker
                 editable
                 label={t("users.fields.role")}
-                data={roleOptions}
+                adapter={roleRecordAdapter()}
                 required
-                value={claimRoleId}
-                onChange={setClaimRoleId}
+                {...claimForm.fieldProps("role_id")}
               />
             </>
           )}
-          <Group justify="flex-end">
-            <Button variant="default" onClick={closeClaim} disabled={claimBusy}>
-              {t("common.cancel")}
-            </Button>
-            <Button
-              loading={claimBusy}
-              disabled={
-                claimMode === "existing"
-                  ? !claimUserId
-                  : !claimRoleId ||
-                    !claimAccount.trim() ||
-                    !claimDisplayName.trim()
-              }
-              onClick={() => void submitClaim()}
-            >
-              {t("users.pending.claim")}
-            </Button>
-          </Group>
         </Stack>
-      </Modal>
+      </FormDialog>
 
       <ConfirmActionModal
         opened={unfederateConfirm.opened}
@@ -469,14 +488,17 @@ export function UserList() {
           required
         />
       </ConfirmActionModal>
-
-      <ConfirmActionModal
-        opened={statusConfirm.opened}
-        onClose={statusConfirm.close}
-        title={t("users.status.confirmTitle")}
-        loading={mutation.isPending}
-        onConfirm={confirmToggle}
-      />
+      {statusAction.dialog}
     </PageChrome>
+  );
+
+  if (listTabs.length === 0) {
+    return frame(undefined, userTable);
+  }
+
+  return (
+    <PageTabs fill value={activeTab} onChange={setTab} tabs={listTabs}>
+      {({ list, panels }) => frame(list, <FillColumn>{panels}</FillColumn>)}
+    </PageTabs>
   );
 }

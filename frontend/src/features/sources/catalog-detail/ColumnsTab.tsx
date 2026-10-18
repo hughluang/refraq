@@ -18,6 +18,7 @@ import { TextareaField } from "@/components/form/TextareaField";
 import { TextField } from "@/components/form/TextField";
 import { FillColumn } from "@/components/layout/FillColumn";
 import { patchColumnSemanticsBatch } from "@/features/sources/api/semantics";
+import { semanticSourceLabel } from "@/features/sources/catalogLabel";
 import {
   type ColumnDraft,
   type ColumnFilter,
@@ -432,7 +433,7 @@ export function ColumnsTab({
                         {col.semantic_source ? (
                           <Text size="xs" c="dimmed">
                             {t("catalog.semantics.provenance")}:{" "}
-                            {col.semantic_source}
+                            {semanticSourceLabel(t, col.semantic_source)}
                           </Text>
                         ) : null}
                       </Stack>

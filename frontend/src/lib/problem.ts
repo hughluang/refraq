@@ -4,7 +4,8 @@ type Translate = (key: string) => string;
 
 /**
  * First-party copy for a Problem Code.
- * A missing `problems.${code}` entry keeps the English `detail`.
+ * A missing `problems.${code}` entry uses the localized `problems.unknown`
+ * string. Server `detail` is never the main message.
  * Anything that is not an API failure uses the caller's fallback.
  */
 export function problemMessage(
@@ -16,5 +17,5 @@ export function problemMessage(
   const key = `problems.${error.code}`;
   const translated = t(key);
   if (translated !== key) return translated;
-  return error.detail;
+  return t("problems.unknown");
 }

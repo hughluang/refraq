@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { FieldChrome } from "@/components/form/FieldChrome";
 import { FieldMode } from "@/components/form/FieldMode";
-import { collectNotes, type FieldChromeProps } from "@/components/form/fieldNotes";
+import { collectNotes, joinDescribedBy, type FieldChromeProps } from "@/components/form/fieldNotes";
 
 export type JsonFieldProps = Omit<
   JsonInputProps,
@@ -51,6 +51,7 @@ export function JsonField({
   notes,
   openSignal,
   bare = false,
+  helper,
   value,
   onChange,
   accept,
@@ -118,11 +119,12 @@ export function JsonField({
         notes={merged}
         required={props.required}
         id={props.id}
+        helper={helper}
         openSignal={openSignal}
         editSignal={draft}
         bare={bare}
       >
-        {({ id, invalid: marked }) => (
+        {({ id, invalid: marked, describedBy }) => (
           <Stack gap={4}>
             {hint != null && hint !== "" ? (
               <Text size="xs" c="dimmed">
@@ -153,6 +155,7 @@ export function JsonField({
               description={undefined}
               error={marked || undefined}
               withAsterisk={false}
+              aria-describedby={joinDescribedBy(props["aria-describedby"], describedBy)}
             />
           </Stack>
         )}

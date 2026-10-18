@@ -11,7 +11,17 @@ export type FieldChromeProps = {
   notes?: readonly FieldNote[];
   openSignal?: string | null;
   bare?: boolean;
+  /** Persistent guidance under the input. Distinct from the reference popover. */
+  helper?: ReactNode;
 };
+
+export function joinDescribedBy(...ids: Array<string | undefined>): string | undefined {
+  const value = ids
+    .flatMap((id) => (id ? id.split(/\s+/) : []))
+    .filter(Boolean)
+    .join(" ");
+  return value || undefined;
+}
 
 const RANK: Record<FieldTone, number> = { error: 0, warning: 1, info: 2 };
 

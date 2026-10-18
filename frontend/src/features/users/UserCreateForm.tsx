@@ -1,36 +1,31 @@
 "use client";
 
-import {
-  Button,
-  Group,
-  PasswordInput,
-  Stack,
-} from "@mantine/core";
-import { useForm } from "@mantine/form";
+import { Button, PasswordInput, Stack } from "@mantine/core";
+import { useState } from "react";
 
-import { SelectField } from "@/components/form/SelectField";
+import { RecordPicker } from "@/components/form/RecordPicker";
+import { roleRecordAdapter } from "@/components/form/recordPickerAdapters";
 import { TextField } from "@/components/form/TextField";
 import {
-  useForm as useRefineForm,
-  useList,
-  useTranslate,
-} from "@refinedev/core";
-import Link from "next/link";
-
-import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
+  FormErrorSummary,
+  saveFailureFrom,
+  type SaveFailure,
+} from "@/components/form/FormErrorSummary";
+import { useConsoleForm } from "@/components/form/useConsoleForm";
+import { useForm as useRefineForm, useTranslate } from "@refinedev/core";
+import { HeaderAction, HeaderActions } from "@/components/layout/HeaderActions";
 import { PageChrome } from "@/components/layout/PageChrome";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
+import { suppressLeaveGuard } from "@/components/navigation/leaveGuard";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
-import type { RoleRow } from "@/features/roles/types";
 import type { UserCreateValues } from "@/features/users/types";
-import { problemMessage } from "@/lib/problem";
+
+const USER_CREATE_FORM_ID = "user-create-form";
 
 export function UserCreateForm() {
   const t = useTranslate();
-  const rolesQuery = useList<RoleRow>({
-    resource: ModuleId.roles,
-    pagination: { mode: "off" },
-  });
-  const { onFinish, formLoading } = useRefineForm<UserCreateValues>({
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const { onFinish } = useRefineForm<UserCreateValues>({
     resource: ModuleId.users,
     action: ModuleAction.create,
     redirect: "list",
@@ -39,21 +34,17 @@ export function UserCreateForm() {
       description: t("users.create.success"),
       type: "success",
     },
-    errorNotification: (error) => ({
-      message: t("users.title"),
-      description:
-        problemMessage(t, error, t("common.error.loadFailed")),
-      type: "error",
-    }),
+    errorNotification: false,
   });
 
-  const form = useForm<UserCreateValues>({
+  const form = useConsoleForm<UserCreateValues>({
     initialValues: {
       account: "",
       display_name: "",
       password: "",
       role_id: null,
     },
+    onValuesChange: () => setSaveFailure(null),
     validate: {
       account: (value) =>
         value.trim().length > 0 ? null : t("users.validation.required"),
@@ -64,65 +55,85 @@ export function UserCreateForm() {
     },
   });
 
-  const roleOptions = (rolesQuery.result?.data ?? []).map((role) => ({
-    value: role.id,
-    label: role.name,
-  }));
-
   return (
-    <PageChrome title={t("users.create.title")}>
-      {rolesQuery.query.isLoading ? (
-        <PageBodySkeleton rows={5} />
-      ) : (
-        <form
-          onSubmit={form.onSubmit((values) =>
-            void onFinish({
-              ...values,
-              role_id: values.role_id || null,
-            }),
-          )}
+    <PageChrome
+      title={t("users.create.title")}
+      status="ready"
+      actions={
+          <HeaderActions
+            standard={
+              <>
+                <Button
+                  component={ConsoleLink}
+                  href="/console/users"
+                  variant="default"
+                  size="sm"
+                >
+                  {t("common.cancel")}
+                </Button>
+                <HeaderAction primary>
+                  <Button type="submit" form={USER_CREATE_FORM_ID} size="sm" loading={form.submitting}>
+                    {t("users.create.submit")}
+                  </Button>
+                </HeaderAction>
+              </>
+            }
+          />
+      }
+    >
+      <form
+          id={USER_CREATE_FORM_ID}
+          onSubmit={form.onSubmit(async (values) => {
+            try {
+              await onFinish({
+                ...values,
+                role_id: values.role_id || null,
+              });
+              suppressLeaveGuard();
+            } catch (error) {
+              setSaveFailure(
+                saveFailureFrom(
+                  t,
+                  error,
+                  form.applyApiError(error),
+                  t("common.error.loadFailed"),
+                ),
+              );
+            }
+          })}
         >
           <Stack gap="sm">
+            <FormErrorSummary failure={saveFailure} />
             <TextField
               label={t("users.fields.account")}
               required
               editable
               maxLength={64}
-              {...form.getInputProps("account")}
+              {...form.fieldProps("account")}
             />
             <TextField
               label={t("users.fields.displayName")}
               required
               editable
               maxLength={64}
-              {...form.getInputProps("display_name")}
+              {...form.fieldProps("display_name")}
             />
             <PasswordInput
               label={t("users.fields.password")}
               required
               maxLength={256}
-              {...form.getInputProps("password")}
+              {...form.fieldProps("password")}
             />
-            <SelectField
+            <RecordPicker
               editable
               label={t("users.fields.role")}
               clearable
               placeholder={t("users.roles.none")}
-              data={roleOptions}
-              value={form.values.role_id}
-              onChange={(value) => form.setFieldValue("role_id", value)}
+              adapter={roleRecordAdapter()}
+              {...form.fieldProps("role_id")}
             />
-            <Group justify="flex-end">
-              <Button component={Link} href="/console/users" variant="default">
-                {t("common.cancel")}
-              </Button>
-              <Button type="submit" loading={formLoading}>
-                {t("users.create.submit")}
-              </Button>
-            </Group>
           </Stack>
         </form>
-      )}
     </PageChrome>
   );
 }

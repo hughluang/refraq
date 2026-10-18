@@ -72,6 +72,15 @@ def create_business_domain(
     return BusinessDomainResponse(domain=_domain_out(record))
 
 
+@router.get("/business-domains/{domain_id}", response_model=BusinessDomainResponse)
+def get_business_domain(
+    domain_id: str,
+    _: UserRecord = Depends(require_permission("metadata:read")),
+) -> BusinessDomainResponse:
+    record = domain_service.require_domain(domain_id)
+    return BusinessDomainResponse(domain=_domain_out(record))
+
+
 @router.patch("/business-domains/{domain_id}", response_model=BusinessDomainResponse)
 def patch_business_domain(
     domain_id: str,

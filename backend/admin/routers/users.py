@@ -20,7 +20,7 @@ from backend.admin.security import hash_password
 from backend.admin.user_payload import build_user_summary
 from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.session_store import SessionStore, get_session_store
-from backend.admin.user_store import UserRecord, UserStore, get_user_store
+from backend.admin.user_store import IdentitySource, UserRecord, UserStore, get_user_store
 from backend.admin.schemas.user import (
     CreateUserRequest,
     CreateUserResponse,
@@ -42,9 +42,15 @@ def list_users(
     roles: RoleStore = Depends(get_role_store),
     page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
     include_system: bool = Query(default=False),
+    q: str | None = Query(default=None),
+    identity_source: IdentitySource | None = Query(default=None),
 ) -> UserListResponse:
     records, total = users.list_users(
-        limit=page.limit, offset=page.offset, include_system=include_system
+        limit=page.limit,
+        offset=page.offset,
+        include_system=include_system,
+        q=(q or "").strip() or None,
+        identity_source=identity_source,
     )
     return UserListResponse(
         items=[build_user_summary(record, roles) for record in records],

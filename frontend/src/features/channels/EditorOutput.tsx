@@ -3,6 +3,8 @@
 import { Button, Stack, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 
+import { presentNodeStatus } from "@/components/display/statusTone";
+import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
 import { canPinNode } from "@/features/channels/editorSession";
 import { NodeRegion } from "@/features/channels/NodeRegion";
 import { RunExecutionOutput } from "@/features/channels/RunExecutionOutput";
@@ -16,10 +18,11 @@ type Props = {
   busy: boolean;
   error: string | null;
   problemTexts: readonly string[];
+  recordName: string;
   pinned: boolean;
   canCancel: boolean;
   onTest: (nodeId: string) => void;
-  onCancel: () => void;
+  onCancel: () => void | Promise<unknown>;
   onPin: (nodeId: string, output: unknown) => void;
   onUnpin: (nodeId: string) => void;
 };
@@ -32,6 +35,7 @@ export function EditorOutputRegion({
   busy,
   error,
   problemTexts,
+  recordName,
   pinned,
   canCancel,
   onTest,
@@ -40,6 +44,8 @@ export function EditorOutputRegion({
   onUnpin,
 }: Props) {
   const t = useTranslate();
+  const cancel = useConsoleMutation();
+  const name = recordName.trim() || nodeId;
   const mine = (result?.node_executions ?? [])
     .filter((item) => item.node_id === nodeId)
     .slice()
@@ -118,7 +124,19 @@ export function EditorOutputRegion({
             color="red"
             variant="light"
             disabled={!canCancel}
-            onClick={onCancel}
+            loading={cancel.submitting}
+            onClick={() => {
+              cancel.run({
+                safety: "confirm",
+                recordName: name,
+                title: t("channels.editor.cancel.confirmTitle", { name }),
+                consequence: t("channels.editor.cancel.consequence"),
+                confirmLabel: t("channels.editor.cancel.confirm"),
+                confirmColor: "red",
+                outcome: t("channels.editor.cancel.outcome"),
+                execute: () => Promise.resolve(onCancel()),
+              });
+            }}
           >
             {t("common.cancel")}
           </Button>
@@ -129,6 +147,7 @@ export function EditorOutputRegion({
         )
       }
     >
+      {cancel.dialog}
       <Stack gap="sm">
         <Text size="xs" c="dimmed">
           {t("channels.editor.hint")}
@@ -180,7 +199,5 @@ function statusLabel(
   t: (key: string, options?: Record<string, unknown>) => string,
   status: string,
 ): string {
-  const key = `channels.editor.status.${status}`;
-  const text = t(key);
-  return text === key ? status : text;
+  return t(presentNodeStatus(status).labelKey);
 }

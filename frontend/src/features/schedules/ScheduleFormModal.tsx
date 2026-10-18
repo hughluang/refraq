@@ -4,18 +4,23 @@ import {
   Button,
   Group,
   Input,
-  Modal,
   SegmentedControl,
   Skeleton,
   Stack,
   Text,
 } from "@mantine/core";
 import { DateTimePicker } from "@mantine/dates";
-import { useForm } from "@mantine/form";
 import { useGetLocale, useNotification, useTranslate } from "@refinedev/core";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
+import { FormDialog } from "@/components/form/FormDialog";
+import {
+  FormErrorSummary,
+  saveFailureFrom,
+  type SaveFailure,
+} from "@/components/form/FormErrorSummary";
+import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { CronField } from "@/components/form/CronField";
 import { DEFAULT_DAILY_CRON } from "@/components/form/cronBuilder";
 import { NumberField } from "@/components/form/NumberField";
@@ -47,7 +52,6 @@ import { isAllowedStartAt } from "@/features/schedules/startAtField";
 import type { ScheduledTask } from "@/features/schedules/types";
 import { useDisplayZoneId, useFormatInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
-import { problemMessage } from "@/lib/problem";
 import { instantToWall, wallToInstant } from "@/lib/wall-time";
 
 type CadenceMode = "clock" | "interval";
@@ -115,29 +119,29 @@ export function ScheduleFormModal({
     ? `${t("schedules.form.title")} · ${sourceLabel}`
     : t("schedules.form.title");
 
+  if (!opened) return null;
   return (
-    <Modal opened={opened} onClose={onClose} title={title} size="lg">
-      {opened ? (
-        <ScheduleForm
-          key={schedule?.id ?? `create:${sourceId ?? ""}`}
-          onClose={onClose}
-          onSaved={onSaved}
-          sourceId={sourceId}
-          schedule={schedule ?? null}
-          cronTimezone={cronTimezone}
-        />
-      ) : null}
-    </Modal>
+    <ScheduleForm
+      key={schedule?.id ?? `create:${sourceId ?? ""}`}
+      title={title}
+      onClose={onClose}
+      onSaved={onSaved}
+      sourceId={sourceId}
+      schedule={schedule ?? null}
+      cronTimezone={cronTimezone}
+    />
   );
 }
 
 function ScheduleForm({
+  title,
   onClose,
   onSaved,
   sourceId,
   schedule,
   cronTimezone,
 }: {
+  title: string;
   onClose: () => void;
   onSaved: () => void;
   sourceId?: string;
@@ -149,9 +153,10 @@ function ScheduleForm({
   const { open } = useNotification();
   const formatInstant = useFormatInstant();
   const displayZone = useDisplayZoneId();
-  const [saving, setSaving] = useState(false);
-  const form = useForm<FormValues>({
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const form = useConsoleForm<FormValues>({
     initialValues: valuesFromTask(schedule, cronTimezone),
+    onValuesChange: () => setSaveFailure(null),
   });
   const cron = form.values.cron.trim();
   const startAt = wallToInstant(form.values.startWall, cronTimezone);
@@ -222,7 +227,6 @@ function ScheduleForm({
       return;
     }
     if (!canSave) return;
-    setSaving(true);
     try {
       const name = form.values.name.trim();
       const running_timeout_sec = timeoutPayload(timeoutInput);
@@ -257,20 +261,31 @@ function ScheduleForm({
       } else {
         return;
       }
+      form.markSaved();
+      setSaveFailure(null);
       open?.({ type: "success", message: t("schedules.save.success") });
       onSaved();
       onClose();
     } catch (err) {
-      open?.({
-        type: "error",
-        message: problemMessage(t, err, String(err)),
-      });
-    } finally {
-      setSaving(false);
+      setSaveFailure(
+        saveFailureFrom(t, err, form.applyApiError(err), String(err)),
+      );
     }
   }
 
   return (
+    <FormDialog
+      opened
+      onClose={onClose}
+      title={title}
+      size="lg"
+      dirty={form.dirty}
+      submitting={form.submitting || showSkeleton}
+      submitDisabled={!canSave}
+      submitLabel={t("common.save")}
+      summary={<FormErrorSummary failure={saveFailure} />}
+      onSubmit={() => void form.submit(handleSave)}
+    >
     <Stack gap="sm">
       {schedule ? null : (
         <SelectField
@@ -388,6 +403,7 @@ function ScheduleForm({
           <Text size="sm">{t("schedules.form.previewFailed")}</Text>
           <Group>
             <Button
+              type="button"
               variant="light"
               size="xs"
               onClick={() => void preview.refetch()}
@@ -440,7 +456,7 @@ function ScheduleForm({
       <TextField
         editable
         label={t("schedules.fields.name")}
-        {...form.getInputProps("name")}
+        {...form.fieldProps("name")}
       />
       <SwitchField
         editable
@@ -450,18 +466,7 @@ function ScheduleForm({
           form.setFieldValue("enabled", event.currentTarget.checked)
         }
       />
-      <Group justify="flex-end">
-        <Button variant="default" onClick={onClose} disabled={saving}>
-          {t("common.cancel")}
-        </Button>
-        <Button
-          loading={saving || showSkeleton}
-          disabled={!canSave}
-          onClick={() => void handleSave()}
-        >
-          {t("common.save")}
-        </Button>
-      </Group>
     </Stack>
+    </FormDialog>
   );
 }

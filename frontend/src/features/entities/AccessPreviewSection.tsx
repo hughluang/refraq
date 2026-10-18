@@ -1,13 +1,15 @@
 "use client";
 
-import { Alert, Button, Checkbox, Collapse, Group, Select, Stack, Table, Text } from "@mantine/core";
+import { Alert, Button, Checkbox, Collapse, Group, Stack, Table, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useState } from "react";
 
 import { previewAccess } from "@/features/entities/accessApi";
 import { presentCell, withheldNames } from "@/features/entities/accessLogic";
 import { accessProblemText } from "@/features/entities/accessProblem";
-import type { AccessOption, AccessRun } from "@/features/entities/accessSession";
+import type { AccessRun } from "@/features/entities/accessSession";
+import { RecordPicker } from "@/components/form/RecordPicker";
+import { userRecordAdapter } from "@/components/form/recordPickerAdapters";
 import { SectionHeader } from "@/components/layout/SectionHeader";
 
 type PreviewColumn = { name: string; marks: string };
@@ -15,7 +17,6 @@ type PreviewModel = { columns: PreviewColumn[]; headers: string[]; rows: string[
 
 type Props = {
   entityId: string;
-  users: AccessOption[];
   canPreviewRows: boolean;
   busyId: string | null;
   run: AccessRun;
@@ -23,7 +24,6 @@ type Props = {
 
 export function AccessPreviewSection({
   entityId,
-  users,
   canPreviewRows,
   busyId,
   run,
@@ -51,12 +51,12 @@ export function AccessPreviewSection({
       <Collapse expanded={open}>
         <Stack gap="sm">
           <Group align="flex-end">
-            <Select
+            <RecordPicker
+              editable
               label={t("entities.access.subject.user")}
-              data={users}
+              adapter={userRecordAdapter()}
               value={previewUser}
               onChange={setPreviewUser}
-              searchable
             />
             <Checkbox
               label={t("entities.access.preview.includeRows")}

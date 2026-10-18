@@ -43,10 +43,12 @@ export function listEntities(params?: {
   status?: readonly EntityStatus[];
   limit?: number;
   offset?: number;
+  signal?: AbortSignal;
 }) {
-  return apiClient<OffsetPage<BusinessEntity>>(
-    `/entities${querySuffix(params)}`,
-  );
+  const { signal, ...query } = params ?? {};
+  return apiClient<OffsetPage<BusinessEntity>>(`/entities${querySuffix(query)}`, {
+    signal,
+  });
 }
 
 export function createEntity(body: EntityCreate) {
@@ -57,8 +59,10 @@ export function createEntity(body: EntityCreate) {
   });
 }
 
-export function getEntity(id: string) {
-  return apiClient<{ entity: BusinessEntity }>(`/entities/${id}`);
+export function getEntity(id: string, init?: { signal?: AbortSignal }) {
+  return apiClient<{ entity: BusinessEntity }>(`/entities/${id}`, {
+    signal: init?.signal,
+  });
 }
 
 export function patchEntity(id: string, body: EntityPatch) {

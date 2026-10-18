@@ -171,6 +171,15 @@ def test_business_domain_crud_and_code_immutable(client: TestClient) -> None:
     assert domain["code"] == "orders"
     assert domain["name"] == "Orders"
 
+    fetched = client.get(f"/business-domains/{domain['id']}")
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["domain"]["id"] == domain["id"]
+    assert fetched.json()["domain"]["code"] == "orders"
+
+    missing = client.get("/business-domains/dom_missing")
+    assert missing.status_code == 404
+    assert missing.json()["code"] == "BUSINESS_DOMAIN_NOT_FOUND"
+
     listed = client.get("/business-domains")
     assert listed.status_code == 200
     assert listed.json()["total"] == 1

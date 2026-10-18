@@ -4,7 +4,7 @@ import { MultiSelect, type MultiSelectProps } from "@mantine/core";
 
 import { FieldChrome } from "@/components/form/FieldChrome";
 import { FieldMode } from "@/components/form/FieldMode";
-import { collectNotes, type FieldChromeProps } from "@/components/form/fieldNotes";
+import { collectNotes, joinDescribedBy, type FieldChromeProps } from "@/components/form/fieldNotes";
 import { optionLabels } from "@/components/form/optionLabel";
 
 export type MultiSelectFieldProps = Omit<MultiSelectProps, "disabled" | "readOnly"> &
@@ -17,6 +17,7 @@ export function MultiSelectField({
   notes,
   openSignal,
   bare = false,
+  helper,
   ...props
 }: MultiSelectFieldProps) {
   const values = props.value ?? [];
@@ -38,17 +39,19 @@ export function MultiSelectField({
         notes={merged}
         required={props.required}
         id={props.id}
+        helper={helper}
         openSignal={openSignal}
         editSignal={props.value}
         bare={bare}
       >
-        {({ id, invalid }) => (
+        {({ id, invalid, describedBy }) => (
           <MultiSelect
             {...props}
             id={id}
             label={undefined}
             description={undefined}
             error={invalid || undefined}
+            aria-describedby={joinDescribedBy(props["aria-describedby"], describedBy)}
             withAsterisk={false}
           />
         )}

@@ -1,0 +1,29 @@
+.console-skip-link {
+  position: absolute;
+  left: var(--mantine-spacing-sm);
+  top: 0;
+  z-index: 1000;
+  padding: var(--mantine-spacing-xs) var(--mantine-spacing-sm);
+  background: var(--mantine-color-body);
+  color: var(--mantine-color-text);
+  border-radius: var(--mantine-radius-sm);
+  transform: translateY(-120%);
+  transition: transform var(--refraq-motion-fast) var(--refraq-ease-enter);
+}
+
+.console-skip-link:focus {
+  transform: translateY(var(--mantine-spacing-xs));
+}
+
+.console-navbar {
+  transition:
+    width var(--refraq-motion-base) var(--refraq-ease-standard),
+    min-width var(--refraq-motion-base) var(--refraq-ease-standard);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .console-skip-link,
+  .console-navbar {
+    transition: none;
+  }
+}

@@ -34,39 +34,54 @@ import {
 } from "@/features/entities/accessLogic";
 import type { AccessOption, AccessRun } from "@/features/entities/accessSession";
 import type { AccessSummary } from "@/features/entities/accessTypes";
+import { RecordPicker } from "@/components/form/RecordPicker";
+import {
+  roleRecordAdapter,
+  userGroupRecordAdapter,
+  userRecordAdapter,
+} from "@/components/form/recordPickerAdapters";
 import { Instant } from "@/components/display/Instant";
-import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
-import { EmptyState } from "@/components/feedback/EmptyState";
+import { ListTable } from "@/components/display/ListTable";
+import { RecordReference } from "@/components/display/RecordReference";
+import { RowActions } from "@/components/display/RowActions";
 import { SectionHeader } from "@/components/layout/SectionHeader";
 import { useEntryZone } from "@/hooks/useFormatInstant";
+import { localListSession } from "@/lib/list-state";
 import { wallToInstant } from "@/lib/wall-time";
 
 const EMPTY_RULE: RuleNode = { kind: "and", children: [] };
 
 type Props = {
   entityId: string;
-  summary: AccessSummary;
-  users: AccessOption[];
-  roles: AccessOption[];
-  groups: AccessOption[];
+  summary: AccessSummary | null;
   subjectAttrs: AccessOption[];
   busyId: string | null;
   run: AccessRun;
   focusId: AccessSectionId;
   focusNonce: number;
+  loading?: boolean;
+  error?: string | null;
+  onReload?: () => void | Promise<void>;
 };
+
+function subjectHref(subject: AccessSummary["grants"][number]["subject"]): string | undefined {
+  if (subject.missing) return undefined;
+  if (subject.type === "user") return `/console/users/${subject.id}`;
+  if (subject.type === "role") return `/console/roles/${subject.id}`;
+  return `/console/user-groups/${subject.id}`;
+}
 
 export function AccessGrantsSection({
   entityId,
   summary,
-  users,
-  roles,
-  groups,
   subjectAttrs,
   busyId,
   run,
   focusId,
   focusNonce,
+  loading = false,
+  error = null,
+  onReload,
 }: Props) {
   const t = useTranslate();
   const zone = useEntryZone();
@@ -82,17 +97,26 @@ export function AccessGrantsSection({
   const [ruleKind, setRuleKind] = useState<RuleOperandKind>("value");
   const [ruleValue, setRuleValue] = useState("");
   const [rule, setRule] = useState<RuleNode>(EMPTY_RULE);
-  const [revokeId, setRevokeId] = useState<string | null>(null);
 
-  const subjectOptions = subjectType === "role" ? roles : subjectType === "group" ? groups : users;
+  const grants = summary?.grants ?? [];
+  const subjectAdapter =
+    subjectType === "role"
+      ? roleRecordAdapter()
+      : subjectType === "group"
+        ? userGroupRecordAdapter()
+        : userRecordAdapter();
   const attributeName = (id: string) =>
-    summary.ladders.find((ladder) => ladder.attribute_id === id)?.attribute_name ?? id;
+    summary?.ladders.find((ladder) => ladder.attribute_id === id)?.attribute_name ?? id;
   const attributeType = (id: string) =>
-    summary.ladders.find((ladder) => ladder.attribute_id === id)?.type ?? null;
+    summary?.ladders.find((ladder) => ladder.attribute_id === id)?.type ?? null;
   const names = { attributeName, attributeType };
   const creating = busyId === "grant-create";
-  const revoking = summary.grants.find((grant) => grant.id === revokeId) ?? null;
-  const revokeBusy = revokeId != null && busyId === `grant-delete:${revokeId}`;
+  const list = localListSession({
+    total: grants.length,
+    loading,
+    error,
+    reload: onReload,
+  });
   const columnType = ruleAttr ? attributeType(ruleAttr) : null;
   const operandKinds = ruleOperandKinds(ruleOp, columnType);
   const hintKey = ruleEditorHint(ruleOp, columnType);
@@ -150,66 +174,90 @@ export function AccessGrantsSection({
           </Button>
         }
       />
-      {summary.grants.length === 0 ? (
-        <EmptyState message={t("entities.access.grants.empty")} />
-      ) : (
-        <Table.ScrollContainer minWidth={720}>
-          <Table>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>{t("entities.access.grants.subject")}</Table.Th>
-                <Table.Th>{t("entities.access.grants.scheme")}</Table.Th>
-                <Table.Th>{t("entities.access.grants.actions")}</Table.Th>
-                <Table.Th>{t("entities.access.grants.rows")}</Table.Th>
-                <Table.Th>{t("entities.access.grants.validUntil")}</Table.Th>
-                <Table.Th />
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {summary.grants.map((grant) => {
-                const profile = summary.profiles.find((item) => item.id === grant.profile_id);
-                return (
-                  <Table.Tr key={grant.id}>
-                    <Table.Td>
-                      {grant.subject.display_name || grant.subject.id}
-                      {grant.broken || grant.subject.missing
-                        ? ` · ${t("entities.access.broken")}`
-                        : ""}
-                    </Table.Td>
-                    <Table.Td>{profile?.name ?? grant.profile_id}</Table.Td>
-                    <Table.Td>
-                      {grant.actions
-                        .map((action) => t(`entities.access.action.${action}`))
-                        .join(t("entities.access.summary.actionJoin"))}
-                    </Table.Td>
-                    <Table.Td>
-                      {describeStoredRule(t, grant.row_rule, names)}
-                    </Table.Td>
-                    <Table.Td>
-                      {grant.valid_until ? (
-                        <Instant value={grant.valid_until} />
-                      ) : (
-                        t("entities.access.grants.noExpiry")
-                      )}
-                    </Table.Td>
-                    <Table.Td>
-                      <Button
-                        size="xs"
-                        color="red"
-                        variant="light"
-                        disabled={busyId !== null}
-                        onClick={() => setRevokeId(grant.id)}
-                      >
-                        {t("entities.access.grants.delete")}
-                      </Button>
-                    </Table.Td>
-                  </Table.Tr>
-                );
-              })}
-            </Table.Tbody>
-          </Table>
-        </Table.ScrollContainer>
-      )}
+      <ListTable
+        embedded
+        list={list}
+        columnCount={6}
+        minWidth={720}
+        emptyMessage={t("entities.access.grants.empty")}
+        head={
+          <Table.Tr>
+            <Table.Th>{t("entities.access.grants.subject")}</Table.Th>
+            <Table.Th>{t("entities.access.grants.scheme")}</Table.Th>
+            <Table.Th>{t("entities.access.grants.actions")}</Table.Th>
+            <Table.Th>{t("entities.access.grants.rows")}</Table.Th>
+            <Table.Th>{t("entities.access.grants.validUntil")}</Table.Th>
+            <Table.Th />
+          </Table.Tr>
+        }
+      >
+        {grants.map((grant) => {
+          const profile = summary?.profiles.find((item) => item.id === grant.profile_id);
+          const subjectName = grant.subject.display_name || grant.subject.id;
+          return (
+            <Table.Tr key={grant.id}>
+              <Table.Td>
+                <Group gap={6} wrap="nowrap">
+                  <RecordReference
+                    name={subjectName}
+                    recordKey={grant.subject.id}
+                    href={subjectHref(grant.subject)}
+                  />
+                  {grant.broken || grant.subject.missing ? (
+                    <Text size="sm" c="dimmed">
+                      {t("entities.access.broken")}
+                    </Text>
+                  ) : null}
+                </Group>
+              </Table.Td>
+              <Table.Td>
+                {profile ? (
+                  <RecordReference name={profile.name} recordKey={profile.key} />
+                ) : (
+                  grant.profile_id
+                )}
+              </Table.Td>
+              <Table.Td>
+                {grant.actions
+                  .map((action) => t(`entities.access.action.${action}`))
+                  .join(t("entities.access.summary.actionJoin"))}
+              </Table.Td>
+              <Table.Td>{describeStoredRule(t, grant.row_rule, names)}</Table.Td>
+              <Table.Td>
+                {grant.valid_until ? (
+                  <Instant value={grant.valid_until} />
+                ) : (
+                  t("entities.access.grants.noExpiry")
+                )}
+              </Table.Td>
+              <Table.Td>
+                <RowActions
+                  recordName={subjectName}
+                  verbs={[
+                    {
+                      key: "revoke",
+                      label: t("entities.access.grants.delete"),
+                      color: "red",
+                      disabledReason: busyId !== null ? t("common.loading") : undefined,
+                      action: {
+                        safety: "confirm",
+                        recordName: subjectName,
+                        title: t("entities.access.grants.revokeTitle"),
+                        consequence: t("entities.access.grants.revokeBody", { name: subjectName }),
+                        confirmLabel: t("entities.access.grants.delete"),
+                        confirmColor: "red",
+                        outcome: t("entities.access.saved.revoked"),
+                        execute: () => deleteGrant(entityId, grant.id),
+                        onSuccess: onReload,
+                      },
+                    },
+                  ]}
+                />
+              </Table.Td>
+            </Table.Tr>
+          );
+        })}
+      </ListTable>
       <Collapse expanded={open}>
         <Stack gap="sm">
           <Group align="flex-end">
@@ -226,16 +274,17 @@ export function AccessGrantsSection({
                 setSubjectId(null);
               }}
             />
-            <Select
+            <RecordPicker
+              key={subjectType}
+              editable
               label={t("entities.access.grants.subject")}
-              data={subjectOptions}
+              adapter={subjectAdapter}
               value={subjectId}
               onChange={setSubjectId}
-              searchable
             />
             <Select
               label={t("entities.access.grants.scheme")}
-              data={summary.profiles.map((profile) => ({
+              data={(summary?.profiles ?? []).map((profile) => ({
                 value: profile.id,
                 label: profile.name,
               }))}
@@ -318,7 +367,7 @@ export function AccessGrantsSection({
               <Group align="flex-end">
                 <Select
                   label={t("entities.access.rule.attr")}
-                  data={summary.ladders.map((ladder) => ({
+                  data={(summary?.ladders ?? []).map((ladder) => ({
                     value: ladder.attribute_id,
                     label: ladder.attribute_name,
                   }))}
@@ -362,6 +411,13 @@ export function AccessGrantsSection({
                     value={ruleValue || null}
                     onChange={(value) => setRuleValue(value ?? "")}
                     aria-label={t("entities.access.rule.subjectAttr")}
+                    renderOption={({ option }) => (
+                      <RecordReference
+                        name={option.label}
+                        recordKey={option.value}
+                        copyable={false}
+                      />
+                    )}
                   />
                 ) : ruleOp === "is_null" && ruleKind === "value" ? (
                   <Select
@@ -423,25 +479,6 @@ export function AccessGrantsSection({
           </Button>
         </Stack>
       </Collapse>
-      <ConfirmActionModal
-        opened={revoking !== null}
-        onClose={() => setRevokeId(null)}
-        title={t("entities.access.grants.revokeTitle")}
-        body={t("entities.access.grants.revokeBody", {
-          name: revoking?.subject.display_name || revoking?.subject.id || "",
-        })}
-        confirmLabel={t("entities.access.grants.delete")}
-        confirmColor="red"
-        loading={revokeBusy}
-        onConfirm={() => {
-          if (!revokeId) return;
-          void run(`grant-delete:${revokeId}`, "entities.access.saved.revoked", () =>
-            deleteGrant(entityId, revokeId),
-          ).then((ok) => {
-            if (ok) setRevokeId(null);
-          });
-        }}
-      />
     </Stack>
   );
 }

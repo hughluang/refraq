@@ -1,15 +1,17 @@
 "use client";
 
-import { Table, Text } from "@mantine/core";
+import { Table } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import { useEffect, useState } from "react";
+import { useCallback } from "react";
 
 import { Instant } from "@/components/display/Instant";
-import { PageError } from "@/components/feedback/PageError";
-import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
+import { ListTable } from "@/components/display/ListTable";
 import { listSemanticsChanges } from "@/features/sources/api/catalog";
-import type { SemanticsChange } from "@/features/sources/types";
-import { problemMessage } from "@/lib/problem";
+import { semanticSourceLabel } from "@/features/sources/catalogLabel";
+import { useConsolePagedList } from "@/hooks/useConsolePagedList";
+import type { PageQuery } from "@/lib/pagination";
+
+const PAGE_SIZE = 50;
 
 type HistoryTabProps = {
   objectId: string;
@@ -28,52 +30,28 @@ function formatValue(value: unknown): string {
 
 export function HistoryTab({ objectId, listEnabled }: HistoryTabProps) {
   const t = useTranslate();
-  const [items, setItems] = useState<SemanticsChange[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!listEnabled) return;
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    void listSemanticsChanges(objectId)
-      .then((page) => {
-        if (!cancelled) setItems(page.items);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setError(problemMessage(t, err, String(err)));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [objectId, listEnabled]);
+  const fetchPage = useCallback(
+    (query: PageQuery) => listSemanticsChanges(objectId, query),
+    [objectId],
+  );
+  const list = useConsolePagedList({
+    pageSize: PAGE_SIZE,
+    fetch: fetchPage,
+    enabled: listEnabled,
+    resetDeps: [objectId],
+  });
 
   if (!listEnabled) {
     return null;
   }
-  if (loading) {
-    return <PageBodySkeleton />;
-  }
-  if (error) {
-    return <PageError message={error} />;
-  }
-  if (items.length === 0) {
-    return (
-      <Text size="sm" c="dimmed">
-        {t("catalog.history.empty")}
-      </Text>
-    );
-  }
 
   return (
-    <Table striped highlightOnHover>
-      <Table.Thead>
+    <ListTable
+      list={list}
+      columnCount={5}
+      minWidth={880}
+      emptyMessage={t("catalog.history.empty")}
+      head={
         <Table.Tr>
           <Table.Th>{t("catalog.history.field")}</Table.Th>
           <Table.Th>{t("catalog.history.old")}</Table.Th>
@@ -81,24 +59,21 @@ export function HistoryTab({ objectId, listEnabled }: HistoryTabProps) {
           <Table.Th>{t("catalog.history.source")}</Table.Th>
           <Table.Th>{t("catalog.history.at")}</Table.Th>
         </Table.Tr>
-      </Table.Thead>
-      <Table.Tbody>
-        {items.map((row) => (
-          <Table.Tr key={row.id}>
-            <Table.Td>
-              {row.column_id
-                ? `${row.field_name} (${row.column_id})`
-                : row.field_name}
-            </Table.Td>
-            <Table.Td>{formatValue(row.old_value)}</Table.Td>
-            <Table.Td>{formatValue(row.new_value)}</Table.Td>
-            <Table.Td>{row.semantic_source}</Table.Td>
-            <Table.Td>
-              <Instant value={row.created_at} />
-            </Table.Td>
-          </Table.Tr>
-        ))}
-      </Table.Tbody>
-    </Table>
+      }
+    >
+      {list.items.map((row) => (
+        <Table.Tr key={row.id}>
+          <Table.Td>
+            {row.column_id ? `${row.field_name} (${row.column_id})` : row.field_name}
+          </Table.Td>
+          <Table.Td>{formatValue(row.old_value)}</Table.Td>
+          <Table.Td>{formatValue(row.new_value)}</Table.Td>
+          <Table.Td>{semanticSourceLabel(t, row.semantic_source)}</Table.Td>
+          <Table.Td>
+            <Instant value={row.created_at} />
+          </Table.Td>
+        </Table.Tr>
+      ))}
+    </ListTable>
   );
 }

@@ -168,6 +168,7 @@ Validation:
 | --- | --- | --- | --- |
 | `GET` | `/business-domains` | `metadata:read` | List domains (`q`; **Offset Page**, `limit` default 100, max 500) |
 | `POST` | `/business-domains` | `metadata:write` | Create (`code`, `name`, `description?`) |
+| `GET` | `/business-domains/{id}` | `metadata:read` | Read one domain (`{ "domain": { … } }`) |
 | `PATCH` | `/business-domains/{id}` | `metadata:write` | Patch `name` / `description` (`code` immutable) |
 | `DELETE` | `/business-domains/{id}` | `metadata:write` | Delete; blocked when referenced (`BUSINESS_DOMAIN_IN_USE`) |
 

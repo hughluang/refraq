@@ -46,6 +46,7 @@ class ConsoleModuleSeed:
     actions: ModuleActions
     group_order: int
     module_order: int
+    icon: str | None = None
 
 
 CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
@@ -54,6 +55,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="workbench",
         group_label_key="layout.navGroup.workbench",
         label_key="layout.nav.home",
+        icon="layout-dashboard",
         routes=ModuleRoutes(list="/console"),
         actions=ModuleActions(list="dashboard:read"),
         group_order=10,
@@ -64,6 +66,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="admin",
         group_label_key="layout.navGroup.admin",
         label_key="users.title",
+        icon="users",
         routes=ModuleRoutes(
             list="/console/users",
             create="/console/users/new",
@@ -84,6 +87,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="admin",
         group_label_key="layout.navGroup.admin",
         label_key="userGroups.title",
+        icon="users-group",
         routes=ModuleRoutes(
             list="/console/user-groups",
             show="/console/user-groups/:id",
@@ -103,6 +107,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="admin",
         group_label_key="layout.navGroup.admin",
         label_key="subjectAttributes.title",
+        icon="id-badge",
         routes=ModuleRoutes(list="/console/subject-attributes"),
         actions=ModuleActions(
             list="users:read",
@@ -118,6 +123,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="admin",
         group_label_key="layout.navGroup.admin",
         label_key="identityProviders.title",
+        icon="plug",
         routes=ModuleRoutes(list="/console/identity-providers"),
         actions=ModuleActions(
             list="identity_providers:read",
@@ -133,6 +139,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="admin",
         group_label_key="layout.navGroup.admin",
         label_key="roles.title",
+        icon="shield-lock",
         routes=ModuleRoutes(
             list="/console/roles",
             create="/console/roles/new",
@@ -152,6 +159,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="admin",
         group_label_key="layout.navGroup.admin",
         label_key="tokens.title",
+        icon="key",
         routes=ModuleRoutes(list=None),
         actions=ModuleActions(
             list="tokens:read",
@@ -167,6 +175,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="metadata",
         group_label_key="layout.navGroup.metadata",
         label_key="sources.title",
+        icon="database",
         routes=ModuleRoutes(
             list="/console/sources",
             show="/console/sources/:id/structure-diffs",
@@ -192,6 +201,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="metadata",
         group_label_key="layout.navGroup.metadata",
         label_key="catalog.title",
+        icon="table",
         routes=ModuleRoutes(
             list="/console/catalog",
             show="/console/catalog/:id",
@@ -210,6 +220,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="metadata",
         group_label_key="layout.navGroup.metadata",
         label_key="businessDomains.title",
+        icon="category",
         routes=ModuleRoutes(
             list="/console/business-domains",
             create="/console/business-domains",
@@ -229,6 +240,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="metadata",
         group_label_key="layout.navGroup.metadata",
         label_key="typeMappings.title",
+        icon="arrows-exchange",
         routes=ModuleRoutes(
             list="/console/type-mappings",
             edit="/console/type-mappings",
@@ -245,6 +257,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="entity",
         group_label_key="layout.navGroup.entity",
         label_key="entities.title",
+        icon="box",
         routes=ModuleRoutes(
             list="/console/entities",
             create="/console/entities/new",
@@ -266,6 +279,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="entity",
         group_label_key="layout.navGroup.entity",
         label_key="dictionaries.title",
+        icon="book",
         routes=ModuleRoutes(
             list="/console/dictionaries",
             create="/console/dictionaries/new",
@@ -287,6 +301,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="channel",
         group_label_key="layout.navGroup.channel",
         label_key="channels.title",
+        icon="route",
         routes=ModuleRoutes(
             list="/console/channels",
             create="/console/channels/new",
@@ -314,6 +329,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="channel",
         group_label_key="layout.navGroup.channel",
         label_key="channelVariables.title",
+        icon="variable",
         routes=ModuleRoutes(list="/console/channel-variables"),
         actions=ModuleActions(
             list="channel:read",
@@ -327,6 +343,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="operations",
         group_label_key="layout.navGroup.operations",
         label_key="jobs.title",
+        icon="list-check",
         routes=ModuleRoutes(list="/console/jobs"),
         actions=ModuleActions(list="jobs:run"),
         group_order=27,
@@ -337,6 +354,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="operations",
         group_label_key="layout.navGroup.operations",
         label_key="schedules.title",
+        icon="clock",
         routes=ModuleRoutes(
             list="/console/schedules",
             edit="/console/schedules",
@@ -356,6 +374,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="settings",
         group_label_key="layout.navGroup.settings",
         label_key="settings.title",
+        icon="settings",
         routes=ModuleRoutes(list="/console/settings"),
         actions=ModuleActions(
             list="settings:read",
@@ -369,6 +388,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="settings",
         group_label_key="layout.navGroup.settings",
         label_key="branding.title",
+        icon="palette",
         routes=ModuleRoutes(list="/console/branding"),
         actions=ModuleActions(
             list="branding:read",
@@ -382,6 +402,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="settings",
         group_label_key="layout.navGroup.settings",
         label_key="modelServices.title",
+        icon="brain",
         routes=ModuleRoutes(
             list="/console/model-services",
             create="/console/model-services",
@@ -401,6 +422,7 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         group_id="workbench",
         group_label_key="layout.navGroup.workbench",
         label_key="account.title",
+        icon="user-circle",
         routes=ModuleRoutes(
             list=None,
             show="/console/account",
@@ -435,6 +457,7 @@ class ModuleIdentity:
     label_key: str
     routes: ModuleRoutes
     actions: ModuleActions
+    icon: str | None = None
 
 
 def build_navigation(permissions: list[str] | tuple[str, ...]) -> list[NavigationGroup]:
@@ -491,6 +514,7 @@ def build_module_identities() -> list[ModuleIdentity]:
             label_key=module.label_key,
             routes=module.routes,
             actions=module.actions,
+            icon=module.icon,
         )
         for module in CONSOLE_MODULE_CATALOG
     ]

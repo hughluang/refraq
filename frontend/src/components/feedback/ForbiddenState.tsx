@@ -1,10 +1,12 @@
 "use client";
 
-import { Button, Group, Stack, Text, Title } from "@mantine/core";
+import { Button, Group, Stack, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import Link from "next/link";
+import { usePathname } from "next/navigation";
 
-const PERMISSION_KEY = /^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$/i;
+import { moduleForPermission } from "@/components/feedback/forbiddenModule";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
+import { useModuleIdentityStore } from "@/features/console/module-identity";
 
 type ForbiddenStateProps = {
   reason?: string;
@@ -12,31 +14,20 @@ type ForbiddenStateProps = {
 
 export function ForbiddenState({ reason }: ForbiddenStateProps) {
   const t = useTranslate();
-  const unregistered = reason === "unregistered_route";
-  const requiredPermission =
-    reason && PERMISSION_KEY.test(reason) ? reason : undefined;
+  const pathname = usePathname();
+  const modules = useModuleIdentityStore((state) => state.modules);
+  const module = moduleForPermission(modules, reason, pathname);
+  const label = module ? t(module.label_key) : "";
+  const named = Boolean(module && label && label !== reason);
+  const sentence = named
+    ? t("forbidden.module", { module: label })
+    : t("forbidden.description");
 
   return (
     <Stack gap="md" maw={480} py="md">
-      <Title order={2}>
-        {t(unregistered ? "forbidden.unregistered.title" : "forbidden.title")}
-      </Title>
-      <Text c="dimmed">
-        {t(
-          unregistered
-            ? "forbidden.unregistered.description"
-            : "forbidden.description",
-        )}
-      </Text>
-      {requiredPermission ? (
-        <Text size="sm">
-          {t("forbidden.requiredPermission", {
-            permission: requiredPermission,
-          })}
-        </Text>
-      ) : null}
+      <Text>{sentence}</Text>
       <Group>
-        <Button component={Link} href="/console" variant="light">
+        <Button component={ConsoleLink} href="/console" variant="light">
           {t("forbidden.back")}
         </Button>
       </Group>

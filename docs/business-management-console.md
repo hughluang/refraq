@@ -11,7 +11,7 @@ Related boundaries:
 - **Management Foundation** (login, session, users, roles, permissions) is the enabling layer: `docs/business-login-auth.md`.
 - Console shell mounts modules by nav group. Metadata modules mount under `metadata` (`docs/business-metadata.md`); **Business Entity** mounts under `entity` as module `entities` (`docs/business-entity.md`) and is not under the `metadata` group; platform **Job** / **Scheduled Task** modules mount under `operations` (`docs/business-jobs.md`, `docs/business-scheduled-tasks.md`). Data Product catalog modules stay out of scope here.
 - Permission decisions are authoritative in the backend; frontend show/hide only improves UX: `docs/architecture.md`.
-- Navigation catalog decision: `docs/adr/0002-console-navigation-catalog.md`. Identity Provider business rules: `docs/business-identity-providers.md`; its API is `docs/api-contracts-identity-providers.md`.
+- Identity Provider business rules: `docs/business-identity-providers.md`; its API is `docs/api-contracts-identity-providers.md`.
 - Site Branding and Brand Attribution: `docs/business-branding.md`; HTTP: `docs/api-contracts-branding.md`.
 - Terminology follows `docs/glossary.md`: default brand copy in the UI is `Refraq`; **Site Branding** may replace the primary product mark; the technical identifier is `refraq`.
 
@@ -36,7 +36,7 @@ Related boundaries:
 | Logout | Invalidate session and leave Console |
 | Language / personal preferences | Stay in the top bar; never move to the side nav |
 | Scope switcher | Reserved slot; may hide implementation until multi-scope exists |
-| Global search | Reserved slot; position stays stable |
+| Command palette | Opens from the header and from Ctrl+K or Cmd+K. See §3.5 |
 | Notifications | Reserved placeholder |
 
 ### 3.2 Side Nav — Structural Navigation
@@ -57,6 +57,9 @@ The side nav carries only module structural navigation and **renders exactly the
 - Modules `user-groups` and `subject-attributes` map list/show to `users:read` and create/edit/delete to `users:write`.
 - About is a top-bar user-menu utility, not structural navigation. It carries **Brand Attribution**, is not a Console Module, and is never permission-filtered.
 - Data products and Governance groups (and any persona composer) are reserved for later and not implemented. The hide-vs-empty policy for empty future groups is deferred.
+
+- Desktop navigation has an expanded width and an icon rail. The choice is stored per browser. Below the `sm` breakpoint the same entries open as an overlay that closes on pathname change and on Escape.
+- The header order is menu (narrow only), brand mark, command palette trigger, color scheme, language, account menu. Account Center, About, and sign-out stay in the account menu. A skip-to-content link is the first focusable control.
 
 **Forbidden**: putting account, logout, or language in the side nav; organizing first-level nav by internal service names; treating Foundation modules as enable/disable toggles; mounting Sources under Administration.
 
@@ -104,6 +107,14 @@ flowchart TB
   SideNav --> Main
 ```
 
+### 3.5 Command Palette, Home, and Color Scheme
+
+The command palette opens from the header trigger and from Ctrl+K or Cmd+K, including while focus is in a field. It lists this **User**'s recent record visits in this browser (the latest eight), permitted **Console Navigation** modules, create actions for modules that have a create route and create permission, and records from the list endpoints the actor may list: Users, Roles, Sources, Entities, Dictionaries, Channels, Business Domains, and User Groups, five each. Record search waits 250 ms and labels each hit by its module. A failed module is omitted. A response for an older query is ignored. The palette also toggles the color scheme, toggles navigation width, changes the UI language through the account locale, and opens **Account Center**. It lists the keyboard shortcuts.
+
+Management Console home shows those recent records and the permitted navigation groups as entry points, each with an icon and a label. A User with no recent visits sees the entry points only. Recent visits are stored per User id in this browser and cleared at sign-out.
+
+The color scheme is light, dark, or system. System is the default. The choice is stored in this browser and applied before the first paint. It is a display choice: not an Account Center preference and not Site Branding.
+
 ## 4. Module Registration Contract
 
 **Registration** means adding a module to the backend code-seeded Console Module catalog. It is not a runtime admin UI and not an enablement flag.
@@ -125,12 +136,13 @@ Rules:
 - Foundation modules have no enabled/disabled state; visibility is permission-only.
 - SPA Refine resources and UX ACL adapt from `GET /console/module-identities` (unfiltered Console Module Identity); the frontend does not hand-maintain a parallel catalog. Typed module ids are generated from the seed (`scripts/gen_console_module_catalog.py`).
 - Identity-only pages (for example **Account Center**, User PAT module `tokens`) register with `routes.list` null so they stay out of Console Navigation but remain in module-identities for `PageCanAccess`.
-- Authenticated visits under `/console/*` always enter the Console shell. When the path matches a catalog route, the shell applies the mapped Permission; when it does not, the shell shows an unregistered-route state (not a bare framework 404). Identity-only modules without a registered page route (for example `tokens`) do not claim a URL; legacy paths such as `/console/tokens` are treated as unregistered, not redirected to Account Center.
+- Authenticated visits under `/console/*` always enter the Console shell. When the path matches a catalog route, the shell applies the mapped Permission. When it does not, the shell shows a page-not-found state inside the shell: the heading says the page is missing, the explanation says the path is not a registered Console route, and a link returns to the console home. That state is not a permission refusal and not a bare framework 404. A permission refusal is a separate state: one sentence names the **Console Module** by its label and links to the console home. It does not show a raw permission key. Identity-only modules without a registered page route (for example `tokens`) do not claim a URL; legacy paths such as `/console/tokens` are treated as unregistered, not redirected to Account Center.
+- Leaving a console page with unsaved changes asks in a console dialog for link, hook, account-menu, and sign-out navigation. A query-only change on the same path is not leaving. Browser Back and Forward are not intercepted: the App Router exposes no cancellable event for them.
 - Adding a metadata or later Data Product module means extending the backend seed and adding pages — not rewriting the shell duty narrative.
 
 ## 5. Platform Settings (System Parameters)
 
-Platform Settings is a real Console Module (`settings`), not a placeholder. It **presents** **System Parameter**s; it does not own the set. Membership, ownership, and lifecycle live in `docs/business-system-parameters.md`; the decision is `docs/adr/0028-system-parameters.md`.
+Platform Settings is a real Console Module (`settings`), not a placeholder. It **presents** **System Parameter**s; it does not own the set. Membership, ownership, and lifecycle live in `docs/business-system-parameters.md`.
 
 Console rules:
 
@@ -156,6 +168,8 @@ Console rules:
 9. Turning Platform Settings into a junk drawer: temporary rollout switches, per-object knobs, per-**User** preferences, reference data catalogs, or engineering tuning knobs (pool size, loop interval, replica count).
 10. Declaring another package's knobs inside the settings mechanism, or having the store call back into domains to apply a value.
 11. Hand-writing a page or a bespoke response field per parameter instead of rendering the catalog.
+12. Wording an unregistered `/console/*` path as a permission refusal.
+13. Intercepting browser Back or Forward.
 
 ## 7. References
 
@@ -164,9 +178,7 @@ Console rules:
 - `docs/api-contracts-branding.md`
 - `docs/business-branding.md`
 - `docs/business-system-parameters.md`
-- `docs/adr/0028-system-parameters.md`
 - `docs/business-entity.md`
 - `docs/business-metadata.md`
 - `docs/business-user-tokens.md`
-- `docs/adr/0002-console-navigation-catalog.md`
 - Industry notes (non-normative): Refine Authorization, React-Admin Permissions, Cloudscape Service navigation, Grafana-style code navtree + server prune

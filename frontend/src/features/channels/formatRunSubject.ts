@@ -16,6 +16,19 @@ export function formatRunSubject(
   return t("channels.runs.subject.version", { number: run.version });
 }
 
+/** Node label when the graph has a name or ref. Otherwise the id. */
+export function nodeDisplayName(
+  nodes: readonly { id: string; name: string; ref?: string }[],
+  nodeId: string | null | undefined,
+): string | null {
+  if (!nodeId) return null;
+  const node = nodes.find((item) => item.id === nodeId);
+  const name = node?.name.trim() ?? "";
+  if (name) return name;
+  const ref = node?.ref?.trim() ?? "";
+  return ref || nodeId;
+}
+
 /** Graph name of a failed node, or its id when the graph has no name. */
 export function formatFailedNode(
   nodes: readonly { id: string; name: string }[],

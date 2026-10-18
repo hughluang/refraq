@@ -10,7 +10,7 @@ import {
   Text,
 } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
-import Link from "next/link";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { useCallback, useEffect, useState } from "react";
 
 import { Instant } from "@/components/display/Instant";
@@ -52,6 +52,7 @@ import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useSearchDebounce } from "@/hooks/useSearchDebounce";
 import { ApiError } from "@/lib/api";
+import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
@@ -133,7 +134,7 @@ export function JoinsTab({
         setToObjectOptions((prev) => retainSelectedOption(prev, toObjectId));
         open?.({
           type: "error",
-          message: err instanceof ApiError ? err.detail : String(err),
+          message: problemMessage(t, err, t("common.error.loadFailed")),
         });
       })
       .finally(() => {
@@ -167,7 +168,7 @@ export function JoinsTab({
         setToColumnOptions((prev) => retainSelectedOption(prev, joinToId));
         open?.({
           type: "error",
-          message: err instanceof ApiError ? err.detail : String(err),
+          message: problemMessage(t, err, t("common.error.loadFailed")),
         });
       })
       .finally(() => {
@@ -218,9 +219,7 @@ export function JoinsTab({
         message:
           messageKey != null
             ? t(messageKey)
-            : err instanceof ApiError
-              ? err.detail
-              : String(err),
+            : problemMessage(t, err, t("common.error.loadFailed")),
       });
     } finally {
       setSaving(false);
@@ -242,9 +241,7 @@ export function JoinsTab({
         message:
           messageKey != null
             ? t(messageKey)
-            : err instanceof ApiError
-              ? err.detail
-              : String(err),
+            : problemMessage(t, err, t("common.error.loadFailed")),
       });
     } finally {
       setSaving(false);
@@ -260,7 +257,7 @@ export function JoinsTab({
     } catch (err) {
       open?.({
         type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
+        message: problemMessage(t, err, t("common.error.loadFailed")),
       });
     } finally {
       setSaving(false);
@@ -276,7 +273,7 @@ export function JoinsTab({
     } catch (err) {
       open?.({
         type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
+        message: problemMessage(t, err, t("common.error.loadFailed")),
       });
     } finally {
       setSaving(false);
@@ -296,7 +293,7 @@ export function JoinsTab({
     } catch (err) {
       open?.({
         type: "error",
-        message: err instanceof ApiError ? err.detail : String(err),
+        message: problemMessage(t, err, t("common.error.loadFailed")),
       });
     } finally {
       setPathLoading(false);
@@ -606,7 +603,7 @@ export function JoinsTab({
                     gap={4}
                     p="sm"
                     style={{
-                      border: "1px solid var(--mantine-color-gray-3)",
+                      border: "1px solid var(--refraq-tone-neutral-border)",
                       borderRadius: 8,
                     }}
                   >
@@ -621,7 +618,7 @@ export function JoinsTab({
                     ))}
                     {path.target_object_id ? (
                       <Button
-                        component={Link}
+                        component={ConsoleLink}
                         href={`/console/catalog/${path.target_object_id}`}
                         size="xs"
                         variant="light"

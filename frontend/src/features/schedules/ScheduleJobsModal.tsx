@@ -1,18 +1,17 @@
 "use client";
 
 import { Button, Group, Modal, Table, Text } from "@mantine/core";
-import { useNotification, useTranslate } from "@refinedev/core";
+import { useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
-import { cancelJob } from "@/features/jobs/api";
 import { formatJobTrigger } from "@/features/jobs/formatJobTrigger";
+import { JobCancelButton } from "@/features/jobs/JobCancelButton";
 import { JobDetailModal } from "@/features/jobs/JobDetailModal";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
 import { listScheduleJobs } from "@/features/schedules/api";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { problemMessage } from "@/lib/problem";
 import { formatJobDuration } from "@/lib/datetime";
 import type { PageQuery } from "@/lib/pagination";
 
@@ -32,7 +31,6 @@ export function ScheduleJobsModal({
   onClose,
 }: Props) {
   const t = useTranslate();
-  const { open } = useNotification();
   const formatInstant = useFormatInstant();
   const [detailId, setDetailId] = useState<string | null>(null);
 
@@ -132,25 +130,11 @@ export function ScheduleJobsModal({
                       {t("jobs.view")}
                     </Button>
                     {job.status === "queued" || job.status === "running" ? (
-                      <Button
-                        size="xs"
-                        variant="light"
-                        color="red"
-                        onClick={async () => {
-                          try {
-                            await cancelJob(job.id);
-                            await reload();
-                          } catch (err) {
-                            open?.({
-                              type: "error",
-                              message:
-                                problemMessage(t, err, String(err)),
-                            });
-                          }
-                        }}
-                      >
-                        {t("jobs.cancel")}
-                      </Button>
+                      <JobCancelButton
+                        jobId={job.id}
+                        recordName={job.summary || job.id}
+                        onCancelled={() => reload()}
+                      />
                     ) : null}
                   </Group>
                 </Table.Td>

@@ -1,13 +1,8 @@
 "use client";
 
-import { Badge } from "@mantine/core";
-import { useTranslate } from "@refinedev/core";
-
-import {
-  ENTITY_STATUS_COLOR,
-  entityStatus,
-  entityStatusLabelKey,
-} from "@/features/entities/publishStatus";
+import { StatusBadge } from "@/components/display/StatusBadge";
+import { presentEntityStatus } from "@/components/display/statusTone";
+import { entityStatus } from "@/features/entities/publishStatus";
 import type { BusinessEntity } from "@/features/entities/types";
 
 type Props = {
@@ -15,11 +10,6 @@ type Props = {
 };
 
 export function EntityStatusBadge({ entity }: Props) {
-  const t = useTranslate();
-  const status = entityStatus(entity);
-  return (
-    <Badge color={ENTITY_STATUS_COLOR[status]} variant="light" tt="none">
-      {t(entityStatusLabelKey(status))}
-    </Badge>
-  );
+  const presentation = presentEntityStatus(entityStatus(entity));
+  return <StatusBadge tone={presentation.tone} labelKey={presentation.labelKey} />;
 }

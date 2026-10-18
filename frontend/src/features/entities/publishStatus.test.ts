@@ -3,9 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   canAuthor,
   entityStatus,
-  entityStatusLabelKey,
   isPublishing,
-  publishStatusLabelKey,
 } from "@/features/entities/publishStatus";
 import type { BusinessEntity, PublishStatus } from "@/features/entities/types";
 
@@ -83,32 +81,6 @@ describe("entityStatus", () => {
         }),
       ),
     ).toBe("deprecated");
-  });
-});
-
-describe("entityStatusLabelKey", () => {
-  it("maps each entity status to its own key", () => {
-    expect(entityStatusLabelKey("not_serving")).toBe(
-      "entities.status.notServing",
-    );
-    expect(entityStatusLabelKey("serving")).toBe("entities.status.serving");
-    expect(entityStatusLabelKey("deprecated")).toBe(
-      "entities.status.deprecated",
-    );
-  });
-});
-
-describe("publishStatusLabelKey", () => {
-  it("maps each publish status without a deprecated tone", () => {
-    expect(publishStatusLabelKey("unpublished")).toBe(
-      "entities.status.unpublished",
-    );
-    expect(publishStatusLabelKey("publishing")).toBe(
-      "entities.status.publishing",
-    );
-    expect(publishStatusLabelKey("published")).toBe(
-      "entities.status.published",
-    );
   });
 });
 

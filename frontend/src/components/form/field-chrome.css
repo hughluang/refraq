@@ -31,11 +31,11 @@
 }
 
 .field-mark[data-tone="error"] {
-  color: var(--mantine-color-red-filled);
+  color: var(--refraq-tone-danger);
 }
 
 .field-mark[data-tone="warning"] {
-  color: var(--mantine-color-yellow-6);
+  color: var(--refraq-tone-warning);
 }
 
 .field-chrome__control {
@@ -51,5 +51,9 @@
 }
 
 .field-chrome[data-tone="warning"] .mantine-Input-input {
-  border-color: var(--mantine-color-yellow-6);
+  border-color: var(--refraq-tone-warning);
+}
+
+.field-chrome__helper {
+  margin: var(--mantine-spacing-xs) 0 0;
 }

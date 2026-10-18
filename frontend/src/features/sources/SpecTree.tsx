@@ -219,7 +219,7 @@ export function SpecTree({ schema, value, onChange, editable }: SpecTreeProps) {
         <Box
           p="sm"
           style={{
-            border: "1px solid var(--mantine-color-gray-3)",
+            border: "1px solid var(--refraq-tone-neutral-border)",
             borderRadius: 8,
           }}
         >

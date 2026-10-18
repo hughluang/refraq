@@ -1,11 +1,14 @@
 "use client";
 
-import { Badge, Button, Drawer, Group, Stack, Table, Text } from "@mantine/core";
+import { Badge, Drawer, Group, Stack, Table, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
+import { ListTable } from "@/components/display/ListTable";
+import { RowActions, type RowActionVerb } from "@/components/display/RowActions";
 import { EmptyState } from "@/components/feedback/EmptyState";
+import { localListSession } from "@/lib/list-state";
 import { attributeConfigSummary } from "@/features/entities/attributeDraftValidation";
 import { getVersion } from "@/features/entities/api";
 import {
@@ -19,7 +22,7 @@ import type {
   BusinessEntity,
   EntityVersion,
 } from "@/features/entities/types";
-import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
+import { JobReference } from "@/components/display/JobReference";
 import type { Instant } from "@/lib/instant";
 
 type Props = {
@@ -86,10 +89,17 @@ export function EntityVersionsTab({
     }
   };
 
+  const list = localListSession({ total: versions.length });
+
   return (
     <>
-      <Table withTableBorder>
-        <Table.Thead>
+      <ListTable
+        embedded
+        list={list}
+        columnCount={7}
+        minWidth={960}
+        emptyMessage={t("entities.versions.empty")}
+        head={
           <Table.Tr>
             <Table.Th>{t("entities.fields.version")}</Table.Th>
             <Table.Th>{t("entities.fields.tableName")}</Table.Th>
@@ -99,9 +109,29 @@ export function EntityVersionsTab({
             <Table.Th>{t("entities.fields.publishJob")}</Table.Th>
             <Table.Th />
           </Table.Tr>
-        </Table.Thead>
-        <Table.Tbody>
-          {versions.map((version) => (
+        }
+      >
+        {versions.map((version) => {
+          const verbs: RowActionVerb[] = [
+            {
+              key: "view",
+              label: t("entities.versions.view"),
+              onClick: () => void view(version),
+              safety: "immediate",
+              disabledReason: viewingId === version.id ? t("common.loading") : undefined,
+            },
+          ];
+          if (canDropTable && canDropVersion(entity, version, versions)) {
+            verbs.push({
+              key: "drop",
+              label: t("entities.drop"),
+              color: "red",
+              onClick: () => onDrop(version),
+              safety: "confirm",
+              disabledReason: busy ? t("common.loading") : undefined,
+            });
+          }
+          return (
             <Table.Tr key={version.id}>
               <Table.Td>
                 <Group gap="xs" wrap="nowrap">
@@ -136,32 +166,12 @@ export function EntityVersionsTab({
                 )}
               </Table.Td>
               <Table.Td>
-                <Group gap="xs" justify="flex-end">
-                  <Button
-                    size="xs"
-                    variant="light"
-                    onClick={() => void view(version)}
-                    loading={viewingId === version.id}
-                  >
-                    {t("entities.versions.view")}
-                  </Button>
-                  {canDropTable && canDropVersion(entity, version, versions) ? (
-                    <Button
-                      size="xs"
-                      color="red"
-                      variant="light"
-                      onClick={() => onDrop(version)}
-                      loading={busy}
-                    >
-                      {t("entities.drop")}
-                    </Button>
-                  ) : null}
-                </Group>
+                <RowActions recordName={String(version.version)} verbs={verbs} />
               </Table.Td>
             </Table.Tr>
-          ))}
-        </Table.Tbody>
-      </Table>
+          );
+        })}
+      </ListTable>
       <Drawer
         opened={opened != null}
         onClose={() => setOpened(null)}
@@ -190,14 +200,12 @@ function PublishJobCell({
   onOpenJob: (jobId: string | null) => void;
 }) {
   return (
-    <Button
-      variant="subtle"
-      size="compact-xs"
-      px={0}
-      onClick={() => onOpenJob(jobId)}
-    >
-      <JobStatusBadge status={status} />
-    </Button>
+    <JobReference
+      jobId={jobId}
+      kind="entity_reconcile"
+      status={status}
+      onOpen={onOpenJob}
+    />
   );
 }
 

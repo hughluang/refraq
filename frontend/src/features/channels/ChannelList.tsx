@@ -1,17 +1,21 @@
 "use client";
 
-import { Anchor, Badge, Group, Table, TextInput } from "@mantine/core";
+import { Table } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import Link from "next/link";
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
+import { StatusBadge } from "@/components/display/StatusBadge";
+import { presentChannelActive } from "@/components/display/statusTone";
 import { ListTable } from "@/components/display/ListTable";
+import { ListToolbar } from "@/components/display/ListToolbar";
+import { RecordReference } from "@/components/display/RecordReference";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { listChannels } from "@/features/channels/api";
 import { ModuleId } from "@/features/console/module-identity";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useListQuery } from "@/hooks/useListQuery";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
@@ -19,41 +23,43 @@ const PAGE_SIZE = 50;
 export function ChannelList() {
   const t = useTranslate();
   const formatInstant = useFormatInstant();
-  const [q, setQ] = useState("");
+  const query = useListQuery();
   const fetchPage = useCallback(
-    (query: PageQuery) => listChannels({ q: q.trim() || undefined, ...query }),
-    [q],
+    (page: PageQuery) =>
+      listChannels({ q: query.search || undefined, ...page }),
+    [query.search],
   );
   const list = useConsolePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
-    resetDeps: [q],
-    filtered: q.trim() !== "",
+    resetDeps: [query.search],
+    filtered: query.isFiltered,
+    page: query.page,
+    onPageChange: query.setPage,
   });
+
+  const createAction = (
+    <CreateListAction resource={ModuleId.channels} href="/console/channels/new">
+      {t("channels.create")}
+    </CreateListAction>
+  );
 
   return (
     <PageChrome
       title={t("channels.title")}
       description={t("channels.description")}
-      actions={
-        <CreateListAction resource={ModuleId.channels} href="/console/channels/new">
-          {t("channels.create")}
-        </CreateListAction>
+      actions={createAction}
+      toolbar={
+        <ListToolbar query={query} searchPlaceholder={t("channels.search")} />
       }
     >
-      <Group>
-        <TextInput
-          placeholder={t("channels.search")}
-          value={q}
-          onChange={(event) => setQ(event.currentTarget.value)}
-          w={280}
-        />
-      </Group>
       <ListTable
         list={list}
         columnCount={4}
         emptyMessage={t("channels.list.empty")}
+        emptyAction={createAction}
         noMatchMessage={t("channels.list.noMatch")}
+        onClearFilters={query.clear}
         head={
           <Table.Tr>
             <Table.Th>{t("channels.fields.name")}</Table.Th>
@@ -66,14 +72,17 @@ export function ChannelList() {
         {list.items.map((channel) => (
           <Table.Tr key={channel.id}>
             <Table.Td>
-              <Anchor component={Link} href={`/console/channels/${channel.id}`}>
-                {channel.name}
-              </Anchor>
+              <RecordReference
+                name={channel.name}
+                recordKey={channel.id}
+                href={`/console/channels/${channel.id}`}
+              />
             </Table.Td>
             <Table.Td>
-              <Badge variant="light" color={channel.active ? "green" : "gray"}>
-                {channel.active ? t("form.value.yes") : t("form.value.no")}
-              </Badge>
+              <StatusBadge
+                tone={presentChannelActive(channel.active).tone}
+                labelKey={presentChannelActive(channel.active).labelKey}
+              />
             </Table.Td>
             <Table.Td>
               {channel.latest_version ? channel.latest_version.number : "—"}

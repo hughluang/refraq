@@ -9,21 +9,24 @@ import {
   Stack,
   Text,
 } from "@mantine/core";
-import { useNotification, useTranslate } from "@refinedev/core";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslate } from "@refinedev/core";
+import { useEffect, useRef } from "react";
 
+import { jobKindLabelKey } from "@/components/display/JobReference";
+import { LiveStatusAnnouncer } from "@/components/display/LiveStatusAnnouncer";
+import { StaleNotice } from "@/components/display/StaleNotice";
+import { presentJobStatus } from "@/components/display/statusTone";
 import { isSessionExpiredError } from "@/lib/api";
-import { problemMessage } from "@/lib/problem";
 
-import { cancelJob, getJob, getJobLogs } from "@/features/jobs/api";
+import { getJob, getJobLogs } from "@/features/jobs/api";
+import { JobCancelButton } from "@/features/jobs/JobCancelButton";
 import { formatJobTrigger } from "@/features/jobs/formatJobTrigger";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
-import type { Job } from "@/features/jobs/types";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useLiveStatus } from "@/hooks/useLiveStatus";
 import { formatJobDuration } from "@/lib/datetime";
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
-const POLL_MS = 2000;
 
 type Props = {
   jobId: string | null;
@@ -35,60 +38,30 @@ type Props = {
 export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
   const formatInstant = useFormatInstant();
   const t = useTranslate();
-  const { open } = useNotification();
-  const [job, setJob] = useState<Job | null>(null);
-  const [logBody, setLogBody] = useState("");
-  const [pollingPaused, setPollingPaused] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [loading, setLoading] = useState(false);
   const logEndRef = useRef<HTMLDivElement | null>(null);
-
-  const refresh = useCallback(async () => {
-    if (!jobId) return;
-    setLoading(true);
-    try {
+  const live = useLiveStatus({
+    enabled: opened && Boolean(jobId),
+    key: opened ? jobId : null,
+    fetch: async (signal) => {
+      if (!jobId) throw new Error("missing job");
       const [jobRes, logsRes] = await Promise.all([
-        getJob(jobId),
-        getJobLogs(jobId),
+        getJob(jobId, { signal }),
+        getJobLogs(jobId, { signal }),
       ]);
-      setJob(jobRes.job);
-      setLogBody(logsRes.body);
-    } catch (err) {
-      if (isSessionExpiredError(err)) return;
-      open?.({
-        type: "error",
-        message: problemMessage(t, err, String(err)),
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [jobId, open]);
-
-  useEffect(() => {
-    if (!opened || !jobId) {
-      setJob(null);
-      setLogBody("");
-      setPollingPaused(false);
-      return;
-    }
-    void refresh();
-  }, [opened, jobId, refresh]);
-
-  useEffect(() => {
-    if (!opened || !jobId || pollingPaused) return;
-    if (job && TERMINAL.has(job.status)) return;
-    const id = window.setInterval(() => {
-      void refresh();
-    }, POLL_MS);
-    return () => window.clearInterval(id);
-  }, [opened, jobId, pollingPaused, job?.status, refresh]);
+      return { job: jobRes.job, logs: logsRes.body };
+    },
+    isTerminal: (item) => TERMINAL.has(item.job.status),
+  });
+  const job = live.data?.job ?? null;
+  const logBody = live.data?.logs ?? "";
+  const showStale = live.stale && !isSessionExpiredError(live.error);
+  const statusLabel = job ? t(presentJobStatus(job.status).labelKey) : "";
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logBody]);
 
   const canCancel = job && (job.status === "queued" || job.status === "running");
-  const showPollControls = job && !TERMINAL.has(job.status);
 
   return (
     <Modal
@@ -97,7 +70,11 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
       title={t("jobs.detail.title")}
       size="xl"
     >
-      {!job && loading ? (
+      <LiveStatusAnnouncer text={statusLabel} />
+      {showStale ? (
+        <StaleNotice hasData={job != null} onRetry={() => void live.refresh()} />
+      ) : null}
+      {!job && live.loading ? (
         <Text size="sm" c="dimmed">
           {t("jobs.detail.loading")}
         </Text>
@@ -115,7 +92,7 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
               <Text span c="dimmed">
                 {t("jobs.fields.kind")}:{" "}
               </Text>
-              {job.kind}
+              {t(jobKindLabelKey(job.kind))}
             </Text>
             <Text size="sm">
               <Text span c="dimmed">
@@ -180,61 +157,23 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
               {t("jobs.logs")}
             </Text>
             <Group gap="xs">
-              {showPollControls ? (
-                <>
-                  <Button
-                    size="xs"
-                    variant="light"
-                    onClick={() => setPollingPaused((p) => !p)}
-                  >
-                    {pollingPaused
-                      ? t("jobs.pollResume")
-                      : t("jobs.pollPause")}
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant="default"
-                    loading={loading}
-                    onClick={() => void refresh()}
-                  >
-                    {t("jobs.pollRefresh")}
-                  </Button>
-                </>
-              ) : (
-                <Button
-                  size="xs"
-                  variant="default"
-                  loading={loading}
-                  onClick={() => void refresh()}
-                >
-                  {t("jobs.pollRefresh")}
-                </Button>
-              )}
+              <Button
+                size="xs"
+                variant="default"
+                loading={live.refreshing}
+                onClick={() => void live.refresh()}
+              >
+                {t("jobs.pollRefresh")}
+              </Button>
               {canCancel ? (
-                <Button
-                  size="xs"
-                  color="red"
-                  variant="light"
-                  loading={busy}
-                  onClick={async () => {
-                    setBusy(true);
-                    try {
-                      await cancelJob(job.id);
-                      await refresh();
-                      onChanged?.();
-                    } catch (err) {
-                      open?.({
-                        type: "error",
-                        message:
-                          problemMessage(t, err, String(err)),
-                      });
-                    } finally {
-                      setBusy(false);
-                    }
+                <JobCancelButton
+                  jobId={job.id}
+                  recordName={job.summary || job.id}
+                  onCancelled={async () => {
+                    await live.refresh();
+                    onChanged?.();
                   }}
-                >
-                  {t("jobs.cancel")}
-                </Button>
+                />
               ) : null}
             </Group>
           </Group>

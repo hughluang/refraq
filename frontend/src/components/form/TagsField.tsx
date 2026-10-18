@@ -4,7 +4,7 @@ import { TagsInput, type TagsInputProps } from "@mantine/core";
 
 import { FieldChrome } from "@/components/form/FieldChrome";
 import { FieldMode } from "@/components/form/FieldMode";
-import { collectNotes, type FieldChromeProps } from "@/components/form/fieldNotes";
+import { collectNotes, joinDescribedBy, type FieldChromeProps } from "@/components/form/fieldNotes";
 
 export type TagsFieldProps = Omit<TagsInputProps, "disabled" | "readOnly"> &
   FieldChromeProps & {
@@ -16,6 +16,7 @@ export function TagsField({
   notes,
   openSignal,
   bare = false,
+  helper,
   ...props
 }: TagsFieldProps) {
   const values = props.value ?? [];
@@ -37,17 +38,19 @@ export function TagsField({
         notes={merged}
         required={props.required}
         id={props.id}
+        helper={helper}
         openSignal={openSignal}
         editSignal={props.value}
         bare={bare}
       >
-        {({ id, invalid }) => (
+        {({ id, invalid, describedBy }) => (
           <TagsInput
             {...props}
             id={id}
             label={undefined}
             description={undefined}
             error={invalid || undefined}
+            aria-describedby={joinDescribedBy(props["aria-describedby"], describedBy)}
             withAsterisk={false}
           />
         )}

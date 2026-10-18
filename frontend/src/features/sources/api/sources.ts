@@ -8,12 +8,22 @@ import type {
   SourceAccess,
 } from "@/features/sources/types";
 
-export function listSources(params?: { limit?: number; offset?: number }) {
+export function listSources(params?: {
+  limit?: number;
+  offset?: number;
+  q?: string;
+  engine?: Engine;
+  signal?: AbortSignal;
+}) {
   const qs = new URLSearchParams();
+  if (params?.q) qs.set("q", params.q);
+  if (params?.engine) qs.set("engine", params.engine);
   if (params?.limit != null) qs.set("limit", String(params.limit));
   if (params?.offset != null) qs.set("offset", String(params.offset));
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
-  return apiClient<OffsetPage<Source>>(`/sources${suffix}`);
+  return apiClient<OffsetPage<Source>>(`/sources${suffix}`, {
+    signal: params?.signal,
+  });
 }
 
 export function getAccessSchema(engine: Engine) {
@@ -22,8 +32,10 @@ export function getAccessSchema(engine: Engine) {
   );
 }
 
-export function getSource(sourceId: string) {
-  return apiClient<{ source: Source }>(`/sources/${sourceId}`);
+export function getSource(sourceId: string, init?: { signal?: AbortSignal }) {
+  return apiClient<{ source: Source }>(`/sources/${sourceId}`, {
+    signal: init?.signal,
+  });
 }
 
 export function getSourceAccess(sourceId: string) {

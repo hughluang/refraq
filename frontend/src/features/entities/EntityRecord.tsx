@@ -1,7 +1,6 @@
 "use client";
 
-import { Button, Divider, Group, Stack } from "@mantine/core";
-import { useForm } from "@mantine/form";
+import { Button, Group, Stack } from "@mantine/core";
 import {
   CanAccess,
   useCan,
@@ -9,15 +8,23 @@ import {
   usePermissions,
   useTranslate,
 } from "@refinedev/core";
-import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
+import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
 import { EmptyState } from "@/components/feedback/EmptyState";
-import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
-import { PageError } from "@/components/feedback/PageError";
+import { HeaderAction, HeaderActions } from "@/components/layout/HeaderActions";
 import { PageChrome } from "@/components/layout/PageChrome";
+import { useConsoleTab } from "@/components/layout/consoleTabs";
+import {
+  FormErrorSummary,
+  saveFailureFrom,
+  type SaveFailure,
+} from "@/components/form/FormErrorSummary";
+import { useConsoleForm } from "@/components/form/useConsoleForm";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
+import { suppressLeaveGuard } from "@/components/navigation/leaveGuard";
+import { useConsoleNavigation } from "@/components/navigation/useConsoleNavigation";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
   type AttributeReveal,
@@ -54,10 +61,7 @@ import {
   createFormErrorTab,
   entityDetailHref,
   entityEditHref,
-  entityRecordHref,
-  isEntityDetailTab,
   parseEntityDetailTab,
-  replaceEntityLocation,
 } from "@/features/entities/entityDetailTab";
 import {
   attributesFromDrafts,
@@ -75,10 +79,8 @@ import type {
   EntityVersion,
 } from "@/features/entities/types";
 import { JobDetailModal } from "@/features/jobs/JobDetailModal";
-import { LEAVE_GUARD_ALLOW } from "@/hooks/leaveGuard";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
-import { useLeaveGuard } from "@/hooks/useLeaveGuard";
 import { problemMessage } from "@/lib/problem";
 
 export type { EntityRecordMode };
@@ -92,8 +94,8 @@ export function EntityRecord(props: Props) {
   const entityId = props.mode === "create" ? undefined : props.entityId;
   const t = useTranslate();
   const { open } = useNotification();
-  const router = useRouter();
-  const searchParams = useSearchParams();
+  const openVersionAction = useConsoleMutation();
+  const { push, replace } = useConsoleNavigation();
   const formatInstant = useFormatInstant();
   const { data: canWrite } = useCan({
     resource: ModuleId.entities,
@@ -107,8 +109,19 @@ export function EntityRecord(props: Props) {
   const canData =
     Array.isArray(permissions) && permissions.includes(DATA_READ_PERMISSION);
 
-  const rawTab = searchParams.get("tab");
-  const [tab, setTab] = useState(() => parseEntityDetailTab(rawTab));
+  const tabItems = useMemo(() => {
+    const items = [
+      { value: "overview" },
+      { value: "attributes" },
+      { value: "versions" },
+    ];
+    if (mode !== "create" && canAccess) items.push({ value: "access" });
+    if (mode !== "create" && canData) items.push({ value: "data" });
+    return items;
+  }, [canAccess, canData, mode]);
+  const consoleTab = useConsoleTab(tabItems);
+  const tab = parseEntityDetailTab(consoleTab.value);
+  const setTab = consoleTab.setTab;
 
   const [entity, setEntity] = useState<BusinessEntity | null>(null);
   const [versions, setVersions] = useState<EntityVersion[]>([]);
@@ -119,10 +132,9 @@ export function EntityRecord(props: Props) {
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobOpened, setJobOpened] = useState(false);
 
-  const deleteEntityConfirm = useConfirmAction<true>();
   const dropConfirm = useConfirmAction<EntityVersion>();
   const publishConfirm = useConfirmAction<true>();
-  const deprecateConfirm = useConfirmAction<true>();
+  const lifecycle = useConsoleMutation();
 
   const [attributeEditorOpen, setAttributeEditorOpen] = useState(false);
   const [attributeReveal, setAttributeReveal] = useState<AttributeReveal | null>(
@@ -147,7 +159,9 @@ export function EntityRecord(props: Props) {
     return issue.values ? t(issue.key, issue.values) : t(issue.key);
   };
 
-  const form = useForm<EntityRecordFormValues>({
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const form = useConsoleForm<EntityRecordFormValues>({
+    onValuesChange: () => setSaveFailure(null),
     initialValues: {
       table_name: "",
       name: "",
@@ -180,11 +194,6 @@ export function EntityRecord(props: Props) {
     },
   });
 
-  const leaveGuard = useLeaveGuard({
-    enabled: mode !== "show" && form.isDirty(),
-    message: t("common.leaveUnsaved"),
-  });
-
   const load = useCallback(async () => {
     if (!entityId) return;
     setLoading(true);
@@ -212,7 +221,7 @@ export function EntityRecord(props: Props) {
         description: loaded.description,
         attributes: version ? draftsFromVersion(version) : [],
       });
-      form.resetDirty();
+      form.markSaved();
     } catch (err) {
       setError(problemMessage(t, err, String(err)));
       setEntity(null);
@@ -227,21 +236,11 @@ export function EntityRecord(props: Props) {
   }, [load, mode]);
 
   useEffect(() => {
-    setTab(parseEntityDetailTab(rawTab));
-  }, [rawTab]);
-
-  useEffect(() => {
-    if (rawTab != null && !isEntityDetailTab(rawTab)) {
-      setTab("overview");
-      replaceEntityLocation(entityRecordHref(mode, entityId));
-    }
-  }, [entityId, mode, rawTab]);
-
-  useEffect(() => {
     if (mode !== "edit" || !entityId || !entity) return;
     if (canAuthor(entity)) return;
-    router.replace(entityDetailHref(entityId, tab));
-  }, [entity, entityId, mode, router, tab]);
+    suppressLeaveGuard();
+    replace(entityDetailHref(entityId, tab));
+  }, [entity, entityId, mode, replace, tab]);
 
   useEffect(() => {
     if (!Array.isArray(permissions) || mode === "create") return;
@@ -249,12 +248,10 @@ export function EntityRecord(props: Props) {
       (tab === "access" && !canAccess) || (tab === "data" && !canData);
     if (!hidden) return;
     setTab("overview");
-    replaceEntityLocation(entityRecordHref(mode, entityId));
-  }, [canAccess, canData, entityId, mode, permissions, tab]);
+  }, [canAccess, canData, entityId, mode, permissions, setTab, tab]);
 
   const selectTab = (next: typeof tab) => {
     setTab(next);
-    replaceEntityLocation(entityRecordHref(mode, entityId, next));
   };
 
   const notifyError = (err: unknown, fallback: string) => {
@@ -278,7 +275,6 @@ export function EntityRecord(props: Props) {
       canAuthor(entity));
 
   const submit = async (values: EntityRecordFormValues) => {
-    setBusy(true);
     try {
       if (mode === "create") {
         const created = await createEntity({
@@ -287,8 +283,8 @@ export function EntityRecord(props: Props) {
           description: values.description.trim(),
           attributes: attributesFromDrafts(values.attributes),
         });
-        form.resetDirty();
-        leaveGuard.bypass();
+        form.markSaved();
+        suppressLeaveGuard();
         open?.({ type: "success", message: t("entities.create.success") });
         window.location.replace(entityEditHref(created.entity.id, "attributes"));
         return;
@@ -299,16 +295,19 @@ export function EntityRecord(props: Props) {
         description: values.description.trim(),
         attributes: attributesFromDrafts(values.attributes),
       });
-      form.resetDirty();
+      form.markSaved();
+      setSaveFailure(null);
       open?.({ type: "success", message: t("entities.update.success") });
       await load();
     } catch (err) {
-      notifyError(
-        err,
-        mode === "create" ? String(err) : t("entities.update.failed"),
+      setSaveFailure(
+        saveFailureFrom(
+          t,
+          err,
+          form.applyApiError(err),
+          mode === "create" ? String(err) : t("entities.update.failed"),
+        ),
       );
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -330,50 +329,40 @@ export function EntityRecord(props: Props) {
     }
   };
 
-  const openNextVersion = async () => {
-    if (!entityId) return;
-    setBusy(true);
-    try {
-      await openVersion(entityId, {});
-      open?.({ type: "success", message: t("entities.versions.open.success") });
-      await load();
-    } catch (err) {
-      notifyError(err, t("entities.versions.open.failed"));
-    } finally {
-      setBusy(false);
-    }
-  };
+  function onDeprecate() {
+    if (!entityId || !entity) return;
+    lifecycle.run({
+      safety: "confirm",
+      key: "deprecate",
+      recordName: entity.name,
+      title: t("entities.deprecate.confirmTitle"),
+      consequence: t("entities.deprecate.consequence"),
+      confirmLabel: t("entities.deprecate"),
+      confirmColor: "red",
+      outcome: t("entities.deprecate.success"),
+      execute: () => deprecateEntity(entityId),
+      onSuccess: () => load(),
+    });
+  }
 
-  const confirmDeprecate = async () => {
-    if (!entityId) return;
-    setBusy(true);
-    try {
-      await deprecateEntity(entityId);
-      deprecateConfirm.close();
-      open?.({ type: "success", message: t("entities.deprecate.success") });
-      await load();
-    } catch (err) {
-      notifyError(err, t("entities.deprecate.failed"));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const confirmDeleteEntity = async () => {
-    if (!entityId) return;
-    setBusy(true);
-    try {
-      await deleteEntity(entityId);
-      deleteEntityConfirm.close();
-      leaveGuard.bypass();
-      open?.({ type: "success", message: t("entities.delete.success") });
-      router.push("/console/entities");
-    } catch (err) {
-      notifyError(err, t("entities.delete.failed"));
-    } finally {
-      setBusy(false);
-    }
-  };
+  function onDeleteEntity() {
+    if (!entityId || !entity) return;
+    lifecycle.run({
+      safety: "confirm",
+      key: "delete",
+      recordName: entity.name,
+      title: t("entities.delete.confirmTitle"),
+      consequence: t("entities.delete.consequence"),
+      confirmLabel: t("actions.delete"),
+      confirmColor: "red",
+      outcome: t("entities.delete.success"),
+      execute: async () => {
+        await deleteEntity(entityId);
+        suppressLeaveGuard();
+        push("/console/entities");
+      },
+    });
+  }
 
   const confirmDrop = async () => {
     const pending = dropConfirm.pending;
@@ -398,29 +387,28 @@ export function EntityRecord(props: Props) {
 
   if (mode !== "create" && loading && !entity) {
     return (
-      <PageChrome title={t("entities.title")} description={t("entities.description")}>
-        <PageBodySkeleton />
-      </PageChrome>
+      <PageChrome
+        title={t("entities.title")}
+        description={t("entities.description")}
+        status="loading"
+      />
     );
   }
 
   if (mode !== "create" && (error || !entity)) {
     return (
-      <PageChrome title={t("entities.title")} description={t("entities.description")}>
-        <PageError
-          message={error ?? t("entities.notFound")}
-          onRetry={() => void load()}
-        />
-      </PageChrome>
+      <PageChrome
+        title={t("entities.title")}
+        description={t("entities.description")}
+        status={error ? "error" : "notFound"}
+        errorMessage={error ?? undefined}
+        onRetry={error ? () => void load() : undefined}
+      />
     );
   }
 
   if (mode === "edit" && entity && !canAuthor(entity)) {
-    return (
-      <PageChrome title={t("entities.edit.title")}>
-        <PageBodySkeleton rows={5} />
-      </PageChrome>
-    );
+    return <PageChrome title={t("entities.edit.title")} status="loading" />;
   }
 
   const writable = entity ? canAuthor(entity) : false;
@@ -429,12 +417,11 @@ export function EntityRecord(props: Props) {
   const dirty = form.isDirty();
   const savedEmpty = (current?.attributes ?? []).length === 0;
   const published = entity?.current_version?.publish_status === "published";
-  const title =
-    mode === "create"
-      ? t("entities.create.title")
-      : entity
-        ? `${entity.name} · ${entity.table_name}`
-        : t("entities.edit.title");
+  const recordTitle =
+    mode === "create" || !entity ? undefined : `${entity.name} · ${entity.table_name}`;
+  const title = recordTitle ? t("entities.title") : mode === "create"
+    ? t("entities.create.title")
+    : t("entities.edit.title");
 
   const header = entityRecordHeaderActions({
     mode,
@@ -447,17 +434,10 @@ export function EntityRecord(props: Props) {
     hasCurrentVersion: current != null,
   });
 
-  const headerActionClusters: ReactNode[] = [];
-  if (header.navigation) {
-    headerActionClusters.push(
-      <Group
-        key="navigation"
-        gap="xs"
-        wrap="nowrap"
-        aria-label={t("entities.actions.navigation")}
-      >
+  const navigationActions = header.navigation ? (
+      <Group gap="xs" wrap="nowrap" aria-label={t("entities.actions.navigation")}>
         <Button
-          component={Link}
+          component={ConsoleLink}
           href="/console/entities"
           variant="default"
           size="sm"
@@ -467,28 +447,34 @@ export function EntityRecord(props: Props) {
         <Button size="sm" variant="light" onClick={() => void load()}>
           {t("jobs.refresh")}
         </Button>
-      </Group>,
-    );
-  }
-  if (header.lifecycle) {
-    headerActionClusters.push(
-      <Group
-        key="lifecycle"
-        gap="xs"
-        wrap="nowrap"
-        aria-label={t("entities.actions.lifecycle")}
-      >
+      </Group>
+  ) : null;
+  const lifecycleActions = header.lifecycle ? (
+      <Group gap="xs" wrap="nowrap" aria-label={t("entities.actions.lifecycle")}>
         {header.publish ? (
           <CanAccess resource={ModuleId.entities} action={ModuleAction.edit}>
-            <Button
-              size="sm"
-              variant={header.publishFilled ? "filled" : "light"}
-              loading={busy}
-              disabled={dirty || savedEmpty}
-              onClick={() => publishConfirm.open(true)}
-            >
-              {t("entities.publish")}
-            </Button>
+            {header.publishFilled ? (
+              <HeaderAction primary>
+                <Button
+                  size="sm"
+                  loading={busy}
+                  disabled={dirty || savedEmpty}
+                  onClick={() => publishConfirm.open(true)}
+                >
+                  {t("entities.publish")}
+                </Button>
+              </HeaderAction>
+            ) : (
+              <Button
+                size="sm"
+                variant="light"
+                loading={busy}
+                disabled={dirty || savedEmpty}
+                onClick={() => publishConfirm.open(true)}
+              >
+                {t("entities.publish")}
+              </Button>
+            )}
           </CanAccess>
         ) : null}
         {header.openVersion ? (
@@ -496,9 +482,28 @@ export function EntityRecord(props: Props) {
             <Button
               size="sm"
               variant="light"
-              loading={busy}
+              loading={busy || openVersionAction.submitting}
               disabled={dirty}
-              onClick={() => void openNextVersion()}
+              onClick={() => {
+                if (!entityId || !entity) return;
+                openVersionAction.run({
+                  safety: "confirm",
+                  recordName: entity.name,
+                  title: t("entities.versions.open.confirmTitle"),
+                  consequence: t("entities.versions.open.confirmBody", { name: entity.name }),
+                  confirmLabel: t("entities.versions.open"),
+                  outcome: t("entities.versions.open.outcome"),
+                  execute: async () => {
+                    setBusy(true);
+                    try {
+                      await openVersion(entityId, {});
+                      await load();
+                    } finally {
+                      setBusy(false);
+                    }
+                  },
+                });
+              }}
             >
               {t("entities.versions.open")}
             </Button>
@@ -510,28 +515,21 @@ export function EntityRecord(props: Props) {
               size="sm"
               variant="light"
               color="red"
-              loading={busy}
-              onClick={() => deprecateConfirm.open(true)}
+              loading={busy || lifecycle.isSubmitting("deprecate")}
+              onClick={onDeprecate}
             >
               {t("entities.deprecate")}
             </Button>
           </CanAccess>
         ) : null}
-      </Group>,
-    );
-  }
-  if (header.standard) {
-    headerActionClusters.push(
-      <Group
-        key="standard"
-        gap="xs"
-        wrap="nowrap"
-        aria-label={t("entities.actions.standard")}
-      >
+      </Group>
+  ) : null;
+  const standardActions = header.standard ? (
+      <Group gap="xs" wrap="nowrap" aria-label={t("entities.actions.standard")}>
         {header.edit ? (
           <CanAccess resource={ModuleId.entities} action={ModuleAction.edit}>
             <Button
-              component={Link}
+              component={ConsoleLink}
               href={entityEditHref(entityId ?? "", tab)}
               size="sm"
               variant="light"
@@ -546,7 +544,8 @@ export function EntityRecord(props: Props) {
               size="sm"
               color="red"
               variant="light"
-              onClick={() => deleteEntityConfirm.open(true)}
+              loading={lifecycle.isSubmitting("delete")}
+              onClick={onDeleteEntity}
             >
               {t("actions.delete")}
             </Button>
@@ -554,7 +553,7 @@ export function EntityRecord(props: Props) {
         ) : null}
         {header.cancel ? (
           <Button
-            component={Link}
+            component={ConsoleLink}
             href={
               mode === "create"
                 ? "/console/entities"
@@ -562,51 +561,41 @@ export function EntityRecord(props: Props) {
             }
             variant="default"
             size="sm"
-            data-leave-guard={LEAVE_GUARD_ALLOW}
           >
             {t("common.cancel")}
           </Button>
         ) : null}
         {header.cancel ? (
-          <Button
-            type="submit"
-            form={ENTITY_RECORD_FORM_ID}
-            size="sm"
-            loading={busy}
-            disabled={attributeEditorOpen}
-          >
-            {mode === "create"
-              ? t("entities.create.submit")
-              : t("entities.edit.submit")}
-          </Button>
+          <HeaderAction primary>
+            <Button
+              type="submit"
+              form={ENTITY_RECORD_FORM_ID}
+              size="sm"
+              loading={form.submitting}
+              disabled={attributeEditorOpen}
+            >
+              {mode === "create"
+                ? t("entities.create.submit")
+                : t("entities.edit.submit")}
+            </Button>
+          </HeaderAction>
         ) : null}
-      </Group>,
-    );
-  }
+      </Group>
+  ) : null;
 
   const headerActions =
-    headerActionClusters.length === 0 ? undefined : (
-      <Group gap="xs" wrap="wrap" align="center">
-        {headerActionClusters.flatMap((cluster, index) =>
-          index === 0
-            ? [cluster]
-            : [
-                <Divider
-                  key={`divider-${header.clusters[index]}`}
-                  orientation="vertical"
-                  h={28}
-                />,
-                cluster,
-              ],
-        )}
-      </Group>
+    header.clusters.length === 0 ? undefined : (
+      <HeaderActions
+        navigation={navigationActions}
+        lifecycle={lifecycleActions}
+        standard={standardActions}
+      />
     );
 
-  const formBody = (
-    <Stack>
-      <EntityTabs
-        value={tab}
-        onChange={selectTab}
+  return (
+    <EntityTabs
+      value={tab}
+      onChange={selectTab}
         overview={
           <Stack>
             {entity ? (
@@ -678,18 +667,22 @@ export function EntityRecord(props: Props) {
             />
           ) : null
         }
-      />
-    </Stack>
-  );
-
-  return (
+    >
+      {({ list, panels }) => (
     <PageChrome
       title={title}
+      recordTitle={recordTitle}
+      recent={
+        recordTitle && entity
+          ? { moduleId: "entities", title: entity.name }
+          : undefined
+      }
       titleExtra={entity ? <EntityStatusBadge entity={entity} /> : undefined}
       actions={headerActions}
+      tabs={list}
     >
       {mode === "show" ? (
-        formBody
+        <Stack>{panels}</Stack>
       ) : (
         <form
           id={ENTITY_RECORD_FORM_ID}
@@ -700,7 +693,7 @@ export function EntityRecord(props: Props) {
               return;
             }
             form.onSubmit(
-              (values) => void submit(values),
+              (values) => submit(values),
               (errors) => {
                 const next = createFormErrorTab(errors);
                 selectTab(next);
@@ -713,12 +706,14 @@ export function EntityRecord(props: Props) {
             )(event);
           }}
         >
-          {formBody}
+          <FormErrorSummary failure={saveFailure} />
+          <Stack>{panels}</Stack>
         </form>
       )}
 
       {entity ? (
         <>
+          {openVersionAction.dialog}
           <EntityPublishConfirm
             opened={publishConfirm.opened}
             onClose={publishConfirm.close}
@@ -729,26 +724,7 @@ export function EntityRecord(props: Props) {
             loading={busy}
             onConfirm={() => void confirmPublish()}
           />
-          <ConfirmActionModal
-            opened={deprecateConfirm.opened}
-            onClose={deprecateConfirm.close}
-            title={t("entities.deprecate.confirmTitle")}
-            body={t("entities.deprecate.confirmBody", { name: entity.name })}
-            confirmColor="red"
-            loading={busy}
-            confirmLabel={t("entities.deprecate")}
-            onConfirm={() => void confirmDeprecate()}
-          />
-          <ConfirmActionModal
-            opened={deleteEntityConfirm.opened}
-            onClose={deleteEntityConfirm.close}
-            title={t("entities.delete.confirmTitle")}
-            body={t("entities.delete.confirmBody", { name: entity.name })}
-            confirmColor="red"
-            loading={busy}
-            confirmLabel={t("actions.delete")}
-            onConfirm={() => void confirmDeleteEntity()}
-          />
+          {lifecycle.dialog}
           <ConfirmActionModal
             opened={dropConfirm.opened}
             onClose={dropConfirm.close}
@@ -770,5 +746,7 @@ export function EntityRecord(props: Props) {
         </>
       ) : null}
     </PageChrome>
+      )}
+    </EntityTabs>
   );
 }

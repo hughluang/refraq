@@ -1,20 +1,16 @@
 "use client";
 
 import { useTranslate } from "@refinedev/core";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 
-import { SelectField } from "@/components/form/SelectField";
+import { RecordPicker } from "@/components/form/RecordPicker";
 import type { FieldNote } from "@/components/form/fieldNotes";
-import { listEntities } from "@/features/entities/api";
 import {
-  REFERENCE_SELF,
-  referenceOptionLabel,
-  referenceSummaryLabel,
-} from "@/features/entities/entityPresentation";
-import type { BusinessEntity } from "@/features/entities/types";
-import { useSearchDebounce } from "@/hooks/useSearchDebounce";
-
-const PAGE_LIMIT = 50;
+  entityRecordAdapter,
+  type RecordOption,
+  type RecordPickerAdapter,
+} from "@/components/form/recordPickerAdapters";
+import { REFERENCE_SELF } from "@/features/entities/entityPresentation";
 
 export type TargetSelection = {
   target_entity_id: string;
@@ -41,12 +37,6 @@ type Props = {
   onChange: (next: TargetSelection) => void;
 };
 
-function queryMatches(query: string, ...parts: string[]): boolean {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return true;
-  return parts.some((part) => part.toLowerCase().includes(needle));
-}
-
 export function TargetEntityField({
   label,
   description,
@@ -66,97 +56,54 @@ export function TargetEntityField({
   onChange,
 }: Props) {
   const t = useTranslate();
-  const [search, setSearch] = useState("");
-  const debouncedSearch = useSearchDebounce(search);
-  const [entities, setEntities] = useState<BusinessEntity[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [loadFailed, setLoadFailed] = useState(false);
   const selfValue = selfEntityId ?? REFERENCE_SELF;
   const emptyNameLabel = t("entities.attributes.selfEntity");
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setLoadFailed(false);
-    void listEntities({
-      q: debouncedSearch.trim() || undefined,
-      status: ["not_serving", "serving"],
-      limit: PAGE_LIMIT,
-    })
-      .then((page) => {
-        if (cancelled) return;
-        setEntities(page.items);
-        setLoadFailed(false);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setEntities([]);
-        setLoadFailed(true);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [debouncedSearch]);
-
-  const data = useMemo(() => {
-    const options: { value: string; label: string }[] = [];
-    if (includeSelf && queryMatches(debouncedSearch, selfName, selfTableName)) {
-      options.push({
-        value: selfValue,
-        label: referenceOptionLabel({
-          name: selfName,
-          tableName: selfTableName,
-          emptyNameLabel,
-        }),
-      });
-    }
-    for (const entity of entities) {
-      if (entity.id === selfValue) continue;
-      options.push({
-        value: entity.id,
-        label: referenceOptionLabel({
-          name: entity.name,
-          tableName: entity.table_name,
-          emptyNameLabel,
-        }),
-      });
-    }
+  const entities = entityRecordAdapter(["not_serving", "serving"]);
+  const selfOption = useMemo<RecordOption>(
+    () => ({
+      id: selfValue,
+      name: selfName.trim() || emptyNameLabel,
+      key: selfTableName,
+    }),
+    [emptyNameLabel, selfName, selfTableName, selfValue],
+  );
+  const adapter = useMemo<RecordPickerAdapter>(
+    () => ({
+      async search(q, signal) {
+        const items = await entities.search(q, signal);
+        const rest = items.filter((item) => item.id !== selfValue);
+        if (!includeSelf) return rest;
+        const needle = q.trim().toLowerCase();
+        const matches =
+          needle === "" ||
+          selfOption.name.toLowerCase().includes(needle) ||
+          selfOption.key.toLowerCase().includes(needle);
+        return matches ? [selfOption, ...rest] : rest;
+      },
+      async resolve(ids, signal) {
+        const rest = ids.filter((id) => id !== selfValue);
+        const resolved = rest.length > 0 ? await entities.resolve(rest, signal) : [];
+        return ids.includes(selfValue) ? [selfOption, ...resolved] : resolved;
+      },
+    }),
+    [entities, includeSelf, selfOption, selfValue],
+  );
+  const known = useMemo<RecordOption[]>(() => {
     const selected = value.trim();
-    if (selected && !options.some((option) => option.value === selected)) {
-      options.unshift({
-        value: selected,
-        label:
-          referenceSummaryLabel({
-            targetEntityId: selected,
-            selfEntityId,
-            selfName,
-            selfTableName,
-            cachedName,
-            cachedTableName,
-            emptyNameLabel,
-          }) ?? selected,
-      });
-    }
-    return options;
-  }, [
-    cachedName,
-    cachedTableName,
-    debouncedSearch,
-    emptyNameLabel,
-    entities,
-    includeSelf,
-    selfEntityId,
-    selfName,
-    selfTableName,
-    selfValue,
-    value,
-  ]);
+    if (!selected) return [];
+    if (selected === selfValue) return [selfOption];
+    if (!cachedName.trim() && !cachedTableName.trim()) return [];
+    return [
+      {
+        id: selected,
+        name: cachedName.trim() || selected,
+        key: cachedTableName.trim() || selected,
+      },
+    ];
+  }, [cachedName, cachedTableName, selfOption, selfValue, value]);
 
   return (
-    <SelectField
+    <RecordPicker
       editable={editable}
       required={required}
       label={label}
@@ -164,14 +111,13 @@ export function TargetEntityField({
       notes={notes}
       openSignal={openSignal}
       bare={bare}
-      error={
-        error ??
-        (loadFailed ? t("entities.attributes.targetLoadFailed") : undefined)
-      }
-      data={data}
+      error={error}
+      adapter={adapter}
+      known={known}
       value={value || null}
-      onChange={(next) => {
-        if (!next) {
+      clearable
+      onChange={(next, option) => {
+        if (!next || !option) {
           onChange({
             target_entity_id: "",
             target_name: "",
@@ -187,27 +133,12 @@ export function TargetEntityField({
           });
           return;
         }
-        const entity = entities.find((item) => item.id === next);
         onChange({
           target_entity_id: next,
-          target_name: entity?.name ?? (next === value ? cachedName : ""),
-          target_table_name:
-            entity?.table_name ?? (next === value ? cachedTableName : ""),
+          target_name: option.name,
+          target_table_name: option.key,
         });
       }}
-      searchable
-      searchValue={search}
-      onSearchChange={setSearch}
-      filter={({ options }) => options}
-      clearable
-      nothingFoundMessage={
-        loading
-          ? "…"
-          : loadFailed
-            ? t("entities.attributes.targetLoadFailed")
-            : t("entities.attributes.targetNothingFound")
-      }
-      comboboxProps={{ withinPortal: true }}
     />
   );
 }

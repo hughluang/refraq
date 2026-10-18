@@ -9,19 +9,25 @@ import {
   Text,
   Title,
 } from "@mantine/core";
-import { useForm } from "@mantine/form";
 import { useTranslate } from "@refinedev/core";
 import { useEffect, useMemo, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
 import { Instant } from "@/components/display/Instant";
 import { MultiSelectField } from "@/components/form/MultiSelectField";
+import {
+  FormErrorSummary,
+  saveFailureFrom,
+  type SaveFailure,
+} from "@/components/form/FormErrorSummary";
+import { useConsoleForm } from "@/components/form/useConsoleForm";
+import { RecordPicker } from "@/components/form/RecordPicker";
+import { businessDomainRecordAdapter } from "@/components/form/recordPickerAdapters";
 import { SelectField } from "@/components/form/SelectField";
 import { TagsField } from "@/components/form/TagsField";
 import { TextareaField } from "@/components/form/TextareaField";
 import { TextField } from "@/components/form/TextField";
-import { listBusinessDomains } from "@/features/business-domains/api";
-import type { BusinessDomain } from "@/features/business-domains/types";
+import { getBusinessDomain } from "@/features/business-domains/api";
 import { patchObjectSemantics } from "@/features/sources/api/semantics";
 import { useSemanticsSave } from "@/features/sources/catalog-detail/useSemanticsSave";
 import type {
@@ -42,7 +48,7 @@ type OverviewFormValues = {
   business_description: string;
   object_category: string | null;
   grain_description: string;
-  business_domain_code: string | null;
+  business_domain_id: string | null;
   business_primary_key: string[];
   evidence_summary: string[];
   open_questions: string[];
@@ -60,7 +66,7 @@ function formFromObject(obj: CatalogObject): OverviewFormValues {
     business_description: obj.business_description ?? "",
     object_category: obj.object_category ? String(obj.object_category) : null,
     grain_description: obj.grain_description ?? "",
-    business_domain_code: obj.business_domain?.code ?? null,
+    business_domain_id: obj.business_domain?.id ?? null,
     business_primary_key: obj.business_primary_key ?? [],
     evidence_summary: obj.evidence_summary ?? [],
     open_questions: obj.open_questions ?? [],
@@ -69,69 +75,69 @@ function formFromObject(obj: CatalogObject): OverviewFormValues {
 
 export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
   const t = useTranslate();
-  const { saving, save: saveSemantics } = useSemanticsSave(onSaved);
-  const [domains, setDomains] = useState<BusinessDomain[]>([]);
-  const form = useForm<OverviewFormValues>({
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const form = useConsoleForm<OverviewFormValues>({
     initialValues: formFromObject(object),
+    onValuesChange: () => setSaveFailure(null),
+  });
+  const { save: saveSemantics } = useSemanticsSave(onSaved, {
+    onError: (error) => {
+      setSaveFailure(
+        saveFailureFrom(t, error, form.applyApiError(error), t("common.error")),
+      );
+    },
   });
 
   useEffect(() => {
     form.setValues(formFromObject(object));
+    form.markSaved();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when object identity/content changes
   }, [object.id, object.semantics_updated_at]);
-
-  useEffect(() => {
-    void listBusinessDomains({ limit: 500 })
-      .then((data) => setDomains(data.items))
-      .catch(() => setDomains([]));
-  }, []);
 
   const columnOptions = useMemo(
     () => object.columns.map((c) => ({ value: c.name, label: c.name })),
     [object.columns],
   );
 
-  const domainOptions = useMemo(
-    () =>
-      domains.map((d) => ({
-        value: d.code,
-        label: `${d.name} (${d.code})`,
-      })),
-    [domains],
-  );
-
   const save = async (values: OverviewFormValues) => {
-    const saved = await saveSemantics(() =>
-      patchObjectSemantics(object.id, {
+    const saved = await saveSemantics(async () => {
+      const business_domain_code = values.business_domain_id
+        ? (await getBusinessDomain(values.business_domain_id)).domain.code
+        : null;
+      return patchObjectSemantics(object.id, {
         business_name: values.business_name,
         business_description: values.business_description,
         object_category:
           (values.object_category as ObjectCategory | null) || null,
         grain_description: values.grain_description || null,
-        business_domain_code: values.business_domain_code || null,
+        business_domain_code,
         business_primary_key: values.business_primary_key,
         evidence_summary: values.evidence_summary,
         open_questions: values.open_questions,
-      }),
-    );
+      });
+    });
     if (saved) {
       form.setValues(formFromObject(saved));
+      form.markSaved();
+      setSaveFailure(null);
     }
   };
 
   return (
     <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="lg">
+      <form onSubmit={form.onSubmit((values) => save(values))}>
       <Stack>
+        <FormErrorSummary failure={saveFailure} />
         <TextField
           label={t("catalog.semantics.businessName")}
           editable={writable}
-          {...form.getInputProps("business_name")}
+          {...form.fieldProps("business_name")}
         />
         <TextareaField
           label={t("catalog.semantics.businessDescription")}
           editable={writable}
           minRows={3}
-          {...form.getInputProps("business_description")}
+          {...form.fieldProps("business_description")}
         />
         <SelectField
           label={t("catalog.semantics.category")}
@@ -139,50 +145,61 @@ export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
           clearable
           searchable
           editable={writable}
-          {...form.getInputProps("object_category")}
+          {...form.fieldProps("object_category")}
         />
         <TextareaField
           label={t("catalog.semantics.grain")}
           editable={writable}
           minRows={2}
-          {...form.getInputProps("grain_description")}
+          {...form.fieldProps("grain_description")}
         />
-        <SelectField
+        <RecordPicker
           label={t("catalog.semantics.domain")}
-          data={domainOptions}
-          clearable
-          searchable
           editable={writable}
-          {...form.getInputProps("business_domain_code")}
+          clearable
+          adapter={businessDomainRecordAdapter()}
+          known={
+            object.business_domain
+              ? [
+                  {
+                    id: object.business_domain.id,
+                    name: object.business_domain.name,
+                    key: object.business_domain.code,
+                  },
+                ]
+              : undefined
+          }
+          {...form.fieldProps("business_domain_id")}
         />
         <MultiSelectField
           label={t("catalog.semantics.businessPrimaryKey")}
           data={columnOptions}
           searchable
           editable={writable}
-          {...form.getInputProps("business_primary_key")}
+          {...form.fieldProps("business_primary_key")}
         />
         <TagsField
           label={t("catalog.semantics.evidenceSummary")}
           editable={writable}
-          {...form.getInputProps("evidence_summary")}
+          {...form.fieldProps("evidence_summary")}
         />
         <TagsField
           label={t("catalog.semantics.openQuestions")}
           editable={writable}
-          {...form.getInputProps("open_questions")}
+          {...form.fieldProps("open_questions")}
         />
         {writable ? (
           <Button
+            type="submit"
             size="sm"
-            loading={saving}
-            onClick={() => void save(form.values)}
+            loading={form.submitting}
             w="fit-content"
           >
             {t("catalog.semantics.saveObject")}
           </Button>
         ) : null}
       </Stack>
+      </form>
 
       <Stack gap="md">
         <Title order={5}>{t("catalog.structure.title")}</Title>

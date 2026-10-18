@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { formatFailedNode, formatRunSubject } from "@/features/channels/formatRunSubject";
+import {
+  formatFailedNode,
+  formatRunSubject,
+  nodeDisplayName,
+} from "@/features/channels/formatRunSubject";
 
 const messages: Record<string, string> = {
   "channels.runs.subject.draft": "Draft",
@@ -47,5 +51,19 @@ describe("formatFailedNode", () => {
 
   it("returns null when the run did not fail a node", () => {
     expect(formatFailedNode([], null)).toBeNull();
+  });
+});
+
+describe("nodeDisplayName", () => {
+  it("prefers the node name, then its ref, then the id", () => {
+    const nodes = [
+      { id: "nd_1", name: "Read rows", ref: "read" },
+      { id: "nd_2", name: "  ", ref: "write" },
+      { id: "nd_3", name: "", ref: "" },
+    ];
+    expect(nodeDisplayName(nodes, "nd_1")).toBe("Read rows");
+    expect(nodeDisplayName(nodes, "nd_2")).toBe("write");
+    expect(nodeDisplayName(nodes, "nd_3")).toBe("nd_3");
+    expect(nodeDisplayName(nodes, null)).toBeNull();
   });
 });

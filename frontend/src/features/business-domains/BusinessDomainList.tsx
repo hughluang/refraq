@@ -1,24 +1,24 @@
 "use client";
 
-import {
-  Button,
-  Group,
-  Modal,
-  Stack,
-  Table,
-  Text,
-  TextInput,
-} from "@mantine/core";
-import { useForm } from "@mantine/form";
-import { CanAccess, useNotification, useTranslate } from "@refinedev/core";
+import { Stack, Table, Text } from "@mantine/core";
+import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
 import { Instant } from "@/components/display/Instant";
+import { FormDialog } from "@/components/form/FormDialog";
+import {
+  FormErrorSummary,
+  saveFailureFrom,
+  type SaveFailure,
+} from "@/components/form/FormErrorSummary";
 import { TextareaField } from "@/components/form/TextareaField";
 import { TextField } from "@/components/form/TextField";
+import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { ListTable } from "@/components/display/ListTable";
-import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
+import { ListToolbar } from "@/components/display/ListToolbar";
+import { RecordReference } from "@/components/display/RecordReference";
+import { RowActions } from "@/components/display/RowActions";
 import { PageChrome } from "@/components/layout/PageChrome";
 import {
   createBusinessDomain,
@@ -28,8 +28,8 @@ import {
 } from "@/features/business-domains/api";
 import type { BusinessDomain } from "@/features/business-domains/types";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
-import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
+import { useListQuery } from "@/hooks/useListQuery";
 import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
@@ -49,45 +49,70 @@ type EditForm = {
 export function BusinessDomainList() {
   const t = useTranslate();
   const { open } = useNotification();
+  const { data: canEdit } = useCan({
+    resource: ModuleId.businessDomains,
+    action: ModuleAction.edit,
+  });
+  const { data: canDelete } = useCan({
+    resource: ModuleId.businessDomains,
+    action: ModuleAction.delete,
+  });
 
-  const [q, setQ] = useState("");
+  const query = useListQuery();
   const [createOpen, setCreateOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<BusinessDomain | null>(null);
-  const deleteConfirm = useConfirmAction<BusinessDomain>();
-  const [busy, setBusy] = useState(false);
+  const [createFailure, setCreateFailure] = useState<SaveFailure | null>(null);
+  const [editFailure, setEditFailure] = useState<SaveFailure | null>(null);
 
-  const createForm = useForm<CreateForm>({
+  const createForm = useConsoleForm<CreateForm>({
     initialValues: { code: "", name: "", description: "" },
+    onValuesChange: () => setCreateFailure(null),
   });
-  const editForm = useForm<EditForm>({
+  const editForm = useConsoleForm<EditForm>({
     initialValues: { name: "", description: "" },
+    onValuesChange: () => setEditFailure(null),
   });
 
   const fetchPage = useCallback(
-    (query: PageQuery) =>
+    (page: PageQuery) =>
       listBusinessDomains({
-        q: q.trim() || undefined,
-        ...query,
+        q: query.search || undefined,
+        ...page,
       }),
-    [q],
+    [query.search],
   );
 
   const list = useConsolePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
-    resetDeps: [q],
-    filtered: q.trim() !== "",
+    resetDeps: [query.search],
+    filtered: query.isFiltered,
+    page: query.page,
+    onPageChange: query.setPage,
   });
   const { items, reload } = list;
 
+  const closeCreate = () => {
+    setCreateOpen(false);
+    setCreateFailure(null);
+    createForm.reset();
+  };
+
+  const closeEdit = () => {
+    setEditTarget(null);
+    setEditFailure(null);
+    editForm.reset();
+  };
+
   const submitCreate = async (values: CreateForm) => {
-    setBusy(true);
     try {
       await createBusinessDomain({
         code: values.code.trim(),
         name: values.name.trim(),
         description: values.description.trim() || null,
       });
+      createForm.markSaved();
+      setCreateFailure(null);
       setCreateOpen(false);
       createForm.reset();
       open?.({
@@ -96,23 +121,21 @@ export function BusinessDomainList() {
       });
       await reload();
     } catch (err) {
-      open?.({
-        type: "error",
-        message: problemMessage(t, err, String(err)),
-      });
-    } finally {
-      setBusy(false);
+      setCreateFailure(
+        saveFailureFrom(t, err, createForm.applyApiError(err), String(err)),
+      );
     }
   };
 
   const submitEdit = async (values: EditForm) => {
     if (!editTarget) return;
-    setBusy(true);
     try {
       await patchBusinessDomain(editTarget.id, {
         name: values.name.trim(),
         description: values.description.trim() || null,
       });
+      editForm.markSaved();
+      setEditFailure(null);
       setEditTarget(null);
       open?.({
         type: "success",
@@ -120,34 +143,9 @@ export function BusinessDomainList() {
       });
       await reload();
     } catch (err) {
-      open?.({
-        type: "error",
-        message: problemMessage(t, err, String(err)),
-      });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const confirmDelete = async () => {
-    const pending = deleteConfirm.pending;
-    if (!pending) return;
-    setBusy(true);
-    try {
-      await deleteBusinessDomain(pending.id);
-      deleteConfirm.close();
-      open?.({
-        type: "success",
-        message: t("businessDomains.delete.success"),
-      });
-      await reload();
-    } catch (err) {
-      open?.({
-        type: "error",
-        message: problemMessage(t, err, String(err)),
-      });
-    } finally {
-      setBusy(false);
+      setEditFailure(
+        saveFailureFrom(t, err, editForm.applyApiError(err), String(err)),
+      );
     }
   };
 
@@ -165,22 +163,22 @@ export function BusinessDomainList() {
       title={t("businessDomains.title")}
       description={t("businessDomains.description")}
       actions={createAction}
-    >
-      <Group>
-        <TextInput
-          placeholder={t("businessDomains.search")}
-          value={q}
-          onChange={(e) => setQ(e.currentTarget.value)}
-          w={280}
+      toolbar={
+        <ListToolbar
+          query={query}
+          searchPlaceholder={t("businessDomains.search")}
         />
-      </Group>
+      }
+    >
       <ListTable
         list={list}
-        columnCount={5}
+        columnCount={4}
+        emptyMessage={t("businessDomains.list.empty")}
+        emptyAction={createAction}
         noMatchMessage={t("businessDomains.list.noMatch")}
+        onClearFilters={query.clear}
         head={
           <Table.Tr>
-            <Table.Th>{t("businessDomains.fields.code")}</Table.Th>
             <Table.Th>{t("businessDomains.fields.name")}</Table.Th>
             <Table.Th>{t("businessDomains.fields.description")}</Table.Th>
             <Table.Th>{t("businessDomains.fields.updatedAt")}</Table.Th>
@@ -191,11 +189,8 @@ export function BusinessDomainList() {
         {items.map((row) => (
           <Table.Tr key={row.id}>
             <Table.Td>
-              <Text ff="monospace" size="sm">
-                {row.code}
-              </Text>
+              <RecordReference name={row.name} recordKey={row.code} />
             </Table.Td>
-            <Table.Td>{row.name}</Table.Td>
             <Table.Td>
               <Text size="sm" c="dimmed" lineClamp={2}>
                 {row.description || "—"}
@@ -207,120 +202,110 @@ export function BusinessDomainList() {
               </Text>
             </Table.Td>
             <Table.Td>
-              <Group gap="xs" justify="flex-end">
-                <CanAccess
-                  resource={ModuleId.businessDomains}
-                  action={ModuleAction.edit}
-                >
-                  <Button
-                    size="xs"
-                    variant="light"
-                    onClick={() => {
+              <RowActions
+                recordName={row.name}
+                verbs={[
+                  {
+                    key: "edit",
+                    label: t("actions.edit"),
+                    hidden: !canEdit?.can,
+                    safety: "immediate",
+                    onClick: () => {
                       setEditTarget(row);
                       editForm.setValues({
                         name: row.name,
                         description: row.description ?? "",
                       });
-                    }}
-                  >
-                    {t("actions.edit")}
-                  </Button>
-                </CanAccess>
-                <CanAccess
-                  resource={ModuleId.businessDomains}
-                  action={ModuleAction.delete}
-                >
-                  <Button
-                    size="xs"
-                    color="red"
-                    variant="light"
-                    onClick={() => deleteConfirm.open(row)}
-                  >
-                    {t("actions.delete")}
-                  </Button>
-                </CanAccess>
-              </Group>
+                      editForm.markSaved();
+                      setEditFailure(null);
+                    },
+                  },
+                  {
+                    key: "delete",
+                    label: t("actions.delete"),
+                    color: "red",
+                    hidden: !canDelete?.can,
+                    action: {
+                      safety: "confirm",
+                      recordName: row.name,
+                      title: t("businessDomains.delete.confirmTitle"),
+                      consequence: t("businessDomains.delete.consequence"),
+                      confirmLabel: t("actions.delete"),
+                      confirmColor: "red",
+                      outcome: t("businessDomains.delete.success"),
+                      execute: () => deleteBusinessDomain(row.id),
+                      onSuccess: () => reload(),
+                    },
+                  },
+                ]}
+              />
             </Table.Td>
           </Table.Tr>
         ))}
       </ListTable>
 
-      <Modal
+      <FormDialog
         opened={createOpen}
-        onClose={() => setCreateOpen(false)}
+        onClose={closeCreate}
         title={t("businessDomains.create.title")}
+        dirty={createForm.dirty}
+        submitting={createForm.submitting}
+        submitLabel={t("businessDomains.create.submit")}
+        summary={<FormErrorSummary failure={createFailure} />}
+        onSubmit={() => void createForm.submit(submitCreate)}
       >
-        <form onSubmit={createForm.onSubmit((v) => void submitCreate(v))}>
-          <Stack>
-            <TextField
-              label={t("businessDomains.fields.code")}
-              required
-              editable
-              {...createForm.getInputProps("code")}
-            />
-            <TextField
-              label={t("businessDomains.fields.name")}
-              required
-              editable
-              {...createForm.getInputProps("name")}
-            />
-            <TextareaField
-              label={t("businessDomains.fields.description")}
-              editable
-              {...createForm.getInputProps("description")}
-              minRows={2}
-            />
-            <Button type="submit" loading={busy}>
-              {t("businessDomains.create.submit")}
-            </Button>
-          </Stack>
-        </form>
-      </Modal>
+        <Stack>
+          <TextField
+            label={t("businessDomains.fields.code")}
+            required
+            editable
+            {...createForm.fieldProps("code")}
+          />
+          <TextField
+            label={t("businessDomains.fields.name")}
+            required
+            editable
+            {...createForm.fieldProps("name")}
+          />
+          <TextareaField
+            label={t("businessDomains.fields.description")}
+            editable
+            {...createForm.fieldProps("description")}
+            minRows={2}
+          />
+        </Stack>
+      </FormDialog>
 
-      <Modal
+      <FormDialog
         opened={editTarget != null}
-        onClose={() => setEditTarget(null)}
+        onClose={closeEdit}
         title={t("businessDomains.edit.title")}
+        dirty={editForm.dirty}
+        submitting={editForm.submitting}
+        submitLabel={t("businessDomains.edit.submit")}
+        summary={<FormErrorSummary failure={editFailure} />}
+        onSubmit={() => void editForm.submit(submitEdit)}
       >
-        <form onSubmit={editForm.onSubmit((v) => void submitEdit(v))}>
-          <Stack>
-            <TextField
-              label={t("businessDomains.fields.code")}
-              editable={false}
-              value={editTarget?.code ?? ""}
-            />
-            <TextField
-              label={t("businessDomains.fields.name")}
-              required
-              editable
-              {...editForm.getInputProps("name")}
-            />
-            <TextareaField
-              label={t("businessDomains.fields.description")}
-              editable
-              {...editForm.getInputProps("description")}
-              minRows={2}
-            />
-            <Button type="submit" loading={busy}>
-              {t("businessDomains.edit.submit")}
-            </Button>
-          </Stack>
-        </form>
-      </Modal>
-
-      <ConfirmActionModal
-        opened={deleteConfirm.opened}
-        onClose={deleteConfirm.close}
-        title={t("businessDomains.delete.confirmTitle")}
-        body={t("businessDomains.delete.confirmBody", {
-          name: deleteConfirm.pending?.name ?? "",
-        })}
-        confirmColor="red"
-        loading={busy}
-        confirmLabel={t("actions.delete")}
-        cancelLabel={t("actions.cancel")}
-        onConfirm={() => void confirmDelete()}
-      />
+        <Stack>
+          <TextField
+            label={t("businessDomains.fields.code")}
+            editable={false}
+            value={editTarget?.code ?? ""}
+          />
+          <TextField
+            label={t("businessDomains.fields.name")}
+            required
+            editable
+            {...editForm.fieldProps("name")}
+          />
+          <TextareaField
+            label={t("businessDomains.fields.description")}
+            editable
+            {...editForm.fieldProps("description")}
+            minRows={2}
+          />
+        </Stack>
+      </FormDialog>
     </PageChrome>
   );
 }

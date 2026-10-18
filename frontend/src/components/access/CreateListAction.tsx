@@ -2,7 +2,7 @@
 
 import { Button } from "@mantine/core";
 import { CanAccess } from "@refinedev/core";
-import Link from "next/link";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import type { ReactNode } from "react";
 
 type CreateListActionProps = {
@@ -21,7 +21,7 @@ export function CreateListAction({
   onClick,
 }: CreateListActionProps) {
   const button = href ? (
-    <Button component={Link} href={href} size="sm">
+    <Button component={ConsoleLink} href={href} size="sm">
       {children}
     </Button>
   ) : (

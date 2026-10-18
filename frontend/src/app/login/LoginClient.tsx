@@ -6,14 +6,15 @@ import {
   Divider,
   Button,
   Center,
-  Image,
   Paper,
   PasswordInput,
+  Skeleton,
   Stack,
   Text,
   Title,
 } from "@mantine/core";
 import { TextField } from "@/components/form/TextField";
+import { BrandMark } from "@/components/display/BrandMark";
 import { useLogin, useTranslate } from "@refinedev/core";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState, type FormEvent } from "react";
@@ -39,6 +40,7 @@ function LoginForm() {
   }>();
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
+  const [failure, setFailure] = useState<string | null>(null);
   const [providers, setProviders] = useState<PublicAuthProvider[]>([]);
   const [providersError, setProvidersError] = useState<string | null>(null);
 
@@ -67,8 +69,10 @@ function LoginForm() {
       {
         onSuccess: (result) => {
           if (!result.success) {
+            setFailure(loginFailureText(result.error, t("auth.login.error.invalidCredentials")));
             return;
           }
+          setFailure(null);
           // Hard navigation avoids Refine soft go() + App Router replace/refresh
           // races that leave the client stuck after a successful login.
           window.location.assign(resolveFromPath(searchParams.get("from")));
@@ -84,17 +88,28 @@ function LoginForm() {
           editable
           label={t("auth.login.account")}
           value={account}
-          onChange={(event) => setAccount(event.currentTarget.value)}
+          onChange={(event) => {
+            setAccount(event.currentTarget.value);
+            setFailure(null);
+          }}
           required
           autoComplete="username"
         />
         <PasswordInput
           label={t("auth.login.password")}
           value={password}
-          onChange={(event) => setPassword(event.currentTarget.value)}
+          onChange={(event) => {
+            setPassword(event.currentTarget.value);
+            setFailure(null);
+          }}
           required
           autoComplete="current-password"
         />
+        {failure ? (
+          <Text role="alert" c="red" size="sm">
+            {failure}
+          </Text>
+        ) : null}
         <Button type="submit" loading={isPending} fullWidth>
           {t("auth.login.submit")}
         </Button>
@@ -126,11 +141,37 @@ function LoginFallback() {
   const t = useTranslate();
   return (
     <Center mih="100vh" p="md">
-      <Paper p="xl" withBorder w={380}>
-        <Text c="dimmed">{t("common.loading")}</Text>
+      <Paper
+        p="xl"
+        withBorder
+        w={380}
+        aria-busy="true"
+        aria-label={t("common.loading")}
+      >
+        <Stack gap="md">
+          <Skeleton height={18} width="30%" ml="auto" />
+          <Skeleton height={64} width="45%" />
+          <Skeleton height={22} width="55%" />
+          <Skeleton height={36} />
+          <Skeleton height={36} />
+          <Skeleton height={36} />
+        </Stack>
       </Paper>
     </Center>
   );
+}
+
+function loginFailureText(error: unknown, fallback: string): string {
+  if (
+    error
+    && typeof error === "object"
+    && "message" in error
+    && typeof error.message === "string"
+    && error.message
+  ) {
+    return error.message;
+  }
+  return fallback;
 }
 
 type LoginGateView = "probing" | "form" | "load_error";
@@ -180,15 +221,7 @@ function LoginGate() {
           <GroupHeader />
           <Stack gap={0}>
             {branding.logoUrl ? (
-              <Image
-                src={branding.logoUrl}
-                alt={branding.brandName}
-                h={64}
-                w="auto"
-                maw="100%"
-                fit="contain"
-                mb="sm"
-              />
+              <BrandMark src={branding.logoUrl} alt={branding.brandName} height={64} />
             ) : null}
             {branding.raw.show_brand_name_with_logo ? (
               <Title order={3}>{branding.brandName}</Title>
@@ -238,7 +271,6 @@ function LoginGate() {
             underline="hover"
             display="block"
             ta="center"
-            opacity={0.7}
             href="https://github.com/hughluang/refraq"
             target="_blank"
             rel="noreferrer"

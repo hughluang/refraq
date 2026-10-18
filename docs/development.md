@@ -62,8 +62,16 @@ This document records the stable development conventions for contributors workin
 - OpenAPI UI (Swagger): `http://127.0.0.1:3000/docs` (site default host port `3001` → `http://127.0.0.1:3001/docs`); spec at `/openapi.json` on the same origin. The OpenAPI `servers` entry is `/api` so Try it out targets the Next.js `/api` rewrite. Use **Authorize** and paste a User PAT (Bearer); a Console Session cookie on the same origin is also sent on Try it out once paths are `/api/...`.
 - Run lint: `npm run lint`
 - Run build: `npm run build`
+- Product theme tokens live in `frontend/src/theme/` (tones, motion, radius, component defaults). The console icon set is `frontend/src/components/icons.tsx`. Site Branding still supplies only the brand palette.
+- Console form frame (`useConsoleForm`, `FormSection`, `FormDialog`, `FormErrorSummary`) lives in `frontend/src/components/form/`. See `frontend/README.md`.
+- Collection frame (`ListTable`, `ListToolbar`, `RowActions`, `useListQuery`) lives in `frontend/src/components/display/` and `frontend/src/hooks/useListQuery.ts`. See `docs/ui-console-layout.md`.
+- Command palette lives in `frontend/src/components/layout/CommandPalette.tsx`. See `docs/ui-console-interaction.md`.
+- Composition rules (`frontend/src/compositionRules.test.ts`) run with the console unit tests: `npm test` in `frontend/`. The rules are listed in `frontend/README.md`.
+- Typecheck: `npm run typecheck` in `frontend/`.
+- End-to-end tests: `npm run e2e` in `frontend/` (Playwright UI: `npm run e2e:ui`). The harness starts `uvicorn backend.main:app` with `REFRAQ_STORE_BACKEND=memory` and the standalone production server from `next build`. Ports: `E2E_API_PORT` (default `8010`), `E2E_CONSOLE_PORT` (default `4173`). See `frontend/README.md`.
 - Management Console content width: `docs/ui-console-layout.md` (section containers full width; internal controls own their own width)
 - Console record create / show / edit: `docs/ui-console-record-form.md`
+- Console actions, notifications, live status, and motion: `docs/ui-console-interaction.md`
 
 ### Release and site install
 
@@ -107,7 +115,7 @@ Treat `docs/product-core/*` as **long-horizon** reference only (files are marked
 6. `docs/adr/0003-foundation-upgrade-vs-bootstrap.md` (cite by full filename; another `0003-*.md` exists)
 7. `docs/business-login-auth.md`
 8. `docs/business-management-console.md`
-9. `docs/ui-console-layout.md` (Console main-area width); `docs/ui-console-record-form.md` (record create / show / edit)
+9. `docs/ui-console-layout.md` (Console main-area width); `docs/ui-console-record-form.md` (record create / show / edit); `docs/ui-console-interaction.md` (actions, notifications, live status, motion, color scheme)
 10. `docs/api-contracts-auth.md`
 11. `docs/api-contracts-users.md`
 12. `docs/api-contracts-roles.md`

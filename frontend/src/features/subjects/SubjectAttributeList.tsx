@@ -1,18 +1,23 @@
 "use client";
 
-import {
-  Button,
-  Group,
-  Modal,
-  Stack,
-  Table,
-} from "@mantine/core";
+import { Stack, Table } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
+import { CreateListAction } from "@/components/access/CreateListAction";
 import { ListTable } from "@/components/display/ListTable";
-import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
+import { RecordReference } from "@/components/display/RecordReference";
+import { RowActions } from "@/components/display/RowActions";
+import { FormDialog } from "@/components/form/FormDialog";
+import {
+  FormErrorSummary,
+  saveFailureFrom,
+  type SaveFailure,
+} from "@/components/form/FormErrorSummary";
+import { RecordPicker } from "@/components/form/RecordPicker";
+import { dictionaryRecordAdapter } from "@/components/form/recordPickerAdapters";
 import { SelectField } from "@/components/form/SelectField";
+import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { SwitchField } from "@/components/form/SwitchField";
 import { TextField } from "@/components/form/TextField";
 import { PageChrome } from "@/components/layout/PageChrome";
@@ -25,8 +30,8 @@ import {
 } from "@/features/subjects/api";
 import { subjectKeyError, subjectNameError } from "@/features/subjects/rules";
 import type { SubjectAttribute, SubjectValueType } from "@/features/subjects/types";
-import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
+import { useListQuery } from "@/hooks/useListQuery";
 import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
@@ -66,11 +71,34 @@ export function SubjectAttributeList() {
   const { open } = useNotification();
   const { data: canWrite } = useCan({
     resource: ModuleId.subjectAttributes,
-    action: ModuleAction.create,
+    action: ModuleAction.edit,
   });
-  const [draft, setDraft] = useState<Draft | null>(null);
-  const [busy, setBusy] = useState(false);
-  const deleteConfirm = useConfirmAction<SubjectAttribute>();
+  const { data: canDelete } = useCan({
+    resource: ModuleId.subjectAttributes,
+    action: ModuleAction.delete,
+  });
+  const query = useListQuery({ search: false });
+  const [opened, setOpened] = useState(false);
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const form = useConsoleForm<Draft>({
+    initialValues: EMPTY_DRAFT,
+    onValuesChange: () => setSaveFailure(null),
+    validate: {
+      key: (value, values) => {
+        if (values.id) return null;
+        const issue = subjectKeyError(value);
+        return issue ? t(`subjectAttributes.validation.key.${issue}`) : null;
+      },
+      name: (value) => {
+        const issue = subjectNameError(value);
+        return issue ? t(`subjectAttributes.validation.name.${issue}`) : null;
+      },
+      dictionaryId: (value, values) =>
+        values.valueType === "dictionary" && !value.trim()
+          ? t("subjectAttributes.validation.dictionary.required")
+          : null,
+    },
+  });
 
   const fetchPage = useCallback(
     (query: PageQuery) => listSubjectAttributes(query),
@@ -79,6 +107,8 @@ export function SubjectAttributeList() {
   const list = useConsolePagedList<SubjectAttribute>({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
+    page: query.page,
+    onPageChange: query.setPage,
   });
 
   function notifyError(err: unknown) {
@@ -89,8 +119,15 @@ export function SubjectAttributeList() {
     });
   }
 
+  function openCreate() {
+    form.setValues(EMPTY_DRAFT);
+    form.markSaved();
+    setSaveFailure(null);
+    setOpened(true);
+  }
+
   function openEdit(row: SubjectAttribute) {
-    setDraft({
+    form.setValues({
       id: row.id,
       key: row.key,
       name: row.name,
@@ -100,81 +137,77 @@ export function SubjectAttributeList() {
       multiValue: row.multi_value,
       multiLocked: row.multi_value,
     });
+    form.markSaved();
+    setSaveFailure(null);
+    setOpened(true);
   }
 
-  async function submit() {
-    if (!draft) return;
-    if (subjectNameError(draft.name)) return;
-    if (!draft.id && subjectKeyError(draft.key)) return;
-    if (draft.valueType === "dictionary" && !draft.dictionaryId.trim()) return;
-    setBusy(true);
+  function close() {
+    setOpened(false);
+    setSaveFailure(null);
+    form.reset();
+  }
+
+  async function submit(values: Draft) {
     try {
-      if (draft.id) {
-        await patchSubjectAttribute(draft.id, {
-          name: draft.name.trim(),
-          description: draft.description.trim() || null,
-          multi_value: draft.multiValue,
+      if (values.id) {
+        await patchSubjectAttribute(values.id, {
+          name: values.name.trim(),
+          description: values.description.trim() || null,
+          multi_value: values.multiValue,
         });
       } else {
         await createSubjectAttribute({
-          key: draft.key,
-          name: draft.name.trim(),
-          description: draft.description.trim() || null,
-          value_type: draft.valueType,
-          ...(draft.valueType === "dictionary"
-            ? { dictionary_id: draft.dictionaryId.trim() }
+          key: values.key,
+          name: values.name.trim(),
+          description: values.description.trim() || null,
+          value_type: values.valueType,
+          ...(values.valueType === "dictionary"
+            ? { dictionary_id: values.dictionaryId.trim() }
             : {}),
-          multi_value: draft.multiValue,
+          multi_value: values.multiValue,
         });
       }
-      setDraft(null);
+      form.markSaved();
+      setSaveFailure(null);
+      setOpened(false);
+      form.reset();
       await list.reload();
     } catch (err) {
-      notifyError(err);
-    } finally {
-      setBusy(false);
+      setSaveFailure(
+        saveFailureFrom(
+          t,
+          err,
+          form.applyApiError(err),
+          t("common.error.loadFailed"),
+        ),
+      );
     }
   }
 
-  async function confirmDelete() {
-    const pending = deleteConfirm.pending;
-    if (!pending) return;
-    setBusy(true);
-    try {
-      await deleteSubjectAttribute(pending.id);
-      deleteConfirm.close();
-      await list.reload();
-    } catch (err) {
-      notifyError(err);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const creating = draft != null && draft.id == null;
-  const keyIssue = draft ? subjectKeyError(draft.key) : null;
-  const nameIssue = draft ? subjectNameError(draft.name) : null;
-  const dictionaryMissing =
-    draft?.valueType === "dictionary" && !draft.dictionaryId.trim();
+  const creating = form.values.id == null;
+  const createAction = (
+    <CreateListAction
+      resource={ModuleId.subjectAttributes}
+      onClick={openCreate}
+    >
+      {t("subjectAttributes.create")}
+    </CreateListAction>
+  );
 
   return (
     <PageChrome
       title={t("subjectAttributes.title")}
       description={t("subjectAttributes.description")}
-      actions={
-        canWrite?.can ? (
-          <Button size="sm" onClick={() => setDraft(EMPTY_DRAFT)}>
-            {t("subjectAttributes.create")}
-          </Button>
-        ) : null
-      }
+      actions={createAction}
     >
       <ListTable
         list={list}
-        columnCount={5}
+        columnCount={4}
+        emptyMessage={t("subjectAttributes.list.empty")}
+        emptyAction={createAction}
         head={
           <Table.Tr>
-            <Table.Th>{t("subjectAttributes.fields.key")}</Table.Th>
             <Table.Th>{t("subjectAttributes.fields.name")}</Table.Th>
             <Table.Th>{t("subjectAttributes.fields.valueType")}</Table.Th>
             <Table.Th>{t("subjectAttributes.fields.multiValue")}</Table.Th>
@@ -184,142 +217,103 @@ export function SubjectAttributeList() {
       >
         {list.items.map((row) => (
           <Table.Tr key={row.id}>
-            <Table.Td>{row.key}</Table.Td>
-            <Table.Td>{row.name}</Table.Td>
+            <Table.Td>
+              <RecordReference name={row.name} recordKey={row.key} />
+            </Table.Td>
             <Table.Td>{t(`subjectAttributes.valueType.${row.value_type}`)}</Table.Td>
             <Table.Td>
               {row.multi_value ? t("form.value.yes") : t("form.value.no")}
             </Table.Td>
             <Table.Td>
-              {canWrite?.can ? (
-                <Group gap="xs">
-                  <Button size="xs" variant="light" onClick={() => openEdit(row)}>
-                    {t("subjectAttributes.edit")}
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant="light"
-                    color="red"
-                    onClick={() => deleteConfirm.open(row)}
-                  >
-                    {t("subjectAttributes.delete")}
-                  </Button>
-                </Group>
-              ) : null}
+              <RowActions
+                recordName={row.name}
+                verbs={[
+                  {
+                    key: "edit",
+                    label: t("subjectAttributes.edit"),
+                    hidden: !canWrite?.can,
+                    safety: "immediate",
+                    onClick: () => openEdit(row),
+                  },
+                  {
+                    key: "delete",
+                    label: t("subjectAttributes.delete"),
+                    color: "red",
+                    hidden: !canDelete?.can,
+                    action: {
+                      safety: "confirm",
+                      recordName: row.name,
+                      title: t("subjectAttributes.delete.confirmTitle"),
+                      consequence: t("subjectAttributes.delete.consequence"),
+                      confirmLabel: t("subjectAttributes.delete"),
+                      confirmColor: "red",
+                      outcome: t("subjectAttributes.delete.outcome"),
+                      execute: () => deleteSubjectAttribute(row.id),
+                      onSuccess: () => list.reload(),
+                    },
+                  },
+                ]}
+              />
             </Table.Td>
           </Table.Tr>
         ))}
       </ListTable>
-      <Modal
-        opened={draft != null}
-        onClose={() => setDraft(null)}
+      <FormDialog
+        opened={opened}
+        onClose={close}
         title={creating ? t("subjectAttributes.create") : t("subjectAttributes.edit")}
+        dirty={form.dirty}
+        submitting={form.submitting}
+        submitLabel={t("subjectAttributes.save")}
+        summary={<FormErrorSummary failure={saveFailure} />}
+        onSubmit={() => void form.submit(submit)}
       >
-        {draft ? (
-          <Stack gap="sm">
-            <TextField
+        <Stack gap="sm">
+          <TextField
+            editable={creating}
+            required
+            label={t("subjectAttributes.fields.key")}
+            description={t("subjectAttributes.fields.keyHint")}
+            {...form.fieldProps("key")}
+          />
+          <TextField
+            editable
+            required
+            label={t("subjectAttributes.fields.name")}
+            {...form.fieldProps("name")}
+          />
+          <TextField
+            editable
+            label={t("subjectAttributes.fields.description")}
+            {...form.fieldProps("description")}
+          />
+          <SelectField
+            editable={creating}
+            label={t("subjectAttributes.fields.valueType")}
+            data={VALUE_TYPES.map((value) => ({
+              value,
+              label: t(`subjectAttributes.valueType.${value}`),
+            }))}
+            allowDeselect={false}
+            {...form.fieldProps("valueType")}
+          />
+          {form.values.valueType === "dictionary" ? (
+            <RecordPicker
               editable={creating}
               required
-              label={t("subjectAttributes.fields.key")}
-              description={t("subjectAttributes.fields.keyHint")}
-              value={draft.key}
-              onChange={(event) =>
-                setDraft({ ...draft, key: event.currentTarget.value })
-              }
-              error={
-                creating && draft.key && keyIssue
-                  ? t(`subjectAttributes.validation.key.${keyIssue}`)
-                  : undefined
-              }
+              label={t("subjectAttributes.fields.dictionaryId")}
+              adapter={dictionaryRecordAdapter()}
+              {...form.fieldProps("dictionaryId")}
             />
-            <TextField
-              editable
-              required
-              label={t("subjectAttributes.fields.name")}
-              value={draft.name}
-              onChange={(event) =>
-                setDraft({ ...draft, name: event.currentTarget.value })
-              }
-              error={
-                draft.name && nameIssue
-                  ? t(`subjectAttributes.validation.name.${nameIssue}`)
-                  : undefined
-              }
-            />
-            <TextField
-              editable
-              label={t("subjectAttributes.fields.description")}
-              value={draft.description}
-              onChange={(event) =>
-                setDraft({ ...draft, description: event.currentTarget.value })
-              }
-            />
-            <SelectField
-              editable={creating}
-              label={t("subjectAttributes.fields.valueType")}
-              data={VALUE_TYPES.map((value) => ({
-                value,
-                label: t(`subjectAttributes.valueType.${value}`),
-              }))}
-              value={draft.valueType}
-              allowDeselect={false}
-              onChange={(value) =>
-                setDraft({
-                  ...draft,
-                  valueType: (value ?? draft.valueType) as SubjectValueType,
-                })
-              }
-            />
-            {draft.valueType === "dictionary" ? (
-              <TextField
-                editable={creating}
-                required
-                label={t("subjectAttributes.fields.dictionaryId")}
-                value={draft.dictionaryId}
-                onChange={(event) =>
-                  setDraft({ ...draft, dictionaryId: event.currentTarget.value })
-                }
-              />
-            ) : null}
-            <SwitchField
-              editable={!draft.multiLocked}
-              label={t("subjectAttributes.fields.multiValue")}
-              description={t("subjectAttributes.fields.multiValueHint")}
-              checked={draft.multiValue}
-              onChange={(event) =>
-                setDraft({ ...draft, multiValue: event.currentTarget.checked })
-              }
-            />
-            <Group justify="flex-end">
-              <Button variant="default" onClick={() => setDraft(null)}>
-                {t("common.cancel")}
-              </Button>
-              <Button
-                loading={busy}
-                disabled={
-                  Boolean(nameIssue) ||
-                  (creating && Boolean(keyIssue)) ||
-                  Boolean(dictionaryMissing)
-                }
-                onClick={() => void submit()}
-              >
-                {t("subjectAttributes.save")}
-              </Button>
-            </Group>
-          </Stack>
-        ) : null}
-      </Modal>
-      <ConfirmActionModal
-        opened={deleteConfirm.opened}
-        onClose={deleteConfirm.close}
-        title={t("subjectAttributes.delete.confirmTitle")}
-        body={t("subjectAttributes.delete.confirmBody", {
-          name: deleteConfirm.pending?.name ?? "",
-        })}
-        confirmColor="red"
-        loading={busy}
-        onConfirm={() => void confirmDelete()}
-      />
+          ) : null}
+          <SwitchField
+            editable={!form.values.multiLocked}
+            label={t("subjectAttributes.fields.multiValue")}
+            description={t("subjectAttributes.fields.multiValueHint")}
+            {...form.fieldProps("multiValue", { type: "checkbox" })}
+          />
+        </Stack>
+      </FormDialog>
     </PageChrome>
   );
 }

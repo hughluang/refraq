@@ -6,15 +6,16 @@ import {
   Burger,
   Button,
   Group,
-  Image,
   Menu,
   Modal,
   Skeleton,
   Stack,
   Text,
   Title,
+  Tooltip,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
+import { NavigationProgress } from "@mantine/nprogress";
 import {
   useGetIdentity,
   useLogout,
@@ -22,15 +23,36 @@ import {
 } from "@refinedev/core";
 import { useChangeLanguage } from "next-i18next/client";
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname } from "next/navigation";
 import { useTranslation } from "react-i18next";
 
+import { ColorSchemeControl } from "@/components/ColorSchemeControl";
+import { BrandMark } from "@/components/display/BrandMark";
 import { ForbiddenState } from "@/components/feedback/ForbiddenState";
 import { PageError } from "@/components/feedback/PageError";
-import { ConsoleNavLink } from "@/components/layout/ConsoleNavLink";
+import { NavCollapseIcon, NavExpandIcon } from "@/components/icons";
+import { CommandPalette } from "@/components/layout/CommandPalette";
+import { ConsolePaletteTrigger } from "@/components/layout/ConsolePaletteTrigger";
+import { ConsoleNavDataProvider } from "@/components/layout/consoleNavData";
+import { ConsoleSideNav } from "@/components/layout/ConsoleSideNav";
+import { ConsoleSkipLink } from "@/components/layout/ConsoleSkipLink";
+import {
+  CONSOLE_MAIN_ID,
+  NAV_EXPANDED_WIDTH,
+  NAV_RAIL_WIDTH,
+} from "@/components/layout/consoleNav";
+import {
+  useNavMode,
+  useNavOverlay,
+  usePageHeadingFocus,
+} from "@/components/layout/useConsoleChrome";
 import { LangSwitcher } from "@/components/LangSwitcher";
+import { confirmLeave } from "@/components/navigation/leaveGuard";
+import { useNavigationProgress } from "@/components/layout/useNavigationProgress";
+import { useConsoleNavigation } from "@/components/navigation/useConsoleNavigation";
 import { fetchConsoleNavigation } from "@/features/console/api";
+import { useModuleIdentityStore } from "@/features/console/module-identity";
 import type { NavigationGroup } from "@/features/console/types";
 import { useBranding } from "@/features/branding/BrandingProvider";
 import { ApiError, isSessionExpiredError } from "@/lib/api";
@@ -45,6 +67,8 @@ import {
   useSessionStore,
   type CurrentUser,
 } from "@/providers/session-store";
+
+import "./ConsoleShell.css";
 
 type ConsoleShellProps = { children: ReactNode };
 
@@ -63,17 +87,48 @@ function NavSkeleton() {
   );
 }
 
+function NavWidthToggle({
+  rail,
+  onToggle,
+}: {
+  rail: boolean;
+  onToggle: () => void;
+}) {
+  const t = useTranslate();
+  const label = rail ? t("layout.nav.expand") : t("layout.nav.collapse");
+  return (
+    <Tooltip label={label} position="right" disabled={!rail}>
+      <Button
+        variant="subtle"
+        size="compact-sm"
+        fullWidth
+        justify={rail ? "center" : "flex-start"}
+        aria-label={label}
+        aria-pressed={rail}
+        leftSection={rail ? <NavExpandIcon /> : <NavCollapseIcon />}
+        onClick={onToggle}
+      >
+        {rail ? null : label}
+      </Button>
+    </Tooltip>
+  );
+}
+
 export function ConsoleShell({ children }: ConsoleShellProps) {
   const t = useTranslate();
   const pathname = usePathname();
-  const router = useRouter();
-  const [opened, { toggle }] = useDisclosure();
+  const { push } = useConsoleNavigation();
+  const { rail, toggle: toggleRail } = useNavMode();
+  const overlay = useNavOverlay(pathname);
+  usePageHeadingFocus(pathname);
+  useNavigationProgress();
   const [aboutOpened, { open: openAbout, close: closeAbout }] = useDisclosure();
   const branding = useBranding();
   const { data: identity } = useGetIdentity<CurrentUser>();
   const sessionUser = useSessionStore((s) => s.user);
   const identityError = useSessionStore((s) => s.identityError);
   const permissionsReady = useSessionStore((s) => s.permissionsReady);
+  const identityModules = useModuleIdentityStore((state) => state.modules);
   const user = identity ?? sessionUser;
   const accountLocale = useSessionStore((s) => s.user?.locale);
   const { mutate: logout, isPending } = useLogout();
@@ -83,6 +138,14 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
   const [navError, setNavError] = useState<string | null>(null);
   const [navErrorKind, setNavErrorKind] = useState<NavErrorKind | null>(null);
   const [navLoading, setNavLoading] = useState(true);
+
+  const iconFor = useMemo(() => {
+    const icons = new Map<string, string | null>();
+    for (const module of identityModules) {
+      icons.set(module.id, module.icon ?? null);
+    }
+    return (moduleId: string) => icons.get(moduleId) ?? null;
+  }, [identityModules]);
 
   const loadNavigation = useCallback(async () => {
     setNavLoading(true);
@@ -147,35 +210,46 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
     );
 
   return (
+    <ConsoleNavDataProvider
+      groups={groups ?? []}
+      ready={!navLoading}
+      toggleNavigation={toggleRail}
+    >
     <AppShell
       header={{ height: 56 }}
       navbar={{
-        width: 220,
+        width: rail ? NAV_RAIL_WIDTH : NAV_EXPANDED_WIDTH,
         breakpoint: "sm",
-        collapsed: { mobile: !opened },
+        collapsed: { mobile: !overlay.opened },
       }}
       padding="md"
       h="100dvh"
       style={{ overflow: "hidden" }}
     >
+      <NavigationProgress aria-label={t("common.loading")} />
+      <CommandPalette />
+      <ConsoleSkipLink />
       <AppShell.Header>
-        <Group h="100%" px="md" justify="space-between">
-          <Group gap="sm">
-            <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
+        <Group h="100%" px="md" justify="space-between" wrap="nowrap">
+          <Group gap="sm" wrap="nowrap">
+            <Burger
+              ref={overlay.menuRef}
+              opened={overlay.opened}
+              onClick={overlay.toggle}
+              hiddenFrom="sm"
+              size="sm"
+              aria-label={t("layout.nav.label")}
+            />
             {branding.logoUrl ? (
-              <Image
-                src={branding.logoUrl}
-                alt={branding.brandName}
-                h={28}
-                w="auto"
-                fit="contain"
-              />
+              <BrandMark src={branding.logoUrl} alt={branding.brandName} height={28} />
             ) : null}
             {branding.raw.show_brand_name_with_logo ? (
               <Title order={4}>{branding.brandName}</Title>
             ) : null}
           </Group>
-          <Group gap="sm">
+          <Group gap="sm" wrap="nowrap">
+            <ConsolePaletteTrigger />
+            <ColorSchemeControl />
             <LangSwitcher />
             {user ? (
               <Menu position="bottom-end" withinPortal>
@@ -186,7 +260,7 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
                   </Button>
                 </Menu.Target>
                 <Menu.Dropdown>
-                  <Menu.Item onClick={() => router.push("/console/account")}>
+                  <Menu.Item onClick={() => push("/console/account")}>
                     {t("account.title")}
                   </Menu.Item>
                   <Menu.Item onClick={openAbout}>
@@ -196,16 +270,19 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
                   <Menu.Item
                     color="red"
                     disabled={isPending}
-                    onClick={() =>
-                      logout(undefined, {
-                        onSuccess: (result) => {
-                          if (!result.success) {
-                            return;
-                          }
-                          window.location.assign("/login");
-                        },
-                      })
-                    }
+                    onClick={() => {
+                      void confirmLeave().then((allowed) => {
+                        if (!allowed) return;
+                        logout(undefined, {
+                          onSuccess: (result) => {
+                            if (!result.success) {
+                              return;
+                            }
+                            window.location.assign("/login");
+                          },
+                        });
+                      });
+                    }}
                   >
                     {t("auth.logout")}
                   </Menu.Item>
@@ -218,41 +295,48 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
         </Group>
       </AppShell.Header>
 
-      <AppShell.Navbar p="sm">
-        {navLoading ? <NavSkeleton /> : null}
-        {!navLoading && navError && navErrorKind !== "forbidden" ? (
-          <PageError
-            message={
-              navError === "navigation_load_failed"
-                ? t("layout.nav.error")
-                : navError
-            }
-            onRetry={() => void loadNavigation()}
-          />
-        ) : null}
-        {!navLoading && !navError && groups
-          ? groups.map((group) => (
-              <Stack key={group.id} gap={2} mb="sm">
-                <Text size="xs" c="dimmed" tt="uppercase" px="sm" fw={600}>
-                  {t(group.label_key)}
-                </Text>
-                {group.modules.map((module) => (
-                  <ConsoleNavLink
-                    key={module.id}
-                    labelKey={module.label_key}
-                    href={module.route}
-                    pathname={pathname}
-                    onNavigate={() => {
-                      if (opened) toggle();
-                    }}
-                  />
-                ))}
-              </Stack>
-            ))
-          : null}
+      <AppShell.Navbar className="console-navbar" p={0}>
+        <AppShell.Section
+          grow
+          p="sm"
+          style={{ overflowY: "auto" }}
+          component="nav"
+          aria-label={t("layout.nav.label")}
+        >
+          {navLoading ? <NavSkeleton /> : null}
+          {!navLoading && navError && navErrorKind !== "forbidden" ? (
+            <PageError
+              message={
+                navError === "navigation_load_failed"
+                  ? t("layout.nav.error")
+                  : navError
+              }
+              onRetry={() => void loadNavigation()}
+            />
+          ) : null}
+          {!navLoading && !navError && groups ? (
+            <ConsoleSideNav
+              groups={groups}
+              pathname={pathname}
+              rail={rail}
+              iconFor={iconFor}
+              onNavigate={() => {
+                if (overlay.opened) overlay.close();
+              }}
+            />
+          ) : null}
+        </AppShell.Section>
+        <AppShell.Section
+          p="sm"
+          style={{ borderTop: "1px solid var(--mantine-color-default-border)" }}
+        >
+          <NavWidthToggle rail={rail} onToggle={toggleRail} />
+        </AppShell.Section>
       </AppShell.Navbar>
 
       <AppShell.Main
+        id={CONSOLE_MAIN_ID}
+        tabIndex={-1}
         display="flex"
         h="100dvh"
         mih={0}
@@ -279,5 +363,6 @@ export function ConsoleShell({ children }: ConsoleShellProps) {
         </Anchor>
       </Modal>
     </AppShell>
+    </ConsoleNavDataProvider>
   );
 }

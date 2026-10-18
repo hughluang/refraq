@@ -48,6 +48,7 @@ class ModuleActionsResponse(BaseModel):
 class ModuleIdentityResponse(BaseModel):
     id: str
     label_key: str
+    icon: str | None = None
     routes: ModuleRoutesResponse
     actions: ModuleActionsResponse
 

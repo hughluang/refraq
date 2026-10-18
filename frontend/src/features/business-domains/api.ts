@@ -10,6 +10,7 @@ export function listBusinessDomains(params?: {
   q?: string;
   limit?: number;
   offset?: number;
+  signal?: AbortSignal;
 }) {
   const qs = new URLSearchParams();
   if (params?.q) qs.set("q", params.q);
@@ -21,7 +22,13 @@ export function listBusinessDomains(params?: {
     total: number;
     limit: number;
     offset: number;
-  }>(`/business-domains${suffix}`);
+  }>(`/business-domains${suffix}`, { signal: params?.signal });
+}
+
+export function getBusinessDomain(id: string, init?: { signal?: AbortSignal }) {
+  return apiClient<{ domain: BusinessDomain }>(`/business-domains/${id}`, {
+    signal: init?.signal,
+  });
 }
 
 export function createBusinessDomain(body: BusinessDomainCreate) {

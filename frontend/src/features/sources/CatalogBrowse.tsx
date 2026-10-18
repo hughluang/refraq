@@ -1,106 +1,112 @@
 "use client";
 
-import {
-  Anchor,
-  Badge,
-  Button,
-  Checkbox,
-  CloseButton,
-  Group,
-  Loader,
-  Select,
-  Table,
-  Text,
-  TextInput,
-  Tooltip,
-} from "@mantine/core";
+import { Button, Group, Table, Text, Tooltip } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
+import { ListToolbar } from "@/components/display/ListToolbar";
+import { RecordReference } from "@/components/display/RecordReference";
+import { StatusBadge } from "@/components/display/StatusBadge";
+import {
+  presentCatalogPresence,
+  presentCatalogSemantics,
+} from "@/components/display/statusTone";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { PageError } from "@/components/feedback/PageError";
+import { RecordPicker } from "@/components/form/RecordPicker";
+import { sourceRecordAdapter } from "@/components/form/recordPickerAdapters";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { listCatalogObjects } from "@/features/sources/api/catalog";
+import { objectTypeLabel } from "@/features/sources/catalogLabel";
 import { listSources } from "@/features/sources/api/sources";
-import {
-  catalogPresence,
-  catalogSemanticsReady,
-} from "@/features/sources/catalog-detail/catalogStatus";
-import type { Source } from "@/features/sources/types";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { useSearchDebounce } from "@/hooks/useSearchDebounce";
+import { useListQuery } from "@/hooks/useListQuery";
 import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 100;
 const COLUMN_COUNT = 7;
 
-type SemanticsReadyFilter = "all" | "ready" | "not_ready";
-
 export function CatalogBrowse() {
   const t = useTranslate();
+  const query = useListQuery({
+    filters: [
+      { key: "source", type: "select", defaultValue: "" },
+      { key: "ready", type: "select", defaultValue: "" },
+      { key: "absent", type: "select", defaultValue: "" },
+    ],
+  });
+  const ready = query.select("ready");
+  const absent = query.select("absent");
 
-  const [sources, setSources] = useState<Source[]>([]);
-  const [sourceId, setSourceId] = useState<string | null>(null);
-  const [q, setQ] = useState("");
-  const debouncedQ = useSearchDebounce(q);
-  const [loading, setLoading] = useState(true);
+  const urlSource = query.select("source");
+  const [fallbackId, setFallbackId] = useState<string | null>(null);
+  const [phase, setPhase] = useState<"loading" | "empty" | "ready" | "error">(
+    urlSource ? "ready" : "loading",
+  );
   const [error, setError] = useState<string | null>(null);
-  const [semanticsReady, setSemanticsReady] =
-    useState<SemanticsReadyFilter>("all");
-  const [includeAbsent, setIncludeAbsent] = useState(true);
+  const sourceId = urlSource || fallbackId;
 
   const fetchPage = useCallback(
-    (query: PageQuery) =>
-      listCatalogObjects(sourceId as string, debouncedQ || undefined, {
-        ...query,
-        include_absent: includeAbsent,
+    (page: PageQuery) =>
+      listCatalogObjects(sourceId as string, query.search || undefined, {
+        ...page,
+        include_absent: absent !== "present",
         business_semantics_ready:
-          semanticsReady === "all" ? undefined : semanticsReady === "ready",
+          ready === "ready" ? true : ready === "not_ready" ? false : undefined,
       }),
-    [sourceId, debouncedQ, includeAbsent, semanticsReady],
+    [sourceId, query.search, absent, ready],
   );
 
-  const filtered =
-    Boolean(debouncedQ) || semanticsReady !== "all" || !includeAbsent;
+  const objectFiltered =
+    query.search !== "" ||
+    ready === "ready" ||
+    ready === "not_ready" ||
+    absent === "present";
   const list = useConsolePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
-    resetDeps: [sourceId, debouncedQ, includeAbsent, semanticsReady],
+    resetDeps: [sourceId, query.search, absent, ready],
     enabled: Boolean(sourceId),
-    filtered,
+    filtered: objectFiltered,
+    page: query.page,
+    onPageChange: query.setPage,
   });
-  const { items, reload, loading: listLoading } = list;
-
-  const loadSources = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await listSources({ limit: 500 });
-      setSources(data.items);
-      if (!sourceId && data.items[0]) {
-        setSourceId(data.items[0].id);
-      }
-    } catch (err) {
-      setError(problemMessage(t, err, String(err)));
-    } finally {
-      setLoading(false);
-    }
-  }, [sourceId]);
+  const { items, reload } = list;
 
   useEffect(() => {
-    void loadSources();
-  }, [loadSources]);
+    if (urlSource || fallbackId) {
+      setPhase("ready");
+      return;
+    }
+    let cancelled = false;
+    setPhase("loading");
+    listSources({ limit: 1, offset: 0 })
+      .then((data) => {
+        if (cancelled) return;
+        const first = data.items[0];
+        if (!first) {
+          setPhase("empty");
+          return;
+        }
+        setFallbackId(first.id);
+        setError(null);
+        setPhase("ready");
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setPhase("error");
+          setError(problemMessage(t, err, String(err)));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fallbackId, t, urlSource]);
 
-  function clearFilters() {
-    setQ("");
-    setSemanticsReady("all");
-    setIncludeAbsent(true);
-  }
-
-  if (error && !loading) return <PageError message={error} />;
+  if (phase === "error" && error) return <PageError message={error} />;
 
   const refreshAction = (
     <Button size="sm" variant="light" onClick={() => void reload()}>
@@ -108,101 +114,70 @@ export function CatalogBrowse() {
     </Button>
   );
 
-  const searchRightSection = listLoading ? (
-    <Loader size="xs" />
-  ) : q ? (
-    <CloseButton
-      size="sm"
-      aria-label={t("common.search.clear")}
-      onClick={() => {
-        setQ("");
-      }}
-    />
-  ) : null;
-
   return (
     <PageChrome
       title={t("catalog.title")}
       description={t("catalog.description")}
       actions={refreshAction}
+      toolbar={
+        phase === "ready" && sourceId ? (
+          <Group align="flex-end" wrap="wrap">
+            <RecordPicker
+              editable
+              label={t("catalog.fields.source")}
+              adapter={sourceRecordAdapter()}
+              value={sourceId}
+              w={320}
+              onChange={(value) => {
+                if (value) query.setFilter("source", value);
+              }}
+            />
+            <ListToolbar
+              query={query}
+              searchPlaceholder={t("catalog.fields.search")}
+              filters={[
+                {
+                  key: "ready",
+                  label: t("catalog.fields.ready"),
+                  options: [
+                    {
+                      value: "not_ready",
+                      label: t("catalog.list.semanticsReady.notReady"),
+                    },
+                    {
+                      value: "ready",
+                      label: t("catalog.list.semanticsReady.ready"),
+                    },
+                  ],
+                },
+                {
+                  key: "absent",
+                  label: t("catalog.fields.present"),
+                  options: [
+                    {
+                      value: "present",
+                      label: t("catalog.list.presentOnly"),
+                    },
+                  ],
+                },
+              ]}
+            />
+          </Group>
+        ) : undefined
+      }
     >
-      {loading && sources.length === 0 ? (
+      {phase === "loading" ? (
         <PageBodySkeleton />
-      ) : sources.length === 0 ? (
+      ) : phase === "empty" ? (
         <EmptyState message={t("catalog.list.noSources")} />
       ) : (
         <>
-          <Group align="flex-end" wrap="wrap">
-            <Select
-              label={t("catalog.fields.source")}
-              data={sources.map((s) => ({
-                value: s.id,
-                label: `${s.key} — ${s.name}`,
-              }))}
-              value={sourceId}
-              onChange={(value) => {
-                if (value) setSourceId(value);
-              }}
-              searchable
-              allowDeselect={false}
-              w={320}
-            />
-            <TextInput
-              label={t("catalog.fields.search")}
-              value={q}
-              onChange={(e) => setQ(e.currentTarget.value)}
-              w={220}
-              rightSection={searchRightSection}
-              rightSectionPointerEvents={listLoading ? "none" : "auto"}
-            />
-            <Select
-              label={t("catalog.fields.ready")}
-              data={[
-                {
-                  value: "all",
-                  label: t("catalog.list.semanticsReady.all"),
-                },
-                {
-                  value: "not_ready",
-                  label: t("catalog.list.semanticsReady.notReady"),
-                },
-                {
-                  value: "ready",
-                  label: t("catalog.list.semanticsReady.ready"),
-                },
-              ]}
-              value={semanticsReady}
-              onChange={(value) =>
-                setSemanticsReady(
-                  (value as SemanticsReadyFilter | null) ?? "all",
-                )
-              }
-              allowDeselect={false}
-              w={180}
-            />
-            <Checkbox
-              label={t("catalog.list.includeAbsent")}
-              checked={includeAbsent}
-              onChange={(e) => setIncludeAbsent(e.currentTarget.checked)}
-              mb={4}
-            />
-            {filtered ? (
-              <Button
-                variant="subtle"
-                size="xs"
-                onClick={clearFilters}
-                mb={4}
-              >
-                {t("common.filters.clear")}
-              </Button>
-            ) : null}
-          </Group>
-
           <ListTable
             list={list}
             columnCount={COLUMN_COUNT}
             emptyMessage={t("catalog.empty")}
             noMatchMessage={t("catalog.list.noMatch")}
+            onClearFilters={query.clear}
             head={
               <Table.Tr>
                 <Table.Th>{t("catalog.fields.schema")}</Table.Th>
@@ -216,31 +191,24 @@ export function CatalogBrowse() {
             }
           >
             {items.map((obj) => {
-              const ready = catalogSemanticsReady(
+              const ready = presentCatalogSemantics(
                 Boolean(obj.business_semantics_ready),
               );
-              const presence = catalogPresence(obj.is_present);
+              const presence = presentCatalogPresence(obj.is_present);
               return (
               <Table.Tr key={obj.id}>
                 <Table.Td>{obj.schema_name}</Table.Td>
                 <Table.Td>
-                  <Anchor
-                    component={Link}
+                  <RecordReference
+                    name={obj.name}
+                    recordKey={obj.schema_name}
                     href={`/console/catalog/${obj.id}`}
-                    size="sm"
-                  >
-                    {obj.name}
-                  </Anchor>
+                  />
                 </Table.Td>
                 <Table.Td>{obj.business_name ?? "—"}</Table.Td>
-                <Table.Td>{obj.object_type}</Table.Td>
+                <Table.Td>{objectTypeLabel(t, obj.object_type)}</Table.Td>
                 <Table.Td>
-                  <Badge
-                    variant={obj.business_semantics_ready ? "light" : "outline"}
-                    color={ready.color}
-                  >
-                    {t(ready.labelKey)}
-                  </Badge>
+                  <StatusBadge tone={ready.tone} labelKey={ready.labelKey} />
                 </Table.Td>
                 <Table.Td maw={280} style={{ maxWidth: 280, overflow: "hidden" }}>
                   <Tooltip label={obj.locator_key}>
@@ -250,15 +218,7 @@ export function CatalogBrowse() {
                   </Tooltip>
                 </Table.Td>
                 <Table.Td>
-                  {obj.is_present ? (
-                    <Text size="sm" c="dimmed">
-                      {t(presence.labelKey)}
-                    </Text>
-                  ) : (
-                    <Badge variant="light" color="orange">
-                      {t(presence.labelKey)}
-                    </Badge>
-                  )}
+                  <StatusBadge tone={presence.tone} labelKey={presence.labelKey} />
                 </Table.Td>
               </Table.Tr>
               );

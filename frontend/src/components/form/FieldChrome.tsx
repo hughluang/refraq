@@ -7,12 +7,14 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
 } from "react";
 
 import "./field-chrome.css";
+import { InfoIcon, StatusDotIcon } from "@/components/icons";
 import {
   noteTone,
   orderedNotes,
@@ -268,7 +270,7 @@ function MarkPopover({
             onToggle();
           }}
         >
-          {icon === "info" ? <InfoIcon /> : <StatusIcon />}
+          {icon === "info" ? <InfoIcon size={14} /> : <StatusDotIcon size={14} />}
         </button>
       </Popover.Target>
       <Popover.Dropdown onMouseEnter={onEnter} onMouseLeave={onLeave}>
@@ -278,39 +280,23 @@ function MarkPopover({
   );
 }
 
-function InfoIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-      <circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" strokeWidth="1.5" />
-      <path d="M8 7.2 V11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-      <circle cx="8" cy="5" r="0.8" fill="currentColor" />
-    </svg>
-  );
-}
-
-function StatusIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-      <circle cx="8" cy="8" r="5" fill="currentColor" />
-    </svg>
-  );
-}
-
 type ChromeProps = {
   label?: ReactNode;
   description?: ReactNode;
+  helper?: ReactNode;
   notes: readonly FieldNote[];
   required?: boolean;
   id?: string;
   openSignal?: string | null;
   editSignal?: unknown;
   bare?: boolean;
-  children: (control: { id: string; invalid: boolean }) => ReactNode;
+  children: (control: { id: string; invalid: boolean; describedBy?: string }) => ReactNode;
 };
 
 export function FieldChrome({
   label,
   description,
+  helper,
   notes,
   required,
   id,
@@ -321,6 +307,20 @@ export function FieldChrome({
 }: ChromeProps) {
   const generated = useId();
   const controlId = id ?? generated;
+  const rootRef = useRef<HTMLDivElement>(null);
+  const helperText = presentDescription(helper);
+  const helperId = helperText != null ? `${controlId}-helper` : undefined;
+  // Mantine replaces aria-describedby while rendering the input, so restore the helper id after each commit.
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root || !helperId) return;
+    const field = root.querySelector<HTMLElement>("input, textarea, select");
+    if (!field) return;
+    const ids = (field.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean);
+    if (ids.includes(helperId)) return;
+    ids.push(helperId);
+    field.setAttribute("aria-describedby", ids.join(" "));
+  });
   if (bare) return children({ id: controlId, invalid: false });
   const tone = noteTone(notes);
   const invalid = tone === "error";
@@ -338,7 +338,11 @@ export function FieldChrome({
   );
   const overlay = !visibleLabel && notes.length > 0;
   return (
-    <div className="field-chrome" data-tone={tone === "warning" ? "warning" : undefined}>
+    <div
+      ref={rootRef}
+      className="field-chrome"
+      data-tone={tone === "warning" ? "warning" : undefined}
+    >
       {visibleLabel ? (
         <div className="field-chrome__label">
           <Input.Label htmlFor={controlId} required={required}>
@@ -348,9 +352,14 @@ export function FieldChrome({
         </div>
       ) : null}
       <div className={overlay ? "field-chrome__control" : undefined}>
-        {children({ id: controlId, invalid })}
+        {children({ id: controlId, invalid, describedBy: helperId })}
         {overlay ? <div className="field-chrome__overlay">{marks}</div> : null}
       </div>
+      {helperText != null ? (
+        <Text id={helperId} className="field-chrome__helper" size="xs" c="dimmed" component="div">
+          {helperText}
+        </Text>
+      ) : null}
     </div>
   );
 }

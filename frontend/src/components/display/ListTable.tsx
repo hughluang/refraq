@@ -1,10 +1,11 @@
 "use client";
 
-import { Skeleton, Stack, Table } from "@mantine/core";
+import { Button, Skeleton, Stack, Table } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { ListPager } from "@/components/display/ListPager";
+import { FEEDBACK_DELAY_MS, TABLE_DENSITY } from "@/theme";
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { PageError } from "@/components/feedback/PageError";
 import type { ListPresentation } from "@/lib/list-state";
@@ -28,8 +29,19 @@ type ListTableProps = {
   list: ListTableList;
   columnCount: number;
   minWidth?: number;
+  /**
+   * Size to the rows. Use inside a scrolling tab, drawer section, or form page.
+   * Page lists omit this and fill the remaining frame.
+   */
+  embedded?: boolean;
   emptyMessage?: string;
+  /** Primary action on the empty row, such as create when it is permitted. */
+  emptyAction?: ReactNode;
   noMatchMessage?: string;
+  /** No-match row offers Clear filters when this is set. */
+  onClearFilters?: () => void;
+  /** Replaces the clear-filters control on the no-match row. */
+  noMatchAction?: ReactNode;
   head: ReactNode;
   children?: ReactNode;
 };
@@ -64,14 +76,27 @@ export function ListTable({
   list,
   columnCount,
   minWidth = DEFAULT_MIN_WIDTH,
+  embedded = false,
   emptyMessage,
+  emptyAction,
   noMatchMessage,
+  onClearFilters,
+  noMatchAction,
   head,
   children,
 }: ListTableProps) {
   const t = useTranslate();
   const { state, refreshing } = list.presentation;
   const busy = state === "loading" || refreshing;
+  const [dimmed, setDimmed] = useState(false);
+  useEffect(() => {
+    if (!refreshing) {
+      setDimmed(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setDimmed(true), FEEDBACK_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [refreshing]);
   let body: ReactNode;
   switch (state) {
     case "loading":
@@ -91,14 +116,24 @@ export function ListTable({
     case "empty":
       body = (
         <StatusRow columnCount={columnCount}>
-          <EmptyState message={emptyMessage ?? t("common.empty")} />
+          <EmptyState message={emptyMessage ?? t("common.empty")} action={emptyAction} />
         </StatusRow>
       );
       break;
     case "no-match":
       body = (
         <StatusRow columnCount={columnCount}>
-          <EmptyState message={noMatchMessage ?? t("common.noMatch")} />
+          <EmptyState
+            message={noMatchMessage ?? t("common.noMatch")}
+            action={
+              noMatchAction ??
+              (onClearFilters ? (
+                <Button type="button" variant="subtle" size="xs" onClick={onClearFilters}>
+                  {t("common.filters.clear")}
+                </Button>
+              ) : undefined)
+            }
+          />
         </StatusRow>
       );
       break;
@@ -107,26 +142,31 @@ export function ListTable({
   }
 
   return (
-    <Stack gap="sm" flex={1} mih={0} style={{ minHeight: 0 }}>
+    <Stack
+      gap="sm"
+      flex={embedded ? undefined : 1}
+      mih={embedded ? undefined : 0}
+      style={embedded ? undefined : { minHeight: 0 }}
+    >
       <Table.ScrollContainer
         minWidth={minWidth}
-        maxHeight="100%"
+        maxHeight={embedded ? undefined : "100%"}
         type="native"
-        flex={1}
-        mih={0}
-        bd="1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4))"
+        flex={embedded ? undefined : 1}
+        mih={embedded ? undefined : 0}
+        bd="1px solid var(--refraq-tone-neutral-border)"
       >
         <Table
           striped
           highlightOnHover
           stickyHeader
-          verticalSpacing="xs"
-          horizontalSpacing="md"
+          verticalSpacing={TABLE_DENSITY.verticalSpacing}
+          horizontalSpacing={TABLE_DENSITY.horizontalSpacing}
         >
           <Table.Thead>{head}</Table.Thead>
           <Table.Tbody
             aria-busy={busy || undefined}
-            style={refreshing ? { opacity: 0.6 } : undefined}
+            style={dimmed ? { opacity: 0.6 } : undefined}
           >
             {body}
           </Table.Tbody>

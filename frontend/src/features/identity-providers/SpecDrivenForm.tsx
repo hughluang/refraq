@@ -1,14 +1,20 @@
 "use client";
 
-import { Button, Group, Stack, Text, TextInput } from "@mantine/core";
-import { useForm } from "@mantine/form";
+import { Stack, Text, TextInput } from "@mantine/core";
 import { useList, useTranslate } from "@refinedev/core";
 import { useEffect, useMemo, useState } from "react";
 
 import { DisplayField } from "@/components/display/DisplayField";
+import { FormDialog } from "@/components/form/FormDialog";
+import {
+  FormErrorSummary,
+  saveFailureFrom,
+  type SaveFailure,
+} from "@/components/form/FormErrorSummary";
 import { SelectField } from "@/components/form/SelectField";
 import { SwitchField } from "@/components/form/SwitchField";
 import { TextField } from "@/components/form/TextField";
+import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { ModuleId } from "@/features/console/module-identity";
 import type { RoleRow } from "@/features/roles/types";
 import { getIdentityProviderSpec } from "@/features/identity-providers/api";
@@ -21,10 +27,10 @@ import type {
 import type { JsonSchemaProperty } from "@/lib/json-schema";
 
 type Props = {
+  opened: boolean;
   provider?: IdentityProvider;
-  loading?: boolean;
-  onSubmit: (values: IdentityProviderFormValues) => void;
-  onCancel: () => void;
+  onSubmit: (values: IdentityProviderFormValues) => Promise<void>;
+  onClose: () => void;
 };
 
 const SPEC_FORM_KEYS = [
@@ -122,20 +128,22 @@ function propType(prop: JsonSchemaProperty | undefined): string {
 }
 
 export function SpecDrivenForm({
+  opened,
   provider,
-  loading,
   onSubmit,
-  onCancel,
+  onClose,
 }: Props) {
   const t = useTranslate();
   const [spec, setSpec] = useState<IdentityProviderSpec | null>(null);
   const [callbackUrl, setCallbackUrl] = useState("");
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const roles = useList<RoleRow>({
     resource: ModuleId.roles,
     pagination: { mode: "off" },
   });
-  const form = useForm<IdentityProviderFormValues>({
+  const form = useConsoleForm<IdentityProviderFormValues>({
     initialValues: valuesFromProvider(provider),
+    onValuesChange: () => setSaveFailure(null),
     validate: {
       display_name: (value) =>
         value.trim() ? null : t("identityProviders.validation.required"),
@@ -214,7 +222,7 @@ export function SpecDrivenForm({
             provider ? t("identityProviders.fields.issuerLocked") : description
           }
           editable={!provider}
-          {...form.getInputProps("issuer")}
+          {...form.fieldProps("issuer")}
         />
       );
     }
@@ -228,8 +236,7 @@ export function SpecDrivenForm({
           editable
           data={roleOptions}
           clearable
-          value={form.values.default_role_id}
-          onChange={(value) => form.setFieldValue("default_role_id", value)}
+          {...form.fieldProps("default_role_id")}
         />
       );
     }
@@ -241,7 +248,7 @@ export function SpecDrivenForm({
           label={label}
           description={description}
           editable
-          {...form.getInputProps(key, { type: "checkbox" })}
+          {...form.fieldProps(key, { type: "checkbox" })}
         />
       );
     }
@@ -258,7 +265,7 @@ export function SpecDrivenForm({
           }
           type="password"
           autoComplete="new-password"
-          {...form.getInputProps("client_secret")}
+          {...form.fieldProps("client_secret")}
         />
       );
     }
@@ -269,18 +276,53 @@ export function SpecDrivenForm({
         label={label}
         description={description}
         editable
-        {...form.getInputProps(key)}
+        {...form.fieldProps(key)}
       />
     );
   };
 
+  const close = () => {
+    setSaveFailure(null);
+    form.reset();
+    onClose();
+  };
+
   return (
-    <form onSubmit={form.onSubmit(onSubmit)}>
+    <FormDialog
+      opened={opened}
+      onClose={close}
+      size="lg"
+      title={
+        provider ? t("identityProviders.edit") : t("identityProviders.create")
+      }
+      dirty={form.dirty}
+      submitting={form.submitting}
+      submitLabel={t("common.save")}
+      summary={<FormErrorSummary failure={saveFailure} />}
+      onSubmit={() =>
+        void form.submit(async (values) => {
+          try {
+            await onSubmit(values);
+            form.markSaved();
+            setSaveFailure(null);
+          } catch (error) {
+            setSaveFailure(
+              saveFailureFrom(
+                t,
+                error,
+                form.applyApiError(error),
+                t("common.error.loadFailed"),
+              ),
+            );
+          }
+        })
+      }
+    >
       <Stack gap="sm">
         <TextField
           label={fieldLabel("display_name", true)}
           editable
-          {...form.getInputProps("display_name")}
+          {...form.fieldProps("display_name")}
         />
         <TextField
           label={t("identityProviders.fields.protocol")}
@@ -290,7 +332,7 @@ export function SpecDrivenForm({
         <SwitchField
           label={t("identityProviders.fields.enabled")}
           editable
-          {...form.getInputProps("enabled", { type: "checkbox" })}
+          {...form.fieldProps("enabled", { type: "checkbox" })}
         />
         {callbackUrl ? (
           <DisplayField
@@ -305,15 +347,7 @@ export function SpecDrivenForm({
             {spec.$id}
           </Text>
         ) : null}
-        <Group justify="flex-end">
-          <Button variant="default" onClick={onCancel} disabled={loading}>
-            {t("common.cancel")}
-          </Button>
-          <Button type="submit" loading={loading}>
-            {t("common.save")}
-          </Button>
-        </Group>
       </Stack>
-    </form>
+    </FormDialog>
   );
 }

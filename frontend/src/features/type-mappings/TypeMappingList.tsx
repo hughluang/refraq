@@ -1,16 +1,22 @@
 "use client";
 
-import { Badge, Checkbox, Group, Select, Table, Text, TextInput } from "@mantine/core";
+import { Table, Text } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
+import { ListToolbar } from "@/components/display/ListToolbar";
+import { StatusBadge } from "@/components/display/StatusBadge";
+import { presentTypeMappingOrigin } from "@/components/display/statusTone";
 import { SelectField } from "@/components/form/SelectField";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
+import { useListQuery } from "@/hooks/useListQuery";
 import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
+
+import { engineLabel } from "@/features/sources/engineLabel";
 
 import { listTypeMappings, patchTypeMapping } from "./api";
 import type { PatchableNormalizedType, TypeMapping } from "./types";
@@ -40,27 +46,34 @@ export function TypeMappingList() {
     action: ModuleAction.edit,
   });
 
-  const [q, setQ] = useState("");
-  const [engine, setEngine] = useState<string | null>(null);
-  const [onlyGaps, setOnlyGaps] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const query = useListQuery({
+    filters: [
+      { key: "engine", type: "select", defaultValue: "" },
+      { key: "gaps", type: "select", defaultValue: "" },
+    ],
+  });
+  const engine = query.select("engine");
+  const gaps = query.select("gaps");
 
   const fetchPage = useCallback(
-    (query: PageQuery) =>
+    (page: PageQuery) =>
       listTypeMappings({
-        q: q.trim() || undefined,
+        q: query.search || undefined,
         engine: engine || undefined,
-        origin: onlyGaps ? "job" : undefined,
-        ...query,
+        origin: gaps === "job" ? "job" : undefined,
+        ...page,
       }),
-    [q, engine, onlyGaps],
+    [query.search, engine, gaps],
   );
 
   const list = useConsolePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
-    resetDeps: [q, engine, onlyGaps],
-    filtered: q.trim() !== "" || Boolean(engine) || onlyGaps,
+    resetDeps: [query.search, engine, gaps],
+    filtered: query.isFiltered,
+    page: query.page,
+    onPageChange: query.setPage,
   });
   const { items, reload } = list;
 
@@ -87,43 +100,40 @@ export function TypeMappingList() {
     }
   };
 
-  const originLabel = (origin: TypeMapping["origin"]) =>
-    t(`typeMappings.origin.${origin}`);
-
   return (
     <PageChrome
       title={t("typeMappings.title")}
       description={t("typeMappings.description")}
-    >
-      <Group>
-        <TextInput
-          placeholder={t("typeMappings.search")}
-          value={q}
-          onChange={(e) => setQ(e.currentTarget.value)}
-          w={280}
-        />
-        <Select
-          placeholder={t("typeMappings.fields.engine")}
-          clearable
-          value={engine}
-          onChange={setEngine}
-          data={[
-            { value: "postgresql", label: "postgresql" },
-            { value: "mssql", label: "mssql" },
-            { value: "oracle", label: "oracle" },
+      toolbar={
+        <ListToolbar
+          query={query}
+          searchPlaceholder={t("typeMappings.search")}
+          filters={[
+            {
+              key: "engine",
+              label: t("typeMappings.fields.engine"),
+              options: ["postgresql", "mssql", "oracle"].map((value) => ({
+                value,
+                label: engineLabel(t, value),
+              })),
+            },
+            {
+              key: "gaps",
+              label: t("typeMappings.fields.origin"),
+              options: [
+                { value: "job", label: t("typeMappings.list.onlyGaps") },
+              ],
+            },
           ]}
-          w={180}
         />
-        <Checkbox
-          label={t("typeMappings.list.onlyGaps")}
-          checked={onlyGaps}
-          onChange={(e) => setOnlyGaps(e.currentTarget.checked)}
-        />
-      </Group>
+      }
+    >
       <ListTable
         list={list}
         columnCount={4}
+        emptyMessage={t("typeMappings.list.empty")}
         noMatchMessage={t("typeMappings.list.noMatch")}
+        onClearFilters={query.clear}
         head={
           <Table.Tr>
             <Table.Th>{t("typeMappings.fields.engine")}</Table.Th>
@@ -138,9 +148,7 @@ export function TypeMappingList() {
           return (
             <Table.Tr key={row.id}>
               <Table.Td>
-                <Text ff="monospace" size="sm">
-                  {row.engine}
-                </Text>
+                <Text size="sm">{engineLabel(t, row.engine)}</Text>
               </Table.Td>
               <Table.Td>
                 <Text ff="monospace" size="sm">
@@ -163,18 +171,11 @@ export function TypeMappingList() {
                 />
               </Table.Td>
               <Table.Td>
-                <Badge
+                <StatusBadge
                   size="xs"
-                  color={
-                    row.origin === "product"
-                      ? "gray"
-                      : row.origin === "job"
-                        ? "yellow"
-                        : "blue"
-                  }
-                >
-                  {originLabel(row.origin)}
-                </Badge>
+                  tone={presentTypeMappingOrigin(row.origin).tone}
+                  labelKey={presentTypeMappingOrigin(row.origin).labelKey}
+                />
               </Table.Td>
             </Table.Tr>
           );

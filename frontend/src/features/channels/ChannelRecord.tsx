@@ -1,10 +1,8 @@
 "use client";
 
 import {
-  Badge,
   Box,
   Button,
-  Divider,
   Drawer,
   Group,
   Modal,
@@ -17,10 +15,13 @@ import {
   Tooltip,
   UnstyledButton,
 } from "@mantine/core";
-import { useForm } from "@mantine/form";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
+import {
+  suppressLeaveGuard,
+  useLeaveGuardRegistration,
+} from "@/components/navigation/leaveGuard";
+import { useConsoleNavigation } from "@/components/navigation/useConsoleNavigation";
 import {
   forwardRef,
   useEffect,
@@ -29,13 +30,26 @@ import {
   useState,
 } from "react";
 
+import {
+  FormErrorSummary,
+  saveFailureFrom,
+  type SaveFailure,
+} from "@/components/form/FormErrorSummary";
+import { FormDialog } from "@/components/form/FormDialog";
+import { useConsoleForm } from "@/components/form/useConsoleForm";
+import { JobReference } from "@/components/display/JobReference";
+import { LiveStatusAnnouncer } from "@/components/display/LiveStatusAnnouncer";
+import { StaleNotice } from "@/components/display/StaleNotice";
+import { StatusBadge } from "@/components/display/StatusBadge";
+import { presentChannelActive, presentJobStatus } from "@/components/display/statusTone";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
-import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
-import { PageError } from "@/components/feedback/PageError";
+import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
+import { AdjustmentsIcon, ListIcon, VersionsIcon } from "@/components/icons";
 import { NumberField } from "@/components/form/NumberField";
 import { TextareaField } from "@/components/form/TextareaField";
 import { TextField } from "@/components/form/TextField";
 import { FillColumn } from "@/components/layout/FillColumn";
+import { HeaderAction, HeaderActions } from "@/components/layout/HeaderActions";
 import { PageChrome } from "@/components/layout/PageChrome";
 import {
   activateChannel,
@@ -71,8 +85,8 @@ import {
 } from "@/features/channels/graphValidation";
 import { formatGraphProblem } from "@/features/channels/problemLabel";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
-import { LEAVE_GUARD_ALLOW } from "@/hooks/leaveGuard";
-import { useLeaveGuard } from "@/hooks/useLeaveGuard";
+import { JobDetailModal } from "@/features/jobs/JobDetailModal";
+import { useLiveStatus } from "@/hooks/useLiveStatus";
 import { ApiError } from "@/lib/api";
 import { problemMessage } from "@/lib/problem";
 
@@ -109,58 +123,66 @@ export function ChannelRecord(props: Props) {
 function ChannelCreate() {
   const t = useTranslate();
   const { open } = useNotification();
-  const [busy, setBusy] = useState(false);
-  const form = useForm({ initialValues: { name: "", description: "" } });
-  const leaveGuard = useLeaveGuard({
-    enabled: form.isDirty(),
-    message: t("common.leaveUnsaved"),
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const form = useConsoleForm({
+    initialValues: { name: "", description: "" },
+    onValuesChange: () => setSaveFailure(null),
   });
 
   return (
     <PageChrome
       title={t("channels.create.title")}
       actions={
-        <Group gap="xs" wrap="nowrap" aria-label={t("channels.actions.standard")}>
-          <Button
-            component={Link}
-            href="/console/channels"
-            variant="default"
-            size="sm"
-            data-leave-guard={LEAVE_GUARD_ALLOW}
-          >
-            {t("common.cancel")}
-          </Button>
-          <Button type="submit" form={FORM_ID} size="sm" loading={busy}>
-            {t("channels.create.submit")}
-          </Button>
-        </Group>
+        <HeaderActions
+          standard={
+            <>
+              <Button
+                component={ConsoleLink}
+                href="/console/channels"
+                variant="default"
+                size="sm"
+              >
+                {t("common.cancel")}
+              </Button>
+              <HeaderAction primary>
+                <Button type="submit" form={FORM_ID} size="sm" loading={form.submitting}>
+                  {t("channels.create.submit")}
+                </Button>
+              </HeaderAction>
+            </>
+          }
+        />
       }
     >
       <form
         id={FORM_ID}
         onSubmit={form.onSubmit(async (values) => {
-          setBusy(true);
           try {
             const description = values.description.trim();
             const created = await createChannel({
               name: values.name.trim(),
               description: description ? description : null,
             });
-            form.resetDirty();
-            leaveGuard.bypass();
+            form.markSaved();
+            suppressLeaveGuard();
             open?.({ type: "success", message: t("channels.create.success") });
             window.location.replace(`/console/channels/${created.channel.id}/edit`);
           } catch (error) {
-            open?.({
-              type: "error",
-              message: problemMessage(t, error, t("channels.save.failed")),
-            });
-          } finally {
-            setBusy(false);
+            setSaveFailure(
+              saveFailureFrom(
+                t,
+                error,
+                form.applyApiError(error),
+                t("channels.save.failed"),
+              ),
+            );
           }
         })}
       >
-        <IdentityFields form={form} editable />
+        <Stack gap="sm">
+          <FormErrorSummary failure={saveFailure} />
+          <IdentityFields form={form} editable />
+        </Stack>
       </form>
     </PageChrome>
   );
@@ -174,8 +196,10 @@ function ChannelExisting({
   channelId: string;
 }) {
   const t = useTranslate();
-  const router = useRouter();
+  const { replace } = useConsoleNavigation();
   const { open } = useNotification();
+  const stopRunAction = useConsoleMutation();
+  const deleteAction = useConsoleMutation();
   const { data: canWrite } = useCan({
     resource: ModuleId.channels,
     action: ModuleAction.edit,
@@ -195,20 +219,20 @@ function ChannelExisting({
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const [panel, setPanel] = useState<"versions" | "runs" | null>(null);
   const [preview, setPreview] = useState<Confirmation | null>(null);
+  const [publishJobId, setPublishJobId] = useState<string | null>(null);
   const [publishRevision, setPublishRevision] = useState(1);
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [runRequest, setRunRequest] = useState<{ stopAt: string | null } | null>(null);
   const [sessionRun, setSessionRun] = useState<ChannelRunDetail | null>(null);
   const [adoptToken, setAdoptToken] = useState(0);
-  const [descriptionDraft, setDescriptionDraft] = useState("");
-  const [timeoutDraft, setTimeoutDraft] = useState<number | string>("");
   const nameEditorRef = useRef<ChannelNameHeadingHandle>(null);
-  const form = useForm<IdentityValues>({
+  const form = useConsoleForm<IdentityValues>({
     initialValues: { name: "", description: "", active: false },
+    onValuesChange: () => setSaveFailure(null),
     validate: {
       name: (value) => {
         const trimmed = value.trim();
@@ -217,6 +241,12 @@ function ChannelExisting({
         return null;
       },
     },
+  });
+  const detailsForm = useConsoleForm<{
+    description: string;
+    timeout: number | string;
+  }>({
+    initialValues: { description: "", timeout: "" },
   });
   const formRef = useRef(form);
   formRef.current = form;
@@ -270,7 +300,7 @@ function ChannelExisting({
           description: channelBody.channel.description ?? "",
           active: channelBody.channel.active,
         });
-        formRef.current.resetDirty();
+        formRef.current.markSaved();
       })
       .catch((error: unknown) => {
         if (!cancelled) {
@@ -287,8 +317,9 @@ function ChannelExisting({
 
   useEffect(() => {
     if (mode !== "edit" || canWrite?.can !== false) return;
-    router.replace(`/console/channels/${channelId}`);
-  }, [canWrite?.can, channelId, mode, router]);
+    suppressLeaveGuard();
+    replace(`/console/channels/${channelId}`);
+  }, [canWrite?.can, channelId, mode, replace]);
 
   const writable = mode === "edit" && Boolean(canWrite?.can);
   const runActive = sessionRun != null && !isTerminalRun(sessionRun.run.status);
@@ -296,21 +327,17 @@ function ChannelExisting({
   const draftEditable = draftAccess === "edit";
   const canStop = Boolean(canWrite?.can || canJobs?.can);
   const runJobId = sessionRun?.run.job_id ?? null;
-  const runStatus = sessionRun?.run.status ?? null;
-  useEffect(() => {
-    if (!runJobId || runStatus == null || isTerminalRun(runStatus)) return;
-    const timer = window.setInterval(() => {
-      void getRun(channelId, runJobId)
-        .then(setSessionRun)
-        .catch(() => undefined);
-    }, 2000);
-    return () => window.clearInterval(timer);
-  }, [channelId, runJobId, runStatus]);
-  const graphDirty = graph != null && JSON.stringify(graph) !== baseline;
-  const leaveGuard = useLeaveGuard({
-    enabled: writable && (form.isDirty() || graphDirty),
-    message: t("common.leaveUnsaved"),
+  const runLive = useLiveStatus({
+    enabled: Boolean(runJobId),
+    key: runJobId,
+    fetch: (signal) => getRun(channelId, runJobId ?? "", { signal }),
+    isTerminal: (detail) => isTerminalRun(detail.run.status),
   });
+  useEffect(() => {
+    if (runLive.data) setSessionRun(runLive.data);
+  }, [runLive.data]);
+  const graphDirty = graph != null && JSON.stringify(graph) !== baseline;
+  useLeaveGuardRegistration(writable && (form.isDirty() || graphDirty));
 
   const notifyError = (error: unknown) => {
     open?.({
@@ -404,17 +431,25 @@ function ChannelExisting({
     notifyError(error);
   };
 
-  if (loading) return <PageBodySkeleton />;
+  if (loading) {
+    return <PageChrome title={t("channels.title")} status="loading" />;
+  }
   if (loadError || !channel || !graph) {
     return (
-      <PageError
-        message={problemMessage(t, loadError, t("channels.load.failed"))}
+      <PageChrome
+        title={t("channels.title")}
+        status={loadError ? "error" : "notFound"}
+        errorMessage={
+          loadError ? problemMessage(t, loadError, t("channels.load.failed")) : undefined
+        }
         requestId={loadError?.requestId}
-        onRetry={() => setReloadToken((value) => value + 1)}
+        onRetry={loadError ? () => setReloadToken((value) => value + 1) : undefined}
       />
     );
   }
-  if (mode === "edit" && canWrite?.can === false) return <PageBodySkeleton />;
+  if (mode === "edit" && canWrite?.can === false) {
+    return <PageChrome title={t("channels.title")} status="loading" />;
+  }
 
   const persist = async (draftGraph?: Graph): Promise<{ revision: number; graph: Graph }> => {
     let nextRevision = revision;
@@ -454,7 +489,7 @@ function ChannelExisting({
         saved = updated.channel;
         setChannel(saved);
       }
-      form.resetDirty(values);
+      form.markSaved();
     }
     if (JSON.stringify(nextGraph) !== baseline) {
       const saved = await saveDraft(channelId, {
@@ -522,14 +557,27 @@ function ChannelExisting({
   };
 
   const stopRun = () => {
-    if (!sessionRun) return;
+    if (!sessionRun || !channel) return;
     const jobId = sessionRun.run.job_id;
-    setBusy(true);
-    void cancelJob(jobId)
-      .then(() => getRun(channelId, jobId))
-      .then(setSessionRun)
-      .catch(catchFailure)
-      .finally(() => setBusy(false));
+    const recordName = form.values.name || channel.name;
+    stopRunAction.run({
+      safety: "confirm",
+      recordName,
+      title: t("channels.run.stop.confirmTitle", { name: recordName }),
+      consequence: t("channels.run.stop.consequence"),
+      confirmLabel: t("channels.run.stop"),
+      confirmColor: "red",
+      outcome: t("channels.run.stop.outcome"),
+      execute: async () => {
+        setBusy(true);
+        try {
+          await cancelJob(jobId);
+          setSessionRun(await getRun(channelId, jobId));
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
   };
 
   const runStopAt = runRequest?.stopAt ?? null;
@@ -538,6 +586,26 @@ function ChannelExisting({
 
   const showEdit = mode === "show" && Boolean(canWrite?.can);
   const showLifecycle = Boolean(canWrite?.can);
+  const startPublish = () => {
+    setBusy(true);
+    void persist()
+      .then(async ({ revision: nextRevision, graph: savedGraph }) => {
+        const result = await validateDraft(channelId, savedGraph);
+        if (!result.valid) {
+          reportBlockedGraph(result, savedGraph);
+          return;
+        }
+        if (!validationResultApplies(savedGraph, graphRef.current)) return;
+        validateSeq.current += 1;
+        setProblems(result.problems);
+        setPorts(result.ports);
+        setExpressionContext(result.context);
+        setPublishRevision(nextRevision);
+        setPreview(await previewPublish(channelId));
+      })
+      .catch(notifyError)
+      .finally(() => setBusy(false));
+  };
 
   const descriptionText = form.values.description.trim();
   const versionLabel = channel.latest_version
@@ -547,19 +615,26 @@ function ChannelExisting({
     setPanel((current) => (current === next ? null : next));
   };
   const openDescription = () => {
-    setDescriptionDraft(form.values.description);
-    setTimeoutDraft(graph.settings.run_timeout_sec ?? "");
+    detailsForm.setValues({
+      description: form.values.description,
+      timeout: graph.settings.run_timeout_sec ?? "",
+    });
+    detailsForm.markSaved();
     setDescriptionOpen(true);
   };
-  const closeDescription = () => setDescriptionOpen(false);
-  const applyDescription = () => {
-    form.setFieldValue("description", descriptionDraft.trim());
-    const next = runTimeoutSec(timeoutDraft);
+  const closeDescription = () => {
+    detailsForm.reset();
+    setDescriptionOpen(false);
+  };
+  const applyDescription = (values: { description: string; timeout: number | string }) => {
+    form.setFieldValue("description", values.description.trim().slice(0, DESCRIPTION_MAX));
+    const next = runTimeoutSec(values.timeout);
     setGraph((current) =>
       current
         ? { ...current, settings: { ...current.settings, run_timeout_sec: next } }
         : current,
     );
+    detailsForm.markSaved();
     setDescriptionOpen(false);
   };
 
@@ -579,7 +654,12 @@ function ChannelExisting({
     >
     <PageChrome
       fill
-      title={form.values.name || channel.name}
+      title={t("channels.title")}
+      recordTitle={form.values.name || channel.name}
+      recent={{
+        moduleId: "channels",
+        title: form.values.name || channel.name,
+      }}
       titleSlot={
         <ChannelNameHeading
           ref={nameEditorRef}
@@ -604,7 +684,7 @@ function ChannelExisting({
               disabled={busy}
               aria-expanded={panel === "versions"}
               aria-label={t("channels.versions.open", { version: versionLabel })}
-              leftSection={<StackedPagesIcon />}
+              leftSection={<VersionsIcon size={14} />}
               onClick={() => togglePanel("versions")}
             >
               {versionLabel}
@@ -615,7 +695,7 @@ function ChannelExisting({
               color="gray"
               disabled={busy}
               aria-expanded={panel === "runs"}
-              leftSection={<ListIcon />}
+              leftSection={<ListIcon size={14} />}
               onClick={() => togglePanel("runs")}
             >
               {t("channels.tabs.runs")}
@@ -625,7 +705,7 @@ function ChannelExisting({
               size="compact-sm"
               color="gray"
               disabled={busy}
-              leftSection={<SlidersIcon />}
+              leftSection={<AdjustmentsIcon size={14} />}
               onClick={openDescription}
             >
               {t("channels.details.title")}
@@ -634,136 +714,186 @@ function ChannelExisting({
         </>
       }
       actions={
-        <Group gap="xs" wrap="wrap" align="center">
-          <Group gap="xs" wrap="nowrap" aria-label={t("channels.actions.navigation")}>
+        <HeaderActions
+          navigation={
             <Button
-              component={Link}
+              component={ConsoleLink}
               href="/console/channels"
-              variant="subtle"
+              variant="default"
               size="sm"
-              data-leave-guard={LEAVE_GUARD_ALLOW}
             >
               {t("channels.actions.back")}
             </Button>
-            {writable ? (
-              <Button
-                size="sm"
-                variant="filled"
-                loading={busy}
-                disabled={!draftEditable}
-                onClick={() => openRun(null)}
-              >
-                {t("channels.run.open")}
-              </Button>
-            ) : null}
-            {runActive && canStop ? (
-              <Button size="sm" color="red" variant="light" loading={busy} onClick={stopRun}>
-                {t("channels.run.stop")}
-              </Button>
-            ) : null}
-          </Group>
-          {showLifecycle ? (
-            <>
-              <Divider orientation="vertical" h={28} />
-              <Group gap="xs" wrap="nowrap" aria-label={t("channels.actions.lifecycle")}>
-                <Button
-                  size="sm"
-                  variant={mode === "show" ? "filled" : "light"}
-                  loading={busy}
-                  disabled={draftAccess === "locked"}
-                  onClick={() => {
-                    setBusy(true);
-                    void persist()
-                      .then(async ({ revision: nextRevision, graph: savedGraph }) => {
-                        const result = await validateDraft(channelId, savedGraph);
-                        if (!result.valid) {
-                          reportBlockedGraph(result, savedGraph);
-                          return;
-                        }
-                        if (!validationResultApplies(savedGraph, graphRef.current)) return;
-                        validateSeq.current += 1;
-                        setProblems(result.problems);
-                        setPorts(result.ports);
-                        setExpressionContext(result.context);
-                        setPublishRevision(nextRevision);
-                        setPreview(await previewPublish(channelId));
-                      })
-                      .catch(notifyError)
-                      .finally(() => setBusy(false));
-                  }}
-                >
-                  {t("channels.actions.publish")}
-                </Button>
-              </Group>
-            </>
-          ) : null}
-          {showEdit || canWrite?.can || writable ? (
-            <>
-          <Divider orientation="vertical" h={28} />
-          <Group gap="xs" wrap="nowrap" aria-label={t("channels.actions.standard")}>
-            {showEdit ? (
-              <Button
-                component={Link}
-                href={`/console/channels/${channelId}/edit`}
-                size="sm"
-                variant="light"
-              >
-                {t("actions.edit")}
-              </Button>
-            ) : null}
-            {canWrite?.can ? (
-              <Button
-                size="sm"
-                color="red"
-                variant="light"
-                onClick={() => setConfirmDelete(true)}
-              >
-                {t("actions.delete")}
-              </Button>
-            ) : null}
-            {writable ? (
-              <Button
-                component={Link}
-                href={`/console/channels/${channelId}`}
-                variant="default"
-                size="sm"
-                data-leave-guard={LEAVE_GUARD_ALLOW}
-              >
-                {t("common.cancel")}
-              </Button>
-            ) : null}
-            {writable ? (
-              <Button
-                type="submit"
-                form={FORM_ID}
-                size="sm"
-                loading={busy}
-                disabled={!draftEditable}
-              >
-                {t("channels.edit.submit")}
-              </Button>
-            ) : null}
-          </Group>
-            </>
-          ) : null}
-        </Group>
+          }
+          lifecycle={
+            writable || (runActive && canStop) || showLifecycle ? (
+              <>
+                {writable ? (
+                  <Button
+                    size="sm"
+                    variant="light"
+                    loading={busy}
+                    disabled={!draftEditable}
+                    onClick={() => openRun(null)}
+                  >
+                    {t("channels.run.open")}
+                  </Button>
+                ) : null}
+                {runActive && canStop ? (
+                  <Button
+                    size="sm"
+                    color="red"
+                    variant="light"
+                    loading={busy || stopRunAction.submitting}
+                    onClick={stopRun}
+                  >
+                    {t("channels.run.stop")}
+                  </Button>
+                ) : null}
+                {showLifecycle ? (
+                  mode === "show" ? (
+                    <HeaderAction primary>
+                      <Button
+                        size="sm"
+                        loading={busy}
+                        disabled={draftAccess === "locked"}
+                        onClick={startPublish}
+                      >
+                        {t("channels.actions.publish")}
+                      </Button>
+                    </HeaderAction>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="light"
+                      loading={busy}
+                      disabled={draftAccess === "locked"}
+                      onClick={startPublish}
+                    >
+                      {t("channels.actions.publish")}
+                    </Button>
+                  )
+                ) : null}
+              </>
+            ) : null
+          }
+          standard={
+            showEdit || canWrite?.can || writable ? (
+              <>
+                {showEdit ? (
+                  <Button
+                    component={ConsoleLink}
+                    href={`/console/channels/${channelId}/edit`}
+                    size="sm"
+                    variant="light"
+                  >
+                    {t("actions.edit")}
+                  </Button>
+                ) : null}
+                {canWrite?.can ? (
+                  <Button
+                    size="sm"
+                    color="red"
+                    variant="light"
+                    loading={deleteAction.isSubmitting("delete")}
+                    onClick={() => {
+                      deleteAction.run({
+                        safety: "confirm",
+                        key: "delete",
+                        recordName: channel?.name || channelId,
+                        title: t("channels.delete.title"),
+                        consequence: t("channels.delete.consequence"),
+                        confirmLabel: t("actions.delete"),
+                        confirmColor: "red",
+                        outcome: t("channels.delete.outcome"),
+                        execute: async () => {
+                          await deleteChannel(channelId);
+                          suppressLeaveGuard();
+                          window.location.replace("/console/channels");
+                        },
+                      });
+                    }}
+                  >
+                    {t("actions.delete")}
+                  </Button>
+                ) : null}
+                {writable ? (
+                  <Button
+                    component={ConsoleLink}
+                    href={`/console/channels/${channelId}`}
+                    variant="default"
+                    size="sm"
+                  >
+                    {t("common.cancel")}
+                  </Button>
+                ) : null}
+                {writable ? (
+                  <HeaderAction primary>
+                    <Button
+                      type="submit"
+                      form={FORM_ID}
+                      size="sm"
+                      loading={form.submitting}
+                      disabled={!draftEditable}
+                    >
+                      {t("channels.edit.submit")}
+                    </Button>
+                  </HeaderAction>
+                ) : null}
+              </>
+            ) : null
+          }
+        />
       }
     >
       <form
         id={FORM_ID}
         hidden
-        onSubmit={(event) => {
-          event.preventDefault();
-          setBusy(true);
-          void persist()
-            .then(() => {
+        onSubmit={form.onSubmit(
+          async () => {
+            setBusy(true);
+            try {
+              await persist();
+              form.markSaved();
+              setSaveFailure(null);
               open?.({ type: "success", message: t("channels.edit.success") });
-            })
-            .catch(notifyError)
-            .finally(() => setBusy(false));
-        }}
+            } catch (error) {
+              if (error instanceof RecordInvalid) throw error;
+              setSaveFailure(
+                saveFailureFrom(
+                  t,
+                  error,
+                  form.applyApiError(error),
+                  t("channels.save.failed"),
+                ),
+              );
+            } finally {
+              setBusy(false);
+            }
+          },
+          (errors) => {
+            const nameError = errors.name;
+            if (typeof nameError === "string") {
+              nameEditorRef.current?.showError(nameError);
+            }
+          },
+        )}
       />
       <FillColumn>
+        <FormErrorSummary failure={saveFailure} />
+        <LiveStatusAnnouncer
+          text={
+            runLive.data
+              ? t(presentJobStatus(runLive.data.run.status).labelKey)
+              : ""
+          }
+        />
+        {runLive.stale ? (
+          <StaleNotice
+            hasData={sessionRun != null || runLive.data != null}
+            onRetry={() => void runLive.refresh()}
+          />
+        ) : null}
         <ChannelCanvas
           key={draftEpoch}
           channelId={channelId}
@@ -805,12 +935,16 @@ function ChannelExisting({
           </Group>
         </Stack>
       </Modal>
-      <Modal
-        opened={descriptionOpen}
-        onClose={closeDescription}
-        title={t("channels.details.title")}
-      >
-        {draftEditable ? (
+      {draftEditable ? (
+        <FormDialog
+          opened={descriptionOpen}
+          onClose={closeDescription}
+          title={t("channels.details.title")}
+          dirty={detailsForm.dirty}
+          submitting={detailsForm.submitting}
+          submitLabel={t("channels.description.apply")}
+          onSubmit={() => void detailsForm.submit(applyDescription)}
+        >
           <Stack gap="sm">
             <Text size="sm" c="dimmed">
               {t("channels.description.hint")}
@@ -818,12 +952,15 @@ function ChannelExisting({
             <Textarea
               label={t("channels.fields.description")}
               placeholder={t("channels.description.optional")}
-              value={descriptionDraft}
               autosize
               minRows={3}
               maxRows={12}
+              {...detailsForm.fieldProps("description")}
               onChange={(event) =>
-                setDescriptionDraft(event.currentTarget.value.slice(0, DESCRIPTION_MAX))
+                detailsForm.setFieldValue(
+                  "description",
+                  event.currentTarget.value.slice(0, DESCRIPTION_MAX),
+                )
               }
             />
             <NumberField
@@ -832,17 +969,16 @@ function ChannelExisting({
               description={t("channels.settings.runTimeoutHint")}
               min={1}
               w={280}
-              value={timeoutDraft}
-              onChange={setTimeoutDraft}
+              {...detailsForm.fieldProps("timeout")}
             />
-            <Group justify="flex-end">
-              <Button variant="default" onClick={closeDescription}>
-                {t("common.cancel")}
-              </Button>
-              <Button onClick={applyDescription}>{t("channels.description.apply")}</Button>
-            </Group>
           </Stack>
-        ) : (
+        </FormDialog>
+      ) : (
+        <Modal
+          opened={descriptionOpen}
+          onClose={closeDescription}
+          title={t("channels.details.title")}
+        >
           <Stack gap="sm">
             <Stack gap={4}>
               <Text size="sm" fw={500}>
@@ -865,8 +1001,9 @@ function ChannelExisting({
               </Button>
             </Group>
           </Stack>
-        )}
-      </Modal>
+        </Modal>
+      )}
+      {stopRunAction.dialog}
       <ConfirmActionModal
         opened={preview != null}
         onClose={() => setPreview(null)}
@@ -881,7 +1018,6 @@ function ChannelExisting({
               setProblems([]);
               setPorts([]);
               setExpressionContext(null);
-              leaveGuard.bypass();
               open?.({ type: "success", message: t("channels.publish.done") });
               setReloadToken((value) => value + 1);
             })
@@ -897,11 +1033,22 @@ function ChannelExisting({
               : t("channels.publish.mirrorsEmpty")}
           </Text>
           <Text size="sm">{t("channels.publish.runs")}</Text>
-          <Text size="sm" c="dimmed">
-            {preview && preview.runs_to_cancel.length > 0
-              ? preview.runs_to_cancel.map((item) => item.job_id).join(", ")
-              : t("channels.publish.runsEmpty")}
-          </Text>
+          {preview && preview.runs_to_cancel.length > 0 ? (
+            <Stack gap={4}>
+              {preview.runs_to_cancel.map((item) => (
+                <JobReference
+                  key={item.job_id}
+                  jobId={item.job_id}
+                  kind="channel_run"
+                  onOpen={setPublishJobId}
+                />
+              ))}
+            </Stack>
+          ) : (
+            <Text size="sm" c="dimmed">
+              {t("channels.publish.runsEmpty")}
+            </Text>
+          )}
           {preview?.missing_run_timeout ? (
             <Text size="sm" c="orange">
               {t("channels.publish.missingTimeout")}
@@ -909,26 +1056,14 @@ function ChannelExisting({
           ) : null}
         </Stack>
       </ConfirmActionModal>
-      <ConfirmActionModal
-        opened={confirmDelete}
-        onClose={() => setConfirmDelete(false)}
-        title={t("channels.delete.title")}
-        confirmLabel={t("actions.delete")}
-        confirmColor="red"
-        loading={busy}
-        onConfirm={() => {
-          setBusy(true);
-          void deleteChannel(channelId)
-            .then(() => {
-              leaveGuard.bypass();
-              window.location.replace("/console/channels");
-            })
-            .catch((error) => {
-              notifyError(error);
-              setBusy(false);
-            });
-        }}
-      />
+      {publishJobId ? (
+        <JobDetailModal
+          jobId={publishJobId}
+          opened
+          onClose={() => setPublishJobId(null)}
+        />
+      ) : null}
+      {deleteAction.dialog}
     </PageChrome>
     <Box
       className="channel-record-overlays"
@@ -1120,11 +1255,13 @@ function ChannelActiveStatus({
 }) {
   const t = useTranslate();
   if (!editable) {
-    const label = active ? t("channels.status.active") : t("channels.status.inactive");
+    const presentation = presentChannelActive(active);
     return (
-      <Badge variant="light" color={active ? "green" : "gray"} size="sm" tt="none">
-        {label}
-      </Badge>
+      <StatusBadge
+        size="sm"
+        tone={presentation.tone}
+        labelKey={presentation.labelKey}
+      />
     );
   }
   return (
@@ -1139,38 +1276,13 @@ function ChannelActiveStatus({
   );
 }
 
-function StackedPagesIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-      <rect x="3" y="4.5" width="8" height="8.5" rx="1" fill="none" stroke="currentColor" strokeWidth="1.5" />
-      <path d="M5 3.25h8.25A.75.75 0 0 1 14 4v8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function ListIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-      <path d="M3 4.5h10M3 8h10M3 11.5h10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function SlidersIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-      <path d="M2.5 4.5h11M2.5 11.5h11" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-      <circle cx="6" cy="4.5" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.5" />
-      <circle cx="10" cy="11.5" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.5" />
-    </svg>
-  );
-}
-
 function IdentityFields({
   form,
   editable,
 }: {
-  form: ReturnType<typeof useForm<{ name: string; description: string }>>;
+  form: {
+    fieldProps: (path: "name" | "description") => object;
+  };
   editable: boolean;
 }) {
   const t = useTranslate();
@@ -1180,12 +1292,12 @@ function IdentityFields({
         editable={editable}
         label={t("channels.fields.name")}
         required={editable}
-        {...form.getInputProps("name")}
+        {...form.fieldProps("name")}
       />
       <TextareaField
         editable={editable}
         label={t("channels.fields.description")}
-        {...form.getInputProps("description")}
+        {...form.fieldProps("description")}
       />
     </Stack>
   );

@@ -238,10 +238,12 @@ describe("AttributeEditor", () => {
 
     expect(screen.getByText("Supplier（supplier）")).toBeTruthy();
     fireEvent.click(screen.getByText("supplier_id"));
-    const target = screen.getByRole("combobox", {
-      name: "entities.fields.targetTableName",
+    fireEvent.click(
+      screen.getByRole("button", { name: "entities.fields.targetTableName" }),
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "recordPicker.placeholder" }), {
+      target: { value: "not-an-entity" },
     });
-    fireEvent.change(target, { target: { value: "not-an-entity" } });
     fireEvent.click(
       screen.getByRole("button", {
         name: "entities.attributes.drawer.confirm",
@@ -264,13 +266,12 @@ describe("AttributeEditor", () => {
     ]);
 
     fireEvent.click(screen.getByText("supplier_id"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "entities.fields.targetTableName" }),
+    );
 
-    expect(
-      await screen.findByText("entities.attributes.targetLoadFailed"),
-    ).toBeTruthy();
-    expect(
-      screen.queryByText("entities.attributes.targetNothingFound"),
-    ).toBeNull();
+    expect(await screen.findByText("common.error.loadFailed")).toBeTruthy();
+    expect(screen.queryByText("recordPicker.empty")).toBeNull();
   });
 
   it("does not open the drawer in display mode", () => {

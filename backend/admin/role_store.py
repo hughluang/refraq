@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Protocol
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from backend.admin.errors import RoleKeyDuplicate
@@ -33,13 +33,34 @@ class RoleStore(Protocol):
 
     def get_by_key(self, key: str) -> RoleRecord | None: ...
     def list_roles(
-        self, *, limit: int | None = None, offset: int = 0
+        self, *, q: str | None = None, limit: int | None = None, offset: int = 0
     ) -> tuple[list[RoleRecord], int]: ...
 
     def insert(self, record: RoleRecord) -> None: ...
     def save(self, record: RoleRecord) -> None: ...
 
     def delete(self, role_id: str) -> RoleRecord | None: ...
+
+
+def _query_needle(q: str | None) -> str:
+    return (q or "").strip()
+
+
+def _role_matches_query(record: RoleRecord, needle: str) -> bool:
+    if not needle:
+        return True
+    return needle in record.key.lower() or needle in record.name.lower()
+
+
+def _role_query_sql(q: str | None):
+    needle = _query_needle(q)
+    if not needle:
+        return None
+    return or_(
+        RoleRow.key.icontains(needle, autoescape=True),
+        RoleRow.name.icontains(needle, autoescape=True),
+    )
+
 
 class MemoryRoleStore:
     def __init__(self) -> None:
@@ -63,11 +84,16 @@ class MemoryRoleStore:
             return self._by_id.get(role_id)
 
     def list_roles(
-        self, *, limit: int | None = None, offset: int = 0
+        self, *, q: str | None = None, limit: int | None = None, offset: int = 0
     ) -> tuple[list[RoleRecord], int]:
+        needle = _query_needle(q).lower()
         with self._lock:
             items = sorted(
-                self._by_id.values(),
+                (
+                    record
+                    for record in self._by_id.values()
+                    if _role_matches_query(record, needle)
+                ),
                 key=lambda record: (0 if record.locked else 1, record.key, record.id),
             )
             return apply_offset_page(items, limit=limit, offset=offset)
@@ -112,12 +138,18 @@ class SqlRoleStore:
             return _row_to_role(row) if row else None
 
     def list_roles(
-        self, *, limit: int | None = None, offset: int = 0
+        self, *, q: str | None = None, limit: int | None = None, offset: int = 0
     ) -> tuple[list[RoleRecord], int]:
         with session_scope() as session:
-            total = int(session.scalar(select(func.count()).select_from(RoleRow)) or 0)
+            count_stmt = select(func.count()).select_from(RoleRow)
+            stmt = select(RoleRow)
+            match = _role_query_sql(q)
+            if match is not None:
+                count_stmt = count_stmt.where(match)
+                stmt = stmt.where(match)
+            total = int(session.scalar(count_stmt) or 0)
             stmt = apply_sql_page(
-                select(RoleRow).order_by(
+                stmt.order_by(
                     case((RoleRow.locked.is_(True), 0), else_=1),
                     RoleRow.key,
                     RoleRow.id,

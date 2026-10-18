@@ -61,7 +61,9 @@ Purpose: list User records.
 
 - Permission: `users:read`
 
-**Offset Page** (oldest first: `created_at ASC`, `id ASC`). Query params: `limit` (default **50**, max **200**), `offset` (default **0**).
+**Offset Page** (oldest first: `created_at ASC`, `id ASC`). Query params: `limit` (default **50**, max **200**), `offset` (default **0**), optional `q`, optional `identity_source`.
+
+`q` is a case-insensitive substring of `account`, `display_name`, or `email`. A blank or whitespace-only `q` is the same as omitting it. `%` and `_` match themselves. `identity_source`, when present, is an exact match of `local`, `oidc`, or `system`. Any other value is `422 REQUEST_INVALID`. It combines with `q`. `total` counts the filtered set. Ordering and the envelope are unchanged. Users with `identity_source=system` stay omitted unless `include_system=true`.
 
 ### Response: `200`
 

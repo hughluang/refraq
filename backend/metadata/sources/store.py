@@ -59,6 +59,7 @@ class SourceStore(Protocol):
         self,
         *,
         query_text: str | None = None,
+        engine: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> tuple[list[SourceRecord], int]: ...
@@ -74,6 +75,18 @@ class SourceStore(Protocol):
 
 def _escape_like_literal(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _engine_code(engine: str | None) -> str | None:
+    code = (engine or "").strip()
+    return code or None
+
+
+def _source_matches_engine(record: SourceRecord, engine: str | None) -> bool:
+    code = _engine_code(engine)
+    if code is None:
+        return True
+    return record.engine == code
 
 
 def source_matches_query(record: SourceRecord, query_text: str | None) -> bool:
@@ -109,12 +122,18 @@ class MemorySourceStore:
         self,
         *,
         query_text: str | None = None,
+        engine: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> tuple[list[SourceRecord], int]:
         with self._lock:
             items = sorted(
-                (r for r in self._sources.values() if source_matches_query(r, query_text)),
+                (
+                    r
+                    for r in self._sources.values()
+                    if source_matches_query(r, query_text)
+                    and _source_matches_engine(r, engine)
+                ),
                 key=lambda r: (r.key, r.id),
             )
             return apply_offset_page(items, limit=limit, offset=offset)
@@ -183,11 +202,15 @@ class SqlSourceStore:
         self,
         *,
         query_text: str | None = None,
+        engine: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> tuple[list[SourceRecord], int]:
         with session_scope() as session:
             filters = _source_query_sql_filters(query_text)
+            code = _engine_code(engine)
+            if code is not None:
+                filters.append(SourceRow.engine == code)
             count_stmt = select(func.count()).select_from(SourceRow)
             if filters:
                 count_stmt = count_stmt.where(*filters)

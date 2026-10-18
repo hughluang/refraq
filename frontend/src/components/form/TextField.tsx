@@ -4,7 +4,7 @@ import { TextInput, type TextInputProps } from "@mantine/core";
 
 import { FieldChrome } from "@/components/form/FieldChrome";
 import { FieldMode } from "@/components/form/FieldMode";
-import { collectNotes, type FieldChromeProps } from "@/components/form/fieldNotes";
+import { collectNotes, joinDescribedBy, type FieldChromeProps } from "@/components/form/fieldNotes";
 
 export type TextFieldProps = Omit<TextInputProps, "disabled" | "readOnly"> &
   FieldChromeProps & {
@@ -16,6 +16,7 @@ export function TextField({
   notes,
   openSignal,
   bare = false,
+  helper,
   ...props
 }: TextFieldProps) {
   const value = props.value;
@@ -38,11 +39,12 @@ export function TextField({
         notes={merged}
         required={props.required}
         id={props.id}
+        helper={helper}
         openSignal={openSignal}
         editSignal={props.value}
         bare={bare}
       >
-        {({ id, invalid }) => (
+        {({ id, invalid, describedBy }) => (
           <TextInput
             {...props}
             id={id}
@@ -50,6 +52,7 @@ export function TextField({
             description={undefined}
             error={invalid || undefined}
             withAsterisk={false}
+            aria-describedby={joinDescribedBy(props["aria-describedby"], describedBy)}
           />
         )}
       </FieldChrome>

@@ -5,12 +5,14 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useState,
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
 
+import { setBrandDocumentTitle } from "@/components/layout/documentTitle";
 import {
   browserAssetUrl,
   resolveBranding,
@@ -72,8 +74,8 @@ export function BrandingProvider({
     };
   }, [current, locale, replaceBranding, t]);
 
-  useEffect(() => {
-    document.title = value.brandName;
+  useLayoutEffect(() => {
+    setBrandDocumentTitle(value.brandName);
   }, [value.brandName]);
 
   return (

@@ -1,11 +1,11 @@
 "use client";
 
-import { useCan } from "@refinedev/core";
+import { useCan, useTranslate } from "@refinedev/core";
 import type { ReactNode } from "react";
 import { usePathname } from "next/navigation";
 
-import { ForbiddenState } from "@/components/feedback/ForbiddenState";
-import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
+import { PageChrome } from "@/components/layout/PageChrome";
+import { useBranding } from "@/features/branding/BrandingProvider";
 import {
   matchPath,
   useModuleIdentityStore,
@@ -17,12 +17,18 @@ type PageCanAccessProps = {
 };
 
 export function PageCanAccess({ children }: PageCanAccessProps) {
+  const t = useTranslate();
+  const brandName = useBranding().brandName;
   const pathname = usePathname();
   const modules = useModuleIdentityStore((state) => state.modules);
   const status = useModuleIdentityStore((state) => state.status);
   const permissionsReady = useSessionStore((state) => state.permissionsReady);
   const ready = permissionsReady && status === "ready";
-  const matched = ready ? matchPath(pathname, modules) : null;
+  const matched = matchPath(pathname, modules);
+  const labelKey = matched
+    ? modules.find((module) => module.id === matched.resource)?.label_key
+    : undefined;
+  const moduleTitle = labelKey ? t(labelKey) : brandName || t("layout.nav.home");
 
   const { data, isLoading } = useCan({
     resource: matched?.resource ?? "",
@@ -31,19 +37,25 @@ export function PageCanAccess({ children }: PageCanAccessProps) {
   });
 
   if (!ready) {
-    return <PageBodySkeleton />;
+    return <PageChrome title={moduleTitle} status="loading" />;
   }
 
   if (!matched) {
-    return <ForbiddenState reason="unregistered_route" />;
+    return <PageChrome title={moduleTitle} status="notFound" />;
   }
 
   if (isLoading || data === undefined) {
-    return <PageBodySkeleton />;
+    return <PageChrome title={moduleTitle} status="loading" />;
   }
 
   if (!data.can) {
-    return <ForbiddenState reason={data.reason} />;
+    return (
+      <PageChrome
+        title={moduleTitle}
+        status="forbidden"
+        forbiddenReason={data.reason}
+      />
+    );
   }
 
   return children;

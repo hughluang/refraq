@@ -1,18 +1,11 @@
 "use client";
 
-import { Button, Group } from "@mantine/core";
-import { useNotification, useTranslate } from "@refinedev/core";
-import { useState } from "react";
+import { useTranslate } from "@refinedev/core";
 
-import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
-import {
-  deleteSchedule,
-  runSchedule,
-} from "@/features/schedules/api";
+import { RowActions } from "@/components/display/RowActions";
+import { deleteSchedule, runSchedule } from "@/features/schedules/api";
 import { isChannelRunSchedule } from "@/features/schedules/scheduleIdentity";
 import type { ScheduledTask } from "@/features/schedules/types";
-import { useConfirmAction } from "@/hooks/useConfirmAction";
-import { problemMessage } from "@/lib/problem";
 
 type Props = {
   task: ScheduledTask;
@@ -21,96 +14,59 @@ type Props = {
   onChanged: () => void;
 };
 
-export function ScheduleRowActions({
-  task,
-  onEdit,
-  onJobs,
-  onChanged,
-}: Props) {
+export function ScheduleRowActions({ task, onEdit, onJobs, onChanged }: Props) {
   const t = useTranslate();
-  const { open } = useNotification();
-  const [running, setRunning] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const deleteConfirm = useConfirmAction<ScheduledTask>();
-
-  async function confirmDelete() {
-    setDeleting(true);
-    try {
-      await deleteSchedule(task.id);
-      open?.({
-        type: "success",
-        message: t("schedules.delete.success"),
-      });
-      deleteConfirm.close();
-      onChanged();
-    } catch (err) {
-      open?.({
-        type: "error",
-        message: problemMessage(t, err, String(err)),
-      });
-    } finally {
-      setDeleting(false);
-    }
-  }
+  const recordName = task.name || task.key;
+  const channelRun = isChannelRunSchedule(task);
 
   return (
-    <>
-      <Group gap="xs" wrap="nowrap">
-        {isChannelRunSchedule(task) ? null : (
-        <Button
-          size="xs"
-          variant="light"
-          loading={running}
-          onClick={async () => {
-            setRunning(true);
-            try {
-              await runSchedule(task.id);
-              open?.({
-                type: "success",
-                message: t("schedules.run.success"),
-              });
-              onChanged();
-            } catch (err) {
-              open?.({
-                type: "error",
-                message: problemMessage(t, err, String(err)),
-              });
-            } finally {
-              setRunning(false);
-            }
-          }}
-        >
-          {t("schedules.run")}
-        </Button>
-        )}
-        <Button size="xs" variant="default" onClick={onJobs}>
-          {t("jobs.scheduleJobs.open")}
-        </Button>
-        {isChannelRunSchedule(task) ? null : (
-        <Button size="xs" variant="light" onClick={onEdit}>
-          {t("schedules.edit")}
-        </Button>
-        )}
-        {task.deletable !== false ? (
-          <Button
-            size="xs"
-            variant="light"
-            color="red"
-            onClick={() => deleteConfirm.open(task)}
-          >
-            {t("schedules.delete")}
-          </Button>
-        ) : null}
-      </Group>
-      <ConfirmActionModal
-        opened={deleteConfirm.opened}
-        onClose={deleteConfirm.close}
-        title={t("schedules.delete.confirmTitle")}
-        body={t("schedules.delete.confirmBody", { name: task.name })}
-        confirmColor="red"
-        loading={deleting}
-        onConfirm={() => void confirmDelete()}
-      />
-    </>
+    <RowActions
+      recordName={recordName}
+      verbs={[
+        {
+          key: "run",
+          label: t("schedules.run"),
+          disabledReason: channelRun ? t("schedules.run.unavailable") : undefined,
+          action: {
+            safety: "immediate",
+            recordName,
+            outcome: t("schedules.run.outcome"),
+            execute: () => runSchedule(task.id),
+            onSuccess: () => onChanged(),
+          },
+        },
+        {
+          key: "jobs",
+          label: t("jobs.scheduleJobs.open"),
+          safety: "immediate",
+          onClick: onJobs,
+        },
+        {
+          key: "edit",
+          label: t("schedules.edit"),
+          disabledReason: channelRun ? t("schedules.edit.unavailable") : undefined,
+          safety: "immediate",
+          onClick: onEdit,
+        },
+        {
+          key: "delete",
+          label: t("schedules.delete"),
+          color: "red",
+          disabledReason:
+            task.deletable === false ? t("schedules.delete.unavailable") : undefined,
+          action: {
+            safety: "confirm",
+            recordName,
+            title: t("schedules.delete.confirmTitle"),
+            consequence: t("schedules.delete.consequence"),
+            confirmLabel: t("schedules.delete"),
+            confirmColor: "red",
+            outcome: t("schedules.delete.success"),
+            execute: () => deleteSchedule(task.id),
+            onSuccess: () => onChanged(),
+          },
+        },
+      ]}
+    />
   );
 }

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from typing import Literal
+
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from backend.core.pagination import SOURCE_LIST, PageParams, page_params
 
@@ -47,8 +49,15 @@ def _source_out(record: SourceRecord) -> SourceOut:
 def list_sources(
     _: UserRecord = Depends(require_permission("sources:read")),
     page: PageParams = Depends(page_params(SOURCE_LIST)),
+    q: str | None = Query(default=None),
+    engine: Literal["postgresql", "mssql", "oracle"] | None = Query(default=None),
 ) -> SourceListResponse:
-    records, total = get_source_store().list_sources(limit=page.limit, offset=page.offset)
+    records, total = get_source_store().list_sources(
+        query_text=(q or "").strip() or None,
+        engine=engine,
+        limit=page.limit,
+        offset=page.offset,
+    )
     return SourceListResponse(
         items=[_source_out(r) for r in records],
         total=total,

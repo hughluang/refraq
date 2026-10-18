@@ -1,14 +1,19 @@
 "use client";
 
-import { Button, Group, Select, Stack, Table, Text, Title } from "@mantine/core";
+import { Button, Group, Stack, Table, Text, Title } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
-import Link from "next/link";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { useCallback, useEffect, useState } from "react";
 
 import { ListTable } from "@/components/display/ListTable";
+import { RecordReference } from "@/components/display/RecordReference";
+import { RowActions } from "@/components/display/RowActions";
 import { PageError } from "@/components/feedback/PageError";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
+import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
 import { TextField } from "@/components/form/TextField";
+import { RecordPicker } from "@/components/form/RecordPicker";
+import { userRecordAdapter, type RecordOption } from "@/components/form/recordPickerAdapters";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
@@ -27,7 +32,6 @@ import {
 } from "@/features/subjects/rules";
 import { SubjectValuesEditor } from "@/features/subjects/SubjectValuesEditor";
 import type { SubjectAttribute, UserGroup } from "@/features/subjects/types";
-import { listUsers } from "@/features/users/api";
 import type { UserRow } from "@/features/users/types";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { problemMessage } from "@/lib/problem";
@@ -40,6 +44,7 @@ type Props = { groupId: string };
 export function UserGroupShow({ groupId }: Props) {
   const t = useTranslate();
   const { open } = useNotification();
+  const membership = useConsoleMutation();
   const { data: canWrite } = useCan({
     resource: ModuleId.userGroups,
     action: ModuleAction.edit,
@@ -50,8 +55,7 @@ export function UserGroupShow({ groupId }: Props) {
   const [description, setDescription] = useState("");
   const [definitions, setDefinitions] = useState<SubjectAttribute[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string[]>>({});
-  const [users, setUsers] = useState<UserRow[]>([]);
-  const [memberId, setMemberId] = useState<string | null>(null);
+  const [member, setMember] = useState<RecordOption | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -80,18 +84,16 @@ export function UserGroupShow({ groupId }: Props) {
     void (async () => {
       setLoading(true);
       try {
-        const [loaded, values, defs, people] = await Promise.all([
+        const [loaded, values, defs] = await Promise.all([
           getUserGroup(groupId),
           getGroupSubjectValues(groupId),
           listAllSubjectAttributes(),
-          listUsers({ limit: 200, offset: 0 }).then((page) => page.items),
         ]);
         if (cancelled) return;
         setGroup(loaded.group);
         setName(loaded.group.name);
         setDescription(loaded.group.description ?? "");
         setDefinitions(defs);
-        setUsers(people);
         const next: Record<string, string[]> = {};
         for (const item of defs) {
           next[item.key] = (values.values[item.key] ?? []).map(String);
@@ -161,34 +163,36 @@ export function UserGroupShow({ groupId }: Props) {
     }
   }
 
-  async function addMember() {
-    if (!memberId) return;
-    setBusy(true);
-    try {
-      await addGroupMember(groupId, memberId);
-      setMemberId(null);
-      await members.reload();
-      const loaded = await getUserGroup(groupId);
-      setGroup(loaded.group);
-    } catch (err) {
-      notifyError(err);
-    } finally {
-      setBusy(false);
-    }
+  async function refreshGroup() {
+    await members.reload();
+    const loaded = await getUserGroup(groupId);
+    setGroup(loaded.group);
   }
 
-  async function removeMember(userId: string) {
-    setBusy(true);
-    try {
-      await removeGroupMember(groupId, userId);
-      await members.reload();
-      const loaded = await getUserGroup(groupId);
-      setGroup(loaded.group);
-    } catch (err) {
-      notifyError(err);
-    } finally {
-      setBusy(false);
-    }
+  function addMember() {
+    if (!member) return;
+    const userId = member.id;
+    const recordName = member.name || userId;
+    membership.run({
+      safety: "undoable",
+      key: "add",
+      recordName,
+      outcome: t("userGroups.members.added"),
+      execute: async () => {
+        setBusy(true);
+        try {
+          await addGroupMember(groupId, userId);
+          setMember(null);
+          await refreshGroup();
+        } finally {
+          setBusy(false);
+        }
+      },
+      undo: async () => {
+        await removeGroupMember(groupId, userId);
+        await refreshGroup();
+      },
+    });
   }
 
   if (loading) {
@@ -213,7 +217,7 @@ export function UserGroupShow({ groupId }: Props) {
       title={group.name}
       description={group.key}
       actions={
-        <Button component={Link} href="/console/user-groups" size="sm" variant="default">
+        <Button component={ConsoleLink} href="/console/user-groups" size="sm" variant="default">
           {t("userGroups.back")}
         </Button>
       }
@@ -252,51 +256,77 @@ export function UserGroupShow({ groupId }: Props) {
           <Title order={4}>{t("userGroups.members.title")}</Title>
           {editable ? (
             <Group align="flex-end">
-              <Select
+              <RecordPicker
                 label={t("userGroups.members.add")}
-                data={users.map((user) => ({
-                  value: user.id,
-                  label: user.account,
-                }))}
-                value={memberId}
-                onChange={setMemberId}
-                searchable
+                adapter={userRecordAdapter()}
+                value={member?.id ?? null}
+                editable
                 clearable
+                onChange={(id, option) => setMember(id && option ? option : null)}
               />
-              <Button size="sm" disabled={!memberId} loading={busy} onClick={() => void addMember()}>
+              <Button
+                size="sm"
+                disabled={!member}
+                loading={busy || membership.isSubmitting("add")}
+                onClick={addMember}
+              >
                 {t("userGroups.members.add")}
               </Button>
             </Group>
           ) : null}
           <ListTable
+            embedded
             list={members}
-            columnCount={editable ? 3 : 2}
+            columnCount={editable ? 2 : 1}
+            minWidth={520}
             head={
               <Table.Tr>
-                <Table.Th>{t("users.fields.account")}</Table.Th>
                 <Table.Th>{t("users.fields.displayName")}</Table.Th>
                 {editable ? <Table.Th>{t("userGroups.fields.actions")}</Table.Th> : null}
               </Table.Tr>
             }
           >
-            {members.items.map((member) => (
-              <Table.Tr key={member.id}>
-                <Table.Td>{member.account}</Table.Td>
-                <Table.Td>{member.display_name}</Table.Td>
-                {editable ? (
+            {members.items.map((member) => {
+              const recordName = member.display_name || member.account;
+              return (
+                <Table.Tr key={member.id}>
                   <Table.Td>
-                    <Button
-                      size="xs"
-                      variant="light"
-                      color="red"
-                      onClick={() => void removeMember(member.id)}
-                    >
-                      {t("userGroups.members.remove")}
-                    </Button>
+                    <RecordReference
+                      name={recordName}
+                      recordKey={member.account}
+                      href={`/console/users/${member.id}`}
+                    />
                   </Table.Td>
-                ) : null}
-              </Table.Tr>
-            ))}
+                  {editable ? (
+                    <Table.Td>
+                      <RowActions
+                        recordName={recordName}
+                        verbs={[
+                          {
+                            key: member.id,
+                            label: t("userGroups.members.remove"),
+                            color: "red",
+                            action: {
+                              safety: "undoable",
+                              recordName,
+                              outcome: t("userGroups.members.removed"),
+                              execute: async () => {
+                                await removeGroupMember(groupId, member.id);
+                                await refreshGroup();
+                              },
+                              undo: async () => {
+                                await addGroupMember(groupId, member.id);
+                                await refreshGroup();
+                              },
+                            },
+                          },
+                        ]}
+                      />
+                    </Table.Td>
+                  ) : null}
+                </Table.Tr>
+              );
+            })}
           </ListTable>
         </Stack>
         <Stack gap="sm">
@@ -307,7 +337,6 @@ export function UserGroupShow({ groupId }: Props) {
           <SubjectValuesEditor
             definitions={definitions}
             drafts={drafts}
-            users={users}
             editable={editable}
             onChange={(key, texts) =>
               setDrafts((current) => ({ ...current, [key]: texts }))

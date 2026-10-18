@@ -11,6 +11,7 @@ import type { Dictionary } from "@/features/dictionaries/types";
 
 vi.mock("@refinedev/core", () => ({
   useTranslate: () => (key: string) => key,
+  useNotification: () => ({ open: vi.fn() }),
 }));
 
 vi.mock("@/features/dictionaries/api", () => ({

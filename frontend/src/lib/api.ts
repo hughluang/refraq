@@ -5,11 +5,23 @@ const baseUrl = process.env.NEXT_PUBLIC_REFRAQ_API_BASE_URL || "/api";
 
 const SESSION_EXPIRY_SKIP_PATHS = new Set(["/auth/login", "/auth/logout"]);
 
+/** One `details[]` entry on a 422 Problem Details body. */
+export type ApiFieldDetail = {
+  field?: string;
+  message?: string;
+  code?: string;
+};
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
   readonly detail: string;
   readonly requestId: string | null;
+  /**
+   * 422 `details`. An array (possibly empty) when the body sends a list.
+   * Undefined when the member is missing or not a list.
+   */
+  readonly details?: readonly ApiFieldDetail[];
   /** Domain members of the Problem Details body beyond the frozen ones. */
   readonly extensions: Record<string, unknown>;
 
@@ -19,12 +31,14 @@ export class ApiError extends Error {
     detail: string,
     requestId: string | null = null,
     extensions: Record<string, unknown> = {},
+    details?: readonly ApiFieldDetail[],
   ) {
     super(`${code}: ${detail}`);
     this.status = status;
     this.code = code;
     this.detail = detail;
     this.requestId = requestId;
+    this.details = details === undefined ? undefined : [...details];
     this.extensions = extensions;
   }
 }
@@ -44,10 +58,40 @@ type ApiErrorBody = {
   code?: unknown;
   detail?: unknown;
   request_id?: unknown;
+  details?: unknown;
 };
 
 function isApiErrorBody(value: unknown): value is ApiErrorBody {
   return typeof value === "object" && value !== null;
+}
+
+function stringMember(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function readFieldDetail(value: unknown): ApiFieldDetail | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const detail: ApiFieldDetail = {};
+  const field = stringMember(record.field);
+  const message = stringMember(record.message);
+  const code = stringMember(record.code);
+  if (field !== undefined) detail.field = field;
+  if (message !== undefined) detail.message = message;
+  if (code !== undefined) detail.code = code;
+  return detail;
+}
+
+/** Missing or non-list `details` stays undefined. A list is kept, including `[]`. */
+function readDetails(body: ApiErrorBody): ApiFieldDetail[] | undefined {
+  if (!Object.prototype.hasOwnProperty.call(body, "details")) return undefined;
+  if (!Array.isArray(body.details)) return undefined;
+  const details: ApiFieldDetail[] = [];
+  for (const item of body.details) {
+    const detail = readFieldDetail(item);
+    if (detail) details.push(detail);
+  }
+  return details;
 }
 
 async function parseError(response: Response): Promise<ApiError> {
@@ -75,7 +119,14 @@ async function parseError(response: Response): Promise<ApiError> {
     for (const [key, value] of Object.entries(body)) {
       if (!PROBLEM_FIXED_MEMBERS.has(key)) extensions[key] = value;
     }
-    return new ApiError(response.status, code, detail, requestId, extensions);
+    return new ApiError(
+      response.status,
+      code,
+      detail,
+      requestId,
+      extensions,
+      readDetails(body),
+    );
   }
 
   return new ApiError(

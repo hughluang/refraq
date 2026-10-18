@@ -5,6 +5,7 @@ import { problemMessage } from "@/lib/problem";
 
 const dictionary: Record<string, string> = {
   "problems.USER_GROUP_KEY_DUPLICATE": "That user group key is taken",
+  "problems.unknown": "Something went wrong",
 };
 
 function t(key: string): string {
@@ -21,13 +22,14 @@ describe("problemMessage", () => {
     expect(problemMessage(t, error, "failed")).toBe("That user group key is taken");
   });
 
-  it("keeps the English detail when the code has no entry", () => {
+  it("does not return raw English detail when a code is unknown", () => {
     const error = new ApiError(
       422,
       "ENTITY_ROW_INVALID",
       "Entity row values or filters are invalid",
     );
-    expect(problemMessage(t, error, "failed")).toBe(
+    expect(problemMessage(t, error, "failed")).toBe("Something went wrong");
+    expect(problemMessage(t, error, "failed")).not.toBe(
       "Entity row values or filters are invalid",
     );
   });

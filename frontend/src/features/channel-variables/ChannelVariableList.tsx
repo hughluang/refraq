@@ -1,21 +1,18 @@
 "use client";
 
-import { Button, Code, Table } from "@mantine/core";
-import { CanAccess, useNotification, useTranslate } from "@refinedev/core";
-import { useCallback } from "react";
+import { Code, Table } from "@mantine/core";
+import { useCan, useTranslate } from "@refinedev/core";
 
 import { Instant } from "@/components/display/Instant";
 import { ListTable } from "@/components/display/ListTable";
-import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
+import { RowActions } from "@/components/display/RowActions";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
-import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
+import { useListQuery } from "@/hooks/useListQuery";
 import { apiClient } from "@/lib/api";
 import type { Instant as InstantValue } from "@/lib/instant";
 import type { OffsetPage } from "@/lib/pagination";
-import { problemMessage } from "@/lib/problem";
-
 type Variable = {
   name: string;
   value: unknown;
@@ -37,26 +34,18 @@ async function deleteVariable(name: string): Promise<void> {
 
 export function ChannelVariableList() {
   const t = useTranslate();
-  const { open } = useNotification();
+  const { data: canDelete } = useCan({
+    resource: ModuleId.channelVariables,
+    action: ModuleAction.delete,
+  });
+  const query = useListQuery({ search: false });
   const list = useConsolePagedList<Variable>({
     pageSize: 50,
     fetch: listVariables,
+    page: query.page,
+    onPageChange: query.setPage,
   });
   const { items, reload } = list;
-  const confirm = useConfirmAction<Variable>();
-
-  const remove = useCallback(async () => {
-    const row = confirm.pending;
-    if (!row) return;
-    try {
-      await deleteVariable(row.name);
-      open?.({ type: "success", message: t("channelVariables.delete.success") });
-      confirm.close();
-      await reload();
-    } catch (err) {
-      open?.({ type: "error", message: problemMessage(t, err, String(err)) });
-    }
-  }, [confirm, open, reload, t]);
 
   return (
     <PageChrome title={t("channelVariables.title")}>
@@ -85,23 +74,32 @@ export function ChannelVariableList() {
               <Instant value={row.updated_at} />
             </Table.Td>
             <Table.Td>
-              <CanAccess resource={ModuleId.channelVariables} action={ModuleAction.delete}>
-                <Button size="xs" color="red" variant="light" onClick={() => confirm.open(row)}>
-                  {t("channelVariables.delete")}
-                </Button>
-              </CanAccess>
+              <RowActions
+                recordName={row.name}
+                verbs={[
+                  {
+                    key: "delete",
+                    label: t("channelVariables.delete"),
+                    color: "red",
+                    hidden: !canDelete?.can,
+                    action: {
+                      safety: "confirm",
+                      recordName: row.name,
+                      title: t("channelVariables.delete.confirmTitle"),
+                      consequence: t("channelVariables.delete.consequence"),
+                      confirmLabel: t("channelVariables.delete"),
+                      confirmColor: "red",
+                      outcome: t("channelVariables.delete.success"),
+                      execute: () => deleteVariable(row.name),
+                      onSuccess: () => reload(),
+                    },
+                  },
+                ]}
+              />
             </Table.Td>
           </Table.Tr>
         ))}
       </ListTable>
-      <ConfirmActionModal
-        opened={confirm.opened}
-        onClose={confirm.close}
-        title={t("channelVariables.delete.confirmTitle")}
-        body={t("channelVariables.delete.confirmBody", { name: confirm.pending?.name ?? "" })}
-        confirmColor="red"
-        onConfirm={() => void remove()}
-      />
     </PageChrome>
   );
 }

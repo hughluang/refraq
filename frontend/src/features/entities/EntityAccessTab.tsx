@@ -1,6 +1,6 @@
 "use client";
 
-import { Alert, Box, Stack, Text } from "@mantine/core";
+import { Alert, Box, Stack } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useState } from "react";
 
@@ -16,11 +16,7 @@ import { accessProblemText } from "@/features/entities/accessProblem";
 import type { AccessSectionId } from "@/features/entities/accessLogic";
 import type { AccessOption, AccessRun } from "@/features/entities/accessSession";
 import type { AccessSummary } from "@/features/entities/accessTypes";
-import { PageError } from "@/components/feedback/PageError";
-import { listEntities } from "@/features/entities/api";
-import { listRoles } from "@/features/roles/api";
-import { listSubjectAttributes, listUserGroups } from "@/features/subjects/api";
-import { listUsers } from "@/features/users/api";
+import { listAllSubjectAttributes } from "@/features/subjects/api";
 
 type Props = {
   entityId: string;
@@ -39,11 +35,7 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
     nonce: 0,
   });
   const [guideDismissed, setGuideDismissed] = useState(false);
-  const [users, setUsers] = useState<AccessOption[]>([]);
-  const [roles, setRoles] = useState<AccessOption[]>([]);
-  const [groups, setGroups] = useState<AccessOption[]>([]);
   const [subjectAttrs, setSubjectAttrs] = useState<AccessOption[]>([]);
-  const [entities, setEntities] = useState<AccessOption[]>([]);
 
   const load = useCallback(async () => {
     const next = await getAccessSummary(entityId);
@@ -74,34 +66,23 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
 
   useEffect(() => {
     void reload();
-    const optionsFailed = (err: unknown) => setOptionsError(accessProblemText(err, t));
+  }, [reload]);
+
+  useEffect(() => {
+    let cancelled = false;
     setOptionsError(null);
-    void listUsers({ limit: 100, offset: 0 })
-      .then((page) =>
-        setUsers(page.items.map((row) => ({ value: row.id, label: row.display_name || row.account }))),
-      )
-      .catch(optionsFailed);
-    void listRoles({ limit: 100, offset: 0 })
-      .then((page) => setRoles(page.items.map((row) => ({ value: row.id, label: row.name }))))
-      .catch(optionsFailed);
-    void listUserGroups({ limit: 100, offset: 0 })
-      .then((page) => setGroups(page.items.map((row) => ({ value: row.id, label: row.name }))))
-      .catch(optionsFailed);
-    void listSubjectAttributes({ limit: 100, offset: 0 })
-      .then((page) =>
-        setSubjectAttrs(page.items.map((row) => ({ value: row.key, label: row.name }))),
-      )
-      .catch(optionsFailed);
-    void listEntities({ limit: 100, offset: 0 })
-      .then((page) =>
-        setEntities(
-          page.items
-            .filter((row) => row.id !== entityId)
-            .map((row) => ({ value: row.id, label: row.name })),
-        ),
-      )
-      .catch(optionsFailed);
-  }, [entityId, reload, t]);
+    void listAllSubjectAttributes()
+      .then((items) => {
+        if (cancelled) return;
+        setSubjectAttrs(items.map((row) => ({ value: row.key, label: row.name })));
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setOptionsError(accessProblemText(err, t));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [t]);
 
   const notify = (ok: boolean, detail?: string) => {
     open?.({
@@ -128,47 +109,47 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
     }
   };
 
-  if (!summary) {
-    return loadError ? (
-      <PageError message={loadError} onRetry={() => void reload()} />
-    ) : (
-      <Text>{t("entities.access.loading")}</Text>
-    );
-  }
+  const collectionLoading = summary == null && loadError == null;
+  const collectionError = summary == null ? loadError : null;
+  const reloadCollection = () => reload();
 
   return (
     <Stack gap="xl">
-      {loadError ? <Alert color="red">{loadError}</Alert> : null}
+      {summary && loadError ? <Alert color="red">{loadError}</Alert> : null}
       {optionsError ? <Alert color="red">{optionsError}</Alert> : null}
-      <AccessPolicySummary summary={summary} />
-      <AccessOrientation
-        summary={summary}
-        dismissed={guideDismissed}
-        onDismiss={() => setGuideDismissed(true)}
-        onFocus={focusSection}
-      />
+      {summary ? <AccessPolicySummary summary={summary} /> : null}
+      {summary ? (
+        <AccessOrientation
+          summary={summary}
+          dismissed={guideDismissed}
+          onDismiss={() => setGuideDismissed(true)}
+          onFocus={focusSection}
+        />
+      ) : null}
       <Box id="access-grants" style={{ scrollMarginTop: 72 }}>
         <AccessGrantsSection
           entityId={entityId}
           summary={summary}
-          users={users}
-          roles={roles}
-          groups={groups}
           subjectAttrs={subjectAttrs}
           busyId={busyId}
           run={run}
           focusId={focus.id}
           focusNonce={focus.nonce}
+          loading={collectionLoading}
+          error={collectionError}
+          onReload={reloadCollection}
         />
       </Box>
       <Box id="access-profiles" style={{ scrollMarginTop: 72 }}>
         <AccessProfilesSection
           entityId={entityId}
           summary={summary}
-          entities={entities}
           busyId={busyId}
           run={run}
           onOptionsError={setOptionsError}
+          loading={collectionLoading}
+          error={collectionError}
+          onReload={reloadCollection}
         />
       </Box>
       <Box id="access-ladders" style={{ scrollMarginTop: 72 }}>
@@ -179,27 +160,33 @@ export function EntityAccessTab({ entityId, canPreviewRows }: Props) {
           run={run}
           focusId={focus.id}
           focusNonce={focus.nonce}
+          loading={collectionLoading}
+          error={collectionError}
+          onReload={reloadCollection}
         />
       </Box>
-      <Box id="access-restrictions" style={{ scrollMarginTop: 72 }}>
-        <AccessRestrictionsSection
-          entityId={entityId}
-          summary={summary}
-          busyId={busyId}
-          run={run}
-          focusId={focus.id}
-          focusNonce={focus.nonce}
-        />
-      </Box>
-      <Box id="access-preview" style={{ scrollMarginTop: 72 }}>
-        <AccessPreviewSection
-          entityId={entityId}
-          users={users}
-          canPreviewRows={canPreviewRows}
-          busyId={busyId}
-          run={run}
-        />
-      </Box>
+      {summary ? (
+        <Box id="access-restrictions" style={{ scrollMarginTop: 72 }}>
+          <AccessRestrictionsSection
+            entityId={entityId}
+            summary={summary}
+            busyId={busyId}
+            run={run}
+            focusId={focus.id}
+            focusNonce={focus.nonce}
+          />
+        </Box>
+      ) : null}
+      {summary ? (
+        <Box id="access-preview" style={{ scrollMarginTop: 72 }}>
+          <AccessPreviewSection
+            entityId={entityId}
+            canPreviewRows={canPreviewRows}
+            busyId={busyId}
+            run={run}
+          />
+        </Box>
+      ) : null}
     </Stack>
   );
 }

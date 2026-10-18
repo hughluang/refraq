@@ -459,7 +459,7 @@ On `succeeded` only:
 
 ### 5.3 `GET /channels`
 
-Query: `q` (optional literal substring of `name`), `active` (`true` | `false` | omitted), `limit` (default 50, max 200), `offset` (default 0). Ordered by `created_at DESC`, `id DESC`.
+Query: `q` (optional case-insensitive substring of `name`; a blank or whitespace-only value is the same as omitting it; `%` and `_` match themselves), `active` (`true` | `false` | omitted), `limit` (default 50, max 200), `offset` (default 0). Ordered by `created_at DESC`, `id DESC`. `total` counts the filtered set.
 
 `GET /channels/{id}` returns `200` `{ "channel": { … } }`.
 

@@ -1,9 +1,11 @@
 "use client";
 
-import { Button, Stack, Table, Text } from "@mantine/core";
+import { Stack, Table, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 
 import { ListTable } from "@/components/display/ListTable";
+import { RecordReference } from "@/components/display/RecordReference";
+import { RowActions } from "@/components/display/RowActions";
 import type { PendingFederatedIdentity } from "@/features/identity-providers/types";
 import type { UsePagedListResult } from "@/hooks/usePagedList";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
@@ -41,13 +43,15 @@ export function PendingFederatedIdentityTable({
         <Table.Tr key={item.id}>
           <Table.Td>
             <Stack gap={2}>
-              <Text size="sm" fw={500}>
-                {item.display_name ?? item.account_hint}
-              </Text>
-              <Text size="xs" c="dimmed">
-                {item.account_hint}
-                {item.email ? ` · ${item.email}` : ""}
-              </Text>
+              <RecordReference
+                name={item.display_name ?? item.account_hint}
+                recordKey={item.account_hint}
+              />
+              {item.email ? (
+                <Text size="xs" c="dimmed">
+                  {item.email}
+                </Text>
+              ) : null}
             </Stack>
           </Table.Td>
           <Table.Td>
@@ -66,9 +70,17 @@ export function PendingFederatedIdentityTable({
           <Table.Td>{formatInstant(item.expires_at)}</Table.Td>
           <Table.Td>{item.attempt_count}</Table.Td>
           <Table.Td>
-            <Button size="xs" onClick={() => onClaim(item)}>
-              {t("users.pending.claim")}
-            </Button>
+            <RowActions
+              recordName={item.display_name ?? item.account_hint}
+              verbs={[
+                {
+                  key: "claim",
+                  label: t("users.pending.claim"),
+                  safety: "immediate",
+                  onClick: () => onClaim(item),
+                },
+              ]}
+            />
           </Table.Td>
         </Table.Tr>
       ))}

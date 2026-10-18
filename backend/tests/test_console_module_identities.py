@@ -25,6 +25,30 @@ from backend.admin.user_store import (  # noqa: E402
     reset_user_store,
 )
 
+EXPECTED_ICONS = {
+    "dashboard": "layout-dashboard",
+    "users": "users",
+    "user-groups": "users-group",
+    "subject-attributes": "id-badge",
+    "identity-providers": "plug",
+    "roles": "shield-lock",
+    "tokens": "key",
+    "sources": "database",
+    "catalog": "table",
+    "business-domains": "category",
+    "type-mappings": "arrows-exchange",
+    "entities": "box",
+    "dictionaries": "book",
+    "channels": "route",
+    "channel-variables": "variable",
+    "jobs": "list-check",
+    "schedules": "clock",
+    "settings": "settings",
+    "branding": "palette",
+    "model-services": "brain",
+    "account": "user-circle",
+}
+
 EXPECTED_IDENTITIES = {
     "dashboard": {
         "label_key": "layout.nav.home",
@@ -260,7 +284,12 @@ EXPECTED_IDENTITIES = {
             "create": "/console/channels/new",
             "edit": "/console/channels/:id/edit",
             "show": "/console/channels/:id",
-            "aliases": [],
+            "aliases": [
+                {
+                    "path": "/console/channels/:id/runs/:jobId",
+                    "action": "show",
+                },
+            ],
         },
         "actions": {
             "list": "channel:read",
@@ -268,6 +297,24 @@ EXPECTED_IDENTITIES = {
             "edit": "channel:write",
             "delete": "channel:write",
             "show": "channel:read",
+            "sample": None,
+        },
+    },
+    "channel-variables": {
+        "label_key": "channelVariables.title",
+        "routes": {
+            "list": "/console/channel-variables",
+            "create": None,
+            "edit": None,
+            "show": None,
+            "aliases": [],
+        },
+        "actions": {
+            "list": "channel:read",
+            "create": None,
+            "edit": None,
+            "delete": "channel:write",
+            "show": None,
             "sample": None,
         },
     },
@@ -435,11 +482,13 @@ def test_module_identities_contract_for_super_admin(client: TestClient) -> None:
     assert response.status_code == 200
     modules = {module["id"]: module for module in response.json()["modules"]}
     assert set(modules) == set(EXPECTED_IDENTITIES)
+    assert set(EXPECTED_ICONS) == set(EXPECTED_IDENTITIES)
     for module_id, expected in EXPECTED_IDENTITIES.items():
         actual = modules[module_id]
         assert actual["label_key"] == expected["label_key"]
         assert actual["routes"] == expected["routes"]
         assert actual["actions"] == expected["actions"]
+        assert actual["icon"] == EXPECTED_ICONS[module_id]
 
 
 def test_operator_receives_full_unfiltered_identities(client: TestClient) -> None:

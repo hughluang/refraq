@@ -17,12 +17,12 @@ export function listJobs(params?: {
   return apiClient<OffsetPage<Job>>(`/jobs${suffix}`);
 }
 
-export function getJob(jobId: string) {
-  return apiClient<{ job: Job }>(`/jobs/${jobId}`);
+export function getJob(jobId: string, init?: { signal?: AbortSignal }) {
+  return apiClient<{ job: Job }>(`/jobs/${jobId}`, init);
 }
 
-export function getJobLogs(jobId: string) {
-  return apiClient<JobLogs>(`/jobs/${jobId}/logs`);
+export function getJobLogs(jobId: string, init?: { signal?: AbortSignal }) {
+  return apiClient<JobLogs>(`/jobs/${jobId}/logs`, init);
 }
 
 export function cancelJob(jobId: string) {

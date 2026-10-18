@@ -5,29 +5,29 @@ import {
   Badge,
   Button,
   Group,
-  Tabs,
   Text,
   Tooltip,
 } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Instant } from "@/components/display/Instant";
-import { PageError } from "@/components/feedback/PageError";
-import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { FillColumn } from "@/components/layout/FillColumn";
+import { PageTabs, useConsoleTab, type PageTabItem } from "@/components/layout/consoleTabs";
+import { StatusBadge } from "@/components/display/StatusBadge";
+import {
+  presentCatalogPresence,
+  presentCatalogSemantics,
+} from "@/components/display/statusTone";
 import { PageChrome } from "@/components/layout/PageChrome";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
+import { objectTypeLabel, semanticSourceLabel } from "@/features/sources/catalogLabel";
 import {
   isAccessEvaluationPending,
   ModuleAction,
   ModuleId,
 } from "@/features/console/module-identity";
 import { getCatalogObject } from "@/features/sources/api/catalog";
-import {
-  catalogPresence,
-  catalogSemanticsReady,
-} from "@/features/sources/catalog-detail/catalogStatus";
 import { ColumnsTab } from "@/features/sources/catalog-detail/ColumnsTab";
 import { DdlTab } from "@/features/sources/catalog-detail/DdlTab";
 import { HistoryTab } from "@/features/sources/catalog-detail/HistoryTab";
@@ -63,7 +63,6 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
   const [object, setObject] = useState<CatalogObject | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<string | null>("overview");
   const [reloadEpoch, setReloadEpoch] = useState(0);
   const [joinsVisited, setJoinsVisited] = useState(false);
   const [historyVisited, setHistoryVisited] = useState(false);
@@ -72,6 +71,13 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
     : true;
   const showSampleTab =
     sampleEligible && (canSamplePending || Boolean(canSampleData?.can));
+  const catalogTabs = useMemo(() => {
+    const items = [{ value: "overview" }, { value: "columns" }];
+    if (showSampleTab) items.push({ value: "sample" });
+    items.push({ value: "joins" }, { value: "ddl" }, { value: "history" });
+    return items;
+  }, [showSampleTab]);
+  const { value: activeTab, setTab } = useConsoleTab(catalogTabs);
 
   const load = useCallback(
     async (opts?: { refresh?: boolean }) => {
@@ -102,7 +108,6 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
     setReloadEpoch(0);
     setJoinsVisited(false);
     setHistoryVisited(false);
-    setActiveTab("overview");
     void load();
   }, [load]);
 
@@ -117,7 +122,7 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
 
   useEffect(() => {
     if (!showSampleTab && activeTab === "sample") {
-      setActiveTab("overview");
+      setTab("overview");
     }
   }, [showSampleTab, activeTab]);
 
@@ -139,41 +144,87 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
     }
   };
 
-  if (loading) {
+  if (loading || error || !object) {
     return (
-      <PageChrome title={t("catalog.detail")}>
-        <PageBodySkeleton />
-      </PageChrome>
-    );
-  }
-  if (error) {
-    return (
-      <PageChrome title={t("catalog.detail")}>
-        <PageError message={error} onRetry={() => void load()} />
-      </PageChrome>
-    );
-  }
-  if (!object) {
-    return (
-      <PageChrome title={t("catalog.detail")}>
-        <PageError message={t("catalog.empty")} />
-      </PageChrome>
+      <PageChrome
+        title={t("catalog.detail")}
+        status={loading ? "loading" : error ? "error" : "notFound"}
+        errorMessage={error ?? undefined}
+        onRetry={error ? () => void load() : undefined}
+      />
     );
   }
 
-  const presence = catalogPresence(object.is_present);
-  const semanticsReady = catalogSemanticsReady(
+  const presence = presentCatalogPresence(object.is_present);
+  const semanticsReady = presentCatalogSemantics(
     Boolean(object.business_semantics_ready),
+  );
+  const detailTabs: PageTabItem[] = [
+    {
+      value: "overview",
+      label: t("catalog.tabs.overview"),
+      panel: (
+        <OverviewTab
+          object={object}
+          writable={writable}
+          onSaved={(next) => setObject(next)}
+        />
+      ),
+    },
+    {
+      value: "columns",
+      label: t("catalog.tabs.columns"),
+      panel: (
+        <ColumnsTab
+          object={object}
+          writable={writable}
+          reloadEpoch={reloadEpoch}
+          onSaved={(next) => setObject(next)}
+        />
+      ),
+    },
+  ];
+  if (showSampleTab) {
+    detailTabs.push({
+      value: "sample",
+      label: t("catalog.tabs.sample"),
+      panel: <SampleTab object={object} />,
+    });
+  }
+  detailTabs.push(
+    {
+      value: "joins",
+      label: t("catalog.tabs.joins"),
+      panel: (
+        <JoinsTab object={object} writable={writable} listEnabled={joinsVisited} />
+      ),
+    },
+    {
+      value: "ddl",
+      label: t("catalog.tabs.ddl"),
+      panel: <DdlTab ddl={object.ddl} />,
+    },
+    {
+      value: "history",
+      label: t("catalog.tabs.history"),
+      panel: <HistoryTab objectId={object.id} listEnabled={historyVisited} />,
+    },
   );
 
   return (
+    <PageTabs fill value={activeTab} onChange={setTab} tabs={detailTabs}>
+      {({ list, panels }) => (
     <PageChrome
-      title={title}
+      title={t("catalog.title")}
+      recordTitle={title}
       description={object.business_name ?? undefined}
+      recent={{ moduleId: "catalog", title }}
+      fill
+      tabs={list}
       actions={
         <Group gap="xs">
           <Button
-            component={Link}
+            component={ConsoleLink}
             href="/console/catalog"
             variant="default"
             size="sm"
@@ -192,13 +243,14 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
     >
       <FillColumn gap="md">
         <Group gap="sm" wrap="wrap">
-          <Badge variant="light">{object.object_type}</Badge>
-          <Badge color={presence.color}>{t(presence.labelKey)}</Badge>
-          <Badge color={semanticsReady.color}>
-            {t(semanticsReady.labelKey)}
-          </Badge>
+          <Badge variant="light">{objectTypeLabel(t, object.object_type)}</Badge>
+          <StatusBadge tone={presence.tone} labelKey={presence.labelKey} />
+          <StatusBadge tone={semanticsReady.tone} labelKey={semanticsReady.labelKey} />
           <Text size="sm" c="dimmed">
-            {t("catalog.semantics.provenance")}: {object.semantic_source ?? "—"}
+            {t("catalog.semantics.provenance")}:{" "}
+            {object.semantic_source
+              ? semanticSourceLabel(t, object.semantic_source)
+              : "—"}
           </Text>
           {object.semantics_updated_at ? (
             <Text size="sm" c="dimmed">
@@ -233,72 +285,10 @@ export function CatalogObjectDetail({ objectId }: CatalogObjectDetailProps) {
           </Tooltip>
         </Group>
 
-        <Tabs
-          value={activeTab}
-          onChange={setActiveTab}
-          keepMounted
-          style={{
-            flex: 1,
-            minHeight: 0,
-            display: "flex",
-            flexDirection: "column",
-          }}
-          styles={{
-            panel: {
-              flex: 1,
-              minHeight: 0,
-              overflow: "auto",
-              display: "flex",
-              flexDirection: "column",
-            },
-          }}
-        >
-          <Tabs.List>
-            <Tabs.Tab value="overview">{t("catalog.tabs.overview")}</Tabs.Tab>
-            <Tabs.Tab value="columns">{t("catalog.tabs.columns")}</Tabs.Tab>
-            {showSampleTab ? (
-              <Tabs.Tab value="sample">{t("catalog.tabs.sample")}</Tabs.Tab>
-            ) : null}
-            <Tabs.Tab value="joins">{t("catalog.tabs.joins")}</Tabs.Tab>
-            <Tabs.Tab value="ddl">{t("catalog.tabs.ddl")}</Tabs.Tab>
-            <Tabs.Tab value="history">{t("catalog.tabs.history")}</Tabs.Tab>
-          </Tabs.List>
-
-          <Tabs.Panel value="overview" pt="md">
-            <OverviewTab
-              object={object}
-              writable={writable}
-              onSaved={(next) => setObject(next)}
-            />
-          </Tabs.Panel>
-          <Tabs.Panel value="columns" pt="md" style={{ overflow: "hidden" }}>
-            <ColumnsTab
-              object={object}
-              writable={writable}
-              reloadEpoch={reloadEpoch}
-              onSaved={(next) => setObject(next)}
-            />
-          </Tabs.Panel>
-          {showSampleTab ? (
-            <Tabs.Panel value="sample" pt="md">
-              <SampleTab object={object} />
-            </Tabs.Panel>
-          ) : null}
-          <Tabs.Panel value="joins" pt="md" style={{ overflow: "hidden" }}>
-            <JoinsTab
-              object={object}
-              writable={writable}
-              listEnabled={joinsVisited}
-            />
-          </Tabs.Panel>
-          <Tabs.Panel value="ddl" pt="md">
-            <DdlTab ddl={object.ddl} />
-          </Tabs.Panel>
-          <Tabs.Panel value="history" pt="md" style={{ overflow: "hidden" }}>
-            <HistoryTab objectId={object.id} listEnabled={historyVisited} />
-          </Tabs.Panel>
-        </Tabs>
+        {panels}
       </FillColumn>
     </PageChrome>
+      )}
+    </PageTabs>
   );
 }

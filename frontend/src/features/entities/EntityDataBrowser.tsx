@@ -6,7 +6,6 @@ import {
   Group,
   Loader,
   Select,
-  Skeleton,
   Stack,
   Table,
   Text,
@@ -14,8 +13,7 @@ import {
 import { useGetIdentity, useTranslate } from "@refinedev/core";
 import { useEffect, useRef, useState } from "react";
 
-import { ListPager } from "@/components/display/ListPager";
-import { EmptyState } from "@/components/feedback/EmptyState";
+import { ListTable } from "@/components/display/ListTable";
 import { listAccountGroups } from "@/features/account/api";
 import { loadDataSchema, queryDataRows } from "@/features/entities/accessApi";
 import {
@@ -27,13 +25,12 @@ import {
 } from "@/features/entities/accessLogic";
 import type { DataSchema } from "@/features/entities/accessTypes";
 import { ApiError } from "@/lib/api";
+import { listPresentationOf } from "@/lib/list-state";
 import { pageToOffset } from "@/lib/pagination";
 import { problemMessage } from "@/lib/problem";
 import type { CurrentUser } from "@/providers/session-store";
 
 const PAGE_SIZE = 50;
-const SKELETON_ROWS = 4;
-const SKELETON_COLUMNS = 3;
 
 type Props = {
   tableName: string;
@@ -44,26 +41,6 @@ type Props = {
 type ViewAs = "none" | "user" | "role" | "group";
 /** null: not listing groups (or list failed; failure text is in `message`). */
 type GroupsLoad = "loading" | "ready" | null;
-
-function SkeletonRows() {
-  return (
-    <Table.ScrollContainer minWidth={480}>
-      <Table>
-        <Table.Tbody aria-busy="true">
-          {Array.from({ length: SKELETON_ROWS }, (_, row) => (
-            <Table.Tr key={row}>
-              {Array.from({ length: SKELETON_COLUMNS }, (_, col) => (
-                <Table.Td key={col}>
-                  <Skeleton height={14} radius="sm" />
-                </Table.Td>
-              ))}
-            </Table.Tr>
-          ))}
-        </Table.Tbody>
-      </Table>
-    </Table.ScrollContainer>
-  );
-}
 
 export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) {
   const t = useTranslate();
@@ -79,10 +56,11 @@ export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) 
   const [page, setPage] = useState(1);
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(active);
   const [reloadNonce, setReloadNonce] = useState(0);
   const requestSeq = useRef(0);
   const groupsSeq = useRef(0);
+  const held = useRef(false);
   const tRef = useRef(t);
   tRef.current = t;
 
@@ -102,6 +80,7 @@ export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) 
 
   const clearResults = (nextBusy: boolean) => {
     requestSeq.current += 1;
+    held.current = false;
     setSchema(null);
     setRows([]);
     setTotal(0);
@@ -156,14 +135,18 @@ export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) 
         if (seq !== requestSeq.current) return;
         const result = await queryDataRows(tableName, queryBody);
         if (seq !== requestSeq.current) return;
+        held.current = true;
         setSchema(next);
         setRows(result.items);
         setTotal(result.total);
+        setMessage(null);
       } catch (err) {
         if (seq !== requestSeq.current) return;
-        setSchema(null);
-        setRows([]);
-        setTotal(0);
+        if (!held.current) {
+          setSchema(null);
+          setRows([]);
+          setTotal(0);
+        }
         setPending(err instanceof ApiError && classifyAccessProblem(err.code) === "pending");
         setMessage(explain(err));
       } finally {
@@ -174,6 +157,26 @@ export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) 
       if (requestSeq.current === seq) requestSeq.current += 1;
     };
   }, [active, selectionReady, kind, narrowKey, tableName, page, reloadNonce]);
+
+  const showError = Boolean(message) && rows.length === 0 && !busy;
+  const columnCount = Math.max(schema?.attributes.length ?? 1, 1);
+  const list = {
+    presentation: listPresentationOf({
+      loading: busy,
+      error: showError ? message : null,
+      total,
+      itemCount: rows.length,
+      filtered: kind !== "none",
+    }),
+    error: showError ? message : null,
+    errorRequestId: null,
+    reload: () => setReloadNonce((current) => current + 1),
+    page,
+    setPage,
+    pageSize: PAGE_SIZE,
+    total,
+  };
+  const showTable = active && (selectionReady || schema != null || message != null || busy);
 
   return (
     <Stack>
@@ -230,84 +233,70 @@ export function EntityDataBrowser({ tableName, physicalHidden, active }: Props) 
           {pending ? t("entities.data.retry") : t("entities.data.refresh")}
         </Button>
       </Group>
-      {message ? <Alert color={pending ? "yellow" : "red"}>{message}</Alert> : null}
-      {busy && !schema ? <SkeletonRows /> : null}
-      {schema ? (
-        <Stack gap="sm">
-          <Table.ScrollContainer minWidth={480}>
-            <Table>
-              <Table.Thead>
-                <Table.Tr>
-                  {schema.attributes.map((attribute) => {
-                    const masked = isMaskedPresentation(attribute.presentation?.levels);
-                    const varying = Boolean(attribute.presentation?.row_varying);
-                    return (
-                      <Table.Th key={attribute.name}>
-                        {attribute.name}
-                        {masked ? ` · ${t("entities.access.cell.masked")}` : ""}
-                        {varying ? ` · ${t("entities.access.cell.rowVarying")}` : ""}
-                        {attribute.writable === false ? ` · ${t("entities.data.readOnly")}` : ""}
-                      </Table.Th>
-                    );
-                  })}
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody
-                aria-busy={busy || undefined}
-                style={busy ? { opacity: 0.6 } : undefined}
-              >
-                {rows.map((row, index) => {
-                  const held = withheldNames(row, schema.withheld_field);
-                  return (
-                    <Table.Tr key={String(row.row_id ?? index)}>
-                      {schema.attributes.map((attribute) => {
-                        const cell = presentCell({
-                          name: attribute.name,
-                          value: row[attribute.name],
-                          withheld: held,
-                          referenceHidden:
-                            attribute.type === "reference" && attribute.target == null,
-                        });
-                        const text =
-                          cell.kind === "withheld"
-                            ? t("entities.access.cell.withheld")
-                            : cell.kind === "empty"
-                              ? t("entities.access.cell.empty")
-                              : cell.kind === "inaccessible_record"
-                                ? t("entities.access.cell.inaccessibleRecord")
-                                : cell.text;
-                        return <Table.Td key={attribute.name}>{text}</Table.Td>;
-                      })}
-                    </Table.Tr>
-                  );
-                })}
-              </Table.Tbody>
-            </Table>
-          </Table.ScrollContainer>
-          {rows.length === 0 ? (
-            <Stack gap="xs">
-              <EmptyState
-                message={
-                  kind === "none" ? t("entities.data.empty") : t("entities.data.emptyNarrowed")
-                }
-              />
-              {kind === "none" ? null : (
-                <Button variant="subtle" size="sm" w="fit-content" onClick={() => applyKind("none")}>
-                  {t("entities.data.useFullAccess")}
-                </Button>
-              )}
-            </Stack>
-          ) : null}
-          {total > 0 ? (
-            <ListPager
-              page={page}
-              pageSize={PAGE_SIZE}
-              total={total}
-              onChange={setPage}
-              disabled={busy}
-            />
-          ) : null}
-        </Stack>
+      {message && rows.length > 0 ? (
+        <Alert color={pending ? "yellow" : "red"}>{message}</Alert>
+      ) : null}
+      {showTable ? (
+        <ListTable
+          embedded
+          list={list}
+          columnCount={columnCount}
+          minWidth={Math.max(480, columnCount * 140)}
+          emptyMessage={t("entities.data.empty")}
+          noMatchMessage={t("entities.data.emptyNarrowed")}
+          noMatchAction={
+            kind === "none" ? undefined : (
+              <Button variant="subtle" size="xs" onClick={() => applyKind("none")}>
+                {t("entities.data.useFullAccess")}
+              </Button>
+            )
+          }
+          head={
+            <Table.Tr>
+              {(schema?.attributes ?? []).map((attribute) => {
+                const masked = isMaskedPresentation(attribute.presentation?.levels);
+                const varying = Boolean(attribute.presentation?.row_varying);
+                return (
+                  <Table.Th key={attribute.name}>
+                    {attribute.name}
+                    {masked ? ` · ${t("entities.access.cell.masked")}` : ""}
+                    {varying ? ` · ${t("entities.access.cell.rowVarying")}` : ""}
+                    {attribute.writable === false ? ` · ${t("entities.data.readOnly")}` : ""}
+                  </Table.Th>
+                );
+              })}
+              {schema ? null : <Table.Th />}
+            </Table.Tr>
+          }
+        >
+          {schema
+            ? rows.map((row, index) => {
+                const withheld = withheldNames(row, schema.withheld_field);
+                return (
+                  <Table.Tr key={String(row.row_id ?? index)}>
+                    {schema.attributes.map((attribute) => {
+                      const cell = presentCell({
+                        name: attribute.name,
+                        value: row[attribute.name],
+                        withheld,
+                        referenceHidden:
+                          attribute.type === "reference" && attribute.target == null,
+                      });
+                      const text =
+                        cell.kind === "withheld"
+                          ? t("entities.access.cell.withheld")
+                          : cell.kind === "empty"
+                            ? t("entities.access.cell.empty")
+                            : cell.kind === "inaccessible_record"
+                              ? t("entities.access.cell.inaccessibleRecord")
+                              : cell.text;
+                      return <Table.Td key={attribute.name}>{text}</Table.Td>;
+                    })}
+                  </Table.Tr>
+                );
+              })
+            : null}
+        </ListTable>
       ) : null}
     </Stack>
   );

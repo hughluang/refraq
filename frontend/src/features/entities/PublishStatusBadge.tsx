@@ -1,12 +1,7 @@
 "use client";
 
-import { Badge } from "@mantine/core";
-import { useTranslate } from "@refinedev/core";
-
-import {
-  PUBLISH_STATUS_COLOR,
-  publishStatusLabelKey,
-} from "@/features/entities/publishStatus";
+import { StatusBadge } from "@/components/display/StatusBadge";
+import { presentPublishStatus } from "@/components/display/statusTone";
 import type { PublishStatus } from "@/features/entities/types";
 
 type Props = {
@@ -14,10 +9,6 @@ type Props = {
 };
 
 export function PublishStatusBadge({ publishStatus }: Props) {
-  const t = useTranslate();
-  return (
-    <Badge color={PUBLISH_STATUS_COLOR[publishStatus]} variant="light" tt="none">
-      {t(publishStatusLabelKey(publishStatus))}
-    </Badge>
-  );
+  const presentation = presentPublishStatus(publishStatus);
+  return <StatusBadge tone={presentation.tone} labelKey={presentation.labelKey} />;
 }

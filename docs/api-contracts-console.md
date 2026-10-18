@@ -10,7 +10,7 @@ Related business rules: `docs/business-management-console.md`.
 
 ## 2. Concepts
 
-- **Console Module catalog**: fixed seed in backend code (ids, groups, routes, actions → permissions, i18n keys). Not writable at runtime.
+- **Console Module catalog**: fixed seed in backend code (ids, groups, routes, actions → permissions, i18n keys, optional `icon`). Not writable at runtime.
 - **Console Navigation**: catalog entries the current User may see, grouped, already filtered by `actions.list` Permission.
 - **Console Module Identity**: unfiltered UX identity for every seeded module including Foundation, metadata-group, and operations-group modules (primary routes + optional `route_aliases` + action → permission). Used by the SPA for Refine wiring and page/feature ACL; not a second registration surface.
 - Labels are **i18n keys**; the frontend translates them.
@@ -100,6 +100,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
 - Does **not** include group or sort fields (those remain navigation-only)
 - `actions.sample` is a non-route UX action (Catalog Sample). Only `catalog` maps it to `catalog:sample`; other modules return `null`.
 - Each module `routes` object includes primary slots (`list`, `create`, `edit`, `show`) and an `aliases` array (empty when none). Each alias is `{ "path": "...", "action": "..." }` for exact deep-link matching when primary slots are full.
+- `icon` is optional. It is a Tabler icon name in kebab-case: the `@tabler/icons` name without the `Icon` prefix (`users`, `shield-lock`). The seed is the only authoring place. A module with no icon returns JSON `null`. `GET /console/navigation` does not include `icon`.
 
 ### Response: `200`
 
@@ -109,6 +110,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
     {
       "id": "dashboard",
       "label_key": "layout.nav.home",
+      "icon": "layout-dashboard",
       "routes": { "list": "/console", "create": null, "edit": null, "show": null, "aliases": [] },
       "actions": {
         "list": "dashboard:read",
@@ -122,6 +124,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
     {
       "id": "users",
       "label_key": "users.title",
+      "icon": "users",
       "routes": {
         "list": "/console/users",
         "create": "/console/users/new",
@@ -140,6 +143,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
     {
       "id": "roles",
       "label_key": "roles.title",
+      "icon": "shield-lock",
       "routes": {
         "list": "/console/roles",
         "create": "/console/roles/new",
@@ -158,6 +162,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
     {
       "id": "catalog",
       "label_key": "catalog.title",
+      "icon": "table",
       "routes": {
         "list": "/console/catalog",
         "create": null,
@@ -176,6 +181,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
     {
       "id": "business-domains",
       "label_key": "businessDomains.title",
+      "icon": "category",
       "routes": {
         "list": "/console/business-domains",
         "create": "/console/business-domains",
@@ -194,6 +200,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
     {
       "id": "settings",
       "label_key": "settings.title",
+      "icon": "settings",
       "routes": { "list": "/console/settings", "create": null, "edit": null, "show": null },
       "actions": {
         "list": "settings:read",
@@ -216,21 +223,26 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
 
 ## 5. Seed Catalog (this slice)
 
-| Module id | Group | `routes.list` | `actions.list` (nav) | Other routes / actions |
-| --- | --- | --- | --- | --- |
-| `dashboard` | `workbench` | `/console` | `dashboard:read` | — |
-| `users` | `admin` | `/console/users` | `users:read` | create/edit/delete → `users:write`; create route `/console/users/new`; show `/console/users/:id` → `users:read` |
-| `user-groups` | `admin` | `/console/user-groups` | `users:read` | create/edit/delete → `users:write`; show `/console/user-groups/:id` → `users:read` |
-| `subject-attributes` | `admin` | `/console/subject-attributes` | `users:read` | create/edit/delete → `users:write` |
-| `roles` | `admin` | `/console/roles` | `roles:read` | create/edit/delete → `roles:write`; create `/console/roles/new`; edit `/console/roles/:id` |
-| `identity-providers` | `admin` | `/console/identity-providers` | `identity_providers:read` | create/edit/delete/test → `identity_providers:write` |
-| `tokens` | `admin` (identity only; **not** in navigation) | `null` (UI in Account Center) | `tokens:read` | create/edit/delete → `tokens:write`; see `docs/business-account.md` |
-| `account` | `workbench` (identity only; **not** in navigation) | `null` | `console:access` | show `/console/account` → `console:access`; see `docs/business-account.md` |
-| `sources` | `metadata` | `/console/sources` | `sources:read` | create/edit/delete → `sources:write`; show `/console/sources/:id/structure-diffs` → `metadata:read`; alias show `/console/sources/:id/structure-diffs/:diffId` |
-| `catalog` | `metadata` | `/console/catalog` | `metadata:read` | edit → `metadata:write`; show → `metadata:read`; sample → `catalog:sample` (no route); show route `/console/catalog/:id` |
-| `business-domains` | `metadata` | `/console/business-domains` | `metadata:read` | create/edit/delete → `metadata:write` |
-| `type-mappings` | `metadata` | `/console/type-mappings` | `metadata:read` | edit → `metadata:write` (no create/delete) |
-| `jobs` | `operations` | `/console/jobs` | `jobs:run` | — |
-| `schedules` | `operations` | `/console/schedules` | `jobs:run` | edit/delete → `jobs:run`; show `/console/sources/:id/schedules` → `jobs:run` |
-| `settings` | `settings` | `/console/settings` | `settings:read` | edit → `settings:write` |
-| `branding` | `settings` | `/console/branding` | `branding:read` | edit → `branding:write` |
+| Module id | Group | `icon` | `routes.list` | `actions.list` (nav) | Other routes / actions |
+| --- | --- | --- | --- | --- | --- |
+| `dashboard` | `workbench` | `layout-dashboard` | `/console` | `dashboard:read` | — |
+| `users` | `admin` | `users` | `/console/users` | `users:read` | create/edit/delete → `users:write`; create route `/console/users/new`; show `/console/users/:id` → `users:read` |
+| `user-groups` | `admin` | `users-group` | `/console/user-groups` | `users:read` | create/edit/delete → `users:write`; show `/console/user-groups/:id` → `users:read` |
+| `subject-attributes` | `admin` | `id-badge` | `/console/subject-attributes` | `users:read` | create/edit/delete → `users:write` |
+| `roles` | `admin` | `shield-lock` | `/console/roles` | `roles:read` | create/edit/delete → `roles:write`; create `/console/roles/new`; edit `/console/roles/:id` |
+| `identity-providers` | `admin` | `plug` | `/console/identity-providers` | `identity_providers:read` | create/edit/delete/test → `identity_providers:write` |
+| `tokens` | `admin` (identity only; **not** in navigation) | `key` | `null` (UI in Account Center) | `tokens:read` | create/edit/delete → `tokens:write`; see `docs/business-account.md` |
+| `account` | `workbench` (identity only; **not** in navigation) | `user-circle` | `null` | `console:access` | show `/console/account` → `console:access`; see `docs/business-account.md` |
+| `sources` | `metadata` | `database` | `/console/sources` | `sources:read` | create/edit/delete → `sources:write`; show `/console/sources/:id/structure-diffs` → `metadata:read`; alias show `/console/sources/:id/structure-diffs/:diffId` |
+| `catalog` | `metadata` | `table` | `/console/catalog` | `metadata:read` | edit → `metadata:write`; show → `metadata:read`; sample → `catalog:sample` (no route); show route `/console/catalog/:id` |
+| `business-domains` | `metadata` | `category` | `/console/business-domains` | `metadata:read` | create/edit/delete → `metadata:write` |
+| `type-mappings` | `metadata` | `arrows-exchange` | `/console/type-mappings` | `metadata:read` | edit → `metadata:write` (no create/delete) |
+| `entities` | `entity` | `box` | `/console/entities` | `entity:read` | create/edit/delete → `entity:write`; create `/console/entities/new`; edit `/console/entities/:id/edit`; show `/console/entities/:id` → `entity:read` |
+| `dictionaries` | `entity` | `book` | `/console/dictionaries` | `entity:read` | create/edit/delete → `entity:write`; create `/console/dictionaries/new`; edit `/console/dictionaries/:id/edit`; show `/console/dictionaries/:id` → `entity:read` |
+| `channels` | `channel` | `route` | `/console/channels` | `channel:read` | create/edit/delete → `channel:write`; create `/console/channels/new`; edit `/console/channels/:id/edit`; show `/console/channels/:id` → `channel:read`; alias show `/console/channels/:id/runs/:jobId` |
+| `channel-variables` | `channel` | `variable` | `/console/channel-variables` | `channel:read` | delete → `channel:write` |
+| `jobs` | `operations` | `list-check` | `/console/jobs` | `jobs:run` | — |
+| `schedules` | `operations` | `clock` | `/console/schedules` | `jobs:run` | edit/delete → `jobs:run`; show `/console/sources/:id/schedules` → `jobs:run` |
+| `settings` | `settings` | `settings` | `/console/settings` | `settings:read` | edit → `settings:write` |
+| `branding` | `settings` | `palette` | `/console/branding` | `branding:read` | edit → `branding:write` |
+| `model-services` | `settings` | `brain` | `/console/model-services` | `model_services:read` | create/edit/delete → `model_services:write` |

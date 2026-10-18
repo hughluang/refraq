@@ -1,26 +1,16 @@
 "use client";
 
-import {
-  Badge,
-  Button,
-  Checkbox,
-  Code,
-  Group,
-  Modal,
-  Stack,
-  Table,
-  Text,
-} from "@mantine/core";
-import {
-  CanAccess,
-  useCan,
-  useNotification,
-  useTranslate,
-} from "@refinedev/core";
+import { Checkbox, Code, Modal, Stack, Table, Text } from "@mantine/core";
+import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
+
+import { StatusBadge } from "@/components/display/StatusBadge";
+import { presentIdentityProviderEnabled } from "@/components/display/statusTone";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
 import { ListTable } from "@/components/display/ListTable";
+import { RecordReference } from "@/components/display/RecordReference";
+import { RowActions, type RowActionVerb } from "@/components/display/RowActions";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
@@ -43,6 +33,7 @@ import type {
 } from "@/features/identity-providers/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
+import { useListQuery } from "@/hooks/useListQuery";
 import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
@@ -51,14 +42,17 @@ const PAGE_SIZE = 50;
 export function IdentityProviderList() {
   const t = useTranslate();
   const { open } = useNotification();
-  const { data: canWrite } = useCan({
+  const { data: canEdit } = useCan({
     resource: ModuleId.identityProviders,
-    action: ModuleAction.create,
+    action: ModuleAction.edit,
+  });
+  const { data: canDelete } = useCan({
+    resource: ModuleId.identityProviders,
+    action: ModuleAction.delete,
   });
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<IdentityProvider | undefined>();
-  const [busy, setBusy] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResult, setTestResult] =
     useState<IdentityProviderTestResult | null>(null);
@@ -69,16 +63,19 @@ export function IdentityProviderList() {
   const [deleting, setDeleting] = useState(false);
   const [disabling, setDisabling] = useState(false);
 
+  const query = useListQuery({ search: false });
   const fetchPage = useCallback(
-    (query: PageQuery) => listIdentityProviders(query),
+    (page: PageQuery) => listIdentityProviders(page),
     [],
   );
   const list = useConsolePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
+    page: query.page,
+    onPageChange: query.setPage,
   });
   const { items, reload } = list;
-  const showActions = Boolean(canWrite?.can);
+  const showActions = Boolean(canEdit?.can || canDelete?.can);
 
   const notifyError = (err: unknown, fallback: string) => {
     open?.({
@@ -88,30 +85,23 @@ export function IdentityProviderList() {
   };
 
   const save = async (values: IdentityProviderFormValues) => {
-    setBusy(true);
-    try {
-      const payload = providerPayload(values, editing ? "edit" : "create");
-      if (editing) {
-        await patchIdentityProvider(editing.id, payload);
-        open?.({
-          type: "success",
-          message: t("identityProviders.update.success"),
-        });
-      } else {
-        await createIdentityProvider(payload);
-        open?.({
-          type: "success",
-          message: t("identityProviders.create.success"),
-        });
-      }
-      setFormOpen(false);
-      setEditing(undefined);
-      await reload();
-    } catch (err) {
-      notifyError(err, t("common.error.loadFailed"));
-    } finally {
-      setBusy(false);
+    const payload = providerPayload(values, editing ? "edit" : "create");
+    if (editing) {
+      await patchIdentityProvider(editing.id, payload);
+      open?.({
+        type: "success",
+        message: t("identityProviders.update.success"),
+      });
+    } else {
+      await createIdentityProvider(payload);
+      open?.({
+        type: "success",
+        message: t("identityProviders.create.success"),
+      });
     }
+    setFormOpen(false);
+    setEditing(undefined);
+    await reload();
   };
 
   const toggleEnabled = async (row: IdentityProvider) => {
@@ -124,17 +114,6 @@ export function IdentityProviderList() {
       } catch (err) {
         notifyError(err, t("common.error.loadFailed"));
       }
-      return;
-    }
-    try {
-      await patchIdentityProvider(row.id, { enabled: true });
-      open?.({
-        type: "success",
-        message: t("identityProviders.enable.success"),
-      });
-      await reload();
-    } catch (err) {
-      notifyError(err, t("common.error.loadFailed"));
     }
   };
 
@@ -225,6 +204,7 @@ export function IdentityProviderList() {
         list={list}
         columnCount={showActions ? 8 : 7}
         emptyMessage={t("identityProviders.empty")}
+        emptyAction={createAction}
         head={
           <Table.Tr>
             <Table.Th>{t("identityProviders.fields.display_name")}</Table.Th>
@@ -245,7 +225,7 @@ export function IdentityProviderList() {
         {items.map((row) => (
           <Table.Tr key={row.id}>
             <Table.Td>
-              <Text fw={600}>{row.display_name}</Text>
+              <RecordReference name={row.display_name} recordKey={row.client_id} />
             </Table.Td>
             <Table.Td>{row.protocol}</Table.Td>
             <Table.Td>
@@ -257,11 +237,10 @@ export function IdentityProviderList() {
               {row.group_claim || t("identityProviders.fields.notConfigured")}
             </Table.Td>
             <Table.Td>
-              <Badge color={row.enabled ? "green" : "gray"} variant="light">
-                {row.enabled
-                  ? t("identityProviders.status.enabled")
-                  : t("identityProviders.status.disabled")}
-              </Badge>
+              <StatusBadge
+                tone={presentIdentityProviderEnabled(row.enabled).tone}
+                labelKey={presentIdentityProviderEnabled(row.enabled).labelKey}
+              />
             </Table.Td>
             <Table.Td>
               {row.client_secret_configured
@@ -271,63 +250,65 @@ export function IdentityProviderList() {
             <Table.Td>{row.bound_user_count}</Table.Td>
             {showActions ? (
               <Table.Td>
-                <Group gap="xs" wrap="wrap">
-                  <CanAccess
-                    resource={ModuleId.identityProviders}
-                    action={ModuleAction.edit}
-                  >
-                    <Button
-                      size="compact-xs"
-                      variant="light"
-                      onClick={() => {
+                <RowActions
+                  recordName={row.display_name}
+                  verbs={[
+                    {
+                      key: "edit",
+                      label: t("actions.edit"),
+                      hidden: !canEdit?.can,
+                      safety: "immediate",
+                      onClick: () => {
                         setEditing(row);
                         setFormOpen(true);
-                      }}
-                    >
-                      {t("actions.edit")}
-                    </Button>
-                  </CanAccess>
-                  <CanAccess
-                    resource={ModuleId.identityProviders}
-                    action={ModuleAction.edit}
-                  >
-                    <Button
-                      size="compact-xs"
-                      variant="light"
-                      onClick={() => void toggleEnabled(row)}
-                    >
-                      {row.enabled
-                        ? t("identityProviders.disable")
-                        : t("identityProviders.enable")}
-                    </Button>
-                  </CanAccess>
-                  <CanAccess
-                    resource={ModuleId.identityProviders}
-                    action={ModuleAction.edit}
-                  >
-                    <Button
-                      size="compact-xs"
-                      variant="light"
-                      loading={testingId === row.id}
-                      onClick={() => void runTest(row)}
-                    >
-                      {t("identityProviders.test")}
-                    </Button>
-                  </CanAccess>
-                  <CanAccess
-                    resource={ModuleId.identityProviders}
-                    action={ModuleAction.delete}
-                  >
-                    <Button
-                      size="compact-xs"
-                      variant="light"
-                      color="red"
-                      onClick={() => void openDelete(row)}
-                    >
-                      {t("actions.delete")}
-                    </Button>
-                  </CanAccess>
-                </Group>
+                      },
+                    },
+                    ...(row.enabled
+                      ? [
+                          {
+                            key: "disable",
+                            label: t("identityProviders.disable"),
+                            hidden: !canEdit?.can,
+                            safety: "confirm" as const,
+                            onClick: () => void toggleEnabled(row),
+                          },
+                        ]
+                      : [
+                          {
+                            key: "enable",
+                            label: t("identityProviders.enable"),
+                            hidden: !canEdit?.can,
+                            action: {
+                              safety: "immediate" as const,
+                              recordName: row.display_name,
+                              outcome: t("identityProviders.enable.outcome"),
+                              execute: () =>
+                                patchIdentityProvider(row.id, { enabled: true }),
+                              onSuccess: () => reload(),
+                            },
+                          },
+                        ]),
+                    {
+                      key: "test",
+                      label: t("identityProviders.test"),
+                      hidden: !canEdit?.can,
+                      disabledReason:
+                        testingId === row.id
+                          ? t("identityProviders.test")
+                          : undefined,
+                      safety: "immediate",
+                      onClick: () => void runTest(row),
+                    },
+                    {
+                      key: "delete",
+                      label: t("actions.delete"),
+                      color: "red",
+                      hidden: !canDelete?.can,
+                      safety: "confirm",
+                      onClick: () => void openDelete(row),
+                    },
+                  ] satisfies RowActionVerb[]}
+                />
               </Table.Td>
             ) : null}
           </Table.Tr>
@@ -335,25 +316,16 @@ export function IdentityProviderList() {
       </ListTable>
 
       <Modal.Stack>
-        <Modal
-          stackId="identity-provider-form"
+        <SpecDrivenForm
+          key={editing?.id ?? "create"}
           opened={formOpen}
-          onClose={() => setFormOpen(false)}
-          title={
-            editing
-              ? t("identityProviders.edit")
-              : t("identityProviders.create")
-          }
-          size="lg"
-        >
-          <SpecDrivenForm
-            key={editing?.id ?? "create"}
-            provider={editing}
-            loading={busy}
-            onSubmit={(values) => void save(values)}
-            onCancel={() => setFormOpen(false)}
-          />
-        </Modal>
+          provider={editing}
+          onSubmit={save}
+          onClose={() => {
+            setFormOpen(false);
+            setEditing(undefined);
+          }}
+        />
 
         <Modal
           stackId="identity-provider-test"

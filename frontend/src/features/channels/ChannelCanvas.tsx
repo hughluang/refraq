@@ -94,8 +94,13 @@ import {
   type PortPlacement,
 } from "@/features/channels/portLayout";
 import {
+  presentNodeStatus,
+  presentProblemSeverity,
+  toneMantineColor,
+} from "@/components/display/statusTone";
+import { AlertIcon, CloseIcon, PlayIcon, PlusIcon, RedoIcon, TestIcon, UndoIcon } from "@/components/icons";
+import {
   formatGraphProblem,
-  problemColor,
   problemIdentity,
   type ProblemGraph,
 } from "@/features/channels/problemLabel";
@@ -138,7 +143,7 @@ const NODE_DRAG_THRESHOLD = 4;
 const CHANNEL_EDGE_TYPE = "channel";
 const nodeTypes = { channel: ChannelFlowNode };
 const edgeTypes = { [CHANNEL_EDGE_TYPE]: ChannelFlowEdge };
-const PROBLEM_STROKE = "var(--mantine-color-red-6)";
+const PROBLEM_STROKE = "var(--refraq-tone-danger)";
 const PROBLEM_HOVER_CLOSE_MS = 120;
 
 function highlightTargets(problem: GraphProblem, active: ProblemHighlight): boolean {
@@ -852,12 +857,12 @@ function ChannelCanvasBody({
       });
   };
   const cancelTest = () => {
-    if (!channelId || !editorJobId) return;
-    void cancelJob(editorJobId)
-      .then(() => getRun(channelId, editorJobId))
-      .then(setEditorResult)
-      .catch((error: unknown) => {
-        setEditorError(problemMessage(t, error, t("channels.editor.cancelFailed")));
+    if (!channelId || !editorJobId) return Promise.resolve();
+    const jobId = editorJobId;
+    return cancelJob(jobId)
+      .then(() => getRun(channelId, jobId))
+      .then((detail) => {
+        setEditorResult(detail);
       });
   };
   const pinNode = (nodeId: string, output: unknown) => {
@@ -983,7 +988,7 @@ function ChannelCanvasBody({
                   disabled={!mutable}
                   onClick={openFullCatalog}
                 >
-                  <PlusIcon />
+                  <PlusIcon size={14} />
                 </ControlButton>
               ) : null}
               {appearance === "edit" ? (
@@ -994,7 +999,7 @@ function ChannelCanvasBody({
                   disabled={!mutable || !canUndo}
                   onClick={undo}
                 >
-                  <HistoryIcon direction="undo" />
+                  <UndoIcon size={14} />
                 </ControlButton>
               ) : null}
               {appearance === "edit" ? (
@@ -1005,7 +1010,7 @@ function ChannelCanvasBody({
                   disabled={!mutable || !canRedo}
                   onClick={redo}
                 >
-                  <HistoryIcon direction="redo" />
+                  <RedoIcon size={14} />
                 </ControlButton>
               ) : null}
             </Controls>
@@ -1141,6 +1146,7 @@ function ChannelCanvasBody({
                         problemTexts={editorProblems.map((problem) =>
                           formatGraphProblem(t, problem, labelGraph),
                         )}
+                        recordName={selected.data.name || selected.data.ref || selected.id}
                         pinned={pinnedIds.has(selected.id)}
                         canCancel={editorJobId != null}
                         onTest={runTest}
@@ -1378,7 +1384,7 @@ function ProblemsControl({
           {pulseToken > 0 ? (
             <span key={pulseToken} className="channel-canvas-problems__pulse" />
           ) : null}
-          <WarningIcon />
+          <AlertIcon size={14} />
           <span className="channel-canvas-problems__badge">{problems.length}</span>
         </ControlButton>
       </Popover.Target>
@@ -1390,9 +1396,10 @@ function ProblemsControl({
           {problems.map((problem) => {
             const itemLabel = formatGraphProblem(t, problem, graph);
             const key = problemIdentity(problem);
-            const color = problemColor(problem.severity);
+            const toneName = presentProblemSeverity(problem.severity);
+            const color = toneMantineColor(toneName);
             const tone =
-              color === "yellow" ? "channel-canvas-problems__item--warning" : undefined;
+              toneName === "warning" ? "channel-canvas-problems__item--warning" : undefined;
             if (!problem.node_id && !problem.edge_id) {
               return (
                 <Text key={key} c={color} className={tone} size="sm">
@@ -1422,108 +1429,6 @@ function ProblemsControl({
         </Stack>
       </Popover.Dropdown>
     </Popover>
-  );
-}
-
-function WarningIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M10.3 4.3 2.4 18a2 2 0 0 0 1.7 3h16a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z" />
-      <path d="M12 9v4" />
-      <path d="M12 17h.01" />
-    </svg>
-  );
-}
-
-function PlusIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      aria-hidden="true"
-    >
-      <path d="M12 5v14" />
-      <path d="M5 12h14" />
-    </svg>
-  );
-}
-
-function HistoryIcon({ direction }: { direction: "undo" | "redo" }) {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      style={direction === "redo" ? { transform: "scaleX(-1)" } : undefined}
-    >
-      <path d="M9 14 4 9l5-5" />
-      <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
-    </svg>
-  );
-}
-
-function PlayIcon() {
-  return (
-    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M8 5v14l11-7z" />
-    </svg>
-  );
-}
-
-function TestIcon() {
-  return (
-    <svg
-      width="10"
-      height="10"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M9 3h6" />
-      <path d="M10 3v5L5.2 19a2 2 0 0 0 1.8 3h10a2 2 0 0 0 1.8-3L14 8V3" />
-    </svg>
-  );
-}
-
-function CloseIcon() {
-  return (
-    <svg
-      width="10"
-      height="10"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="3"
-      strokeLinecap="round"
-      aria-hidden="true"
-    >
-      <path d="M6 6l12 12M18 6 6 18" />
-    </svg>
   );
 }
 
@@ -1636,7 +1541,7 @@ function ChannelFlowEdge({
               void deleteElements({ edges: [{ id }] });
             }}
           >
-            <CloseIcon />
+            <CloseIcon size={10} />
           </button>
         </EdgeToolbar>
       ) : null}
@@ -1708,7 +1613,7 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
                 run.onTest(id);
               }}
             >
-              <TestIcon />
+              <TestIcon size={10} />
             </button>
           ) : null}
           <button
@@ -1723,7 +1628,7 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
               onRun(id);
             }}
           >
-            <PlayIcon />
+            <PlayIcon size={10} />
           </button>
           <button
             type="button"
@@ -1736,7 +1641,7 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
               void deleteElements({ nodes: [{ id }] });
             }}
           >
-            <CloseIcon />
+            <CloseIcon size={10} />
           </button>
         </>
       ) : null}
@@ -1754,7 +1659,7 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
       ) : null}
       {phase === "dead" ? (
         <Text size="xs" c="dimmed" className="channel-flow-node__status">
-          {t("channels.run.notRun")}
+          {t(presentNodeStatus("dead").labelKey)}
         </Text>
       ) : null}
       {run.pinnedIds.has(id) ? (

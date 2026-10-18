@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 
 from backend.core.pagination import PageParams, page_params
 
@@ -58,8 +58,11 @@ def list_roles(
     roles: RoleStore = Depends(get_role_store),
     users: UserStore = Depends(get_user_store),
     page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
+    q: str | None = Query(default=None),
 ) -> RoleListResponse:
-    records, total = roles.list_roles(limit=page.limit, offset=page.offset)
+    records, total = roles.list_roles(
+        q=(q or "").strip() or None, limit=page.limit, offset=page.offset
+    )
     return RoleListResponse(
         items=[_to_summary(record, users) for record in records],
         total=total,

@@ -43,6 +43,7 @@ const FREQUENCIES: CronFrequency[] = [
 type CronFieldProps = {
   label?: ReactNode;
   description?: ReactNode;
+  helper?: ReactNode;
   error?: ReactNode;
   notes?: readonly FieldNote[];
   openSignal?: string | null;
@@ -76,6 +77,7 @@ function isHourStep(value: number): value is HourStep {
 export function CronField({
   label,
   description,
+  helper,
   error,
   notes,
   openSignal = null,
@@ -132,17 +134,19 @@ export function CronField({
         <FieldChrome
           label={label}
           description={description}
+          helper={helper}
           notes={merged}
           required={required}
           openSignal={openSignal}
           editSignal={value}
         >
-          {({ id, invalid }) => (
+          {({ id, invalid, describedBy }) => (
             <TextInput
               id={id}
               required={required}
               error={invalid || undefined}
               withAsterisk={false}
+              aria-describedby={describedBy}
               value={value}
               onChange={(event) => onChange?.(event.currentTarget.value)}
             />
@@ -153,16 +157,18 @@ export function CronField({
           <FieldChrome
             label={label ?? t("form.cron.frequency")}
             description={description}
+            helper={helper}
             notes={merged}
             required={required}
             openSignal={openSignal}
             editSignal={value}
           >
-            {({ id, invalid }) => (
+            {({ id, invalid, describedBy }) => (
               <Select
                 id={id}
                 error={invalid || undefined}
                 withAsterisk={false}
+                aria-describedby={describedBy}
                 allowDeselect={false}
                 data={FREQUENCIES.map((frequency) => ({
                   value: frequency,

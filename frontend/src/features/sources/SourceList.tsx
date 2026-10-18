@@ -1,26 +1,28 @@
 "use client";
 
+import { Button, Modal, Stack, Table } from "@mantine/core";
+import { FormDialog } from "@/components/form/FormDialog";
 import {
-  Badge,
-  Button,
-  Group,
-  Modal,
-  Stack,
-  Table,
-  Text,
-  Tooltip,
-} from "@mantine/core";
-import { useForm } from "@mantine/form";
-import { CanAccess, useCan, useNotification, useTranslate } from "@refinedev/core";
-import Link from "next/link";
+  FormErrorSummary,
+  saveFailureFrom,
+  type SaveFailure,
+} from "@/components/form/FormErrorSummary";
+import { useConsoleForm } from "@/components/form/useConsoleForm";
+import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
+import { StatusBadge } from "@/components/display/StatusBadge";
+import { presentSourceStatus } from "@/components/display/statusTone";
 import { SelectField } from "@/components/form/SelectField";
 import { TextareaField } from "@/components/form/TextareaField";
 import { TextField } from "@/components/form/TextField";
 import { ListTable } from "@/components/display/ListTable";
+import { ListToolbar } from "@/components/display/ListToolbar";
+import { RecordReference } from "@/components/display/RecordReference";
+import { RowActions } from "@/components/display/RowActions";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
+import { useConsoleNavigation } from "@/components/navigation/useConsoleNavigation";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
@@ -33,6 +35,7 @@ import {
   testSource,
   testSourceDraft,
 } from "@/features/sources/api/sources";
+import { engineLabel } from "@/features/sources/engineLabel";
 import { SpecTree, defaultsFromSchema } from "@/features/sources/SpecTree";
 import type {
   ConnectorSpec,
@@ -42,6 +45,7 @@ import type {
 } from "@/features/sources/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
+import { useListQuery } from "@/hooks/useListQuery";
 import { problemMessage } from "@/lib/problem";
 import type { PageQuery } from "@/lib/pagination";
 
@@ -55,11 +59,11 @@ type IdentityForm = {
   engine: Engine | "";
 };
 
-const ENGINE_OPTIONS = [
-  { value: "postgresql", label: "PostgreSQL" },
-  { value: "mssql", label: "MSSQL" },
-  { value: "oracle", label: "Oracle" },
-];
+const ENGINES = ["postgresql", "mssql", "oracle"] as const;
+
+function selectedEngine(value: string): Engine | undefined {
+  return ENGINES.find((engine) => engine === value);
+}
 
 function emptyIdentity(engine: Engine = "postgresql"): IdentityForm {
   return {
@@ -83,6 +87,11 @@ function scopeLabel(source: Source): string {
 
 export function SourceList() {
   const t = useTranslate();
+  const { push } = useConsoleNavigation();
+  const engineOptions = ENGINES.map((value) => ({
+    value,
+    label: engineLabel(t, value),
+  }));
   const { open } = useNotification();
   const { data: canWrite } = useCan({
     resource: ModuleId.sources,
@@ -99,31 +108,43 @@ export function SourceList() {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Source | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const [testing, setTesting] = useState(false);
   const [schema, setSchema] = useState<ConnectorSpec | null>(null);
   const [access, setAccess] = useState<SourceAccess>({});
 
   const engineConfirm = useConfirmAction<Engine>();
-  const deleteConfirm = useConfirmAction<Source>();
-  const [deleting, setDeleting] = useState(false);
+  const query = useListQuery({
+    filters: [{ key: "engine", type: "select", defaultValue: "" }],
+  });
+  const engine = query.select("engine");
 
   const showActions = Boolean(
     canWrite?.can || canRunJobs?.can || canReadDiffs?.can,
   );
 
   const fetchPage = useCallback(
-    (query: PageQuery) => listSources(query),
-    [],
+    (page: PageQuery) =>
+      listSources({
+        ...page,
+        q: query.search || undefined,
+        engine: selectedEngine(engine),
+      }),
+    [query.search, engine],
   );
   const list = useConsolePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
+    resetDeps: [query.search, engine],
+    filtered: query.isFiltered,
+    page: query.page,
+    onPageChange: query.setPage,
   });
   const { items, reload } = list;
 
-  const form = useForm<IdentityForm>({
+  const form = useConsoleForm<IdentityForm>({
     initialValues: emptyIdentity(),
+    onValuesChange: () => setSaveFailure(null),
     validate: {
       key: (v) =>
         editing ? null : v.trim() ? null : t("sources.validation.required"),
@@ -141,7 +162,9 @@ export function SourceList() {
   const openCreate = async () => {
     setEditing(null);
     form.setValues(emptyIdentity("postgresql"));
+    form.markSaved();
     form.clearErrors();
+    setSaveFailure(null);
     try {
       const defaults = await loadSchemaAndDefaults("postgresql");
       setAccess(defaults);
@@ -169,7 +192,9 @@ export function SourceList() {
       status: source.status === "disabled" ? "disabled" : "active",
       engine,
     });
+    form.markSaved();
     form.clearErrors();
+    setSaveFailure(null);
     try {
       const defaults = await loadSchemaAndDefaults(engine);
       try {
@@ -254,26 +279,55 @@ export function SourceList() {
     }
   };
 
-  const confirmDelete = async () => {
-    const pending = deleteConfirm.pending;
-    if (!pending) return;
-    setDeleting(true);
+  const closeModal = () => {
+    setModalOpen(false);
+    setSaveFailure(null);
+    form.reset();
+  };
+
+  const saveSource = async (values: IdentityForm) => {
+    if (!values.engine) return;
     try {
-      await deleteSource(pending.id);
-      open?.({
-        type: "success",
-        message: t("sources.delete.success"),
-      });
-      deleteConfirm.close();
+      if (editing) {
+        const updated = await patchSource(editing.id, {
+          name: values.name.trim(),
+          description: values.description.trim() || null,
+          status: values.status,
+          engine: values.engine,
+          access,
+        });
+        open?.({
+          type: "success",
+          message: t("sources.update.success"),
+        });
+        if (updated.schedules && updated.schedules.length > 0) {
+          open?.({
+            type: "success",
+            message: t("schedules.seededOnSourceUpdate"),
+          });
+        }
+      } else {
+        await createSource({
+          key: values.key.trim(),
+          name: values.name.trim(),
+          kind: "database",
+          description: values.description.trim() || null,
+          engine: values.engine,
+          access,
+        });
+        open?.({
+          type: "success",
+          message: t("sources.create.success"),
+        });
+      }
+      form.markSaved();
+      setSaveFailure(null);
+      setModalOpen(false);
       await reload();
     } catch (err) {
-      open?.({
-        type: "error",
-        message:
-          problemMessage(t, err, t("sources.delete.error")),
-      });
-    } finally {
-      setDeleting(false);
+      setSaveFailure(
+        saveFailureFrom(t, err, form.applyApiError(err), String(err)),
+      );
     }
   };
 
@@ -291,14 +345,29 @@ export function SourceList() {
       title={t("sources.title")}
       description={t("sources.description")}
       actions={createAction}
+      toolbar={
+        <ListToolbar
+          query={query}
+          searchPlaceholder={t("sources.search")}
+          filters={[
+            {
+              key: "engine",
+              label: t("sources.fields.engine"),
+              options: engineOptions,
+            },
+          ]}
+        />
+      }
     >
       <ListTable
         list={list}
-        columnCount={showActions ? 8 : 7}
+        columnCount={showActions ? 7 : 6}
         emptyMessage={t("sources.empty")}
+        emptyAction={createAction}
+        noMatchMessage={t("sources.list.noMatch")}
+        onClearFilters={query.clear}
         head={
           <Table.Tr>
-            <Table.Th>{t("sources.fields.key")}</Table.Th>
             <Table.Th>{t("sources.fields.name")}</Table.Th>
             <Table.Th>{t("sources.fields.engine")}</Table.Th>
             <Table.Th>{t("sources.fields.host")}</Table.Th>
@@ -313,9 +382,18 @@ export function SourceList() {
       >
         {items.map((source) => (
           <Table.Tr key={source.id}>
-            <Table.Td>{source.key}</Table.Td>
-            <Table.Td>{source.name}</Table.Td>
-            <Table.Td>{source.engine ?? "—"}</Table.Td>
+            <Table.Td>
+              <RecordReference
+                name={source.name}
+                recordKey={source.key}
+                href={
+                  canReadDiffs?.can
+                    ? `/console/sources/${source.id}/structure-diffs`
+                    : undefined
+                }
+              />
+            </Table.Td>
+            <Table.Td>{source.engine ? engineLabel(t, source.engine) : "—"}</Table.Td>
             <Table.Td>
               {typeof source.access?.host === "string"
                 ? source.access.host
@@ -323,12 +401,10 @@ export function SourceList() {
             </Table.Td>
             <Table.Td>{scopeLabel(source)}</Table.Td>
             <Table.Td>
-              <Badge
-                color={source.status === "active" ? "green" : "gray"}
-                variant="light"
-              >
-                {source.status}
-              </Badge>
+              <StatusBadge
+                tone={presentSourceStatus(source.status).tone}
+                labelKey={presentSourceStatus(source.status).labelKey}
+              />
             </Table.Td>
             <Table.Td>
               {source.has_access
@@ -337,205 +413,138 @@ export function SourceList() {
             </Table.Td>
             {showActions ? (
               <Table.Td>
-                <Group gap="xs" wrap="nowrap">
-                  <CanAccess
-                    resource={ModuleId.sources}
-                    action={ModuleAction.show}
-                  >
-                    <Button
-                      component={Link}
-                      href={`/console/sources/${source.id}/structure-diffs`}
-                      size="compact-xs"
-                      variant="default"
-                    >
-                      {t("structureDiffs.open")}
-                    </Button>
-                  </CanAccess>
-                  <CanAccess
-                    resource={ModuleId.jobs}
-                    action={ModuleAction.list}
-                  >
-                    <Button
-                      component={Link}
-                      href={`/console/sources/${source.id}/schedules`}
-                      size="compact-xs"
-                      variant="light"
-                    >
-                      {t("schedules.related.open")}
-                    </Button>
-                  </CanAccess>
-                  {canWrite?.can ? (
-                    <>
-                      <Button
-                        size="compact-xs"
-                        variant="light"
-                        onClick={() => void openEdit(source)}
-                      >
-                        {t("sources.edit")}
-                      </Button>
-                      <Tooltip
-                        label={t("sources.delete.disabledHint")}
-                        disabled={source.status === "disabled"}
-                      >
-                        <span>
-                          <Button
-                            size="compact-xs"
-                            variant="light"
-                            color="red"
-                            disabled={
-                              source.status !== "disabled" || deleting
-                            }
-                            onClick={() => deleteConfirm.open(source)}
-                          >
-                            {t("sources.delete")}
-                          </Button>
-                        </span>
-                      </Tooltip>
-                    </>
-                  ) : null}
-                </Group>
+                <RowActions
+                  recordName={source.name}
+                  verbs={[
+                    {
+                      key: "diffs",
+                      label: t("structureDiffs.open"),
+                      hidden: !canReadDiffs?.can,
+                      safety: "immediate",
+                      onClick: () =>
+                        push(`/console/sources/${source.id}/structure-diffs`),
+                    },
+                    {
+                      key: "schedules",
+                      label: t("schedules.related.open"),
+                      hidden: !canRunJobs?.can,
+                      safety: "immediate",
+                      onClick: () =>
+                        push(`/console/sources/${source.id}/schedules`),
+                    },
+                    {
+                      key: "edit",
+                      label: t("sources.edit"),
+                      hidden: !canWrite?.can,
+                      safety: "immediate",
+                      onClick: () => void openEdit(source),
+                    },
+                    {
+                      key: "delete",
+                      label: t("sources.delete"),
+                      color: "red",
+                      hidden: !canWrite?.can,
+                      disabledReason:
+                        source.status === "disabled"
+                          ? undefined
+                          : t("sources.delete.disabledHint"),
+                      action: {
+                        safety: "confirm",
+                        recordName: source.name,
+                        title: t("sources.delete.confirmTitle"),
+                        consequence: t("sources.delete.consequence"),
+                        confirmLabel: t("sources.delete"),
+                        confirmColor: "red",
+                        outcome: t("sources.delete.success"),
+                        execute: () => deleteSource(source.id),
+                        onSuccess: () => reload(),
+                      },
+                    },
+                  ]}
+                />
               </Table.Td>
             ) : null}
           </Table.Tr>
         ))}
       </ListTable>
 
-      <Modal.Stack>
-        <Modal
-          stackId="source-form"
-          opened={modalOpen}
-          onClose={() => setModalOpen(false)}
-          title={editing ? t("sources.edit") : t("sources.create")}
-          size="lg"
-        >
-          <form
-            onSubmit={form.onSubmit(async (values) => {
-              if (!values.engine) return;
-              setBusy(true);
-              try {
-                if (editing) {
-                  const updated = await patchSource(editing.id, {
-                    name: values.name.trim(),
-                    description: values.description.trim() || null,
-                    status: values.status,
-                    engine: values.engine,
-                    access,
-                  });
-                  open?.({
-                    type: "success",
-                    message: t("sources.update.success"),
-                  });
-                  if (updated.schedules && updated.schedules.length > 0) {
-                    open?.({
-                      type: "success",
-                      message: t("schedules.seededOnSourceUpdate"),
-                    });
-                  }
-                } else {
-                  await createSource({
-                    key: values.key.trim(),
-                    name: values.name.trim(),
-                    kind: "database",
-                    description: values.description.trim() || null,
-                    engine: values.engine,
-                    access,
-                  });
-                  open?.({
-                    type: "success",
-                    message: t("sources.create.success"),
-                  });
-                }
-                setModalOpen(false);
-                await reload();
-              } catch (err) {
-                open?.({
-                  type: "error",
-                  message: problemMessage(t, err, String(err)),
-                });
-              } finally {
-                setBusy(false);
-              }
-            })}
+      <FormDialog
+        opened={modalOpen}
+        onClose={closeModal}
+        title={editing ? t("sources.edit") : t("sources.create")}
+        size="lg"
+        dirty={form.dirty}
+        submitting={form.submitting}
+        submitLabel={t("common.save")}
+        summary={<FormErrorSummary failure={saveFailure} />}
+        onSubmit={() => void form.submit(saveSource)}
+        leading={
+          <Button
+            type="button"
+            variant="default"
+            loading={testing}
+            disabled={form.submitting}
+            onClick={() => void runProbe()}
           >
-            <Stack gap="sm">
-              {!editing ? (
-                <TextField
-                  label={t("sources.fields.key")}
-                  required
-                  editable
-                  {...form.getInputProps("key")}
-                />
-              ) : null}
-              <TextField
-                label={t("sources.fields.name")}
-                required
-                editable
-                {...form.getInputProps("name")}
-              />
-              <TextareaField
-                label={t("sources.fields.description")}
-                autosize
-                minRows={2}
-                editable
-                {...form.getInputProps("description")}
-              />
-              {editing ? (
-                <SelectField
-                  label={t("sources.fields.status")}
-                  editable
-                  data={[
-                    { value: "active", label: "active" },
-                    { value: "disabled", label: "disabled" },
-                  ]}
-                  {...form.getInputProps("status")}
-                />
-              ) : null}
-              <SelectField
-                label={t("sources.fields.engine")}
-                data={ENGINE_OPTIONS}
-                required
-                editable
-                placeholder={t("sources.validation.required")}
-                value={form.values.engine || null}
-                onChange={(value) =>
-                  confirmEngineChange((value as Engine | null) ?? null)
-                }
-              />
+            {t("sources.test")}
+          </Button>
+        }
+      >
+        <Stack gap="sm">
+          {!editing ? (
+            <TextField
+              label={t("sources.fields.key")}
+              required
+              editable
+              {...form.fieldProps("key")}
+            />
+          ) : null}
+          <TextField
+            label={t("sources.fields.name")}
+            required
+            editable
+            {...form.fieldProps("name")}
+          />
+          <TextareaField
+            label={t("sources.fields.description")}
+            autosize
+            minRows={2}
+            editable
+            {...form.fieldProps("description")}
+          />
+          {editing ? (
+            <SelectField
+              label={t("sources.fields.status")}
+              editable
+              data={[
+                { value: "active", label: t("sources.status.active") },
+                { value: "disabled", label: t("sources.status.disabled") },
+              ]}
+              {...form.fieldProps("status")}
+            />
+          ) : null}
+          <SelectField
+            label={t("sources.fields.engine")}
+            data={engineOptions}
+            required
+            editable
+            placeholder={t("sources.validation.required")}
+            {...form.fieldProps("engine")}
+            value={form.values.engine || null}
+            onChange={(value) =>
+              confirmEngineChange((value as Engine | null) ?? null)
+            }
+          />
+          <SpecTree
+            schema={schema}
+            value={access}
+            onChange={setAccess}
+            editable
+          />
+        </Stack>
+      </FormDialog>
 
-              <SpecTree
-                schema={schema}
-                value={access}
-                onChange={setAccess}
-                editable
-              />
-
-              <Group justify="space-between">
-                <Button
-                  type="button"
-                  variant="default"
-                  loading={testing}
-                  disabled={busy}
-                  onClick={() => void runProbe()}
-                >
-                  {t("sources.test")}
-                </Button>
-                <Group>
-                  <Button
-                    variant="default"
-                    onClick={() => setModalOpen(false)}
-                    disabled={busy || testing}
-                  >
-                    {t("common.cancel")}
-                  </Button>
-                  <Button type="submit" loading={busy} disabled={testing}>
-                    {t("common.save")}
-                  </Button>
-                </Group>
-              </Group>
-            </Stack>
-          </form>
-        </Modal>
-
+      <Modal.Stack>
         <ConfirmActionModal
           stackId="engine-switch"
           opened={engineConfirm.opened}
@@ -551,23 +560,6 @@ export function SourceList() {
           }}
         />
 
-        <ConfirmActionModal
-          stackId="source-delete"
-          opened={deleteConfirm.opened}
-          onClose={deleteConfirm.close}
-          title={t("sources.delete.confirmTitle")}
-          body={
-            deleteConfirm.pending
-              ? t("sources.delete.confirmBody", {
-                  name: deleteConfirm.pending.name,
-                })
-              : null
-          }
-          confirmColor="red"
-          loading={deleting}
-          size="sm"
-          onConfirm={() => void confirmDelete()}
-        />
       </Modal.Stack>
     </PageChrome>
   );

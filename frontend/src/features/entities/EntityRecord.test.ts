@@ -40,6 +40,10 @@ const LABELS: Record<string, string> = {
   "entities.deprecate.confirmTitle": "Deprecate this Business Entity?",
   "entities.deprecate.confirmBody":
     "Deprecate “{{name}}”. Authoring stops. This cannot be undone.",
+  "entities.deprecate.consequence": "Authoring stops.",
+  "feedback.confirm.body": "{{record}}: {{consequence}} This cannot be undone.",
+  "feedback.success.title": "{{outcome}} — {{record}}",
+  "problems.unknown": "Something went wrong.",
   "entities.deprecate.success": "Business Entity deprecated",
   "jobs.refresh": "Refresh",
   "actions.edit": "Edit",
@@ -72,10 +76,12 @@ vi.mock("@refinedev/core", () => ({
 vi.mock("next/link", () => ({
   default: ({ href, children }: { href: string; children: ReactNode }) =>
     createElement("a", { href }, children),
+  useLinkStatus: () => ({ pending: false }),
 }));
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  usePathname: () => "/console/entities",
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
   useSearchParams: () => new URLSearchParams(),
 }));
 

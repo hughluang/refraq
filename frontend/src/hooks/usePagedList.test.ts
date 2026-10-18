@@ -114,4 +114,33 @@ describe("usePagedList resetDeps reload", () => {
     expect(result.current.items).toEqual([]);
     expect(result.current.loading).toBe(false);
   });
+
+  it("uses a controlled page and asks the owner to reset it", async () => {
+    const fetch = vi.fn((query: PageQuery) =>
+      pageOf(Array.from({ length: 120 }, (_, index) => `row-${index}`), query),
+    );
+    const onPageChange = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ resetDeps, page }) =>
+        usePagedList({
+          pageSize: 50,
+          fetch,
+          resetDeps,
+          page,
+          onPageChange,
+          initialLoading: false,
+        }),
+      { initialProps: { resetDeps: ["a"] as readonly unknown[], page: 2 } },
+    );
+
+    await act(async () => {});
+    expect(fetch.mock.calls[0]?.[0]).toEqual({ limit: 50, offset: 50 });
+    expect(onPageChange).not.toHaveBeenCalled();
+
+    rerender({ resetDeps: ["b"], page: 2 });
+    await act(async () => {});
+    expect(result.current.page).toBe(1);
+    expect(onPageChange).toHaveBeenCalledWith(1);
+    expect(fetch.mock.calls.at(-1)?.[0]).toEqual({ limit: 50, offset: 0 });
+  });
 });

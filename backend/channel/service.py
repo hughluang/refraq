@@ -93,7 +93,7 @@ def list_channels(
     limit: int,
     offset: int,
 ) -> tuple[list[tuple[ChannelRecord, tuple[int, datetime] | None]], int]:
-    needle = q if q else None
+    needle = (q or "").strip() or None
     records, total = get_channel_store().list_channels(
         q=needle, active=active, limit=limit, offset=offset
     )

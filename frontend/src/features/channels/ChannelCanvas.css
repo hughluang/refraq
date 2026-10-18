@@ -1,5 +1,5 @@
 .react-flow__connection.invalid .react-flow__connection-path {
-  stroke: var(--mantine-color-red-6);
+  stroke: var(--refraq-tone-danger);
 }
 
 .channel-canvas-stage {
@@ -77,17 +77,17 @@
   order: -4;
   position: relative;
   overflow: visible;
-  color: var(--mantine-color-red-6);
-  --channel-problem-pulse: var(--mantine-color-red-4);
+  color: var(--refraq-tone-danger);
+  --channel-problem-pulse: var(--refraq-tone-danger-soft);
 }
 
 .channel-canvas-controls .channel-canvas-problems--warning {
-  color: var(--mantine-color-yellow-6);
-  --channel-problem-pulse: var(--mantine-color-yellow-4);
+  color: var(--refraq-tone-warning);
+  --channel-problem-pulse: var(--refraq-tone-warning-soft);
 }
 
 .channel-canvas-problems--warning .channel-canvas-problems__badge {
-  background: var(--mantine-color-yellow-6);
+  background: var(--refraq-tone-warning);
 }
 
 .channel-canvas-controls .channel-canvas-add {
@@ -121,8 +121,8 @@
   height: 12px;
   padding: 0 2px;
   border-radius: 999px;
-  background: var(--mantine-color-red-6);
-  color: var(--mantine-color-white);
+  background: var(--refraq-tone-danger);
+  color: var(--refraq-tone-on-solid);
   font-size: 8px;
   font-weight: 700;
   line-height: 12px;
@@ -131,11 +131,11 @@
 }
 
 .channel-canvas-problems__item--active {
-  background: var(--mantine-color-red-light);
+  background: color-mix(in srgb, var(--refraq-tone-danger) 16%, transparent);
 }
 
 .channel-canvas-problems__item--warning.channel-canvas-problems__item--active {
-  background: var(--mantine-color-yellow-light);
+  background: color-mix(in srgb, var(--refraq-tone-warning) 22%, transparent);
 }
 
 .channel-canvas-problems__pulse {
@@ -163,18 +163,18 @@
 
 .channel-flow-node {
   position: relative;
-  border: 1px solid var(--mantine-color-gray-4);
+  border: 1px solid var(--refraq-tone-neutral-border);
 }
 
 /* Extra emphasis stays outside the border box so selection and problem states do not shift node content. */
 .channel-flow-node--selected {
-  border-color: var(--mantine-color-blue-6);
-  box-shadow: 0 0 0 1px var(--mantine-color-blue-6);
+  border-color: var(--mantine-primary-color-filled);
+  box-shadow: 0 0 0 1px var(--mantine-primary-color-filled);
 }
 
 .channel-flow-node--problem {
-  border-color: var(--mantine-color-red-6);
-  box-shadow: 0 0 0 1px var(--mantine-color-red-6);
+  border-color: var(--refraq-tone-danger);
+  box-shadow: 0 0 0 1px var(--refraq-tone-danger);
 }
 
 .channel-flow-node--waiting {
@@ -182,15 +182,15 @@
 }
 
 .channel-flow-node--running {
-  border-color: var(--mantine-color-blue-6);
+  border-color: var(--refraq-tone-running);
 }
 
 .channel-flow-node--succeeded {
-  border-color: var(--mantine-color-green-6);
+  border-color: var(--refraq-tone-success);
 }
 
 .channel-flow-node--failed {
-  border-color: var(--mantine-color-red-6);
+  border-color: var(--refraq-tone-danger);
 }
 
 .channel-flow-node--dead {
@@ -199,13 +199,13 @@
 }
 
 .channel-flow-node--pinned {
-  border-color: var(--mantine-color-grape-6);
+  border-color: var(--refraq-tone-pinned);
 }
 
 .channel-flow-node__pin {
   display: inline-block;
   margin-top: 4px;
-  color: var(--mantine-color-grape-7);
+  color: var(--refraq-tone-pinned);
   font-weight: 600;
 }
 
@@ -213,7 +213,7 @@
   width: 8px;
   height: 8px;
   border-radius: 1px;
-  background: var(--mantine-color-grape-6);
+  background: var(--refraq-tone-pinned);
 }
 
 .channel-flow-port {
@@ -267,12 +267,6 @@
   opacity: 0;
   transform: scale(0.85);
   pointer-events: none;
-  transition:
-    opacity 120ms ease,
-    transform 120ms ease,
-    background-color 120ms ease,
-    border-color 120ms ease,
-    color 120ms ease;
 }
 
 .channel-flow-node__delete {
@@ -300,21 +294,21 @@
 
 .channel-flow-node__delete:hover,
 .channel-flow-edge__delete:hover {
-  border-color: var(--mantine-color-red-6);
-  background: var(--mantine-color-red-6);
-  color: var(--mantine-color-white);
+  border-color: var(--refraq-tone-danger);
+  background: var(--refraq-tone-danger);
+  color: var(--refraq-tone-on-solid);
 }
 
 .channel-flow-node__test:hover {
-  border-color: var(--mantine-color-blue-6);
-  color: var(--mantine-color-blue-6);
+  border-color: var(--mantine-primary-color-filled);
+  color: var(--mantine-primary-color-filled);
 }
 
 .channel-flow-node__run:focus-visible,
 .channel-flow-node__test:focus-visible,
 .channel-flow-node__delete:focus-visible,
 .channel-flow-edge__delete:focus-visible {
-  outline: 2px solid var(--mantine-color-blue-6);
+  outline: 2px solid var(--mantine-primary-color-filled);
   outline-offset: 1px;
 }
 
@@ -330,21 +324,37 @@
   color: var(--mantine-color-dimmed);
   box-shadow: var(--mantine-shadow-xs);
   cursor: pointer;
-  animation: channel-flow-edge-delete-in 120ms ease;
-  transition:
-    background-color 120ms ease,
-    border-color 120ms ease,
-    color 120ms ease;
 }
 
-@keyframes channel-flow-edge-delete-in {
-  from {
-    opacity: 0;
-    transform: scale(0.85);
+@media (prefers-reduced-motion: no-preference) {
+  .channel-flow-node__run,
+  .channel-flow-node__test,
+  .channel-flow-node__delete {
+    transition:
+      opacity var(--refraq-motion-fast) var(--refraq-ease-standard),
+      transform var(--refraq-motion-fast) var(--refraq-ease-standard),
+      background-color var(--refraq-motion-fast) var(--refraq-ease-standard),
+      border-color var(--refraq-motion-fast) var(--refraq-ease-standard),
+      color var(--refraq-motion-fast) var(--refraq-ease-standard);
   }
-  to {
-    opacity: 1;
-    transform: scale(1);
+
+  .channel-flow-edge__delete {
+    animation: channel-flow-edge-delete-in var(--refraq-motion-fast) var(--refraq-ease-enter);
+    transition:
+      background-color var(--refraq-motion-fast) var(--refraq-ease-standard),
+      border-color var(--refraq-motion-fast) var(--refraq-ease-standard),
+      color var(--refraq-motion-fast) var(--refraq-ease-standard);
+  }
+
+  @keyframes channel-flow-edge-delete-in {
+    from {
+      opacity: 0;
+      transform: scale(0.85);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
   }
 }
 
@@ -536,7 +546,7 @@
 }
 
 .channel-code-field__editor[data-severity="error"] .cm-editor {
-  border-color: var(--mantine-color-red-filled);
+  border-color: var(--refraq-tone-danger);
 }
 
 .channel-template-field__editor .cm-editor {
@@ -544,11 +554,11 @@
 }
 
 .channel-template-field__editor[data-severity="error"] .cm-editor {
-  border-color: var(--mantine-color-red-filled);
+  border-color: var(--refraq-tone-danger);
 }
 
 .channel-template-field__editor[data-severity="warning"] .cm-editor {
-  border-color: var(--mantine-color-yellow-6);
+  border-color: var(--refraq-tone-warning);
 }
 
 .channel-template-field__delim {

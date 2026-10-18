@@ -1,5 +1,6 @@
 import type { AuthActionResponse, AuthProvider } from "@refinedev/core";
 
+import { clearRecents } from "@/lib/recents";
 import { useModuleIdentityStore } from "@/features/console/module-identity";
 import { apiClient, ApiError } from "@/lib/api";
 import { expireClientSession } from "@/lib/session-expiry";
@@ -24,6 +25,11 @@ function isProtectedDocument(): boolean {
 function clearClientSession() {
   useSessionStore.getState().clear();
   useModuleIdentityStore.getState().reset();
+}
+
+function forgetRecentsForCurrentUser() {
+  const userId = getCurrentUser()?.id;
+  if (userId) clearRecents(userId);
 }
 
 type LoginParams = { account: string; password: string };
@@ -171,6 +177,7 @@ export const authProvider: RefineAuth = {
       await apiClient<{ success: boolean }>("/auth/logout", { method: "POST" });
     } catch (error) {
       if (isApiError(error) && error.status === 401) {
+        forgetRecentsForCurrentUser();
         clearClientSession();
         // Omit redirectTo; ConsoleShell hard-navigates after success.
         return { success: true };
@@ -186,6 +193,7 @@ export const authProvider: RefineAuth = {
           : new Error("logout failed"),
       };
     }
+    forgetRecentsForCurrentUser();
     clearClientSession();
     // Omit redirectTo so Refine useLogout does not soft-navigate; ConsoleShell
     // performs a hard navigation after success.

@@ -1,87 +1,112 @@
 "use client";
 
-import { Box, Group, Table, Text, Tooltip } from "@mantine/core";
+import { Anchor, Box, Group, Table, Text, Tooltip } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { Instant } from "@/components/display/Instant";
-import { ListPager } from "@/components/display/ListPager";
-import { EmptyState } from "@/components/feedback/EmptyState";
+import { ListTable } from "@/components/display/ListTable";
+import { LiveStatusAnnouncer } from "@/components/display/LiveStatusAnnouncer";
+import { StaleNotice } from "@/components/display/StaleNotice";
+import { presentJobStatus, toneVariable } from "@/components/display/statusTone";
+import { PencilIcon } from "@/components/icons";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { listRuns } from "@/features/channels/api";
 import { formatRunError } from "@/features/channels/problemLabel";
-import type { ChannelRun } from "@/features/channels/types";
-import { JOB_STATUS_COLOR } from "@/features/jobs/JobStatusBadge";
+import { isTerminalRun } from "@/features/channels/runSession";
+import { useLiveStatus } from "@/hooks/useLiveStatus";
+import { ApiError } from "@/lib/api";
+import { listPresentationOf } from "@/lib/list-state";
 import { pageToOffset } from "@/lib/pagination";
+import { problemMessage } from "@/lib/problem";
 
 const PAGE_SIZE = 50;
 
 export function ChannelRuns({ channelId }: { channelId: string }) {
   const t = useTranslate();
-  const router = useRouter();
   const [page, setPage] = useState(1);
-  const [items, setItems] = useState<ChannelRun[]>([]);
-  const [total, setTotal] = useState(0);
-  useEffect(() => {
-    let cancelled = false;
-    const load = () => {
-      void listRuns(channelId, {
-        limit: PAGE_SIZE,
-        offset: pageToOffset(page, PAGE_SIZE),
-      }).then((result) => {
-        if (cancelled) return;
-        setItems(result.items);
-        setTotal(result.total);
-      });
-    };
-    load();
-    const timer = window.setInterval(load, 2000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [channelId, page]);
-  if (total === 0) return <EmptyState message={t("channels.runs.empty")} />;
+  const live = useLiveStatus({
+    key: `${channelId}:${page}`,
+    fetch: (signal) =>
+      listRuns(
+        channelId,
+        {
+          limit: PAGE_SIZE,
+          offset: pageToOffset(page, PAGE_SIZE),
+        },
+        { signal },
+      ),
+    isTerminal: (result) =>
+      result.items.length > 0 && result.items.every((run) => isTerminalRun(run.status)),
+  });
+  const items = live.data?.items ?? [];
+  const total = live.data?.total ?? 0;
+  const failed = live.stale && live.data == null;
+  const errorText = problemMessage(t, live.error, t("liveStatus.unavailable"));
+  const statusText = items
+    .map((run) => t(presentJobStatus(run.status).labelKey))
+    .join(", ");
+  const list = {
+    presentation: listPresentationOf({
+      loading: live.loading || live.refreshing,
+      error: failed ? errorText : null,
+      total,
+      itemCount: items.length,
+      filtered: false,
+    }),
+    error: failed ? errorText : null,
+    errorRequestId: live.error instanceof ApiError ? live.error.requestId : null,
+    reload: () => live.refresh(),
+    page,
+    setPage,
+    pageSize: PAGE_SIZE,
+    total,
+  };
+
   return (
     <div className="channel-drawer-list">
-      <div className="channel-drawer-list__scroll">
-        <Table>
-      <Table.Thead>
-        <Table.Tr>
-          <Table.Th>{t("channels.runs.started")}</Table.Th>
-        </Table.Tr>
-      </Table.Thead>
-      <Table.Tbody>
+      <LiveStatusAnnouncer text={statusText} />
+      {live.stale && live.data != null ? (
+        <StaleNotice hasData onRetry={() => void live.refresh()} />
+      ) : null}
+      <ListTable
+        list={list}
+        columnCount={1}
+        minWidth={420}
+        emptyMessage={t("channels.runs.empty")}
+        head={
+          <Table.Tr>
+            <Table.Th>{t("channels.runs.started")}</Table.Th>
+          </Table.Tr>
+        }
+      >
         {items.map((run) => {
-          const color = JOB_STATUS_COLOR[run.status] ?? "gray";
+          const presentation = presentJobStatus(run.status);
           const error = formatRunError(t, run.error_code, run.error_message);
           const hasError = Boolean(run.error_code || run.error_message);
-          const statusLabel = hasError && error.label ? error.label : run.status;
+          const statusLabel = t(presentation.labelKey);
+          const tip = hasError && error.label ? error.label : statusLabel;
           const href = `/console/channels/${channelId}/runs/${run.job_id}`;
-          const open = () => router.push(href);
           return (
-            <Table.Tr
-              key={run.job_id}
-              tabIndex={0}
-              style={{ cursor: "pointer" }}
-              onClick={open}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") open();
-              }}
-            >
+            <Table.Tr key={run.job_id}>
               <Table.Td>
                 <Group gap="xs" wrap="nowrap" align="center">
-                  <Tooltip label={statusLabel}>
+                  <Tooltip label={tip}>
                     <Box
                       role="img"
                       aria-label={statusLabel}
                       w={8}
                       h={8}
-                      bg={`${color}.6`}
-                      style={{ borderRadius: 999, flex: "none" }}
+                      style={{
+                        borderRadius: 999,
+                        flex: "none",
+                        background: toneVariable(presentation.tone),
+                      }}
                     />
                   </Tooltip>
-                  <Instant value={run.started_at ?? run.created_at} />
+                  <Anchor component={ConsoleLink} href={href} size="sm">
+                    <Instant value={run.started_at ?? run.created_at} />
+                  </Anchor>
                   {run.ignore_checkpoints ? (
                     <Text span size="xs" c="dimmed">
                       {t("channels.runs.ignoreCheckpoints")}
@@ -93,10 +118,7 @@ export function ChannelRuns({ channelId }: { channelId: string }) {
             </Table.Tr>
           );
         })}
-      </Table.Tbody>
-        </Table>
-      </div>
-      <ListPager page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
+      </ListTable>
     </div>
   );
 }
@@ -110,20 +132,7 @@ function DraftMark({ label }: { label: string }) {
         aria-label={label}
         style={{ display: "inline-flex", flex: "none" }}
       >
-        <svg
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M12 20h9" />
-          <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
-        </svg>
+        <PencilIcon size={14} />
       </Box>
     </Tooltip>
   );

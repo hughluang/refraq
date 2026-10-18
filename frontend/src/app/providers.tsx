@@ -3,25 +3,30 @@
 import "@mantine/core/styles.css";
 import "@mantine/dates/styles.css";
 import "@mantine/notifications/styles.css";
+import "@mantine/nprogress/styles.css";
 
 import { MantineProvider } from "@mantine/core";
-import { Notifications } from "@mantine/notifications";
 import { useMemo, type ReactNode } from "react";
 
 import { useBranding } from "@/features/branding/BrandingProvider";
-import { appTheme } from "@/features/branding/theme";
+import { ConsoleNotifications } from "@/providers/notification-provider";
 import { RefineRoot } from "@/providers/refine";
+import { productCssVariablesResolver, productTheme } from "@/theme";
 
 export function AppProviders({ children }: { children: ReactNode }) {
   const { raw } = useBranding();
   const theme = useMemo(
-    () => appTheme(raw.primary_shades),
+    () => productTheme(raw.primary_shades),
     [raw.primary_shades],
   );
 
   return (
-    <MantineProvider theme={theme} defaultColorScheme="light">
-      <Notifications position="top-right" />
+    <MantineProvider
+      theme={theme}
+      cssVariablesResolver={productCssVariablesResolver}
+      defaultColorScheme="auto"
+    >
+      <ConsoleNotifications />
       <RefineRoot>{children}</RefineRoot>
     </MantineProvider>
   );

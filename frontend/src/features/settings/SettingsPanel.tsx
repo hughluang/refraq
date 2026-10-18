@@ -20,7 +20,14 @@ import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
 import { PageError } from "@/components/feedback/PageError";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
+import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
+import {
+  FormErrorSummary,
+  saveFailureFrom,
+  type SaveFailure,
+} from "@/components/form/FormErrorSummary";
 import { PageChrome } from "@/components/layout/PageChrome";
+import { useLeaveGuardRegistration } from "@/components/navigation/leaveGuard";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
   fetchPlatformSettings,
@@ -37,6 +44,7 @@ import {
 } from "@/features/settings/constraint";
 import type { SystemParameter } from "@/features/settings/types";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { ApiError } from "@/lib/api";
 import { problemMessage } from "@/lib/problem";
 
 function groupLabelKey(group: string): string {
@@ -51,6 +59,7 @@ export function SettingsPanel() {
   const t = useTranslate();
   const formatInstant = useFormatInstant();
   const { open } = useNotification();
+  const resetAction = useConsoleMutation();
   const { data: canWrite } = useCan({
     resource: ModuleId.settings,
     action: ModuleAction.edit,
@@ -60,7 +69,6 @@ export function SettingsPanel() {
   const [enumSearch, setEnumSearch] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [resettingKey, setResettingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const applyCatalog = useCallback((items: SystemParameter[]) => {
@@ -106,6 +114,12 @@ export function SettingsPanel() {
     () => dirtyParameterValues(parameters, drafts),
     [drafts, parameters],
   );
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  useLeaveGuardRegistration(Object.keys(dirtyValues).length > 0);
+
+  useEffect(() => {
+    setSaveFailure(null);
+  }, [drafts]);
 
   const groups = useMemo(() => {
     const seen: string[] = [];
@@ -131,37 +145,37 @@ export function SettingsPanel() {
         description: t("settings.save.success"),
       });
     } catch (err) {
-      open?.({
-        type: "error",
-        message: t("settings.title"),
-        description:
-          problemMessage(t, err, t("common.error")),
-      });
+      const api = err instanceof ApiError ? err : null;
+      setSaveFailure(
+        saveFailureFrom(
+          t,
+          err,
+          {
+            mapped: [],
+            unmapped: api?.status === 422 ? [...(api.details ?? [])] : [],
+          },
+          t("common.error"),
+        ),
+      );
     } finally {
       setSaving(false);
     }
   }
 
-  async function onReset(key: string) {
-    setResettingKey(key);
-    try {
-      const data = await resetPlatformSettings([key]);
-      applyCatalog(data.parameters);
-      open?.({
-        type: "success",
-        message: t("settings.title"),
-        description: t("settings.reset.success"),
-      });
-    } catch (err) {
-      open?.({
-        type: "error",
-        message: t("settings.title"),
-        description:
-          problemMessage(t, err, t("common.error")),
-      });
-    } finally {
-      setResettingKey(null);
-    }
+  function onReset(key: string, name: string) {
+    resetAction.run({
+      safety: "confirm",
+      key,
+      recordName: name,
+      title: t("settings.reset.confirmTitle", { name }),
+      consequence: t("settings.reset.consequence"),
+      confirmLabel: t("settings.reset"),
+      outcome: t("settings.reset.outcome"),
+      execute: async () => {
+        const data = await resetPlatformSettings([key]);
+        applyCatalog(data.parameters);
+      },
+    });
   }
 
   return (
@@ -182,6 +196,8 @@ export function SettingsPanel() {
       }
     >
       <Stack gap="lg">
+        {resetAction.dialog}
+        <FormErrorSummary failure={saveFailure} />
         {loading ? <PageBodySkeleton rows={6} /> : null}
         {!loading && error ? (
           <PageError message={error} onRetry={() => void load()} />
@@ -316,9 +332,9 @@ export function SettingsPanel() {
                           <Button
                             size="sm"
                             variant="light"
-                            loading={resettingKey === item.key}
+                            loading={resetAction.isSubmitting(item.key)}
                             disabled={item.source === "seed"}
-                            onClick={() => void onReset(item.key)}
+                            onClick={() => onReset(item.key, t(item.label_key))}
                           >
                             {t("settings.reset")}
                           </Button>

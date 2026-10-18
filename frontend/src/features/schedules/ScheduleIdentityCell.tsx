@@ -1,7 +1,7 @@
 "use client";
 
 import { Text } from "@mantine/core";
-import Link from "next/link";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 
 import {
   scheduleIdentity,
@@ -22,7 +22,7 @@ export function ScheduleIdentityCell({
     <>
       <Text size="sm">
         {channelId ? (
-          <Link href={`/console/channels/${channelId}`}>{identity.primary}</Link>
+          <ConsoleLink href={`/console/channels/${channelId}`}>{identity.primary}</ConsoleLink>
         ) : (
           identity.primary
         )}

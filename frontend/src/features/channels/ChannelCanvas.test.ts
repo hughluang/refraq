@@ -55,7 +55,10 @@ const LABELS: Record<string, string> = {
   "channels.editor.unpin": "Unpin output",
   "channels.editor.pinned": "Pinned",
   "channels.editor.failed": "The test did not finish",
+  "problems.CHANNEL_GRAPH_INVALID": "The graph is not valid",
+  "problems.unknown": "Something went wrong. Try again.",
   "channels.editor.cancelFailed": "Cancel failed",
+  "channels.editor.cancel.confirm": "Cancel test",
   "channels.run.showFullOutput": "Show full output",
   "channels.run.outputFailed": "Output failed",
   "common.cancel": "Cancel",
@@ -1158,6 +1161,8 @@ describe("editor test runs", () => {
     const cancel = await screen.findByRole("button", { name: "Cancel" });
     await waitFor(() => expect((cancel as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(cancel);
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel test" }));
 
     await waitFor(() => expect(cancelJob).toHaveBeenCalledWith("job_test"));
     expect(getRun).toHaveBeenLastCalledWith("chn_1", "job_test");
@@ -1241,8 +1246,11 @@ describe("editor test runs", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Test up to here" }));
     await waitFor(() => {
-      expect(screen.getByRole("alert").textContent).toContain("Missing channel:code_write for Start");
+      expect(screen.getByRole("alert").textContent).toContain("Something went wrong. Try again.");
     });
+    expect(screen.getByRole("alert").textContent).not.toContain(
+      "Missing channel:code_write for Start",
+    );
   });
 
   it("hides the editor test without channel:write and while browsing", async () => {

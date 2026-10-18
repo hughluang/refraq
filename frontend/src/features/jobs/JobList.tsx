@@ -1,10 +1,13 @@
 "use client";
 
-import { Button, Group, Table, Text } from "@mantine/core";
-import { useNotification, useTranslate } from "@refinedev/core";
+import { Button, Table, Text } from "@mantine/core";
+import { useTranslate } from "@refinedev/core";
 import { useCallback, useState } from "react";
 
+import { jobKindLabelKey } from "@/components/display/JobReference";
 import { ListTable } from "@/components/display/ListTable";
+import { RecordReference } from "@/components/display/RecordReference";
+import { RowActions } from "@/components/display/RowActions";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { cancelJob, listJobs } from "@/features/jobs/api";
 import { formatJobTrigger } from "@/features/jobs/formatJobTrigger";
@@ -12,7 +15,7 @@ import { JobDetailModal } from "@/features/jobs/JobDetailModal";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { problemMessage } from "@/lib/problem";
+import { useListQuery } from "@/hooks/useListQuery";
 import { formatJobDuration } from "@/lib/datetime";
 import type { PageQuery } from "@/lib/pagination";
 
@@ -20,18 +23,21 @@ const PAGE_SIZE = 50;
 
 export function JobList() {
   const t = useTranslate();
-  const { open } = useNotification();
   const formatInstant = useFormatInstant();
   const [detailId, setDetailId] = useState<string | null>(null);
 
+  const query = useListQuery({ search: false });
+
   const fetchPage = useCallback(
-    (query: PageQuery) => listJobs(query),
+    (pageQuery: PageQuery) => listJobs(pageQuery),
     [],
   );
 
   const list = useConsolePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
+    page: query.page,
+    onPageChange: query.setPage,
   });
   const { items, reload } = list;
 
@@ -61,61 +67,62 @@ export function JobList() {
           </Table.Tr>
         }
       >
-        {items.map((job) => (
-          <Table.Tr key={job.id}>
-            <Table.Td>
-              <Text size="sm">{job.summary || "—"}</Text>
-              <Text size="xs" c="dimmed" ff="monospace">
-                {job.id}
-              </Text>
-            </Table.Td>
-            <Table.Td>{job.kind}</Table.Td>
-            <Table.Td>
-              <JobStatusBadge status={job.status} />
-            </Table.Td>
-            <Table.Td>
-              <Text size="sm">{formatJobTrigger(job, t)}</Text>
-            </Table.Td>
-            <Table.Td>
-              <Text size="sm">{formatInstant(job.created_at)}</Text>
-            </Table.Td>
-            <Table.Td>
-              <Text size="sm">{formatJobDuration(job)}</Text>
-            </Table.Td>
-            <Table.Td>
-              <Group gap="xs" wrap="nowrap">
-                <Button
-                  size="xs"
-                  variant="light"
-                  onClick={() => setDetailId(job.id)}
-                >
-                  {t("jobs.view")}
-                </Button>
-                {job.status === "queued" || job.status === "running" ? (
-                  <Button
-                    size="xs"
-                    variant="light"
-                    color="red"
-                    onClick={async () => {
-                      try {
-                        await cancelJob(job.id);
-                        await reload();
-                      } catch (err) {
-                        open?.({
-                          type: "error",
-                          message:
-                            problemMessage(t, err, String(err)),
-                        });
-                      }
-                    }}
-                  >
-                    {t("jobs.cancel")}
-                  </Button>
-                ) : null}
-              </Group>
-            </Table.Td>
-          </Table.Tr>
-        ))}
+        {items.map((job) => {
+          const recordName = job.summary.trim() || t(jobKindLabelKey(job.kind));
+          const cancellable = job.status === "queued" || job.status === "running";
+          return (
+            <Table.Tr key={job.id}>
+              <Table.Td>
+                <RecordReference name={recordName} recordKey={job.id} />
+              </Table.Td>
+              <Table.Td>{t(jobKindLabelKey(job.kind))}</Table.Td>
+              <Table.Td>
+                <JobStatusBadge status={job.status} />
+              </Table.Td>
+              <Table.Td>
+                <Text size="sm">{formatJobTrigger(job, t)}</Text>
+              </Table.Td>
+              <Table.Td>
+                <Text size="sm">{formatInstant(job.created_at)}</Text>
+              </Table.Td>
+              <Table.Td>
+                <Text size="sm">{formatJobDuration(job)}</Text>
+              </Table.Td>
+              <Table.Td>
+                <RowActions
+                  recordName={recordName}
+                  verbs={[
+                    {
+                      key: "view",
+                      label: t("jobs.view"),
+                      safety: "immediate",
+                      onClick: () => setDetailId(job.id),
+                    },
+                    {
+                      key: "cancel",
+                      label: t("jobs.cancel"),
+                      color: "red",
+                      disabledReason: cancellable
+                        ? undefined
+                        : t("jobs.cancel.unavailable"),
+                      action: {
+                        safety: "confirm",
+                        recordName,
+                        title: t("jobs.cancel.confirmTitle", { name: recordName }),
+                        consequence: t("jobs.cancel.consequence"),
+                        confirmLabel: t("jobs.cancel"),
+                        confirmColor: "red",
+                        outcome: t("jobs.cancel.outcome"),
+                        execute: () => cancelJob(job.id),
+                        onSuccess: () => reload(),
+                      },
+                    },
+                  ]}
+                />
+              </Table.Td>
+            </Table.Tr>
+          );
+        })}
       </ListTable>
 
       <JobDetailModal

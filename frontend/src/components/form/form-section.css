@@ -1,0 +1,15 @@
+.form-section {
+  container-type: inline-size;
+}
+
+.form-section__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--mantine-spacing-md);
+}
+
+@container (min-width: 36rem) {
+  .form-section__grid[data-columns="2"] {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}

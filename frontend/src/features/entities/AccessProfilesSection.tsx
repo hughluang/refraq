@@ -34,26 +34,34 @@ import {
 import { accessProblemText } from "@/features/entities/accessProblem";
 import type { AccessOption, AccessRun } from "@/features/entities/accessSession";
 import type { AccessSummary } from "@/features/entities/accessTypes";
-import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
-import { EmptyState } from "@/components/feedback/EmptyState";
+import { RecordPicker } from "@/components/form/RecordPicker";
+import { entityRecordAdapter } from "@/components/form/recordPickerAdapters";
+import { ListTable } from "@/components/display/ListTable";
+import { RecordReference } from "@/components/display/RecordReference";
+import { RowActions } from "@/components/display/RowActions";
 import { SectionHeader } from "@/components/layout/SectionHeader";
+import { localListSession } from "@/lib/list-state";
 
 type Props = {
   entityId: string;
-  summary: AccessSummary;
-  entities: AccessOption[];
+  summary: AccessSummary | null;
   busyId: string | null;
   run: AccessRun;
   onOptionsError: (message: string) => void;
+  loading?: boolean;
+  error?: string | null;
+  onReload?: () => void | Promise<void>;
 };
 
 export function AccessProfilesSection({
   entityId,
   summary,
-  entities,
   busyId,
   run,
   onOptionsError,
+  loading = false,
+  error = null,
+  onReload,
 }: Props) {
   const t = useTranslate();
   const [profileKey, setProfileKey] = useState("");
@@ -67,15 +75,16 @@ export function AccessProfilesSection({
   const [copyProfileId, setCopyProfileId] = useState<string | null>(null);
   const [copyKey, setCopyKey] = useState("");
   const [copyName, setCopyName] = useState("");
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+
+  const ladders = summary?.ladders ?? [];
+  const profiles = summary?.profiles ?? [];
 
   useEffect(() => {
+    if (!summary) return;
     setMatrix(matrixFromProfiles(summary.ladders, summary.profiles));
   }, [summary]);
 
-  const attributeIds = summary.ladders.map((ladder) => ladder.attribute_id);
-  const deleting = summary.profiles.find((profile) => profile.id === deleteId) ?? null;
-  const deleteBusy = deleteId != null && busyId === `profile-delete:${deleteId}`;
+  const attributeIds = ladders.map((ladder) => ladder.attribute_id);
   const creating = busyId === "profile-create";
   const copying = busyId === "profile-copy";
   const derivedKey = accessKeyFromName(profileName);
@@ -90,23 +99,32 @@ export function AccessProfilesSection({
         title={t("entities.access.profiles")}
         description={t("entities.access.profiles.description")}
       />
-      {summary.ladders.length === 0 ? (
-        <EmptyState message={t("entities.access.profiles.needAttributes")} />
-      ) : summary.profiles.length === 0 ? (
-        <EmptyState message={t("entities.access.profiles.empty")} />
-      ) : (
-        <Table.ScrollContainer minWidth={640}>
-          <Table>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>{t("entities.access.profiles.column")}</Table.Th>
-                {summary.profiles.map((profile) => {
-                  const grantCount = profileGrantCount(profile.id, summary.grants);
+      <ListTable
+        embedded
+        list={localListSession({
+          total: ladders.length > 0 && profiles.length > 0 ? ladders.length : 0,
+          loading,
+          error,
+          reload: onReload,
+        })}
+        columnCount={profiles.length > 0 && ladders.length > 0 ? 1 + profiles.length : 1}
+        minWidth={640}
+        emptyMessage={
+          ladders.length === 0
+            ? t("entities.access.profiles.needAttributes")
+            : t("entities.access.profiles.empty")
+        }
+        head={
+          <Table.Tr>
+            <Table.Th>{t("entities.access.profiles.column")}</Table.Th>
+            {ladders.length > 0
+              ? profiles.map((profile) => {
+                  const grantCount = profileGrantCount(profile.id, summary?.grants ?? []);
                   const allClear = profileIsAllClear(profile.columns, attributeIds);
                   return (
                     <Table.Th key={profile.id}>
                       <Stack gap={2}>
-                        <Text fw={600}>{profile.name}</Text>
+                        <RecordReference name={profile.name} recordKey={profile.key} />
                         {allClear ? (
                           <Text size="xs" c="dimmed">
                             {t("entities.access.summary.allClear")}
@@ -120,86 +138,105 @@ export function AccessProfilesSection({
                       </Stack>
                     </Table.Th>
                   );
-                })}
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {summary.ladders.map((ladder) => (
-                <Table.Tr key={ladder.attribute_id}>
-                  <Table.Td>{ladder.attribute_name}</Table.Td>
-                  {summary.profiles.map((profile) => (
-                    <Table.Td key={profile.id}>
-                      <Select
-                        aria-label={`${profile.name} ${ladder.attribute_name}`}
-                        data={[
-                          { value: "", label: t("entities.access.profiles.notInProfile") },
-                          ...ladder.levels.map((level) => ({
-                            value: level.key,
-                            label: levelOptionLabel(
-                              t(`entities.access.mask.${levelModeKind(level.mode)}`),
-                              level.key,
-                            ),
-                          })),
-                        ]}
-                        value={matrix[profile.id]?.[ladder.attribute_id] ?? ""}
-                        onChange={(value) =>
-                          setMatrix((current) => ({
-                            ...current,
-                            [profile.id]: {
-                              ...(current[profile.id] ?? {}),
-                              [ladder.attribute_id]: value ?? "",
-                            },
-                          }))
-                        }
-                      />
-                    </Table.Td>
-                  ))}
-                </Table.Tr>
-              ))}
-              <Table.Tr>
-                <Table.Td />
-                {summary.profiles.map((profile) => {
-                  const saving = busyId === `profile-save:${profile.id}`;
-                  const dirty = !sameProfileColumns(
-                    attributeIds,
-                    profile.columns,
-                    matrix[profile.id] ?? {},
-                  );
-                  return (
-                    <Table.Td key={profile.id}>
-                      <Group>
-                        <Button
-                          size="xs"
-                          loading={saving}
-                          disabled={!dirty || (busyId !== null && !saving)}
-                          onClick={() =>
-                            void run(`profile-save:${profile.id}`, "entities.access.saved.profiles", () =>
-                              patchProfile(entityId, profile.id, {
-                                columns: columnsFromMatrix(attributeIds, matrix[profile.id] ?? {}),
-                              }).then(() => undefined),
-                            )
-                          }
-                        >
-                          {t("entities.access.profiles.save")}
-                        </Button>
-                        <Button
-                          size="xs"
-                          color="red"
-                          variant="light"
-                          disabled={busyId !== null}
-                          onClick={() => setDeleteId(profile.id)}
-                        >
-                          {t("entities.access.profiles.delete")}
-                        </Button>
-                      </Group>
-                    </Table.Td>
-                  );
-                })}
-              </Table.Tr>
-            </Table.Tbody>
-          </Table>
-        </Table.ScrollContainer>
-      )}
+                })
+              : null}
+          </Table.Tr>
+        }
+      >
+        {ladders.map((ladder) => (
+          <Table.Tr key={ladder.attribute_id}>
+            <Table.Td>
+              <RecordReference
+                name={ladder.attribute_name}
+                recordKey={ladder.type}
+                copyable={false}
+              />
+            </Table.Td>
+            {profiles.map((profile) => (
+              <Table.Td key={profile.id}>
+                <Select
+                  aria-label={`${profile.name} ${ladder.attribute_name}`}
+                  data={[
+                    { value: "", label: t("entities.access.profiles.notInProfile") },
+                    ...ladder.levels.map((level) => ({
+                      value: level.key,
+                      label: levelOptionLabel(
+                        t(`entities.access.mask.${levelModeKind(level.mode)}`),
+                        level.key,
+                      ),
+                    })),
+                  ]}
+                  value={matrix[profile.id]?.[ladder.attribute_id] ?? ""}
+                  onChange={(value) =>
+                    setMatrix((current) => ({
+                      ...current,
+                      [profile.id]: {
+                        ...(current[profile.id] ?? {}),
+                        [ladder.attribute_id]: value ?? "",
+                      },
+                    }))
+                  }
+                />
+              </Table.Td>
+            ))}
+          </Table.Tr>
+        ))}
+        <Table.Tr>
+          <Table.Td />
+          {profiles.map((profile) => {
+            const saving = busyId === `profile-save:${profile.id}`;
+            const dirty = !sameProfileColumns(
+              attributeIds,
+              profile.columns,
+              matrix[profile.id] ?? {},
+            );
+            return (
+              <Table.Td key={profile.id}>
+                <Group wrap="nowrap">
+                  <Button
+                    size="xs"
+                    loading={saving}
+                    disabled={!dirty || (busyId !== null && !saving)}
+                    onClick={() =>
+                      void run(`profile-save:${profile.id}`, "entities.access.saved.profiles", () =>
+                        patchProfile(entityId, profile.id, {
+                          columns: columnsFromMatrix(attributeIds, matrix[profile.id] ?? {}),
+                        }).then(() => undefined),
+                      )
+                    }
+                  >
+                    {t("entities.access.profiles.save")}
+                  </Button>
+                  <RowActions
+                    recordName={profile.name}
+                    verbs={[
+                      {
+                        key: "delete",
+                        label: t("entities.access.profiles.delete"),
+                        color: "red",
+                        disabledReason: busyId !== null ? t("common.loading") : undefined,
+                        action: {
+                          safety: "confirm",
+                          recordName: profile.name,
+                          title: t("entities.access.profiles.deleteTitle"),
+                          consequence: t("entities.access.profiles.deleteBody", {
+                            name: profile.name,
+                          }),
+                          confirmLabel: t("entities.access.profiles.delete"),
+                          confirmColor: "red",
+                          outcome: t("entities.access.saved.profileRemoved"),
+                          execute: () => deleteProfile(entityId, profile.id),
+                          onSuccess: onReload,
+                        },
+                      },
+                    ]}
+                  />
+                </Group>
+              </Table.Td>
+            );
+          })}
+        </Table.Tr>
+      </ListTable>
       <Group align="flex-end">
         <TextInput
           label={t("entities.access.profiles.name")}
@@ -258,9 +295,11 @@ export function AccessProfilesSection({
             {t("entities.access.profiles.copyDescription")}
           </Text>
           <Group align="flex-end">
-            <Select
+            <RecordPicker
+              editable
               label={t("entities.access.profiles.copySource")}
-              data={entities}
+              adapter={entityRecordAdapter()}
+              excludeIds={[entityId]}
               value={copyEntity}
               onChange={(value) => {
                 setCopyEntity(value);
@@ -324,23 +363,6 @@ export function AccessProfilesSection({
           </Group>
         </Stack>
       </Collapse>
-      <ConfirmActionModal
-        opened={deleting !== null}
-        onClose={() => setDeleteId(null)}
-        title={t("entities.access.profiles.deleteTitle")}
-        body={t("entities.access.profiles.deleteBody", { name: deleting?.name ?? "" })}
-        confirmLabel={t("entities.access.profiles.delete")}
-        confirmColor="red"
-        loading={deleteBusy}
-        onConfirm={() => {
-          if (!deleteId) return;
-          void run(`profile-delete:${deleteId}`, "entities.access.saved.profileRemoved", () =>
-            deleteProfile(entityId, deleteId),
-          ).then((ok) => {
-            if (ok) setDeleteId(null);
-          });
-        }}
-      />
     </Stack>
   );
 }

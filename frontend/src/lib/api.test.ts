@@ -36,7 +36,75 @@ describe("apiClient Problem Details", () => {
         requestId: "abc123",
       }),
     );
-    await expect(apiClient("/auth/me")).rejects.toBeInstanceOf(ApiError);
+    const missing = await apiClient("/auth/me").then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(missing).toBeInstanceOf(ApiError);
+    expect((missing as ApiError).details).toBeUndefined();
+  });
+
+  it("keeps 422 details and leaves them out of extensions", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            type: "urn:refraq:problem:REQUEST_INVALID",
+            status: 422,
+            detail: "Request validation failed",
+            code: "REQUEST_INVALID",
+            request_id: "rid-422",
+            details: [
+              {
+                field: "account",
+                code: "VALUE_MISSING",
+                message: "Field required",
+                input: "should-not-be-kept",
+              },
+            ],
+            retry_after: 3,
+          }),
+          {
+            status: 422,
+            headers: { "Content-Type": "application/problem+json" },
+          },
+        );
+      }),
+    );
+
+    await expect(apiClient("/users")).rejects.toMatchObject({
+      status: 422,
+      code: "REQUEST_INVALID",
+      detail: "Request validation failed",
+      requestId: "rid-422",
+      details: [{ field: "account", code: "VALUE_MISSING", message: "Field required" }],
+      extensions: { retry_after: 3 },
+    });
+  });
+
+  it("keeps an empty details list and drops a non-list", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const details = String(url).endsWith("/empty") ? [] : "nope";
+      return new Response(
+        JSON.stringify({
+          status: 422,
+          detail: "Request validation failed",
+          code: "REQUEST_INVALID",
+          details,
+        }),
+        { status: 422, headers: { "Content-Type": "application/problem+json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(apiClient("/empty")).rejects.toMatchObject({ details: [] });
+    const blank = await apiClient("/blank").then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(blank).toBeInstanceOf(ApiError);
+    expect((blank as ApiError).details).toBeUndefined();
   });
 
   it("turns an unparseable Instant into API_CONTRACT_INVALID with the request id", async () => {

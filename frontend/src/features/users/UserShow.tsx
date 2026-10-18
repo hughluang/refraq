@@ -1,21 +1,20 @@
 "use client";
 
-import { Button, Group, MultiSelect, Stack, Text, Title } from "@mantine/core";
+import { Button, Group, Stack, Text, Title } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
-import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { PageError } from "@/components/feedback/PageError";
-import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
 import { FieldDisplay } from "@/components/form/FieldDisplay";
+import { RecordMultiPicker } from "@/components/form/RecordPicker";
+import { userGroupRecordAdapter } from "@/components/form/recordPickerAdapters";
 import { PageChrome } from "@/components/layout/PageChrome";
+import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
   getUser,
   getUserGroups,
   getUserSubjectValues,
   listAllSubjectAttributes,
-  listUserGroups,
   putUserGroups,
   putUserSubjectValues,
 } from "@/features/subjects/api";
@@ -24,8 +23,7 @@ import {
   formatSubjectValues,
   SubjectValuesEditor,
 } from "@/features/subjects/SubjectValuesEditor";
-import type { SubjectAttribute, SubjectValues, UserGroup } from "@/features/subjects/types";
-import { listUsers } from "@/features/users/api";
+import type { SubjectAttribute, SubjectValues } from "@/features/subjects/types";
 import type { UserRow } from "@/features/users/types";
 import { problemMessage } from "@/lib/problem";
 
@@ -40,12 +38,10 @@ export function UserShow({ userId }: Props) {
   });
   const editable = Boolean(canWrite?.can);
   const [user, setUser] = useState<UserRow | null>(null);
-  const [groups, setGroups] = useState<UserGroup[]>([]);
   const [groupIds, setGroupIds] = useState<string[]>([]);
   const [definitions, setDefinitions] = useState<SubjectAttribute[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string[]>>({});
   const [effective, setEffective] = useState<SubjectValues>({});
-  const [people, setPeople] = useState<UserRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -63,20 +59,16 @@ export function UserShow({ userId }: Props) {
     void (async () => {
       setLoading(true);
       try {
-        const [loaded, membership, values, defs, catalog, users] = await Promise.all([
+        const [loaded, membership, values, defs] = await Promise.all([
           getUser(userId),
           getUserGroups(userId),
           getUserSubjectValues(userId),
           listAllSubjectAttributes(),
-          listUserGroups({ limit: 200, offset: 0 }),
-          listUsers({ limit: 200, offset: 0 }),
         ]);
         if (cancelled) return;
         setUser(loaded.user);
-        setGroups(catalog.items);
         setGroupIds(membership.groups.map((group) => group.id));
         setDefinitions(defs);
-        setPeople(users.items);
         setEffective(values.effective);
         const next: Record<string, string[]> = {};
         for (const item of defs) {
@@ -147,34 +139,27 @@ export function UserShow({ userId }: Props) {
   }
 
   if (loading) {
-    return (
-      <PageChrome title={t("users.title")}>
-        <PageBodySkeleton />
-      </PageChrome>
-    );
+    return <PageChrome title={t("users.title")} status="loading" />;
   }
   if (error || !user) {
     return (
-      <PageChrome title={t("users.title")}>
-        <PageError
-          message={error ?? t("common.error.loadFailed")}
-          onRetry={() => location.reload()}
-        />
-      </PageChrome>
+      <PageChrome
+        title={t("users.title")}
+        status={error ? "error" : "notFound"}
+        errorMessage={error ?? undefined}
+        onRetry={error ? () => location.reload() : undefined}
+      />
     );
   }
 
-  const groupOptions = groups.map((group) => ({
-    value: group.id,
-    label: group.name,
-  }));
-
   return (
     <PageChrome
-      title={user.display_name}
+      title={t("users.title")}
+      recordTitle={user.display_name}
       description={user.account}
+      recent={{ moduleId: "users", title: user.display_name }}
       actions={
-        <Button component={Link} href="/console/users" size="sm" variant="default">
+        <Button component={ConsoleLink} href="/console/users" size="sm" variant="default">
           {t("users.back")}
         </Button>
       }
@@ -183,22 +168,13 @@ export function UserShow({ userId }: Props) {
         <FieldDisplay label={t("users.fields.status")} value={t(`users.status.${user.status}`)} />
         <Stack gap="sm">
           <Title order={4}>{t("users.groups.title")}</Title>
-          {editable ? (
-            <MultiSelect
-              label={t("users.groups.title")}
-              data={groupOptions}
-              value={groupIds}
-              onChange={setGroupIds}
-              searchable
-            />
-          ) : (
-            <FieldDisplay
-              label={t("users.groups.title")}
-              value={groupIds
-                .map((id) => groupOptions.find((option) => option.value === id)?.label ?? id)
-                .join(", ")}
-            />
-          )}
+          <RecordMultiPicker
+            editable={editable}
+            label={t("users.groups.title")}
+            adapter={userGroupRecordAdapter()}
+            value={groupIds}
+            onChange={setGroupIds}
+          />
           {editable ? (
             <Group>
               <Button size="sm" loading={busy} onClick={() => void saveGroups()}>
@@ -212,7 +188,6 @@ export function UserShow({ userId }: Props) {
           <SubjectValuesEditor
             definitions={definitions}
             drafts={drafts}
-            users={people}
             editable={editable}
             onChange={(key, texts) =>
               setDrafts((current) => ({ ...current, [key]: texts }))

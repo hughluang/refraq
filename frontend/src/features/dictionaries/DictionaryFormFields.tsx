@@ -10,8 +10,12 @@ import { TextField } from "@/components/form/TextField";
 import { EMPTY_DICTIONARY_ENTRY } from "@/features/dictionaries/dictionaryForm";
 import type { DictionaryFormValues } from "@/features/dictionaries/types";
 
+type DictionaryFormApi = UseFormReturnType<DictionaryFormValues> & {
+  fieldProps?: UseFormReturnType<DictionaryFormValues>["getInputProps"];
+};
+
 type Props = {
-  form: UseFormReturnType<DictionaryFormValues>;
+  form: DictionaryFormApi;
   editable: boolean;
   nameEditable: boolean;
 };
@@ -19,6 +23,7 @@ type Props = {
 export function DictionaryFormFields({ form, editable, nameEditable }: Props) {
   const t = useTranslate();
   const entries = form.values.entries;
+  const fieldProps = form.fieldProps ?? form.getInputProps;
 
   return (
     <Stack>
@@ -26,19 +31,19 @@ export function DictionaryFormFields({ form, editable, nameEditable }: Props) {
         editable={nameEditable}
         required
         label={t("dictionaries.fields.name")}
-        {...form.getInputProps("name")}
+        {...fieldProps("name")}
       />
       <TextField
         editable={editable}
         required
         label={t("dictionaries.fields.displayName")}
-        {...form.getInputProps("display_name")}
+        {...fieldProps("display_name")}
       />
       <TextareaField
         editable={editable}
         minRows={2}
         label={t("dictionaries.fields.description")}
-        {...form.getInputProps("description")}
+        {...fieldProps("description")}
       />
       <Stack gap="xs">
         <Text size="sm" fw={500}>
@@ -66,14 +71,14 @@ export function DictionaryFormFields({ form, editable, nameEditable }: Props) {
                     editable={editable}
                     required
                     aria-label={t("dictionaries.fields.code")}
-                    {...form.getInputProps(`entries.${index}.code`)}
+                    {...fieldProps(`entries.${index}.code`)}
                   />
                 </Table.Td>
                 <Table.Td>
                   <TextField
                     editable={editable}
                     aria-label={t("dictionaries.fields.label")}
-                    {...form.getInputProps(`entries.${index}.label`)}
+                    {...fieldProps(`entries.${index}.label`)}
                   />
                 </Table.Td>
                 <Table.Td>

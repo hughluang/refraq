@@ -7,7 +7,6 @@ import {
   Stack,
   Title,
 } from "@mantine/core";
-import { useForm } from "@mantine/form";
 import {
   CanAccess,
   useGetIdentity,
@@ -20,17 +19,26 @@ import { useEffect, useMemo, useState } from "react";
 import { DisplayField } from "@/components/display/DisplayField";
 import { PageError } from "@/components/feedback/PageError";
 import { PageBodySkeleton } from "@/components/feedback/PageBodySkeleton";
+import { FormSection } from "@/components/form/FormSection";
 import { SelectField } from "@/components/form/SelectField";
 import { TextField } from "@/components/form/TextField";
+import {
+  FormErrorSummary,
+  saveFailureFrom,
+  type SaveFailure,
+} from "@/components/form/FormErrorSummary";
+import { useConsoleForm } from "@/components/form/useConsoleForm";
+import { HeaderAction, HeaderActions } from "@/components/layout/HeaderActions";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { AccountSectionNav } from "@/features/account/AccountSectionNav";
 import { ACCOUNT_SECTION } from "@/features/account/account-sections";
 import { patchAccountProfile } from "@/features/account/api";
+
+const PROFILE_FORM_ID = "account-profile-form";
 import { PasswordSection } from "@/features/account/PasswordSection";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { McpSection } from "@/features/account/McpSection";
 import { TokenList } from "@/features/tokens/TokenList";
-import { problemMessage } from "@/lib/problem";
 import { FOLLOW_BROWSER_TIMEZONE } from "@/providers/display-timezone-catalog";
 import { useTimeZones } from "@/providers/time-zones";
 import {
@@ -57,7 +65,7 @@ export function AccountPanel() {
   const { data: identity } = useGetIdentity<CurrentUser>();
   const setUser = useSessionStore((s) => s.setUser);
   const changeLanguage = useChangeLanguage(LOCALE_COOKIE_NAME);
-  const [savingProfile, setSavingProfile] = useState(false);
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
 
   const {
     items: timeZones,
@@ -70,13 +78,14 @@ export function AccountPanel() {
   );
   const catalogZoneSet = useMemo(() => new Set(catalogZones), [catalogZones]);
 
-  const profileForm = useForm<ProfileForm>({
+  const profileForm = useConsoleForm<ProfileForm>({
     initialValues: {
       display_name: "",
       email: "",
       locale: "en-US",
       display_timezone: FOLLOW_BROWSER_TIMEZONE,
     },
+    onValuesChange: () => setSaveFailure(null),
     validate: {
       display_name: (value) =>
         value.trim().length > 0 ? null : t("account.validation.required"),
@@ -92,6 +101,7 @@ export function AccountPanel() {
       // null → follow browser; non-null (even outside ICU catalog) keep as-is.
       display_timezone: identity.display_timezone ?? FOLLOW_BROWSER_TIMEZONE,
     });
+    profileForm.markSaved();
     // Only sync when identity id / fields change from server.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- form identity is stable enough
   }, [
@@ -119,7 +129,6 @@ export function AccountPanel() {
   }, [t, catalogZones, catalogZoneSet, identity?.display_timezone]);
 
   async function onSaveProfile(values: ProfileForm) {
-    setSavingProfile(true);
     try {
       const user = await patchAccountProfile({
         display_name: values.display_name.trim(),
@@ -134,20 +143,22 @@ export function AccountPanel() {
       if (isLocale(user.locale)) {
         await changeLanguage(user.locale);
       }
+      profileForm.markSaved();
+      setSaveFailure(null);
       open?.({
         type: "success",
         message: t("account.title"),
         description: t("account.profile.success"),
       });
     } catch (err) {
-      open?.({
-        type: "error",
-        message: t("account.title"),
-        description:
-          problemMessage(t, err, t("account.profile.error")),
-      });
-    } finally {
-      setSavingProfile(false);
+      setSaveFailure(
+        saveFailureFrom(
+          t,
+          err,
+          profileForm.applyApiError(err),
+          t("account.profile.error"),
+        ),
+      );
     }
   }
 
@@ -157,6 +168,17 @@ export function AccountPanel() {
     <PageChrome
       title={t("account.title")}
       description={t("account.description")}
+      actions={
+        <HeaderActions
+          standard={
+            <HeaderAction primary>
+              <Button type="submit" form={PROFILE_FORM_ID} size="sm" loading={profileForm.submitting}>
+                {t("account.profile.save")}
+              </Button>
+            </HeaderAction>
+          }
+        />
+      }
     >
       <Group align="flex-start" wrap="nowrap" gap="xl">
         <Stack gap="xl" style={{ flex: 1, minWidth: 0 }}>
@@ -183,27 +205,32 @@ export function AccountPanel() {
 
             <Divider />
 
-            <form onSubmit={profileForm.onSubmit(onSaveProfile)}>
+            <form id={PROFILE_FORM_ID} onSubmit={profileForm.onSubmit(onSaveProfile)}>
               <Stack gap="sm">
-                <Title order={4}>{t("account.section.profile")}</Title>
+                <FormErrorSummary failure={saveFailure} />
+                <FormSection
+                  title={t("account.section.profile")}
+                  columns={1}
+                  order={3}
+                >
                 <TextField
                   label={t("account.fields.displayName")}
                   withAsterisk
                   editable
-                  {...profileForm.getInputProps("display_name")}
+                  {...profileForm.fieldProps("display_name")}
                 />
                 <TextField
                   label={t("account.fields.email")}
-                  description={t("account.fields.email.hint")}
+                  helper={t("account.fields.email.hint")}
                   editable
-                  {...profileForm.getInputProps("email")}
+                  {...profileForm.fieldProps("email")}
                 />
                 <SelectField
                   label={t("account.fields.locale")}
                   data={LOCALE_SELECT_DATA}
                   allowDeselect={false}
                   editable
-                  {...profileForm.getInputProps("locale")}
+                  {...profileForm.fieldProps("locale")}
                 />
                 {timeZonesLoading ? (
                   <PageBodySkeleton rows={1} />
@@ -214,20 +241,16 @@ export function AccountPanel() {
                     ) : null}
                     <SelectField
                       label={t("account.fields.displayTimezone")}
-                      description={t("account.fields.displayTimezone.hint")}
+                      helper={t("account.fields.displayTimezone.hint")}
                       data={timezoneSelectData}
                       searchable
                       allowDeselect={false}
                       editable
-                      {...profileForm.getInputProps("display_timezone")}
+                      {...profileForm.fieldProps("display_timezone")}
                     />
                   </>
                 )}
-                <Group justify="flex-end">
-                  <Button type="submit" loading={savingProfile}>
-                    {t("account.profile.save")}
-                  </Button>
-                </Group>
+                </FormSection>
               </Stack>
             </form>
 

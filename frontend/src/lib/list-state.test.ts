@@ -4,6 +4,7 @@ import {
   isRefreshing,
   listPresentationOf,
   listStateOf,
+  localListSession,
 } from "@/lib/list-state";
 
 const base = {
@@ -113,5 +114,27 @@ describe("listPresentationOf", () => {
     expect(
       listPresentationOf({ ...base, total: 120, itemCount: 0 }),
     ).toEqual({ state: "ready", refreshing: false });
+  });
+});
+
+describe("localListSession", () => {
+  it("shows every local row on one page", () => {
+    const list = localListSession({ total: 3 });
+    expect(list.presentation).toEqual({ state: "ready", refreshing: false });
+    expect(list.page).toBe(1);
+    expect(list.pageSize).toBe(3);
+    expect(list.total).toBe(3);
+  });
+
+  it("uses a skeleton while the array is still loading", () => {
+    expect(localListSession({ total: 0, loading: true }).presentation.state).toBe(
+      "loading",
+    );
+  });
+
+  it("keeps an error retryable when nothing is on screen", () => {
+    const list = localListSession({ total: 0, error: "offline" });
+    expect(list.presentation.state).toBe("error");
+    expect(list.error).toBe("offline");
   });
 });

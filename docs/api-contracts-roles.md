@@ -97,7 +97,9 @@ Purpose: list Role records.
 
 - Permission: `roles:read`
 
-**Offset Page** (locked first, then `key ASC`, `id ASC`). Query params: `limit` (default **50**, max **200**), `offset` (default **0**).
+**Offset Page** (locked first, then `key ASC`, `id ASC`). Query params: `limit` (default **50**, max **200**), `offset` (default **0**), optional `q`.
+
+`q` is a case-insensitive substring of `key` or `name`. A blank or whitespace-only `q` is the same as omitting it. `%` and `_` match themselves. `total` counts the filtered set. Ordering and the envelope are unchanged.
 
 ### Response: `200`
 

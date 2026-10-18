@@ -33,14 +33,18 @@ export function listDictionaries(params?: {
   status?: readonly DictionaryListStatus[];
   limit?: number;
   offset?: number;
+  signal?: AbortSignal;
 }) {
-  return apiClient<OffsetPage<Dictionary>>(
-    `/dictionaries${querySuffix(params)}`,
-  );
+  const { signal, ...query } = params ?? {};
+  return apiClient<OffsetPage<Dictionary>>(`/dictionaries${querySuffix(query)}`, {
+    signal,
+  });
 }
 
-export function getDictionary(id: string) {
-  return apiClient<{ dictionary: Dictionary }>(`/dictionaries/${id}`);
+export function getDictionary(id: string, init?: { signal?: AbortSignal }) {
+  return apiClient<{ dictionary: Dictionary }>(`/dictionaries/${id}`, {
+    signal: init?.signal,
+  });
 }
 
 export function createDictionary(body: DictionaryCreateBody) {

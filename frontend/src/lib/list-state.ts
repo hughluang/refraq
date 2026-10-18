@@ -44,3 +44,48 @@ export function listPresentationOf(input: ListStateInput): ListPresentation {
     refreshing: isRefreshing(input),
   };
 }
+
+/** Fields a `ListTable` binds for a collection that is not an Offset Page fetch. */
+export type LocalListSession = {
+  presentation: ListPresentation;
+  error: string | null;
+  errorRequestId: string | null;
+  reload: () => void | Promise<void>;
+  page: number;
+  setPage: (page: number) => void;
+  pageSize: number;
+  total: number;
+};
+
+function ignorePage(_page: number) {}
+
+/**
+ * One in-memory collection as a list session.
+ * All rows sit on a single page, so the pager shows the count and no page numbers.
+ */
+export function localListSession(input: {
+  total: number;
+  loading?: boolean;
+  error?: string | null;
+  reload?: () => void | Promise<void>;
+}): LocalListSession {
+  const error = input.error ?? null;
+  const loading = input.loading ?? false;
+  const itemCount = loading || error ? 0 : input.total;
+  return {
+    presentation: listPresentationOf({
+      loading,
+      error,
+      total: input.total,
+      itemCount,
+      filtered: false,
+    }),
+    error,
+    errorRequestId: null,
+    reload: input.reload ?? (() => undefined),
+    page: 1,
+    setPage: ignorePage,
+    pageSize: Math.max(input.total, 1),
+    total: input.total,
+  };
+}

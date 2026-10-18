@@ -64,9 +64,6 @@ function renderSection() {
       createElement(AccessGrantsSection, {
         entityId: "ent_1",
         summary,
-        users: [],
-        roles: [],
-        groups: [],
         subjectAttrs: [{ value: "regions", label: "Regions" }],
         busyId: null,
         run: vi.fn(async () => true),

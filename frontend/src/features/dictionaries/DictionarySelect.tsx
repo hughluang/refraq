@@ -4,12 +4,16 @@ import { Anchor, Badge, Button, Group, Stack, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useEffect, useState } from "react";
 
-import { FieldDisplay } from "@/components/form/FieldDisplay";
-import { SelectField } from "@/components/form/SelectField";
-import { getDictionary, listDictionaries } from "@/features/dictionaries/api";
+import { RecordPicker } from "@/components/form/RecordPicker";
+import {
+  cachedDictionary,
+  dictionaryRecordAdapter,
+  rememberDictionary,
+} from "@/components/form/recordPickerAdapters";
+import { getDictionary } from "@/features/dictionaries/api";
 import { CreateDictionaryModal } from "@/features/dictionaries/CreateDictionaryModal";
 import { DictionaryStatusBadge } from "@/features/dictionaries/DictionaryStatusBadge";
-import type { Dictionary, DictionaryEntry } from "@/features/dictionaries/types";
+import type { DictionaryEntry } from "@/features/dictionaries/types";
 
 export type DictionarySelection = {
   dictionary_id: string;
@@ -30,10 +34,6 @@ type Props = {
   onChange: (next: DictionarySelection) => void;
 };
 
-function optionLabel(item: Pick<Dictionary, "display_name" | "name">): string {
-  return item.display_name.trim() || item.name;
-}
-
 export function DictionarySelect({
   editable,
   value,
@@ -45,33 +45,11 @@ export function DictionarySelect({
   onChange,
 }: Props) {
   const t = useTranslate();
-  const [options, setOptions] = useState<Dictionary[]>([]);
-  const [optionsFailed, setOptionsFailed] = useState(false);
-  const [query, setQuery] = useState("");
   const [preview, setPreview] = useState<DictionaryEntry[] | null>(null);
   const [previewFailed, setPreviewFailed] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const loadFailedMessage = t("common.error.loadFailed");
-
-  useEffect(() => {
-    let cancelled = false;
-    setOptionsFailed(false);
-    void listDictionaries({ q: query.trim() || undefined, limit: 200 }).then(
-      (page) => {
-        if (cancelled) return;
-        setOptions(page.items);
-        setOptionsFailed(false);
-      },
-      () => {
-        if (cancelled) return;
-        setOptions([]);
-        setOptionsFailed(true);
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [query]);
+  const selectedLabel = displayName.trim() || name.trim() || value;
 
   useEffect(() => {
     if (!value) {
@@ -98,57 +76,45 @@ export function DictionarySelect({
     };
   }, [value]);
 
-  const visible = options.filter(
-    (item) => item.deprecated_at == null || item.id === value,
-  );
-  const data = visible.map((item) => ({
-    value: item.id,
-    label: optionLabel(item),
-  }));
-  if (value && !data.some((item) => item.value === value)) {
-    data.unshift({
-      value,
-      label: displayName.trim() || name.trim() || value,
-    });
-  }
-
   const active = (preview ?? []).filter((entry) => entry.active);
   const inactive = (preview ?? []).filter((entry) => !entry.active);
-  const selectedLabel = displayName.trim() || name.trim() || value;
 
   return (
     <Stack gap="xs">
-      {editable ? (
-        <SelectField
-          editable
-          required
-          searchable
-          label={t("entities.fields.dictionary")}
-          description={t("entities.fields.dictionaryHint")}
-          data={data}
-          value={value || null}
-          error={error ?? (optionsFailed ? loadFailedMessage : undefined)}
-          nothingFoundMessage={optionsFailed ? loadFailedMessage : undefined}
-          filter={({ options }) => options}
-          onSearchChange={setQuery}
-          onChange={(next) => {
-            const picked = options.find((item) => item.id === next);
+      <RecordPicker
+        editable={editable}
+        required
+        label={t("entities.fields.dictionary")}
+        description={t("entities.fields.dictionaryHint")}
+        adapter={dictionaryRecordAdapter()}
+        value={value || null}
+        error={error}
+        known={
+          value
+            ? [{ id: value, name: selectedLabel, key: name.trim() || value }]
+            : undefined
+        }
+        onChange={(next) => {
+          if (!next) {
             onChange({
-              dictionary_id: next ?? "",
-              dictionary_name: picked?.name ?? "",
-              dictionary_display_name: picked?.display_name ?? "",
-              dictionary_deprecated: picked?.deprecated_at != null,
+              dictionary_id: "",
+              dictionary_name: "",
+              dictionary_display_name: "",
+              dictionary_deprecated: false,
               behind: false,
             });
-          }}
-        />
-      ) : (
-        <FieldDisplay
-          label={t("entities.fields.dictionary")}
-          description={t("entities.fields.dictionaryHint")}
-          value={selectedLabel || undefined}
-        />
-      )}
+            return;
+          }
+          const picked = cachedDictionary(next);
+          onChange({
+            dictionary_id: next,
+            dictionary_name: picked?.name ?? "",
+            dictionary_display_name: picked?.display_name ?? "",
+            dictionary_deprecated: picked?.deprecated_at != null,
+            behind: false,
+          });
+        }}
+      />
       <Group gap="sm">
         {editable ? (
           <Button
@@ -206,15 +172,16 @@ export function DictionarySelect({
       <CreateDictionaryModal
         opened={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreated={(created) =>
+        onCreated={(created) => {
+          rememberDictionary(created);
           onChange({
             dictionary_id: created.id,
             dictionary_name: created.name,
             dictionary_display_name: created.display_name,
             dictionary_deprecated: false,
             behind: false,
-          })
-        }
+          });
+        }}
       />
     </Stack>
   );

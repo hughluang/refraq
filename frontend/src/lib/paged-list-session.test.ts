@@ -39,9 +39,10 @@ describe("syncResetPage", () => {
 });
 
 describe("list error fields", () => {
-  it("splits ApiError detail from requestId", () => {
+  it("uses a localized message and keeps the request id", () => {
     const err = new ApiError(500, "JOB_FAILED", "boom", "req-1");
-    expect(listErrorMessage(err)).toBe("boom");
+    expect(listErrorMessage(err)).toBe("Something went wrong. Try again.");
+    expect(listErrorMessage(err)).not.toBe("boom");
     expect(listErrorRequestId(err)).toBe("req-1");
   });
 
@@ -157,7 +158,7 @@ describe("loadPagedGeneration", () => {
     });
   });
 
-  it("returns error detail and requestId", async () => {
+  it("returns the localized problem message and requestId", async () => {
     const result = await loadPagedGeneration({
       started: 3,
       currentGeneration: () => 3,
@@ -169,7 +170,7 @@ describe("loadPagedGeneration", () => {
     });
     expect(result).toEqual({
       kind: "error",
-      message: "bad offset",
+      message: "The request is not valid. Check the fields and try again.",
       requestId: "rid",
     });
   });

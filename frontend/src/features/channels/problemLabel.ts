@@ -78,9 +78,6 @@ export function fieldMessages(
     }));
 }
 
-export function problemColor(severity: "error" | "warning" | undefined): "red" | "yellow" {
-  return severity === "warning" ? "yellow" : "red";
-}
 
 export function formatRunError(
   t: (key: string) => string,

@@ -150,12 +150,16 @@ export function startRun(
 export function listRuns(
   id: string,
   params?: { status?: string; target?: string; limit?: number; offset?: number },
+  init?: { signal?: AbortSignal },
 ) {
-  return apiClient<OffsetPage<ChannelRun>>(`/channels/${id}/runs${querySuffix(params)}`);
+  return apiClient<OffsetPage<ChannelRun>>(
+    `/channels/${id}/runs${querySuffix(params)}`,
+    init,
+  );
 }
 
-export function getRun(id: string, jobId: string) {
-  return apiClient<ChannelRunDetail>(`/channels/${id}/runs/${jobId}`);
+export function getRun(id: string, jobId: string, init?: { signal?: AbortSignal }) {
+  return apiClient<ChannelRunDetail>(`/channels/${id}/runs/${jobId}`, init);
 }
 
 export function getExecutionOutput(

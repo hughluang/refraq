@@ -3,6 +3,13 @@
 import { DisplayField } from "@/components/display/DisplayField";
 import { SwitchField } from "@/components/form/SwitchField";
 import { TextField } from "@/components/form/TextField";
+import {
+  FormErrorSummary,
+  saveFailureFrom,
+  type SaveFailure,
+} from "@/components/form/FormErrorSummary";
+import { useConsoleForm } from "@/components/form/useConsoleForm";
+import { useLeaveGuardRegistration } from "@/components/navigation/leaveGuard";
 import { generateColors } from "@mantine/colors-generator";
 import {
   Alert,
@@ -15,14 +22,12 @@ import {
   Paper,
   SimpleGrid,
   Stack,
-  Tabs,
   Text,
   Title,
 } from "@mantine/core";
-import { useForm } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
-import { useRouter } from "next/navigation";
+import { useConsoleNavigation } from "@/components/navigation/useConsoleNavigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
@@ -57,9 +62,11 @@ import {
   ModuleAction,
   ModuleId,
 } from "@/features/console/module-identity";
+import { PageTabs, useConsoleTab } from "@/components/layout/consoleTabs";
 import { problemMessage } from "@/lib/problem";
 import {
   getDefaultLocale,
+  isLocale,
   LOCALE_CATALOG,
   SUPPORTED_LOCALES,
   type Locale,
@@ -118,7 +125,7 @@ function useObjectUrl(file: File | null): string | null {
 
 export function BrandingPanel() {
   const t = useTranslate();
-  const router = useRouter();
+  const { refresh } = useConsoleNavigation();
   const { replaceBranding } = useBranding();
   const { open: notify } = useNotification();
   const { data: canWrite } = useCan({
@@ -127,18 +134,24 @@ export function BrandingPanel() {
   });
   const [resetOpened, resetModal] = useDisclosure();
   const [branding, setBranding] = useState<PublicBranding>(DEFAULT_BRANDING);
-  const [locale, setLocale] = useState<Locale>(LOCALE_CATALOG[0].code);
+  const localeTabs = useMemo(
+    () => LOCALE_CATALOG.map(({ code }) => ({ value: code })),
+    [],
+  );
+  const { value: localeValue, setTab: setLocaleTab } = useConsoleTab(localeTabs);
+  const locale: Locale = isLocale(localeValue) ? localeValue : LOCALE_CATALOG[0].code;
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [faviconFile, setFaviconFile] = useState<File | null>(null);
   const [logoCleared, setLogoCleared] = useState(false);
   const [faviconCleared, setFaviconCleared] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const form = useForm<FormValues>({
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
+  const form = useConsoleForm<FormValues>({
     mode: "controlled",
     initialValues: formValues(DEFAULT_BRANDING),
+    onValuesChange: () => setSaveFailure(null),
     validate: {
       primaryColor: (value) =>
         value.length === 0 || isHexColor(value)
@@ -147,6 +160,9 @@ export function BrandingPanel() {
     },
   });
   const { resetDirty, setValues } = form;
+  const assetsDirty =
+    logoFile != null || faviconFile != null || logoCleared || faviconCleared;
+  useLeaveGuardRegistration(assetsDirty);
 
   const applyBranding = useCallback(
     (next: PublicBranding) => {
@@ -165,9 +181,9 @@ export function BrandingPanel() {
     (next: PublicBranding) => {
       applyBranding(next);
       replaceBranding(next);
-      router.refresh();
+      refresh();
     },
-    [applyBranding, replaceBranding, router],
+    [applyBranding, replaceBranding, refresh],
   );
 
   const load = useCallback(async () => {
@@ -217,7 +233,6 @@ export function BrandingPanel() {
   );
 
   async function save(values: FormValues) {
-    setSaving(true);
     try {
       const color = values.primaryColor || null;
       let next = await updateBranding({
@@ -248,20 +263,18 @@ export function BrandingPanel() {
         next = await fetchPublicBranding();
       }
       publishBranding(next);
+      form.markSaved();
+      setSaveFailure(null);
       notify?.({
         type: "success",
         message: t("branding.title"),
         description: t("branding.save.success"),
       });
     } catch (err) {
-      notify?.({
-        type: "error",
-        message: t("branding.title"),
-        description: problemMessage(t, err, t("common.error")),
-      });
       await load();
-    } finally {
-      setSaving(false);
+      setSaveFailure(
+        saveFailureFrom(t, err, form.applyApiError(err), t("common.error")),
+      );
     }
   }
 
@@ -297,8 +310,8 @@ export function BrandingPanel() {
               {t("branding.reset")}
             </Button>
             <Button
-              loading={saving}
-              onClick={() => form.onSubmit(save)()}
+              loading={form.submitting}
+              onClick={() => void form.submit(save)}
             >
               {t("branding.save")}
             </Button>
@@ -311,30 +324,24 @@ export function BrandingPanel() {
         <PageError message={error} onRetry={() => void load()} />
       ) : null}
       {!loading && !error ? (
+        <Stack gap="md">
+        <FormErrorSummary failure={saveFailure} />
         <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="xl">
           <Stack gap="lg">
             <Paper withBorder p="md">
-              <Tabs
+              <PageTabs
                 value={locale}
-                onChange={(value) => {
-                  if (value) setLocale(value as Locale);
-                }}
-              >
-                <Tabs.List>
-                  {LOCALE_CATALOG.map(({ code }) => (
-                    <Tabs.Tab key={code} value={code}>
-                      {t(`locale.label.${code}`)}
-                    </Tabs.Tab>
-                  ))}
-                </Tabs.List>
-                {LOCALE_CATALOG.map(({ code }) => (
-                  <Tabs.Panel key={code} value={code} pt="md">
+                onChange={setLocaleTab}
+                tabs={LOCALE_CATALOG.map(({ code }) => ({
+                  value: code,
+                  label: t(`locale.label.${code}`),
+                  panel: (
                     <Stack>
                       <TextField
                         label={t("branding.fields.name")}
                         maxLength={80}
                         editable={Boolean(canWrite?.can)}
-                        {...form.getInputProps(`brandNames.${code}`)}
+                        {...form.fieldProps(`brandNames.${code}`)}
                         rightSection={
                           canWrite?.can && form.values.brandNames[code] ? (
                             <Button
@@ -352,10 +359,10 @@ export function BrandingPanel() {
                       />
                       <TextField
                         label={t("branding.fields.tagline")}
-                        description={t("branding.fields.tagline.help")}
+                        helper={t("branding.fields.tagline.help")}
                         maxLength={160}
                         editable={Boolean(canWrite?.can)}
-                        {...form.getInputProps(`taglines.${code}`)}
+                        {...form.fieldProps(`taglines.${code}`)}
                         rightSection={
                           canWrite?.can && form.values.taglines[code] ? (
                             <Button
@@ -372,9 +379,16 @@ export function BrandingPanel() {
                         rightSectionWidth={64}
                       />
                     </Stack>
-                  </Tabs.Panel>
-                ))}
-              </Tabs>
+                  ),
+                }))}
+              >
+                {({ list, panels }) => (
+                  <Stack gap="sm">
+                    {list}
+                    {panels}
+                  </Stack>
+                )}
+              </PageTabs>
             </Paper>
 
             <Paper withBorder p="md">
@@ -392,7 +406,7 @@ export function BrandingPanel() {
                     "#fa5252",
                     "#7950f2",
                   ]}
-                  {...form.getInputProps("primaryColor")}
+                  {...form.fieldProps("primaryColor")}
                 />
                 ) : (
                   <DisplayField
@@ -424,14 +438,14 @@ export function BrandingPanel() {
                 <SwitchField
                   label={t("branding.fields.showLogo")}
                   editable={Boolean(canWrite?.can)}
-                  {...form.getInputProps("showLogo", {
+                  {...form.fieldProps("showLogo", {
                     type: "checkbox",
                   })}
                 />
                 <SwitchField
                   label={t("branding.fields.showName")}
                   editable={Boolean(canWrite?.can)}
-                  {...form.getInputProps("showBrandNameWithLogo", {
+                  {...form.fieldProps("showBrandNameWithLogo", {
                     type: "checkbox",
                   })}
                 />
@@ -567,6 +581,7 @@ export function BrandingPanel() {
             </Paper>
           </Stack>
         </SimpleGrid>
+        </Stack>
       ) : null}
 
       <ConfirmActionModal

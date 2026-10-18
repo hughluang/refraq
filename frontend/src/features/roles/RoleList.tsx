@@ -1,71 +1,51 @@
 "use client";
 
-import { Badge, Button, Group, Table, Text } from "@mantine/core";
-import {
-  CanAccess,
-  useCan,
-  useDelete,
-  useTranslate,
-} from "@refinedev/core";
-import Link from "next/link";
+import { Badge, Group, Table, Text } from "@mantine/core";
+import { useCan, useDelete, useTranslate } from "@refinedev/core";
 import { useCallback } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
 import { ListTable } from "@/components/display/ListTable";
-import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
+import { ListToolbar } from "@/components/display/ListToolbar";
+import { RecordReference } from "@/components/display/RecordReference";
+import { RowActions } from "@/components/display/RowActions";
+import { useConsoleNavigation } from "@/components/navigation/useConsoleNavigation";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { listRoles } from "@/features/roles/api";
 import type { RoleRow } from "@/features/roles/types";
-import { useConfirmAction } from "@/hooks/useConfirmAction";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { problemMessage } from "@/lib/problem";
+import { useListQuery } from "@/hooks/useListQuery";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
 
 export function RoleList() {
   const t = useTranslate();
+  const { push } = useConsoleNavigation();
   const { data: canWrite } = useCan({
     resource: ModuleId.roles,
-    action: ModuleAction.create,
+    action: ModuleAction.edit,
   });
-  const fetchPage = useCallback((query: PageQuery) => listRoles(query), []);
+  const { data: canDelete } = useCan({
+    resource: ModuleId.roles,
+    action: ModuleAction.delete,
+  });
+  const query = useListQuery();
+  const fetchPage = useCallback(
+    (page: PageQuery) => listRoles({ ...page, q: query.search || undefined }),
+    [query.search],
+  );
   const list = useConsolePagedList<RoleRow>({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
+    resetDeps: [query.search],
+    filtered: query.isFiltered,
+    page: query.page,
+    onPageChange: query.setPage,
   });
   const { items: rows, reload } = list;
-  const { mutate: deleteRole, mutation } = useDelete();
-  const deleteConfirm = useConfirmAction<RoleRow>();
-
-  function confirmDelete() {
-    const pending = deleteConfirm.pending;
-    if (!pending) return;
-    deleteRole(
-      {
-        resource: ModuleId.roles,
-        id: pending.id,
-        successNotification: {
-          message: t("roles.title"),
-          description: t("roles.delete.success"),
-          type: "success",
-        },
-        errorNotification: (err) => ({
-          message: t("roles.title"),
-          description:
-            problemMessage(t, err, t("roles.delete.error")),
-          type: "error",
-        }),
-      },
-      {
-        onSuccess: () => {
-          void reload();
-        },
-        onSettled: () => deleteConfirm.close(),
-      },
-    );
-  }
+  const { mutate: deleteRole } = useDelete();
 
   const createAction = (
     <CreateListAction resource={ModuleId.roles} href="/console/roles/new">
@@ -78,13 +58,19 @@ export function RoleList() {
       title={t("roles.title")}
       description={t("roles.description")}
       actions={createAction}
+      toolbar={
+        <ListToolbar query={query} searchPlaceholder={t("roles.search")} />
+      }
     >
       <ListTable
         list={list}
-        columnCount={5}
+        columnCount={4}
+        emptyMessage={t("roles.list.empty")}
+        emptyAction={createAction}
+        noMatchMessage={t("roles.list.noMatch")}
+        onClearFilters={query.clear}
         head={
           <Table.Tr>
-            <Table.Th>{t("roles.fields.key")}</Table.Th>
             <Table.Th>{t("roles.fields.name")}</Table.Th>
             <Table.Th>{t("roles.fields.permissions")}</Table.Th>
             <Table.Th>{t("roles.fields.users")}</Table.Th>
@@ -93,13 +79,21 @@ export function RoleList() {
         }
       >
         {rows.map((row) => {
-          const canDelete =
-            canWrite?.can && !row.locked && row.user_count === 0;
+          const recordName = row.name;
+          const deleteReason = row.locked
+            ? t("roles.delete.locked")
+            : row.user_count > 0
+              ? t("roles.delete.assigned")
+              : undefined;
           return (
             <Table.Tr key={row.id}>
               <Table.Td>
                 <Group gap="xs">
-                  <Text size="sm">{row.key}</Text>
+                  <RecordReference
+                    name={row.name}
+                    recordKey={row.key}
+                    href={`/console/roles/${row.id}`}
+                  />
                   {row.locked ? (
                     <Badge size="xs" color="red" variant="light">
                       {t("roles.locked")}
@@ -107,7 +101,6 @@ export function RoleList() {
                   ) : null}
                 </Group>
               </Table.Td>
-              <Table.Td>{row.name}</Table.Td>
               <Table.Td>
                 <Text size="sm" c="dimmed">
                   {row.permissions.length}
@@ -115,55 +108,56 @@ export function RoleList() {
               </Table.Td>
               <Table.Td>{row.user_count}</Table.Td>
               <Table.Td>
-                <Group gap="xs">
-                  <CanAccess
-                    resource={ModuleId.roles}
-                    action={ModuleAction.edit}
-                  >
-                    <Button
-                      component={Link}
-                      href={`/console/roles/${row.id}`}
-                      size="xs"
-                      variant="light"
-                      disabled={row.locked}
-                    >
-                      {t("roles.edit")}
-                    </Button>
-                  </CanAccess>
-                  <CanAccess
-                    resource={ModuleId.roles}
-                    action={ModuleAction.delete}
-                  >
-                    <Button
-                      size="xs"
-                      variant="light"
-                      color="red"
-                      disabled={!canDelete || mutation.isPending}
-                      onClick={() => deleteConfirm.open(row)}
-                    >
-                      {t("roles.delete")}
-                    </Button>
-                  </CanAccess>
-                </Group>
+                <RowActions
+                  recordName={recordName}
+                  verbs={[
+                    {
+                      key: "edit",
+                      label: t("roles.edit"),
+                      hidden: !canWrite?.can,
+                      disabledReason: row.locked ? t("roles.lockedHint") : undefined,
+                      safety: "immediate",
+                      onClick: () => push(`/console/roles/${row.id}`),
+                    },
+                    {
+                      key: "delete",
+                      label: t("roles.delete"),
+                      color: "red",
+                      hidden: !canDelete?.can,
+                      disabledReason: deleteReason,
+                      action: {
+                        safety: "confirm",
+                        recordName,
+                        title: t("roles.delete.confirmTitle"),
+                        consequence: t("roles.delete.consequence"),
+                        confirmLabel: t("roles.delete"),
+                        confirmColor: "red",
+                        outcome: t("roles.delete.success"),
+                        execute: () =>
+                          new Promise<void>((resolve, reject) => {
+                            deleteRole(
+                              {
+                                resource: ModuleId.roles,
+                                id: row.id,
+                                successNotification: false,
+                                errorNotification: false,
+                              },
+                              {
+                                onSuccess: () => resolve(),
+                                onError: (error) => reject(error),
+                              },
+                            );
+                          }),
+                        onSuccess: () => reload(),
+                      },
+                    },
+                  ]}
+                />
               </Table.Td>
             </Table.Tr>
           );
         })}
       </ListTable>
-
-      <ConfirmActionModal
-        opened={deleteConfirm.opened}
-        onClose={deleteConfirm.close}
-        title={t("roles.delete.confirmTitle")}
-        body={
-          deleteConfirm.pending
-            ? t("roles.delete.confirmBody", { name: deleteConfirm.pending.name })
-            : null
-        }
-        confirmColor="red"
-        loading={mutation.isPending}
-        onConfirm={confirmDelete}
-      />
     </PageChrome>
   );
 }

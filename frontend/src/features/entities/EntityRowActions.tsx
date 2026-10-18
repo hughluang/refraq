@@ -1,12 +1,10 @@
 "use client";
 
-import { Button, Group } from "@mantine/core";
-import { CanAccess, useNotification, useTranslate } from "@refinedev/core";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useState } from "react";
 
-import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
+import { RowActions, type RowActionVerb } from "@/components/display/RowActions";
+import { useConsoleNavigation } from "@/components/navigation/useConsoleNavigation";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import {
   deleteEntity,
@@ -16,7 +14,6 @@ import {
 } from "@/features/entities/api";
 import { EntityPublishConfirm } from "@/features/entities/EntityPublishConfirm";
 import { entityEditHref } from "@/features/entities/entityDetailTab";
-import { entityRecordHeaderActions } from "@/features/entities/entityRecordActions";
 import { canAuthor, isPublishing } from "@/features/entities/publishStatus";
 import type { BusinessEntity } from "@/features/entities/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
@@ -31,23 +28,19 @@ type Props = {
 export function EntityRowActions({ entity, canWrite, onChanged }: Props) {
   const t = useTranslate();
   const { open } = useNotification();
-  const router = useRouter();
+  const { push } = useConsoleNavigation();
+  const { data: canDelete } = useCan({
+    resource: ModuleId.entities,
+    action: ModuleAction.delete,
+  });
   const [busy, setBusy] = useState(false);
   const publishConfirm = useConfirmAction<true>();
-  const openVersionConfirm = useConfirmAction<true>();
-  const deprecateConfirm = useConfirmAction<true>();
-  const deleteConfirm = useConfirmAction<true>();
 
-  const actions = entityRecordHeaderActions({
-    mode: "show",
-    canWrite,
-    canAuthor: canAuthor(entity),
-    publishing: isPublishing(entity),
-    deprecated: Boolean(entity.deprecated_at),
-    published: entity.current_version?.publish_status === "published",
-    everPublished: entity.ever_published,
-    hasCurrentVersion: entity.current_version != null,
-  });
+  const publishing = isPublishing(entity);
+  const deprecated = Boolean(entity.deprecated_at);
+  const author = canAuthor(entity);
+  const published = entity.current_version?.publish_status === "published";
+  const recordName = entity.name;
 
   const notifyError = (err: unknown, fallback: string) => {
     open?.({
@@ -74,117 +67,107 @@ export function EntityRowActions({ entity, canWrite, onChanged }: Props) {
     }
   };
 
-  const confirmOpenVersion = async () => {
-    setBusy(true);
-    try {
-      await openVersion(entity.id, {});
-      openVersionConfirm.close();
-      open?.({
-        type: "success",
-        message: t("entities.versions.open.success"),
-      });
-      router.push(entityEditHref(entity.id));
-    } catch (err) {
-      notifyError(err, t("entities.versions.open.failed"));
-    } finally {
-      setBusy(false);
-    }
-  };
+  let publishReason: string | undefined;
+  if (!entity.current_version) publishReason = t("entities.actions.noVersion");
+  else if (publishing) publishReason = t("entities.actions.publishing");
+  else if (deprecated) publishReason = t("entities.actions.deprecated");
+  else if (!author) publishReason = t("entities.actions.notDraft");
 
-  const confirmDeprecate = async () => {
-    setBusy(true);
-    try {
-      await deprecateEntity(entity.id);
-      deprecateConfirm.close();
-      open?.({ type: "success", message: t("entities.deprecate.success") });
-      onChanged();
-    } catch (err) {
-      notifyError(err, t("entities.deprecate.failed"));
-    } finally {
-      setBusy(false);
-    }
-  };
+  let openReason: string | undefined;
+  if (publishing) openReason = t("entities.actions.publishing");
+  else if (deprecated) openReason = t("entities.actions.deprecated");
+  else if (!published) openReason = t("entities.actions.notPublished");
 
-  const confirmDelete = async () => {
-    setBusy(true);
-    try {
-      await deleteEntity(entity.id);
-      deleteConfirm.close();
-      open?.({ type: "success", message: t("entities.delete.success") });
-      onChanged();
-    } catch (err) {
-      notifyError(err, t("entities.delete.failed"));
-    } finally {
-      setBusy(false);
-    }
-  };
+  let deprecateReason: string | undefined;
+  if (publishing) deprecateReason = t("entities.actions.publishing");
+  else if (deprecated) deprecateReason = t("entities.actions.deprecated");
+  else if (!entity.ever_published) deprecateReason = t("entities.actions.neverPublished");
 
-  const visible =
-    actions.publish ||
-    actions.openVersion ||
-    actions.deprecate ||
-    actions.edit ||
-    actions.deleteEntity;
-  if (!visible) return null;
+  let editReason: string | undefined;
+  if (publishing) editReason = t("entities.actions.publishing");
+  else if (deprecated) editReason = t("entities.actions.deprecated");
+  else if (!author) editReason = t("entities.actions.notDraft");
+
+  let deleteReason: string | undefined;
+  if (publishing) deleteReason = t("entities.actions.publishing");
+  else if (entity.ever_published) deleteReason = t("entities.actions.alreadyPublished");
+
+  const verbs: RowActionVerb[] = [
+    {
+      key: "publish",
+      label: t("entities.publish"),
+      hidden: !canWrite,
+      disabledReason: publishReason,
+      safety: "confirm",
+      onClick: () => publishConfirm.open(true),
+    },
+    {
+      key: "open",
+      label: t("entities.versions.open"),
+      hidden: !canWrite,
+      disabledReason: openReason,
+      action: {
+        safety: "confirm",
+        recordName,
+        title: t("entities.versions.open.confirmTitle"),
+        consequence: t("entities.versions.open.confirmBody", { name: recordName }),
+        confirmLabel: t("entities.versions.open"),
+        outcome: t("entities.versions.open.outcome"),
+        execute: async () => {
+          await openVersion(entity.id, {});
+          push(entityEditHref(entity.id));
+        },
+      },
+    },
+    {
+      key: "deprecate",
+      label: t("entities.deprecate"),
+      color: "red",
+      hidden: !canWrite,
+      disabledReason: deprecateReason,
+      action: {
+        safety: "confirm",
+        recordName,
+        title: t("entities.deprecate.confirmTitle"),
+        consequence: t("entities.deprecate.consequence"),
+        confirmLabel: t("entities.deprecate"),
+        confirmColor: "red",
+        outcome: t("entities.deprecate.success"),
+        execute: () => deprecateEntity(entity.id),
+        onSuccess: () => onChanged(),
+      },
+    },
+    {
+      key: "edit",
+      label: t("actions.edit"),
+      hidden: !canWrite,
+      disabledReason: editReason,
+      safety: "immediate",
+      onClick: () => push(entityEditHref(entity.id)),
+    },
+    {
+      key: "delete",
+      label: t("actions.delete"),
+      color: "red",
+      hidden: !canWrite || !canDelete?.can,
+      disabledReason: deleteReason,
+      action: {
+        safety: "confirm",
+        recordName,
+        title: t("entities.delete.confirmTitle"),
+        consequence: t("entities.delete.consequence"),
+        confirmLabel: t("actions.delete"),
+        confirmColor: "red",
+        outcome: t("entities.delete.success"),
+        execute: () => deleteEntity(entity.id),
+        onSuccess: () => onChanged(),
+      },
+    },
+  ];
 
   return (
     <>
-      <Group gap="xs" wrap="nowrap">
-        {actions.publish ? (
-          <Button
-            size="xs"
-            variant="light"
-            disabled={busy}
-            onClick={() => publishConfirm.open(true)}
-          >
-            {t("entities.publish")}
-          </Button>
-        ) : null}
-        {actions.openVersion ? (
-          <Button
-            size="xs"
-            variant="light"
-            disabled={busy}
-            onClick={() => openVersionConfirm.open(true)}
-          >
-            {t("entities.versions.open")}
-          </Button>
-        ) : null}
-        {actions.deprecate ? (
-          <Button
-            size="xs"
-            variant="light"
-            color="red"
-            disabled={busy}
-            onClick={() => deprecateConfirm.open(true)}
-          >
-            {t("entities.deprecate")}
-          </Button>
-        ) : null}
-        {actions.edit ? (
-          <Button
-            component={Link}
-            href={entityEditHref(entity.id)}
-            size="xs"
-            variant="light"
-          >
-            {t("actions.edit")}
-          </Button>
-        ) : null}
-        {actions.deleteEntity ? (
-          <CanAccess resource={ModuleId.entities} action={ModuleAction.delete}>
-            <Button
-              size="xs"
-              variant="light"
-              color="red"
-              disabled={busy}
-              onClick={() => deleteConfirm.open(true)}
-            >
-              {t("actions.delete")}
-            </Button>
-          </CanAccess>
-        ) : null}
-      </Group>
+      <RowActions recordName={recordName} verbs={verbs} />
       <EntityPublishConfirm
         opened={publishConfirm.opened}
         onClose={publishConfirm.close}
@@ -194,35 +177,6 @@ export function EntityRowActions({ entity, canWrite, onChanged }: Props) {
         everPublished={entity.ever_published}
         loading={busy}
         onConfirm={() => void confirmPublish()}
-      />
-      <ConfirmActionModal
-        opened={openVersionConfirm.opened}
-        onClose={openVersionConfirm.close}
-        title={t("entities.versions.open.confirmTitle")}
-        body={t("entities.versions.open.confirmBody", { name: entity.name })}
-        loading={busy}
-        confirmLabel={t("entities.versions.open")}
-        onConfirm={() => void confirmOpenVersion()}
-      />
-      <ConfirmActionModal
-        opened={deprecateConfirm.opened}
-        onClose={deprecateConfirm.close}
-        title={t("entities.deprecate.confirmTitle")}
-        body={t("entities.deprecate.confirmBody", { name: entity.name })}
-        confirmColor="red"
-        loading={busy}
-        confirmLabel={t("entities.deprecate")}
-        onConfirm={() => void confirmDeprecate()}
-      />
-      <ConfirmActionModal
-        opened={deleteConfirm.opened}
-        onClose={deleteConfirm.close}
-        title={t("entities.delete.confirmTitle")}
-        body={t("entities.delete.confirmBody", { name: entity.name })}
-        confirmColor="red"
-        loading={busy}
-        confirmLabel={t("actions.delete")}
-        onConfirm={() => void confirmDelete()}
       />
     </>
   );

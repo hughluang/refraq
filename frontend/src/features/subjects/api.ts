@@ -21,9 +21,10 @@ function pageQuery(query: PageQuery, extra?: Record<string, string | undefined>)
   return qs.toString();
 }
 
-export function listUserGroups(query: PageQuery & { q?: string }) {
+export function listUserGroups(query: PageQuery & { q?: string; signal?: AbortSignal }) {
   return apiClient<OffsetPage<UserGroup>>(
     `/user-groups?${pageQuery(query, { q: query.q })}`,
+    { signal: query.signal },
   );
 }
 
@@ -39,8 +40,10 @@ export function createUserGroup(body: {
   });
 }
 
-export function getUserGroup(id: string) {
-  return apiClient<{ group: UserGroup }>(`/user-groups/${id}`);
+export function getUserGroup(id: string, init?: { signal?: AbortSignal }) {
+  return apiClient<{ group: UserGroup }>(`/user-groups/${id}`, {
+    signal: init?.signal,
+  });
 }
 
 export function patchUserGroup(
@@ -147,8 +150,8 @@ export function deleteSubjectAttribute(id: string) {
   return apiClient<void>(`/subject-attributes/${id}`, { method: "DELETE" });
 }
 
-export function getUser(id: string) {
-  return apiClient<{ user: UserRow }>(`/users/${id}`);
+export function getUser(id: string, init?: { signal?: AbortSignal }) {
+  return apiClient<{ user: UserRow }>(`/users/${id}`, { signal: init?.signal });
 }
 
 export function getUserGroups(userId: string) {

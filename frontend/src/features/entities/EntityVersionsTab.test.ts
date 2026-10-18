@@ -34,6 +34,7 @@ const LABELS: Record<string, string> = {
   "entities.fields.maxLength": "Max length",
   "entities.status.published": "Published",
   "entities.status.unpublished": "Unpublished",
+  "status.job.succeeded": "Succeeded",
   "entities.attributeType.string": "String",
   "entities.attributes.config.maxLength": "Max length {{value}}",
   "entities.versions.serving": "In use",
@@ -201,7 +202,7 @@ describe("EntityVersionsTab", () => {
     expect(screen.getAllByText("2026-09-10T04:00:00Z")).toHaveLength(2);
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByRole("button", { name: "succeeded" }));
+    fireEvent.click(screen.getByRole("button", { name: /job_1/ }));
     expect(onOpenJob).toHaveBeenCalledWith("job_1");
 
     fireEvent.click(screen.getAllByRole("button", { name: "View" })[0]);

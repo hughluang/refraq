@@ -4,7 +4,7 @@ import { NumberInput, type NumberInputProps } from "@mantine/core";
 
 import { FieldChrome } from "@/components/form/FieldChrome";
 import { FieldMode } from "@/components/form/FieldMode";
-import { collectNotes, type FieldChromeProps } from "@/components/form/fieldNotes";
+import { collectNotes, joinDescribedBy, type FieldChromeProps } from "@/components/form/fieldNotes";
 
 export type NumberFieldProps = Omit<NumberInputProps, "disabled" | "readOnly"> &
   FieldChromeProps & {
@@ -21,6 +21,7 @@ export function NumberField({
   notes,
   openSignal,
   bare = false,
+  helper,
   ...props
 }: NumberFieldProps) {
   const merged = bare ? [] : collectNotes(props.error, notes);
@@ -41,11 +42,12 @@ export function NumberField({
         notes={merged}
         required={props.required}
         id={props.id}
+        helper={helper}
         openSignal={openSignal}
         editSignal={props.value}
         bare={bare}
       >
-        {({ id, invalid }) => (
+        {({ id, invalid, describedBy }) => (
           <NumberInput
             {...props}
             id={id}
@@ -53,6 +55,7 @@ export function NumberField({
             description={undefined}
             error={invalid || undefined}
             withAsterisk={false}
+            aria-describedby={joinDescribedBy(props["aria-describedby"], describedBy)}
           />
         )}
       </FieldChrome>

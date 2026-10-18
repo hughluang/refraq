@@ -1,12 +1,13 @@
 "use client";
 
-import { Anchor, Button, Group, MultiSelect, Table, Text, TextInput } from "@mantine/core";
+import { Table, Text } from "@mantine/core";
 import { useCan, useTranslate } from "@refinedev/core";
-import Link from "next/link";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
 import { ListTable } from "@/components/display/ListTable";
+import { ListToolbar } from "@/components/display/ListToolbar";
+import { RecordReference } from "@/components/display/RecordReference";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { EntityRowActions } from "@/features/entities/EntityRowActions";
@@ -15,13 +16,12 @@ import { PublishStatusBadge } from "@/features/entities/PublishStatusBadge";
 import { listEntities } from "@/features/entities/api";
 import {
   DEFAULT_ENTITY_LIST_STATUSES,
-  entityListIsFiltered,
   entityListShouldFetch,
   entityListStatuses,
 } from "@/features/entities/entityListFilter";
-import type { EntityStatus } from "@/features/entities/publishStatus";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useListQuery } from "@/hooks/useListQuery";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
@@ -33,36 +33,47 @@ export function EntityList() {
     resource: ModuleId.entities,
     action: ModuleAction.edit,
   });
-  const [q, setQ] = useState("");
-  const [statuses, setStatuses] = useState<EntityStatus[]>([
-    ...DEFAULT_ENTITY_LIST_STATUSES,
-  ]);
+  const query = useListQuery({
+    filters: [
+      {
+        key: "status",
+        type: "multi",
+        defaultValue: DEFAULT_ENTITY_LIST_STATUSES,
+      },
+    ],
+  });
+  const statusQuery = query.multi("status");
+  const statuses = useMemo(
+    () => entityListStatuses(statusQuery),
+    [statusQuery],
+  );
 
   const fetchPage = useCallback(
-    (query: PageQuery) => {
+    (pageQuery: PageQuery) => {
       if (!entityListShouldFetch(statuses)) {
         return {
           items: [],
           total: 0,
-          limit: query.limit,
-          offset: query.offset,
+          limit: pageQuery.limit,
+          offset: pageQuery.offset,
         };
       }
       return listEntities({
-        q: q.trim() || undefined,
+        q: query.search || undefined,
         status: statuses,
-        ...query,
+        ...pageQuery,
       });
     },
-    [q, statuses],
+    [query.search, statuses],
   );
 
-  const filtered = entityListIsFiltered(q, statuses);
   const list = useConsolePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
-    resetDeps: [q, statuses],
-    filtered,
+    resetDeps: [query.search, statuses],
+    filtered: query.isFiltered,
+    page: query.page,
+    onPageChange: query.setPage,
   });
   const { items } = list;
 
@@ -78,60 +89,40 @@ export function EntityList() {
           {t("entities.create")}
         </CreateListAction>
       }
-    >
-      <Group>
-        <TextInput
-          placeholder={t("entities.search")}
-          value={q}
-          onChange={(event) => setQ(event.currentTarget.value)}
-          w={280}
-        />
-        <MultiSelect
-          placeholder={
-            statuses.length === 0
-              ? t("entities.fields.entityStatus")
-              : undefined
-          }
-          data={[
-            { value: "not_serving", label: t("entities.status.notServing") },
-            { value: "serving", label: t("entities.status.serving") },
-            { value: "deprecated", label: t("entities.status.deprecated") },
+      toolbar={
+        <ListToolbar
+          query={query}
+          searchPlaceholder={t("entities.search")}
+          filters={[
+            {
+              key: "status",
+              label: t("entities.fields.entityStatus"),
+              options: [
+                { value: "not_serving", label: t("entities.status.notServing") },
+                { value: "serving", label: t("entities.status.serving") },
+                { value: "deprecated", label: t("entities.status.deprecated") },
+              ],
+            },
           ]}
-          value={statuses}
-          onChange={(value) => setStatuses(entityListStatuses(value))}
-          searchable={false}
-          clearable
-          w="max-content"
-          miw={280}
-          styles={{
-            root: { flexShrink: 0 },
-            wrapper: { width: "max-content" },
-            input: { width: "max-content", minWidth: 280 },
-            pillsList: { flexWrap: "nowrap" },
-            pill: { flexShrink: 0, maxWidth: "none" },
-          }}
         />
-        {filtered ? (
-          <Button
-            variant="subtle"
-            size="xs"
-            onClick={() => {
-              setQ("");
-              setStatuses([...DEFAULT_ENTITY_LIST_STATUSES]);
-            }}
-          >
-            {t("common.filters.clear")}
-          </Button>
-        ) : null}
-      </Group>
+      }
+    >
       <ListTable
         list={list}
-        columnCount={7}
+        columnCount={6}
         emptyMessage={t("entities.list.empty")}
+        emptyAction={
+          <CreateListAction
+            resource={ModuleId.entities}
+            href="/console/entities/new"
+          >
+            {t("entities.create")}
+          </CreateListAction>
+        }
         noMatchMessage={t("entities.list.noMatch")}
+        onClearFilters={query.clear}
         head={
           <Table.Tr>
-            <Table.Th>{t("entities.fields.tableName")}</Table.Th>
             <Table.Th>{t("entities.fields.name")}</Table.Th>
             <Table.Th>{t("entities.fields.version")}</Table.Th>
             <Table.Th>{t("entities.fields.entityStatus")}</Table.Th>
@@ -146,16 +137,12 @@ export function EntityList() {
           return (
             <Table.Tr key={row.id}>
               <Table.Td>
-                <Anchor
-                  component={Link}
+                <RecordReference
+                  name={row.name}
+                  recordKey={row.table_name}
                   href={`/console/entities/${row.id}`}
-                  size="sm"
-                  ff="monospace"
-                >
-                  {row.table_name}
-                </Anchor>
+                />
               </Table.Td>
-              <Table.Td>{row.name}</Table.Td>
               <Table.Td>{current ? current.version : "—"}</Table.Td>
               <Table.Td>
                 <EntityStatusBadge entity={row} />

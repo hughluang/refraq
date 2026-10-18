@@ -3,18 +3,22 @@
 import {
   Button,
   Group,
-  Modal,
   PasswordInput,
   Stack,
   Text,
   Title,
 } from "@mantine/core";
-import { useForm } from "@mantine/form";
 import { useNotification, useTranslate } from "@refinedev/core";
 import { useState } from "react";
 
+import { FormDialog } from "@/components/form/FormDialog";
+import {
+  FormErrorSummary,
+  saveFailureFrom,
+  type SaveFailure,
+} from "@/components/form/FormErrorSummary";
+import { useConsoleForm } from "@/components/form/useConsoleForm";
 import { changeAccountPassword } from "@/features/account/api";
-import { problemMessage } from "@/lib/problem";
 
 type PasswordForm = {
   current_password: string;
@@ -25,15 +29,16 @@ type PasswordForm = {
 export function PasswordSection() {
   const t = useTranslate();
   const { open } = useNotification();
-  const [savingPassword, setSavingPassword] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
 
-  const passwordForm = useForm<PasswordForm>({
+  const passwordForm = useConsoleForm<PasswordForm>({
     initialValues: {
       current_password: "",
       new_password: "",
       confirm_password: "",
     },
+    onValuesChange: () => setSaveFailure(null),
     validate: {
       current_password: (value) =>
         value.length > 0 ? null : t("account.validation.required"),
@@ -48,16 +53,18 @@ export function PasswordSection() {
 
   function closePasswordModal() {
     setPasswordOpen(false);
+    setSaveFailure(null);
     passwordForm.reset();
   }
 
   async function onChangePassword(values: PasswordForm) {
-    setSavingPassword(true);
     try {
       await changeAccountPassword({
         current_password: values.current_password,
         new_password: values.new_password,
       });
+      passwordForm.markSaved();
+      setSaveFailure(null);
       passwordForm.reset();
       setPasswordOpen(false);
       open?.({
@@ -66,14 +73,14 @@ export function PasswordSection() {
         description: t("account.password.success"),
       });
     } catch (err) {
-      open?.({
-        type: "error",
-        message: t("account.title"),
-        description:
-          problemMessage(t, err, t("account.password.error")),
-      });
-    } finally {
-      setSavingPassword(false);
+      setSaveFailure(
+        saveFailureFrom(
+          t,
+          err,
+          passwordForm.applyApiError(err),
+          t("account.password.error"),
+        ),
+      );
     }
   }
 
@@ -85,47 +92,37 @@ export function PasswordSection() {
           {t("account.section.password")}
         </Button>
       </Group>
-      <Modal
+      <FormDialog
         opened={passwordOpen}
         onClose={closePasswordModal}
         title={t("account.section.password")}
-        centered
+        dirty={passwordForm.dirty}
+        submitting={passwordForm.submitting}
+        submitLabel={t("account.password.save")}
+        summary={<FormErrorSummary failure={saveFailure} />}
+        onSubmit={() => void passwordForm.submit(onChangePassword)}
       >
-        <form onSubmit={passwordForm.onSubmit(onChangePassword)}>
-          <Stack gap="md">
-            <PasswordInput
-              label={t("account.fields.currentPassword")}
-              withAsterisk
-              {...passwordForm.getInputProps("current_password")}
-            />
-            <PasswordInput
-              label={t("account.fields.newPassword")}
-              withAsterisk
-              {...passwordForm.getInputProps("new_password")}
-            />
-            <PasswordInput
-              label={t("account.fields.confirmPassword")}
-              withAsterisk
-              {...passwordForm.getInputProps("confirm_password")}
-            />
-            <Text size="sm" c="dimmed">
-              {t("account.password.hint")}
-            </Text>
-            <Group justify="flex-end">
-              <Button
-                variant="default"
-                onClick={closePasswordModal}
-                disabled={savingPassword}
-              >
-                {t("common.cancel")}
-              </Button>
-              <Button type="submit" loading={savingPassword}>
-                {t("account.password.save")}
-              </Button>
-            </Group>
-          </Stack>
-        </form>
-      </Modal>
+        <Stack gap="md">
+          <PasswordInput
+            label={t("account.fields.currentPassword")}
+            withAsterisk
+            {...passwordForm.fieldProps("current_password")}
+          />
+          <PasswordInput
+            label={t("account.fields.newPassword")}
+            withAsterisk
+            {...passwordForm.fieldProps("new_password")}
+          />
+          <PasswordInput
+            label={t("account.fields.confirmPassword")}
+            withAsterisk
+            {...passwordForm.fieldProps("confirm_password")}
+          />
+          <Text size="sm" c="dimmed">
+            {t("account.password.hint")}
+          </Text>
+        </Stack>
+      </FormDialog>
     </>
   );
 }

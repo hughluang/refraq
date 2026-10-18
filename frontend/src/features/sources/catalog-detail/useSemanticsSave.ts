@@ -6,7 +6,10 @@ import { useState } from "react";
 import type { CatalogObject } from "@/features/sources/types";
 import { problemMessage } from "@/lib/problem";
 
-export function useSemanticsSave(onSaved: (object: CatalogObject) => void) {
+export function useSemanticsSave(
+  onSaved: (object: CatalogObject) => void,
+  options?: { onError?: (error: unknown) => void },
+) {
   const t = useTranslate();
   const { open } = useNotification();
   const [saving, setSaving] = useState(false);
@@ -21,10 +24,14 @@ export function useSemanticsSave(onSaved: (object: CatalogObject) => void) {
       open?.({ type: "success", message: t("catalog.semantics.saved") });
       return data.object;
     } catch (err) {
-      open?.({
-        type: "error",
-        message: problemMessage(t, err, String(err)),
-      });
+      if (options?.onError) {
+        options.onError(err);
+      } else {
+        open?.({
+          type: "error",
+          message: problemMessage(t, err, String(err)),
+        });
+      }
       return undefined;
     } finally {
       setSaving(false);
