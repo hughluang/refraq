@@ -273,8 +273,10 @@ export function NodeConfigPanel({
           />
         </Stack>
         </NodeRegion>
-        {editor}
-        {result}
+        <div className="channel-node-run-column">
+          {editor}
+          {result}
+        </div>
       </div>
     </FieldDisclosureContext.Provider>
   );
