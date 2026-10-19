@@ -965,6 +965,24 @@ describe("ChannelCanvas controls", () => {
     expect(section).toMatch(/reduced-motion preference shows and hides the overlay immediately/i);
     expect(section).toMatch(/edge that enters the node currently running/i);
   });
+
+  it("sizes the workbench from the focus width and keeps three columns", () => {
+    const css = readFileSync(resolve(__dirname, "ChannelCanvas.css"), "utf8");
+    expect(css).not.toMatch(/960px/);
+    expect(css).not.toMatch(/@container/);
+
+    const detail = css.match(/^\.channel-node-config--detail \{([\s\S]*?)\n\}/m)?.[1] ?? "";
+    expect(detail).toMatch(
+      /width:\s*min\(calc\(100% - 16px\), max\(50%, calc\(100% - 28rem\)\)\)/,
+    );
+    expect(detail).not.toMatch(/container-type/);
+
+    const columns = css.match(/^\.channel-node-detail \{([\s\S]*?)\n\}/m)?.[1] ?? "";
+    expect(columns).toMatch(
+      /grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 2fr\) minmax\(0, 1fr\)/,
+    );
+    expect(columns).not.toMatch(/240px|440px/);
+  });
 });
 
 describe("empty canvas", () => {

@@ -474,9 +474,8 @@
 }
 
 .channel-node-config--detail {
-  width: min(calc(100% - 16px), max(960px, 75%));
+  width: min(calc(100% - 16px), max(50%, calc(100% - 28rem)));
   height: calc(100% - 16px);
-  container-type: inline-size;
 }
 
 .channel-node-config--focus .channel-node-detail {
@@ -514,7 +513,7 @@
   min-height: 0;
   margin-top: var(--mantine-spacing-sm);
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) minmax(440px, 2fr) minmax(240px, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -557,34 +556,6 @@
   grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   gap: var(--mantine-spacing-xs);
   max-width: 40rem;
-}
-
-@container (max-width: 960px) {
-  .channel-node-detail {
-    grid-template-columns: minmax(0, 1fr);
-    overflow: auto;
-  }
-
-  .channel-node-region {
-    border-left: none;
-    border-top: 1px solid var(--mantine-color-default-border);
-    flex: none;
-  }
-
-  .channel-node-region:first-child {
-    border-top: none;
-  }
-
-  .channel-node-region__title {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    background: var(--mantine-color-body);
-  }
-
-  .channel-node-region__body {
-    overflow: visible;
-  }
 }
 
 .channel-config-grid {
