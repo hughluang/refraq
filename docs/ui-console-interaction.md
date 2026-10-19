@@ -87,6 +87,8 @@ Easing is standard, enter, and exit. Overlay transitions use the base duration. 
 
 That edge is the only canvas motion. While motion is allowed, it flows along its stroke by animating `stroke-dashoffset`. The flow may be slower than the transition tokens above, and it does not move layout. A reduced-motion preference keeps the running color and leaves the edge solid. No other canvas glyph moves.
 
+The node settings overlay may fade in and out. That motion does not shift layout. Switching the overlay between the focus altitude and the workbench altitude does not animate. A reduced-motion preference shows and hides the overlay immediately. The canvas still moves only the edge that enters the node currently running.
+
 `respectReducedMotion` is set. Every custom transition and keyframe follows the reduced-motion preference.
 
 ## 9. Color Schemes

@@ -76,6 +76,7 @@ import {
   type FlowNodeData,
 } from "@/features/channels/graphValidation";
 import { NodeConfigPanel } from "@/features/channels/NodeConfigPanel";
+import { MOTION_MS } from "@/theme/tokens";
 import { NodeRunSummary, ResultRegion, UpstreamRegion } from "@/features/channels/NodeRunRegions";
 import {
   executionCountByNode,
@@ -229,6 +230,7 @@ function ChannelCanvasBody({
   const [edges, setEdges] = useState<Edge[]>(seededEdges);
   const [configNodeId, setConfigNodeId] = useState<string | null>(null);
   const [altitude, setAltitude] = useState<"focus" | "workbench">("focus");
+  const [leaving, setLeaving] = useState(false);
   useEffect(() => {
     if (configNodeId == null) setAltitude("focus");
   }, [configNodeId]);
@@ -245,6 +247,10 @@ function ChannelCanvasBody({
   );
   const commitQueued = useRef(false);
   const flowRootRef = useRef<HTMLDivElement>(null);
+  const closeTimerRef = useRef<number | null>(null);
+  const closingRef = useRef(false);
+  const cancelOverlayCloseRef = useRef<() => void>(() => {});
+  const beginCloseRef = useRef<() => void>(() => {});
   const undoRef = useRef<() => void>(() => {});
   const redoRef = useRef<() => void>(() => {});
   const highlightRef = useRef<ProblemHighlight | null>(highlight);
@@ -345,6 +351,7 @@ function ChannelCanvasBody({
   };
 
   const restore = (snap: CanvasSnapshot) => {
+    cancelOverlayCloseRef.current();
     const painted = paintProblems(snap.nodes, snap.edges);
     nodesRef.current = painted.nodes;
     edgesRef.current = painted.edges;
@@ -379,6 +386,7 @@ function ChannelCanvasBody({
     adoptedToken.current = adoptToken;
     const nextGraph = graph;
     if (JSON.stringify(graphNow()) === JSON.stringify(nextGraph)) return;
+    cancelOverlayCloseRef.current();
     const selectedNodeIds = new Set(
       nodesRef.current.filter((node) => node.selected).map((node) => node.id),
     );
@@ -468,6 +476,8 @@ function ChannelCanvasBody({
 
   const focusProblem = (problem: GraphProblem) => {
     if (!problem.node_id && !problem.edge_id) return;
+    if (closingRef.current) setAltitude("focus");
+    cancelOverlayCloseRef.current();
     const next: ProblemHighlight = {
       nodeId: problem.node_id,
       edgeId: problem.node_id ? null : problem.edge_id,
@@ -501,6 +511,8 @@ function ChannelCanvasBody({
     link?: { sourceId: string; sourceHandle: string },
   ) => {
     if (!mutable || !canAuthorNodeType(spec.permission, heldPermissions)) return;
+    if (closingRef.current) setAltitude("focus");
+    cancelOverlayCloseRef.current();
     clearHighlight();
     const label = nodeTypeLabel(t, spec);
     const count = nodesRef.current.filter((node) => node.data.nodeType === spec.type).length;
@@ -610,7 +622,11 @@ function ChannelCanvasBody({
     setConfigNodeId((current) => {
       if (current == null) return null;
       const open = next.find((node) => node.id === current);
-      return open?.selected ? current : null;
+      if (!open) return null;
+      // Pane click starts the leave, then React Flow deselects. Keep the overlay
+      // mounted until that leave finishes. A removed node still closes now.
+      if (closingRef.current) return current;
+      return open.selected ? current : null;
     });
     const marked = highlightRef.current;
     if (marked && selected && selected.id !== marked.nodeId) clearHighlight();
@@ -717,17 +733,76 @@ function ChannelCanvasBody({
     setProblemsDismissed((count) => count + 1);
   };
 
-  const openFullCatalog = () => {
-    if (picker?.kind === "catalog") {
-      setPicker(null);
+  const restoreNodeFocus = (nodeId: string | null) => {
+    if (!nodeId) return;
+    const node = flowRootRef.current?.querySelector(
+      `.react-flow__node[data-id="${CSS.escape(nodeId)}"]`,
+    );
+    if (node instanceof HTMLElement) node.focus();
+  };
+
+  const cancelOverlayClose = () => {
+    if (closeTimerRef.current != null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+    closingRef.current = false;
+    setLeaving(false);
+  };
+  cancelOverlayCloseRef.current = cancelOverlayClose;
+
+  const finishOverlayClose = (nodeId: string | null, pickerAtClose: PickerState | null) => {
+    closeTimerRef.current = null;
+    closingRef.current = false;
+    setLeaving(false);
+    if (nodeId != null && nodesRef.current.some((node) => node.id === nodeId && node.selected)) {
+      const nextNodes = nodesRef.current.map((node) =>
+        node.id === nodeId ? { ...node, selected: false } : node,
+      );
+      nodesRef.current = nextNodes;
+      setNodes(nextNodes);
+    }
+    setConfigNodeId((current) => (current === nodeId ? null : current));
+    setPicker((current) => (current === pickerAtClose ? null : current));
+  };
+
+  const beginClose = () => {
+    const overlayOpen = configNodeId != null || picker != null;
+    if (!overlayOpen) {
+      clearSelection();
       return;
     }
+    if (closingRef.current) return;
+    const nodeId = configNodeId;
+    const pickerAtClose = picker;
+    restoreNodeFocus(nodeId);
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      clearSelection();
+      return;
+    }
+    closingRef.current = true;
+    clearHighlight();
+    setProblemsDismissed((count) => count + 1);
+    setLeaving(true);
+    closeTimerRef.current = window.setTimeout(() => {
+      finishOverlayClose(nodeId, pickerAtClose);
+    }, MOTION_MS.base);
+  };
+  beginCloseRef.current = beginClose;
+
+  const openFullCatalog = () => {
+    if (picker?.kind === "catalog") {
+      beginClose();
+      return;
+    }
+    cancelOverlayClose();
     releaseSelection();
     setPicker({ kind: "catalog" });
   };
 
   const selected = nodes.find((node) => node.id === configNodeId) ?? null;
   const selectedSpec = catalog.find((item) => item.type === selected?.data.nodeType);
+  const overlayRef = useRef<HTMLDivElement>(null);
   const labelGraph = problemGraphOf(nodes, edges);
   const revealKey =
     selected != null && highlight?.nodeId === selected.id ? highlight.key : null;
@@ -753,6 +828,26 @@ function ChannelCanvasBody({
     [sessionRun],
   );
   const showCatalog = picker !== null && selected == null;
+  const overlayKey = selected?.id ?? (showCatalog ? "catalog" : null);
+  useEffect(() => {
+    if (overlayKey == null || leaving) return;
+    overlayRef.current?.focus();
+  }, [overlayKey, leaving]);
+  useEffect(() => {
+    if (overlayKey == null || leaving) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      beginCloseRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [overlayKey, leaving]);
+  useEffect(
+    () => () => {
+      if (closeTimerRef.current != null) window.clearTimeout(closeTimerRef.current);
+    },
+    [],
+  );
   const hasTrigger = nodes.some((node) => node.data.entry);
   const catalogSpecs = (picker?.kind === "connect" ? picker.specs : catalog).filter(
     (spec) => !hasTrigger || !spec.entry,
@@ -772,6 +867,8 @@ function ChannelCanvasBody({
   };
 
   const openNodeConfig = (nodeId: string) => {
+    if (closingRef.current) setAltitude("focus");
+    cancelOverlayClose();
     setConfigNodeId(nodeId);
     setPicker(null);
     const marked = highlightRef.current;
@@ -832,7 +929,7 @@ function ChannelCanvasBody({
             onNodeClick={(_, node) => openNodeConfig(node.id)}
             onConnect={onConnect}
             onConnectEnd={onConnectEnd}
-            onPaneClick={clearSelection}
+            onPaneClick={beginClose}
             isValidConnection={isValidConnection}
             nodesDraggable={mutable}
             nodesConnectable={mutable}
@@ -919,16 +1016,24 @@ function ChannelCanvasBody({
           ) : null}
           {showCatalog || selected ? (
             <Paper
+              ref={overlayRef}
               withBorder
               shadow="md"
               p="sm"
-              className={
+              tabIndex={-1}
+              aria-label={selected ? selected.data.name : undefined}
+              className={[
+                "channel-node-config",
                 selected
                   ? altitude === "workbench"
-                    ? "channel-node-config channel-node-config--detail"
-                    : "channel-node-config channel-node-config--focus"
-                  : "channel-node-config"
-              }
+                    ? "channel-node-config--detail"
+                    : "channel-node-config--focus"
+                  : "",
+                leaving ? "channel-node-config--leave" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              aria-hidden={leaving || undefined}
               onPointerDown={(event) => event.stopPropagation()}
             >
               {showCatalog ? (
@@ -941,7 +1046,7 @@ function ChannelCanvasBody({
                       <CloseButton
                         size="sm"
                         aria-label={t("channels.node.close")}
-                        onClick={clearSelection}
+                        onClick={beginClose}
                       />
                     </Group>
                   </div>
@@ -1053,7 +1158,7 @@ function ChannelCanvasBody({
                       detail={sessionRun}
                     />
                   }
-                  onClose={clearSelection}
+                  onClose={beginClose}
                   onChange={(nodeId, data) => {
                     const next = nodesRef.current.map((node) =>
                       node.id === nodeId ? { ...node, data } : node,

@@ -1,5 +1,8 @@
 /** @vitest-environment jsdom */
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { MantineProvider } from "@mantine/core";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
@@ -265,6 +268,30 @@ function renderCanvas(
       },
     };
   });
+}
+
+function mediaBlocks(css: string, query: string): string[] {
+  const needle = `@media (${query})`;
+  const blocks: string[] = [];
+  let from = 0;
+  while (from < css.length) {
+    const start = css.indexOf(needle, from);
+    if (start < 0) break;
+    const open = css.indexOf("{", start);
+    let depth = 0;
+    let end = open;
+    for (; end < css.length; end += 1) {
+      const char = css[end];
+      if (char === "{") depth += 1;
+      else if (char === "}") {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    blocks.push(css.slice(open + 1, end));
+    from = end + 1;
+  }
+  return blocks;
 }
 
 describe("ChannelCanvas controls", () => {
@@ -665,7 +692,9 @@ describe("ChannelCanvas controls", () => {
     expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "channels.node.close" }));
-    expect(screen.queryByRole("region", { name: "Configuration" })).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByRole("region", { name: "Configuration" })).toBeNull();
+    });
 
     fireEvent.click(second);
     expect(screen.queryByRole("region", { name: "Upstream outputs" })).toBeNull();
@@ -710,6 +739,231 @@ describe("ChannelCanvas controls", () => {
     expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Next");
     expect(screen.queryByRole("region", { name: "Upstream outputs" })).toBeNull();
     expect(screen.getByRole("button", { name: "Show input and output" })).toBeTruthy();
+  });
+
+  it("moves focus into the settings overlay and names it for the node", async () => {
+    await renderCanvas([], nodeGraph);
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+
+    const panel = document.querySelector(".channel-node-config");
+    if (!(panel instanceof HTMLElement)) throw new Error("missing panel");
+    expect(panel.getAttribute("tabindex")).toBe("-1");
+    expect(panel.getAttribute("role")).not.toBe("dialog");
+    expect(panel.getAttribute("aria-modal")).toBeNull();
+    expect(panel.getAttribute("aria-label")).toBe("Start");
+    expect(panel === document.activeElement || panel.contains(document.activeElement)).toBe(true);
+  });
+
+  it("plays the leave motion when the canvas pane is clicked, then unmounts", async () => {
+    await renderCanvas([], nodeGraph);
+    const node = document.querySelector('.react-flow__node[data-id="nd_1"]');
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+    const pane = document.querySelector(".react-flow__pane");
+    if (!(pane instanceof HTMLElement)) throw new Error("missing pane");
+
+    fireEvent.click(pane);
+    expect(document.querySelector(".channel-node-config--leave")).not.toBeNull();
+    expect(document.querySelector(".channel-node-config")).not.toBeNull();
+
+    await waitFor(() => {
+      expect(document.querySelector(".channel-node-config")).toBeNull();
+    });
+  });
+
+  it("drops the overlay immediately for an edge selection and keeps that edge selected", async () => {
+    const sink: NodeTypeSpec = {
+      ...spec,
+      type: "step",
+      family: "transform",
+      label: "Step",
+      summary: "Next",
+      entry: false,
+      inputs: [{ port: "in", description: "" }],
+      outputs: [],
+    };
+    await renderCanvas(
+      [],
+      {
+        nodes: [
+          nodeGraph.nodes[0]!,
+          {
+            id: "nd_2",
+            ref: "step",
+            type: "step",
+            name: "Next",
+            position: { x: 280, y: 40 },
+            config: {},
+            on_error: "stop",
+            retry: null,
+          },
+        ],
+        edges: [
+          {
+            id: "ed_1",
+            source: { node_id: "nd_1", port: "out" },
+            target: { node_id: "nd_2", port: "in" },
+          },
+        ],
+        settings: nodeGraph.settings,
+      },
+      { catalog: [spec, sink] },
+    );
+    const node = document.querySelector('.react-flow__node[data-id="nd_1"]');
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+    const pane = document.querySelector(".react-flow__pane");
+    if (!(pane instanceof HTMLElement)) throw new Error("missing pane");
+    fireEvent.click(pane);
+    expect(document.querySelector(".channel-node-config--leave")).not.toBeNull();
+
+    const edge = document.querySelector(".react-flow__edge[data-id='ed_1']");
+    if (!(edge instanceof Element)) throw new Error("missing edge");
+    fireEvent.click(edge);
+    expect(document.querySelector(".channel-node-config")).toBeNull();
+    expect(edge.classList.contains("selected")).toBe(true);
+
+    await act(() => new Promise((resolve) => setTimeout(resolve, 250)));
+    expect(edge.classList.contains("selected")).toBe(true);
+    expect(document.querySelector(".channel-node-config")).toBeNull();
+  });
+
+  it("closes the settings overlay on Escape and returns focus to the node", async () => {
+    await renderCanvas([], nodeGraph);
+    const node = document.querySelector('.react-flow__node[data-id="nd_1"]');
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+    expect(document.querySelector(".channel-node-config")).not.toBeNull();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => {
+      expect(document.querySelector(".channel-node-config")).toBeNull();
+    });
+    expect(document.activeElement).toBe(node);
+  });
+
+  it("closes from the name field on Escape and keeps the typed name on the node", async () => {
+    await renderCanvas([], nodeGraph);
+    const node = document.querySelector('.react-flow__node[data-id="nd_1"]');
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      target: { value: "Renamed" },
+    });
+    expect(node.textContent).toContain("Renamed");
+
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Name" }), { key: "Escape" });
+    await waitFor(() => {
+      expect(document.querySelector(".channel-node-config")).toBeNull();
+    });
+    expect(node.textContent).toContain("Renamed");
+    expect(document.activeElement).toBe(node);
+  });
+
+  it("leaves the settings overlay open when Escape was already handled", async () => {
+    await renderCanvas([], nodeGraph);
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+    const name = screen.getByRole("textbox", { name: "Name" });
+    name.addEventListener("keydown", (event) => {
+      event.preventDefault();
+    });
+
+    fireEvent.keyDown(name, { key: "Escape" });
+    expect(document.querySelector(".channel-node-config")).not.toBeNull();
+    expect(document.querySelector(".channel-node-config--leave")).toBeNull();
+  });
+
+  it("drops the settings overlay immediately when reduced motion is requested", async () => {
+    await renderCanvas([], nodeGraph);
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      value: (query: string) => ({
+        matches: query.includes("reduce"),
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }),
+    });
+    const node = document.querySelector('.react-flow__node[data-id="nd_1"]');
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(document.querySelector(".channel-node-config")).toBeNull();
+    expect(document.activeElement).toBe(node);
+  });
+
+  it("keeps the same overlay element when switching altitude", async () => {
+    await renderCanvas([], nodeGraph);
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+    const panel = document.querySelector(".channel-node-config");
+    if (!(panel instanceof HTMLElement)) throw new Error("missing panel");
+
+    fireEvent.click(screen.getByRole("button", { name: "Show input and output" }));
+    expect(document.querySelector(".channel-node-config")).toBe(panel);
+    expect(panel.className).toContain("channel-node-config--detail");
+    expect(panel.className).not.toContain("channel-node-config--leave");
+
+    fireEvent.click(screen.getByRole("button", { name: "Show parameters only" }));
+    expect(document.querySelector(".channel-node-config")).toBe(panel);
+    expect(panel.className).toContain("channel-node-config--focus");
+    expect(panel.className).not.toContain("channel-node-config--detail");
+  });
+
+  it("fades the shared overlay in and out and disables that motion when reduced", () => {
+    const css = readFileSync(resolve(__dirname, "ChannelCanvas.css"), "utf8");
+    const motion = mediaBlocks(css, "prefers-reduced-motion: no-preference").join("\n");
+    expect(motion).toContain(".channel-node-config {");
+    expect(motion).toContain(".channel-node-config--leave");
+    expect(motion).toContain("var(--refraq-motion-base)");
+    expect(motion).toContain("var(--refraq-ease-enter)");
+    expect(motion).toContain("var(--refraq-ease-exit)");
+
+    const frames = [
+      ...motion.matchAll(/@keyframes (channel-node-config-(?:in|out)) \{([\s\S]*?)\n  \}/g),
+    ];
+    expect(frames.map((frame) => frame[1])).toEqual([
+      "channel-node-config-in",
+      "channel-node-config-out",
+    ]);
+    for (const frame of frames) {
+      const body = frame[2] ?? "";
+      expect(body).toMatch(/opacity:\s*0/);
+      expect(body).not.toMatch(/\b(?:width|height|margin)\s*:/);
+      const shifts = [...body.matchAll(/translateX\(([0-9.]+)px\)/g)].map((match) =>
+        Number(match[1]),
+      );
+      expect(shifts.length).toBeGreaterThan(0);
+      expect(Math.max(...shifts)).toBeLessThanOrEqual(8);
+    }
+
+    const reduced = mediaBlocks(css, "prefers-reduced-motion: reduce").join("\n");
+    expect(reduced).toMatch(/\.channel-node-config[\s\S]*animation:\s*none/);
+
+    for (const rule of [".channel-node-config--focus", ".channel-node-config--detail"]) {
+      const body = css.match(new RegExp(`${rule.replace(".", "\\.")} \\{([\\s\\S]*?)\\n\\}`))?.[1];
+      expect(body).toBeTruthy();
+      expect(body).not.toMatch(/transition/);
+    }
+  });
+
+  it("states the node settings overlay motion constraints in the interaction doc", () => {
+    const doc = readFileSync(
+      resolve(__dirname, "../../../../docs/ui-console-interaction.md"),
+      "utf8",
+    );
+    const section = doc.split(/^## 9\. /m)[0]?.split(/^## 8\. Motion/m)[1] ?? "";
+    expect(section).toMatch(/node settings overlay may fade in and out/i);
+    expect(section).toMatch(/does not shift layout/i);
+    expect(section).toMatch(/focus altitude and the workbench altitude does not animate/i);
+    expect(section).toMatch(/reduced-motion preference shows and hides the overlay immediately/i);
+    expect(section).toMatch(/edge that enters the node currently running/i);
   });
 });
 

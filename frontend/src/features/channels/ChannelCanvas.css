@@ -425,6 +425,49 @@
   overflow: hidden;
 }
 
+.channel-node-config--leave {
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .channel-node-config {
+    animation: channel-node-config-in var(--refraq-motion-base) var(--refraq-ease-enter) both;
+  }
+
+  .channel-node-config--leave {
+    animation: channel-node-config-out var(--refraq-motion-base) var(--refraq-ease-exit) both;
+  }
+
+  @keyframes channel-node-config-in {
+    from {
+      opacity: 0;
+      transform: translateX(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  @keyframes channel-node-config-out {
+    from {
+      opacity: 1;
+      transform: translateX(0);
+    }
+    to {
+      opacity: 0;
+      transform: translateX(8px);
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .channel-node-config,
+  .channel-node-config--leave {
+    animation: none;
+  }
+}
+
 .channel-node-config--focus {
   width: min(28rem, calc(100% - 16px));
   height: calc(100% - 16px);
