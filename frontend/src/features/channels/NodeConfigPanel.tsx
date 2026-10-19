@@ -304,17 +304,17 @@ export function NodeConfigPanel({
         </Stack>
         </NodeRegion>
         {altitude === "workbench" ? result : null}
-        {altitude === "focus" && (runSummary != null || onAltitude) ? (
-          <Stack gap="xs" mt="sm">
-            {runSummary}
-            {onAltitude ? (
-              <Button size="compact-xs" variant="light" onClick={() => onAltitude("workbench")}>
-                {t("channels.node.showData")}
-              </Button>
-            ) : null}
-          </Stack>
-        ) : null}
       </div>
+      {altitude === "focus" && (runSummary != null || onAltitude) ? (
+        <Stack className="channel-node-config__context" gap="xs">
+          {runSummary}
+          {onAltitude ? (
+            <Button size="compact-xs" variant="light" onClick={() => onAltitude("workbench")}>
+              {t("channels.node.showData")}
+            </Button>
+          ) : null}
+        </Stack>
+      ) : null}
     </FieldDisclosureContext.Provider>
   );
 }

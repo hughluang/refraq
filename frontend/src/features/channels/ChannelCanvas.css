@@ -489,15 +489,21 @@
 .channel-node-config--focus .channel-node-detail {
   display: flex;
   flex-direction: column;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .channel-node-config--focus .channel-node-region {
-  flex: none;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .channel-node-config--focus .channel-node-region__body {
-  overflow: visible;
+  overflow: auto;
+}
+
+.channel-node-config__context {
+  flex: none;
+  margin-top: var(--mantine-spacing-sm);
 }
 
 .channel-node-config--focus .channel-node-header-fields {

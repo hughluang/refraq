@@ -263,6 +263,7 @@ function ChannelCanvasBody({
   const flowRootRef = useRef<HTMLDivElement>(null);
   const closeTimerRef = useRef<number | null>(null);
   const closingRef = useRef(false);
+  const focusReturnRef = useRef<string | null>(null);
   const cancelOverlayCloseRef = useRef<() => void>(() => {});
   const beginCloseRef = useRef<() => void>(() => {});
   const undoRef = useRef<() => void>(() => {});
@@ -666,6 +667,7 @@ function ChannelCanvasBody({
     const marked = highlightRef.current;
     if (marked && selected && selected.id !== marked.edgeId) clearHighlight();
     if (selected) {
+      focusReturnRef.current = null;
       setConfigNodeId(null);
       if (nodesRef.current.some((node) => node.selected)) {
         const cleared = nodesRef.current.map((node) => ({ ...node, selected: false }));
@@ -761,6 +763,7 @@ function ChannelCanvasBody({
       closeTimerRef.current = null;
     }
     closingRef.current = false;
+    focusReturnRef.current = null;
     setLeaving(false);
   };
   cancelOverlayCloseRef.current = cancelOverlayClose;
@@ -789,7 +792,7 @@ function ChannelCanvasBody({
     if (closingRef.current) return;
     const nodeId = configNodeId;
     const pickerAtClose = picker;
-    restoreNodeFocus(nodeId);
+    focusReturnRef.current = nodeId;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       clearSelection();
       return;
@@ -846,6 +849,13 @@ function ChannelCanvasBody({
   useEffect(() => {
     if (overlayKey == null || leaving) return;
     overlayRef.current?.focus();
+  }, [overlayKey, leaving]);
+  useEffect(() => {
+    if (overlayKey != null || leaving) return;
+    const nodeId = focusReturnRef.current;
+    if (!nodeId) return;
+    focusReturnRef.current = null;
+    restoreNodeFocus(nodeId);
   }, [overlayKey, leaving]);
   useEffect(() => {
     if (overlayKey == null || leaving) return;

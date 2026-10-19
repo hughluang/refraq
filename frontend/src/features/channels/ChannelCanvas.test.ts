@@ -225,6 +225,24 @@ const nodeGraph: Graph = {
   settings: EMPTY_GRAPH.settings,
 };
 
+const twoNodeGraph: Graph = {
+  nodes: [
+    nodeGraph.nodes[0]!,
+    {
+      id: "nd_2",
+      ref: "manual_2",
+      type: "manual",
+      name: "Keep",
+      position: { x: 280, y: 40 },
+      config: {},
+      on_error: "stop",
+      retry: null,
+    },
+  ],
+  edges: [],
+  settings: nodeGraph.settings,
+};
+
 function renderCanvas(
   problems: GraphProblem[] = [],
   graph: Graph = EMPTY_GRAPH,
@@ -637,8 +655,19 @@ describe("ChannelCanvas controls", () => {
     if (!(node instanceof HTMLElement)) throw new Error("missing node");
     fireEvent.click(node);
     expect(screen.queryByRole("region", { name: "Upstream outputs" })).toBeNull();
+    const showData = screen.getByRole("button", { name: "Show input and output" });
+    const parameters = document.querySelector(
+      ".channel-node-config--focus .channel-node-region__body",
+    );
+    const context = document.querySelector(".channel-node-config__context");
+    expect(parameters?.contains(showData)).toBe(false);
+    expect(context?.contains(showData)).toBe(true);
+    expect(parameters?.contains(screen.getByText("channels.node.onError.stop"))).toBe(true);
+    expect(context?.contains(screen.getByText("Upstream outputs: This node has no upstream nodes"))).toBe(
+      true,
+    );
 
-    fireEvent.click(screen.getByRole("button", { name: "Show input and output" }));
+    fireEvent.click(showData);
     expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
     expect(screen.getByRole("region", { name: "Configuration" })).toBeTruthy();
     expect(screen.getByRole("region", { name: "This node's result" })).toBeTruthy();
@@ -830,18 +859,22 @@ describe("ChannelCanvas controls", () => {
     expect(document.querySelector(".channel-node-config")).toBeNull();
   });
 
-  it("closes the settings overlay on Escape and returns focus to the node", async () => {
-    await renderCanvas([], nodeGraph);
-    const node = document.querySelector('.react-flow__node[data-id="nd_1"]');
-    if (!(node instanceof HTMLElement)) throw new Error("missing node");
-    fireEvent.click(node);
+  it("closes the settings overlay on Escape and returns focus to that node", async () => {
+    await renderCanvas([], twoNodeGraph);
+    const closed = document.querySelector('.react-flow__node[data-id="nd_2"]');
+    const other = document.querySelector('.react-flow__node[data-id="nd_1"]');
+    if (!(closed instanceof HTMLElement) || !(other instanceof HTMLElement)) {
+      throw new Error("missing node");
+    }
+    fireEvent.click(closed);
     expect(document.querySelector(".channel-node-config")).not.toBeNull();
 
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => {
       expect(document.querySelector(".channel-node-config")).toBeNull();
+      expect(document.activeElement).toBe(closed);
     });
-    expect(document.activeElement).toBe(node);
+    expect(document.activeElement).not.toBe(other);
   });
 
   it("closes from the name field on Escape and keeps the typed name on the node", async () => {
@@ -878,7 +911,7 @@ describe("ChannelCanvas controls", () => {
   });
 
   it("drops the settings overlay immediately when reduced motion is requested", async () => {
-    await renderCanvas([], nodeGraph);
+    await renderCanvas([], twoNodeGraph);
     Object.defineProperty(window, "matchMedia", {
       writable: true,
       value: (query: string) => ({
@@ -888,13 +921,17 @@ describe("ChannelCanvas controls", () => {
         removeEventListener: vi.fn(),
       }),
     });
-    const node = document.querySelector('.react-flow__node[data-id="nd_1"]');
-    if (!(node instanceof HTMLElement)) throw new Error("missing node");
-    fireEvent.click(node);
+    const closed = document.querySelector('.react-flow__node[data-id="nd_2"]');
+    const other = document.querySelector('.react-flow__node[data-id="nd_1"]');
+    if (!(closed instanceof HTMLElement) || !(other instanceof HTMLElement)) {
+      throw new Error("missing node");
+    }
+    fireEvent.click(closed);
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(document.querySelector(".channel-node-config")).toBeNull();
-    expect(document.activeElement).toBe(node);
+    expect(document.activeElement).toBe(closed);
+    expect(document.activeElement).not.toBe(other);
   });
 
   it("keeps the same overlay element when switching altitude", async () => {
@@ -982,6 +1019,15 @@ describe("ChannelCanvas controls", () => {
       /grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 2fr\) minmax\(0, 1fr\)/,
     );
     expect(columns).not.toMatch(/240px|440px/);
+
+    const focusDetail =
+      css.match(/^\.channel-node-config--focus \.channel-node-detail \{([\s\S]*?)\n\}/m)?.[1] ?? "";
+    expect(focusDetail).toMatch(/overflow:\s*hidden/);
+    expect(focusDetail).not.toMatch(/overflow:\s*auto/);
+    const focusBody =
+      css.match(/^\.channel-node-config--focus \.channel-node-region__body \{([\s\S]*?)\n\}/m)?.[1] ??
+      "";
+    expect(focusBody).toMatch(/overflow:\s*auto/);
   });
 });
 
