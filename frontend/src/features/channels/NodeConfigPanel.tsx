@@ -4,6 +4,8 @@ import { ActionIcon, Button, CloseButton, Group, Stack, Text } from "@mantine/co
 import { usePermissions, useTranslate } from "@refinedev/core";
 import { useEffect, useRef, type ReactNode } from "react";
 
+import { StatusBadge } from "@/components/display/StatusBadge";
+import { presentNodeStatus } from "@/components/display/statusTone";
 import { FieldDisclosureContext, FieldMarks } from "@/components/form/FieldChrome";
 import type { FieldNote } from "@/components/form/fieldNotes";
 import { JsonField } from "@/components/form/JsonField";
@@ -61,6 +63,13 @@ type Props = {
   scope: SelfScope;
   /** Null hides the template previews. */
   templatePreview?: ChannelTemplatePreview | null;
+  /** Focus shows parameters and a run summary. Workbench shows the three columns. */
+  altitude?: "focus" | "workbench";
+  onAltitude?: (altitude: "focus" | "workbench") => void;
+  /** One-line run context for focus. Not mounted in the workbench. */
+  runSummary?: ReactNode;
+  /** Canvas run phase. Null hides the header badge. */
+  phase?: string | null;
   upstream: ReactNode;
   result: ReactNode;
   onClose: () => void;
@@ -88,6 +97,10 @@ export function NodeConfigPanel({
   graph = EMPTY_GRAPH,
   scope,
   templatePreview = null,
+  altitude = "focus",
+  onAltitude,
+  runSummary = null,
+  phase = null,
   upstream,
   result,
   onClose,
@@ -175,9 +188,22 @@ export function NodeConfigPanel({
                 {typeLabel}
               </Text>
               {summary ? (
-                <Text size="xs" c="dimmed">
+                <Text size="xs" c="dimmed" className="channel-node-type-summary">
                   {summary}
                 </Text>
+              ) : null}
+              {phase ? (
+                <span className="channel-node-phase">
+                  <StatusBadge
+                    size="xs"
+                    tone={presentNodeStatus(phase).tone}
+                    labelKey={
+                      phase === "waiting"
+                        ? "channels.canvas.phase.waiting"
+                        : presentNodeStatus(phase).labelKey
+                    }
+                  />
+                </span>
               ) : null}
             </Group>
             <Group gap={4} wrap="nowrap">
@@ -188,6 +214,12 @@ export function NodeConfigPanel({
                   openSignal={revealIn(headerProblems)}
                 />
               ) : null}
+              {altitude === "workbench" && onAltitude ? (
+                <Button size="compact-xs" variant="light" onClick={() => onAltitude("focus")}>
+                  {t("channels.node.showParameters")}
+                </Button>
+              ) : null}
+              {runAction}
               <CloseButton size="sm" aria-label={t("channels.node.close")} onClick={onClose} />
             </Group>
           </Group>
@@ -212,8 +244,8 @@ export function NodeConfigPanel({
         </Stack>
       </div>
       <div className="channel-node-detail">
-        {upstream}
-        <NodeRegion title={t("channels.node.config")} action={runAction}>
+        {altitude === "workbench" ? upstream : null}
+        <NodeRegion title={t("channels.node.config")}>
         <Stack gap="sm">
           {configLocked && permission ? (
             <Text size="xs" c="dimmed">
@@ -271,7 +303,17 @@ export function NodeConfigPanel({
           />
         </Stack>
         </NodeRegion>
-        {result}
+        {altitude === "workbench" ? result : null}
+        {altitude === "focus" && (runSummary != null || onAltitude) ? (
+          <Stack gap="xs" mt="sm">
+            {runSummary}
+            {onAltitude ? (
+              <Button size="compact-xs" variant="light" onClick={() => onAltitude("workbench")}>
+                {t("channels.node.showData")}
+              </Button>
+            ) : null}
+          </Stack>
+        ) : null}
       </div>
     </FieldDisclosureContext.Provider>
   );

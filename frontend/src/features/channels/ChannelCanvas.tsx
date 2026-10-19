@@ -76,7 +76,7 @@ import {
   type FlowNodeData,
 } from "@/features/channels/graphValidation";
 import { NodeConfigPanel } from "@/features/channels/NodeConfigPanel";
-import { ResultRegion, UpstreamRegion } from "@/features/channels/NodeRunRegions";
+import { NodeRunSummary, ResultRegion, UpstreamRegion } from "@/features/channels/NodeRunRegions";
 import {
   executionCountByNode,
   phaseByNode,
@@ -228,6 +228,10 @@ function ChannelCanvasBody({
   const [nodes, setNodes] = useState<ChannelNode[]>(seededNodes);
   const [edges, setEdges] = useState<Edge[]>(seededEdges);
   const [configNodeId, setConfigNodeId] = useState<string | null>(null);
+  const [altitude, setAltitude] = useState<"focus" | "workbench">("focus");
+  useEffect(() => {
+    if (configNodeId == null) setAltitude("focus");
+  }, [configNodeId]);
   const [picker, setPicker] = useState<PickerState | null>(null);
   const [highlight, setHighlight] = useState<ProblemHighlight | null>(null);
   const [problemsDismissed, setProblemsDismissed] = useState(0);
@@ -920,7 +924,9 @@ function ChannelCanvasBody({
               p="sm"
               className={
                 selected
-                  ? "channel-node-config channel-node-config--detail"
+                  ? altitude === "workbench"
+                    ? "channel-node-config channel-node-config--detail"
+                    : "channel-node-config channel-node-config--focus"
                   : "channel-node-config"
               }
               onPointerDown={(event) => event.stopPropagation()}
@@ -1012,6 +1018,21 @@ function ChannelCanvasBody({
                     },
                   }}
                   templatePreview={templatePreview}
+                  altitude={altitude}
+                  onAltitude={setAltitude}
+                  phase={phases.get(selected.id) ?? null}
+                  runSummary={
+                    <NodeRunSummary
+                      nodeId={selected.id}
+                      nodes={nodes.map((node) => ({
+                        id: node.id,
+                        name: node.data.name,
+                        ref: node.data.ref,
+                      }))}
+                      hasUpstream={edges.some((edge) => edge.target === selected.id)}
+                      detail={sessionRun}
+                    />
+                  }
                   upstream={
                     <UpstreamRegion
                       channelId={channelId ?? ""}

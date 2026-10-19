@@ -425,10 +425,45 @@
   overflow: hidden;
 }
 
+.channel-node-config--focus {
+  width: min(28rem, calc(100% - 16px));
+  height: calc(100% - 16px);
+}
+
 .channel-node-config--detail {
   width: min(calc(100% - 16px), max(960px, 75%));
   height: calc(100% - 16px);
   container-type: inline-size;
+}
+
+.channel-node-config--focus .channel-node-detail {
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.channel-node-config--focus .channel-node-region {
+  flex: none;
+}
+
+.channel-node-config--focus .channel-node-region__body {
+  overflow: visible;
+}
+
+.channel-node-config--focus .channel-node-header-fields {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.channel-node-config--focus .channel-node-type-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-node-phase {
+  flex: none;
 }
 
 .channel-node-detail {

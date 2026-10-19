@@ -36,6 +36,8 @@ const LABELS: Record<string, string> = {
   "channels.canvas.palette": "Nodes",
   "channels.canvas.problemsSummary": "{{errors}} errors, {{warnings}} warnings",
   "channels.node.run": "Run node",
+  "channels.node.showData": "Show input and output",
+  "channels.node.showParameters": "Show parameters only",
   "channels.run.showFullOutput": "Show full output",
   "channels.run.outputFailed": "Output failed",
   "channels.editor.status.running": "Running",
@@ -46,10 +48,13 @@ const LABELS: Record<string, string> = {
   "channels.node.config": "Configuration",
   "channels.run.upstream": "Upstream outputs",
   "channels.run.result": "This node's result",
+  "channels.run.noUpstream": "This node has no upstream nodes",
+  "channels.run.idle": "Run the graph to see data here",
   "channels.run.waiting": "Waiting for this node",
   "channels.canvas.phase.waiting": "Waiting",
   "channels.run.notRun": "Not run",
   "channels.run.executions": "{{count}} executions",
+  "channels.node.moreUpstream": "{{count}} more upstream nodes",
   "channels.canvas.handle": "{{node}} {{port}} {{side}}",
   "channels.canvas.input": "input",
   "channels.canvas.output": "output",
@@ -458,9 +463,15 @@ describe("ChannelCanvas controls", () => {
     const node = document.querySelector(".react-flow__node");
     if (!(node instanceof HTMLElement)) throw new Error("missing node");
     fireEvent.click(node);
-    const config = screen.getByRole("region", { name: "Configuration" });
-    const configRun = within(config).getByRole("button", { name: "Run node" });
+    const header = document.querySelector(".channel-node-config__header");
+    if (!(header instanceof HTMLElement)) throw new Error("missing header");
+    const configRun = within(header).getByRole("button", { name: "Run node" });
     expect((configRun as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      within(screen.getByRole("region", { name: "Configuration" })).queryByRole("button", {
+        name: "Run node",
+      }),
+    ).toBeNull();
   });
 
   it("opens configuration when a node is clicked during a session run", async () => {
@@ -507,15 +518,198 @@ describe("ChannelCanvas controls", () => {
     if (!(header instanceof HTMLElement)) throw new Error("missing header");
     expect(within(header).getByText("Manual")).toBeTruthy();
     expect(within(header).getByText("Start here")).toBeTruthy();
-    const config = screen.getByRole("region", { name: "Configuration" });
-    const result = screen.getByRole("region", { name: "This node's result" });
-    expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
-    expect(screen.getByText("Waiting for this node")).toBeTruthy();
-    expect(within(result).queryByRole("button")).toBeNull();
+    const waiting = within(header).getByText("Waiting");
+    expect(waiting.closest("[data-size]")?.getAttribute("data-size")).toBe("xs");
+    expect(within(header).queryByText("Waiting for this node")).toBeNull();
+    const panel = header.closest(".channel-node-config");
+    expect(panel?.className).toContain("channel-node-config--focus");
+    expect(panel?.className).not.toContain("channel-node-config--detail");
+    expect(screen.getByRole("region", { name: "Configuration" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Upstream outputs" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "This node's result" })).toBeNull();
+    expect(screen.getByText("Upstream outputs: This node has no upstream nodes")).toBeTruthy();
+    expect(screen.getByText("This node's result: Waiting for this node")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Show full output" })).toBeNull();
 
-    fireEvent.click(within(config).getByRole("button", { name: "Run node" }));
+    fireEvent.click(within(header).getByRole("button", { name: "Run node" }));
     expect(onRun).toHaveBeenCalledTimes(2);
     expect(onRun).toHaveBeenLastCalledWith("nd_1");
+  });
+
+  it("uses the canvas phase label in the header and omits it without a run", async () => {
+    await renderCanvas([], nodeGraph);
+    const idleNode = document.querySelector(".react-flow__node");
+    if (!(idleNode instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(idleNode);
+    const idleHeader = document.querySelector(".channel-node-config__header");
+    if (!(idleHeader instanceof HTMLElement)) throw new Error("missing header");
+    expect(within(idleHeader).queryByText("Waiting")).toBeNull();
+    expect(within(idleHeader).queryByText("Succeeded")).toBeNull();
+
+    cleanup();
+    const now = Instant.parse("2026-01-01T00:00:00Z");
+    const sessionRun: ChannelRunDetail = {
+      run: {
+        job_id: "job_1",
+        status: "succeeded",
+        outcome: null,
+        target: "draft",
+        version: null,
+        draft_revision: 1,
+        trigger_kind: "user",
+        trigger_ref: "manual",
+        trigger_node_id: "nd_1",
+        trigger_actor_name: null,
+        trigger_schedule_name: null,
+        ignore_checkpoints: false,
+        stop_at_node_id: "nd_1",
+        failed_node_id: null,
+        created_at: now,
+        started_at: now,
+        finished_at: now,
+        error_code: null,
+        error_message: null,
+      },
+      graph: nodeGraph,
+      node_executions: [
+        {
+          seq: 1,
+          node_id: "nd_1",
+          status: "succeeded",
+          started_at: now,
+          finished_at: now,
+          output_bytes: 12,
+          output_preview: { rows: ["hidden"] },
+          output_truncated: false,
+          error_code: null,
+          error_message: null,
+          error_detail: null,
+        },
+      ],
+    };
+    await renderCanvas([], nodeGraph, { sessionRun });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+    const header = document.querySelector(".channel-node-config__header");
+    if (!(header instanceof HTMLElement)) throw new Error("missing header");
+    expect(within(header).getByText("Succeeded")).toBeTruthy();
+    expect(screen.getByText("This node's result: Start Succeeded")).toBeTruthy();
+    expect(screen.queryByText(/hidden/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show input and output" }));
+    expect(within(header).getByText("Succeeded")).toBeTruthy();
+    expect(screen.queryByText("This node's result: Start Succeeded")).toBeNull();
+    expect(screen.getByText(/hidden/)).toBeTruthy();
+  });
+
+  it("opens the three-column workbench and returns to parameters", async () => {
+    await renderCanvas([], nodeGraph);
+
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+    expect(screen.queryByRole("region", { name: "Upstream outputs" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show input and output" }));
+    expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Configuration" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "This node's result" })).toBeTruthy();
+    expect(screen.getAllByText("This node has no upstream nodes")).toHaveLength(1);
+    expect(screen.getAllByText("Run the graph to see data here")).toHaveLength(1);
+    const panel = document.querySelector(".channel-node-config");
+    expect(panel?.className).toContain("channel-node-config--detail");
+    expect(panel?.className).not.toContain("channel-node-config--focus");
+    const header = document.querySelector(".channel-node-config__header");
+    if (!(header instanceof HTMLElement)) throw new Error("missing header");
+    expect(within(header).getByRole("button", { name: "Run node" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show parameters only" }));
+    expect(screen.queryByRole("region", { name: "Upstream outputs" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "This node's result" })).toBeNull();
+    expect(panel?.className).toContain("channel-node-config--focus");
+  });
+
+  it("returns to focus after close and keeps the workbench when the node changes", async () => {
+    const pair: Graph = {
+      nodes: [
+        { ...nodeGraph.nodes[0]! },
+        {
+          id: "nd_2",
+          ref: "next",
+          type: "manual",
+          name: "Next",
+          position: { x: 280, y: 40 },
+          config: {},
+          on_error: "stop",
+          retry: null,
+        },
+      ],
+      edges: [],
+      settings: nodeGraph.settings,
+    };
+    await renderCanvas([], pair);
+    const nodes = [...document.querySelectorAll(".react-flow__node")];
+    const first = nodes.find((item) => item.getAttribute("data-id") === "nd_1");
+    const second = nodes.find((item) => item.getAttribute("data-id") === "nd_2");
+    if (!(first instanceof HTMLElement) || !(second instanceof HTMLElement)) {
+      throw new Error("missing nodes");
+    }
+
+    fireEvent.click(first);
+    fireEvent.click(screen.getByRole("button", { name: "Show input and output" }));
+    expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
+
+    fireEvent.click(second);
+    expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Next");
+    expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "channels.node.close" }));
+    expect(screen.queryByRole("region", { name: "Configuration" })).toBeNull();
+
+    fireEvent.click(second);
+    expect(screen.queryByRole("region", { name: "Upstream outputs" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Show input and output" })).toBeTruthy();
+  });
+
+  it("returns to focus after the open node is deleted", async () => {
+    const pair: Graph = {
+      nodes: [
+        { ...nodeGraph.nodes[0]! },
+        {
+          id: "nd_2",
+          ref: "next",
+          type: "manual",
+          name: "Next",
+          position: { x: 280, y: 40 },
+          config: {},
+          on_error: "stop",
+          retry: null,
+        },
+      ],
+      edges: [],
+      settings: nodeGraph.settings,
+    };
+    await renderCanvas([], pair);
+    const first = document.querySelector('.react-flow__node[data-id="nd_1"]');
+    const second = document.querySelector('.react-flow__node[data-id="nd_2"]');
+    if (!(first instanceof HTMLElement) || !(second instanceof HTMLElement)) {
+      throw new Error("missing nodes");
+    }
+
+    fireEvent.click(first);
+    fireEvent.click(screen.getByRole("button", { name: "Show input and output" }));
+    expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
+
+    fireEvent.keyDown(document, { key: "Delete", code: "Delete" });
+    await waitFor(() => {
+      expect(document.querySelector('.react-flow__node[data-id="nd_1"]')).toBeNull();
+    });
+
+    fireEvent.click(second);
+    expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Next");
+    expect(screen.queryByRole("region", { name: "Upstream outputs" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Show input and output" })).toBeTruthy();
   });
 });
 
