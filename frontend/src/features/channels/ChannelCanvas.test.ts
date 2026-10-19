@@ -35,6 +35,7 @@ const LABELS: Record<string, string> = {
   "channels.node.run": "Run node",
   "channels.run.showFullOutput": "Show full output",
   "channels.run.outputFailed": "Output failed",
+  "channels.editor.status.running": "Running",
   "channels.editor.status.succeeded": "Succeeded",
   "channels.editor.status.failed": "Failed",
   "channels.editor.status.skipped": "Skipped",
@@ -43,6 +44,7 @@ const LABELS: Record<string, string> = {
   "channels.run.upstream": "Upstream outputs",
   "channels.run.result": "This node's result",
   "channels.run.waiting": "Waiting for this node",
+  "channels.canvas.phase.waiting": "Waiting",
   "channels.run.notRun": "Not run",
   "channels.run.executions": "{{count}} executions",
   "channels.canvas.handle": "{{node}} {{port}} {{side}}",
@@ -781,6 +783,252 @@ describe("channel ports", () => {
     expect(body?.querySelector(".channel-flow-node--succeeded")).not.toBeNull();
     expect(skip?.textContent).toContain("Not run");
     expect(skip?.querySelector(".channel-flow-node--dead")).not.toBeNull();
+  });
+
+  it("says Running on a node whose execution is running", async () => {
+    const now = Instant.parse("2026-01-01T00:00:00Z");
+    const graph: Graph = {
+      ...EMPTY_GRAPH,
+      nodes: [placed("trigger", "trigger.manual", "Start", 20)],
+    };
+    await renderCanvas([], graph, {
+      catalog: [
+        catalogSpec("trigger.manual", [], [{ port: "main", description: "" }], true),
+      ],
+      appearance: "browse",
+      mutable: false,
+      sessionRun: {
+        run: {
+          job_id: "job_1",
+          status: "running",
+          outcome: null,
+          target: "draft",
+          version: null,
+          draft_revision: 1,
+          trigger_kind: "user",
+          trigger_ref: "trigger",
+          trigger_node_id: "trigger",
+          trigger_actor_name: null,
+          trigger_schedule_name: null,
+          ignore_checkpoints: false,
+          stop_at_node_id: null,
+          failed_node_id: null,
+          created_at: now,
+          started_at: now,
+          finished_at: null,
+          error_code: null,
+          error_message: null,
+        },
+        graph,
+        node_executions: [
+          {
+            seq: 1,
+            node_id: "trigger",
+            status: "running",
+            started_at: now,
+            finished_at: null,
+            output_bytes: 0,
+            output_preview: null,
+            error_code: null,
+            error_message: null,
+            error_detail: null,
+          },
+        ],
+      },
+    });
+
+    const node = document.querySelector(".react-flow__node[data-id='trigger']");
+    expect(node?.textContent).toContain("Running");
+  });
+
+  it("says Waiting, not the detail-panel sentence, on a node that has not started", async () => {
+    const now = Instant.parse("2026-01-01T00:00:00Z");
+    const graph: Graph = {
+      ...EMPTY_GRAPH,
+      nodes: [
+        placed("trigger", "trigger.manual", "Start", 20),
+        placed("body", "read.sql", "Body", 200),
+      ],
+      edges: [
+        {
+          id: "e1",
+          source: { node_id: "trigger", port: "main" },
+          target: { node_id: "body", port: "main" },
+        },
+      ],
+    };
+    await renderCanvas([], graph, {
+      catalog: [
+        catalogSpec("trigger.manual", [], [{ port: "main", description: "" }], true),
+        READ_SPEC,
+      ],
+      appearance: "browse",
+      mutable: false,
+      sessionRun: {
+        run: {
+          job_id: "job_1",
+          status: "running",
+          outcome: null,
+          target: "draft",
+          version: null,
+          draft_revision: 1,
+          trigger_kind: "user",
+          trigger_ref: "trigger",
+          trigger_node_id: "trigger",
+          trigger_actor_name: null,
+          trigger_schedule_name: null,
+          ignore_checkpoints: false,
+          stop_at_node_id: null,
+          failed_node_id: null,
+          created_at: now,
+          started_at: now,
+          finished_at: null,
+          error_code: null,
+          error_message: null,
+        },
+        graph,
+        node_executions: [
+          {
+            seq: 1,
+            node_id: "trigger",
+            status: "succeeded",
+            started_at: now,
+            finished_at: now,
+            output_bytes: 0,
+            output_preview: null,
+            error_code: null,
+            error_message: null,
+            error_detail: null,
+          },
+        ],
+      },
+    });
+
+    const body = document.querySelector(".react-flow__node[data-id='body']");
+    expect(body?.textContent).toContain("Waiting");
+    expect(body?.textContent).not.toContain("Waiting for this node");
+  });
+
+  it("says Failed on a node whose execution failed", async () => {
+    const now = Instant.parse("2026-01-01T00:00:00Z");
+    const graph: Graph = {
+      ...EMPTY_GRAPH,
+      nodes: [placed("trigger", "trigger.manual", "Start", 20)],
+    };
+    await renderCanvas([], graph, {
+      catalog: [
+        catalogSpec("trigger.manual", [], [{ port: "main", description: "" }], true),
+      ],
+      appearance: "browse",
+      mutable: false,
+      sessionRun: {
+        run: {
+          job_id: "job_1",
+          status: "failed",
+          outcome: "failed",
+          target: "draft",
+          version: null,
+          draft_revision: 1,
+          trigger_kind: "user",
+          trigger_ref: "trigger",
+          trigger_node_id: "trigger",
+          trigger_actor_name: null,
+          trigger_schedule_name: null,
+          ignore_checkpoints: false,
+          stop_at_node_id: null,
+          failed_node_id: "trigger",
+          created_at: now,
+          started_at: now,
+          finished_at: now,
+          error_code: "boom",
+          error_message: "nope",
+        },
+        graph,
+        node_executions: [
+          {
+            seq: 1,
+            node_id: "trigger",
+            status: "failed",
+            started_at: now,
+            finished_at: now,
+            output_bytes: 0,
+            output_preview: null,
+            error_code: "boom",
+            error_message: "nope",
+            error_detail: null,
+          },
+        ],
+      },
+    });
+
+    const node = document.querySelector(".react-flow__node[data-id='trigger']");
+    expect(node?.textContent).toContain("Failed");
+  });
+
+  it("keeps the selected class beside the running phase", async () => {
+    const now = Instant.parse("2026-01-01T00:00:00Z");
+    const graph: Graph = {
+      ...EMPTY_GRAPH,
+      nodes: [placed("trigger", "trigger.manual", "Start", 20)],
+    };
+    await renderCanvas([], graph, {
+      catalog: [
+        catalogSpec("trigger.manual", [], [{ port: "main", description: "" }], true),
+      ],
+      appearance: "browse",
+      mutable: false,
+      sessionRun: {
+        run: {
+          job_id: "job_1",
+          status: "running",
+          outcome: null,
+          target: "draft",
+          version: null,
+          draft_revision: 1,
+          trigger_kind: "user",
+          trigger_ref: "trigger",
+          trigger_node_id: "trigger",
+          trigger_actor_name: null,
+          trigger_schedule_name: null,
+          ignore_checkpoints: false,
+          stop_at_node_id: null,
+          failed_node_id: null,
+          created_at: now,
+          started_at: now,
+          finished_at: null,
+          error_code: null,
+          error_message: null,
+        },
+        graph,
+        node_executions: [
+          {
+            seq: 1,
+            node_id: "trigger",
+            status: "running",
+            started_at: now,
+            finished_at: null,
+            output_bytes: 0,
+            output_preview: null,
+            error_code: null,
+            error_message: null,
+            error_detail: null,
+          },
+        ],
+      },
+    });
+
+    const shell = document.querySelector(".react-flow__node[data-id='trigger']");
+    if (!(shell instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(shell);
+    const card = shell.querySelector(".channel-flow-node");
+    expect(card?.classList.contains("channel-flow-node--selected")).toBe(true);
+    expect(card?.classList.contains("channel-flow-node--running")).toBe(true);
+    expect(card?.classList.contains("channel-flow-node--problem")).toBe(false);
+  });
+
+  it("does not show a phase when the node has not run", async () => {
+    await renderCanvas([], nodeGraph, { appearance: "browse", mutable: false });
+    expect(document.querySelector(".channel-flow-node__status")).toBeNull();
   });
 });
 

@@ -1541,6 +1541,7 @@
   "channels.canvas.input": "输入",
   "channels.canvas.output": "输出",
   "channels.canvas.edge": "{{source}} 到 {{target}}",
+  "channels.canvas.phase.waiting": "等待",
   "channels.canvas.ports.main": "主",
   "channels.canvas.ports.true": "真",
   "channels.canvas.ports.false": "假",

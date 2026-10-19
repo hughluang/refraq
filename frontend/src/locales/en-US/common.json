@@ -1541,6 +1541,7 @@
   "channels.canvas.input": "input",
   "channels.canvas.output": "output",
   "channels.canvas.edge": "{{source}} to {{target}}",
+  "channels.canvas.phase.waiting": "Waiting",
   "channels.canvas.ports.main": "Main",
   "channels.canvas.ports.true": "True",
   "channels.canvas.ports.false": "False",

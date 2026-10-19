@@ -79,6 +79,7 @@ import {
   type HandleSide,
   type PortPlacement,
 } from "@/features/channels/portLayout";
+import { StatusBadge } from "@/components/display/StatusBadge";
 import {
   presentNodeStatus,
   presentProblemSeverity,
@@ -1368,6 +1369,13 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   const errorAnchor = outputs.some((port) => port.port === "error");
   const run = useContext(CanvasRunContext);
   const phase = run.phases.get(id);
+  const presented = phase ? presentNodeStatus(phase) : null;
+  const phaseStatus = presented
+    ? {
+        tone: presented.tone,
+        labelKey: phase === "waiting" ? "channels.canvas.phase.waiting" : presented.labelKey,
+      }
+    : null;
   const count = run.counts.get(id) ?? 0;
   const onRun = run.onRun;
   const depth = Math.max(
@@ -1394,7 +1402,6 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
         minWidth: 148,
         minHeight: depth > 1 ? 24 + depth * 28 : undefined,
         padding: "8px 12px",
-        borderRadius: 8,
         background: "var(--mantine-color-body)",
       }}
     >
@@ -1430,7 +1437,7 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
         </>
       ) : null}
       <PortHandles ports={laid.inputs} nodeName={data.name} kind="target" />
-      <Text size="xs" c="dimmed">
+      <Text size="xs" c="dimmed" className="channel-flow-node__type">
         {spec ? nodeTypeLabel(t, spec) : data.nodeType}
       </Text>
       <Text size="sm" fw={600}>
@@ -1441,10 +1448,10 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
           {t("channels.run.executions", { count })}
         </Text>
       ) : null}
-      {phase === "dead" ? (
-        <Text size="xs" c="dimmed" className="channel-flow-node__status">
-          {t(presentNodeStatus("dead").labelKey)}
-        </Text>
+      {phaseStatus ? (
+        <span className="channel-flow-node__status">
+          <StatusBadge size="xs" tone={phaseStatus.tone} labelKey={phaseStatus.labelKey} />
+        </span>
       ) : null}
       <PortHandles ports={laid.outputs} nodeName={data.name} kind="source" />
       {errorAnchor ? (

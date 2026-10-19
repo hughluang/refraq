@@ -164,6 +164,26 @@
 .channel-flow-node {
   position: relative;
   border: 1px solid var(--refraq-tone-neutral-border);
+  border-radius: var(--mantine-radius-sm);
+}
+
+.channel-flow-node:has(.channel-flow-node__status) .channel-flow-node__type {
+  padding-right: 5.5rem;
+}
+
+.channel-flow-node__status {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  line-height: 1;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* Run and delete controls use top: -8px and height: 18px, so their boxes end at 10px. */
+.channel-flow-node:has(.channel-flow-node__run) .channel-flow-node__status {
+  top: 10px;
 }
 
 /* Extra emphasis stays outside the border box so selection and problem states do not shift node content. */
@@ -177,25 +197,24 @@
   box-shadow: 0 0 0 1px var(--refraq-tone-danger);
 }
 
+.channel-flow-node:hover:not(.channel-flow-node--selected):not(.channel-flow-node--problem) {
+  border-color: var(--refraq-tone-neutral);
+}
+
 .channel-flow-node--waiting {
   border-style: dashed;
-}
-
-.channel-flow-node--running {
-  border-color: var(--refraq-tone-running);
-}
-
-.channel-flow-node--succeeded {
-  border-color: var(--refraq-tone-success);
-}
-
-.channel-flow-node--failed {
-  border-color: var(--refraq-tone-danger);
 }
 
 .channel-flow-node--dead {
   border-style: dashed;
   opacity: 0.72;
+}
+
+.channel-flow-node .react-flow__handle:not(.channel-flow-handle--loop) {
+  width: 8px;
+  height: 8px;
+  background: var(--mantine-color-body);
+  border: 1px solid var(--refraq-tone-neutral);
 }
 
 .channel-flow-node .react-flow__handle.channel-flow-handle--loop {
@@ -303,6 +322,10 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
+  .channel-flow-node {
+    transition: border-color var(--refraq-motion-fast) var(--refraq-ease-standard);
+  }
+
   .channel-flow-node__run,
   .channel-flow-node__delete {
     transition:
