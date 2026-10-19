@@ -83,7 +83,9 @@ Motion tokens live in `frontend/src/theme/tokens.ts`.
 | Slow | 300 ms |
 | Feedback delay | 200 ms |
 
-Easing is standard, enter, and exit. Overlay transitions use the base duration. Motion is for overlays, navigation width, section collapse, notification enter and exit, the route progress bar, and pending indicators. Route content, list refetch, and polling refresh do not animate, and motion does not shift layout.
+Easing is standard, enter, and exit. Overlay transitions use the base duration. Motion is for overlays, navigation width, section collapse, notification enter and exit, the route progress bar, pending indicators, and the **Data Channel** canvas edge that enters the node currently running. Route content, list refetch, and polling refresh do not animate, and motion does not shift layout.
+
+That edge is the only canvas motion. While motion is allowed, it flows along its stroke by animating `stroke-dashoffset`. The flow may be slower than the transition tokens above, and it does not move layout. A reduced-motion preference keeps the running color and leaves the edge solid. No other canvas glyph moves.
 
 `respectReducedMotion` is set. Every custom transition and keyframe follows the reduced-motion preference.
 
@@ -94,7 +96,6 @@ The console offers light, dark, and system. System is the default. The choice is
 ## 10. Non-Goals
 
 - Domain rules for when a verb is legal.
-- Canvas glyph motion.
 
 ## 11. References
 

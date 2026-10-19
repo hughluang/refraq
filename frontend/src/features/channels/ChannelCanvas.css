@@ -7,6 +7,8 @@
   inset: 0;
   min-width: 0;
   min-height: 0;
+  --xy-edge-stroke: var(--refraq-tone-neutral-border);
+  --xy-edge-stroke-selected: var(--mantine-primary-color-filled);
 }
 
 .channel-record-overlays {
@@ -250,8 +252,17 @@
   transform: translateX(-50%);
 }
 
-.channel-flow-edge--return .react-flow__edge-path {
+.channel-flow-edge--return:not(.channel-flow-edge--live) .react-flow__edge-path {
   stroke-dasharray: 4 3;
+}
+
+.channel-canvas-stage .react-flow__edge.channel-flow-edge--settled .react-flow__edge-path {
+  opacity: 0.38;
+}
+
+.channel-canvas-stage .react-flow__edge.channel-flow-edge--live .react-flow__edge-path {
+  stroke: var(--refraq-tone-running);
+  opacity: 1;
 }
 
 .channel-flow-node__run,
@@ -352,6 +363,17 @@
     to {
       opacity: 1;
       transform: scale(1);
+    }
+  }
+
+  .channel-canvas-stage .react-flow__edge.channel-flow-edge--live .react-flow__edge-path {
+    stroke-dasharray: 8 6;
+    animation: channel-flow-edge-live 1.4s linear infinite;
+  }
+
+  @keyframes channel-flow-edge-live {
+    to {
+      stroke-dashoffset: -28;
     }
   }
 }

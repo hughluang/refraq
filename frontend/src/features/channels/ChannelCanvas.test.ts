@@ -1032,6 +1032,224 @@ describe("channel ports", () => {
   });
 });
 
+describe("channel edges", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  it("draws an arrow whose paint follows the edge stroke", async () => {
+    await renderCanvas(
+      [],
+      {
+        ...EMPTY_GRAPH,
+        nodes: [
+          placed("start", "trigger.manual", "Start", 20),
+          placed("body", "read.sql", "Body", 280),
+        ],
+        edges: [
+          {
+            id: "e1",
+            source: { node_id: "start", port: "main" },
+            target: { node_id: "body", port: "main" },
+          },
+        ],
+      },
+      {
+        catalog: [
+          catalogSpec("trigger.manual", [], [{ port: "main", description: "" }], true),
+          READ_SPEC,
+        ],
+      },
+    );
+
+    const edge = await screen.findByRole("group", { name: "Main to Main" });
+    const path = edge.querySelector(".react-flow__edge-path");
+    const markerEnd = path?.getAttribute("marker-end") ?? "";
+    const markerId = /url\('#([^']+)'\)/.exec(markerEnd)?.[1] ?? "";
+    const arrow = markerId
+      ? document.getElementById(markerId)?.querySelector("polyline.arrowclosed")
+      : null;
+    expect(arrow).toBeTruthy();
+    expect(arrow?.getAttribute("style") ?? "").not.toMatch(/#(?:555|b1b1b7)/i);
+    expect((arrow as SVGElement).style.fill).toBe("context-stroke");
+    expect((arrow as SVGElement).style.stroke).toBe("context-stroke");
+  });
+
+  it("marks the edge into a running node as live", async () => {
+    const graph: Graph = {
+      ...EMPTY_GRAPH,
+      nodes: [
+        placed("start", "trigger.manual", "Start", 20),
+        placed("body", "read.sql", "Body", 240),
+        placed("next", "read.sql", "Next", 460),
+      ],
+      edges: [
+        {
+          id: "into",
+          source: { node_id: "start", port: "main" },
+          target: { node_id: "body", port: "main" },
+        },
+        {
+          id: "beyond",
+          source: { node_id: "body", port: "main" },
+          target: { node_id: "next", port: "main" },
+        },
+      ],
+    };
+    await renderCanvas([], graph, {
+      catalog: [
+        catalogSpec("trigger.manual", [], [{ port: "main", description: "" }], true),
+        READ_SPEC,
+      ],
+      appearance: "browse",
+      mutable: false,
+      sessionRun: runDetail(graph, "running", [
+        { seq: 1, node_id: "start", status: "succeeded" },
+        { seq: 2, node_id: "body", status: "running" },
+      ]),
+    });
+
+    const edge = (id: string) => document.querySelector(`.react-flow__edge[data-id='${id}']`);
+    await waitFor(() => {
+      expect(edge("into")).not.toBeNull();
+    });
+    expect(edge("into")?.classList.contains("channel-flow-edge--live")).toBe(true);
+    expect(edge("beyond")?.classList.contains("channel-flow-edge--live")).toBe(false);
+    expect(edge("beyond")?.classList.contains("channel-flow-edge--settled")).toBe(false);
+  });
+
+  it("fades an edge when its source or target did not run", async () => {
+    const graph: Graph = {
+      ...EMPTY_GRAPH,
+      nodes: [
+        placed("start", "trigger.manual", "Start", 20),
+        placed("body", "read.sql", "Body", 220),
+        placed("skip", "read.sql", "Skip", 420),
+        placed("after", "read.sql", "After", 620),
+      ],
+      edges: [
+        {
+          id: "walked",
+          source: { node_id: "start", port: "main" },
+          target: { node_id: "body", port: "main" },
+        },
+        {
+          id: "into-skip",
+          source: { node_id: "body", port: "main" },
+          target: { node_id: "skip", port: "main" },
+        },
+        {
+          id: "from-skip",
+          source: { node_id: "skip", port: "main" },
+          target: { node_id: "after", port: "main" },
+        },
+      ],
+    };
+    await renderCanvas([], graph, {
+      catalog: [
+        catalogSpec("trigger.manual", [], [{ port: "main", description: "" }], true),
+        READ_SPEC,
+      ],
+      appearance: "browse",
+      mutable: false,
+      sessionRun: runDetail(graph, "succeeded", [
+        { seq: 1, node_id: "start", status: "succeeded" },
+        { seq: 2, node_id: "body", status: "succeeded" },
+      ]),
+    });
+
+    const edge = (id: string) => document.querySelector(`.react-flow__edge[data-id='${id}']`);
+    await waitFor(() => {
+      expect(edge("into-skip")).not.toBeNull();
+    });
+    expect(edge("walked")?.classList.contains("channel-flow-edge--settled")).toBe(false);
+    expect(edge("into-skip")?.classList.contains("channel-flow-edge--settled")).toBe(true);
+    expect(edge("from-skip")?.classList.contains("channel-flow-edge--settled")).toBe(true);
+  });
+
+  it("does not paint a failed execution as a failure edge", async () => {
+    const graph: Graph = {
+      ...EMPTY_GRAPH,
+      nodes: [
+        placed("start", "trigger.manual", "Start", 20),
+        placed("body", "read.sql", "Body", 280),
+      ],
+      edges: [
+        {
+          id: "e1",
+          source: { node_id: "start", port: "main" },
+          target: { node_id: "body", port: "main" },
+        },
+      ],
+    };
+    await renderCanvas([], graph, {
+      catalog: [
+        catalogSpec("trigger.manual", [], [{ port: "main", description: "" }], true),
+        READ_SPEC,
+      ],
+      appearance: "browse",
+      mutable: false,
+      sessionRun: runDetail(graph, "failed", [
+        { seq: 1, node_id: "start", status: "succeeded" },
+        { seq: 2, node_id: "body", status: "failed" },
+      ]),
+    });
+
+    const edge = () => document.querySelector(".react-flow__edge[data-id='e1']");
+    await waitFor(() => {
+      expect(edge()).not.toBeNull();
+    });
+    expect(edge()?.getAttribute("class") ?? "").not.toMatch(/fail/i);
+    expect(edge()?.classList.contains("channel-flow-edge--live")).toBe(false);
+    expect(edge()?.classList.contains("channel-flow-edge--settled")).toBe(false);
+  });
+});
+
+function runDetail(
+  graph: Graph,
+  status: string,
+  executions: { seq: number; node_id: string; status: string }[],
+): ChannelRunDetail {
+  const now = Instant.parse("2026-01-01T00:00:00Z");
+  const terminal = status === "succeeded" || status === "failed" || status === "cancelled";
+  return {
+    run: {
+      job_id: "job_1",
+      status,
+      outcome: terminal ? (status === "failed" ? "failed" : "completed") : null,
+      target: "draft",
+      version: null,
+      draft_revision: 1,
+      trigger_kind: "user",
+      trigger_ref: "start",
+      trigger_node_id: "start",
+      trigger_actor_name: null,
+      trigger_schedule_name: null,
+      ignore_checkpoints: false,
+      stop_at_node_id: null,
+      failed_node_id: null,
+      created_at: now,
+      started_at: now,
+      finished_at: terminal ? now : null,
+      error_code: null,
+      error_message: null,
+    },
+    graph,
+    node_executions: executions.map((item) => ({
+      seq: item.seq,
+      node_id: item.node_id,
+      status: item.status,
+      started_at: now,
+      finished_at: item.status === "running" ? null : now,
+      output_bytes: 0,
+      output_preview: null,
+      output_truncated: false,
+      error_code: null,
+      error_message: null,
+      error_detail: null,
+    })),
+  };
+}
+
 const CODE_SPEC: NodeTypeSpec = {
   ...catalogSpec(
     "transform.code",

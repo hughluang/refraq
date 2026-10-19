@@ -16,6 +16,7 @@ import {
   applyEdgeChanges,
   applyNodeChanges,
   getBezierPath,
+  MarkerType,
   useReactFlow,
   type Connection,
   type Edge,
@@ -126,6 +127,7 @@ type PickerState =
 
 const NODE_DRAG_THRESHOLD = 4;
 const CHANNEL_EDGE_TYPE = "channel";
+const CHANNEL_EDGE_MARKER = { type: MarkerType.ArrowClosed, color: "context-stroke" };
 const nodeTypes = { channel: ChannelFlowNode };
 const edgeTypes = { [CHANNEL_EDGE_TYPE]: ChannelFlowEdge };
 const PROBLEM_STROKE = "var(--refraq-tone-danger)";
@@ -790,13 +792,17 @@ function ChannelCanvasBody({
               className: [
                 edge.className,
                 isLoopReturn(edge.targetHandle) ? "channel-flow-edge--return" : "",
+                phases.get(edge.target) === "running" ? "channel-flow-edge--live" : "",
+                phases.get(edge.source) === "dead" || phases.get(edge.target) === "dead"
+                  ? "channel-flow-edge--settled"
+                  : "",
               ]
                 .filter(Boolean)
                 .join(" ") || undefined,
             }))}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
-            defaultEdgeOptions={{ type: CHANNEL_EDGE_TYPE }}
+            defaultEdgeOptions={{ type: CHANNEL_EDGE_TYPE, markerEnd: CHANNEL_EDGE_MARKER }}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onNodeClick={(_, node) => openNodeConfig(node.id)}
