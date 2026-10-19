@@ -274,7 +274,8 @@ describe("ChannelRecord draft access", () => {
 
   it("keeps undo history when a draft save does not reload the canvas", async () => {
     await renderRecord("edit");
-    const add = await screen.findByRole("button", { name: "channels.canvas.add" });
+    const panel = await screen.findByTestId("rf__controls");
+    const add = within(panel).getByRole("button", { name: "channels.canvas.add" });
     fireEvent.click(add);
     fireEvent.click(screen.getByRole("button", { name: /Manual/ }));
     const undo = screen.getByRole("button", { name: "channels.canvas.undo" });
