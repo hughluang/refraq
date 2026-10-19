@@ -250,8 +250,16 @@
 .channel-flow-node .react-flow__handle:not(.channel-flow-handle--loop) {
   width: 8px;
   height: 8px;
-  background: var(--mantine-color-body);
-  border: 1px solid var(--refraq-tone-neutral);
+  padding: 0;
+  border: none;
+  /* Library radius is a percentage, so a 1px snap of width vs height turns the dot into an ellipse. */
+  border-radius: 0;
+  background: radial-gradient(
+    circle closest-side,
+    var(--mantine-color-body) 0 55%,
+    var(--refraq-tone-neutral) 70% 86%,
+    transparent 100%
+  );
 }
 
 .channel-flow-node .react-flow__handle.channel-flow-handle--loop {

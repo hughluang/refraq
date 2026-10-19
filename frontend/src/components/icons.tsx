@@ -15,9 +15,11 @@ import {
   IconCheck,
   IconChevronLeft,
   IconChevronRight,
+  IconCircleDashed,
   IconCircleFilled,
   IconCircleX,
   IconClock,
+  IconLoader,
   IconDatabase,
   IconDeviceDesktop,
   IconDotsVertical,
@@ -69,7 +71,10 @@ function withDefaults(Component: IconComponent) {
 export const AdjustmentsIcon = withDefaults(IconAdjustments);
 export const AlertIcon = withDefaults(IconAlertTriangle);
 export const CheckIcon = withDefaults(IconCheck);
+export const CircleDashedIcon = withDefaults(IconCircleDashed);
+export const ClockIcon = withDefaults(IconClock);
 export const ErrorIcon = withDefaults(IconCircleX);
+export const LoaderIcon = withDefaults(IconLoader);
 export const UndoIcon = withDefaults(IconArrowBackUp);
 export const RedoIcon = withDefaults(IconArrowForwardUp);
 export const StatusDotIcon = withDefaults(IconCircleFilled);

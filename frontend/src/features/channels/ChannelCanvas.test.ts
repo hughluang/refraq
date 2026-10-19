@@ -1396,7 +1396,8 @@ describe("channel ports", () => {
     const skip = document.querySelector(".react-flow__node[data-id='skip']");
     expect(body?.textContent).toContain("2 executions");
     expect(body?.querySelector(".channel-flow-node--succeeded")).not.toBeNull();
-    expect(skip?.textContent).toContain("Not run");
+    expect(phaseLabel(skip)).toBe("Not run");
+    expect(skip?.textContent).not.toContain("Not run");
     expect(skip?.querySelector(".channel-flow-node--dead")).not.toBeNull();
   });
 
@@ -1453,7 +1454,8 @@ describe("channel ports", () => {
     });
 
     const node = document.querySelector(".react-flow__node[data-id='trigger']");
-    expect(node?.textContent).toContain("Running");
+    expect(phaseLabel(node)).toBe("Running");
+    expect(node?.textContent).not.toContain("Running");
   });
 
   it("says Waiting, not the detail-panel sentence, on a node that has not started", async () => {
@@ -1520,8 +1522,8 @@ describe("channel ports", () => {
     });
 
     const body = document.querySelector(".react-flow__node[data-id='body']");
-    expect(body?.textContent).toContain("Waiting");
-    expect(body?.textContent).not.toContain("Waiting for this node");
+    expect(phaseLabel(body)).toBe("Waiting");
+    expect(body?.textContent).not.toContain("Waiting");
   });
 
   it("says Failed on a node whose execution failed", async () => {
@@ -1577,7 +1579,8 @@ describe("channel ports", () => {
     });
 
     const node = document.querySelector(".react-flow__node[data-id='trigger']");
-    expect(node?.textContent).toContain("Failed");
+    expect(phaseLabel(node)).toBe("Failed");
+    expect(node?.textContent).not.toContain("Failed");
   });
 
   it("keeps the selected class beside the running phase", async () => {
@@ -1646,6 +1649,10 @@ describe("channel ports", () => {
     expect(document.querySelector(".channel-flow-node__status")).toBeNull();
   });
 });
+
+function phaseLabel(node: Element | null | undefined): string | null {
+  return node?.querySelector(".channel-flow-node__status")?.getAttribute("aria-label") ?? null;
+}
 
 describe("channel edges", () => {
   beforeEach(stubDomApis);

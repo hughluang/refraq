@@ -82,6 +82,7 @@ import {
   executionCountByNode,
   phaseByNode,
   samplesByNode,
+  type NodeRunPhase,
 } from "@/features/channels/runSession";
 import type { ChannelTemplatePreview } from "@/features/channels/TemplateRunPreview";
 import { canAuthorNodeType } from "@/features/channels/nodePermission";
@@ -93,13 +94,26 @@ import {
   type HandleSide,
   type PortPlacement,
 } from "@/features/channels/portLayout";
-import { StatusBadge } from "@/components/display/StatusBadge";
 import {
   presentNodeStatus,
   presentProblemSeverity,
   toneMantineColor,
+  toneVariable,
+  type Tone,
 } from "@/components/display/statusTone";
-import { AlertIcon, CloseIcon, PlayIcon, PlusIcon, RedoIcon, UndoIcon } from "@/components/icons";
+import {
+  AlertIcon,
+  CheckIcon,
+  CircleDashedIcon,
+  ClockIcon,
+  CloseIcon,
+  ErrorIcon,
+  LoaderIcon,
+  PlayIcon,
+  PlusIcon,
+  RedoIcon,
+  UndoIcon,
+} from "@/components/icons";
 import {
   formatGraphProblem,
   problemIdentity,
@@ -1623,10 +1637,8 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
           {t("channels.run.executions", { count })}
         </Text>
       ) : null}
-      {phaseStatus ? (
-        <span className="channel-flow-node__status">
-          <StatusBadge size="xs" tone={phaseStatus.tone} labelKey={phaseStatus.labelKey} />
-        </span>
+      {phaseStatus && phase && isNodeRunPhase(phase) ? (
+        <NodePhaseMark phase={phase} tone={phaseStatus.tone} label={t(phaseStatus.labelKey)} />
       ) : null}
       <PortHandles ports={laid.outputs} nodeName={data.name} kind="source" />
       {errorAnchor ? (
@@ -1650,6 +1662,37 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
         />
       ) : null}
     </div>
+  );
+}
+
+const PHASE_ICON: Record<NodeRunPhase, typeof CheckIcon> = {
+  waiting: ClockIcon,
+  running: LoaderIcon,
+  succeeded: CheckIcon,
+  failed: ErrorIcon,
+  dead: CircleDashedIcon,
+};
+
+function isNodeRunPhase(phase: string): phase is NodeRunPhase {
+  return Object.hasOwn(PHASE_ICON, phase);
+}
+
+function NodePhaseMark({
+  phase,
+  tone,
+  label,
+}: {
+  phase: NodeRunPhase;
+  tone: Tone;
+  label: string;
+}) {
+  const Icon = PHASE_ICON[phase];
+  return (
+    <Tooltip label={label} openDelay={200}>
+      <span className="channel-flow-node__status nodrag nopan" role="img" aria-label={label}>
+        <Icon size={14} color={toneVariable(tone)} />
+      </span>
+    </Tooltip>
   );
 }
 
