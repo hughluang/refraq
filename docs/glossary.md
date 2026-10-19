@@ -571,8 +571,8 @@ Avoid **Entity Version**, a mutable published graph, and an unattended trigger r
 
 ### Channel Run
 
-One run of a **Data Channel**: exactly one **Job** of kind `channel_run`, executed in one worker child process, entered at the trigger node that minted it. An on-demand run may name a stop node and then execute only that node's ancestor closure, including the node; it may pin outputs inside that closure. A pinned node is not executed, and its supplied output and `pinned` node execution are persisted. Testing is an on-demand run and follows the same asynchronous, writing, auditable path. User cancel kills the worker child process. Runs may target a frozen draft or the published version and may overlap; there is no execution lock. A run ends `succeeded` (outcome `completed` or `skipped`), `failed`, or `cancelled`; a newer published version cancels runs still executing an older published version and does not cancel a `draft` run. A rerun is a new Job. The run stores the graph it executed, pinned inputs, the **Expression Context** it evaluated with, and each node execution's output.
-Avoid Ingestion Job, sync job, a Scheduled Task, in-place retry, and **Kind execution lock** or `JOB_ALREADY_ACTIVE` for this kind. Avoid "execution" for the whole run; one node's step inside a run is a node execution. Avoid a dry-run interpretation: every unpinned node performs its normal effects.
+One run of a **Data Channel**: exactly one **Job** of kind `channel_run`, executed in one worker child process, entered at the trigger node that minted it. An on-demand run may name a stop node and then execute only that node's ancestor closure, including the node. There is no separate testing action and no pinned output. Every node the run reaches performs its normal effects. User cancel kills the worker child process. Runs may target a frozen draft or the published version and may overlap; there is no execution lock. A run ends `succeeded` (outcome `completed` or `skipped`), `failed`, or `cancelled`; a newer published version cancels runs still executing an older published version and does not cancel a `draft` run. A rerun is a new Job. The run stores the graph it executed, the **Expression Context** it evaluated with, and each node execution's output.
+Avoid Ingestion Job, sync job, a Scheduled Task, in-place retry, and **Kind execution lock** or `JOB_ALREADY_ACTIVE` for this kind. Avoid "execution" for the whole run; one node's step inside a run is a node execution. Avoid a dry-run interpretation: every node the run reaches performs its normal effects. Avoid a separate testing action and a pinned output that skips execution.
 
 ### Node Ref
 
@@ -592,7 +592,7 @@ Avoid requiring `{{ }}` around static JSON, and a separate literal mode.
 ### Template Preview
 
 The value one **Template Field** takes against a recorded **Channel Run**: the run's recorded **Expression Context** and the recorded outputs of the upstream nodes the template names, evaluated in the run sandbox and converted to the declared value type as at run time. It executes no node and writes nothing. A named node with no recorded output is reported missing, not failed.
-Avoid a dry run, an on-demand test run, a sample value computed in the browser, and previewing against a node's refined schema.
+Avoid a dry run, a sample value computed in the browser, and previewing against a node's refined schema.
 
 ### Coarse Port Type
 
@@ -606,7 +606,7 @@ Avoid a permission bypass, a human account, and `super_admin` as a stand-in for 
 
 ### Checkpoint
 
-A durable cursor owned by a concrete **Data Channel** business node that reads an incremental stream. That node's configuration defines when it reads the cursor, fixes an upper bound, advances, and handles invalid state. The Channel Run framework does not derive those effects from `draft` versus `published`, testing intent, a stop node, or pinned outputs.
+A durable cursor owned by a concrete **Data Channel** business node that reads an incremental stream. That node's configuration defines when it reads the cursor, fixes an upper bound, advances, and handles invalid state. The Channel Run framework does not derive those effects from `draft` versus `published` or a stop node.
 Avoid watermark, treating `last_run_at` or `scheduled_for` as a checkpoint, a per-schedule cursor, a framework-wide advancement rule, and a platform-derived dirty-key set.
 
 ### Dataset Reference

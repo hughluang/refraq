@@ -314,10 +314,3 @@ class NodeTypeOut(BaseModel):
 
 class NodeTypeListResponse(BaseModel):
     items: list[NodeTypeOut]
-
-
-class PinnedInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    node_id: str = Field(min_length=1, max_length=64)
-    output: Any

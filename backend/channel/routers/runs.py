@@ -16,7 +16,7 @@ from backend.channel.run_store import (
     output_preview_with_truncated,
 )
 from backend.channel.runs import start_run
-from backend.channel.schemas.channels import GraphIn, PinnedInput
+from backend.channel.schemas.channels import GraphIn
 from backend.channel.template_preview import preview_template
 from backend.core.pagination import PageParams, page_params
 from backend.core.time import Instant, format_instant
@@ -31,7 +31,6 @@ class StartRunRequest(BaseModel):
     target: Literal["draft", "published"] = "published"
     ignore_checkpoints: bool = False
     stop_at_node_id: str | None = None
-    pinned: list[PinnedInput] = Field(default_factory=list)
 
 
 class TemplatePreviewRequest(BaseModel):
@@ -94,7 +93,6 @@ def http_start_run(
         target=body.target,
         ignore_checkpoints=body.ignore_checkpoints,
         stop_at_node_id=body.stop_at_node_id,
-        pinned=[item.model_dump(mode="json") for item in body.pinned],
         actor=actor,
         actor_token_id=actor_token_id,
     )
@@ -216,7 +214,6 @@ def _present(job: Any, record: Any) -> dict[str, Any]:
         "trigger_schedule_name": None,
         "ignore_checkpoints": record.ignore_checkpoints,
         "stop_at_node_id": record.stop_at_node_id,
-        "pinned": record.pinned,
         "failed_node_id": record.failed_node_id,
         "stopped_node_id": record.stopped_node_id,
         "created_at": format_instant(record.created_at),

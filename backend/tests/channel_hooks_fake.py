@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Mapping
 
 from backend.admin.user_store import UserRecord
-from backend.channel.nodes.spec import NodeResult, PinnedOutput
+from backend.channel.nodes.spec import NodeResult
 
 _ACTOR = {"id": "usr_system", "name": "System"}
 
@@ -20,7 +20,6 @@ class FakeHooks:
         started_at: str = "1970-01-01T00:00:00Z",
         user: UserRecord | None = None,
         schedule: Mapping[str, Any] | None = None,
-        pinned: Mapping[str, Any] | None = None,
         evaluate: Callable[[str], Any] | None = None,
         run_code: Callable[[str, float], Any] | None = None,
     ) -> None:
@@ -38,7 +37,6 @@ class FakeHooks:
                 "scheduled_for": started_at,
             }
         )
-        self._pinned = dict(pinned) if pinned is not None else {}
         self._evaluate = evaluate
         self._run_code = run_code
         self.order: list[str] = []
@@ -79,12 +77,6 @@ class FakeHooks:
         if self._run_code is None:
             raise AssertionError(source)
         return self._run_code(source, timeout_sec)
-
-    def pinned_output(self, node: Mapping[str, Any]) -> PinnedOutput | None:
-        node_id = str(node["id"])
-        if node_id not in self._pinned:
-            return None
-        return PinnedOutput(self._pinned[node_id])
 
 
 def _user() -> UserRecord:

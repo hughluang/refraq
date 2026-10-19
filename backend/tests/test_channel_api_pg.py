@@ -862,7 +862,6 @@ def test_run_record_preview_and_retention(channel_client: TestClient) -> None:
 
 def _test_run(client: TestClient, channel_id: str, graph: dict, **body) -> object:
     stop_at_node_id = body.pop("stop_at_node_id")
-    pinned = body.pop("pinned", [])
     draft = client.get(f"/channels/{channel_id}/draft").json()
     saved = client.put(
         f"/channels/{channel_id}/draft",
@@ -875,7 +874,6 @@ def _test_run(client: TestClient, channel_id: str, graph: dict, **body) -> objec
         json={
             "target": "draft",
             "stop_at_node_id": stop_at_node_id,
-            "pinned": pinned,
             **body,
         },
     )
@@ -1018,70 +1016,13 @@ def test_test_run_is_a_recorded_run_and_writes(channel_client: TestClient) -> No
         assert capped_nodes["nd_cut"]["output_preview"]["n"] == [1, 2, 3, 4, 5]
         assert capped_nodes["nd_cut"]["output_truncated"] is False
 
-        pinned_graph = {
-            "nodes": [
-                _node("nd_trigger", "run_manually", "trigger.manual", "Run", 0, {}),
-                _node(
-                    "nd_shape",
-                    "shape",
-                    "transform.set_fields",
-                    "Shape",
-                    40,
-                    {"fields": [{"name": "rows", "value": '[{"code": "REAL"}]'}]},
-                ),
-                _node(
-                    "nd_copy",
-                    "copy",
-                    "transform.set_fields",
-                    "Copy",
-                    80,
-                    {"fields": [{"name": "rows", "value": "{{ self.shape.output.rows }}"}]},
-                ),
-                _node(
-                    "nd_after",
-                    "after",
-                    "transform.set_fields",
-                    "After",
-                    120,
-                    {"fields": [{"name": "n", "value": "1"}]},
-                ),
-            ],
-            "edges": [
-                _edge("ed_shape", "nd_trigger", "nd_shape"),
-                _edge("ed_copy", "nd_shape", "nd_copy"),
-                _edge("ed_after", "nd_copy", "nd_after"),
-            ],
-            "settings": settings,
-        }
-        pinned = _test_run(
-            channel_client,
-            channel_id,
-            pinned_graph,
-            stop_at_node_id="nd_copy",
-            pinned=[{"node_id": "nd_shape", "output": {"rows": [{"code": "Z"}]}}],
-        )
-        assert pinned.status_code == 200, pinned.text
-        pinned_body = pinned.json()
-        assert pinned_body["run"]["status"] == "succeeded", pinned_body
-        pinned_nodes = {item["node_id"]: item for item in pinned_body["node_executions"]}
-        assert set(pinned_nodes) == {"nd_trigger", "nd_shape", "nd_copy"}
-        assert pinned_nodes["nd_shape"]["status"] == "pinned"
-        assert pinned_nodes["nd_copy"]["output_preview"]["rows"] == [{"code": "Z"}]
-
-        pinned_for = {
-            "nodes": [
-                _node("nd_trigger", "run_manually", "trigger.manual", "Run", 0, {}),
-                _node("nd_for", "each", "volume.for", "Each", 40, {"items": "[]"}),
-            ],
-            "edges": [_edge("ed_for", "nd_trigger", "nd_for")],
-            "settings": settings,
-        }
-        refused = _test_run(
-            channel_client,
-            channel_id,
-            pinned_for,
-            stop_at_node_id="nd_for",
-            pinned=[{"node_id": "nd_for", "output": {}}],
+        refused = channel_client.post(
+            f"/channels/{channel_id}/runs",
+            json={
+                "target": "draft",
+                "stop_at_node_id": "nd_trigger",
+                "pinned": [{"node_id": "nd_shape", "output": {"rows": [{"code": "Z"}]}}],
+            },
         )
         assert refused.status_code == 422
         assert refused.json()["code"] == "REQUEST_INVALID"

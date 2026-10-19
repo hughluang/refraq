@@ -225,13 +225,13 @@ Entity publish does not block on incompatible write nodes. Its confirmation list
 
 A **Checkpoint** is a durable cursor owned by a concrete business node that reads an incremental stream. The node's configuration defines when it reads a stored cursor, what upper bound it fixes, when it advances, how it handles an invalid cursor, and whether an on-demand `ignore_checkpoints` request changes that behaviour.
 
-The Channel Run framework stores and exposes the run option but does not infer checkpoint effects from `target`, a stop node, pinned outputs, or testing intent. A draft run and a published run therefore have no framework-level difference in checkpoint policy. The configuration shape and exact rules for a Read Changes node belong to the CDC node contract and are outside this document.
+The Channel Run framework stores and exposes the run option but does not infer checkpoint effects from `target` or a stop node. A draft run and a published run therefore have no framework-level difference in checkpoint policy. The configuration shape and exact rules for a Read Changes node belong to the CDC node contract and are outside this document.
 
 Schedule instants (`last_run_at`, `scheduled_for`) are never checkpoints.
 
 ### 6.2 A Run Is One Job
 
-Each run is one **Job** of kind `channel_run`, executed in one worker child process. Its `input` names the channel, the target (`draft` or `published`), and run options (`docs/api-contracts-data-channel.md` §4.2). It carries no version. The runner enters the graph's single trigger node. An on-demand run may set `stop_at_node_id` and may pin outputs of nodes inside that closure. The run still enters that trigger and executes only the node's ancestor closure, including the node. A pinned node records status `pinned` and the supplied output without executing. When the stop field is omitted, the run executes every node reachable from the trigger. A closure that finishes ends `succeeded` with outcome `completed`.
+Each run is one **Job** of kind `channel_run`, executed in one worker child process. Its `input` names the channel, the target (`draft` or `published`), and run options (`docs/api-contracts-data-channel.md` §4.2). It carries no version. The runner enters the graph's single trigger node. An on-demand run may set `stop_at_node_id`. The run still enters that trigger and executes only the node's ancestor closure, including the node. When the stop field is omitted, the run executes every node reachable from the trigger. A closure that finishes ends `succeeded` with outcome `completed`.
 
 - Target `published`: at start the runner resolves the current published version, records it and the graph on the run, and enters at the trigger node.
 - Target `draft`: the runner executes the graph and `draft_revision` frozen when the run was queued.
@@ -287,9 +287,9 @@ A rerun of a run is a new Job on the same published version as the original, rea
 
 ### 6.9 Run Records
 
-Every run records the graph it executed, its pinned inputs, the Expression Context it evaluated with (`self.channel`, `self.run`, and `self.platform` as fixed at run start), and, for each node execution, its output, duration, status, and error, plus the last failed node. The output is stored in full. A recorded output is the value later expressions read, including the output of a skipped or pinned node. Run detail cuts each list in `output_preview` to 100 elements and marks `output_truncated` when it did so; the separate output read pages the full stored value. Dataset References in a record are pageable in full during the retention window. Run data retention is a System Parameter in days.
+Every run records the graph it executed, the Expression Context it evaluated with (`self.channel`, `self.run`, and `self.platform` as fixed at run start), and, for each node execution, its output, duration, status, and error, plus the last failed node. The output is stored in full. A recorded output is the value later expressions read, including the output of a skipped node. Run detail cuts each list in `output_preview` to 100 elements and marks `output_truncated` when it did so; the separate output read pages the full stored value. Dataset References in a record are pageable in full during the retention window. Run data retention is a System Parameter in days.
 
-Testing is an on-demand Channel Run (ADR 0060), not a separate editor execution. The framework does not suppress writes, roll back node effects, limit rows during execution, or create a synthetic run identity. A test and any other on-demand run share the Job, worker, run record, cancellation, audit, and node semantics.
+There is no editor-execution resource and no dry-run. The framework does not suppress writes, roll back node effects, limit rows during execution, or create a synthetic run identity. Every Channel Run shares the Job, worker, run record, cancellation, audit, and node semantics.
 
 Channel Run records are kept for `channel_run_record_retention_days`. The hidden system Scheduled Task in §7.4 then deletes a record, and its node executions, when the Job is terminal and `created_at` is older than that many days. Jobs stay.
 
@@ -299,7 +299,7 @@ Channel Run records are kept for `channel_run_record_retention_days`. The hidden
 
 | Trigger | Mints a Channel Run when |
 | --- | --- |
-| Manual | An operator with `channel:write` asks for an on-demand run of the graph's only trigger; optionally stopping at one node, pinning outputs in that closure, or requesting that checkpoint-aware nodes ignore stored cursors. The run's target is `draft` or `published`. Allowed while inactive. The node's payload is a static JSON object; the node's output is that object plus `triggered_by` and `triggered_at` |
+| Manual | An operator with `channel:write` asks for an on-demand run of the graph's only trigger, optionally stopping at one node or requesting that checkpoint-aware nodes ignore stored cursors. The run's target is `draft` or `published`. Allowed while inactive. The node's payload is a static JSON object; the node's output is that object plus `triggered_by` and `triggered_at` |
 | Scheduled | Its synced Scheduled Task row is due (§7.2) |
 | Platform event | A platform event matches: workflow failed, entity head switched, mirror resnapshot completed, mirror status changed |
 | Changes arrived | New entries appear in a chosen mirror or entity Change Log |
@@ -389,7 +389,7 @@ All keys are `platform`-scoped.
 | Permission | Grants |
 | --- | --- |
 | `channel:read` | Read channels, drafts, versions, run lists, and run records; read **Source Mirror** data through read nodes and records |
-| `channel:write` | Create, edit, save drafts, validate, publish, and delete channels; Template Preview against a run record; Global Variable writes; on-demand runs (target `draft` or `published`, with optional stop node and pinned outputs) and rerun; cancel a `channel_run` Job |
+| `channel:write` | Create, edit, save drafts, validate, publish, and delete channels; Template Preview against a run record; Global Variable writes; on-demand runs (target `draft` or `published`, with an optional stop node) and rerun; cancel a `channel_run` Job |
 | `channel:code_write` | Author a Code node. Required in addition to `channel:write` |
 | `channel:source_query` | Author a live Source query node. Required in addition to `channel:write`. Does not grant `query:run` |
 | `mirror:write` | Operate Source Mirrors (disable, delete data, resnapshot overrides) |
@@ -404,7 +404,7 @@ Channel schedule rows are locked, so `jobs:run` only observes them.
 
 The Data Channel editor is a record authoring surface (`docs/ui-console-record-form.md`): create, show, and edit share one layout, and node configuration panels follow the record-form conventions. The canvas edits the draft. The channel page shows the activation switch, the version list, and the run list. The Console names a problem by the node's display name, and by the two endpoint names when the problem names an edge. It validates the graph on screen and has no separate validate action. Where the module mounts in Console Navigation is outside this document.
 
-An on-demand run starts only from the edit page. The header Run executes every node reachable from the trigger. A node's Run names that node as the stop node and executes only it and its ancestors, and only errors in those nodes refuse the start. Testing to a node first saves the draft and starts the same asynchronous on-demand run with `target=draft`, that stop node, and any pinned outputs in the closure. All variants open the write confirmation, may perform every normal node effect, create a run record, and are observed and cancelled through the run and Job surfaces. There is no non-writing editor execution or execution row limit. The show page lists runs and can cancel an unfinished run; it does not start one.
+An on-demand run starts only from the edit page. The header Run executes every node reachable from the trigger. A node's Run names that node as the stop node and executes only it and its ancestors, and only errors in those nodes refuse the start. Both open the write confirmation, may perform every normal node effect, create a run record, and are observed and cancelled through the run and Job surfaces. There is no non-writing editor execution or execution row limit. The show page lists runs and can cancel an unfinished run; it does not start one.
 
 Under a template field that holds a calculation, the node configuration panel shows its **Template Preview** against the channel's latest draft **Channel Run**, for a User with `channel:write`. It evaluates again after an edit pauses and when that run records more node executions. With no draft run, the panel says that running the upstream nodes provides the values. A missing result names the nodes that have no output in that run.
 

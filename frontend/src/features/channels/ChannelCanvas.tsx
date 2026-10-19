@@ -39,7 +39,6 @@ import {
 import "@xyflow/react/dist/style.css";
 import "./ChannelCanvas.css";
 
-import { getRun, startRun } from "@/features/channels/api";
 import {
   createHistory,
   pushHistory,
@@ -61,28 +60,15 @@ import {
   graphFromFlow,
   newGraphId,
   outputTargetTypes,
-  refusedProblems,
   type FlowNodeData,
 } from "@/features/channels/graphValidation";
-import { EditorOutputRegion } from "@/features/channels/EditorOutput";
-import {
-  editorPhaseByNode,
-  loadPins,
-  pinsForGraph,
-  savePins,
-  withPin,
-  withoutPin,
-  type EditorPin,
-} from "@/features/channels/editorSession";
 import { NodeConfigPanel } from "@/features/channels/NodeConfigPanel";
 import { ResultRegion, UpstreamRegion } from "@/features/channels/NodeRunRegions";
 import {
   executionCountByNode,
-  isTerminalRun,
   phaseByNode,
   samplesByNode,
 } from "@/features/channels/runSession";
-import { cancelJob } from "@/features/jobs/api";
 import type { ChannelTemplatePreview } from "@/features/channels/TemplateRunPreview";
 import { canAuthorNodeType } from "@/features/channels/nodePermission";
 import { nodeTypeLabel, nodeTypeSummary } from "@/features/channels/nodeTypeCopy";
@@ -98,7 +84,7 @@ import {
   presentProblemSeverity,
   toneMantineColor,
 } from "@/components/display/statusTone";
-import { AlertIcon, CloseIcon, PlayIcon, PlusIcon, RedoIcon, TestIcon, UndoIcon } from "@/components/icons";
+import { AlertIcon, CloseIcon, PlayIcon, PlusIcon, RedoIcon, UndoIcon } from "@/components/icons";
 import {
   formatGraphProblem,
   problemIdentity,
@@ -113,8 +99,6 @@ import type {
   NodeTypeSpec,
   RefinedPort,
 } from "@/features/channels/types";
-import { ApiError } from "@/lib/api";
-import { problemMessage } from "@/lib/problem";
 
 type ChannelNode = Node<FlowNodeData, "channel">;
 
@@ -157,18 +141,10 @@ const CanvasRunContext = createContext<{
   phases: ReadonlyMap<string, string>;
   counts: ReadonlyMap<string, number>;
   onRun: (nodeId: string) => void;
-  onTest: (nodeId: string) => void;
-  canTest: boolean;
-  testingId: string | null;
-  pinnedIds: ReadonlySet<string>;
 }>({
   phases: new Map(),
   counts: new Map(),
   onRun: () => {},
-  onTest: () => {},
-  canTest: false,
-  testingId: null,
-  pinnedIds: new Set(),
 });
 
 type Props = {
@@ -176,7 +152,7 @@ type Props = {
   catalog: NodeTypeSpec[];
   /** Edit page keeps authoring chrome. Browse hides it. */
   appearance: "edit" | "browse";
-  /** Draft mutations are allowed. A running test keeps the edit appearance and sets this false. */
+  /** Draft mutations are allowed. */
   mutable: boolean;
   /**
    * Bumps after a draft save so the canvas adopts the stored graph without remounting.
@@ -193,8 +169,6 @@ type Props = {
   onRun?: (nodeId: string) => void;
   /** Set on the editor canvas. */
   channelId?: string;
-  /** Saves the exact on-screen graph before an editor test starts a draft run. */
-  onPersistForTest?: (graph: Graph) => Promise<void>;
 };
 
 export function ChannelCanvas(props: Props) {
@@ -219,7 +193,6 @@ function ChannelCanvasBody({
   templatePreview = null,
   onRun = () => {},
   channelId,
-  onPersistForTest,
 }: Props) {
   const t = useTranslate();
   const { data: heldPermissions } = usePermissions<string[]>({});
@@ -242,20 +215,10 @@ function ChannelCanvasBody({
   const [picker, setPicker] = useState<PickerState | null>(null);
   const [highlight, setHighlight] = useState<ProblemHighlight | null>(null);
   const [problemsDismissed, setProblemsDismissed] = useState(0);
-  const [editorResult, setEditorResult] = useState<ChannelRunDetail | null>(null);
-  const [editorError, setEditorError] = useState<string | null>(null);
-  const [editorProblems, setEditorProblems] = useState<GraphProblem[]>([]);
-  const [pins, setPins] = useState<EditorPin[]>([]);
-  const [testingId, setTestingId] = useState<string | null>(null);
-  const [editorJobId, setEditorJobId] = useState<string | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
-  const pinsRef = useRef(pins);
-  const testingRef = useRef(false);
-  const testEpoch = useRef(0);
-  const pinsLoadedFor = useRef<string | null>(null);
   const historyRef = useRef<History<CanvasSnapshot>>(
     createHistory(snapshotOf(seededNodes, seededEdges)),
   );
@@ -266,19 +229,15 @@ function ChannelCanvasBody({
   const highlightRef = useRef<ProblemHighlight | null>(highlight);
   nodesRef.current = nodes;
   edgesRef.current = edges;
-  pinsRef.current = pins;
   highlightRef.current = highlight;
   const settingsRef = useRef(graph.settings);
   settingsRef.current = graph.settings;
-  const shownProblems = mergeProblems(problems, editorProblems);
-  const pinKey = nodes.map((node) => `${node.id}:${node.data.nodeType}`).join("|");
-
-  const problemKey = shownProblems.map((problem) => problemIdentity(problem)).join("|");
+  const problemKey = problems.map((problem) => problemIdentity(problem)).join("|");
   const highlightKey = highlight?.key ?? "";
   useEffect(() => {
     const active = highlightRef.current;
     const resolved =
-      active != null && !shownProblems.some((problem) => highlightTargets(problem, active))
+      active != null && !problems.some((problem) => highlightTargets(problem, active))
         ? null
         : active;
     if (active && resolved == null) {
@@ -294,27 +253,7 @@ function ChannelCanvasBody({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [problemKey, highlightKey]);
 
-  useEffect(() => {
-    if (!channelId) return;
-    const switching = pinsLoadedFor.current !== channelId;
-    const source = switching ? loadPins(sessionStorage, channelId) : pinsRef.current;
-    pinsLoadedFor.current = channelId;
-    const next = pinsForGraph(source, nodeFacts(nodesRef.current));
-    pinsRef.current = next;
-    setPins((current) => (JSON.stringify(current) === JSON.stringify(next) ? current : next));
-    savePins(sessionStorage, channelId, next);
-  }, [channelId, pinKey]);
-
-  useEffect(
-    () => () => {
-      testEpoch.current += 1;
-    },
-    [],
-  );
-
   const emit = (nextNodes: ChannelNode[], nextEdges: Edge[]) => {
-    setEditorProblems((current) => (current.length === 0 ? current : []));
-    setEditorError((current) => (current == null ? current : null));
     onChange(
       graphFromFlow(
         nextNodes.map((node) => ({
@@ -777,108 +716,17 @@ function ChannelCanvasBody({
     () => (sessionRun ? samplesByNode(sessionRun.node_executions) : new Map<string, unknown>()),
     [sessionRun],
   );
-  const sessionPhases = useMemo(
+  const phases = useMemo(
     () => (sessionRun ? phaseByNode(sessionRun, sessionRun.graph ?? graph) : new Map()),
     [sessionRun, graph],
   );
-  const editorPhases = useMemo(
-    () =>
-      editorResult
-        ? editorPhaseByNode(
-            nodes.map((node) => node.id),
-            editorResult.node_executions,
-          )
-        : null,
-    [editorResult, nodes],
-  );
-  const phases = editorPhases ?? sessionPhases;
   const counts = useMemo(
     () =>
-      editorResult
-        ? executionCountByNode(editorResult.node_executions)
-        : sessionRun
-          ? executionCountByNode(sessionRun.node_executions)
-          : new Map<string, number>(),
-    [editorResult, sessionRun],
+      sessionRun
+        ? executionCountByNode(sessionRun.node_executions)
+        : new Map<string, number>(),
+    [sessionRun],
   );
-  const canTest =
-    appearance === "edit" &&
-    Boolean(channelId) &&
-    Boolean(onPersistForTest) &&
-    canAuthorNodeType("channel:write", heldPermissions);
-  const pinnedIds = useMemo(() => new Set(pins.map((pin) => pin.node_id)), [pins]);
-  const runTest = (nodeId: string) => {
-    if (!channelId || !onPersistForTest || testingRef.current) return;
-    testingRef.current = true;
-    const epoch = ++testEpoch.current;
-    setTestingId(nodeId);
-    setConfigNodeId(nodeId);
-    setEditorError(null);
-    setEditorProblems([]);
-    const screenGraph = graphNow();
-    const sentPins = pinsForGraph(
-      pinsRef.current,
-      screenGraph.nodes.map((node) => ({ id: node.id, type: node.type })),
-    );
-    void Promise.resolve()
-      .then(async () => {
-        await onPersistForTest(screenGraph);
-        const started = await startRun(channelId, {
-          target: "draft",
-          ignore_checkpoints: false,
-          stop_at_node_id: nodeId,
-          pinned: sentPins,
-        });
-        if (testEpoch.current !== epoch) return;
-        setEditorJobId(started.run.job_id);
-        while (testEpoch.current === epoch) {
-          const detail = await getRun(channelId, started.run.job_id);
-          if (testEpoch.current !== epoch) return;
-          setEditorResult(detail);
-          setEditorError(null);
-          setEditorProblems([]);
-          if (isTerminalRun(detail.run.status)) return;
-          await new Promise((resolve) => window.setTimeout(resolve, 2000));
-        }
-      })
-      .catch((error: unknown) => {
-        if (testEpoch.current !== epoch) return;
-        setEditorResult(null);
-        if (error instanceof ApiError && error.code === "CHANNEL_GRAPH_INVALID") {
-          setEditorProblems(refusedProblems(error));
-        }
-        setEditorError(problemMessage(t, error, t("channels.editor.failed")));
-      })
-      .finally(() => {
-        if (testEpoch.current !== epoch) return;
-        testingRef.current = false;
-        setTestingId(null);
-        setEditorJobId(null);
-      });
-  };
-  const cancelTest = () => {
-    if (!channelId || !editorJobId) return Promise.resolve();
-    const jobId = editorJobId;
-    return cancelJob(jobId)
-      .then(() => getRun(channelId, jobId))
-      .then((detail) => {
-        setEditorResult(detail);
-      });
-  };
-  const pinNode = (nodeId: string, output: unknown) => {
-    if (!channelId) return;
-    const next = pinsForGraph(withPin(pinsRef.current, { node_id: nodeId, output }), nodeFacts(nodesRef.current));
-    pinsRef.current = next;
-    setPins(next);
-    savePins(sessionStorage, channelId, next);
-  };
-  const unpinNode = (nodeId: string) => {
-    if (!channelId) return;
-    const next = pinsForGraph(withoutPin(pinsRef.current, nodeId), nodeFacts(nodesRef.current));
-    pinsRef.current = next;
-    setPins(next);
-    savePins(sessionStorage, channelId, next);
-  };
   const showCatalog = picker !== null && selected == null;
   const hasTrigger = nodes.some((node) => node.data.entry);
   const catalogSpecs = (picker?.kind === "connect" ? picker.specs : catalog).filter(
@@ -919,7 +767,7 @@ function ChannelCanvasBody({
         <CanvasSurfaceContext.Provider value={{ editing: appearance === "edit", mutable }}>
         <CanvasCatalogContext.Provider value={catalog}>
         <CanvasRunContext.Provider
-          value={{ phases, counts, onRun, onTest: runTest, canTest, testingId, pinnedIds }}
+          value={{ phases, counts, onRun }}
         >
         <div
           ref={flowRootRef}
@@ -970,9 +818,9 @@ function ChannelCanvasBody({
               showInteractive={appearance === "edit" && mutable}
               className="channel-canvas-controls"
             >
-              {shownProblems.length > 0 ? (
+              {problems.length > 0 ? (
                 <ProblemsControl
-                  problems={shownProblems}
+                  problems={problems}
                   graph={labelGraph}
                   activeKey={highlight?.key ?? null}
                   dismissToken={problemsDismissed}
@@ -1092,7 +940,7 @@ function ChannelCanvasBody({
                   editable={mutable}
                   canRun={appearance === "edit" ? mutable : null}
                   revealKey={revealKey}
-                  problems={shownProblems.filter((problem) => problem.node_id === selected.id)}
+                  problems={problems.filter((problem) => problem.node_id === selected.id)}
                   graph={labelGraph}
                   scope={{
                     nodes: upstreamOutputs(
@@ -1133,28 +981,6 @@ function ChannelCanvasBody({
                       nodeId={selected.id}
                       detail={sessionRun}
                     />
-                  }
-                  editor={
-                    canTest ? (
-                      <EditorOutputRegion
-                        channelId={channelId ?? ""}
-                        nodeId={selected.id}
-                        nodeType={selected.data.nodeType}
-                        result={editorResult}
-                        busy={testingId === selected.id}
-                        error={editorError}
-                        problemTexts={editorProblems.map((problem) =>
-                          formatGraphProblem(t, problem, labelGraph),
-                        )}
-                        recordName={selected.data.name || selected.data.ref || selected.id}
-                        pinned={pinnedIds.has(selected.id)}
-                        canCancel={editorJobId != null}
-                        onTest={runTest}
-                        onCancel={cancelTest}
-                        onPin={pinNode}
-                        onUnpin={unpinNode}
-                      />
-                    ) : null
                   }
                   onClose={clearSelection}
                   onChange={(nodeId, data) => {
@@ -1260,25 +1086,6 @@ function eventPoint(event: MouseEvent | TouchEvent): { x: number; y: number } | 
     return touch ? { x: touch.clientX, y: touch.clientY } : null;
   }
   return { x: event.clientX, y: event.clientY };
-}
-
-function nodeFacts(nodes: readonly ChannelNode[]): { id: string; type: string }[] {
-  return nodes.map((node) => ({ id: node.id, type: node.data.nodeType }));
-}
-
-function mergeProblems(
-  base: readonly GraphProblem[],
-  extra: readonly GraphProblem[],
-): GraphProblem[] {
-  const seen = new Set<string>();
-  const merged: GraphProblem[] = [];
-  for (const problem of [...extra, ...base]) {
-    const key = problemIdentity(problem);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push(problem);
-  }
-  return merged;
 }
 
 function problemGraphOf(nodes: ChannelNode[], edges: Edge[]): ProblemGraph {
@@ -1563,8 +1370,6 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   const phase = run.phases.get(id);
   const count = run.counts.get(id) ?? 0;
   const onRun = run.onRun;
-  const testing = run.testingId != null;
-  const testingHere = run.testingId === id;
   const depth = Math.max(
     laid.inputs.filter((port) => port.position !== "bottom").length,
     laid.outputs.length,
@@ -1595,27 +1400,6 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
     >
       {editing ? (
         <>
-          {run.canTest ? (
-            <button
-              type="button"
-              className="channel-flow-node__test nodrag nopan"
-              aria-label={
-                testingHere
-                  ? t("channels.editor.testing")
-                  : t("channels.editor.testNode", { node: data.name })
-              }
-              title={t("channels.editor.test")}
-              aria-busy={testingHere}
-              disabled={testing}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={(event) => {
-                event.stopPropagation();
-                run.onTest(id);
-              }}
-            >
-              <TestIcon size={10} />
-            </button>
-          ) : null}
           <button
             type="button"
             className="channel-flow-node__run nodrag nopan"
@@ -1660,11 +1444,6 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
       {phase === "dead" ? (
         <Text size="xs" c="dimmed" className="channel-flow-node__status">
           {t(presentNodeStatus("dead").labelKey)}
-        </Text>
-      ) : null}
-      {run.pinnedIds.has(id) ? (
-        <Text size="xs" className="channel-flow-node__pin">
-          {t("channels.editor.pinned")}
         </Text>
       ) : null}
       <PortHandles ports={laid.outputs} nodeName={data.name} kind="source" />

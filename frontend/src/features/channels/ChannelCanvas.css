@@ -198,22 +198,11 @@
   opacity: 0.72;
 }
 
-.channel-flow-node--pinned {
-  border-color: var(--refraq-tone-pinned);
-}
-
-.channel-flow-node__pin {
-  display: inline-block;
-  margin-top: 4px;
-  color: var(--refraq-tone-pinned);
-  font-weight: 600;
-}
-
 .channel-flow-node .react-flow__handle.channel-flow-handle--loop {
   width: 8px;
   height: 8px;
   border-radius: 1px;
-  background: var(--refraq-tone-pinned);
+  background: var(--refraq-tone-info);
 }
 
 .channel-flow-port {
@@ -247,7 +236,6 @@
 }
 
 .channel-flow-node__run,
-.channel-flow-node__test,
 .channel-flow-node__delete {
   position: absolute;
   top: -8px;
@@ -277,14 +265,8 @@
   right: 16px;
 }
 
-.channel-flow-node__test {
-  right: 40px;
-}
-
 .channel-flow-node:hover > .channel-flow-node__run,
 .channel-flow-node:focus-within > .channel-flow-node__run,
-.channel-flow-node:hover > .channel-flow-node__test,
-.channel-flow-node:focus-within > .channel-flow-node__test,
 .channel-flow-node:hover > .channel-flow-node__delete,
 .channel-flow-node:focus-within > .channel-flow-node__delete {
   opacity: 1;
@@ -299,13 +281,7 @@
   color: var(--refraq-tone-on-solid);
 }
 
-.channel-flow-node__test:hover {
-  border-color: var(--mantine-primary-color-filled);
-  color: var(--mantine-primary-color-filled);
-}
-
 .channel-flow-node__run:focus-visible,
-.channel-flow-node__test:focus-visible,
 .channel-flow-node__delete:focus-visible,
 .channel-flow-edge__delete:focus-visible {
   outline: 2px solid var(--mantine-primary-color-filled);
@@ -328,7 +304,6 @@
 
 @media (prefers-reduced-motion: no-preference) {
   .channel-flow-node__run,
-  .channel-flow-node__test,
   .channel-flow-node__delete {
     transition:
       opacity var(--refraq-motion-fast) var(--refraq-ease-standard),
@@ -397,26 +372,6 @@
   border-left: none;
 }
 
-/* Editor test and channel-run result share the third track so a fourth region cannot wrap. */
-.channel-node-run-column {
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  border-left: 1px solid var(--mantine-color-default-border);
-}
-
-.channel-node-run-column > .channel-node-region {
-  flex: 1 1 auto;
-  min-height: 0;
-  border-left: none;
-}
-
-.channel-node-run-column > .channel-node-region + .channel-node-region {
-  border-top: 1px solid var(--mantine-color-default-border);
-}
-
 .channel-node-region--run {
   background: var(--mantine-color-gray-light);
 }
@@ -460,15 +415,6 @@
 
   .channel-node-region:first-child {
     border-top: none;
-  }
-
-  .channel-node-run-column {
-    border-left: none;
-    overflow: visible;
-  }
-
-  .channel-node-run-column > .channel-node-region:first-child {
-    border-top: 1px solid var(--mantine-color-default-border);
   }
 
   .channel-node-region__title {

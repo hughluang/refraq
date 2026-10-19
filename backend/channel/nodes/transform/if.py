@@ -39,18 +39,6 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     )
 
 
-def _pinned(node: Mapping[str, Any], output: Any) -> NodeResult:
-    del node
-    if not isinstance(output, dict) or "value" not in output:
-        return NodeResult(
-            status="failed",
-            error_code="CHANNEL_NODE_FAILED",
-            error_message="Pinned If output has no value",
-        )
-    ports = frozenset({"true" if bool(output["value"]) else "false"})
-    return NodeResult(status="pinned", output=output, ports=ports)
-
-
 NODE_TYPE = NodeType(
     type_id="transform.if",
     family="transform",
@@ -81,5 +69,4 @@ NODE_TYPE = NodeType(
     ),
     execute=_execute,
     refine=_refine,
-    pinned=_pinned,
 )

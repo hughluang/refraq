@@ -40,7 +40,7 @@ describe("status tone registry", () => {
     expect(presentJobStatus("succeeded").tone).toBe("success");
     expect(presentJobStatus("failed").tone).toBe("danger");
     expect(presentJobStatus("cancelled").tone).toBe("neutral");
-    expect(presentNodeStatus("pinned").tone).toBe("pinned");
+    expect(presentNodeStatus("skipped").tone).toBe("neutral");
     expect(presentNodeStatus("dead").labelKey).toBe("channels.run.notRun");
     expect(presentEntityStatus("serving").tone).toBe("success");
     expect(presentEntityStatus("deprecated").tone).toBe("danger");

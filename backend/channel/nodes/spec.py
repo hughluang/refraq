@@ -20,14 +20,12 @@ __all__ = [
     "MAIN_OUTPUT",
     "NodeResult",
     "NodeType",
-    "PinnedOutput",
     "PortSpec",
     "Problem",
     "ReferenceResolver",
     "ResolvedAttribute",
     "ResolvedEntity",
     "object_schema",
-    "pin_output",
 ]
 
 
@@ -48,11 +46,6 @@ class NodeResult:
     error_detail: dict[str, Any] | None = None
     ports: frozenset[str] | None = None
     iterations: list[Any] | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class PinnedOutput:
-    value: Any
 
 
 class EngineHooks(Protocol):
@@ -90,16 +83,8 @@ class EngineHooks(Protocol):
     @property
     def schedule(self) -> Mapping[str, Any]: ...
 
-    def pinned_output(self, node: Mapping[str, Any]) -> PinnedOutput | None: ...
-
-
-def pin_output(node: Mapping[str, Any], output: Any) -> NodeResult:
-    del node
-    return NodeResult(status="pinned", output=output)
-
 
 Execute = Callable[[Mapping[str, Any], EngineHooks], NodeResult]
-Pinned = Callable[[Mapping[str, Any], Any], NodeResult]
 Refine = Callable[
     [Mapping[str, Any], Mapping[str, Any], Any],
     dict[str, Any],
@@ -155,8 +140,6 @@ class NodeType:
     permission: str | None = None
     type_version: int = 1
     refine: Refine | None = None
-    pinned: Pinned = pin_output
-    pinnable: bool = True
     check: Check | None = None
 
 

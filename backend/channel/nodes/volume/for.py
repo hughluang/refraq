@@ -117,5 +117,4 @@ NODE_TYPE = NodeType(
     ),
     execute=_execute,
     refine=_refine,
-    pinnable=False,
 )

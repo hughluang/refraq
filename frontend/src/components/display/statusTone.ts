@@ -5,7 +5,6 @@ export const TONES = [
   "success",
   "warning",
   "danger",
-  "pinned",
 ] as const;
 
 export type Tone = (typeof TONES)[number];
@@ -23,7 +22,6 @@ export const TONE_MANTINE_COLOR: Record<Tone, string> = {
   success: "green",
   warning: "yellow",
   danger: "red",
-  pinned: "grape",
 };
 
 export function toneMantineColor(tone: Tone): string {
@@ -63,7 +61,6 @@ const NODE_STATUS: Record<string, StatusTone> = {
   succeeded: { tone: "success", labelKey: "channels.editor.status.succeeded" },
   failed: { tone: "danger", labelKey: "channels.editor.status.failed" },
   skipped: { tone: "neutral", labelKey: "channels.editor.status.skipped" },
-  pinned: { tone: "pinned", labelKey: "channels.editor.status.pinned" },
   cancelled: { tone: "neutral", labelKey: "channels.editor.status.cancelled" },
   dead: { tone: "neutral", labelKey: "channels.run.notRun" },
 };

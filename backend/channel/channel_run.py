@@ -12,7 +12,7 @@ from backend.admin.user_store import UserRecord, ensure_system_user, get_user_st
 from backend.channel.context import channel_context, platform_context, run_context
 from backend.channel.engine import RunOutcome, execute
 from backend.channel.nodes import list_node_types
-from backend.channel.nodes.spec import EngineHooks, NodeResult, PinnedOutput
+from backend.channel.nodes.spec import EngineHooks, NodeResult
 from backend.channel.references import ChannelReferenceResolver
 from backend.channel.run_store import ChannelRunRecord, get_run_store, output_size
 from backend.channel.sandbox import SandboxSession
@@ -74,7 +74,6 @@ def mint_on_demand_run(
     draft_revision: int | None,
     graph: dict[str, Any] | None,
     stop_at_node_id: str | None,
-    pinned: list[dict[str, Any]],
 ) -> tuple[JobRecord, ChannelRunRecord]:
     job = create_queued_job(
         kind="channel_run",
@@ -83,7 +82,6 @@ def mint_on_demand_run(
             "target": target,
             "ignore_checkpoints": ignore_checkpoints,
             "stop_at_node_id": stop_at_node_id,
-            "pinned": pinned,
         },
         trigger_kind="user",
         trigger_ref=actor_id,
@@ -101,7 +99,6 @@ def mint_on_demand_run(
         ignore_checkpoints=ignore_checkpoints,
         created_at=utc_now(),
         stop_at_node_id=stop_at_node_id,
-        pinned=pinned,
     )
     get_run_store().insert_run(record)
     return job, record
@@ -177,7 +174,6 @@ def _channel_run_record(
     ignore_checkpoints: bool,
     created_at: datetime,
     stop_at_node_id: str | None = None,
-    pinned: list[dict[str, Any]] | None = None,
 ) -> ChannelRunRecord:
     return ChannelRunRecord(
         job_id=job_id,
@@ -193,7 +189,6 @@ def _channel_run_record(
         skipped_node_ids=[],
         created_at=created_at,
         stop_at_node_id=stop_at_node_id,
-        pinned=list(pinned or []),
     )
 
 
@@ -291,7 +286,6 @@ def execute_channel_run(
             target=run.target,
             channel_id=run.channel_id,
             run_version=run.version,
-            pinned=run.pinned,
         )
         return _execute_graph(
             graph,
@@ -317,7 +311,6 @@ class _RunHooks:
         target: str,
         channel_id: str,
         run_version: int | None,
-        pinned: list[dict[str, Any]],
     ) -> None:
         self._sandbox = sandbox
         self.run_id = run_id
@@ -328,9 +321,6 @@ class _RunHooks:
         self.channel_id = channel_id
         self._target = target
         self._run_version = run_version
-        self._pinned = {
-            str(item["node_id"]): item.get("output") for item in pinned
-        }
 
     def evaluate(self, expression: str) -> Any:
         return self._sandbox.evaluate(expression)
@@ -361,12 +351,6 @@ class _RunHooks:
         if not versions:
             return False
         return versions[0].number > self._run_version
-
-    def pinned_output(self, node: Mapping[str, Any]) -> PinnedOutput | None:
-        node_id = str(node["id"])
-        if node_id not in self._pinned:
-            return None
-        return PinnedOutput(self._pinned[node_id])
 
     def on_start(self, node: Mapping[str, Any]) -> int:
         record = get_run_store().start_execution(self.run_id, str(node["id"]))

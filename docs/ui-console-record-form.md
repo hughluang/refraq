@@ -54,10 +54,10 @@ Facts that are not form fields (timestamps, job ids) stay on `DisplayField` (`fr
 Page-level actions render only in `PageChrome` `actions` through `HeaderActions` (`frontend/src/components/layout/HeaderActions.tsx`). The slot sits on the right of the title row (`docs/ui-console-layout.md`). `HeaderActions` partitions buttons into up to three clusters and separates non-empty clusters with a vertical divider. An empty cluster omits itself and its divider. Every header button uses `size="sm"`. At most one button is the filled primary. Mark it with `HeaderAction` `primary` (that wrapper also sets `size="sm"` and `variant="filled"`). A button that omits `primary` still counts as primary when its variant is omitted or `"filled"`.
 
 1. **Navigation** — back to list, refresh. Chrome, not record CRUD and not domain lifecycle. Present on show and edit. Absent on create: cancel returns to the list.
-2. **Domain lifecycle** — publish, open version, deprecate, and a channel test run. Present on show and edit when permission and domain lifecycle allow. Absent on create. A channel test run is `variant="light"` in this cluster.
+2. **Domain lifecycle** — publish, open version, deprecate. Present on show and edit when permission and domain lifecycle allow. Absent on create. A channel header Run belongs to this cluster: it is present only on edit, uses `variant="light"`, and is not a second filled primary. Show does not start a run.
 3. **Standard record** (rightmost) — cancel, save/create, edit, delete.
 
-The filled primary is Save when the definition form is on screen (create and edit). On edit, Save is that filled primary. On show, Publish is the filled primary when it is shown. Open version and edit are `light`. Delete and deprecate are `light` red. A channel test run is `variant="light"` in the lifecycle cluster, not a second filled primary.
+The filled primary is Save when the definition form is on screen (create and edit). On edit, Save is that filled primary. On show, Publish is the filled primary when it is shown. Open version and edit are `light`. Delete and deprecate are `light` red. A channel header Run is `variant="light"` in the lifecycle cluster, present only on edit, and is not a second filled primary.
 
 ## 4. Forbidden
 

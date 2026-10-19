@@ -44,12 +44,11 @@ def test_every_type_states_its_function_and_ports() -> None:
         _assert_property_docs(node.config_schema)
 
 
-def test_every_registered_type_has_execute_and_only_for_is_unpinnable() -> None:
+def test_every_registered_type_has_execute() -> None:
     types = list_node_types()
     assert types
     for node in types:
         assert callable(node.execute)
-    assert [node.type_id for node in types if not node.pinnable] == ["volume.for"]
 
 
 def test_a_node_type_requires_execute() -> None:

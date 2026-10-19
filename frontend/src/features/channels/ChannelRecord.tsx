@@ -109,6 +109,9 @@ type IdentityValues = {
 
 class RecordInvalid extends Error {}
 
+/** Save must reject while another page mutation holds the latch, so the form does not mark the draft saved. */
+class PageMutationOccupied extends Error {}
+
 type DraftAccess = "browse" | "edit" | "locked";
 
 type Props =
@@ -254,6 +257,7 @@ function ChannelExisting({
   const loadedChannelRef = useRef<string | null>(null);
   const arrivalRef = useRef(false);
   const runEpoch = useRef(0);
+  const pageMutation = useRef(false);
   const [draftEpoch, setDraftEpoch] = useState(0);
 
   useEffect(() => {
@@ -533,6 +537,18 @@ function ChannelExisting({
       }
     : null;
 
+  const occupyPage = (): boolean => {
+    if (pageMutation.current) return false;
+    pageMutation.current = true;
+    setBusy(true);
+    return true;
+  };
+
+  const releasePage = () => {
+    pageMutation.current = false;
+    setBusy(false);
+  };
+
   const launch = () => {
     const stopAt = runRequest?.stopAt ?? null;
     if (!graph || runActive) return;
@@ -541,7 +557,7 @@ function ChannelExisting({
       notifyError(new Error(t("channels.run.needTrigger")));
       return;
     }
-    setBusy(true);
+    if (!occupyPage()) return;
     void (async () => {
       await persist();
       const started = await startRun(channelId, {
@@ -553,7 +569,7 @@ function ChannelExisting({
       setRunRequest(null);
     })()
       .catch(catchFailure)
-      .finally(() => setBusy(false));
+      .finally(releasePage);
   };
 
   const stopRun = () => {
@@ -587,7 +603,7 @@ function ChannelExisting({
   const showEdit = mode === "show" && Boolean(canWrite?.can);
   const showLifecycle = Boolean(canWrite?.can);
   const startPublish = () => {
-    setBusy(true);
+    if (!occupyPage()) return;
     void persist()
       .then(async ({ revision: nextRevision, graph: savedGraph }) => {
         const result = await validateDraft(channelId, savedGraph);
@@ -604,7 +620,7 @@ function ChannelExisting({
         setPreview(await previewPublish(channelId));
       })
       .catch(notifyError)
-      .finally(() => setBusy(false));
+      .finally(releasePage);
   };
 
   const descriptionText = form.values.description.trim();
@@ -851,14 +867,14 @@ function ChannelExisting({
         hidden
         onSubmit={form.onSubmit(
           async () => {
-            setBusy(true);
+            if (!occupyPage()) throw new PageMutationOccupied();
             try {
               await persist();
               form.markSaved();
               setSaveFailure(null);
               open?.({ type: "success", message: t("channels.edit.success") });
             } catch (error) {
-              if (error instanceof RecordInvalid) throw error;
+              if (error instanceof RecordInvalid || error instanceof PageMutationOccupied) throw error;
               setSaveFailure(
                 saveFailureFrom(
                   t,
@@ -868,7 +884,7 @@ function ChannelExisting({
                 ),
               );
             } finally {
-              setBusy(false);
+              releasePage();
             }
           },
           (errors) => {
@@ -909,9 +925,6 @@ function ChannelExisting({
           sessionRun={sessionRun}
           templatePreview={templatePreview}
           onRun={openRun}
-          onPersistForTest={async (screenGraph) => {
-            await persist(screenGraph);
-          }}
         />
       </FillColumn>
       <Modal
@@ -1011,7 +1024,7 @@ function ChannelExisting({
         confirmLabel={t("channels.publish.confirm")}
         loading={busy}
         onConfirm={() => {
-          setBusy(true);
+          if (!occupyPage()) return;
           void publishChannel(channelId, publishRevision)
             .then(async () => {
               setPreview(null);
@@ -1022,7 +1035,7 @@ function ChannelExisting({
               setReloadToken((value) => value + 1);
             })
             .catch(catchFailure)
-            .finally(() => setBusy(false));
+            .finally(releasePage);
         }}
       >
         <Stack gap="xs">

@@ -330,12 +330,8 @@ class _Run:
                 error_message=f"No executor for {node['type']}",
             )
         else:
-            pinned = self.hooks.pinned_output(node)
-            if pinned is not None:
-                result = spec.pinned(node, pinned.value)
-            else:
-                result = spec.execute(node, self.hooks)
-                result = _apply_output_check(node_id, spec, result, self.schemas)
+            result = spec.execute(node, self.hooks)
+            result = _apply_output_check(node_id, spec, result, self.schemas)
         if result.status == "skipped" and result.output is None:
             result.output = {"skipped": True, "reason": result.error_message}
         return seq, result

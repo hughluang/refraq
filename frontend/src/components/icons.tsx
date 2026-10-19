@@ -22,7 +22,6 @@ import {
   IconDeviceDesktop,
   IconDotsVertical,
   IconInbox,
-  IconFlask,
   IconIdBadge,
   IconInfoCircle,
   IconKey,
@@ -77,7 +76,6 @@ export const StatusDotIcon = withDefaults(IconCircleFilled);
 export const DesktopIcon = withDefaults(IconDeviceDesktop);
 export const DotsIcon = withDefaults(IconDotsVertical);
 export const EmptyIcon = withDefaults(IconInbox);
-export const TestIcon = withDefaults(IconFlask);
 export const InfoIcon = withDefaults(IconInfoCircle);
 export const LanguageIcon = withDefaults(IconLanguage);
 export const ListIcon = withDefaults(IconList);

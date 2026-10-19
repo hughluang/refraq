@@ -1,7 +1,6 @@
 import { apiClient } from "@/lib/api";
 import type { OffsetPage } from "@/lib/pagination";
 
-import type { EditorPin } from "@/features/channels/editorSession";
 import type {
   Channel,
   ChannelDraft,
@@ -137,7 +136,6 @@ export function startRun(
     target: "draft" | "published";
     ignore_checkpoints?: boolean;
     stop_at_node_id?: string | null;
-    pinned?: readonly EditorPin[];
   },
 ) {
   return apiClient<{ run: ChannelRun }>(`/channels/${id}/runs`, {

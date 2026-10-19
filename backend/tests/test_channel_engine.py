@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from backend.channel.engine import execute
-from backend.channel.nodes import list_node_types
 from backend.channel.nodes.spec import EngineHooks, NodeResult, NodeType, PortSpec
 from backend.tests.channel_hooks_fake import FakeHooks
 
@@ -532,62 +531,3 @@ def test_output_check_uses_the_upstream_refined_schema() -> None:
 
     matched = execute(graph, "src", catalog({"n": 1}), _RESOLVER, FakeHooks())
     assert matched.status == "succeeded"
-
-
-def test_pinned_output_bypasses_execute() -> None:
-    def ran(node: dict, hooks: EngineHooks) -> NodeResult:
-        del node, hooks
-        return NodeResult(status="failed", error_code="CHANNEL_NODE_FAILED", error_message="ran")
-
-    hooks = FakeHooks(pinned={"a": {"kept": True}})
-    outcome = execute(
-        {"nodes": [_node("a", 0)], "edges": [], "settings": {}},
-        "a",
-        [_type("fake", ran)],
-        _RESOLVER,
-        hooks,
-    )
-    assert outcome.status == "succeeded"
-    assert hooks.outputs["a"] == {"kept": True}
-    assert ("a", "pinned") in hooks.statuses
-
-
-def test_pinned_if_selects_the_branch_from_value() -> None:
-    if_type = next(item for item in list_node_types() if item.type_id == "transform.if")
-
-    def ran(node: dict, hooks: EngineHooks) -> NodeResult:
-        del hooks
-        return NodeResult(status="succeeded", output={"id": node["id"]})
-
-    def graph() -> dict:
-        return {
-            "nodes": [
-                _node("g", 0, type_id="transform.if"),
-                _node("yes", 1),
-                _node("no", 2),
-            ],
-            "edges": [_edge("g", "yes", "true"), _edge("g", "no", "false")],
-            "settings": {},
-        }
-
-    catalog = [if_type, _type("fake", ran)]
-    true_hooks = FakeHooks(pinned={"g": {"value": True}})
-    true_outcome = execute(graph(), "g", catalog, _RESOLVER, true_hooks)
-    assert true_outcome.status == "succeeded"
-    assert true_hooks.order == ["g", "yes"]
-
-    false_hooks = FakeHooks(pinned={"g": {"value": False}})
-    false_outcome = execute(graph(), "g", catalog, _RESOLVER, false_hooks)
-    assert false_outcome.status == "succeeded"
-    assert false_hooks.order == ["g", "no"]
-
-    missing = execute(
-        {"nodes": [_node("g", 0, type_id="transform.if")], "edges": [], "settings": {}},
-        "g",
-        [if_type],
-        _RESOLVER,
-        FakeHooks(pinned={"g": {}}),
-    )
-    assert missing.status == "failed"
-    assert missing.error_code == "CHANNEL_NODE_FAILED"
-    assert missing.error_message == "Pinned If output has no value"

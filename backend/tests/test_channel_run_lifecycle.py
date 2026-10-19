@@ -50,45 +50,6 @@ MANUAL_GRAPH = {
     "settings": {"run_timeout_sec": None, "error_channel_id": None},
 }
 
-PINNED_GRAPH = {
-    "nodes": [
-        MANUAL_GRAPH["nodes"][0],
-        {
-            "id": "nd_shape",
-            "ref": "shape",
-            "type": "transform.set_fields",
-            "name": "Shape",
-            "position": {"x": 40, "y": 0},
-            "config": {"fields": [{"name": "rows", "value": "[]"}]},
-            "on_error": "stop",
-            "retry": None,
-        },
-        {
-            "id": "nd_copy",
-            "ref": "copy",
-            "type": "transform.set_fields",
-            "name": "Copy",
-            "position": {"x": 80, "y": 0},
-            "config": {"fields": [{"name": "rows", "value": "{{ self.shape.output.rows }}"}]},
-            "on_error": "stop",
-            "retry": None,
-        },
-    ],
-    "edges": [
-        {
-            "id": "ed_shape",
-            "source": {"node_id": "nd_trigger", "port": "main"},
-            "target": {"node_id": "nd_shape", "port": "main"},
-        },
-        {
-            "id": "ed_copy",
-            "source": {"node_id": "nd_shape", "port": "main"},
-            "target": {"node_id": "nd_copy", "port": "main"},
-        },
-    ],
-    "settings": {"run_timeout_sec": None, "error_channel_id": None},
-}
-
 SCHEDULED_GRAPH = {
     "nodes": [
         {
@@ -377,7 +338,6 @@ def test_on_demand_run_persists_draft_and_published_records_and_dispatches_once(
             "target": target,
             "ignore_checkpoints": False,
             "stop_at_node_id": None,
-            "pinned": [],
         }
         assert job.summary == "channel_run Material"
         assert job.trigger_kind == "user"
@@ -394,44 +354,24 @@ def test_on_demand_run_persists_draft_and_published_records_and_dispatches_once(
     assert dispatched == [draft_body["job_id"], published_body["job_id"]]
 
 
-def test_on_demand_run_persists_pinned_outputs_inside_its_scope(
+def test_on_demand_run_rejects_pinned_outputs(
     client: TestClient, dispatched: list[str]
 ) -> None:
     created = client.post("/channels", json={"name": "Pinned", "description": None})
     channel_id = created.json()["channel"]["id"]
-    _save_draft(client, channel_id, PINNED_GRAPH)
-    pinned = [{"node_id": "nd_shape", "output": {"rows": [{"code": "P"}]}}]
+    _save_draft(client, channel_id, MANUAL_GRAPH)
 
     started = client.post(
         f"/channels/{channel_id}/runs",
         json={
             "target": "draft",
-            "stop_at_node_id": "nd_copy",
-            "pinned": pinned,
+            "pinned": [{"node_id": "nd_trigger", "output": {}}],
         },
     )
 
-    assert started.status_code == 202, started.text
-    body = started.json()["run"]
-    assert body["pinned"] == pinned
-    record = get_run_store().get_run(body["job_id"])
-    assert record is not None
-    assert record.pinned == pinned
-    job = get_job_store().get(body["job_id"])
-    assert job is not None
-    assert job.input["pinned"] == pinned
-    assert dispatched == [body["job_id"]]
-
-    outside = client.post(
-        f"/channels/{channel_id}/runs",
-        json={
-            "target": "draft",
-            "stop_at_node_id": "nd_shape",
-            "pinned": [{"node_id": "nd_copy", "output": {}}],
-        },
-    )
-    assert outside.status_code == 422
-    assert outside.json()["code"] == "REQUEST_INVALID"
+    assert started.status_code == 422
+    assert started.json()["code"] == "REQUEST_INVALID"
+    assert dispatched == []
 
 
 def test_run_contexts_agree_for_equivalent_inputs() -> None:

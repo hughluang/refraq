@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -42,7 +42,6 @@ class ChannelRunRecord:
     created_at: datetime
     stopped_node_id: str | None = None
     stop_at_node_id: str | None = None
-    pinned: list[dict[str, Any]] = field(default_factory=list)
     # `self.channel`, `self.run`, and `self.platform`; None until the run starts.
     context: dict[str, Any] | None = None
 
@@ -302,7 +301,6 @@ def _run_row(record: ChannelRunRecord) -> ChannelRunRow:
         failed_node_id=record.failed_node_id,
         stopped_node_id=record.stopped_node_id,
         stop_at_node_id=record.stop_at_node_id,
-        pinned=list(record.pinned),
         skipped_node_ids=list(record.skipped_node_ids),
         context=record.context,
         created_at=record.created_at,
@@ -325,7 +323,6 @@ def _run_record(row: ChannelRunRow) -> ChannelRunRecord:
         created_at=row.created_at,
         stopped_node_id=row.stopped_node_id,
         stop_at_node_id=row.stop_at_node_id,
-        pinned=list(row.pinned),
         context=row.context,
     )
 

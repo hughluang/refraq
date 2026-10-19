@@ -56,7 +56,6 @@ function toneVariables(theme: MantineTheme, scheme: "light" | "dark"): Record<st
     "--refraq-tone-warning-soft": shade(theme, "yellow", soft),
     "--refraq-tone-danger": shade(theme, "red", solid),
     "--refraq-tone-danger-soft": shade(theme, "red", soft),
-    "--refraq-tone-pinned": shade(theme, "grape", solid),
     "--refraq-tone-on-solid": theme.white,
   };
 }

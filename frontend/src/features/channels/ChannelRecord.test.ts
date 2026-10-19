@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,11 +11,21 @@ import {
   getRun,
   listNodeTypes,
   listRuns,
+  previewPublish,
+  publishChannel,
   saveDraft,
   startRun,
   validateDraft,
 } from "@/features/channels/api";
-import { EMPTY_GRAPH, type Channel, type ChannelRunDetail, type NodeTypeSpec } from "@/features/channels/types";
+import en from "@/locales/en-US/common.json";
+import zh from "@/locales/zh-CN/common.json";
+import {
+  EMPTY_GRAPH,
+  type Channel,
+  type ChannelRunDetail,
+  type Confirmation,
+  type NodeTypeSpec,
+} from "@/features/channels/types";
 import { Instant } from "@/lib/instant";
 
 vi.mock("@refinedev/core", () => ({
@@ -59,6 +69,10 @@ vi.mock("@/features/channels/api", () => ({
 
 vi.mock("@/features/jobs/api", () => ({
   cancelJob: vi.fn(),
+}));
+
+vi.mock("@/features/branding/BrandingProvider", () => ({
+  useBranding: () => ({ brandName: "Refraq" }),
 }));
 
 const now = Instant.parse("2026-01-01T00:00:00Z");
@@ -147,6 +161,39 @@ function stubDomApis() {
       toJSON: () => ({}),
     });
   }
+}
+
+function triggerGraph() {
+  return {
+    nodes: [
+      {
+        id: "nd_1",
+        ref: "run_manually",
+        type: "trigger.manual",
+        name: "Start",
+        position: { x: 40, y: 40 },
+        config: {},
+        on_error: "stop" as const,
+        retry: null,
+      },
+    ],
+    edges: [],
+    settings: EMPTY_GRAPH.settings,
+  };
+}
+
+const publishPreview: Confirmation = {
+  draft_revision: 1,
+  mirrors_to_open: [],
+  runs_to_cancel: [],
+  missing_run_timeout: false,
+};
+
+function clickTwice(node: HTMLElement) {
+  act(() => {
+    node.click();
+    node.click();
+  });
 }
 
 function renderRecord(mode: "show" | "edit") {
@@ -332,5 +379,142 @@ describe("ChannelRecord draft access", () => {
         stop_at_node_id: null,
       });
     });
+  });
+
+  it("enqueues one run when confirm is clicked twice in one turn", async () => {
+    vi.mocked(getDraft).mockResolvedValue({
+      draft_revision: 1,
+      draft_updated_at: now,
+      graph: triggerGraph(),
+    });
+    vi.mocked(listNodeTypes).mockResolvedValue({
+      items: [{ ...spec, type: "trigger.manual", label: "Manual" }],
+    });
+    let resolveRun: (value: { run: ChannelRunDetail["run"] }) => void = () => {};
+    vi.mocked(startRun).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRun = resolve;
+        }),
+    );
+
+    await renderRecord("edit");
+    fireEvent.click(await screen.findByRole("button", { name: "channels.run.open" }));
+    const confirm = within(await screen.findByRole("dialog")).getByRole("button", {
+      name: "channels.run.confirm",
+    });
+    clickTwice(confirm);
+    await waitFor(() => {
+      expect(startRun).toHaveBeenCalledTimes(1);
+    });
+    await act(async () => {
+      resolveRun(runningDetail().run);
+    });
+  });
+
+  it("previews publish once when the button is clicked twice in one turn", async () => {
+    vi.mocked(previewPublish).mockResolvedValue(publishPreview);
+    await renderRecord("edit");
+    const publish = await screen.findByRole("button", { name: "channels.actions.publish" });
+    clickTwice(publish);
+    await waitFor(() => {
+      expect(previewPublish).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("publishes once when confirm is clicked twice in one turn", async () => {
+    vi.mocked(previewPublish).mockResolvedValue(publishPreview);
+    let resolvePublish: (value: unknown) => void = () => {};
+    vi.mocked(publishChannel).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePublish = resolve;
+        }),
+    );
+
+    await renderRecord("edit");
+    fireEvent.click(await screen.findByRole("button", { name: "channels.actions.publish" }));
+    const confirm = within(await screen.findByRole("dialog")).getByRole("button", {
+      name: "channels.publish.confirm",
+    });
+    clickTwice(confirm);
+    expect(publishChannel).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolvePublish({});
+    });
+  });
+
+  it("lets the first of save and run accept the page latch", async () => {
+    vi.mocked(getDraft).mockResolvedValue({
+      draft_revision: 1,
+      draft_updated_at: now,
+      graph: triggerGraph(),
+    });
+    vi.mocked(listNodeTypes).mockResolvedValue({
+      items: [
+        { ...spec, type: "trigger.manual", label: "Manual" },
+        { ...spec, type: "transform.filter", label: "Filter", entry: false },
+      ],
+    });
+    vi.mocked(startRun).mockResolvedValue({ run: runningDetail().run });
+    vi.mocked(previewPublish).mockResolvedValue(publishPreview);
+
+    await renderRecord("edit");
+    fireEvent.click(await screen.findByRole("button", { name: "channels.canvas.add" }));
+    fireEvent.click(screen.getByRole("button", { name: /Filter/ }));
+    fireEvent.click(screen.getByRole("button", { name: "channels.run.open" }));
+    const dialog = await screen.findByRole("dialog");
+    const confirm = within(dialog).getByRole("button", { name: "channels.run.confirm" });
+    const save = screen.getByRole("button", { name: "channels.edit.submit" });
+    const publish = screen.getByRole("button", { name: "channels.actions.publish" });
+
+    act(() => {
+      confirm.click();
+      save.click();
+      publish.click();
+    });
+    await waitFor(() => {
+      expect(startRun).toHaveBeenCalledTimes(1);
+    });
+    expect(saveDraft).toHaveBeenCalledTimes(1);
+    expect(previewPublish).not.toHaveBeenCalled();
+
+    cleanup();
+    vi.mocked(startRun).mockClear();
+    vi.mocked(saveDraft).mockClear();
+    vi.mocked(previewPublish).mockClear();
+    await renderRecord("edit");
+    fireEvent.click(await screen.findByRole("button", { name: "channels.canvas.add" }));
+    fireEvent.click(screen.getByRole("button", { name: /Filter/ }));
+    fireEvent.click(screen.getByRole("button", { name: "channels.run.open" }));
+    const secondDialog = await screen.findByRole("dialog");
+    const secondConfirm = within(secondDialog).getByRole("button", { name: "channels.run.confirm" });
+    act(() => {
+      screen.getByRole("button", { name: "channels.edit.submit" }).click();
+      secondConfirm.click();
+      screen.getByRole("button", { name: "channels.actions.publish" }).click();
+    });
+    await waitFor(() => {
+      expect(saveDraft).toHaveBeenCalledTimes(1);
+    });
+    expect(startRun).not.toHaveBeenCalled();
+    expect(previewPublish).not.toHaveBeenCalled();
+  });
+});
+
+describe("run confirmation copy", () => {
+  it("states the execution scope and the save, without a write or dry-run claim", () => {
+    expect(zh["channels.run.writes"]).toBe(
+      "\u5c06\u8fd0\u884c\u5f53\u524d\u753b\u5e03\u4e2d\u7684\u56fe\u3002\u672a\u4fdd\u5b58\u7684\u6539\u52a8\u4f1a\u5148\u4fdd\u5b58\u3002",
+    );
+    expect(zh["channels.run.writesUpTo"]).toBe(
+      "\u5c06\u8fd0\u884c\u300c{{node}}\u300d\u53ca\u5176\u4e0a\u6e38\u8282\u70b9\uff0c\u4e0b\u6e38\u8282\u70b9\u4e0d\u8fd0\u884c\u3002\u672a\u4fdd\u5b58\u7684\u6539\u52a8\u4f1a\u5148\u4fdd\u5b58\u3002",
+    );
+    expect(en["channels.run.writes"]).toBe(
+      "This runs the graph on the canvas. Unsaved changes are saved first.",
+    );
+    expect(en["channels.run.writesUpTo"]).toBe(
+      "This runs {{node}} and the nodes upstream of it. Downstream nodes do not run. Unsaved changes are saved first.",
+    );
   });
 });
