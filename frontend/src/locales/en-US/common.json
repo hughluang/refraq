@@ -1530,6 +1530,8 @@
   "channels.actions.back": "Back to list",
   "channels.actions.publish": "Publish",
   "channels.canvas.add": "Add",
+  "channels.canvas.empty": "Add a trigger to start this channel.",
+  "channels.canvas.connectNone": "This output cannot connect to another node.",
   "channels.canvas.permissionRequired": "Requires {{permission}}",
   "channels.canvas.palette": "Nodes",
   "channels.canvas.problemsSummary": "{{errors}} errors, {{warnings}} warnings",

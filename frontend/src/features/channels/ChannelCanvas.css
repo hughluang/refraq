@@ -11,6 +11,37 @@
   --xy-edge-stroke-selected: var(--mantine-primary-color-filled);
 }
 
+.channel-canvas-connect-note {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  left: 0;
+  max-width: 24rem;
+  margin: var(--mantine-spacing-md);
+  pointer-events: none;
+}
+
+.channel-canvas-empty {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  left: 0;
+  max-width: 24rem;
+  padding: var(--mantine-spacing-md);
+  pointer-events: none;
+}
+
+.channel-canvas-empty button {
+  pointer-events: auto;
+}
+
+.channel-canvas-stage .react-flow__attribution {
+  background: transparent;
+  font-size: 10px;
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 .channel-record-overlays {
   pointer-events: none;
 }
@@ -61,6 +92,10 @@
 
 .channel-canvas-stage--browse .react-flow {
   --xy-background-color: var(--mantine-color-gray-light);
+}
+
+.channel-canvas-controls .react-flow__controls-button:disabled {
+  pointer-events: auto;
 }
 
 .channel-canvas-controls .react-flow__controls-button:last-child {

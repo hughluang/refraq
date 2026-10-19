@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -22,6 +22,9 @@ vi.mock("@/features/channels/api", () => ({
 
 const LABELS: Record<string, string> = {
   "channels.canvas.add": "Add",
+  "channels.canvas.empty": "Add a trigger to start this channel.",
+  "channels.canvas.connectNone": "This output cannot connect to another node.",
+  "channels.canvas.nextStep": "Next step",
   "channels.canvas.permissionRequired": "Requires {{permission}}",
   "channels.node.permissionReadOnly":
     "This configuration is view only. Editing it requires {{permission}}.",
@@ -225,6 +228,7 @@ function renderCanvas(
     catalog?: NodeTypeSpec[];
     onChange?: (graph: Graph) => void;
     channelId?: string;
+    colorScheme?: "light" | "dark";
   } = {},
 ) {
   const appearance = options.appearance ?? "edit";
@@ -233,7 +237,10 @@ function renderCanvas(
     const element = (next: GraphProblem[]) =>
         createElement(
           MantineProvider,
-          { env: "test" },
+          {
+            env: "test",
+            ...(options.colorScheme ? { forceColorScheme: options.colorScheme } : {}),
+          },
           createElement(ChannelCanvas, {
           graph,
           catalog: options.catalog ?? [spec],
@@ -274,7 +281,7 @@ describe("ChannelCanvas controls", () => {
     expect(panel.querySelector(".react-flow__controls-fitview")).not.toBeNull();
     expect(panel.querySelector(".react-flow__controls-interactive")).not.toBeNull();
 
-    const add = screen.getByRole("button", { name: "Add" });
+    const add = within(panel).getByRole("button", { name: "Add" });
     const undo = screen.getByRole("button", { name: "Undo" });
     const redo = screen.getByRole("button", { name: "Redo" });
     expect(add.querySelector("svg")).not.toBeNull();
@@ -509,6 +516,148 @@ describe("ChannelCanvas controls", () => {
     fireEvent.click(within(config).getByRole("button", { name: "Run node" }));
     expect(onRun).toHaveBeenCalledTimes(2);
     expect(onRun).toHaveBeenLastCalledWith("nd_1");
+  });
+});
+
+describe("empty canvas", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  it("shows the next step and adds a node from an empty canvas", async () => {
+    await renderCanvas();
+
+    expect(screen.getByText("Add a trigger to start this channel.")).toBeTruthy();
+    const panel = screen.getByTestId("rf__controls");
+    const emptyAdd = screen
+      .getAllByRole("button", { name: "Add" })
+      .find((button) => !panel.contains(button));
+    if (!(emptyAdd instanceof HTMLButtonElement)) throw new Error("missing empty-canvas add");
+    fireEvent.click(emptyAdd);
+    expect(screen.getByText("Nodes")).toBeTruthy();
+    expect(screen.getByText("Manual")).toBeTruthy();
+  });
+
+  it("states the next step on an empty canvas without an add action while browsing", async () => {
+    await renderCanvas([], EMPTY_GRAPH, { appearance: "browse", mutable: false });
+
+    expect(screen.getByText("Add a trigger to start this channel.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
+  });
+});
+
+describe("canvas color", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  it("follows the console color scheme", async () => {
+    await renderCanvas([], nodeGraph, { colorScheme: "dark" });
+    expect(document.querySelector(".react-flow")?.classList.contains("dark")).toBe(true);
+
+    cleanup();
+    await renderCanvas([], nodeGraph, { colorScheme: "light" });
+    expect(document.querySelector(".react-flow")?.classList.contains("light")).toBe(true);
+  });
+});
+
+function releaseOutput(name: string) {
+  const handle = screen.getAllByRole("button", { hidden: true }).find(
+    (element) => element.getAttribute("aria-label") === name,
+  );
+  if (!(handle instanceof HTMLElement)) throw new Error(`missing output ${name}`);
+  const flow = document.querySelector(".react-flow");
+  if (!(flow instanceof HTMLElement)) throw new Error("missing flow");
+  Document.prototype.elementFromPoint = () => flow;
+  fireEvent.mouseDown(handle, { button: 0, clientX: 8, clientY: 8 });
+  fireEvent.mouseMove(document, { clientX: 48, clientY: 48 });
+  fireEvent.mouseUp(document, { clientX: 48, clientY: 48 });
+}
+
+describe("unreachable output", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  it("explains a release when the output has no next node", async () => {
+    await renderCanvas([], nodeGraph);
+    await waitFor(() => {
+      const node = document.querySelector(".react-flow__node");
+      if (!(node instanceof HTMLElement) || node.style.visibility === "hidden") {
+        throw new Error("node not measured");
+      }
+    });
+
+    releaseOutput("Start out output");
+
+    const note = screen.getByText("This output cannot connect to another node.");
+    expect(note.getAttribute("aria-live")).toBe("polite");
+
+    const pane = document.querySelector(".react-flow__pane");
+    if (!(pane instanceof HTMLElement)) throw new Error("missing pane");
+    fireEvent.pointerDown(pane);
+    expect(screen.queryByText("This output cannot connect to another node.")).toBeNull();
+  });
+
+  it("keeps the next-step choice when the output can still connect", async () => {
+    await renderCanvas([], nodeGraph, { catalog: [spec, READ_SPEC] });
+    await waitFor(() => {
+      const node = document.querySelector(".react-flow__node");
+      if (!(node instanceof HTMLElement) || node.style.visibility === "hidden") {
+        throw new Error("node not measured");
+      }
+    });
+
+    releaseOutput("Start out output");
+
+    expect(screen.getByText("Next step")).toBeTruthy();
+    expect(screen.queryByText("This output cannot connect to another node.")).toBeNull();
+  });
+});
+
+describe("canvas selection", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  it("does not box-select while shift is held", async () => {
+    await renderCanvas([], nodeGraph);
+    const pane = document.querySelector(".react-flow__pane");
+    if (!(pane instanceof HTMLElement)) throw new Error("missing pane");
+
+    fireEvent.keyDown(window, { key: "Shift", code: "ShiftLeft" });
+    fireEvent.pointerDown(pane, { button: 0, clientX: 12, clientY: 12, pointerId: 1, shiftKey: true });
+    fireEvent.pointerMove(pane, { clientX: 90, clientY: 90, pointerId: 1, shiftKey: true });
+
+    expect(pane.classList.contains("selection")).toBe(false);
+    expect(document.querySelector(".react-flow__selection")).toBeNull();
+  });
+});
+
+describe("canvas control hints", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  it("shows the same name as the button after hovering for 200ms", async () => {
+    await renderCanvas([], nodeGraph);
+    vi.useFakeTimers();
+    try {
+      for (const name of ["Add", "Undo", "Redo"]) {
+        const button = screen.getByRole("button", { name });
+        fireEvent.mouseEnter(button);
+        expect(screen.queryByRole("tooltip")).toBeNull();
+        act(() => {
+          vi.advanceTimersByTime(199);
+        });
+        expect(screen.queryByRole("tooltip")).toBeNull();
+        act(() => {
+          vi.advanceTimersByTime(1);
+        });
+        expect(screen.getByRole("tooltip").textContent).toBe(name);
+        fireEvent.mouseLeave(button);
+        act(() => {
+          vi.advanceTimersByTime(0);
+        });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1303,7 +1452,7 @@ describe("guarded node authoring", () => {
 
   it("does not add a guarded node when the session lacks its permission", async () => {
     await renderCanvas([], EMPTY_GRAPH, { catalog: [spec, CODE_SPEC] });
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(within(screen.getByTestId("rf__controls")).getByRole("button", { name: "Add" }));
 
     const guarded = screen.getByRole("button", { name: /Requires channel:code_write/ });
     expect(guarded.textContent).toContain("Code");

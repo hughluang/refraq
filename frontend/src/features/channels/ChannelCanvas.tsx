@@ -1,6 +1,16 @@
 "use client";
 
-import { Button, CloseButton, Group, Paper, Popover, Stack, Text } from "@mantine/core";
+import {
+  Button,
+  CloseButton,
+  Group,
+  Paper,
+  Popover,
+  Stack,
+  Text,
+  Tooltip,
+  useComputedColorScheme,
+} from "@mantine/core";
 import { usePermissions, useTranslate } from "@refinedev/core";
 import {
   Background,
@@ -39,6 +49,8 @@ import {
 
 import "@xyflow/react/dist/style.css";
 import "./ChannelCanvas.css";
+
+import { EmptyState } from "@/components/feedback/EmptyState";
 
 import {
   createHistory,
@@ -198,6 +210,7 @@ function ChannelCanvasBody({
   channelId,
 }: Props) {
   const t = useTranslate();
+  const colorScheme = useComputedColorScheme("light", { getInitialValueInEffect: false });
   const { data: heldPermissions } = usePermissions<string[]>({});
   const { screenToFlowPosition, setCenter, getInternalNode } = useReactFlow();
   const entryTypes = useMemo(
@@ -218,6 +231,7 @@ function ChannelCanvasBody({
   const [picker, setPicker] = useState<PickerState | null>(null);
   const [highlight, setHighlight] = useState<ProblemHighlight | null>(null);
   const [problemsDismissed, setProblemsDismissed] = useState(0);
+  const [connectNote, setConnectNote] = useState(false);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const nodesRef = useRef(nodes);
@@ -659,7 +673,11 @@ function ChannelCanvasBody({
     if (!under?.closest(".react-flow")) return;
     const sourceHandle = connectionState.fromHandle.id || "main";
     const specs = outputTargetTypes(graphNow(), catalog, connectionState.fromNode.id, sourceHandle);
-    if (specs.length === 0) return;
+    if (specs.length === 0) {
+      setConnectNote(true);
+      return;
+    }
+    setConnectNote(false);
     releaseSelection();
     setPicker({
       kind: "connect",
@@ -780,8 +798,10 @@ function ChannelCanvasBody({
               : "channel-canvas-stage channel-canvas-stage--browse"
           }
           onKeyDown={onCanvasKeyDown}
+          onPointerDown={() => setConnectNote(false)}
         >
           <ReactFlow
+            colorMode={colorScheme}
             nodes={nodes}
             edges={edges.map((edge) => ({
               ...edge,
@@ -816,6 +836,7 @@ function ChannelCanvasBody({
             nodeDragThreshold={NODE_DRAG_THRESHOLD}
             nodeClickDistance={NODE_DRAG_THRESHOLD}
             multiSelectionKeyCode={null}
+            selectionKeyCode={null}
             deleteKeyCode={mutable ? ["Backspace", "Delete"] : null}
             fitView
           >
@@ -835,41 +856,63 @@ function ChannelCanvasBody({
                 />
               ) : null}
               {appearance === "edit" ? (
-                <ControlButton
-                  className="channel-canvas-add"
-                  title={t("channels.canvas.add")}
-                  aria-label={t("channels.canvas.add")}
-                  aria-expanded={picker?.kind === "catalog"}
-                  disabled={!mutable}
-                  onClick={openFullCatalog}
-                >
-                  <PlusIcon size={14} />
-                </ControlButton>
+                <Tooltip label={t("channels.canvas.add")} openDelay={200}>
+                  <ControlButton
+                    className="channel-canvas-add"
+                    aria-label={t("channels.canvas.add")}
+                    aria-expanded={picker?.kind === "catalog"}
+                    disabled={!mutable}
+                    onClick={openFullCatalog}
+                  >
+                    <PlusIcon size={14} />
+                  </ControlButton>
+                </Tooltip>
               ) : null}
               {appearance === "edit" ? (
-                <ControlButton
-                  className="channel-canvas-undo"
-                  title={t("channels.canvas.undo")}
-                  aria-label={t("channels.canvas.undo")}
-                  disabled={!mutable || !canUndo}
-                  onClick={undo}
-                >
-                  <UndoIcon size={14} />
-                </ControlButton>
+                <Tooltip label={t("channels.canvas.undo")} openDelay={200}>
+                  <ControlButton
+                    className="channel-canvas-undo"
+                    aria-label={t("channels.canvas.undo")}
+                    disabled={!mutable || !canUndo}
+                    onClick={undo}
+                  >
+                    <UndoIcon size={14} />
+                  </ControlButton>
+                </Tooltip>
               ) : null}
               {appearance === "edit" ? (
-                <ControlButton
-                  className="channel-canvas-redo"
-                  title={t("channels.canvas.redo")}
-                  aria-label={t("channels.canvas.redo")}
-                  disabled={!mutable || !canRedo}
-                  onClick={redo}
-                >
-                  <RedoIcon size={14} />
-                </ControlButton>
+                <Tooltip label={t("channels.canvas.redo")} openDelay={200}>
+                  <ControlButton
+                    className="channel-canvas-redo"
+                    aria-label={t("channels.canvas.redo")}
+                    disabled={!mutable || !canRedo}
+                    onClick={redo}
+                  >
+                    <RedoIcon size={14} />
+                  </ControlButton>
+                </Tooltip>
               ) : null}
             </Controls>
           </ReactFlow>
+          {connectNote ? (
+            <Text className="channel-canvas-connect-note" size="sm" c="dimmed" aria-live="polite">
+              {t("channels.canvas.connectNone")}
+            </Text>
+          ) : null}
+          {nodes.length === 0 ? (
+            <div className="channel-canvas-empty">
+              <EmptyState
+                message={t("channels.canvas.empty")}
+                action={
+                  appearance === "edit" && mutable ? (
+                    <Button type="button" size="xs" variant="default" onClick={openFullCatalog}>
+                      {t("channels.canvas.add")}
+                    </Button>
+                  ) : null
+                }
+              />
+            </div>
+          ) : null}
           {showCatalog || selected ? (
             <Paper
               withBorder
