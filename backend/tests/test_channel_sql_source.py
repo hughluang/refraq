@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 
@@ -254,6 +257,7 @@ def test_source_sql_decodes_utf8_and_fails_on_binary(
             statement_timeout_sec=30,
         )
     assert raised.value.code == "CHANNEL_NODE_FAILED"
+    assert raised.value.message == "SQL value is not valid UTF-8 text"
 
     def text_only(
         source_id: str, sql: str, *, timeout_sec: int, max_rows: int
@@ -269,3 +273,41 @@ def test_source_sql_decodes_utf8_and_fails_on_binary(
         source={"kind": "source", "source_id": "src_live"},
         statement_timeout_sec=30,
     )["rows"] == [{"blob": "A"}]
+
+
+def test_source_sql_renders_driver_values_as_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def execute(
+        source_id: str, sql: str, *, timeout_sec: int, max_rows: int
+    ) -> StatementResult:
+        del source_id, sql, timeout_sec, max_rows
+        return StatementResult(
+            columns=["n", "qty", "when", "id", "blob"],
+            rows=[
+                [
+                    7,
+                    Decimal("10.50"),
+                    datetime(2020, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+                    UUID("12345678-1234-5678-1234-567812345678"),
+                    memoryview(b"hi"),
+                ]
+            ],
+            rowcount=1,
+            truncated=False,
+        )
+
+    monkeypatch.setattr("backend.channel.sql_read.execute_source_statement", execute)
+    assert run_channel_sql(
+        "SELECT n FROM t",
+        source={"kind": "source", "source_id": "src_live"},
+        statement_timeout_sec=30,
+    )["rows"] == [
+        {
+            "n": 7,
+            "qty": "10.50",
+            "when": "2020-01-02T03:04:05Z",
+            "id": "12345678-1234-5678-1234-567812345678",
+            "blob": "hi",
+        }
+    ]

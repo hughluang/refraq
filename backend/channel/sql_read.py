@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time
-from decimal import Decimal
 from typing import Any, Mapping
-from uuid import UUID
 
+from pydantic_core import to_jsonable_python
 from sqlalchemy.exc import DBAPIError
 
 from backend.entity.statements import (
@@ -102,22 +100,17 @@ def _db_message(exc: DBAPIError) -> str:
 
 
 def _jsonable(value: Any) -> Any:
-    if isinstance(value, datetime):
-        return value.isoformat().replace("+00:00", "Z")
-    if isinstance(value, (date, time)):
-        return value.isoformat()
-    if isinstance(value, Decimal):
-        return str(value)
-    if isinstance(value, UUID):
-        return str(value)
+    """Make one driver cell JSON-safe.
+
+    ``memoryview`` is what drivers return for binary columns; Pydantic does not
+    accept it. Invalid UTF-8 stays a channel failure with a fixed message.
+    """
     if isinstance(value, memoryview):
         value = bytes(value)
-    if isinstance(value, bytes):
-        try:
-            return value.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise SqlReadError(
-                "CHANNEL_NODE_FAILED",
-                "SQL value is not valid UTF-8 text",
-            ) from exc
-    return value
+    try:
+        return to_jsonable_python(value)
+    except UnicodeDecodeError as exc:
+        raise SqlReadError(
+            "CHANNEL_NODE_FAILED",
+            "SQL value is not valid UTF-8 text",
+        ) from exc
