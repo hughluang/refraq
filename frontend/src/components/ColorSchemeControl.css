@@ -1,0 +1,16 @@
+.color-scheme-option {
+  display: none;
+}
+
+html[data-color-scheme-preference="light"] .color-scheme-option[data-color-scheme-option="light"],
+html[data-color-scheme-preference="dark"] .color-scheme-option[data-color-scheme-option="dark"],
+html[data-color-scheme-preference="auto"] .color-scheme-option[data-color-scheme-option="auto"],
+html:not([data-color-scheme-preference]) .color-scheme-option[data-color-scheme-option="auto"] {
+  display: inline;
+}
+
+.color-scheme-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mantine-spacing-xs);
+}
