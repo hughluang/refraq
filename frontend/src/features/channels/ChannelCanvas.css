@@ -9,6 +9,8 @@
   min-height: 0;
   --xy-edge-stroke: var(--refraq-tone-neutral-border);
   --xy-edge-stroke-selected: var(--mantine-primary-color-filled);
+  /* React Flow controls: 15px panel margin + 26px button, plus a gap. */
+  --channel-canvas-controls-clearance: calc(15px + 26px + var(--mantine-spacing-sm));
 }
 
 .channel-canvas-connect-note {
@@ -477,7 +479,7 @@
 }
 
 .channel-node-config--detail {
-  width: min(calc(100% - 16px), max(50%, calc(100% - 28rem)));
+  width: calc(100% - 8px - var(--channel-canvas-controls-clearance));
   height: calc(100% - 16px);
 }
 

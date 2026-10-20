@@ -968,8 +968,11 @@ describe("ChannelCanvas controls", () => {
     expect(css).not.toMatch(/@container/);
 
     const detail = css.match(/^\.channel-node-config--detail \{([\s\S]*?)\n\}/m)?.[1] ?? "";
+    expect(css).toMatch(
+      /--channel-canvas-controls-clearance:\s*calc\(15px \+ 26px \+ var\(--mantine-spacing-sm\)\)/,
+    );
     expect(detail).toMatch(
-      /width:\s*min\(calc\(100% - 16px\), max\(50%, calc\(100% - 28rem\)\)\)/,
+      /width:\s*calc\(100% - 8px - var\(--channel-canvas-controls-clearance\)\)/,
     );
     expect(detail).not.toMatch(/container-type/);
 
