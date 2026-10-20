@@ -56,7 +56,7 @@ export function presentJobStatus(status: string): StatusTone {
 }
 
 const NODE_STATUS: Record<string, StatusTone> = {
-  waiting: { tone: "neutral", labelKey: "channels.run.waiting" },
+  waiting: { tone: "neutral", labelKey: "channels.canvas.phase.waiting" },
   running: { tone: "running", labelKey: "channels.editor.status.running" },
   succeeded: { tone: "success", labelKey: "channels.editor.status.succeeded" },
   failed: { tone: "danger", labelKey: "channels.editor.status.failed" },

@@ -77,7 +77,7 @@ import {
 } from "@/features/channels/graphValidation";
 import { NodeConfigPanel } from "@/features/channels/NodeConfigPanel";
 import { MOTION_MS } from "@/theme/tokens";
-import { NodeRunSummary, ResultRegion, UpstreamRegion } from "@/features/channels/NodeRunRegions";
+import { ResultRegion, UpstreamRegion } from "@/features/channels/NodeRunRegions";
 import {
   executionCountByNode,
   phaseByNode,
@@ -243,11 +243,7 @@ function ChannelCanvasBody({
   const [nodes, setNodes] = useState<ChannelNode[]>(seededNodes);
   const [edges, setEdges] = useState<Edge[]>(seededEdges);
   const [configNodeId, setConfigNodeId] = useState<string | null>(null);
-  const [altitude, setAltitude] = useState<"focus" | "workbench">("focus");
   const [leaving, setLeaving] = useState(false);
-  useEffect(() => {
-    if (configNodeId == null) setAltitude("focus");
-  }, [configNodeId]);
   const [picker, setPicker] = useState<PickerState | null>(null);
   const [highlight, setHighlight] = useState<ProblemHighlight | null>(null);
   const [problemsDismissed, setProblemsDismissed] = useState(0);
@@ -491,7 +487,6 @@ function ChannelCanvasBody({
 
   const focusProblem = (problem: GraphProblem) => {
     if (!problem.node_id && !problem.edge_id) return;
-    if (closingRef.current) setAltitude("focus");
     cancelOverlayCloseRef.current();
     const next: ProblemHighlight = {
       nodeId: problem.node_id,
@@ -526,7 +521,6 @@ function ChannelCanvasBody({
     link?: { sourceId: string; sourceHandle: string },
   ) => {
     if (!mutable || !canAuthorNodeType(spec.permission, heldPermissions)) return;
-    if (closingRef.current) setAltitude("focus");
     cancelOverlayCloseRef.current();
     clearHighlight();
     const label = nodeTypeLabel(t, spec);
@@ -891,7 +885,6 @@ function ChannelCanvasBody({
   };
 
   const openNodeConfig = (nodeId: string) => {
-    if (closingRef.current) setAltitude("focus");
     cancelOverlayClose();
     setConfigNodeId(nodeId);
     setPicker(null);
@@ -1048,11 +1041,7 @@ function ChannelCanvasBody({
               aria-label={selected ? selected.data.name : undefined}
               className={[
                 "channel-node-config",
-                selected
-                  ? altitude === "workbench"
-                    ? "channel-node-config--detail"
-                    : "channel-node-config--focus"
-                  : "",
+                selected ? "channel-node-config--detail" : "",
                 leaving ? "channel-node-config--leave" : "",
               ]
                 .filter(Boolean)
@@ -1147,21 +1136,7 @@ function ChannelCanvasBody({
                     },
                   }}
                   templatePreview={templatePreview}
-                  altitude={altitude}
-                  onAltitude={setAltitude}
                   phase={phases.get(selected.id) ?? null}
-                  runSummary={
-                    <NodeRunSummary
-                      nodeId={selected.id}
-                      nodes={nodes.map((node) => ({
-                        id: node.id,
-                        name: node.data.name,
-                        ref: node.data.ref,
-                      }))}
-                      hasUpstream={edges.some((edge) => edge.target === selected.id)}
-                      detail={sessionRun}
-                    />
-                  }
                   upstream={
                     <UpstreamRegion
                       channelId={channelId ?? ""}

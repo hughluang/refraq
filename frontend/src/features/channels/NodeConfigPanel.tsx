@@ -63,11 +63,6 @@ type Props = {
   scope: SelfScope;
   /** Null hides the template previews. */
   templatePreview?: ChannelTemplatePreview | null;
-  /** Focus shows parameters and a run summary. Workbench shows the three columns. */
-  altitude?: "focus" | "workbench";
-  onAltitude?: (altitude: "focus" | "workbench") => void;
-  /** One-line run context for focus. Not mounted in the workbench. */
-  runSummary?: ReactNode;
   /** Canvas run phase. Null hides the header badge. */
   phase?: string | null;
   upstream: ReactNode;
@@ -97,9 +92,6 @@ export function NodeConfigPanel({
   graph = EMPTY_GRAPH,
   scope,
   templatePreview = null,
-  altitude = "focus",
-  onAltitude,
-  runSummary = null,
   phase = null,
   upstream,
   result,
@@ -188,7 +180,7 @@ export function NodeConfigPanel({
                 {typeLabel}
               </Text>
               {summary ? (
-                <Text size="xs" c="dimmed" className="channel-node-type-summary">
+                <Text size="xs" c="dimmed">
                   {summary}
                 </Text>
               ) : null}
@@ -213,11 +205,6 @@ export function NodeConfigPanel({
                   notes={headerNotes}
                   openSignal={revealIn(headerProblems)}
                 />
-              ) : null}
-              {altitude === "workbench" && onAltitude ? (
-                <Button size="compact-xs" variant="light" onClick={() => onAltitude("focus")}>
-                  {t("channels.node.showParameters")}
-                </Button>
               ) : null}
               {runAction}
               <CloseButton size="sm" aria-label={t("channels.node.close")} onClick={onClose} />
@@ -244,7 +231,7 @@ export function NodeConfigPanel({
         </Stack>
       </div>
       <div className="channel-node-detail">
-        {altitude === "workbench" ? upstream : null}
+        {upstream}
         <NodeRegion title={t("channels.node.config")}>
         <Stack gap="sm">
           {configLocked && permission ? (
@@ -303,18 +290,8 @@ export function NodeConfigPanel({
           />
         </Stack>
         </NodeRegion>
-        {altitude === "workbench" ? result : null}
+        {result}
       </div>
-      {altitude === "focus" && (runSummary != null || onAltitude) ? (
-        <Stack className="channel-node-config__context" gap="xs">
-          {runSummary}
-          {onAltitude ? (
-            <Button size="compact-xs" variant="light" onClick={() => onAltitude("workbench")}>
-              {t("channels.node.showData")}
-            </Button>
-          ) : null}
-        </Stack>
-      ) : null}
     </FieldDisclosureContext.Provider>
   );
 }

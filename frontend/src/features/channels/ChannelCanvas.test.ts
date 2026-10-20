@@ -39,8 +39,6 @@ const LABELS: Record<string, string> = {
   "channels.canvas.palette": "Nodes",
   "channels.canvas.problemsSummary": "{{errors}} errors, {{warnings}} warnings",
   "channels.node.run": "Run node",
-  "channels.node.showData": "Show input and output",
-  "channels.node.showParameters": "Show parameters only",
   "channels.run.showFullOutput": "Show full output",
   "channels.run.outputFailed": "Output failed",
   "channels.editor.status.running": "Running",
@@ -53,11 +51,10 @@ const LABELS: Record<string, string> = {
   "channels.run.result": "This node's result",
   "channels.run.noUpstream": "This node has no upstream nodes",
   "channels.run.idle": "Run the graph to see data here",
-  "channels.run.waiting": "Waiting for this node",
+  "channels.run.absent": "This node has not executed yet",
   "channels.canvas.phase.waiting": "Waiting",
   "channels.run.notRun": "Not run",
   "channels.run.executions": "{{count}} executions",
-  "channels.node.moreUpstream": "{{count}} more upstream nodes",
   "channels.canvas.handle": "{{node}} {{port}} {{side}}",
   "channels.canvas.input": "input",
   "channels.canvas.output": "output",
@@ -554,7 +551,7 @@ describe("ChannelCanvas controls", () => {
     fireEvent.click(run);
     expect(onRun).toHaveBeenCalledTimes(1);
     expect(onRun).toHaveBeenCalledWith("nd_1");
-    expect(screen.queryByText("Waiting for this node")).toBeNull();
+    expect(screen.queryByText("This node has not executed yet")).toBeNull();
 
     const node = document.querySelector(".react-flow__node");
     if (!(node instanceof HTMLElement)) throw new Error("missing node");
@@ -565,15 +562,14 @@ describe("ChannelCanvas controls", () => {
     expect(within(header).getByText("Start here")).toBeTruthy();
     const waiting = within(header).getByText("Waiting");
     expect(waiting.closest("[data-size]")?.getAttribute("data-size")).toBe("xs");
-    expect(within(header).queryByText("Waiting for this node")).toBeNull();
+    expect(within(header).queryByText("This node has not executed yet")).toBeNull();
     const panel = header.closest(".channel-node-config");
-    expect(panel?.className).toContain("channel-node-config--focus");
-    expect(panel?.className).not.toContain("channel-node-config--detail");
+    expect(panel?.className).toContain("channel-node-config--detail");
+    expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
     expect(screen.getByRole("region", { name: "Configuration" })).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "Upstream outputs" })).toBeNull();
-    expect(screen.queryByRole("region", { name: "This node's result" })).toBeNull();
-    expect(screen.getByText("Upstream outputs: This node has no upstream nodes")).toBeTruthy();
-    expect(screen.getByText("This node's result: Waiting for this node")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "This node's result" })).toBeTruthy();
+    expect(screen.getByText("This node has no upstream nodes")).toBeTruthy();
+    expect(screen.getByText("This node has not executed yet")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Show full output" })).toBeNull();
 
     fireEvent.click(within(header).getByRole("button", { name: "Run node" }));
@@ -639,54 +635,36 @@ describe("ChannelCanvas controls", () => {
     const header = document.querySelector(".channel-node-config__header");
     if (!(header instanceof HTMLElement)) throw new Error("missing header");
     expect(within(header).getByText("Succeeded")).toBeTruthy();
-    expect(screen.getByText("This node's result: Start Succeeded")).toBeTruthy();
-    expect(screen.queryByText(/hidden/)).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Show input and output" }));
-    expect(within(header).getByText("Succeeded")).toBeTruthy();
-    expect(screen.queryByText("This node's result: Start Succeeded")).toBeNull();
     expect(screen.getByText(/hidden/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Show input and output" })).toBeNull();
   });
 
-  it("opens the three-column workbench and returns to parameters", async () => {
+  it("opens the three-column window when a node is clicked", async () => {
     await renderCanvas([], nodeGraph);
 
     const node = document.querySelector(".react-flow__node");
     if (!(node instanceof HTMLElement)) throw new Error("missing node");
     fireEvent.click(node);
-    expect(screen.queryByRole("region", { name: "Upstream outputs" })).toBeNull();
-    const showData = screen.getByRole("button", { name: "Show input and output" });
-    const parameters = document.querySelector(
-      ".channel-node-config--focus .channel-node-region__body",
-    );
-    const context = document.querySelector(".channel-node-config__context");
-    expect(parameters?.contains(showData)).toBe(false);
-    expect(context?.contains(showData)).toBe(true);
-    expect(parameters?.contains(screen.getByText("channels.node.onError.stop"))).toBe(true);
-    expect(context?.contains(screen.getByText("Upstream outputs: This node has no upstream nodes"))).toBe(
-      true,
-    );
-
-    fireEvent.click(showData);
     expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
     expect(screen.getByRole("region", { name: "Configuration" })).toBeTruthy();
     expect(screen.getByRole("region", { name: "This node's result" })).toBeTruthy();
     expect(screen.getAllByText("This node has no upstream nodes")).toHaveLength(1);
     expect(screen.getAllByText("Run the graph to see data here")).toHaveLength(1);
+    expect(
+      within(screen.getByRole("region", { name: "Configuration" })).getByText(
+        "channels.node.onError.stop",
+      ),
+    ).toBeTruthy();
     const panel = document.querySelector(".channel-node-config");
     expect(panel?.className).toContain("channel-node-config--detail");
-    expect(panel?.className).not.toContain("channel-node-config--focus");
     const header = document.querySelector(".channel-node-config__header");
     if (!(header instanceof HTMLElement)) throw new Error("missing header");
     expect(within(header).getByRole("button", { name: "Run node" })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "Show parameters only" }));
-    expect(screen.queryByRole("region", { name: "Upstream outputs" })).toBeNull();
-    expect(screen.queryByRole("region", { name: "This node's result" })).toBeNull();
-    expect(panel?.className).toContain("channel-node-config--focus");
+    expect(screen.queryByRole("button", { name: "Show input and output" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show parameters only" })).toBeNull();
   });
 
-  it("returns to focus after close and keeps the workbench when the node changes", async () => {
+  it("keeps the same window when the node changes and after close", async () => {
     const pair: Graph = {
       nodes: [
         { ...nodeGraph.nodes[0]! },
@@ -713,7 +691,6 @@ describe("ChannelCanvas controls", () => {
     }
 
     fireEvent.click(first);
-    fireEvent.click(screen.getByRole("button", { name: "Show input and output" }));
     expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
 
     fireEvent.click(second);
@@ -726,11 +703,13 @@ describe("ChannelCanvas controls", () => {
     });
 
     fireEvent.click(second);
-    expect(screen.queryByRole("region", { name: "Upstream outputs" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Show input and output" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
+    expect(document.querySelector(".channel-node-config")?.className).toContain(
+      "channel-node-config--detail",
+    );
   });
 
-  it("returns to focus after the open node is deleted", async () => {
+  it("opens the same window after the open node is deleted", async () => {
     const pair: Graph = {
       nodes: [
         { ...nodeGraph.nodes[0]! },
@@ -756,7 +735,6 @@ describe("ChannelCanvas controls", () => {
     }
 
     fireEvent.click(first);
-    fireEvent.click(screen.getByRole("button", { name: "Show input and output" }));
     expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
 
     fireEvent.keyDown(document, { key: "Delete", code: "Delete" });
@@ -766,8 +744,10 @@ describe("ChannelCanvas controls", () => {
 
     fireEvent.click(second);
     expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Next");
-    expect(screen.queryByRole("region", { name: "Upstream outputs" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Show input and output" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
+    expect(document.querySelector(".channel-node-config")?.className).toContain(
+      "channel-node-config--detail",
+    );
   });
 
   it("moves focus into the settings overlay and names it for the node", async () => {
@@ -934,25 +914,6 @@ describe("ChannelCanvas controls", () => {
     expect(document.activeElement).not.toBe(other);
   });
 
-  it("keeps the same overlay element when switching altitude", async () => {
-    await renderCanvas([], nodeGraph);
-    const node = document.querySelector(".react-flow__node");
-    if (!(node instanceof HTMLElement)) throw new Error("missing node");
-    fireEvent.click(node);
-    const panel = document.querySelector(".channel-node-config");
-    if (!(panel instanceof HTMLElement)) throw new Error("missing panel");
-
-    fireEvent.click(screen.getByRole("button", { name: "Show input and output" }));
-    expect(document.querySelector(".channel-node-config")).toBe(panel);
-    expect(panel.className).toContain("channel-node-config--detail");
-    expect(panel.className).not.toContain("channel-node-config--leave");
-
-    fireEvent.click(screen.getByRole("button", { name: "Show parameters only" }));
-    expect(document.querySelector(".channel-node-config")).toBe(panel);
-    expect(panel.className).toContain("channel-node-config--focus");
-    expect(panel.className).not.toContain("channel-node-config--detail");
-  });
-
   it("fades the shared overlay in and out and disables that motion when reduced", () => {
     const css = readFileSync(resolve(__dirname, "ChannelCanvas.css"), "utf8");
     const motion = mediaBlocks(css, "prefers-reduced-motion: no-preference").join("\n");
@@ -983,11 +944,9 @@ describe("ChannelCanvas controls", () => {
     const reduced = mediaBlocks(css, "prefers-reduced-motion: reduce").join("\n");
     expect(reduced).toMatch(/\.channel-node-config[\s\S]*animation:\s*none/);
 
-    for (const rule of [".channel-node-config--focus", ".channel-node-config--detail"]) {
-      const body = css.match(new RegExp(`${rule.replace(".", "\\.")} \\{([\\s\\S]*?)\\n\\}`))?.[1];
-      expect(body).toBeTruthy();
-      expect(body).not.toMatch(/transition/);
-    }
+    const detailRule = css.match(/^\.channel-node-config--detail \{([\s\S]*?)\n\}/m)?.[1] ?? "";
+    expect(detailRule).toBeTruthy();
+    expect(detailRule).not.toMatch(/transition/);
   });
 
   it("states the node settings overlay motion constraints in the interaction doc", () => {
@@ -998,12 +957,12 @@ describe("ChannelCanvas controls", () => {
     const section = doc.split(/^## 9\. /m)[0]?.split(/^## 8\. Motion/m)[1] ?? "";
     expect(section).toMatch(/node settings overlay may fade in and out/i);
     expect(section).toMatch(/does not shift layout/i);
-    expect(section).toMatch(/focus altitude and the workbench altitude does not animate/i);
+    expect(section).not.toMatch(/focus altitude/i);
     expect(section).toMatch(/reduced-motion preference shows and hides the overlay immediately/i);
     expect(section).toMatch(/edge that enters the node currently running/i);
   });
 
-  it("sizes the workbench from the focus width and keeps three columns", () => {
+  it("sizes the node window and keeps three columns", () => {
     const css = readFileSync(resolve(__dirname, "ChannelCanvas.css"), "utf8");
     expect(css).not.toMatch(/960px/);
     expect(css).not.toMatch(/@container/);
@@ -1019,15 +978,7 @@ describe("ChannelCanvas controls", () => {
       /grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 2fr\) minmax\(0, 1fr\)/,
     );
     expect(columns).not.toMatch(/240px|440px/);
-
-    const focusDetail =
-      css.match(/^\.channel-node-config--focus \.channel-node-detail \{([\s\S]*?)\n\}/m)?.[1] ?? "";
-    expect(focusDetail).toMatch(/overflow:\s*hidden/);
-    expect(focusDetail).not.toMatch(/overflow:\s*auto/);
-    const focusBody =
-      css.match(/^\.channel-node-config--focus \.channel-node-region__body \{([\s\S]*?)\n\}/m)?.[1] ??
-      "";
-    expect(focusBody).toMatch(/overflow:\s*auto/);
+    expect(css).not.toMatch(/channel-node-config--focus/);
   });
 });
 
