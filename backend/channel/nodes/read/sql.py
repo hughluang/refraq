@@ -82,7 +82,7 @@ NODE_TYPE = NodeType(
         "The statement text is a template, and expression results are spliced as text. "
         "The node returns the driver result."
     ),
-    entry=False,
+    trigger=False,
     inputs=(MAIN_INPUT,),
     outputs=(MAIN_OUTPUT,),
     config_schema={

@@ -43,7 +43,7 @@ def _type(
         label=type_id,
         summary="Test node.",
         description="Test node. Used only by the engine suite.",
-        entry=False,
+        trigger=False,
         inputs=(PortSpec("main", "Input."), PortSpec("loop", "Loop return.")),
         outputs=outputs,
         config_schema={"type": "object"},

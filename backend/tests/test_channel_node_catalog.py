@@ -59,7 +59,7 @@ def test_a_node_type_requires_execute() -> None:
             label="Bare",
             summary="Has no execute function.",
             description="Test type. Constructing it without execute fails.",
-            entry=False,
+            trigger=False,
             inputs=(),
             outputs=(PortSpec("main", "Output."),),
             config_schema={"type": "object"},

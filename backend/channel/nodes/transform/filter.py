@@ -228,7 +228,7 @@ NODE_TYPE = NodeType(
         "all keeps a row only when every condition matches. any keeps it when one matches. "
         "The output lists the kept rows and how many were dropped."
     ),
-    entry=False,
+    trigger=False,
     inputs=(MAIN_INPUT,),
     outputs=(MAIN_OUTPUT,),
     config_schema=object_schema(

@@ -208,7 +208,7 @@ def test_cycle_through_loop_back_port_is_legal() -> None:
             "Test-only loop type. A cycle is legal when one edge leaves its "
             "loop-back port."
         ),
-        entry=False,
+        trigger=False,
         inputs=(PortSpec("main", "Items to iterate."),),
         outputs=(
             PortSpec("main", "Items after the loop finishes."),
@@ -502,7 +502,7 @@ def test_template_problem_path_includes_a_list_index() -> None:
         label="Nested",
         summary="Holds a list of templates.",
         description="Test type. One template sits under a list index.",
-        entry=True,
+        trigger=True,
         inputs=(),
         outputs=(PortSpec("main", "An object.", coarse_type="object"),),
         config_schema={
@@ -548,7 +548,7 @@ def test_incompatible_coarse_port_types() -> None:
         label="Items",
         summary="Emits a list.",
         description="Test type. Its output is a list of items, not an object.",
-        entry=True,
+        trigger=True,
         inputs=(),
         outputs=(PortSpec("main", "A list of items.", coarse_type="items"),),
         config_schema={
@@ -643,7 +643,7 @@ def test_refine_upstream_names_only_ancestors_with_ref() -> None:
         label="Sink",
         summary="Records the upstream map.",
         description="Test-only sink. Its refine records ancestor refs.",
-        entry=False,
+        trigger=False,
         inputs=(PortSpec("main", "Items."),),
         outputs=(PortSpec("main", "Items."),),
         config_schema={
@@ -877,7 +877,7 @@ def _flagged(*, required: list[str], check) -> NodeType:
             "Test type. Validation asks its check only after the configuration "
             "passes the JSON Schema."
         ),
-        entry=True,
+        trigger=True,
         inputs=(),
         outputs=(PortSpec("main", "Output."),),
         config_schema={

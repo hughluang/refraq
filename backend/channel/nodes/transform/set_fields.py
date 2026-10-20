@@ -98,7 +98,7 @@ NODE_TYPE = NodeType(
         "The node writes those keys in list order. "
         "Downstream nodes read the object by this node's ref."
     ),
-    entry=False,
+    trigger=False,
     inputs=(MAIN_INPUT,),
     outputs=(MAIN_OUTPUT,),
     config_schema=object_schema(

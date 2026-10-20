@@ -15,7 +15,7 @@ export type FlowNodeData = {
   config: Record<string, unknown>;
   onError: GraphNode["on_error"];
   retry: GraphNode["retry"];
-  entry: boolean;
+  trigger: boolean;
   problem: boolean;
   typeVersion: number;
 };
@@ -58,7 +58,7 @@ export function emptyNodeData(
   ref: string,
   name: string,
   config: Record<string, unknown>,
-  entry: boolean,
+  trigger: boolean,
 ): FlowNodeData {
   return {
     nodeType,
@@ -67,7 +67,7 @@ export function emptyNodeData(
     config,
     onError: "stop",
     retry: null,
-    entry,
+    trigger,
     problem: false,
     typeVersion: 1,
   };
@@ -75,7 +75,7 @@ export function emptyNodeData(
 
 export function flowFromGraph(
   graph: Graph,
-  entryTypes: ReadonlySet<string>,
+  triggerTypes: ReadonlySet<string>,
 ): { nodes: FlowNodeShape[]; edges: FlowEdgeShape[] } {
   return {
     nodes: graph.nodes.map((node) => ({
@@ -88,7 +88,7 @@ export function flowFromGraph(
         config: node.config,
         onError: node.on_error,
         retry: node.retry,
-        entry: entryTypes.has(node.type),
+        trigger: triggerTypes.has(node.type),
         problem: false,
         typeVersion: node.type_version ?? 1,
       },

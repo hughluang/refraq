@@ -107,11 +107,11 @@ class _Run:
                     stack.append(target)
         return seen
 
-    def walk(self, scope: set[str], *, entry: str | None) -> RunOutcome | None:
+    def walk(self, scope: set[str], *, start: str | None) -> RunOutcome | None:
         direct = (scope & self.reachable) - self._hidden(scope)
         done: set[str] = set()
-        if entry is not None:
-            stack = [entry] if entry in direct else []
+        if start is not None:
+            stack = [start] if start in direct else []
         else:
             stack = self._seeds(direct, done)
         while stack:
@@ -276,7 +276,7 @@ class _Run:
             self.produced[node_id] = step
             self._arm(node_id, body)
             self.ran_stack.append(set())
-            outcome = self.walk(body, entry=None)
+            outcome = self.walk(body, start=None)
             ran = self.ran_stack.pop()
             if outcome is not None:
                 self.hooks.on_finish(
@@ -360,7 +360,7 @@ class _Run:
 
 def execute(
     graph: Mapping[str, Any],
-    entry_node_id: str,
+    trigger_node_id: str,
     catalog: Sequence[NodeType],
     resolver: ReferenceResolver,
     hooks: EngineHooks,
@@ -370,14 +370,14 @@ def execute(
     stop_at_node_id: str | None = None,
 ) -> RunOutcome:
     nodes = {str(node["id"]): node for node in graph["nodes"]}
-    if entry_node_id not in nodes:
+    if trigger_node_id not in nodes:
         return RunOutcome(
             status="cancelled",
             error_code="CHANNEL_TRIGGER_INVALID",
             error_message="Trigger node is not in the graph",
         )
     children, _parents = _child_index(graph, nodes)
-    reachable = _reachable(entry_node_id, children)
+    reachable = _reachable(trigger_node_id, children)
     if stop_at_node_id is not None:
         closure = ancestor_closure(graph, stop_at_node_id)
         reachable &= closure if closure is not None else set()
@@ -393,7 +393,7 @@ def execute(
         timeout_sec=timeout_sec,
         clock=clock,
     )
-    outcome = runner.walk(reachable, entry=entry_node_id)
+    outcome = runner.walk(reachable, start=trigger_node_id)
     if outcome is not None:
         return outcome
     return RunOutcome(
@@ -478,9 +478,9 @@ def _child_index(
     return children, parents
 
 
-def _reachable(entry: str, children: dict[str, list[str]]) -> set[str]:
-    seen = {entry}
-    stack = [entry]
+def _reachable(start: str, children: dict[str, list[str]]) -> set[str]:
+    seen = {start}
+    stack = [start]
     while stack:
         node_id = stack.pop()
         for child in children.get(node_id, []):

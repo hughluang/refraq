@@ -83,7 +83,7 @@ const spec: NodeTypeSpec = {
   label: "Manual",
   summary: "Start here",
   description: "",
-  entry: true,
+  trigger: true,
   inputs: [],
   outputs: [{ port: "out", description: "" }],
   config_schema: {},
@@ -454,7 +454,7 @@ describe("ChannelRecord draft access", () => {
     vi.mocked(listNodeTypes).mockResolvedValue({
       items: [
         { ...spec, type: "trigger.manual", label: "Manual" },
-        { ...spec, type: "transform.filter", label: "Filter", entry: false },
+        { ...spec, type: "transform.filter", label: "Filter", trigger: false },
       ],
     });
     vi.mocked(startRun).mockResolvedValue({ run: runningDetail().run });

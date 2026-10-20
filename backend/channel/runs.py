@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from backend.admin.audit import persist_audit_event
 from backend.admin.user_store import UserRecord
-from backend.channel.channel_run import dispatch, entry_node_id, mint_on_demand_run
+from backend.channel.channel_run import dispatch, mint_on_demand_run, trigger_node_id
 from backend.channel.errors import (
     ChannelGraphInvalid,
     ChannelNotFound,
@@ -47,8 +47,8 @@ def start_run(
     closure = require_stop_closure(graph, stop_at_node_id)
     if target == "draft" or closure is not None:
         refuse_invalid_closure(graph, channel_id=channel_id, closure=closure)
-    entry = entry_node_id(graph)
-    if entry is None:
+    trigger = trigger_node_id(graph)
+    if trigger is None:
         raise ChannelTriggerInvalid()
     job, record = mint_on_demand_run(
         channel_id=channel_id,
@@ -56,7 +56,7 @@ def start_run(
         target=target,
         ignore_checkpoints=ignore_checkpoints,
         actor_id=actor.id,
-        trigger_node_id=entry,
+        trigger_node_id=trigger,
         version=version,
         draft_revision=draft_revision,
         graph=graph,

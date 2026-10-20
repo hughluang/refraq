@@ -91,7 +91,7 @@ NODE_TYPE = NodeType(
         "The platform applies its timeout, row cap, and query audit. "
         "Rows come back as objects keyed by column name."
     ),
-    entry=False,
+    trigger=False,
     inputs=(MAIN_INPUT,),
     outputs=(MAIN_OUTPUT,),
     config_schema=object_schema(

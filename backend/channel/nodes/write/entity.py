@@ -211,7 +211,7 @@ NODE_TYPE = NodeType(
         "attribute. When the published head no longer matches, the node fails "
         "the item or skips it."
     ),
-    entry=False,
+    trigger=False,
     inputs=(MAIN_INPUT,),
     outputs=(MAIN_OUTPUT, ERROR_OUTPUT),
     config_schema=object_schema(

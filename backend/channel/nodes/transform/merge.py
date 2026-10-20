@@ -176,7 +176,7 @@ NODE_TYPE = NodeType(
         "by_position pairs rows by index. "
         "The join is inner, left, or full. append ignores the join."
     ),
-    entry=False,
+    trigger=False,
     inputs=(MAIN_INPUT,),
     outputs=(MAIN_OUTPUT,),
     config_schema=_schema(),

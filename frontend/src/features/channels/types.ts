@@ -155,7 +155,7 @@ export type NodeTypeSpec = {
   label: string;
   summary: string;
   description: string;
-  entry: boolean;
+  trigger: boolean;
   inputs: NodeTypePort[];
   outputs: NodeTypePort[];
   config_schema: Record<string, unknown>;

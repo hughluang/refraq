@@ -361,7 +361,7 @@ Sections are empty lists, or `false`, when there is nothing to show.
   "label": "Write Entity",
   "summary": "Creates, updates, upserts, or deletes rows of a Business Entity.",
   "description": "Writes mapped attributes into the current head of one Business Entity. The match key is the head's Business Key unless the node names a unique attribute. When the published head no longer matches, the node fails the item or skips it.",
-  "entry": false,
+  "trigger": false,
   "inputs": [
     {
       "port": "main",
@@ -389,7 +389,7 @@ Sections are empty lists, or `false`, when there is nothing to show.
 
 - `family` is `trigger`, `read`, `transform`, `volume`, `state`, or `write`.
 - `label`, `summary`, and `description` are English. `summary` is one sentence. `description` states the type's function and its place in a workflow.
-- `entry` is `true` for trigger types; they declare no inputs.
+- `trigger` is `true` for trigger types; they declare no inputs.
 - Each port is `{ "port", "description", "coarse_type", "loop_back" }`. `port` is lower snake case. `coarse_type` is `object`, `items`, or `unknown`. `loop_back` is true on the output that starts a loop body (`each` on `volume.for`) and false otherwise. `main` is the primary data port. `error` is an output that carries items the node failed when `on_error` is `error_output`.
 - `type_version` is the current version of the node type. A node instance's `type_version` must match it.
 - `config_schema` is a JSON Schema object that the Console renders as the configuration panel and the server enforces at validate and publish. Every property, including properties nested under array items, has `title` and `description`.

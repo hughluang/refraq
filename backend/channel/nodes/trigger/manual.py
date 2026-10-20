@@ -105,11 +105,11 @@ NODE_TYPE = NodeType(
     label="Manual trigger",
     summary="Starts a run when an operator asks for one by hand.",
     description=(
-        "Entry point of a Data Channel. An operator with channel:write starts the "
+        "Trigger of a Data Channel. An operator with channel:write starts the "
         "run from the Console, including while the channel is inactive. The run "
         "begins with no upstream items."
     ),
-    entry=True,
+    trigger=True,
     inputs=(),
     outputs=(MAIN_OUTPUT,),
     config_schema=object_schema(

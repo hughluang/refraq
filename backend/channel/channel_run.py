@@ -1,4 +1,4 @@
-"""One home for a Channel Run's entry rule, minting, dispatch, and engine hooks."""
+"""One home for a Channel Run's trigger rule, minting, dispatch, and engine hooks."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ Dispatcher = Callable[[str], object]
 __all__ = [
     "ScheduledMint",
     "dispatch",
-    "entry_node_id",
+    "trigger_node_id",
     "execute_channel_run",
     "expression_context",
     "mint_on_demand_run",
@@ -52,14 +52,14 @@ class ScheduledMint:
     mint_at: datetime | None
 
 
-def entry_node_id(graph: dict[str, Any]) -> str | None:
-    entry_types = {item.type_id for item in list_node_types() if item.entry}
-    entries = [
-        node for node in graph.get("nodes") or [] if node.get("type") in entry_types
+def trigger_node_id(graph: dict[str, Any]) -> str | None:
+    trigger_types = {item.type_id for item in list_node_types() if item.trigger}
+    triggers = [
+        node for node in graph.get("nodes") or [] if node.get("type") in trigger_types
     ]
-    if len(entries) != 1:
+    if len(triggers) != 1:
         return None
-    return str(entries[0]["id"])
+    return str(triggers[0]["id"])
 
 
 def mint_on_demand_run(
@@ -256,8 +256,8 @@ def schedule_context(
 def execute_channel_run(
     *,
     graph: Mapping[str, Any],
-    entry_node_id: str,
-    entry_node: Mapping[str, Any],
+    trigger_node_id: str,
+    trigger_node: Mapping[str, Any],
     run: ChannelRunRecord,
     context: dict[str, Any],
     actor: dict[str, str],
@@ -269,7 +269,7 @@ def execute_channel_run(
     user = ensure_system_user(get_user_store())
     schedule = schedule_context(
         channel_id=run.channel_id,
-        node=entry_node,
+        node=trigger_node,
         trigger_kind=job.trigger_kind,
         when=job.created_at,
         trigger_ref=job.trigger_ref,
@@ -289,7 +289,7 @@ def execute_channel_run(
         )
         return _execute_graph(
             graph,
-            entry_node_id,
+            trigger_node_id,
             run.channel_id,
             hooks,
             timeout_sec=timeout_sec,
@@ -385,7 +385,7 @@ def _sandbox_session(context: dict[str, Any]) -> Iterator[SandboxSession]:
 
 def _execute_graph(
     graph: Mapping[str, Any],
-    entry_node_id: str,
+    trigger_node_id: str,
     channel_id: str,
     hooks: EngineHooks,
     *,
@@ -395,7 +395,7 @@ def _execute_graph(
 ) -> RunOutcome:
     return execute(
         graph,
-        entry_node_id,
+        trigger_node_id,
         list_node_types(),
         ChannelReferenceResolver(channel_id),
         hooks,

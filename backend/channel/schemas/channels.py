@@ -304,7 +304,7 @@ class NodeTypeOut(BaseModel):
     label: str
     summary: str
     description: str
-    entry: bool
+    trigger: bool
     inputs: list[PortOut]
     outputs: list[PortOut]
     config_schema: dict[str, Any]

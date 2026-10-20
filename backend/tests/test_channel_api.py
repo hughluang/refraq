@@ -337,7 +337,7 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
         "state.variable",
         "write.entity",
     ]
-    assert items[0]["entry"] is True
+    assert items[0]["trigger"] is True
     assert items[0]["label"] == "Manual trigger"
     assert items[0]["summary"]
     assert items[0]["description"]

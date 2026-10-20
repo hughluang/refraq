@@ -76,11 +76,11 @@ NODE_TYPE = NodeType(
     label="Scheduled trigger",
     summary="Starts a run when the published cadence is due.",
     description=(
-        "Entry point of a Data Channel. Publish syncs this node's cadence to one "
+        "Trigger of a Data Channel. Publish syncs this node's cadence to one "
         "locked Scheduled Task for the channel. A due tick starts a published run "
         "at this node. The output carries the schedule id, name, and scheduled_for."
     ),
-    entry=True,
+    trigger=True,
     inputs=(),
     outputs=(MAIN_OUTPUT,),
     config_schema={

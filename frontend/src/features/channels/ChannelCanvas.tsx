@@ -228,12 +228,12 @@ function ChannelCanvasBody({
   const colorScheme = useComputedColorScheme("light", { getInitialValueInEffect: false });
   const { data: heldPermissions } = usePermissions<string[]>({});
   const { screenToFlowPosition, setCenter, getInternalNode } = useReactFlow();
-  const entryTypes = useMemo(
-    () => new Set(catalog.filter((item) => item.entry).map((item) => item.type)),
+  const triggerTypes = useMemo(
+    () => new Set(catalog.filter((item) => item.trigger).map((item) => item.type)),
     [catalog],
   );
   const initial = useMemo(
-    () => flowFromGraph(graph, entryTypes),
+    () => flowFromGraph(graph, triggerTypes),
     // The canvas owns edits after mount. The parent remounts only when a draft is loaded.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -408,7 +408,7 @@ function ChannelCanvasBody({
     const selectedEdgeIds = new Set(
       edgesRef.current.filter((edge) => edge.selected).map((edge) => edge.id),
     );
-    const flow = flowFromGraph(nextGraph, entryTypes);
+    const flow = flowFromGraph(nextGraph, triggerTypes);
     const adoptedNodes: ChannelNode[] = flow.nodes.map((node) => ({
       ...node,
       type: "channel",
@@ -431,7 +431,7 @@ function ChannelCanvasBody({
     // The stored graph is one undo step ahead of the pre-save canvas, so undo
     // returns to that unsaved graph.
     pushSnap();
-  }, [adoptToken, entryTypes, graph]);
+  }, [adoptToken, triggerTypes, graph]);
 
   useEffect(() => {
     if (mutable) return;
@@ -547,7 +547,7 @@ function ChannelCanvasBody({
         ref,
         name,
         defaultConfig(spec.config_schema as SchemaObject),
-        spec.entry,
+        spec.trigger,
       ),
     };
     const nextNodes = [...nodesRef.current.map((node) => ({ ...node, selected: false })), created];
@@ -872,9 +872,9 @@ function ChannelCanvasBody({
     },
     [],
   );
-  const hasTrigger = nodes.some((node) => node.data.entry);
+  const hasTrigger = nodes.some((node) => node.data.trigger);
   const catalogSpecs = (picker?.kind === "connect" ? picker.specs : catalog).filter(
-    (spec) => !hasTrigger || !spec.entry,
+    (spec) => !hasTrigger || !spec.trigger,
   );
   const catalogTitle =
     picker?.kind === "connect" ? t("channels.canvas.nextStep") : t("channels.canvas.palette");
@@ -1268,7 +1268,7 @@ function structural(snap: CanvasSnapshot) {
       config: node.data.config,
       onError: node.data.onError,
       retry: node.data.retry,
-      entry: node.data.entry,
+      trigger: node.data.trigger,
     })),
     edges: snap.edges.map((edge) => ({
       id: edge.id,
@@ -1562,7 +1562,7 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   const catalog = useContext(CanvasCatalogContext);
   const spec = catalog.find((item) => item.type === data.nodeType);
   const { deleteElements } = useReactFlow();
-  const inputs = spec ? spec.inputs : data.entry ? [] : [{ port: "main", description: "" }];
+  const inputs = spec ? spec.inputs : data.trigger ? [] : [{ port: "main", description: "" }];
   const outputs = spec ? spec.outputs : [{ port: "main", description: "" }];
   const laid = layoutNodePorts(inputs, outputs);
   const errorAnchor = outputs.some((port) => port.port === "error");

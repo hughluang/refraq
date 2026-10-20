@@ -770,7 +770,7 @@ def _outgoing(
 
 def _is_trigger(node: Mapping[str, Any], by_type: dict[str, NodeType]) -> bool:
     spec = by_type.get(str(node["type"]))
-    return spec is not None and spec.entry
+    return spec is not None and spec.trigger
 
 
 def _loop_body_problems(

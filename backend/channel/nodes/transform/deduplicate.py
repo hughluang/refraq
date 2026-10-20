@@ -63,7 +63,7 @@ NODE_TYPE = NodeType(
         "keys names the fields that form the identity, compared as JSON. "
         "A missing field is null. Later duplicates are counted in removed."
     ),
-    entry=False,
+    trigger=False,
     inputs=(MAIN_INPUT,),
     outputs=(MAIN_OUTPUT,),
     config_schema=object_schema(

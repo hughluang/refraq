@@ -86,7 +86,7 @@ NODE_TYPE = NodeType(
         "The done output adds results collected from the loop input. "
         "An empty list runs the body zero times and sets current and index to null."
     ),
-    entry=False,
+    trigger=False,
     inputs=(
         MAIN_INPUT,
         PortSpec("loop", "Return edge that collects one result per iteration.", coarse_type="object"),

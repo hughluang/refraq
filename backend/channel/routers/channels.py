@@ -126,7 +126,7 @@ def _node_type_out(spec: NodeType) -> NodeTypeOut:
         label=spec.label,
         summary=spec.summary,
         description=spec.description,
-        entry=spec.entry,
+        trigger=spec.trigger,
         inputs=[
             PortOut(
                 port=port.port,

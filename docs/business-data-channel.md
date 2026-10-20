@@ -50,7 +50,7 @@ A graph is a set of nodes, a set of directed edges, and graph settings.
 
 - **Node.** Each node has an id, a `ref`, a node type, a name, a configuration object, a canvas position, and per-node error settings (§6.8). The node type declares its configuration schema, its input ports, and its output ports (§4.2). Node ids are assigned when the node is created and stay stable across draft saves and versions; schedule sync, checkpoints, and run records key on them. Node names are unique within a graph. `ref` is a Python identifier, unique within the graph, generated when the node is created, and editable. Expressions name a node's output by `ref` (§4.1).
 - **Edge.** An edge connects one output port of a node to one input port of another node. An edge orders execution and selects a branch. It does not carry items (ADR 0056).
-- **Trigger nodes are entry points.** A trigger node has no input port and no inbound edge. A run starts at exactly one trigger node: the one that minted it.
+- **A trigger node starts a run.** A trigger node has no input port and no inbound edge. A run starts at exactly one trigger node: the one that minted it.
 - **A loop node is the only legal back edge.** A cycle is legal only when it passes through a loop node's loop-back port. A loop node is a node type that declares a loop-back output port; For is the only one in this release.
 - **Graph settings** carry the optional run timeout (§6.6) and the optional error workflow (§6.8). Graph settings are part of the version.
 
@@ -137,7 +137,7 @@ Port names are lower snake case. `main` carries the node's primary items or data
 
 | Family | Node types | Role |
 | --- | --- | --- |
-| Trigger | Manual, Scheduled, Platform event, Changes arrived | Entry point of a run (§7) |
+| Trigger | Manual, Scheduled, Platform event, Changes arrived | Starts a run (§7) |
 | Read | SQL, live Source query, Read Mirror, Read Changes | Run a SQL statement, read a guarded Source query, or read mirror and change rows |
 | Transform | Set fields, If, Filter, Merge, Deduplicate, Code | Reshape, route, or drop items |
 | Volume | For, Materialize, Batch Read | Iterate a list, and move large data by reference |

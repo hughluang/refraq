@@ -183,7 +183,7 @@ function node(config: Record<string, unknown>, nodeType = "write.entity"): FlowN
     config,
     onError: "stop",
     retry: null,
-    entry: false,
+    trigger: false,
     problem: false,
     typeVersion: 1,
   };

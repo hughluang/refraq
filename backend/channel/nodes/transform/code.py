@@ -81,7 +81,7 @@ NODE_TYPE = NodeType(
         "The call runs in the channel run's sandbox: no network, an allow-listed "
         "set of modules, and a wall-clock limit."
     ),
-    entry=False,
+    trigger=False,
     inputs=(MAIN_INPUT,),
     outputs=(MAIN_OUTPUT,),
     config_schema=object_schema(

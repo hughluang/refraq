@@ -14,7 +14,7 @@ import {
 } from "@/features/channels/graphValidation";
 import type { Graph } from "@/features/channels/types";
 
-const ENTRY = new Set(["trigger.manual"]);
+const TRIGGERS = new Set(["trigger.manual"]);
 
 function node(id: string, type: string, name = id): Graph["nodes"][number] {
   return {
@@ -56,7 +56,7 @@ describe("flow conversion", () => {
       edges: [edge("ed_1", "nd_trigger", "nd_read", "error", "main")],
       settings: { run_timeout_sec: 30, error_channel_id: null },
     };
-    const flow = flowFromGraph(graph, ENTRY);
+    const flow = flowFromGraph(graph, TRIGGERS);
     const restored = graphFromFlow(
       flow.nodes as FlowNodeShape[],
       flow.edges,
@@ -67,7 +67,7 @@ describe("flow conversion", () => {
     expect(restored.nodes[0]?.type).toBe("trigger.manual");
     expect(restored.edges[0]).toEqual(edge("ed_1", "nd_trigger", "nd_read", "error", "main"));
     expect(restored.settings.run_timeout_sec).toBe(30);
-    expect(flow.nodes[0]?.data.entry).toBe(true);
+    expect(flow.nodes[0]?.data.trigger).toBe(true);
   });
 });
 

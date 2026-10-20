@@ -49,7 +49,7 @@ NODE_TYPE = NodeType(
         "The live output is true when the condition is true, and false otherwise. "
         "Both ports carry the object {value: bool}. A dead branch does not run."
     ),
-    entry=False,
+    trigger=False,
     inputs=(MAIN_INPUT,),
     outputs=(
         PortSpec("true", "Taken when the condition is true.", coarse_type="object"),

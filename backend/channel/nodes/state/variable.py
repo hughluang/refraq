@@ -95,7 +95,7 @@ NODE_TYPE = NodeType(
         "A write takes effect immediately and is not rolled back when the run fails. "
         "An optional expiry lets a lease release itself."
     ),
-    entry=False,
+    trigger=False,
     inputs=(MAIN_INPUT,),
     outputs=(MAIN_OUTPUT,),
     config_schema={

@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 from backend.admin.user_store import get_user_store
-from backend.channel.channel_run import entry_node_id, execute_channel_run, expression_context
+from backend.channel.channel_run import execute_channel_run, expression_context, trigger_node_id
 from backend.channel.run_store import get_run_store, note_killed_run
 from backend.channel.sandbox import SandboxFailed
 from backend.channel.store import get_channel_store
@@ -42,19 +42,19 @@ def run_channel_job(job_id: str) -> dict[str, str]:
     if graph is None:
         _cancel(job_id, run, None)
         return {"status": "cancelled"}
-    entry = entry_node_id(graph)
-    entry_node = next((node for node in graph["nodes"] if node["id"] == entry), None)
-    if entry is None or entry_node is None:
+    trigger = trigger_node_id(graph)
+    trigger_node = next((node for node in graph["nodes"] if node["id"] == trigger), None)
+    if trigger is None or trigger_node is None:
         _cancel(job_id, run, None)
         return {"status": "cancelled"}
     if claimed.trigger_kind == "schedule" and (
-        not channel.active or entry_node.get("type") != "trigger.scheduled"
+        not channel.active or trigger_node.get("type") != "trigger.scheduled"
     ):
-        _cancel(job_id, run, entry)
+        _cancel(job_id, run, trigger)
         return {"status": "cancelled"}
     run.graph = graph
     run.version = version
-    run.trigger_node_id = entry
+    run.trigger_node_id = trigger
     started = utc_now()
     actor = _actor(claimed)
     context = expression_context(channel, run, started, actor, claimed.trigger_kind)
@@ -70,8 +70,8 @@ def run_channel_job(job_id: str) -> dict[str, str]:
     try:
         outcome = execute_channel_run(
             graph=graph,
-            entry_node_id=entry,
-            entry_node=entry_node,
+            trigger_node_id=trigger,
+            trigger_node=trigger_node,
             run=run,
             context=context,
             actor=actor,

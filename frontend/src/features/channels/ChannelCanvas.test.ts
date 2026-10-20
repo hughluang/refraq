@@ -201,7 +201,7 @@ const spec: NodeTypeSpec = {
   label: "Manual",
   summary: "Start here",
   description: "",
-  entry: true,
+  trigger: true,
   inputs: [],
   outputs: [{ port: "out", description: "" }],
   config_schema: {},
@@ -809,7 +809,7 @@ describe("ChannelCanvas controls", () => {
       family: "transform",
       label: "Step",
       summary: "Next",
-      entry: false,
+      trigger: false,
       inputs: [{ port: "in", description: "" }],
       outputs: [],
     };
@@ -1177,7 +1177,7 @@ function catalogSpec(
   type: string,
   inputs: NodeTypeSpec["inputs"],
   outputs: NodeTypeSpec["outputs"],
-  entry = false,
+  trigger = false,
 ): NodeTypeSpec {
   return {
     type,
@@ -1185,7 +1185,7 @@ function catalogSpec(
     label: type,
     summary: type,
     description: "",
-    entry,
+    trigger,
     inputs,
     outputs,
     config_schema: {},

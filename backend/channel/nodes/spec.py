@@ -132,7 +132,7 @@ class NodeType:
     label: str
     summary: str
     description: str
-    entry: bool
+    trigger: bool
     inputs: tuple[PortSpec, ...]
     outputs: tuple[PortSpec, ...]
     config_schema: dict[str, Any]
