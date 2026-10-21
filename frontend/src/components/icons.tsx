@@ -48,6 +48,7 @@ import {
   IconList,
   IconListCheck,
   IconMoon,
+  IconNote,
   IconPalette,
   IconPencil,
   IconPlayerPlayFilled,
@@ -123,6 +124,7 @@ export const ChevronDownIcon = withDefaults(IconChevronDown);
 export const FitViewIcon = withDefaults(IconArrowsMaximize);
 export const KeyboardIcon = withDefaults(IconKeyboard);
 export const MinimapIcon = withDefaults(IconMap);
+export const NoteIcon = withDefaults(IconNote);
 export const ZoomInIcon = withDefaults(IconZoomIn);
 export const ZoomOutIcon = withDefaults(IconZoomOut);
 

@@ -118,6 +118,49 @@
   background: var(--mantine-color-body);
 }
 
+.channel-canvas-stage .react-flow__node-note {
+  z-index: 0 !important;
+}
+
+.channel-note {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  border-radius: var(--mantine-radius-sm);
+  background: var(--mantine-color-yellow-light);
+  color: var(--mantine-color-yellow-light-color);
+  border: 1px solid color-mix(in srgb, var(--mantine-color-yellow-light-color) 32%, transparent);
+  font-size: var(--mantine-font-size-sm);
+  line-height: var(--mantine-line-height);
+  white-space: pre-wrap;
+}
+
+.channel-note__body,
+.channel-note__input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+  padding: var(--mantine-spacing-xs);
+  font: inherit;
+  color: inherit;
+  white-space: pre-wrap;
+}
+
+.channel-note__input {
+  display: block;
+  height: 100%;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+}
+
+.channel-note__placeholder {
+  color: color-mix(in srgb, var(--mantine-color-yellow-light-color) 55%, transparent);
+}
+
 .channel-canvas-toolbar__sep {
   width: 1px;
   align-self: stretch;
@@ -202,6 +245,14 @@
   border-radius: var(--mantine-radius-sm);
   background: var(--mantine-color-body);
   text-align: start;
+}
+
+.channel-flow-node--frame {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border-style: dashed;
+  background: color-mix(in srgb, var(--mantine-color-blue-light) 65%, transparent);
 }
 
 .channel-flow-node__icon {
@@ -317,20 +368,14 @@
   pointer-events: auto;
 }
 
-.channel-flow-node .react-flow__handle.channel-flow-handle--loop {
-  border: 1px solid var(--refraq-tone-info);
-  border-radius: 1px;
-  background: var(--refraq-tone-info);
-}
-
-.channel-flow-node .react-flow__handle:not(.channel-flow-handle--loop) {
+.channel-flow-node .react-flow__handle {
   border: 1.5px solid var(--refraq-tone-neutral);
   /* Length radius: the library's 100% radius turns a 1px width/height snap into an ellipse. */
   border-radius: 999px;
   background: var(--mantine-color-body);
 }
 
-.channel-flow-node:hover .react-flow__handle:not(.channel-flow-handle--loop) {
+.channel-flow-node:hover .react-flow__handle {
   border-color: var(--mantine-primary-color-filled);
   border-width: 2.5px;
 }
@@ -366,19 +411,14 @@
   transform: translateY(-50%);
 }
 
-.channel-flow-port--bottom {
-  bottom: -14px;
-  left: 50%;
-  transform: translateX(-50%);
+.channel-flow-port--inset {
+  left: 36px;
+  transform: translateY(-50%);
 }
 
 .channel-canvas-stage .react-flow__edge:hover .react-flow__edge-path,
 .channel-canvas-stage .react-flow__edge.channel-flow-edge--adjacent .react-flow__edge-path {
   stroke: var(--mantine-primary-color-filled);
-}
-
-.channel-flow-edge--return:not(.channel-flow-edge--live) .react-flow__edge-path {
-  stroke-dasharray: 4 3;
 }
 
 .channel-canvas-stage .react-flow__edge.channel-flow-edge--settled .react-flow__edge-path {

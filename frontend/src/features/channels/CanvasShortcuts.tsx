@@ -77,6 +77,12 @@ export const CANVAS_SHORTCUTS: readonly CanvasShortcut[] = [
     chords: [{ key: "Tab" }],
   },
   {
+    id: "editNote",
+    group: "edit",
+    labelKey: "channels.canvas.shortcuts.editNote",
+    chords: [{ key: "Double-click" }],
+  },
+  {
     id: "close",
     group: "edit",
     labelKey: "channels.canvas.shortcuts.close",

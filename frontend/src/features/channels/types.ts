@@ -8,6 +8,8 @@ export type GraphNode = {
   type: string;
   name: string;
   position: { x: number; y: number };
+  /** For node id whose frame contains this node. Position is then relative to that frame. Absent when the node is on the canvas root. */
+  parent?: string;
   config: Record<string, unknown>;
   on_error: "stop" | "continue" | "error_output";
   retry: { max_tries: number; wait_sec: number } | null;
@@ -20,6 +22,14 @@ export type GraphEdge = {
   target: { node_id: string; port: string };
 };
 
+/** A canvas note. It is not an executable node and is omitted from `nodes`. */
+export type GraphNote = {
+  id: string;
+  position: { x: number; y: number };
+  size: { width: number; height: number };
+  text: string;
+};
+
 export type GraphSettings = {
   run_timeout_sec: number | null;
   run_retry_limit?: number | null;
@@ -30,6 +40,8 @@ export type Graph = {
   nodes: GraphNode[];
   edges: GraphEdge[];
   settings: GraphSettings;
+  /** Absent when the stored graph has no notes. An empty list is not written. */
+  notes?: GraphNote[];
 };
 
 export type Channel = {

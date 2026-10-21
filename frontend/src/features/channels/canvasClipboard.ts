@@ -1,17 +1,16 @@
 import { canAuthorNodeType } from "@/features/channels/nodePermission";
-import type { Graph, GraphEdge, GraphNode, NodeTypeSpec } from "@/features/channels/types";
+import type { Graph, GraphEdge, GraphNode, GraphNote, NodeTypeSpec } from "@/features/channels/types";
 import { newGraphId, nodeRef } from "@/features/channels/graphValidation";
 
 export const FRAGMENT_KIND = "refraq.channel.fragment";
 export const FRAGMENT_VERSION = 1;
 
-/** `notes` stays empty until channel notes are serialized. Parsed notes are kept for that slice. */
 export type ChannelFragment = {
   kind: typeof FRAGMENT_KIND;
   version: typeof FRAGMENT_VERSION;
   nodes: GraphNode[];
   edges: GraphEdge[];
-  notes: unknown[];
+  notes: GraphNote[];
 };
 
 export type PasteSkip = {
@@ -22,10 +21,11 @@ export type PasteSkip = {
   permissions: string[];
 };
 
-/** Nodes and edges to add. Empty when every node was skipped. */
+/** Nodes, edges, and notes to add. Empty when nothing was accepted. */
 export type PasteResult = {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  notes: GraphNote[];
   skipped: PasteSkip;
 };
 
@@ -39,12 +39,15 @@ export function serializeFragment(graph: Graph, selectedNodeIds: Iterable<string
   const edges = graph.edges
     .filter((item) => selected.has(item.source.node_id) && selected.has(item.target.node_id))
     .map((item) => structuredClone(item));
+  const notes = (graph.notes ?? [])
+    .filter((item) => selected.has(item.id))
+    .map((item) => structuredClone(item));
   return {
     kind: FRAGMENT_KIND,
     version: FRAGMENT_VERSION,
     nodes,
     edges,
-    notes: [],
+    notes,
   };
 }
 
@@ -72,12 +75,18 @@ export function parseFragment(text: string): ChannelFragment | null {
     if (!edge) return null;
     edges.push(edge);
   }
+  const notes: GraphNote[] = [];
+  for (const item of parsed.notes) {
+    const note = parseNote(item);
+    if (!note) return null;
+    notes.push(note);
+  }
   return {
     kind: FRAGMENT_KIND,
     version: FRAGMENT_VERSION,
     nodes,
     edges,
-    notes: parsed.notes,
+    notes,
   };
 }
 
@@ -123,7 +132,11 @@ export function pasteFragment(
     accepted.push(copy);
   }
 
-  const nodes = placeNodes(accepted, anchor);
+  const notes = fragment.notes.map((source) => ({
+    ...structuredClone(source),
+    id: newGraphId("nt"),
+  }));
+  const placed = placePasted(accepted, notes, anchor);
   const edges: GraphEdge[] = [];
   for (const source of fragment.edges) {
     const sourceId = idMap.get(source.source.node_id);
@@ -135,25 +148,43 @@ export function pasteFragment(
       target: { node_id: targetId, port: source.target.port },
     });
   }
-  return { nodes, edges, skipped };
+  return { nodes: placed.nodes, edges, notes: placed.notes, skipped };
 }
 
-function placeNodes(nodes: GraphNode[], anchor: { x: number; y: number } | null): GraphNode[] {
-  if (nodes.length === 0) return nodes;
+type Positioned = { position: { x: number; y: number } };
+
+/** Anchor uses one origin for nodes and notes. No anchor shifts each item by the duplicate offset. */
+function placePasted<N extends Positioned, M extends Positioned>(
+  nodes: N[],
+  notes: M[],
+  anchor: { x: number; y: number } | null,
+): { nodes: N[]; notes: M[] } {
+  if (nodes.length === 0 && notes.length === 0) return { nodes, notes };
   if (!anchor) {
-    return nodes.map((item) => ({
-      ...item,
-      position: { x: item.position.x + DUPLICATE_OFFSET, y: item.position.y + DUPLICATE_OFFSET },
-    }));
+    return {
+      nodes: shiftBy(nodes, DUPLICATE_OFFSET, DUPLICATE_OFFSET),
+      notes: shiftBy(notes, DUPLICATE_OFFSET, DUPLICATE_OFFSET),
+    };
   }
-  const minX = Math.min(...nodes.map((item) => item.position.x));
-  const minY = Math.min(...nodes.map((item) => item.position.y));
-  return nodes.map((item) => ({
+  const origin = boundsOrigin([...nodes, ...notes]);
+  return {
+    nodes: shiftBy(nodes, anchor.x - origin.x, anchor.y - origin.y),
+    notes: shiftBy(notes, anchor.x - origin.x, anchor.y - origin.y),
+  };
+}
+
+function boundsOrigin(items: readonly Positioned[]): { x: number; y: number } {
+  return {
+    x: Math.min(...items.map((item) => item.position.x)),
+    y: Math.min(...items.map((item) => item.position.y)),
+  };
+}
+
+function shiftBy<T extends Positioned>(items: T[], dx: number, dy: number): T[] {
+  if (items.length === 0) return items;
+  return items.map((item) => ({
     ...item,
-    position: {
-      x: anchor.x + (item.position.x - minX),
-      y: anchor.y + (item.position.y - minY),
-    },
+    position: { x: item.position.x + dx, y: item.position.y + dy },
   }));
 }
 
@@ -167,6 +198,26 @@ function nextName(name: string, used: Set<string>): string {
   const next = `${name} ${index}`;
   used.add(next);
   return next;
+}
+
+function parseNote(value: unknown): GraphNote | null {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.text !== "string") return null;
+  const position = parsePoint(value.position);
+  const size = parseSize(value.size);
+  if (!position || !size) return null;
+  return { id: value.id, position, size, text: value.text };
+}
+
+function parsePoint(value: unknown): { x: number; y: number } | null {
+  if (!isRecord(value) || typeof value.x !== "number" || typeof value.y !== "number") return null;
+  return { x: value.x, y: value.y };
+}
+
+function parseSize(value: unknown): { width: number; height: number } | null {
+  if (!isRecord(value) || typeof value.width !== "number" || typeof value.height !== "number") {
+    return null;
+  }
+  return { width: value.width, height: value.height };
 }
 
 function parseNode(value: unknown): GraphNode | null {

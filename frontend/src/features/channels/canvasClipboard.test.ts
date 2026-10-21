@@ -6,7 +6,14 @@ import {
   serializeFragment,
   type ChannelFragment,
 } from "@/features/channels/canvasClipboard";
-import { EMPTY_GRAPH, type Graph, type GraphEdge, type GraphNode, type NodeTypeSpec } from "@/features/channels/types";
+import {
+  EMPTY_GRAPH,
+  type Graph,
+  type GraphEdge,
+  type GraphNode,
+  type GraphNote,
+  type NodeTypeSpec,
+} from "@/features/channels/types";
 
 function node(partial: Partial<GraphNode> & Pick<GraphNode, "id" | "type">): GraphNode {
   return {
@@ -34,8 +41,17 @@ function edge(
   };
 }
 
-function graph(nodes: GraphNode[], edges: GraphEdge[] = []): Graph {
-  return { nodes, edges, settings: EMPTY_GRAPH.settings };
+function graph(nodes: GraphNode[], edges: GraphEdge[] = [], notes?: GraphNote[]): Graph {
+  return notes ? { nodes, edges, settings: EMPTY_GRAPH.settings, notes } : { nodes, edges, settings: EMPTY_GRAPH.settings };
+}
+
+function note(partial: Partial<GraphNote> & Pick<GraphNote, "id">): GraphNote {
+  return {
+    position: { x: 0, y: 0 },
+    size: { width: 240, height: 120 },
+    text: "",
+    ...partial,
+  };
 }
 
 function spec(type: string, extra: Partial<NodeTypeSpec> = {}): NodeTypeSpec {
@@ -102,10 +118,12 @@ describe("canvasClipboard", () => {
       version: 1,
       nodes: [kept],
       edges: [],
-      notes: [{ id: "nt_1", text: "later" }],
+      notes: [note({ id: "nt_1", text: "later", position: { x: 4, y: 8 }, size: { width: 200, height: 90 } })],
     });
 
-    expect(parseFragment(text)?.notes).toEqual([{ id: "nt_1", text: "later" }]);
+    expect(parseFragment(text)?.notes).toEqual([
+      note({ id: "nt_1", text: "later", position: { x: 4, y: 8 }, size: { width: 200, height: 90 } }),
+    ]);
     expect(parseFragment("not json")).toBeNull();
     expect(parseFragment("[]")).toBeNull();
     expect(
@@ -151,6 +169,94 @@ describe("canvasClipboard", () => {
         }),
       ),
     ).toBeNull();
+    expect(
+      parseFragment(
+        JSON.stringify({
+          kind: "refraq.channel.fragment",
+          version: 1,
+          nodes: [],
+          edges: [],
+          notes: [{ id: "nt_1", text: "later" }],
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("serializes selected notes and pastes them with new ids, off the node list", () => {
+    const kept = note({
+      id: "nt_keep",
+      position: { x: 10, y: 20 },
+      size: { width: 240, height: 120 },
+      text: "keep\nme",
+    });
+    const source = node({
+      id: "nd_a",
+      type: "read.sql",
+      name: "Load",
+      position: { x: 0, y: 0 },
+    });
+    const current = graph(
+      [source, node({ id: "nd_b", type: "read.sql", name: "Other" })],
+      [],
+      [kept, note({ id: "nt_out", text: "out" })],
+    );
+
+    const fragment = serializeFragment(current, ["nd_a", "nt_keep"]);
+
+    expect(fragment.notes).toEqual([kept]);
+    expect(fragment.nodes.map((item) => item.id)).toEqual(["nd_a"]);
+    kept.text = "changed";
+    expect(fragment.notes[0]?.text).toBe("keep\nme");
+
+    const pasted = pasteFragment(fragment, graph([]), [read], [], null);
+
+    expect(pasted.nodes).toHaveLength(1);
+    expect(pasted.nodes[0]?.id.startsWith("nd_")).toBe(true);
+    expect(pasted.nodes[0]?.position).toEqual({ x: 40, y: 40 });
+    expect(pasted.notes).toHaveLength(1);
+    expect(pasted.notes[0]?.id).toMatch(/^nt_[0-9a-f]{12}$/);
+    expect(pasted.notes[0]?.id).not.toBe("nt_keep");
+    expect(pasted.notes[0]?.text).toBe("keep\nme");
+    expect(pasted.notes[0]?.size).toEqual({ width: 240, height: 120 });
+    expect(pasted.notes[0]?.position).toEqual({ x: 50, y: 60 });
+    expect(pasted.nodes.some((item) => item.id === pasted.notes[0]?.id)).toBe(false);
+  });
+
+  it("anchors pasted notes with the nodes, and still pastes notes when every node is skipped", () => {
+    const fragment: ChannelFragment = {
+      kind: "refraq.channel.fragment",
+      version: 1,
+      nodes: [node({ id: "nd_a", type: "read.sql", position: { x: 100, y: 80 } })],
+      edges: [],
+      notes: [
+        note({
+          id: "nt_a",
+          position: { x: 140, y: 200 },
+          text: "beside",
+        }),
+      ],
+    };
+
+    const anchored = pasteFragment(fragment, graph([]), [read], [], { x: 10, y: 30 });
+
+    expect(anchored.nodes[0]?.position).toEqual({ x: 10, y: 30 });
+    expect(anchored.notes[0]?.position).toEqual({ x: 50, y: 150 });
+
+    const skipped = pasteFragment(
+      {
+        ...fragment,
+        nodes: [node({ id: "nd_x", type: "missing.type", position: { x: 0, y: 0 } })],
+      },
+      graph([]),
+      [read],
+      [],
+      null,
+    );
+    expect(skipped.nodes).toEqual([]);
+    expect(skipped.skipped.unknown).toBe(1);
+    expect(skipped.notes).toHaveLength(1);
+    expect(skipped.notes[0]?.position).toEqual({ x: 180, y: 240 });
+    expect(skipped.notes[0]?.text).toBe("beside");
   });
 
   it("pastes into another graph with new ids, a suffixed name, a new ref, and a deep-copied config", () => {
@@ -301,7 +407,7 @@ describe("canvasClipboard", () => {
         edge("ed_code", "nd_code", "nd_load"),
         edge("ed_gone", "nd_gone", "nd_load"),
       ],
-      notes: [{ id: "nt_1" }],
+      notes: [],
     };
     const resident = node({
       id: "nd_has",

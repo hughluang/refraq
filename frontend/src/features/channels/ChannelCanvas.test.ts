@@ -15,6 +15,8 @@ import {
   type GraphProblem,
   type NodeTypeSpec,
 } from "@/features/channels/types";
+import en from "@/locales/en-US/common.json";
+import zh from "@/locales/zh-CN/common.json";
 import { Instant } from "@/lib/instant";
 
 const sessionPermissions = vi.hoisted(() => ({ current: [] as string[] }));
@@ -25,6 +27,11 @@ vi.mock("@/features/channels/api", () => ({
 
 const LABELS: Record<string, string> = {
   "channels.canvas.add": "Add",
+  "channels.canvas.note": "Note",
+  "channels.canvas.addNote": "Add a note",
+  "channels.canvas.notePlaceholder": "Write a note",
+  "channels.canvas.noteLabel": "Note",
+  "channels.canvas.shortcuts.editNote": "Edit a note",
   "channels.canvas.empty": "Add a trigger to start this channel.",
   "channels.canvas.connectNone": "This output cannot connect to another node.",
   "channels.canvas.nextStep": "Next step",
@@ -104,7 +111,6 @@ const LABELS: Record<string, string> = {
   "channels.canvas.ports.false": "False",
   "channels.canvas.ports.each": "Each",
   "channels.canvas.ports.done": "Done",
-  "channels.canvas.ports.loop": "Loop",
 };
 
 vi.mock("@refinedev/core", () => ({
@@ -1776,19 +1782,31 @@ describe("channel ports", () => {
     expect((await port("Check True output")).getAttribute("data-handleid")).toBe("true");
   });
 
-  it("shows For inputs and the loop-back output", async () => {
+  it("draws For as a frame with each inside the left and done on the right", async () => {
     await renderCanvas([], {
       ...EMPTY_GRAPH,
       nodes: [placed("walk", "volume.for", "Walk", 40)],
     }, { catalog: [FOR_SPEC] });
 
-    expect(await port("Walk Main input")).toBeTruthy();
-    expect((await port("Walk Loop input")).getAttribute("data-handlepos")).toBe("bottom");
+    const frame = document.querySelector('.react-flow__node[data-id="walk"]');
+    if (!(frame instanceof HTMLElement)) throw new Error("missing frame");
+    expect(frame.querySelector(".channel-flow-node--frame")).not.toBeNull();
+    expect(frame.style.width).toBe("320px");
+    expect(frame.style.height).toBe("180px");
+
+    const main = await port("Walk Main input");
+    expect(main.getAttribute("data-handlepos")).toBe("left");
+    expect(main.style.left).toBe("");
+    expect(screen.queryByRole("button", { name: "Walk Loop input" })).toBeNull();
+
     const each = await port("Walk Each output");
-    expect(each.className).toContain("channel-flow-handle--loop");
-    expect(await port("Walk Done output")).toBeTruthy();
+    expect(each.getAttribute("data-handlepos")).toBe("left");
+    expect(each.style.left).toBe("20px");
+    const done = await port("Walk Done output");
+    expect(done.getAttribute("data-handlepos")).toBe("right");
+    expect(done.style.left).toBe("");
     expect(screen.getByText("Each")).toBeTruthy();
-    expect(screen.getByText("Loop")).toBeTruthy();
+    expect(screen.getByText("Done")).toBeTruthy();
   });
 
   it("keeps a non-main port when an edge is created, including through undo", async () => {
@@ -1842,7 +1860,7 @@ describe("channel ports", () => {
     ]);
   });
 
-  it("marks a return into the loop input", async () => {
+  it("stays up when an edge targets the removed loop port", async () => {
     await renderCanvas([], {
       ...EMPTY_GRAPH,
       nodes: [placed("walk", "volume.for", "Walk", 20), placed("step", "read.sql", "Step", 280)],
@@ -1855,10 +1873,88 @@ describe("channel ports", () => {
       ],
     }, { catalog: [FOR_SPEC, READ_SPEC] });
 
-    await waitFor(() => {
-      expect(document.querySelector(".channel-flow-edge--return")).not.toBeNull();
+    expect(await screen.findByRole("button", { name: "Walk Main input" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Step Main output" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Walk Loop input" })).toBeNull();
+    expect(document.querySelector(".channel-flow-edge--return")).toBeNull();
+  });
+
+  function flowNode(id: string) {
+    const found = document.querySelector(`.react-flow__node[data-id="${id}"]`);
+    if (!(found instanceof HTMLElement)) throw new Error(`missing ${id}`);
+    return found;
+  }
+
+  function translationOf(id: string) {
+    const match = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/.exec(flowNode(id).style.transform);
+    if (!match) throw new Error(`missing transform for ${id}`);
+    return { x: Number(match[1]), y: Number(match[2]) };
+  }
+
+  it("keeps a body's parent and relative position when the body is nudged", async () => {
+    const onChange = vi.fn();
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [
+        { ...placed("step", "read.sql", "Step", 0), position: { x: 80, y: 100 }, parent: "walk" },
+        placed("walk", "volume.for", "Walk", 100),
+      ],
+    }, { catalog: [FOR_SPEC, READ_SPEC], onChange });
+
+    const frame = flowNode("walk");
+    expect(frame.classList.contains("parent")).toBe(true);
+    expect(frame.style.width).toBe("336px");
+    expect(frame.style.height).toBe("204px");
+    expect(translationOf("step")).toEqual({ x: 180, y: 140 });
+
+    fireEvent.click(flowNode("step"));
+    flowNode("step").focus();
+    fireEvent.keyDown(flowNode("step"), { key: "ArrowRight" });
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    expect(saved.nodes.find((item) => item.id === "step")).toMatchObject({
+      parent: "walk",
+      position: { x: 88, y: 100 },
     });
-    expect(screen.getByRole("group", { name: "Main to Loop" })).toBeTruthy();
+    const walk = saved.nodes.find((item) => item.id === "walk");
+    expect(walk).not.toHaveProperty("parent");
+    expect(walk).not.toHaveProperty("width");
+    expect(walk).not.toHaveProperty("height");
+  });
+
+  it("draws a nested For inside the outer frame", async () => {
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [
+        { ...placed("step", "read.sql", "Step", 0), position: { x: 200, y: 200 }, parent: "inner" },
+        {
+          ...placed("inner", "volume.for", "Inner", 0),
+          position: { x: 40, y: 48 },
+          parent: "outer",
+        },
+        { ...placed("outer", "volume.for", "Outer", 0), position: { x: 10, y: 20 } },
+      ],
+    }, { catalog: [FOR_SPEC, READ_SPEC] });
+
+    const outer = flowNode("outer");
+    const inner = flowNode("inner");
+    expect(outer.classList.contains("parent")).toBe(true);
+    expect(inner.classList.contains("parent")).toBe(true);
+    expect(inner.querySelector(".channel-flow-node--frame")).not.toBeNull();
+    expect(outer.style.width).toBe("544px");
+    expect(outer.style.height).toBe("400px");
+    expect(inner.style.width).toBe("456px");
+    expect(inner.style.height).toBe("304px");
+    expect(translationOf("inner")).toEqual({ x: 50, y: 68 });
+    expect(translationOf("step")).toEqual({ x: 250, y: 268 });
+  });
+
+  it("names the done port in Chinese and drops the loop port label", () => {
+    const zhMessages = zh as Record<string, string>;
+    const enMessages = en as Record<string, string>;
+    expect(zhMessages["channels.canvas.ports.done"]).toBe("\u5b8c\u6210");
+    expect(enMessages["channels.canvas.ports.done"]).toBe("Done");
+    expect(zhMessages).not.toHaveProperty("channels.canvas.ports.loop");
+    expect(enMessages).not.toHaveProperty("channels.canvas.ports.loop");
   });
 
   it("counts repeated executions and marks a node that did not run", async () => {
@@ -3333,6 +3429,7 @@ describe("channel canvas clipboard and menus", () => {
     fireEvent.contextMenu(pane);
     expect(await screen.findByRole("menuitem", { name: /Fit view/ })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: /Add a node here/ })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /Add a note/ })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: /Paste/ })).toBeNull();
   });
 
@@ -3348,6 +3445,177 @@ describe("channel canvas clipboard and menus", () => {
     expect(screen.queryByRole("menuitem", { name: /Duplicate/ })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: /Cut/ })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: /Delete/ })).toBeNull();
+  });
+});
+
+const keptNote = {
+  id: "nt_kept",
+  position: { x: 80, y: 200 },
+  size: { width: 240, height: 120 },
+  text: "keep this",
+};
+
+function graphWithNote(): Graph {
+  return { ...nodeGraph, notes: [keptNote] };
+}
+
+describe("canvas notes", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  it("adds a note from the toolbar, keeps the typed lines, and undoes that text in one step", async () => {
+    const onChange = vi.fn();
+    await renderCanvas([], nodeGraph, { onChange });
+
+    fireEvent.click(screen.getByRole("button", { name: "Note" }));
+
+    const field = screen.getByRole("textbox", { name: "Note" });
+    expect(document.activeElement).toBe(field);
+    expect(document.querySelector(".channel-node-config")).toBeNull();
+    expect(document.querySelector(".react-flow__node-toolbar")).toBeNull();
+    expect(document.querySelector(".react-flow__node-note")).not.toBeNull();
+
+    fireEvent.change(field, { target: { value: "hello\nthere" } });
+    fireEvent.blur(field);
+
+    await waitFor(() => {
+      const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+      expect(saved.notes).toEqual([
+        expect.objectContaining({
+          text: "hello\nthere",
+          size: { width: 240, height: 120 },
+          position: { x: 160, y: 120 },
+        }),
+      ]);
+    });
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    expect(saved.nodes.map((item) => item.id)).toEqual(["nd_1"]);
+    expect(saved.notes?.[0]?.id).toMatch(/^nt_[0-9a-f]{12}$/);
+
+    const callsBeforeUndo = onChange.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(onChange.mock.calls.length).toBeGreaterThan(callsBeforeUndo));
+    const restored = onChange.mock.calls.at(-1)?.[0] as Graph;
+    expect(restored.notes).toEqual([expect.objectContaining({ text: "" })]);
+    expect(restored.nodes.map((item) => item.id)).toEqual(["nd_1"]);
+  });
+
+  it("moves a selected note and deletes it without opening settings", async () => {
+    const onChange = vi.fn();
+    await renderCanvas([], graphWithNote(), { onChange });
+    const note = document.querySelector(".react-flow__node-note");
+    if (!(note instanceof HTMLElement)) throw new Error("missing note");
+
+    fireEvent.click(note);
+    expect(note.classList.contains("draggable")).toBe(true);
+    expect(document.querySelector(".channel-node-config")).toBeNull();
+    expect(document.querySelector(".react-flow__node-toolbar")).toBeNull();
+
+    note.focus();
+    fireEvent.keyDown(note, { key: "ArrowRight" });
+
+    await waitFor(() => {
+      const moved = onChange.mock.calls.at(-1)?.[0] as Graph | undefined;
+      expect(moved?.notes?.[0]?.position).toEqual({ x: keptNote.position.x + 8, y: keptNote.position.y });
+    });
+
+    fireEvent.keyDown(document, { key: "Delete", code: "Delete" });
+    await waitFor(() => {
+      const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+      expect(saved.notes).toBeUndefined();
+      expect(saved.nodes.map((item) => item.id)).toEqual(["nd_1"]);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => {
+      const restored = onChange.mock.calls.at(-1)?.[0] as Graph;
+      expect(restored.notes?.[0]?.text).toBe("keep this");
+    });
+  });
+
+  it("edits a note on double-click and leaves settings closed", async () => {
+    const onChange = vi.fn();
+    await renderCanvas([], graphWithNote(), { onChange });
+    const note = document.querySelector(".react-flow__node-note");
+    if (!(note instanceof HTMLElement)) throw new Error("missing note");
+
+    fireEvent.doubleClick(note);
+    expect(document.querySelector(".channel-node-config")).toBeNull();
+    const field = screen.getByRole("textbox", { name: "Note" });
+    expect(field).toHaveProperty("value", "keep this");
+
+    note.focus();
+    fireEvent.keyDown(note, { key: "Enter" });
+    expect(document.querySelector(".channel-node-config")).toBeNull();
+
+    fireEvent.change(field, { target: { value: "keep this" } });
+    fireEvent.keyDown(field, { key: "Escape" });
+    expect(screen.queryByRole("textbox", { name: "Note" })).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(document.querySelector(".channel-note")?.textContent).toContain("keep this");
+  });
+
+  it("adds a note at the pointer from the empty pane menu", async () => {
+    const onChange = vi.fn();
+    await renderCanvas([], EMPTY_GRAPH, { onChange });
+    const pane = document.querySelector(".react-flow__pane");
+    if (!(pane instanceof HTMLElement)) throw new Error("missing pane");
+
+    fireEvent.contextMenu(pane, { clientX: 40, clientY: 48 });
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Add a note/ }));
+
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Note" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Note" }), { target: { value: "here" } });
+    fireEvent.blur(screen.getByRole("textbox", { name: "Note" }));
+    await waitFor(() => {
+      const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+      expect(saved.nodes).toEqual([]);
+      expect(saved.notes?.[0]?.text).toBe("here");
+      expect(saved.notes?.[0]?.size).toEqual({ width: 240, height: 120 });
+    });
+  });
+
+  it("paints a note in a pale minimap color", async () => {
+    localStorage.setItem("refraq.channelCanvas.minimap", "1");
+    await renderCanvas([], graphWithNote());
+    await waitFor(() => {
+      const fills = [...document.querySelectorAll(".react-flow__minimap-node")].map(
+        (node) => (node as SVGElement).style.fill,
+      );
+      expect(fills).toContain("var(--mantine-color-yellow-light)");
+      expect(fills).toContain("var(--mantine-color-orange-filled)");
+    });
+  });
+
+  it("stays read-only while browsing, with no resize handles", async () => {
+    await renderCanvas([], graphWithNote(), { appearance: "browse", mutable: false });
+    expect(screen.queryByRole("button", { name: "Note" })).toBeNull();
+    const note = document.querySelector(".react-flow__node-note");
+    if (!(note instanceof HTMLElement)) throw new Error("missing note");
+    expect(note.textContent).toContain("keep this");
+    expect(document.querySelector(".react-flow__resize-control")).toBeNull();
+
+    fireEvent.click(note);
+    fireEvent.doubleClick(note);
+    expect(screen.queryByRole("textbox", { name: "Note" })).toBeNull();
+    expect(document.querySelector(".react-flow__resize-control")).toBeNull();
+    expect(document.querySelector(".channel-node-config")).toBeNull();
+  });
+
+  it("refuses note edits while a run lock is held", async () => {
+    const onChange = vi.fn();
+    await renderCanvas([], graphWithNote(), { mutable: false, onChange });
+    expect((screen.getByRole("button", { name: "Note" }) as HTMLButtonElement).disabled).toBe(true);
+    const note = document.querySelector(".react-flow__node-note");
+    if (!(note instanceof HTMLElement)) throw new Error("missing note");
+
+    fireEvent.click(note);
+    fireEvent.doubleClick(note);
+    expect(screen.queryByRole("textbox", { name: "Note" })).toBeNull();
+    expect(document.querySelector(".react-flow__resize-control")).toBeNull();
+
+    fireEvent.keyDown(document, { key: "Delete", code: "Delete" });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(document.querySelector(".react-flow__node-note")?.textContent).toContain("keep this");
   });
 });
 

@@ -17,6 +17,7 @@ import {
   EdgeToolbar,
   Handle,
   MarkerType,
+  NodeResizer,
   NodeToolbar,
   Position,
   ReactFlow,
@@ -88,6 +89,7 @@ import {
   newGraphId,
   outputTargetTypes,
   type FlowNodeData,
+  type FlowNoteShape,
 } from "@/features/channels/graphValidation";
 import { NodeConfigPanel } from "@/features/channels/NodeConfigPanel";
 import { familyTint, nodeTypeIcon } from "@/features/channels/nodeVisual";
@@ -103,9 +105,11 @@ import type { ChannelTemplatePreview } from "@/features/channels/TemplateRunPrev
 import { canAuthorNodeType } from "@/features/channels/nodePermission";
 import { nodeTypeLabel } from "@/features/channels/nodeTypeCopy";
 import {
-  isLoopReturn,
+  EACH_INSET,
+  FOR_NODE_TYPE,
+  frameBox,
   layoutNodePorts,
-  returnEdgePath,
+  parentsFirst,
   type HandleSide,
   type PortPlacement,
 } from "@/features/channels/portLayout";
@@ -126,6 +130,7 @@ import {
   ErrorIcon,
   FitViewIcon,
   LoaderIcon,
+  NoteIcon,
   PasteIcon,
   PlayIcon,
   PlusIcon,
@@ -142,9 +147,83 @@ import type {
 } from "@/features/channels/types";
 
 type ChannelNode = Node<FlowNodeData, "channel">;
+type NoteData = { text: string };
+type NoteCanvasNode = Node<NoteData, "note"> & { width: number; height: number };
+type CanvasNode = ChannelNode | NoteCanvasNode;
+
+const NOTE_WIDTH = 240;
+const NOTE_HEIGHT = 120;
+const NOTE_MIN_WIDTH = 160;
+const NOTE_MIN_HEIGHT = 80;
+const NOTE_MAX_SIZE = 2000;
+
+function isChannelNode(node: CanvasNode): node is ChannelNode {
+  return node.type !== "note";
+}
+
+function isNoteNode(node: CanvasNode): node is NoteCanvasNode {
+  return node.type === "note";
+}
+
+function noteCanvasNode(note: FlowNoteShape, selected: boolean): NoteCanvasNode {
+  return {
+    id: note.id,
+    type: "note",
+    position: note.position,
+    width: note.width,
+    height: note.height,
+    style: { width: note.width, height: note.height },
+    data: { text: note.data.text },
+    selected,
+    zIndex: 0,
+    connectable: false,
+  };
+}
+
+function flowNoteOf(node: NoteCanvasNode): FlowNoteShape {
+  return {
+    id: node.id,
+    position: { x: node.position.x, y: node.position.y },
+    width: node.width,
+    height: node.height,
+    data: { text: node.data.text },
+  };
+}
+
+function presentNodes(nodes: CanvasNode[]): CanvasNode[] {
+  const members = nodes.flatMap((node) =>
+    isChannelNode(node)
+      ? [
+          {
+            id: node.id,
+            parentId: node.parentId,
+            position: node.position,
+            nodeType: node.data.nodeType,
+          },
+        ]
+      : [],
+  );
+  return parentsFirst(nodes).map((node) => {
+    if (!isChannelNode(node) || node.data.nodeType !== FOR_NODE_TYPE) return node;
+    const box = frameBox(node.id, members);
+    return {
+      ...node,
+      style: { ...node.style, width: box.width, height: box.height },
+    };
+  });
+}
+
+function settleNote(node: NoteCanvasNode): NoteCanvasNode {
+  return {
+    ...node,
+    zIndex: 0,
+    connectable: false,
+    style: { ...node.style, width: node.width, height: node.height },
+  };
+}
 
 type CanvasSnapshot = {
-  nodes: ChannelNode[];
+  nodes: CanvasNode[];
   edges: Edge[];
 };
 
@@ -191,6 +270,7 @@ export type PickerIntent =
 
 type CanvasMenuState =
   | { kind: "node"; nodeId: string; x: number; y: number }
+  | { kind: "note"; nodeId: string; x: number; y: number }
   | { kind: "selection"; x: number; y: number }
   | { kind: "edge"; edgeId: string; x: number; y: number }
   | {
@@ -217,7 +297,7 @@ const CANVAS_MIN_ZOOM = 0.25;
 const CANVAS_MAX_ZOOM = 2;
 const CHANNEL_EDGE_TYPE = "channel";
 const CHANNEL_EDGE_MARKER = { type: MarkerType.ArrowClosed, color: "context-stroke" };
-const nodeTypes = { channel: ChannelFlowNode };
+const nodeTypes = { channel: ChannelFlowNode, note: NoteFlowNode };
 const edgeTypes = { [CHANNEL_EDGE_TYPE]: ChannelFlowEdge };
 const PROBLEM_STROKE = "var(--refraq-tone-danger)";
 
@@ -233,6 +313,9 @@ const CanvasSurfaceContext = createContext<{
   openPickerAt: (screenPoint: { x: number; y: number }, intent: PickerIntent) => void;
   duplicateNode: (nodeId: string) => void;
   busyOutputs: ReadonlySet<string>;
+  editingNoteId: string | null;
+  draftNoteText: (noteId: string, text: string) => void;
+  endNoteEdit: (noteId: string) => void;
 }>({
   editing: false,
   mutable: false,
@@ -240,6 +323,9 @@ const CanvasSurfaceContext = createContext<{
   openPickerAt: () => {},
   duplicateNode: () => {},
   busyOutputs: new Set<string>(),
+  editingNoteId: null,
+  draftNoteText: () => {},
+  endNoteEdit: () => {},
 });
 const CanvasCatalogContext = createContext<readonly NodeTypeSpec[]>([]);
 const CanvasRunContext = createContext<{
@@ -318,9 +404,12 @@ function ChannelCanvasBody({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
-  const seededNodes = initial.nodes.map((node) => ({ ...node, type: "channel" as const }));
+  const seededNodes: CanvasNode[] = [
+    ...initial.notes.map((note) => noteCanvasNode(note, false)),
+    ...initial.nodes.map((node) => ({ ...node, type: "channel" as const, zIndex: 1 })),
+  ];
   const seededEdges = channelEdges(initial.edges);
-  const [nodes, setNodes] = useState<ChannelNode[]>(seededNodes);
+  const [nodes, setNodes] = useState<CanvasNode[]>(seededNodes);
   const [edges, setEdges] = useState<Edge[]>(seededEdges);
   const [configNodeId, setConfigNodeId] = useState<string | null>(null);
   const [leaving, setLeaving] = useState(false);
@@ -337,6 +426,8 @@ function ChannelCanvasBody({
   const historyRef = useRef<History<CanvasSnapshot>>(
     createHistory(snapshotOf(seededNodes, seededEdges)),
   );
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const noteEditOrigin = useRef<{ id: string; text: string } | null>(null);
   const commitQueued = useRef(false);
   const flowRootRef = useRef<HTMLDivElement>(null);
   const closeTimerRef = useRef<number | null>(null);
@@ -353,6 +444,7 @@ function ChannelCanvasBody({
   nodesRef.current = nodes;
   edgesRef.current = edges;
   highlightRef.current = highlight;
+  const flowNodes = useMemo(() => presentNodes(nodes), [nodes]);
   const settingsRef = useRef(graph.settings);
   settingsRef.current = graph.settings;
   const problemKey = problems.map((problem) => problemIdentity(problem)).join("|");
@@ -376,34 +468,15 @@ function ChannelCanvasBody({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [problemKey, highlightKey]);
 
-  const emit = (nextNodes: ChannelNode[], nextEdges: Edge[]) => {
-    onChange(
-      graphFromFlow(
-        nextNodes.map((node) => ({
-          id: node.id,
-          position: node.position,
-          data: node.data,
-        })),
-        nextEdges.map((edge) => ({
-          id: edge.id,
-          source: edge.source,
-          target: edge.target,
-          sourceHandle: edge.sourceHandle,
-          targetHandle: edge.targetHandle,
-        })),
-        settingsRef.current,
-      ),
-    );
-  };
-
-  const graphNow = () =>
+  const graphOf = (nextNodes: CanvasNode[], nextEdges: Edge[]) =>
     graphFromFlow(
-      nodesRef.current.map((node) => ({
+      nextNodes.filter(isChannelNode).map((node) => ({
         id: node.id,
         position: node.position,
         data: node.data,
+        ...(node.parentId ? { parentId: node.parentId } : {}),
       })),
-      edgesRef.current.map((edge) => ({
+      nextEdges.map((edge) => ({
         id: edge.id,
         source: edge.source,
         target: edge.target,
@@ -411,7 +484,14 @@ function ChannelCanvasBody({
         targetHandle: edge.targetHandle,
       })),
       settingsRef.current,
+      nextNodes.filter(isNoteNode).map(flowNoteOf),
     );
+
+  const emit = (nextNodes: CanvasNode[], nextEdges: Edge[]) => {
+    onChange(graphOf(nextNodes, nextEdges));
+  };
+
+  const graphNow = () => graphOf(nodesRef.current, edgesRef.current);
 
   const publishHistory = (next: History<CanvasSnapshot>) => {
     historyRef.current = next;
@@ -491,7 +571,9 @@ function ChannelCanvasBody({
     edgesRef.current = painted.edges;
     setNodes(painted.nodes);
     setEdges(painted.edges);
-    setConfigNodeId(painted.nodes.find((node) => node.selected)?.id ?? null);
+    setConfigNodeId(
+      painted.nodes.find((node) => node.selected && isChannelNode(node))?.id ?? null,
+    );
     emit(painted.nodes, painted.edges);
   };
 
@@ -530,11 +612,15 @@ function ChannelCanvasBody({
       edgesRef.current.filter((edge) => edge.selected).map((edge) => edge.id),
     );
     const flow = flowFromGraph(nextGraph, triggerTypes);
-    const adoptedNodes: ChannelNode[] = flow.nodes.map((node) => ({
-      ...node,
-      type: "channel",
-      selected: selectedNodeIds.has(node.id),
-    }));
+    const adoptedNodes: CanvasNode[] = [
+      ...flow.notes.map((note) => noteCanvasNode(note, selectedNodeIds.has(note.id))),
+      ...flow.nodes.map((node) => ({
+        ...node,
+        type: "channel" as const,
+        zIndex: 1,
+        selected: selectedNodeIds.has(node.id),
+      })),
+    ];
     const adoptedEdges = channelEdges(
       flow.edges.map((edge) => ({
         ...edge,
@@ -657,17 +743,20 @@ function ChannelCanvasBody({
     cancelOverlayCloseRef.current();
     clearHighlight();
     const label = nodeTypeLabel(t, spec);
-    const count = nodesRef.current.filter((node) => node.data.nodeType === spec.type).length;
+    const count = nodesRef.current.filter(
+      (node) => isChannelNode(node) && node.data.nodeType === spec.type,
+    ).length;
     const name = count === 0 ? label : `${label} ${count + 1}`;
     const id = newGraphId("nd");
     const ref = nodeRef(
       spec.type,
-      nodesRef.current.map((node) => node.data.ref),
+      nodesRef.current.flatMap((node) => (isChannelNode(node) ? [node.data.ref] : [])),
     );
     const created: ChannelNode = {
       id,
       type: "channel",
       position,
+      zIndex: 1,
       selected: true,
       data: emptyNodeData(
         spec.type,
@@ -681,22 +770,7 @@ function ChannelCanvasBody({
     let nextEdges: Edge[] = edgesRef.current
       .filter((edge) => edge.id !== options?.removeEdgeId)
       .map((edge) => ({ ...edge, selected: false }));
-    const draftOf = (edgesNow: Edge[]) =>
-      graphFromFlow(
-        nextNodes.map((node) => ({
-          id: node.id,
-          position: node.position,
-          data: node.data,
-        })),
-        edgesNow.map((edge) => ({
-          id: edge.id,
-          source: edge.source,
-          target: edge.target,
-          sourceHandle: edge.sourceHandle,
-          targetHandle: edge.targetHandle,
-        })),
-        settingsRef.current,
-      );
+    const draftOf = (edgesNow: Edge[]) => graphOf(nextNodes, edgesNow);
     const link = options?.link;
     if (link) {
       const input = spec.inputs.find((port) =>
@@ -828,7 +902,7 @@ function ChannelCanvasBody({
 
   const firstOutputHandle = (sourceId: string, spec: NodeTypeSpec): string | null => {
     const source = nodesRef.current.find((node) => node.id === sourceId);
-    if (!source) return null;
+    if (!source || !isChannelNode(source)) return null;
     const sourceSpec = catalog.find((item) => item.type === source.data.nodeType);
     const outputs = sourceSpec?.outputs ?? [];
     const graph = graphNow();
@@ -899,7 +973,7 @@ function ChannelCanvasBody({
       beginCloseRef.current();
       return;
     }
-    const selected = nodesRef.current.filter((node) => node.selected);
+    const selected = nodesRef.current.filter((node) => node.selected && isChannelNode(node));
     const place: PickerPlace =
       selected.length === 1 && selected[0]
         ? { mode: "beside", sourceId: selected[0].id }
@@ -921,8 +995,10 @@ function ChannelCanvasBody({
     openAddPicker({ x: rect.left, y: rect.top }, true);
   };
 
-  const onNodesChange = (changes: NodeChange<ChannelNode>[]) => {
-    const next = applyNodeChanges(changes, nodesRef.current);
+  const onNodesChange = (changes: NodeChange<CanvasNode>[]) => {
+    const next = applyNodeChanges(changes, nodesRef.current).map((node) =>
+      isNoteNode(node) ? settleNote(node) : node,
+    );
     nodesRef.current = next;
     setNodes(next);
     const selected = next.find((node) => node.selected);
@@ -947,10 +1023,26 @@ function ChannelCanvasBody({
       edgesRef.current = cleared;
       setEdges(cleared);
     }
-    if (shouldCommitNodeChanges(changes)) {
+    if (noteEditOrigin.current && !next.some((node) => node.id === noteEditOrigin.current?.id)) {
+      noteEditOrigin.current = null;
+      setEditingNoteId(null);
+    }
+    const noteResizing = changes.some(
+      (change) =>
+        change.type === "dimensions" &&
+        change.resizing === true &&
+        next.some((node) => node.id === change.id && isNoteNode(node)),
+    );
+    const noteResizeEnded = changes.some(
+      (change) =>
+        change.type === "dimensions" &&
+        change.resizing === false &&
+        next.some((node) => node.id === change.id && isNoteNode(node)),
+    );
+    if (shouldCommitNodeChanges(changes) || noteResizeEnded) {
       emit(next, edgesRef.current);
       scheduleCommit();
-    } else if (changes.some((change) => change.type === "position")) {
+    } else if (changes.some((change) => change.type === "position") || noteResizing) {
       emit(next, edgesRef.current);
     }
   };
@@ -1119,7 +1211,9 @@ function ChannelCanvasBody({
   };
   beginCloseRef.current = beginClose;
 
-  const selected = nodes.find((node) => node.id === configNodeId) ?? null;
+  const selected =
+    nodes.find((node): node is ChannelNode => node.id === configNodeId && isChannelNode(node)) ??
+    null;
   const selectedSpec = catalog.find((item) => item.type === selected?.data.nodeType);
   const overlayRef = useRef<HTMLDivElement>(null);
   const labelGraph = problemGraphOf(nodes, edges);
@@ -1199,7 +1293,7 @@ function ChannelCanvasBody({
     },
     [],
   );
-  const hasTrigger = nodes.some((node) => node.data.trigger);
+  const hasTrigger = nodes.some((node) => isChannelNode(node) && node.data.trigger);
   const pickerTypes = (): NodeTypeSpec[] => {
     if (!picker) return [];
     const visible = catalog.filter((item) => !hasTrigger || !item.trigger);
@@ -1338,14 +1432,25 @@ function ChannelCanvasBody({
 
   const applyAdded = (result: ReturnType<typeof pasteFragment>) => {
     showSkip(result.skipped);
-    if (result.nodes.length === 0) return;
+    if (result.nodes.length === 0 && result.notes.length === 0) return;
     const flow = flowFromGraph(
-      { nodes: result.nodes, edges: result.edges, settings: settingsRef.current },
+      {
+        nodes: result.nodes,
+        edges: result.edges,
+        settings: settingsRef.current,
+        notes: result.notes,
+      },
       triggerTypes,
     );
-    const nextNodes: ChannelNode[] = [
+    const nextNodes: CanvasNode[] = [
       ...nodesRef.current.map((node) => ({ ...node, selected: false })),
-      ...flow.nodes.map((node) => ({ ...node, type: "channel" as const, selected: true })),
+      ...flow.nodes.map((node) => ({
+        ...node,
+        type: "channel" as const,
+        zIndex: 1,
+        selected: true,
+      })),
+      ...flow.notes.map((note) => noteCanvasNode(note, true)),
     ];
     const nextEdges = channelEdges([
       ...edgesRef.current.map((edge) => ({ ...edge, selected: false })),
@@ -1423,6 +1528,67 @@ function ChannelCanvasBody({
     );
   };
 
+  const viewportCenter = () => {
+    const pane = flowRootRef.current?.querySelector(".react-flow");
+    const rect = pane instanceof HTMLElement ? pane.getBoundingClientRect() : null;
+    if (!rect || rect.width < 8 || rect.height < 8) return { x: 160, y: 120 };
+    return screenToFlowPosition({
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    });
+  };
+
+  const addNote = (position: { x: number; y: number }) => {
+    if (!mutable || appearance !== "edit") return;
+    cancelOverlayCloseRef.current();
+    clearHighlight();
+    const created = noteCanvasNode(
+      {
+        id: newGraphId("nt"),
+        position,
+        width: NOTE_WIDTH,
+        height: NOTE_HEIGHT,
+        data: { text: "" },
+      },
+      true,
+    );
+    const nextNodes: CanvasNode[] = [
+      ...nodesRef.current.map((node) => ({ ...node, selected: false })),
+      created,
+    ];
+    const nextEdges = edgesRef.current.map((edge) => ({ ...edge, selected: false }));
+    nodesRef.current = nextNodes;
+    edgesRef.current = nextEdges;
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+    setConfigNodeId(null);
+    setPicker(null);
+    noteEditOrigin.current = { id: created.id, text: "" };
+    setEditingNoteId(created.id);
+    emit(nextNodes, nextEdges);
+    commitNow();
+  };
+
+  const draftNoteText = (noteId: string, text: string) => {
+    const next = nodesRef.current.map((node) =>
+      isNoteNode(node) && node.id === noteId ? { ...node, data: { text } } : node,
+    );
+    nodesRef.current = next;
+    setNodes(next);
+  };
+
+  const endNoteEdit = (noteId: string) => {
+    const origin = noteEditOrigin.current;
+    if (origin?.id === noteId) noteEditOrigin.current = null;
+    setEditingNoteId((current) => (current === noteId ? null : current));
+    const node = nodesRef.current.find((item) => item.id === noteId);
+    if (!node || !origin || origin.id !== noteId || !isNoteNode(node) || node.data.text === origin.text) {
+      return;
+    }
+    emit(nodesRef.current, edgesRef.current);
+    commitNow();
+  };
+
   const selectOnly = (nodeId: string) => {
     const nextNodes = nodesRef.current.map((node) => ({ ...node, selected: node.id === nodeId }));
     const nextEdges = edgesRef.current.map((edge) => ({ ...edge, selected: false }));
@@ -1440,7 +1606,12 @@ function ChannelCanvasBody({
       return;
     }
     if (!already) selectOnly(nodeId);
-    setContextMenu({ kind: "node", nodeId, x, y });
+    const target = nodesRef.current.find((node) => node.id === nodeId);
+    setContextMenu(
+      target && isNoteNode(target)
+        ? { kind: "note", nodeId, x, y }
+        : { kind: "node", nodeId, x, y },
+    );
   };
 
   const openPaneMenu = (x: number, y: number) => {
@@ -1501,6 +1672,8 @@ function ChannelCanvasBody({
     if (!(target instanceof HTMLElement) || !target.classList.contains("react-flow__node")) return;
     const nodeId = target.getAttribute("data-id");
     if (!nodeId) return;
+    const focused = nodesRef.current.find((node) => node.id === nodeId);
+    if (!focused || isNoteNode(focused)) return;
     if (nodesRef.current.filter((node) => node.selected).length > 1) return;
     openNodeConfig(nodeId);
   };
@@ -1523,6 +1696,9 @@ function ChannelCanvasBody({
             openPickerAt,
             duplicateNode: (nodeId) => duplicateIds([nodeId]),
             busyOutputs,
+            editingNoteId,
+            draftNoteText,
+            endNoteEdit,
           }}
         >
         <CanvasCatalogContext.Provider value={catalog}>
@@ -1551,7 +1727,7 @@ function ChannelCanvasBody({
         >
           <ReactFlow
             colorMode={colorScheme}
-            nodes={nodes}
+            nodes={flowNodes}
             edges={edges.map((edge) => ({
               ...edge,
               ariaLabel: t("channels.canvas.edge", {
@@ -1560,7 +1736,6 @@ function ChannelCanvasBody({
               }),
               className: [
                 edge.className,
-                isLoopReturn(edge.targetHandle) ? "channel-flow-edge--return" : "",
                 phases.get(edge.target) === "running" ? "channel-flow-edge--live" : "",
                 phases.get(edge.source) === "dead" || phases.get(edge.target) === "dead"
                   ? "channel-flow-edge--settled"
@@ -1578,10 +1753,20 @@ function ChannelCanvasBody({
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onNodeClick={(event, node) => {
+              if (isNoteNode(node)) return;
               if (event.shiftKey || configNodeId == null) return;
               openNodeConfig(node.id);
             }}
             onNodeDoubleClick={(_, node) => {
+              if (isNoteNode(node)) {
+                if (mutable && appearance === "edit") {
+                  if (noteEditOrigin.current?.id !== node.id) {
+                    noteEditOrigin.current = { id: node.id, text: node.data.text };
+                  }
+                  setEditingNoteId(node.id);
+                }
+                return;
+              }
               if (nodesRef.current.filter((item) => item.selected).length > 1) return;
               openNodeConfig(node.id);
             }}
@@ -1639,6 +1824,7 @@ function ChannelCanvasBody({
               canRedo={canRedo}
               addExpanded={picker?.fromAdd ?? false}
               onAdd={openToolbarPicker}
+              onAddNote={() => addNote(viewportCenter())}
               onUndo={undo}
               onRedo={redo}
               onSelectAll={selectAll}
@@ -1696,19 +1882,25 @@ function ChannelCanvasBody({
               }}
               onDuplicate={() => {
                 const ids =
-                  contextMenu.kind === "node" ? [contextMenu.nodeId] : selectedNodeIds();
+                  contextMenu.kind === "node" || contextMenu.kind === "note"
+                    ? [contextMenu.nodeId]
+                    : selectedNodeIds();
                 closeMenu();
                 duplicateIds(ids);
               }}
               onCopy={() => {
                 const ids =
-                  contextMenu.kind === "node" ? [contextMenu.nodeId] : selectedNodeIds();
+                  contextMenu.kind === "node" || contextMenu.kind === "note"
+                    ? [contextMenu.nodeId]
+                    : selectedNodeIds();
                 closeMenu();
                 void writeFragment(ids);
               }}
               onCut={() => {
                 const ids =
-                  contextMenu.kind === "node" ? [contextMenu.nodeId] : selectedNodeIds();
+                  contextMenu.kind === "node" || contextMenu.kind === "note"
+                    ? [contextMenu.nodeId]
+                    : selectedNodeIds();
                 closeMenu();
                 void writeFragment(ids).then((copied) => {
                   if (copied) removeNodes(ids);
@@ -1716,7 +1908,9 @@ function ChannelCanvasBody({
               }}
               onDeleteNodes={() => {
                 const ids =
-                  contextMenu.kind === "node" ? [contextMenu.nodeId] : selectedNodeIds();
+                  contextMenu.kind === "node" || contextMenu.kind === "note"
+                    ? [contextMenu.nodeId]
+                    : selectedNodeIds();
                 closeMenu();
                 removeNodes(ids);
               }}
@@ -1731,6 +1925,10 @@ function ChannelCanvasBody({
               onAdd={(point) => {
                 closeMenu();
                 openPickerAt(point, { kind: "free" });
+              }}
+              onAddNote={(point) => {
+                closeMenu();
+                addNote(screenToFlowPosition(point));
               }}
               onPaste={(text, point) => {
                 closeMenu();
@@ -1799,7 +1997,11 @@ function ChannelCanvasBody({
                   scope={{
                     nodes: upstreamOutputs(
                       selected.id,
-                      nodes.map((node) => ({ id: node.id, ref: node.data.ref, name: node.data.name })),
+                      nodes.flatMap((node) =>
+                      isChannelNode(node)
+                        ? [{ id: node.id, ref: node.data.ref, name: node.data.name }]
+                        : [],
+                    ),
                       edges.map((edge) => ({
                         source: edge.source,
                         target: edge.target,
@@ -1821,11 +2023,11 @@ function ChannelCanvasBody({
                     <UpstreamRegion
                       channelId={channelId ?? ""}
                       nodeId={selected.id}
-                      nodes={nodes.map((node) => ({
-                        id: node.id,
-                        name: node.data.name,
-                        ref: node.data.ref,
-                      }))}
+                      nodes={nodes.flatMap((node) =>
+                        isChannelNode(node)
+                          ? [{ id: node.id, name: node.data.name, ref: node.data.ref }]
+                          : [],
+                      )}
                       hasUpstream={edges.some((edge) => edge.target === selected.id)}
                       detail={sessionRun}
                     />
@@ -1840,7 +2042,7 @@ function ChannelCanvasBody({
                   onClose={beginClose}
                   onChange={(nodeId, data) => {
                     const next = nodesRef.current.map((node) =>
-                      node.id === nodeId ? { ...node, data } : node,
+                      node.id === nodeId && isChannelNode(node) ? { ...node, data } : node,
                     );
                     nodesRef.current = next;
                     setNodes(next);
@@ -1870,15 +2072,19 @@ function ChannelCanvasBody({
   );
 
   function paintProblems(
-    currentNodes: ChannelNode[],
+    currentNodes: CanvasNode[],
     currentEdges: Edge[],
     active: ProblemHighlight | null = highlightRef.current,
   ) {
     return {
-      nodes: currentNodes.map((node) => ({
-        ...node,
-        data: { ...node.data, problem: active?.nodeId === node.id },
-      })),
+      nodes: currentNodes.map((node) =>
+        isNoteNode(node)
+          ? node
+          : {
+              ...node,
+              data: { ...node.data, problem: active?.nodeId === node.id },
+            },
+      ),
       edges: channelEdges(
         currentEdges.map((edge) => ({
           ...edge,
@@ -1894,19 +2100,28 @@ function ChannelCanvasBody({
   }
 }
 
-function snapshotOf(nodes: ChannelNode[], edges: Edge[]): CanvasSnapshot {
+function snapshotOf(nodes: CanvasNode[], edges: Edge[]): CanvasSnapshot {
   return {
-    nodes: nodes.map((node) => ({
-      ...node,
-      position: { ...node.position },
-      selected: Boolean(node.selected),
-      data: {
-        ...node.data,
-        problem: false,
-        config: { ...node.data.config },
-        retry: node.data.retry ? { ...node.data.retry } : null,
-      },
-    })),
+    nodes: nodes.map((node) =>
+      isNoteNode(node)
+        ? {
+            ...settleNote(node),
+            position: { ...node.position },
+            selected: Boolean(node.selected),
+            data: { text: node.data.text },
+          }
+        : {
+            ...node,
+            position: { ...node.position },
+            selected: Boolean(node.selected),
+            data: {
+              ...node.data,
+              problem: false,
+              config: { ...node.data.config },
+              retry: node.data.retry ? { ...node.data.retry } : null,
+            },
+          },
+    ),
     edges: edges.map((edge) => ({
       id: edge.id,
       source: edge.source,
@@ -1924,17 +2139,28 @@ function sameSnapshot(left: CanvasSnapshot, right: CanvasSnapshot): boolean {
 
 function structural(snap: CanvasSnapshot) {
   return {
-    nodes: snap.nodes.map((node) => ({
-      id: node.id,
-      x: node.position.x,
-      y: node.position.y,
-      type: node.data.nodeType,
-      name: node.data.name,
-      config: node.data.config,
-      onError: node.data.onError,
-      retry: node.data.retry,
-      trigger: node.data.trigger,
-    })),
+    nodes: snap.nodes.map((node) =>
+      isNoteNode(node)
+        ? {
+            id: node.id,
+            x: node.position.x,
+            y: node.position.y,
+            width: node.width,
+            height: node.height,
+            text: node.data.text,
+          }
+        : {
+            id: node.id,
+            x: node.position.x,
+            y: node.position.y,
+            type: node.data.nodeType,
+            name: node.data.name,
+            config: node.data.config,
+            onError: node.data.onError,
+            retry: node.data.retry,
+            trigger: node.data.trigger,
+          },
+    ),
     edges: snap.edges.map((edge) => ({
       id: edge.id,
       source: edge.source,
@@ -2017,6 +2243,7 @@ function CanvasContextMenu({
   onInsert,
   onDeleteEdge,
   onAdd,
+  onAddNote,
   onPaste,
   onFit,
 }: {
@@ -2033,6 +2260,7 @@ function CanvasContextMenu({
   onInsert: (edgeId: string, point: { x: number; y: number }) => void;
   onDeleteEdge: (edgeId: string) => void;
   onAdd: (point: { x: number; y: number }) => void;
+  onAddNote: (point: { x: number; y: number }) => void;
   onPaste: (text: string, point: { x: number; y: number }) => void;
   onFit: () => void;
 }) {
@@ -2070,7 +2298,7 @@ function CanvasContextMenu({
       );
     }
   }
-  if ((menu.kind === "node" || menu.kind === "selection") && canMutate) {
+  if ((menu.kind === "node" || menu.kind === "note" || menu.kind === "selection") && canMutate) {
     entries.push(
       <Menu.Item
         key="duplicate"
@@ -2082,7 +2310,7 @@ function CanvasContextMenu({
       </Menu.Item>,
     );
   }
-  if (menu.kind === "node" || menu.kind === "selection") {
+  if (menu.kind === "node" || menu.kind === "note" || menu.kind === "selection") {
     entries.push(
       <Menu.Item
         key="copy"
@@ -2094,7 +2322,7 @@ function CanvasContextMenu({
       </Menu.Item>,
     );
   }
-  if ((menu.kind === "node" || menu.kind === "selection") && canMutate) {
+  if ((menu.kind === "node" || menu.kind === "note" || menu.kind === "selection") && canMutate) {
     entries.push(
       <Menu.Item
         key="cut"
@@ -2140,6 +2368,9 @@ function CanvasContextMenu({
       entries.push(
         <Menu.Item key="add" leftSection={<PlusIcon size={14} />} onClick={() => onAdd(point)}>
           {t("channels.canvas.addHere")}
+        </Menu.Item>,
+        <Menu.Item key="add-note" leftSection={<NoteIcon size={14} />} onClick={() => onAddNote(point)}>
+          {t("channels.canvas.addNote")}
         </Menu.Item>,
         <Menu.Item
           key="paste"
@@ -2195,9 +2426,11 @@ function CanvasContextMenu({
   );
 }
 
-function problemGraphOf(nodes: ChannelNode[], edges: Edge[]): ProblemGraph {
+function problemGraphOf(nodes: CanvasNode[], edges: Edge[]): ProblemGraph {
   return {
-    nodes: nodes.map((node) => ({ id: node.id, name: node.data.name })),
+    nodes: nodes.flatMap((node) =>
+      isChannelNode(node) ? [{ id: node.id, name: node.data.name }] : [],
+    ),
     edges: edges.map((edge) => ({
       id: edge.id,
       source: { node_id: edge.source },
@@ -2229,7 +2462,6 @@ function ChannelFlowEdge({
   targetY,
   sourcePosition,
   targetPosition,
-  targetHandleId,
   selected,
   style,
   markerEnd,
@@ -2242,19 +2474,14 @@ function ChannelFlowEdge({
   const { deleteElements } = useReactFlow();
   const [hovered, setHovered] = useState(false);
   const hideTimer = useRef<number | null>(null);
-  const [path, labelX, labelY] = isLoopReturn(targetHandleId)
-    ? (() => {
-        const routed = returnEdgePath(sourceX, sourceY, targetX, targetY);
-        return [routed.path, routed.labelX, routed.labelY] as const;
-      })()
-    : getBezierPath({
-        sourceX,
-        sourceY,
-        sourcePosition,
-        targetX,
-        targetY,
-        targetPosition,
-      });
+  const [path, labelX, labelY] = getBezierPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+  });
 
   useEffect(
     () => () => {
@@ -2380,6 +2607,59 @@ function NodeToolButton({
   );
 }
 
+function NoteFlowNode({ id, data, selected }: NodeProps<Node<NoteData, "note">>) {
+  const t = useTranslate();
+  const { editing, mutable, editingNoteId, draftNoteText, endNoteEdit } = useContext(CanvasSurfaceContext);
+  const fieldRef = useRef<HTMLTextAreaElement>(null);
+  const live = editingNoteId === id;
+  const canEdit = editing && mutable;
+
+  useEffect(() => {
+    if (!live) return;
+    fieldRef.current?.focus();
+  }, [live]);
+
+  return (
+    <div className="channel-note" aria-label={t("channels.canvas.noteLabel")}>
+      {selected && canEdit ? (
+        <NodeResizer
+          minWidth={NOTE_MIN_WIDTH}
+          minHeight={NOTE_MIN_HEIGHT}
+          maxWidth={NOTE_MAX_SIZE}
+          maxHeight={NOTE_MAX_SIZE}
+          color="var(--mantine-color-yellow-light-color)"
+        />
+      ) : null}
+      {live ? (
+        <textarea
+          ref={fieldRef}
+          className="channel-note__input nodrag nowheel"
+          maxLength={4000}
+          value={data.text}
+          aria-label={t("channels.canvas.noteLabel")}
+          placeholder={t("channels.canvas.notePlaceholder")}
+          onChange={(event) => draftNoteText(id, event.currentTarget.value)}
+          onBlur={() => endNoteEdit(id)}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            event.stopPropagation();
+            event.currentTarget.blur();
+          }}
+        />
+      ) : (
+        <div className="channel-note__body">
+          {data.text ? (
+            data.text
+          ) : (
+            <span className="channel-note__placeholder">{t("channels.canvas.notePlaceholder")}</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   const t = useTranslate();
   const { editing, mutable, openNode, openPickerAt, duplicateNode, busyOutputs } =
@@ -2390,7 +2670,8 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   const [hovered, setHovered] = useState(false);
   const inputs = spec ? spec.inputs : data.trigger ? [] : [{ port: "main", description: "" }];
   const outputs = spec ? spec.outputs : [{ port: "main", description: "" }];
-  const laid = layoutNodePorts(inputs, outputs);
+  const frame = data.nodeType === FOR_NODE_TYPE;
+  const laid = layoutNodePorts(inputs, outputs, { frame });
   const errorAnchor = outputs.some((port) => port.port === "error");
   const run = useContext(CanvasRunContext);
   const phase = run.phases.get(id);
@@ -2403,11 +2684,7 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
     : null;
   const count = run.counts.get(id) ?? 0;
   const onRun = run.onRun;
-  const depth = Math.max(
-    laid.inputs.filter((port) => port.position !== "bottom").length,
-    laid.outputs.length,
-    1,
-  );
+  const depth = Math.max(laid.inputs.length, laid.outputs.length, 1);
   const emphasis = data.problem
     ? "channel-flow-node--problem"
     : selected
@@ -2415,6 +2692,7 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
       : "";
   const className = [
     "channel-flow-node",
+    frame ? "channel-flow-node--frame" : "",
     emphasis,
     phase ? `channel-flow-node--${phase}` : "",
   ]
@@ -2425,7 +2703,7 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   return (
     <div
       className={className}
-      style={depth > 1 ? { minHeight: 24 + depth * 28 } : undefined}
+      style={frame || depth <= 1 ? undefined : { minHeight: 24 + depth * 28 }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
@@ -2585,8 +2863,7 @@ function PortHandles({
               type={kind}
               position={flowPosition(port.position)}
               id={port.port}
-              className={port.loopBack ? "channel-flow-handle--loop" : undefined}
-              style={port.position === "bottom" ? { left: "50%" } : { top: port.top }}
+              style={port.inset ? { top: port.top, left: EACH_INSET } : { top: port.top }}
               aria-label={t("channels.canvas.handle", {
                 node: nodeName,
                 port: name,
@@ -2598,7 +2875,11 @@ function PortHandles({
               <button
                 type="button"
                 className="channel-flow-port-add nodrag nopan"
-                style={{ top: port.top, left: "calc(100% + 16px)" }}
+                style={
+                  port.inset
+                    ? { top: port.top, left: EACH_INSET + 16 }
+                    : { top: port.top, left: "calc(100% + 16px)" }
+                }
                 aria-label={t("channels.canvas.addFromPort", { port: name })}
                 onPointerDown={(event) => event.stopPropagation()}
                 onMouseDown={(event) => event.stopPropagation()}
@@ -2612,8 +2893,8 @@ function PortHandles({
             ) : null}
             {port.labelled ? (
               <span
-                className={`channel-flow-port channel-flow-port--${port.position}`}
-                style={port.position === "bottom" ? undefined : { top: port.top }}
+                className={`channel-flow-port channel-flow-port--${port.inset ? "inset" : port.position}`}
+                style={{ top: port.top }}
               >
                 {name}
               </span>
@@ -2626,9 +2907,7 @@ function PortHandles({
 }
 
 function flowPosition(side: HandleSide): Position {
-  if (side === "left") return Position.Left;
-  if (side === "right") return Position.Right;
-  return Position.Bottom;
+  return side === "left" ? Position.Left : Position.Right;
 }
 
 function portLabel(

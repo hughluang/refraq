@@ -276,6 +276,25 @@ describe("ChannelRecord draft access", () => {
     });
   });
 
+  it("saves a draft note beside the nodes", async () => {
+    await renderRecord("edit");
+    fireEvent.click(await screen.findByRole("button", { name: "channels.canvas.note" }));
+    const field = await screen.findByRole("textbox", { name: "channels.canvas.noteLabel" });
+    fireEvent.change(field, { target: { value: "remember\nthis" } });
+    fireEvent.blur(field);
+    fireEvent.click(screen.getByRole("button", { name: "channels.edit.submit" }));
+    await waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
+    const body = vi.mocked(saveDraft).mock.calls[0]?.[1];
+    expect(body?.graph.notes).toEqual([
+      expect.objectContaining({
+        text: "remember\nthis",
+        size: { width: 240, height: 120 },
+      }),
+    ]);
+    expect(body?.graph.nodes.map((node) => node.id)).not.toContain(body?.graph.notes?.[0]?.id);
+    expect(body?.graph).not.toHaveProperty("nodes", expect.arrayContaining([expect.objectContaining({ text: "remember\nthis" })]));
+  });
+
   it("keeps undo history when a draft save does not reload the canvas", async () => {
     await renderRecord("edit");
     const panel = await screen.findByRole("toolbar", { name: "channels.canvas.toolbar" });

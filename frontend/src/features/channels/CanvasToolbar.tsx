@@ -19,6 +19,7 @@ import {
   FitViewIcon,
   KeyboardIcon,
   MinimapIcon,
+  NoteIcon,
   PlusIcon,
   RedoIcon,
   UndoIcon,
@@ -71,6 +72,7 @@ export function CanvasToolbar({
   addExpanded,
   overlayOpen = false,
   onAdd,
+  onAddNote,
   onUndo,
   onRedo,
   onSelectAll,
@@ -95,6 +97,7 @@ export function CanvasToolbar({
   /** Settings, the node picker, or another canvas overlay already has focus duty. */
   overlayOpen?: boolean;
   onAdd: () => void;
+  onAddNote: () => void;
   onUndo: () => void;
   onRedo: () => void;
   onSelectAll: () => void;
@@ -171,6 +174,13 @@ export function CanvasToolbar({
                 onClick={onAdd}
               >
                 <PlusIcon size={14} />
+              </ToolButton>
+              <ToolButton
+                label={t("channels.canvas.note")}
+                disabled={!mutable}
+                onClick={onAddNote}
+              >
+                <NoteIcon size={14} />
               </ToolButton>
               <span className="channel-canvas-toolbar__sep" role="separator" />
               <ToolButton
@@ -268,8 +278,10 @@ export function CanvasToolbar({
           pannable
           zoomable
           ariaLabel={t("channels.canvas.minimap")}
-          nodeColor={(node: Node<FlowNodeData>) => {
-            const family = catalog.find((item) => item.type === node.data.nodeType)?.family ?? "";
+          nodeColor={(node: Node) => {
+            if (node.type === "note") return "var(--mantine-color-yellow-light)";
+            const data = node.data as FlowNodeData;
+            const family = catalog.find((item) => item.type === data.nodeType)?.family ?? "";
             return `var(--mantine-color-${familyTint(family)}-filled)`;
           }}
         />

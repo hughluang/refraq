@@ -2,6 +2,7 @@ import { omitUnsetIntegers, type SchemaObject } from "@/features/channels/config
 import type {
   Graph,
   GraphNode,
+  GraphNote,
   GraphProblem,
   GraphSettings,
   NodeTypeSpec,
@@ -24,6 +25,8 @@ export type FlowNodeShape = {
   id: string;
   position: { x: number; y: number };
   data: FlowNodeData;
+  /** Set only when the graph node has `parent`. React Flow's field; the graph field is `parent`. */
+  parentId?: string;
 };
 
 export type FlowEdgeShape = {
@@ -35,7 +38,16 @@ export type FlowEdgeShape = {
   problem?: boolean;
 };
 
-export function newGraphId(prefix: "nd" | "ed"): string {
+/** React Flow shape for a note. `data` is not `FlowNodeData`. */
+export type FlowNoteShape = {
+  id: string;
+  position: { x: number; y: number };
+  width: number;
+  height: number;
+  data: { text: string };
+};
+
+export function newGraphId(prefix: "nd" | "ed" | "nt"): string {
   const bytes = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
   return `${prefix}_${bytes}`;
 }
@@ -76,23 +88,34 @@ export function emptyNodeData(
 export function flowFromGraph(
   graph: Graph,
   triggerTypes: ReadonlySet<string>,
-): { nodes: FlowNodeShape[]; edges: FlowEdgeShape[] } {
+): { nodes: FlowNodeShape[]; edges: FlowEdgeShape[]; notes: FlowNoteShape[] } {
   return {
-    nodes: graph.nodes.map((node) => ({
-      id: node.id,
-      position: node.position,
-      data: {
-        nodeType: node.type,
-        ref: node.ref || nodeRef(node.type, graph.nodes.map((item) => item.ref).filter(Boolean)),
-        name: node.name,
-        config: node.config,
-        onError: node.on_error,
-        retry: node.retry,
-        trigger: triggerTypes.has(node.type),
-        problem: false,
-        typeVersion: node.type_version ?? 1,
-      },
+    notes: (graph.notes ?? []).map((note) => ({
+      id: note.id,
+      position: { x: note.position.x, y: note.position.y },
+      width: note.size.width,
+      height: note.size.height,
+      data: { text: note.text },
     })),
+    nodes: graph.nodes.map((node) => {
+      const flowNode: FlowNodeShape = {
+        id: node.id,
+        position: node.position,
+        data: {
+          nodeType: node.type,
+          ref: node.ref || nodeRef(node.type, graph.nodes.map((item) => item.ref).filter(Boolean)),
+          name: node.name,
+          config: node.config,
+          onError: node.on_error,
+          retry: node.retry,
+          trigger: triggerTypes.has(node.type),
+          problem: false,
+          typeVersion: node.type_version ?? 1,
+        },
+      };
+      if (node.parent) flowNode.parentId = node.parent;
+      return flowNode;
+    }),
     edges: graph.edges.map((edge) => ({
       id: edge.id,
       source: edge.source.node_id,
@@ -122,25 +145,41 @@ export function graphFromFlow(
   nodes: FlowNodeShape[],
   edges: FlowEdgeShape[],
   settings: GraphSettings,
+  notes: FlowNoteShape[] = [],
 ): Graph {
-  return {
-    nodes: nodes.map((node) => ({
-      id: node.id,
-      ref: node.data.ref,
-      type: node.data.nodeType,
-      name: node.data.name,
-      position: { x: node.position.x, y: node.position.y },
-      config: node.data.config,
-      on_error: node.data.onError,
-      retry: node.data.retry,
-      type_version: node.data.typeVersion ?? 1,
-    })),
+  const graph: Graph = {
+    nodes: nodes.map((node) => {
+      const graphNode: GraphNode = {
+        id: node.id,
+        ref: node.data.ref,
+        type: node.data.nodeType,
+        name: node.data.name,
+        position: { x: node.position.x, y: node.position.y },
+        config: node.data.config,
+        on_error: node.data.onError,
+        retry: node.data.retry,
+        type_version: node.data.typeVersion ?? 1,
+      };
+      if (node.parentId) graphNode.parent = node.parentId;
+      return graphNode;
+    }),
     edges: edges.map((edge) => ({
       id: edge.id,
       source: { node_id: edge.source, port: edge.sourceHandle || "main" },
       target: { node_id: edge.target, port: edge.targetHandle || "main" },
     })),
     settings,
+  };
+  if (notes.length > 0) graph.notes = notes.map(noteFromFlow);
+  return graph;
+}
+
+function noteFromFlow(note: FlowNoteShape): GraphNote {
+  return {
+    id: note.id,
+    position: { x: note.position.x, y: note.position.y },
+    size: { width: note.width, height: note.height },
+    text: note.data.text,
   };
 }
 

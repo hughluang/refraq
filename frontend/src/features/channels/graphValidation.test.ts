@@ -5,6 +5,7 @@ import {
   flowFromGraph,
   graphFromFlow,
   insertableTypes,
+  newGraphId,
   outputTargetTypes,
   VALIDATION_PAUSE_MS,
   validationContentKey,
@@ -69,6 +70,114 @@ describe("flow conversion", () => {
     expect(restored.edges[0]).toEqual(edge("ed_1", "nd_trigger", "nd_read", "error", "main"));
     expect(restored.settings.run_timeout_sec).toBe(30);
     expect(flow.nodes[0]?.data.trigger).toBe(true);
+  });
+
+  it("round-trips notes beside the nodes and omits notes when the graph has none", () => {
+    const settings = { run_timeout_sec: null, error_channel_id: null };
+    const note = {
+      id: "nt_keep",
+      position: { x: 8, y: 16 },
+      size: { width: 240, height: 120 },
+      text: "line one\nline two",
+    };
+    const graph: Graph = {
+      nodes: [node("nd_read", "read.sql", "Read")],
+      edges: [edge("ed_1", "nd_read", "nd_missing")],
+      settings,
+      notes: [note],
+    };
+
+    const flow = flowFromGraph(graph, TRIGGERS);
+    expect(flow.nodes.map((item) => item.id)).toEqual(["nd_read"]);
+    expect(flow.notes).toEqual([
+      {
+        id: "nt_keep",
+        position: { x: 8, y: 16 },
+        width: 240,
+        height: 120,
+        data: { text: "line one\nline two" },
+      },
+    ]);
+
+    const restored = graphFromFlow(flow.nodes as FlowNodeShape[], flow.edges, settings, flow.notes);
+    expect(restored.nodes.map((item) => item.id)).toEqual(["nd_read"]);
+    expect(restored.notes).toEqual([note]);
+    expect(restored.edges).toEqual(graph.edges);
+
+    const legacy: Graph = {
+      nodes: [node("nd_read", "read.sql", "Read")],
+      edges: [],
+      settings,
+    };
+    const legacyFlow = flowFromGraph(legacy, TRIGGERS);
+    const legacyBack = graphFromFlow(legacyFlow.nodes as FlowNodeShape[], legacyFlow.edges, settings);
+    expect(Object.keys(legacyBack).sort()).toEqual(["edges", "nodes", "settings"]);
+    const emptied = graphFromFlow(
+      legacyFlow.nodes as FlowNodeShape[],
+      legacyFlow.edges,
+      settings,
+      [],
+    );
+    expect(emptied).not.toHaveProperty("notes");
+  });
+
+  it("mints note ids with an nt prefix", () => {
+    expect(newGraphId("nt")).toMatch(/^nt_[0-9a-f]{12}$/);
+  });
+
+  it("round-trips For parent links and relative positions without storing a frame size", () => {
+    const settings = { run_timeout_sec: null, error_channel_id: null };
+    const graph: Graph = {
+      nodes: [
+        { ...node("nd_body", "read.sql", "Body"), position: { x: 16, y: 24 }, parent: "nd_inner" },
+        {
+          ...node("nd_inner", "volume.for", "Inner"),
+          position: { x: 40, y: 48 },
+          parent: "nd_outer",
+        },
+        { ...node("nd_outer", "volume.for", "Outer"), position: { x: 10, y: 20 } },
+        { ...node("nd_after", "read.sql", "After"), position: { x: 400, y: 40 } },
+      ],
+      edges: [],
+      settings,
+    };
+
+    const flow = flowFromGraph(graph, TRIGGERS);
+    expect(flow.nodes.map((item) => item.id)).toEqual([
+      "nd_body",
+      "nd_inner",
+      "nd_outer",
+      "nd_after",
+    ]);
+    expect(flow.nodes.find((item) => item.id === "nd_body")?.parentId).toBe("nd_inner");
+    expect(flow.nodes.find((item) => item.id === "nd_body")?.position).toEqual({ x: 16, y: 24 });
+    expect(flow.nodes.find((item) => item.id === "nd_inner")?.parentId).toBe("nd_outer");
+    expect(flow.nodes.find((item) => item.id === "nd_inner")?.position).toEqual({ x: 40, y: 48 });
+    expect(flow.nodes.find((item) => item.id === "nd_outer")).not.toHaveProperty("parentId");
+    expect(flow.nodes.find((item) => item.id === "nd_after")).not.toHaveProperty("parentId");
+
+    const restored = graphFromFlow(flow.nodes as FlowNodeShape[], flow.edges, settings);
+    expect(restored.nodes.map((item) => item.id)).toEqual([
+      "nd_body",
+      "nd_inner",
+      "nd_outer",
+      "nd_after",
+    ]);
+    expect(restored.nodes.find((item) => item.id === "nd_body")).toMatchObject({
+      parent: "nd_inner",
+      position: { x: 16, y: 24 },
+    });
+    expect(restored.nodes.find((item) => item.id === "nd_inner")).toMatchObject({
+      parent: "nd_outer",
+      position: { x: 40, y: 48 },
+    });
+    expect(restored.nodes.find((item) => item.id === "nd_outer")).not.toHaveProperty("parent");
+    expect(restored.nodes.find((item) => item.id === "nd_after")).not.toHaveProperty("parent");
+    for (const item of restored.nodes) {
+      expect(item).not.toHaveProperty("width");
+      expect(item).not.toHaveProperty("height");
+    }
+    expect(restored).not.toHaveProperty("notes");
   });
 });
 
@@ -325,7 +434,7 @@ describe("insertableTypes", () => {
 describe("validation schedule keys", () => {
   const settings = { run_timeout_sec: null, error_channel_id: null };
 
-  it("ignores position when comparing content", () => {
+  it("ignores notes and position when comparing content", () => {
     const graph: Graph = {
       nodes: [node("nd_read", "read.sql", "Read")],
       edges: [],
@@ -336,6 +445,54 @@ describe("validation schedule keys", () => {
       nodes: [{ ...graph.nodes[0]!, position: { x: 9, y: 9 } }],
     };
     expect(validationContentKey(graph)).toBe(validationContentKey(moved));
+    const noted: Graph = {
+      ...graph,
+      notes: [
+        {
+          id: "nt_1",
+          position: { x: 1, y: 1 },
+          size: { width: 240, height: 120 },
+          text: "aside",
+        },
+      ],
+    };
+    const rewritten: Graph = {
+      ...noted,
+      notes: [{ ...noted.notes![0]!, text: "moved aside", position: { x: 9, y: 9 } }],
+    };
+    expect(validationContentKey(noted)).toBe(validationContentKey(graph));
+    expect(validationContentKey(rewritten)).toBe(validationContentKey(graph));
+  });
+
+  it("does not treat a note id as a connection endpoint", () => {
+    const withNote = {
+      nodes: [node("nd_read", "read.sql"), node("nd_write", "write.entity")],
+      edges: [] as Graph["edges"],
+      notes: [
+        {
+          id: "nt_1",
+          position: { x: 0, y: 0 },
+          size: { width: 240, height: 120 },
+          text: "",
+        },
+      ],
+    };
+    expect(
+      connectionAllowed(withNote, CATALOG, {
+        source: "nd_read",
+        target: "nd_write",
+        sourceHandle: "main",
+        targetHandle: "main",
+      }),
+    ).toBe(true);
+    expect(
+      connectionAllowed(withNote, CATALOG, {
+        source: "nt_1",
+        target: "nd_write",
+        sourceHandle: "main",
+        targetHandle: "main",
+      }),
+    ).toBe(false);
   });
 
   it("validates a loaded draft immediately and later content after a pause", () => {
