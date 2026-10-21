@@ -76,6 +76,7 @@ import {
   type FlowNodeData,
 } from "@/features/channels/graphValidation";
 import { NodeConfigPanel } from "@/features/channels/NodeConfigPanel";
+import { familyTint, nodeTypeIcon } from "@/features/channels/nodeVisual";
 import { MOTION_MS } from "@/theme/tokens";
 import { ResultRegion, UpstreamRegion } from "@/features/channels/NodeRunRegions";
 import {
@@ -918,6 +919,9 @@ function ChannelCanvasBody({
     openNodeConfig(nodeId);
   };
 
+  const selectedNodes = nodes.filter((node) => node.selected);
+  const adjacentTo = selectedNodes.length === 1 ? selectedNodes[0]!.id : null;
+
   return (
     <Stack gap={0} flex={1} mih={0} h="100%" w="100%" pos="relative">
         <CanvasSurfaceContext.Provider value={{ editing: appearance === "edit", mutable }}>
@@ -950,6 +954,9 @@ function ChannelCanvasBody({
                 phases.get(edge.target) === "running" ? "channel-flow-edge--live" : "",
                 phases.get(edge.source) === "dead" || phases.get(edge.target) === "dead"
                   ? "channel-flow-edge--settled"
+                  : "",
+                adjacentTo != null && (edge.source === adjacentTo || edge.target === adjacentTo)
+                  ? "channel-flow-edge--adjacent"
                   : "",
               ]
                 .filter(Boolean)
@@ -1586,15 +1593,12 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   ]
     .filter(Boolean)
     .join(" ");
+  const family = spec?.family ?? "";
+  const TypeIcon = nodeTypeIcon(data.nodeType, family);
   return (
     <div
       className={className}
-      style={{
-        minWidth: 148,
-        minHeight: depth > 1 ? 24 + depth * 28 : undefined,
-        padding: "8px 12px",
-        background: "var(--mantine-color-body)",
-      }}
+      style={depth > 1 ? { minHeight: 24 + depth * 28 } : undefined}
     >
       {editing ? (
         <>
@@ -1628,17 +1632,25 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
         </>
       ) : null}
       <PortHandles ports={laid.inputs} nodeName={data.name} kind="target" />
-      <Text size="xs" c="dimmed" className="channel-flow-node__type">
-        {spec ? nodeTypeLabel(t, spec) : data.nodeType}
-      </Text>
-      <Text size="sm" fw={600}>
-        {data.name}
-      </Text>
-      {count > 1 ? (
-        <Text size="xs" c="dimmed" className="channel-flow-node__count">
-          {t("channels.run.executions", { count })}
+      <span
+        className={`channel-flow-node__icon channel-flow-node__icon--${familyTint(family)}`}
+        aria-hidden
+      >
+        <TypeIcon />
+      </span>
+      <div className="channel-flow-node__body">
+        <Text size="xs" c="dimmed">
+          {spec ? nodeTypeLabel(t, spec) : data.nodeType}
         </Text>
-      ) : null}
+        <Text size="sm" fw={600} className="channel-flow-node__name" title={data.name}>
+          {data.name}
+        </Text>
+        {count > 1 ? (
+          <Text size="xs" c="dimmed" className="channel-flow-node__count">
+            {t("channels.run.executions", { count })}
+          </Text>
+        ) : null}
+      </div>
       {phaseStatus && phase && isNodeRunPhase(phase) ? (
         <NodePhaseMark phase={phase} tone={phaseStatus.tone} label={t(phaseStatus.labelKey)} />
       ) : null}

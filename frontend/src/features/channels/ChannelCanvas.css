@@ -7,7 +7,8 @@
   inset: 0;
   min-width: 0;
   min-height: 0;
-  --xy-edge-stroke: var(--refraq-tone-neutral-border);
+  --xy-edge-stroke: var(--refraq-tone-neutral);
+  --xy-edge-stroke-width: 1.5;
   --xy-edge-stroke-selected: var(--mantine-primary-color-filled);
   /* React Flow controls: 15px panel margin + 26px button, plus a gap. */
   --channel-canvas-controls-clearance: calc(15px + 26px + var(--mantine-spacing-sm));
@@ -202,21 +203,69 @@
 
 .channel-flow-node {
   position: relative;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  column-gap: var(--mantine-spacing-xs);
+  align-content: start;
+  align-items: center;
+  width: 208px;
+  padding: var(--mantine-spacing-xs);
   border: 1px solid var(--refraq-tone-neutral-border);
   border-radius: var(--mantine-radius-sm);
+  background: var(--mantine-color-body);
+  text-align: start;
 }
 
-.channel-flow-node:has(.channel-flow-node__status) .channel-flow-node__type {
-  padding-right: 5.5rem;
+.channel-flow-node__icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--mantine-radius-sm);
+  line-height: 0;
+}
+
+.channel-flow-node__icon--orange {
+  background: var(--mantine-color-orange-light);
+  color: var(--mantine-color-orange-light-color);
+}
+
+.channel-flow-node__icon--blue {
+  background: var(--mantine-color-blue-light);
+  color: var(--mantine-color-blue-light-color);
+}
+
+.channel-flow-node__icon--gray {
+  background: var(--mantine-color-gray-light);
+  color: var(--mantine-color-gray-light-color);
+}
+
+.channel-flow-node__icon--grape {
+  background: var(--mantine-color-grape-light);
+  color: var(--mantine-color-grape-light-color);
+}
+
+.channel-flow-node__body {
+  min-width: 0;
+}
+
+/* Phase mark is 14px and hangs into the text column from the top-right. */
+.channel-flow-node:has(.channel-flow-node__status) .channel-flow-node__body {
+  padding-right: calc(14px + var(--mantine-spacing-xs));
+}
+
+.channel-flow-node .channel-flow-node__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .channel-flow-node__status {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: var(--mantine-spacing-xs);
+  right: var(--mantine-spacing-xs);
   z-index: 1;
   line-height: 1;
-  pointer-events: none;
   white-space: nowrap;
 }
 
@@ -225,19 +274,16 @@
   top: 10px;
 }
 
-/* Extra emphasis stays outside the border box so selection and problem states do not shift node content. */
-.channel-flow-node--selected {
-  border-color: var(--mantine-primary-color-filled);
-  box-shadow: 0 0 0 1px var(--mantine-primary-color-filled);
+.channel-flow-node--running {
+  border-color: var(--refraq-tone-running);
 }
 
-.channel-flow-node--problem {
+.channel-flow-node--succeeded {
+  border-color: var(--refraq-tone-success);
+}
+
+.channel-flow-node--failed {
   border-color: var(--refraq-tone-danger);
-  box-shadow: 0 0 0 1px var(--refraq-tone-danger);
-}
-
-.channel-flow-node:hover:not(.channel-flow-node--selected):not(.channel-flow-node--problem) {
-  border-color: var(--refraq-tone-neutral);
 }
 
 .channel-flow-node--waiting {
@@ -249,26 +295,72 @@
   opacity: 0.72;
 }
 
-.channel-flow-node .react-flow__handle:not(.channel-flow-handle--loop) {
-  width: 8px;
-  height: 8px;
-  padding: 0;
-  border: none;
-  /* Library radius is a percentage, so a 1px snap of width vs height turns the dot into an ellipse. */
-  border-radius: 0;
-  background: radial-gradient(
-    circle closest-side,
-    var(--mantine-color-body) 0 55%,
-    var(--refraq-tone-neutral) 70% 86%,
-    transparent 100%
-  );
+.channel-flow-node--selected {
+  box-shadow:
+    0 0 0 2px var(--mantine-color-body),
+    0 0 0 4px var(--mantine-primary-color-filled);
+}
+
+.channel-flow-node--problem {
+  box-shadow:
+    0 0 0 2px var(--mantine-color-body),
+    0 0 0 4px var(--refraq-tone-danger);
+}
+
+.channel-flow-node:hover:not(.channel-flow-node--running):not(.channel-flow-node--succeeded):not(
+    .channel-flow-node--failed
+  ) {
+  border-color: var(--refraq-tone-neutral);
+}
+
+.channel-flow-node .react-flow__handle {
+  z-index: 2;
+  width: 10px;
+  height: 10px;
+}
+
+/* Visible ring is 10px; 7px each side makes the hit target 24px. */
+.channel-flow-node .react-flow__handle::before {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  background: var(--mantine-color-body);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.channel-flow-node .react-flow__handle.connectionindicator::before,
+.channel-flow-node .react-flow__handle.connectingfrom::before {
+  pointer-events: auto;
 }
 
 .channel-flow-node .react-flow__handle.channel-flow-handle--loop {
-  width: 8px;
-  height: 8px;
+  border: 1px solid var(--refraq-tone-info);
   border-radius: 1px;
   background: var(--refraq-tone-info);
+}
+
+.channel-flow-node .react-flow__handle:not(.channel-flow-handle--loop) {
+  border: 1.5px solid var(--refraq-tone-neutral);
+  /* Length radius: the library's 100% radius turns a 1px width/height snap into an ellipse. */
+  border-radius: 999px;
+  background: var(--mantine-color-body);
+}
+
+.channel-flow-node:hover .react-flow__handle:not(.channel-flow-handle--loop) {
+  border-color: var(--mantine-primary-color-filled);
+  border-width: 2.5px;
+}
+
+.channel-flow-node .react-flow__handle.connectingfrom {
+  border-color: var(--mantine-primary-color-filled);
+  background: var(--mantine-primary-color-filled);
+}
+
+.channel-flow-node .react-flow__handle.valid {
+  box-shadow:
+    0 0 0 2px var(--mantine-color-body),
+    0 0 0 4px var(--mantine-primary-color-filled);
 }
 
 .channel-flow-port {
@@ -295,6 +387,11 @@
   bottom: -14px;
   left: 50%;
   transform: translateX(-50%);
+}
+
+.channel-canvas-stage .react-flow__edge:hover .react-flow__edge-path,
+.channel-canvas-stage .react-flow__edge.channel-flow-edge--adjacent .react-flow__edge-path {
+  stroke: var(--mantine-primary-color-filled);
 }
 
 .channel-flow-edge--return:not(.channel-flow-edge--live) .react-flow__edge-path {
@@ -379,7 +476,21 @@
 
 @media (prefers-reduced-motion: no-preference) {
   .channel-flow-node {
-    transition: border-color var(--refraq-motion-fast) var(--refraq-ease-standard);
+    transition:
+      border-color var(--refraq-motion-fast) var(--refraq-ease-standard),
+      box-shadow var(--refraq-motion-fast) var(--refraq-ease-standard);
+  }
+
+  .channel-flow-node .react-flow__handle {
+    transition:
+      border-color var(--refraq-motion-fast) var(--refraq-ease-standard),
+      border-width var(--refraq-motion-fast) var(--refraq-ease-standard),
+      background-color var(--refraq-motion-fast) var(--refraq-ease-standard),
+      box-shadow var(--refraq-motion-fast) var(--refraq-ease-standard);
+  }
+
+  .channel-canvas-stage .react-flow__edge-path {
+    transition: stroke var(--refraq-motion-fast) var(--refraq-ease-standard);
   }
 
   .channel-flow-node__run,

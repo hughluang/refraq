@@ -8,9 +8,13 @@ import {
   IconArrowBackUp,
   IconArrowForwardUp,
   IconArrowsExchange,
+  IconArrowsJoin2,
+  IconArrowsSplit2,
+  IconBolt,
   IconBook,
   IconBox,
   IconBrain,
+  IconCalendarTime,
   IconCategory,
   IconCheck,
   IconChevronLeft,
@@ -19,10 +23,15 @@ import {
   IconCircleFilled,
   IconCircleX,
   IconClock,
+  IconCode,
+  IconCopyOff,
   IconLoader,
   IconDatabase,
   IconDeviceDesktop,
   IconDotsVertical,
+  IconFilter,
+  IconForms,
+  IconHandFinger,
   IconInbox,
   IconIdBadge,
   IconInfoCircle,
@@ -36,14 +45,18 @@ import {
   IconPencil,
   IconPlayerPlayFilled,
   IconPlug,
+  IconPlugConnected,
   IconPlus,
+  IconRepeat,
   IconRoute,
   IconSearch,
+  IconSend,
   IconSettings,
   IconShieldLock,
   IconStack2,
   IconSun,
   IconTable,
+  IconTableImport,
   IconUserCircle,
   IconUsers,
   IconUsersGroup,
@@ -96,6 +109,25 @@ export const CloseIcon = withDefaults(IconX);
 export const SearchIcon = withDefaults(IconSearch);
 export const NavCollapseIcon = withDefaults(IconChevronLeft);
 export const NavExpandIcon = withDefaults(IconChevronRight);
+
+export const BoltIcon = withDefaults(IconBolt);
+export const BoxIcon = withDefaults(IconBox);
+export const CalendarTimeIcon = withDefaults(IconCalendarTime);
+export const CodeIcon = withDefaults(IconCode);
+export const CopyOffIcon = withDefaults(IconCopyOff);
+export const DatabaseIcon = withDefaults(IconDatabase);
+export const FilterIcon = withDefaults(IconFilter);
+export const FormsIcon = withDefaults(IconForms);
+export const HandFingerIcon = withDefaults(IconHandFinger);
+export const JoinIcon = withDefaults(IconArrowsJoin2);
+export const MailIcon = withDefaults(IconMail);
+export const PlugConnectedIcon = withDefaults(IconPlugConnected);
+export const RepeatIcon = withDefaults(IconRepeat);
+export const SendIcon = withDefaults(IconSend);
+export const SplitIcon = withDefaults(IconArrowsSplit2);
+export const TableImportIcon = withDefaults(IconTableImport);
+export const VariableIcon = withDefaults(IconVariable);
+export const WebhookIcon = withDefaults(IconWebhook);
 
 /** Kebab-case Tabler names emitted by the Console Module catalog seed. */
 const MODULE_ICONS: Record<string, ReturnType<typeof withDefaults>> = {

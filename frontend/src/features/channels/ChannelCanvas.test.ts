@@ -1650,6 +1650,105 @@ describe("channel ports", () => {
   });
 });
 
+describe("channel node anatomy", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  it("draws a family-tinted icon tile beside the type and name", async () => {
+    await renderCanvas(
+      [],
+      {
+        ...EMPTY_GRAPH,
+        nodes: [
+          placed("start", "trigger.manual", "Start", 20),
+          placed("load", "read.sql", "Load customers", 280),
+          placed("save", "write.entity", "Save", 540),
+          placed("odd", "misc.thing", "Odd", 800),
+        ],
+      },
+      {
+        catalog: [
+          catalogSpec("trigger.manual", [], [{ port: "main", description: "" }], true),
+          READ_SPEC,
+          catalogSpec("write.entity", [{ port: "main", description: "" }], []),
+        ],
+      },
+    );
+
+    const card = (id: string) =>
+      document.querySelector(`.react-flow__node[data-id='${id}'] .channel-flow-node`);
+    await waitFor(() => {
+      expect(card("start")).not.toBeNull();
+    });
+    const tile = (id: string) => card(id)?.querySelector(".channel-flow-node__icon");
+    expect(tile("start")?.classList.contains("channel-flow-node__icon--orange")).toBe(true);
+    expect(tile("start")?.querySelector("svg")).not.toBeNull();
+    expect(tile("load")?.classList.contains("channel-flow-node__icon--blue")).toBe(true);
+    expect(tile("save")?.classList.contains("channel-flow-node__icon--grape")).toBe(true);
+    expect(tile("odd")?.classList.contains("channel-flow-node__icon--gray")).toBe(true);
+    const name = card("load")?.querySelector(".channel-flow-node__name");
+    expect(name?.textContent).toBe("Load customers");
+    expect(name?.getAttribute("title")).toBe("Load customers");
+  });
+
+  it("marks the edges of the one selected node as adjacent", async () => {
+    await renderCanvas(
+      [],
+      {
+        ...EMPTY_GRAPH,
+        nodes: [
+          placed("start", "trigger.manual", "Start", 20),
+          placed("body", "read.sql", "Body", 280),
+          placed("next", "read.sql", "Next", 540),
+        ],
+        edges: [
+          {
+            id: "into",
+            source: { node_id: "start", port: "main" },
+            target: { node_id: "body", port: "main" },
+          },
+          {
+            id: "beyond",
+            source: { node_id: "body", port: "main" },
+            target: { node_id: "next", port: "main" },
+          },
+        ],
+      },
+      {
+        catalog: [
+          catalogSpec("trigger.manual", [], [{ port: "main", description: "" }], true),
+          READ_SPEC,
+        ],
+      },
+    );
+
+    const edge = (id: string) => document.querySelector(`.react-flow__edge[data-id='${id}']`);
+    const adjacent = (id: string) => edge(id)?.classList.contains("channel-flow-edge--adjacent");
+    const node = (id: string) => {
+      const shell = document.querySelector(`.react-flow__node[data-id='${id}']`);
+      if (!(shell instanceof HTMLElement)) throw new Error(`missing node ${id}`);
+      return shell;
+    };
+    await waitFor(() => {
+      expect(edge("beyond")).not.toBeNull();
+    });
+    expect(adjacent("into")).toBe(false);
+    expect(adjacent("beyond")).toBe(false);
+
+    fireEvent.click(node("body"));
+    await waitFor(() => {
+      expect(adjacent("into")).toBe(true);
+    });
+    expect(adjacent("beyond")).toBe(true);
+
+    fireEvent.click(node("start"));
+    await waitFor(() => {
+      expect(adjacent("beyond")).toBe(false);
+    });
+    expect(adjacent("into")).toBe(true);
+  });
+});
+
 function phaseLabel(node: Element | null | undefined): string | null {
   return node?.querySelector(".channel-flow-node__status")?.getAttribute("aria-label") ?? null;
 }
