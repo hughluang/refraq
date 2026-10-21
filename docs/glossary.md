@@ -584,6 +584,16 @@ Avoid Ingestion Job, sync job, a Scheduled Task, in-place retry, and **Kind exec
 Explanatory text on a **Data Channel** graph. It has an id, a canvas position, a size, and text. It is saved with the draft and published with the **Channel Version**. It has no effect on execution or validation.
 Avoid treating it as a node, an edge, a port, or a configuration value an expression can read.
 
+### For
+
+A **Data Channel** volume node that contains a **Loop Body**. A node is inside that For when its `parent` is the For's node id. A nested For's children belong to the inner For. The For runs the body once per element of a JSON array. Its ports are the input `main` and the outputs `each` and `done`. While a round runs, the body reads `{current, index, count}` from the For. The stored output is `{current, index, count, iterations}`. Each `iterations` object is keyed by the **Node Ref** of each body node that ran on that element, sorted by `ref`, and the value is that node's output. The For fails when the UTF-8 byte length of the compact JSON of `iterations` exceeds 16 MiB.
+Avoid a loop-back port, a `loop` input, a `results` field, a legal cycle through the For, and naming a body node from a node reached by `done`.
+
+### Loop Body
+
+The direct child nodes of one **For**: every node whose `parent` is that For. Membership is that `parent`, not the set of nodes reachable from a port. An edge may enter the body only from that For's `each` output. `done` connects only to a node outside the body. An edge that crosses the frame is illegal in either direction. A body node's canvas position is relative to the For's frame. The frame's size is derived from those positions, with a margin and a minimum size, and is not stored.
+Avoid a return edge into the For, and storing null for a body node that did not run.
+
 ### Node Ref
 
 The Python identifier on a **Data Channel** node, unique in the graph, generated when the node is created and editable. An expression reads that node's output as `self.<ref>.output`. The same output is `self.nodes["<node name>"].output`.

@@ -139,12 +139,13 @@ Node fields:
 | `type` | A node type id from the catalog (§3.7) |
 | `type_version` | Integer, default `1`. Must equal the node type's current `type_version` |
 | `name` | Trimmed, 1 to 128 characters, unique within the graph |
-| `position` | Canvas coordinates; numbers; not interpreted by the server |
+| `position` | Canvas coordinates; numbers; not interpreted by the server. When `parent` is set, the coordinates are relative to that **For**'s frame |
+| `parent` | Optional node id of a For, omitted when the node is not a direct child of a For. JSON `null` means no parent. A stored node omits `parent` when it has none. The server stores no frame size |
 | `config` | Object validated against the node type's `config_schema` at validate and publish. Save accepts any object |
 | `on_error` | `stop`, `continue`, or `error_output`. `error_output` fails validation unless the node type declares an `error` output |
 | `retry` | `null`, or `{ "max_tries", "wait_sec" }`. `max_tries` is 1 to 10 and includes the first execution. `wait_sec` is 0 to 3600. Null executes once |
 
-Edge `source.port` and `target.port` name ports declared by the node types. Graph `settings.run_timeout_sec` is `null` or a positive integer of seconds at most 252460800. `settings.run_retry_limit` is `null` or an integer 0 to 10. `settings.error_channel_id` is `null` or another Data Channel id. Publish requires that channel's current published version to use `trigger.error` as its only trigger.
+Edge `source.port` and `target.port` name ports declared by the node types. An edge from S to T crosses a For frame when the two `parent` values differ and S is not T's parent. Two omitted `parent` values are equal. A crossing is `CHANNEL_LOOP_BODY_INVALID` in either direction, including an edge from a body node to its For. The only edge that may enter a frame is that For's `each` port connected to a node whose `parent` is that For, and `each` connects only to such a node. `done` connects only to a node outside that frame. A `parent` that names a missing node or a node that is not a For, or a parent chain that contains a cycle, is `CHANNEL_LOOP_BODY_INVALID`. A cycle among edges is `CHANNEL_GRAPH_CYCLE`. Graph `settings.run_timeout_sec` is `null` or a positive integer of seconds at most 252460800. `settings.run_retry_limit` is `null` or an integer 0 to 10. `settings.error_channel_id` is `null` or another Data Channel id. Publish requires that channel's current published version to use `trigger.error` as its only trigger.
 
 `notes` is optional and defaults to an empty list. A graph has at most 200 **Channel Note**s. Draft save, validate, and template preview accept this same graph shape.
 
@@ -260,7 +261,7 @@ For configuration (`volume.for`):
 | --- | --- |
 | `items` | A JSON array template. Each element is any JSON value. More than 100000 elements fails the node with `CHANNEL_ITEM_LIMIT_EXCEEDED` |
 
-During an iteration the output is `{"current", "index", "count"}`. The stored output is that object plus `"results"`. `current` and `index` are null when `items` is empty. Ports: inputs `main` and `loop`; outputs `each` (`loop_back`) and `done`.
+Ports are the input `main` and the outputs `each` and `done`. There is no `loop` port, and `each` is not a loop-back port. During a round the output visible to the body is `{"current", "index", "count"}` for that element. The stored output adds `"iterations"`. `current` is the last element and `index` is its zero-based position; both are null when `items` is empty. `count` is the number of elements, 0 when `items` is empty. `iterations` is an array of one object per element, in order, and is `[]` when `items` is empty. Each object's keys are the `ref` values of direct child nodes that ran on that element, sorted by `ref`. Each value is that node's output. A node that did not run is omitted, not stored as null. A round in which no child ran is `{}`. An If that ran stores that node's output; a branch that did not run adds no key. A nested For stores one key whose value is that For's whole output. The body does not read `iterations` or an earlier element, and may read outputs of nodes upstream of the For. A node reached from `done` reads the stored output, including `iterations`, and does not name a child node. After each element, the UTF-8 byte length of the compact JSON of `iterations` is measured: `,` and `:` with no extra whitespace, and characters outside ASCII are not written as `\u` escapes. Above 16 MiB (16777216 bytes) the node fails with `CHANNEL_ITERATION_VOLUME_EXCEEDED`. `done` runs after the body, including when `items` is empty.
 
 Code configuration (`transform.code`):
 
@@ -314,7 +315,7 @@ A successful execution returns `{rows, count, truncated}`. `rows` is an array of
 Validation reports problems as result documents, not as Problem Details:
 
 ```json
-{ "code": "CHANNEL_GRAPH_CYCLE", "node_id": "nd_read", "edge_id": "ed_2", "path": [], "detail": "Cycle does not pass through a loop node", "severity": "error" }
+{ "code": "CHANNEL_GRAPH_CYCLE", "node_id": "nd_read", "edge_id": "ed_2", "path": [], "detail": "The graph contains a cycle", "severity": "error" }
 ```
 
 `severity` is `error` or `warning`. Only `error` makes the graph invalid.
@@ -420,7 +421,7 @@ Sections are empty lists, or `false`, when there is nothing to show.
 - `family` is `trigger`, `read`, `transform`, `volume`, `state`, `write`, or `action`.
 - `label`, `summary`, and `description` are English. `summary` is one sentence. `description` states the type's function and its place in a workflow.
 - `trigger` is `true` for trigger types; they declare no inputs.
-- Each port is `{ "port", "description", "coarse_type", "loop_back" }`. `port` is lower snake case. `coarse_type` is `object`, `items`, or `unknown`. `loop_back` is true on the output that starts a loop body (`each` on `volume.for`) and false otherwise. `main` is the primary data port. `error` is an output that carries items the node failed when `on_error` is `error_output`.
+- Each port is `{ "port", "description", "coarse_type", "loop_back" }`. `port` is lower snake case. `coarse_type` is `object`, `items`, or `unknown`. `loop_back` is false on every port. `main` is the primary data port. `error` is an output that carries items the node failed when `on_error` is `error_output`.
 - `type_version` is the current version of the node type. A node instance's `type_version` must match it.
 - `config_schema` is a JSON Schema object that the Console renders as the configuration panel and the server enforces at validate and publish. Every property, including properties nested under array items, has `title` and `description`.
 - `permission` names the extra Permission needed to add or edit a node of this type (`channel:code_write` for `transform.code`, `channel:source_query` for `read.source_query`), or `null`.
@@ -699,8 +700,8 @@ Empty body. Requires `channel:write`. The source run must be `failed` and `targe
 | `CHANNEL_GRAPH_MULTIPLE_TRIGGERS` | The graph has more than one trigger node |
 | `CHANNEL_GRAPH_TRIGGER_INPUT` | A trigger node has an inbound edge |
 | `CHANNEL_GRAPH_UNREACHABLE` | A node is not reachable from any trigger node |
-| `CHANNEL_GRAPH_CYCLE` | A cycle does not pass through a loop node's loop-back port |
-| `CHANNEL_LOOP_BODY_INVALID` | A loop body edge enters from outside the loop port, the body, and the loop's ancestors; a body edge leaves to somewhere other than the body or the loop input; or the loop input has more than one return edge, or that edge does not start in the body |
+| `CHANNEL_GRAPH_CYCLE` | The graph contains a cycle |
+| `CHANNEL_LOOP_BODY_INVALID` | A node's `parent` names a missing node or a node that is not a **For**, a parent chain contains a cycle, or an edge crosses a For frame. An edge from S to T crosses when the two `parent` values differ and S is not T's parent. The only entry is that For's `each` connected to a node whose `parent` is that For, and `each` connects only to such a node. `done` connects only outside that frame |
 | `CHANNEL_GRAPH_EDGE_INVALID` | An edge names an unknown node or port |
 | `CHANNEL_NODE_TYPE_UNKNOWN` | A node names an unknown node type |
 | `CHANNEL_NODE_CONFIG_INVALID` | A node configuration does not satisfy its `config_schema` |
@@ -711,7 +712,7 @@ Empty body. Requires `channel:write`. The source run must be `failed` and `targe
 | `CHANNEL_MATCH_KEY_INVALID` | A write node's match key does not resolve |
 | `CHANNEL_EXPRESSION_INVALID` | A template expression does not parse |
 | `CHANNEL_TEMPLATE_TYPE_MISMATCH` | A template with no `{{ }}` does not match its declared value type |
-| `CHANNEL_TEMPLATE_REF_INVALID` | A template names a node that does not exist or is not upstream |
+| `CHANNEL_TEMPLATE_REF_INVALID` | A template names a node that does not exist or is not an ancestor. Ancestors skip an edge that crosses a For frame (`docs/business-data-channel.md` §4.1) |
 | `CHANNEL_TEMPLATE_TYPE_UNKNOWN` | Warning. A template result type cannot be known until run time |
 | `CHANNEL_PORT_TYPE_MISMATCH` | An edge joins ports whose coarse types differ and both are known |
 | `CHANNEL_PORT_TYPE_UNKNOWN` | Warning. An edge's upstream coarse type is `unknown` |
@@ -725,7 +726,8 @@ Empty body. Requires `channel:write`. The source run must be `failed` and `targe
 | --- | --- |
 | `CHANNEL_RUN_TIMEOUT` | The graph run timeout elapsed; the run log names the node it stopped at |
 | `CHANNEL_WRITE_INCOMPATIBLE` | A write node with policy `fail` met a head its mapping is incompatible with |
-| `CHANNEL_ITEM_LIMIT_EXCEEDED` | One node execution exceeded the in-memory item limit |
+| `CHANNEL_ITEM_LIMIT_EXCEEDED` | One node execution held more than 100000 items |
+| `CHANNEL_ITERATION_VOLUME_EXCEEDED` | The UTF-8 byte length of a **For** node's compact JSON `iterations` exceeded 16 MiB (16777216 bytes). The error message is `For iteration output exceeds 16 MiB. Read the items in batches.` |
 | `CHANNEL_SQL_NOT_ONE_STATEMENT` | The rendered SQL text is empty, unreadable, or more than one statement |
 | `CHANNEL_NODE_FAILED` | A node failed with `on_error` `stop`; the run record names the node and its error. A Code node sets `error_detail.reason` to `network`, `import`, `timeout`, `memory`, or `error` (and, for `error`, `type`, `message`, and `line`). A live Source query keeps the Controlled Query code in `error_detail.code` |
 | `CHANNEL_VALUE_TYPE_MISMATCH` | A template result does not match its declared value type |
