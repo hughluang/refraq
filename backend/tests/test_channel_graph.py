@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from backend.channel.graph import refine_ports, validate
+from backend.channel.graph import ancestor_closure, refine_ports, validate
+from backend.channel.schemas.channels import NodeIn
 from backend.channel.nodes import list_node_types
 from backend.channel.nodes.spec import (
     NodeType,
@@ -72,8 +73,10 @@ def _node(
     type_id: str,
     name: str,
     config: dict | None = None,
+    *,
+    parent: str | None = None,
 ) -> dict:
-    return {
+    node = {
         "id": node_id,
         "ref": node_id.removeprefix("nd_"),
         "type": type_id,
@@ -83,6 +86,9 @@ def _node(
         "on_error": "stop",
         "retry": None,
     }
+    if parent is not None:
+        node["parent"] = parent
+    return node
 
 
 def _edge(
@@ -203,7 +209,7 @@ def test_cycle_not_through_loop() -> None:
     assert cycles[0].node_id == "nd_write"
 
 
-def test_cycle_through_loop_back_port_is_legal() -> None:
+def test_cycle_through_a_loop_back_port_is_illegal() -> None:
     loop = NodeType(
         execute=_idle,
         type_id="volume.loop",
@@ -211,8 +217,8 @@ def test_cycle_through_loop_back_port_is_legal() -> None:
         label="Loop",
         summary="Repeats its loop-back branch for each incoming item.",
         description=(
-            "Test-only loop type. A cycle is legal when one edge leaves its "
-            "loop-back port."
+            "Test-only loop type. A cycle that leaves its loop-back port "
+            "is still a cycle."
         ),
         trigger=False,
         inputs=(PortSpec("main", "Items to iterate."),),
@@ -237,7 +243,10 @@ def test_cycle_through_loop_back_port_is_legal() -> None:
             _edge("ed_2", "nd_loop", "nd_loop", source_port="loop"),
         ],
     )
-    assert validate(graph, FakeResolver(), [*list_node_types(), loop]) == []
+    problems = validate(graph, FakeResolver(), [*list_node_types(), loop])
+    cycles = [item for item in problems if item.code == "CHANNEL_GRAPH_CYCLE"]
+    assert cycles
+    assert cycles[0].edge_id == "ed_2"
 
 
 def test_unknown_node_and_port_and_edge() -> None:
@@ -461,6 +470,30 @@ def test_expression_source_warns_until_run_time() -> None:
         item for item in problems if item.code == "CHANNEL_TEMPLATE_TYPE_UNKNOWN"
     ]
     assert [(item.severity, item.path) for item in unknown] == [("warning", ("source",))]
+
+
+def test_node_in_accepts_an_optional_parent() -> None:
+    bare = NodeIn(
+        id="nd_step",
+        ref="step",
+        type="transform.set_fields",
+        name="Step",
+        position={"x": 0, "y": 0},
+        config={},
+    )
+    assert bare.parent is None
+    assert "parent" not in bare.model_dump()
+    held = NodeIn(
+        id="nd_step",
+        ref="step",
+        type="transform.set_fields",
+        name="Step",
+        position={"x": 0, "y": 0},
+        config={},
+        parent="nd_walk",
+    )
+    assert held.parent == "nd_walk"
+    assert held.model_dump()["parent"] == "nd_walk"
 
 
 def test_expression_must_name_an_upstream_node() -> None:
@@ -739,74 +772,199 @@ def test_manual_payload_reserved_key_points_at_payload() -> None:
     assert [item.path for item in reserved] == [("payload",)]
 
 
-def _walk_graph(extra_nodes: list[dict] | None = None, extra_edges: list[dict] | None = None) -> dict:
-    nodes = [
-        _node("nd_trigger", "trigger.manual", "Run"),
-        _node("nd_walk", "volume.for", "Walk", {"items": "[1]"}),
-        _node(
-            "nd_step",
-            "transform.set_fields",
-            "Step",
-            {"fields": [{"name": "n", "value": "1"}]},
-        ),
-    ]
-    edges = [
-        _edge("ed_in", "nd_trigger", "nd_walk"),
-        _edge("ed_each", "nd_walk", "nd_step", source_port="each"),
-        _edge("ed_back", "nd_step", "nd_walk", target_port="loop"),
-    ]
-    if extra_nodes:
-        nodes.extend(extra_nodes)
-    if extra_edges:
-        edges.extend(extra_edges)
-    return _graph(nodes, edges)
+def _fields(value: str) -> dict:
+    return {"fields": [{"name": "n", "value": value}]}
 
 
-def test_cycle_through_for_each_is_legal() -> None:
-    problems = validate(_walk_graph(), FakeResolver())
-    assert [item.code for item in problems if item.severity == "error"] == []
-
-
-def test_ancestor_edge_into_a_for_body_is_legal() -> None:
-    graph = _walk_graph(
-        extra_edges=[_edge("ed_from_trigger", "nd_trigger", "nd_step")],
-    )
-    problems = validate(graph, FakeResolver())
-    assert [item.code for item in problems if item.code == "CHANNEL_LOOP_BODY_INVALID"] == []
-
-
-def test_for_body_cannot_leave_or_take_two_returns() -> None:
-    left = _walk_graph(
-        extra_edges=[_edge("ed_escape", "nd_step", "nd_walk", target_port="main")],
-    )
-    escaped = [item for item in validate(left, FakeResolver()) if item.code == "CHANNEL_LOOP_BODY_INVALID"]
-    assert escaped
-    assert escaped[0].edge_id == "ed_escape"
-
-    other = _node(
-        "nd_other",
-        "transform.set_fields",
-        "Other",
-        {"fields": [{"name": "n", "value": "2"}]},
-    )
-    two = _graph(
+def _for_frame() -> dict:
+    return _graph(
         [
             _node("nd_trigger", "trigger.manual", "Run"),
             _node("nd_walk", "volume.for", "Walk", {"items": "[1]"}),
-            _node("nd_step", "transform.set_fields", "Step", {"fields": [{"name": "n", "value": "1"}]}),
-            other,
+            _node("nd_step", "transform.set_fields", "Step", _fields("1"), parent="nd_walk"),
+            _node("nd_tail", "transform.set_fields", "Tail", _fields("2"), parent="nd_walk"),
+            _node("nd_after", "transform.set_fields", "After", _fields("3")),
         ],
         [
             _edge("ed_in", "nd_trigger", "nd_walk"),
             _edge("ed_each", "nd_walk", "nd_step", source_port="each"),
-            _edge("ed_each_2", "nd_walk", "nd_other", source_port="each"),
-            _edge("ed_back", "nd_step", "nd_walk", target_port="loop"),
-            _edge("ed_back_2", "nd_other", "nd_walk", target_port="loop"),
+            _edge("ed_next", "nd_step", "nd_tail"),
+            _edge("ed_done", "nd_walk", "nd_after", source_port="done"),
         ],
     )
-    codes = [item.code for item in validate(two, FakeResolver())]
-    assert "CHANNEL_LOOP_BODY_INVALID" in codes
-    assert "CHANNEL_GRAPH_CYCLE" not in codes
+
+
+def test_for_frame_of_direct_children_is_legal() -> None:
+    assert [item for item in validate(_for_frame(), FakeResolver()) if item.severity == "error"] == []
+
+
+def test_nested_for_owns_only_its_direct_children() -> None:
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_outer", "volume.for", "Outer", {"items": "[1]"}),
+            _node("nd_inner", "volume.for", "Inner", {"items": "[2]"}, parent="nd_outer"),
+            _node("nd_leaf", "transform.set_fields", "Leaf", _fields("1"), parent="nd_inner"),
+            _node("nd_side", "transform.set_fields", "Side", _fields("2"), parent="nd_outer"),
+            _node("nd_after", "transform.set_fields", "After", _fields("3")),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_outer"),
+            _edge("ed_outer_each", "nd_outer", "nd_inner", source_port="each"),
+            _edge("ed_inner_each", "nd_inner", "nd_leaf", source_port="each"),
+            _edge("ed_inner_done", "nd_inner", "nd_side", source_port="done"),
+            _edge("ed_outer_done", "nd_outer", "nd_after", source_port="done"),
+        ],
+    )
+    assert [item for item in validate(graph, FakeResolver()) if item.severity == "error"] == []
+
+
+def test_parent_must_name_an_existing_for() -> None:
+    missing = _for_frame()
+    missing["nodes"][2]["parent"] = "nd_missing"
+    missing_problems = [
+        item
+        for item in validate(missing, FakeResolver())
+        if item.code == "CHANNEL_LOOP_BODY_INVALID" and item.edge_id is None
+    ]
+    assert [item.node_id for item in missing_problems] == ["nd_step"]
+    assert missing_problems[0].detail == "parent does not name a For node"
+
+    not_for = _for_frame()
+    not_for["nodes"][2]["parent"] = "nd_trigger"
+    not_for_problems = [
+        item for item in validate(not_for, FakeResolver()) if item.code == "CHANNEL_LOOP_BODY_INVALID"
+    ]
+    assert any(item.node_id == "nd_step" and item.detail == "parent does not name a For node" for item in not_for_problems)
+
+    cycled = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_outer", "volume.for", "Outer", {"items": "[1]"}, parent="nd_inner"),
+            _node("nd_inner", "volume.for", "Inner", {"items": "[2]"}, parent="nd_outer"),
+        ],
+        [_edge("ed_in", "nd_trigger", "nd_outer")],
+    )
+    cycle_nodes = {
+        item.node_id
+        for item in validate(cycled, FakeResolver())
+        if item.code == "CHANNEL_LOOP_BODY_INVALID" and item.detail == "parent chain contains a cycle"
+    }
+    assert cycle_nodes == {"nd_outer", "nd_inner"}
+
+
+def test_edge_that_crosses_a_for_frame_is_invalid() -> None:
+    entered = _for_frame()
+    entered["edges"].append(_edge("ed_from_trigger", "nd_trigger", "nd_step"))
+    entered_problems = [
+        item for item in validate(entered, FakeResolver()) if item.code == "CHANNEL_LOOP_BODY_INVALID"
+    ]
+    assert [item.edge_id for item in entered_problems] == ["ed_from_trigger"]
+    assert entered_problems[0].detail == "Edge crosses a For frame"
+
+    left = _for_frame()
+    left["edges"].append(_edge("ed_escape", "nd_tail", "nd_after"))
+    left_problems = [
+        item for item in validate(left, FakeResolver()) if item.code == "CHANNEL_LOOP_BODY_INVALID"
+    ]
+    assert [item.edge_id for item in left_problems] == ["ed_escape"]
+
+    returned = _for_frame()
+    returned["edges"].append(_edge("ed_back", "nd_tail", "nd_walk"))
+    returned_codes = {item.code for item in validate(returned, FakeResolver())}
+    assert "CHANNEL_LOOP_BODY_INVALID" in returned_codes
+    assert "CHANNEL_GRAPH_CYCLE" in returned_codes
+
+
+def test_for_frame_is_entered_only_from_each() -> None:
+    done_into = _for_frame()
+    done_into["edges"] = [
+        edge for edge in done_into["edges"] if edge["id"] != "ed_done"
+    ]
+    done_into["edges"].append(_edge("ed_done_in", "nd_walk", "nd_step", source_port="done"))
+    done_problems = [
+        item for item in validate(done_into, FakeResolver()) if item.code == "CHANNEL_LOOP_BODY_INVALID"
+    ]
+    assert [item.edge_id for item in done_problems] == ["ed_done_in"]
+    assert done_problems[0].detail == "For frame is entered only from each"
+
+    each_out = _for_frame()
+    each_out["edges"].append(_edge("ed_each_out", "nd_walk", "nd_after", source_port="each"))
+    each_problems = [
+        item
+        for item in validate(each_out, FakeResolver())
+        if item.code == "CHANNEL_LOOP_BODY_INVALID" and item.edge_id == "ed_each_out"
+    ]
+    assert len(each_problems) == 1
+    assert each_problems[0].detail == "each connects only to a direct child of this For"
+
+
+def test_ancestor_closure_skips_edges_that_cross_a_for_frame() -> None:
+    graph = _for_frame()
+    graph["edges"].append(_edge("ed_back", "nd_tail", "nd_walk", target_port="loop"))
+    assert ancestor_closure(graph, "nd_step") == {"nd_trigger", "nd_walk", "nd_step"}
+    assert ancestor_closure(graph, "nd_tail") == {"nd_trigger", "nd_walk", "nd_step", "nd_tail"}
+    after = ancestor_closure(graph, "nd_after")
+    assert after is not None
+    assert "nd_walk" in after
+    assert "nd_step" not in after
+    assert "nd_tail" not in after
+
+
+def test_body_template_cannot_name_a_later_node() -> None:
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_walk", "volume.for", "Walk", {"items": "[1]"}),
+            _node(
+                "nd_step",
+                "transform.set_fields",
+                "Step",
+                {
+                    "fields": [
+                        {"name": "later", "value": "{{ self.tail.output.n }}"},
+                        {"name": "loop", "value": "{{ self.walk.output.current }}"},
+                        {"name": "upstream", "value": "{{ self.trigger.output }}"},
+                    ]
+                },
+                parent="nd_walk",
+            ),
+            _node(
+                "nd_tail",
+                "transform.set_fields",
+                "Tail",
+                {"fields": [{"name": "n", "value": "{{ self.step.output.later }}"}]},
+                parent="nd_walk",
+            ),
+            _node(
+                "nd_after",
+                "transform.set_fields",
+                "After",
+                {
+                    "fields": [
+                        {"name": "body", "value": "{{ self.step.output.later }}"},
+                        {"name": "loop", "value": "{{ self.walk.output.iterations }}"},
+                    ]
+                },
+            ),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_walk"),
+            _edge("ed_each", "nd_walk", "nd_step", source_port="each"),
+            _edge("ed_next", "nd_step", "nd_tail"),
+            _edge("ed_back", "nd_tail", "nd_walk", target_port="loop"),
+            _edge("ed_done", "nd_walk", "nd_after", source_port="done"),
+        ],
+    )
+    invalid = [
+        (item.node_id, item.path)
+        for item in validate(graph, FakeResolver())
+        if item.code == "CHANNEL_TEMPLATE_REF_INVALID"
+    ]
+    assert invalid == [
+        ("nd_step", ("fields", 0, "value")),
+        ("nd_after", ("fields", 0, "value")),
+    ]
 
 
 def test_set_fields_rejects_duplicate_names() -> None:

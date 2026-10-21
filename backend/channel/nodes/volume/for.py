@@ -28,12 +28,12 @@ _STEP: dict[str, Any] = {
 _DONE: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["current", "index", "count", "results"],
+    "required": ["current", "index", "count", "iterations"],
     "properties": {
         "current": _ANY,
         "index": {"type": ["integer", "null"]},
         "count": {"type": "integer"},
-        "results": {"type": "array"},
+        "iterations": {"type": "array"},
     },
 }
 
@@ -69,7 +69,7 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
         index = count - 1
     return NodeResult(
         status="succeeded",
-        output={"current": current, "index": index, "count": count, "results": []},
+        output={"current": current, "index": index, "count": count, "iterations": []},
         iterations=iterations,
         ports=frozenset({"done"}),
     )
@@ -83,19 +83,15 @@ NODE_TYPE = NodeType(
     description=(
         "The items template is a JSON array of at most 100000 elements. "
         "Each iteration exposes current, index, and count on this node. "
-        "The done output adds results collected from the loop input. "
+        "The done output adds iterations, one object per element, keyed by the nodes that ran. "
         "An empty list runs the body zero times and sets current and index to null."
     ),
     trigger=False,
-    inputs=(
-        MAIN_INPUT,
-        PortSpec("loop", "Return edge that collects one result per iteration.", coarse_type="object"),
-    ),
+    inputs=(MAIN_INPUT,),
     outputs=(
         PortSpec(
             "each",
-            "Starts the loop body. One iteration per element.",
-            loop_back=True,
+            "Starts one iteration for each element. Connects only to direct children of this For.",
             coarse_type="object",
         ),
         PortSpec("done", "Taken after every iteration has finished.", coarse_type="object"),

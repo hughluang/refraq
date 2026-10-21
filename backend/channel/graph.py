@@ -1,9 +1,10 @@
 """Pure graph validation for a Data Channel draft.
 
 `validate` reports every problem it finds. It does not read stores; callers
-pass a reference resolver. A cycle is legal only when one of its edges leaves
-a Loop node's loop-back port. A loop body may only be entered from that port,
-from another body node, or from an ancestor of the loop.
+pass a reference resolver. Every cycle is illegal. A For frame is the set of
+nodes whose parent is that For. An edge may enter a frame only from that For
+node's each port. Ancestors walk incoming edges and skip edges that cross a
+frame.
 """
 
 from __future__ import annotations
@@ -75,8 +76,8 @@ def validate(
     problems.extend(_edge_problems(edges, by_id, by_type))
     problems.extend(_trigger_problems(nodes, edges, by_id, by_type))
     problems.extend(_reachability_problems(nodes, edges, by_id, by_type))
-    problems.extend(_cycle_problems(nodes, edges, by_id, by_type))
-    problems.extend(_loop_body_problems(nodes, edges, by_id, by_type))
+    problems.extend(_cycle_problems(nodes, edges, by_id))
+    problems.extend(_for_frame_problems(nodes, edges, by_id))
     problems.extend(_reference_problems(nodes, by_type, resolver))
     problems.extend(_settings_problems(graph["settings"], resolver))
     return problems
@@ -621,47 +622,34 @@ def _cycle_problems(
     nodes: list[dict[str, Any]],
     edges: list[dict[str, Any]],
     by_id: dict[str, dict[str, Any]],
-    by_type: dict[str, NodeType],
 ) -> list[Problem]:
     outgoing = _outgoing(edges, by_id)
     color = {node_id: _WHITE for node_id in by_id}
-    stack_nodes: list[str] = []
-    stack_edges: list[dict[str, Any] | None] = []
     problems: list[Problem] = []
 
-    def dfs(node_id: str, via: dict[str, Any] | None) -> None:
+    def dfs(node_id: str) -> None:
         color[node_id] = _GRAY
-        stack_nodes.append(node_id)
-        stack_edges.append(via)
         for edge in outgoing.get(node_id, []):
             target_id = str(edge["target"]["node_id"])
             if target_id not in by_id:
                 continue
             if color[target_id] == _GRAY:
-                start = stack_nodes.index(target_id)
-                cycle_edges = [
-                    item for item in stack_edges[start + 1 :] if item is not None
-                ]
-                cycle_edges.append(edge)
-                if not any(_is_loop_back(item, by_id, by_type) for item in cycle_edges):
-                    problems.append(
-                        Problem(
-                            "CHANNEL_GRAPH_CYCLE",
-                            "Cycle does not pass through a loop node",
-                            node_id=str(edge["source"]["node_id"]),
-                            edge_id=str(edge["id"]),
-                        )
+                problems.append(
+                    Problem(
+                        "CHANNEL_GRAPH_CYCLE",
+                        "Graph contains a cycle",
+                        node_id=str(edge["source"]["node_id"]),
+                        edge_id=str(edge["id"]),
                     )
+                )
             elif color[target_id] == _WHITE:
-                dfs(target_id, edge)
-        stack_nodes.pop()
-        stack_edges.pop()
+                dfs(target_id)
         color[node_id] = _BLACK
 
     for node in nodes:
         node_id = str(node["id"])
         if color[node_id] == _WHITE:
-            dfs(node_id, None)
+            dfs(node_id)
     return problems
 
 
@@ -787,160 +775,116 @@ def _is_trigger(node: Mapping[str, Any], by_type: dict[str, NodeType]) -> bool:
     return spec is not None and spec.trigger
 
 
-def _loop_body_problems(
+_FOR_TYPE = "volume.for"
+
+
+def _parent_ref(node: Mapping[str, Any]) -> str | None:
+    parent = node.get("parent")
+    if isinstance(parent, str) and parent:
+        return parent
+    return None
+
+
+def _crosses_frame(
+    source_id: str,
+    target_id: str,
+    by_id: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    """An edge crosses a frame when the endpoints have different parents and the source is not the target's parent."""
+    parent_source = _parent_ref(by_id[source_id])
+    parent_target = _parent_ref(by_id[target_id])
+    if parent_source == parent_target:
+        return False
+    return parent_target != source_id
+
+
+def _parent_cycle(start: str, by_id: Mapping[str, Mapping[str, Any]]) -> bool:
+    seen = {start}
+    current = start
+    while True:
+        parent = _parent_ref(by_id[current])
+        if parent is None or parent not in by_id:
+            return False
+        if parent in seen:
+            return True
+        if str(by_id[parent].get("type")) != _FOR_TYPE:
+            return False
+        seen.add(parent)
+        current = parent
+
+
+def _for_frame_problems(
     nodes: list[dict[str, Any]],
     edges: list[dict[str, Any]],
     by_id: dict[str, dict[str, Any]],
-    by_type: dict[str, NodeType],
 ) -> list[Problem]:
     problems: list[Problem] = []
-    outgoing = _outgoing(edges, by_id)
-    ancestors = _control_ancestors(by_id, edges, by_type)
     for node in nodes:
-        spec = by_type.get(str(node["type"]))
-        if spec is None:
+        parent = node.get("parent")
+        if parent is None:
             continue
-        loop_ports = [port.port for port in spec.outputs if port.loop_back]
-        if not loop_ports:
-            continue
-        loop_id = str(node["id"])
-        loop_port = loop_ports[0]
-        body = _loop_body(loop_id, loop_port, outgoing)
-        anc = ancestors.get(loop_id, set())
-        backs = [
-            edge
-            for edge in edges
-            if str(edge["target"]["node_id"]) == loop_id
-            and str(edge["target"]["port"]) != "main"
-            and str(edge["source"]["node_id"]) in by_id
-            and str(edge["target"]["node_id"]) in by_id
-        ]
-        if len(backs) > 1:
+        node_id = str(node["id"])
+        if (
+            not isinstance(parent, str)
+            or not parent
+            or parent not in by_id
+            or str(by_id[parent].get("type")) != _FOR_TYPE
+        ):
             problems.append(
                 Problem(
                     "CHANNEL_LOOP_BODY_INVALID",
-                    "Loop input has more than one return edge",
-                    node_id=loop_id,
-                    edge_id=str(backs[1]["id"]),
+                    "parent does not name a For node",
+                    node_id=node_id,
                 )
             )
-        for edge in backs:
-            if str(edge["source"]["node_id"]) not in body:
-                problems.append(
-                    Problem(
-                        "CHANNEL_LOOP_BODY_INVALID",
-                        "Loop return edge does not start in the loop body",
-                        node_id=str(edge["source"]["node_id"]),
-                        edge_id=str(edge["id"]),
-                    )
-                )
-        for edge in edges:
-            source_id = str(edge["source"]["node_id"])
-            target_id = str(edge["target"]["node_id"])
-            if source_id not in by_id or target_id not in by_id:
-                continue
-            if source_id in body:
-                returns = target_id == loop_id and str(edge["target"]["port"]) != "main"
-                if target_id not in body and not returns:
-                    problems.append(
-                        Problem(
-                            "CHANNEL_LOOP_BODY_INVALID",
-                            "Loop body edge leaves the body",
-                            node_id=source_id,
-                            edge_id=str(edge["id"]),
-                        )
-                    )
-            if target_id in body:
-                from_loop = source_id == loop_id and str(edge["source"]["port"]) == loop_port
-                if not from_loop and source_id not in body and source_id not in anc:
-                    problems.append(
-                        Problem(
-                            "CHANNEL_LOOP_BODY_INVALID",
-                            "Loop body edge does not come from the loop, the body, or an ancestor",
-                            node_id=target_id,
-                            edge_id=str(edge["id"]),
-                        )
-                    )
-    return problems
-
-
-def _loop_body(
-    loop_id: str,
-    loop_port: str,
-    outgoing: dict[str, list[dict[str, Any]]],
-) -> set[str]:
-    seen: set[str] = set()
-    stack = [
-        str(edge["target"]["node_id"])
-        for edge in outgoing.get(loop_id, [])
-        if str(edge["source"]["port"]) == loop_port
-    ]
-    while stack:
-        node_id = stack.pop()
-        if node_id == loop_id or node_id in seen:
             continue
-        seen.add(node_id)
-        for edge in outgoing.get(node_id, []):
-            stack.append(str(edge["target"]["node_id"]))
-    return seen
-
-
-def _control_ancestors(
-    by_id: dict[str, dict[str, Any]],
-    edges: list[dict[str, Any]],
-    by_type: dict[str, NodeType],
-) -> dict[str, set[str]]:
-    """Ancestors along forward edges. A loop return edge is not a forward edge."""
-    incoming: dict[str, set[str]] = {node_id: set() for node_id in by_id}
+        if _parent_cycle(node_id, by_id):
+            problems.append(
+                Problem(
+                    "CHANNEL_LOOP_BODY_INVALID",
+                    "parent chain contains a cycle",
+                    node_id=node_id,
+                )
+            )
     for edge in edges:
         source_id = str(edge["source"]["node_id"])
         target_id = str(edge["target"]["node_id"])
         if source_id not in by_id or target_id not in by_id:
             continue
-        if _is_loop_input(edge, by_id, by_type):
+        if _crosses_frame(source_id, target_id, by_id):
+            problems.append(
+                Problem(
+                    "CHANNEL_LOOP_BODY_INVALID",
+                    "Edge crosses a For frame",
+                    node_id=source_id,
+                    edge_id=str(edge["id"]),
+                )
+            )
             continue
-        incoming[target_id].add(source_id)
-    found: dict[str, set[str]] = {}
-    for node_id in by_id:
-        seen: set[str] = set()
-        stack = list(incoming[node_id])
-        while stack:
-            current = stack.pop()
-            if current in seen:
-                continue
-            seen.add(current)
-            stack.extend(incoming.get(current, ()))
-        found[node_id] = seen
-    return found
-
-
-def _is_loop_input(
-    edge: Mapping[str, Any],
-    by_id: dict[str, dict[str, Any]],
-    by_type: dict[str, NodeType],
-) -> bool:
-    target = by_id.get(str(edge["target"]["node_id"]))
-    if target is None:
-        return False
-    spec = by_type.get(str(target["type"]))
-    if spec is None or not any(port.loop_back for port in spec.outputs):
-        return False
-    return str(edge["target"]["port"]) != "main"
-
-
-def _is_loop_back(
-    edge: Mapping[str, Any],
-    by_id: dict[str, dict[str, Any]],
-    by_type: dict[str, NodeType],
-) -> bool:
-    source = by_id.get(str(edge["source"]["node_id"]))
-    if source is None:
-        return False
-    spec = by_type.get(str(source["type"]))
-    if spec is None:
-        return False
-    port = str(edge["source"]["port"])
-    return any(item.port == port and item.loop_back for item in spec.outputs)
+        source = by_id[source_id]
+        if str(source.get("type")) != _FOR_TYPE:
+            continue
+        source_port = str(edge["source"]["port"])
+        target_parent = _parent_ref(by_id[target_id])
+        if target_parent == source_id and source_port != "each":
+            problems.append(
+                Problem(
+                    "CHANNEL_LOOP_BODY_INVALID",
+                    "For frame is entered only from each",
+                    node_id=source_id,
+                    edge_id=str(edge["id"]),
+                )
+            )
+        elif source_port == "each" and target_parent != source_id:
+            problems.append(
+                Problem(
+                    "CHANNEL_LOOP_BODY_INVALID",
+                    "each connects only to a direct child of this For",
+                    node_id=source_id,
+                    edge_id=str(edge["id"]),
+                )
+            )
+    return problems
 
 
 def refine_ports(
@@ -1022,8 +966,11 @@ def _ancestors(
     for edge in edges:
         source_id = str(edge["source"]["node_id"])
         target_id = str(edge["target"]["node_id"])
-        if source_id in by_id and target_id in by_id:
-            incoming[target_id].add(source_id)
+        if source_id not in by_id or target_id not in by_id:
+            continue
+        if _crosses_frame(source_id, target_id, by_id):
+            continue
+        incoming[target_id].add(source_id)
     found: dict[str, set[str]] = {}
     for node_id in by_id:
         seen: set[str] = set()

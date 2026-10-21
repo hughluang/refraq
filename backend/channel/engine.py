@@ -6,9 +6,9 @@ whose incoming edges are all dead does not run. Among ready siblings, the
 smaller canvas y, then x, is explored first, and that branch finishes before
 the next sibling.
 
-A loop-type node (its type declares a loop-back output) runs its body once per
-iteration. Edges into a non-``main`` input of a loop node are return edges:
-they do not gate the loop, and they collect one result per iteration.
+A volume.for node runs once for each element. Its body is the nodes whose
+parent is that For. Each iteration records the outputs of the body nodes that
+ran. An incoming edge that does not target main does not gate the For.
 """
 
 from __future__ import annotations
@@ -20,11 +20,17 @@ from typing import Any, Mapping, Sequence
 from backend.channel.graph import ancestor_closure, refine_ports
 from backend.channel.nodes.spec import EngineHooks, NodeResult, NodeType, ReferenceResolver
 from backend.channel.template import output_matches
+from backend.channel.variables import value_size
 
 __all__ = [
+    "ITERATION_VOLUME_MAX_BYTES",
     "RunOutcome",
     "execute",
 ]
+
+ITERATION_VOLUME_MAX_BYTES = 16 * 1024 * 1024
+_FOR_TYPE = "volume.for"
+_EACH_PORT = "each"
 
 
 @dataclass
@@ -53,7 +59,6 @@ class _Run:
         by_type: Mapping[str, NodeType],
         schemas: Mapping[str, Mapping[str, Any]],
         hooks: EngineHooks,
-        loop_ports: Mapping[str, str],
         reachable: set[str],
         *,
         timeout_sec: int | None,
@@ -63,7 +68,6 @@ class _Run:
         self.by_type = by_type
         self.schemas = schemas
         self.hooks = hooks
-        self.loop_ports = dict(loop_ports)
         self.reachable = reachable
         self.timeout_sec = timeout_sec
         self.clock = clock
@@ -77,35 +81,21 @@ class _Run:
         self.skipped: list[str] = []
         self.produced: dict[str, Any] = {}
         self.ran_stack: list[set[str]] = [set()]
-        self.loop_out: dict[str, str] = {}
+        self.loops: set[str] = set()
         self.bodies: dict[str, set[str]] = {}
         self._index_loops()
 
     def _index_loops(self) -> None:
+        children: dict[str, set[str]] = {}
         for node_id, node in self.nodes.items():
-            port = self.loop_ports.get(str(node["type"]))
-            if port is None:
+            parent = node.get("parent")
+            if isinstance(parent, str) and parent in self.nodes and parent != node_id:
+                children.setdefault(parent, set()).add(node_id)
+        for node_id, node in self.nodes.items():
+            if str(node.get("type")) != _FOR_TYPE:
                 continue
-            self.loop_out[node_id] = port
-            self.bodies[node_id] = self._body(node_id, port)
-
-    def _body(self, loop_id: str, port: str) -> set[str]:
-        seen: set[str] = set()
-        stack = [
-            self.links[index].target
-            for index in self.outgoing[loop_id]
-            if self.links[index].source_port == port and self.links[index].target != loop_id
-        ]
-        while stack:
-            node_id = stack.pop()
-            if node_id in seen or node_id == loop_id:
-                continue
-            seen.add(node_id)
-            for index in self.outgoing.get(node_id, []):
-                target = self.links[index].target
-                if target != loop_id and target not in seen:
-                    stack.append(target)
-        return seen
+            self.loops.add(node_id)
+            self.bodies[node_id] = set(children.get(node_id, ()))
 
     def walk(self, scope: set[str], *, start: str | None) -> RunOutcome | None:
         direct = (scope & self.reachable) - self._hidden(scope)
@@ -170,7 +160,7 @@ class _Run:
 
     def _back(self, index: int) -> bool:
         link = self.links[index]
-        return link.target in self.loop_out and link.target_port != "main"
+        return link.target in self.loops and link.target_port != "main"
 
     def _counting(self, node_id: str) -> list[int]:
         return [index for index in self.incoming[node_id] if not self._back(index)]
@@ -223,7 +213,7 @@ class _Run:
         done: set[str],
         stack: list[str],
     ) -> RunOutcome | None:
-        if node_id in self.loop_out:
+        if node_id in self.loops:
             return self._run_loop(node_id, direct, done, stack)
         outcome, result = self._finish_tries(node_id)
         if outcome is not None:
@@ -244,26 +234,25 @@ class _Run:
         if stopped is not None:
             return stopped
         node = self.nodes[node_id]
-        loop_port = self.loop_out[node_id]
         if result.status == "failed":
             outcome = self._policy(node_id, result)
             self.hooks.on_finish(seq, node, result)
             if outcome is not None:
                 return outcome
             self._note(node_id, result)
-            self._settle(node_id, result, {loop_port})
+            self._settle(node_id, result, {_EACH_PORT})
             self._push(node_id, direct, done, stack)
             return None
         if result.status != "succeeded":
             self.hooks.on_finish(seq, node, result)
             self._note(node_id, result)
-            self._settle(node_id, result, {loop_port})
+            self._settle(node_id, result, {_EACH_PORT})
             self._push(node_id, direct, done, stack)
             return None
         outcome = self._iterate(node_id, seq, result)
         if outcome is not None:
             return outcome
-        self._settle(node_id, result, {loop_port})
+        self._settle(node_id, result, {_EACH_PORT})
         self._push(node_id, direct, done, stack)
         return None
 
@@ -271,7 +260,6 @@ class _Run:
         node = self.nodes[node_id]
         body = self.bodies[node_id]
         steps = result.iterations if isinstance(result.iterations, list) else []
-        back = self._return_edge(node_id)
         collected: list[Any] = []
         for step in steps:
             self._drop(body)
@@ -294,32 +282,45 @@ class _Run:
                     ),
                 )
                 return outcome
-            if back is not None:
-                source = back.source
-                collected.append(self.produced.get(source) if source in ran else None)
+            collected.append(self._round(ran))
+            if value_size(collected) > ITERATION_VOLUME_MAX_BYTES:
+                message = "For iteration output exceeds 16 MiB. Read the items in batches."
+                failed = NodeResult(
+                    status="failed",
+                    error_code="CHANNEL_ITERATION_VOLUME_EXCEEDED",
+                    error_message=message,
+                )
+                self.hooks.on_finish(seq, node, failed)
+                return RunOutcome(
+                    status="failed",
+                    error_code="CHANNEL_ITERATION_VOLUME_EXCEEDED",
+                    error_message=message,
+                    failed_node_id=node_id,
+                    skipped_node_ids=list(self.skipped),
+                )
         base = result.output if isinstance(result.output, dict) else {}
-        final = {**base, "results": collected}
-        result.output = final
+        result.output = {**base, "iterations": collected}
         self.hooks.on_finish(seq, node, result)
         self._note(node_id, result)
         return None
 
+    def _round(self, ran: set[str]) -> dict[str, Any]:
+        record: dict[str, Any] = {}
+        ordered = sorted(ran, key=lambda item: str(self.nodes[item].get("ref") or item))
+        for body_id in ordered:
+            ref = str(self.nodes[body_id].get("ref") or body_id)
+            record[ref] = self.produced.get(body_id)
+        return record
+
     def _arm(self, loop_id: str, body: set[str]) -> None:
-        loop_port = self.loop_out[loop_id]
         for index, link in enumerate(self.links):
-            from_loop = link.source == loop_id and link.source_port == loop_port
+            from_loop = link.source == loop_id and link.source_port == _EACH_PORT
             if link.target not in body or not (link.source in body or from_loop):
                 continue
             self.state[index] = "live" if from_loop else "pending"
 
-    def _return_edge(self, loop_id: str) -> _Link | None:
-        for index in self.incoming[loop_id]:
-            if self._back(index):
-                return self.links[index]
-        return None
-
     def _drop(self, body: set[str]) -> None:
-        refs = [str(self.nodes[node_id].get("ref") or node_id) for node_id in body]
+        refs = sorted(str(self.nodes[node_id].get("ref") or node_id) for node_id in body)
         drop = getattr(self.hooks, "drop_outputs", None)
         if callable(drop) and refs:
             drop(refs)
@@ -461,7 +462,6 @@ def execute(
         {item.type_id: item for item in types},
         _output_schemas(refine_ports(graph, resolver, types)),
         hooks,
-        _loop_ports(types),
         reachable,
         timeout_sec=timeout_sec,
         clock=clock,
@@ -474,16 +474,6 @@ def execute(
         outcome="completed",
         skipped_node_ids=list(runner.skipped),
     )
-
-
-def _loop_ports(catalog: Sequence[NodeType]) -> dict[str, str]:
-    found: dict[str, str] = {}
-    for spec in catalog:
-        for port in spec.outputs:
-            if port.loop_back:
-                found[spec.type_id] = port.port
-                break
-    return found
 
 
 def _output_schemas(ports: Sequence[Any]) -> dict[str, dict[str, Any]]:
@@ -505,7 +495,9 @@ def _apply_output_check(
         return result
     produced = schemas.get(node_id, {})
     for port in spec.outputs:
-        if port.loop_back or port.port == "error":
+        if port.port == "error":
+            continue
+        if result.ports is not None and port.port not in result.ports:
             continue
         schema = produced.get(port.port)
         if isinstance(schema, dict) and not output_matches(result.output, schema):

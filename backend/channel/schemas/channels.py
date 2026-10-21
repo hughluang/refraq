@@ -52,6 +52,7 @@ class NodeIn(BaseModel):
     on_error: Literal["stop", "continue", "error_output"] = "stop"
     retry: RetryIn | None = None
     type_version: int = Field(default=1, ge=1)
+    parent: str | None = None
 
     @field_validator("name")
     @classmethod
@@ -72,6 +73,22 @@ class NodeIn(BaseModel):
         ):
             raise ValueError("ref is not a usable Python identifier")
         return value
+
+    @field_validator("parent")
+    @classmethod
+    def _parent(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if _ID_RE.fullmatch(value) is None:
+            raise ValueError("parent is not a node id")
+        return value
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_parent(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        document = handler(self)
+        if document.get("parent") is None:
+            document.pop("parent", None)
+        return document
 
 
 class PortRefIn(BaseModel):

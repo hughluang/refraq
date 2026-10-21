@@ -258,8 +258,15 @@ def test_for_exposes_iterations_and_rejects_the_limit(monkeypatch: pytest.Monkey
         {"current": "b", "index": 1, "count": 2},
     ]
     assert result.output["current"] == "b"
-    assert result.output["results"] == []
+    assert result.output["iterations"] == []
+    assert "results" not in result.output
     assert result.ports == frozenset({"done"})
+    for_type = next(item for item in list_node_types() if item.type_id == "volume.for")
+    assert [port.port for port in for_type.inputs] == ["main"]
+    assert [(port.port, port.loop_back) for port in for_type.outputs] == [
+        ("each", False),
+        ("done", False),
+    ]
     empty = _run("volume.for")(_node("volume.for", {"items": "[]"}), Hooks())
     assert empty.iterations == []
     assert empty.output["current"] is None

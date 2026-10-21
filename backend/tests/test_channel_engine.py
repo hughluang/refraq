@@ -31,16 +31,8 @@ def _type(
     type_id: str,
     run: Callable[..., NodeResult],
     *,
-    loop_port: str | None = None,
     refine: Callable[..., dict] | None = None,
 ) -> NodeType:
-    if loop_port is None:
-        outputs = (PortSpec("main", "Output."),)
-    else:
-        outputs = (
-            PortSpec(loop_port, "Loop.", loop_back=True),
-            PortSpec("done", "Done."),
-        )
     return NodeType(
         type_id=type_id,
         family="test",
@@ -49,24 +41,26 @@ def _type(
         description="Test node. Used only by the engine suite.",
         trigger=False,
         inputs=(PortSpec("main", "Input."), PortSpec("loop", "Loop return.")),
-        outputs=outputs,
+        outputs=(PortSpec("main", "Output."),),
         config_schema={"type": "object"},
         execute=run,
         refine=refine,
     )
 
 
-def _catalog(
-    bound: dict[str, Callable[..., NodeResult]],
+def _catalog(bound: dict[str, Callable[..., NodeResult]]) -> list[NodeType]:
+    return [_type(type_id, run) for type_id, run in bound.items()]
+
+
+def _node(
+    node_id: str,
+    y: float,
+    x: float = 0,
+    type_id: str = "fake",
     *,
-    loops: dict[str, str] | None = None,
-) -> list[NodeType]:
-    loops = loops or {}
-    return [_type(type_id, run, loop_port=loops.get(type_id)) for type_id, run in bound.items()]
-
-
-def _node(node_id: str, y: float, x: float = 0, type_id: str = "fake") -> dict:
-    return {
+    parent: str | None = None,
+) -> dict:
+    node = {
         "id": node_id,
         "type": type_id,
         "name": node_id,
@@ -76,6 +70,9 @@ def _node(node_id: str, y: float, x: float = 0, type_id: str = "fake") -> dict:
         "on_error": "stop",
         "retry": None,
     }
+    if parent is not None:
+        node["parent"] = parent
+    return node
 
 
 def _edge(
@@ -284,9 +281,9 @@ def _walk(node: dict, hooks: EngineHooks) -> NodeResult:
     count = len(items)
     iterations = [{"current": item, "index": index, "count": count} for index, item in enumerate(items)]
     if count == 0:
-        output = {"current": None, "index": None, "count": 0, "results": []}
+        output = {"current": None, "index": None, "count": 0}
     else:
-        output = {"current": items[-1], "index": count - 1, "count": count, "results": []}
+        output = {"current": items[-1], "index": count - 1, "count": count}
     return NodeResult(status="succeeded", output=output, iterations=iterations, ports=frozenset({"done"}))
 
 
@@ -332,61 +329,63 @@ def test_join_waits_for_both_inputs() -> None:
     assert hooks.order == ["s", "a", "a2", "b", "m"]
 
 
-def test_for_runs_the_body_once_per_element_and_collects_results() -> None:
+def test_for_runs_the_body_once_per_element_and_records_iterations() -> None:
     walk = _node("walk", 0, type_id="volume.for")
     walk["config"] = {"items": ["a", "b"]}
     graph = {
-        "nodes": [walk, _node("step", 1), _node("after", 2)],
+        "nodes": [walk, _node("step", 1, parent="walk"), _node("after", 2)],
         "edges": [
             _edge("walk", "step", "each"),
-            _edge("step", "walk", "main", "loop"),
             _edge("walk", "after", "done"),
         ],
         "settings": {},
     }
     hooks = FakeHooks()
-    outcome = execute(graph, "walk", _catalog({"volume.for": _walk, "fake": _walk}, loops={"volume.for": "each"}), _RESOLVER, hooks)
+    outcome = execute(graph, "walk", _catalog({"volume.for": _walk, "fake": _walk}), _RESOLVER, hooks)
     assert outcome.status == "succeeded"
     assert hooks.order == ["walk", "step", "step", "after"]
-    assert hooks.outputs["walk"]["results"] == [{"saw": "a", "id": "step"}, {"saw": "b", "id": "step"}]
+    assert hooks.outputs["walk"]["iterations"] == [
+        {"step": {"saw": "a", "id": "step"}},
+        {"step": {"saw": "b", "id": "step"}},
+    ]
+    assert "results" not in hooks.outputs["walk"]
     assert hooks.outputs["walk"]["current"] == "b"
     assert hooks.outputs["walk"]["index"] == 1
     assert hooks.dropped == [["step"], ["step"]]
 
 
-def test_for_empty_list_skips_the_body() -> None:
+def test_for_empty_list_skips_the_body_and_still_runs_done() -> None:
     walk = _node("walk", 0, type_id="volume.for")
     walk["config"] = {"items": []}
     graph = {
-        "nodes": [walk, _node("step", 1)],
+        "nodes": [walk, _node("step", 1, parent="walk"), _node("after", 2)],
         "edges": [
             _edge("walk", "step", "each"),
-            _edge("step", "walk", "main", "loop"),
+            _edge("walk", "after", "done"),
         ],
         "settings": {},
     }
     hooks = FakeHooks()
-    outcome = execute(graph, "walk", _catalog({"volume.for": _walk, "fake": _walk}, loops={"volume.for": "each"}), _RESOLVER, hooks)
+    outcome = execute(graph, "walk", _catalog({"volume.for": _walk, "fake": _walk}), _RESOLVER, hooks)
     assert outcome.status == "succeeded"
-    assert hooks.order == ["walk"]
-    assert hooks.outputs["walk"]["results"] == []
+    assert hooks.order == ["walk", "after"]
+    assert hooks.outputs["walk"]["iterations"] == []
+    assert hooks.outputs["walk"]["count"] == 0
     assert hooks.outputs["walk"]["current"] is None
     assert hooks.outputs["walk"]["index"] is None
     assert hooks.dropped == []
 
 
-def test_nested_for_collects_inner_results() -> None:
+def test_nested_for_records_the_inner_output_as_one_key() -> None:
     outer = _node("outer", 0, type_id="volume.for")
     outer["config"] = {"items": [1, 2]}
-    inner = _node("inner", 1, type_id="volume.for")
+    inner = _node("inner", 1, type_id="volume.for", parent="outer")
     inner["config"] = {"items": ["x"]}
     graph = {
-        "nodes": [outer, inner, _node("leaf", 2)],
+        "nodes": [outer, inner, _node("leaf", 2, parent="inner")],
         "edges": [
             _edge("outer", "inner", "each"),
             _edge("inner", "leaf", "each"),
-            _edge("leaf", "inner", "main", "loop"),
-            _edge("inner", "outer", "done", "loop"),
         ],
         "settings": {},
     }
@@ -394,47 +393,166 @@ def test_nested_for_collects_inner_results() -> None:
     outcome = execute(
         graph,
         "outer",
-        _catalog({"volume.for": _walk, "fake": _walk}, loops={"volume.for": "each"}),
+        _catalog({"volume.for": _walk, "fake": _walk}),
         _RESOLVER,
         hooks,
     )
     assert outcome.status == "succeeded"
     assert hooks.order == ["outer", "inner", "leaf", "inner", "leaf"]
-    assert [item["saw"] for item in hooks.outputs["outer"]["results"][0]["results"]] == [1]
-    assert hooks.outputs["outer"]["results"][1]["results"][0]["saw"] == 2
+    assert set(hooks.outputs["outer"]["iterations"][0]) == {"inner"}
+    assert hooks.outputs["outer"]["iterations"][0]["inner"]["iterations"] == [
+        {"leaf": {"saw": 1, "id": "leaf"}}
+    ]
+    assert hooks.outputs["outer"]["iterations"][1]["inner"]["iterations"][0]["leaf"]["saw"] == 2
+    assert hooks.dropped == [["inner"], ["leaf"], ["inner"], ["leaf"]]
+
+
+def test_for_iteration_omits_the_branch_that_did_not_run() -> None:
+    walk = _node("walk", 0, type_id="volume.for")
+    walk["config"] = {"items": [1]}
+    gate = _node("gate", 1, type_id="transform.if", parent="walk")
+    gate["config"] = {"live": "true"}
+    graph = {
+        "nodes": [
+            walk,
+            gate,
+            _node("live", 2, parent="walk"),
+            _node("dead", 3, parent="walk"),
+            _node("after", 4),
+        ],
+        "edges": [
+            _edge("walk", "gate", "each"),
+            _edge("gate", "live", "true"),
+            _edge("gate", "dead", "false"),
+            _edge("walk", "after", "done"),
+        ],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(
+        graph,
+        "walk",
+        _catalog({"volume.for": _walk, "transform.if": _branch, "fake": _branch}),
+        _RESOLVER,
+        hooks,
+    )
+    assert outcome.status == "succeeded"
+    assert hooks.order == ["walk", "gate", "live", "after"]
+    assert hooks.outputs["walk"]["iterations"] == [
+        {"gate": {"value": True}, "live": {"id": "live"}}
+    ]
+
+
+def test_for_fails_when_iteration_output_exceeds_16_mib(monkeypatch) -> None:
+    from backend.channel.engine import ITERATION_VOLUME_MAX_BYTES
+    from backend.channel.variables import value_size
+
+    assert ITERATION_VOLUME_MAX_BYTES == 16 * 1024 * 1024
+    blob = "x" * 30
+    one_round = [{"step": {"blob": blob}}]
+    monkeypatch.setattr(
+        "backend.channel.engine.ITERATION_VOLUME_MAX_BYTES",
+        value_size(one_round),
+    )
+
+    def bulky(node: dict, hooks: EngineHooks) -> NodeResult:
+        if node["type"] == "volume.for":
+            return _walk(node, hooks)
+        return NodeResult(status="succeeded", output={"blob": blob})
+
+    walk = _node("walk", 0, type_id="volume.for")
+    walk["config"] = {"items": ["a", "b"]}
+    graph = {
+        "nodes": [walk, _node("step", 1, parent="walk"), _node("after", 2)],
+        "edges": [
+            _edge("walk", "step", "each"),
+            _edge("walk", "after", "done"),
+        ],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(graph, "walk", _catalog({"volume.for": bulky, "fake": bulky}), _RESOLVER, hooks)
+    assert outcome.status == "failed"
+    assert outcome.error_code == "CHANNEL_ITERATION_VOLUME_EXCEEDED"
+    assert outcome.failed_node_id == "walk"
+    assert outcome.error_message is not None
+    assert "batch" in outcome.error_message.lower()
+    assert hooks.order == ["walk", "step", "step"]
+    assert "after" not in hooks.order
+
+
+def test_engine_runs_volume_for_without_rejecting_the_each_schema() -> None:
+    import importlib
+
+    for_type = importlib.import_module("backend.channel.nodes.volume.for").NODE_TYPE
+
+    walk = _node("walk", 0, type_id="volume.for")
+    walk["config"] = {"items": '["a", "b"]'}
+    graph = {
+        "nodes": [walk, _node("step", 1, parent="walk"), _node("after", 2)],
+        "edges": [
+            _edge("walk", "step", "each"),
+            _edge("walk", "after", "done"),
+        ],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(
+        graph,
+        "walk",
+        [for_type, _type("fake", _ok)],
+        _RESOLVER,
+        hooks,
+    )
+    assert outcome.status == "succeeded"
+    assert outcome.error_code is None
+    assert hooks.order == ["walk", "step", "step", "after"]
+    assert hooks.outputs["walk"]["iterations"] == [
+        {"step": {"id": "step"}},
+        {"step": {"id": "step"}},
+    ]
+    assert hooks.outputs["walk"]["count"] == 2
+    assert hooks.outputs["walk"]["current"] == "b"
 
 
 def test_cancel_inside_a_for_body() -> None:
     walk = _node("walk", 0, type_id="volume.for")
     walk["config"] = {"items": ["a", "b"]}
     graph = {
-        "nodes": [walk, _node("step", 1), _node("tail", 2)],
+        "nodes": [walk, _node("step", 1, parent="walk"), _node("tail", 2, parent="walk")],
         "edges": [
             _edge("walk", "step", "each"),
             _edge("step", "tail"),
-            _edge("tail", "walk", "main", "loop"),
         ],
         "settings": {},
     }
     hooks = FakeHooks()
     hooks.cancel_after = "step"
-    outcome = execute(graph, "walk", _catalog({"volume.for": _walk, "fake": _ok}, loops={"volume.for": "each"}), _RESOLVER, hooks)
+    outcome = execute(graph, "walk", _catalog({"volume.for": _walk, "fake": _ok}), _RESOLVER, hooks)
     assert outcome.status == "cancelled"
     assert outcome.stopped_node_id == "tail"
     assert hooks.order == ["walk", "step"]
 
 
-def test_stop_at_inside_a_for_body_excludes_the_rest() -> None:
+def test_stop_at_inside_a_for_body_excludes_the_back_edge_downstream() -> None:
     start = _node("start", 0)
     walk = _node("walk", 1, type_id="volume.for")
     walk["config"] = {"items": ["a"]}
     graph = {
-        "nodes": [start, walk, _node("step", 2), _node("side", 3), _node("after", 4)],
+        "nodes": [
+            start,
+            walk,
+            _node("step", 2, parent="walk"),
+            _node("tail", 3, parent="walk"),
+            _node("side", 4, parent="walk"),
+            _node("after", 5),
+        ],
         "edges": [
             _edge("start", "walk"),
             _edge("walk", "step", "each"),
+            _edge("step", "tail"),
+            _edge("tail", "walk", "main", "loop"),
             _edge("walk", "side", "each"),
-            _edge("step", "walk", "main", "loop"),
             _edge("walk", "after", "done"),
         ],
         "settings": {},
@@ -443,14 +561,16 @@ def test_stop_at_inside_a_for_body_excludes_the_rest() -> None:
     outcome = execute(
         graph,
         "start",
-        _catalog({"fake": _ok, "volume.for": _walk}, loops={"volume.for": "each"}),
+        _catalog({"fake": _ok, "volume.for": _walk}),
         _RESOLVER,
         hooks,
         stop_at_node_id="step",
     )
     assert outcome.status == "succeeded"
     assert hooks.order == ["start", "walk", "step"]
-    assert hooks.outputs["walk"]["results"] == [{"id": "step"}]
+    assert "tail" not in hooks.order
+    assert "side" not in hooks.order
+    assert hooks.outputs["walk"]["iterations"] == [{"step": {"id": "step"}}]
 
 
 def test_timeout_inside_a_for_body() -> None:
@@ -465,11 +585,10 @@ def test_timeout_inside_a_for_body() -> None:
         return _ok(node, hooks)
 
     graph = {
-        "nodes": [walk, _node("step", 1), _node("tail", 2)],
+        "nodes": [walk, _node("step", 1, parent="walk"), _node("tail", 2, parent="walk")],
         "edges": [
             _edge("walk", "step", "each"),
             _edge("step", "tail"),
-            _edge("tail", "walk", "main", "loop"),
         ],
         "settings": {},
     }
@@ -477,7 +596,7 @@ def test_timeout_inside_a_for_body() -> None:
     outcome = execute(
         graph,
         "walk",
-        _catalog({"volume.for": _walk, "fake": slow}, loops={"volume.for": "each"}),
+        _catalog({"volume.for": _walk, "fake": slow}),
         _RESOLVER,
         hooks,
         timeout_sec=0.01,

@@ -686,21 +686,24 @@ def test_if_and_for_run_the_live_branch(channel_client: TestClient) -> None:
                     80,
                     {"items": "[1, 2]"},
                 ),
-                _node(
-                    "nd_step",
-                    "step",
-                    "transform.set_fields",
-                    "Step",
-                    120,
-                    {
-                        "fields": [
-                            {
-                                "name": "n",
-                                "value": "{{ self.walk.output.current }}",
-                            }
-                        ]
-                    },
-                ),
+                {
+                    **_node(
+                        "nd_step",
+                        "step",
+                        "transform.set_fields",
+                        "Step",
+                        120,
+                        {
+                            "fields": [
+                                {
+                                    "name": "n",
+                                    "value": "{{ self.walk.output.current }}",
+                                }
+                            ]
+                        },
+                    ),
+                    "parent": "nd_walk",
+                },
                 _node(
                     "nd_missed",
                     "missed",
@@ -715,7 +718,6 @@ def test_if_and_for_run_the_live_branch(channel_client: TestClient) -> None:
                 _edge("ed_true", "nd_gate", "nd_walk", source_port="true"),
                 _edge("ed_false", "nd_gate", "nd_missed", source_port="false"),
                 _edge("ed_each", "nd_walk", "nd_step", source_port="each"),
-                _edge("ed_back", "nd_step", "nd_walk", target_port="loop"),
             ],
             "settings": {"run_timeout_sec": None, "error_channel_id": None},
         }
@@ -734,7 +736,10 @@ def test_if_and_for_run_the_live_branch(channel_client: TestClient) -> None:
         assert len(by_node["nd_step"]) == 2
         walk = by_node["nd_walk"]
         assert len(walk) == 1
-        assert walk[0]["output_preview"]["results"] == [{"n": 1}, {"n": 2}]
+        assert walk[0]["output_preview"]["iterations"] == [
+            {"step": {"n": 1}},
+            {"step": {"n": 2}},
+        ]
     finally:
         set_dispatcher(previous)
 
