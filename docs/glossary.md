@@ -88,10 +88,15 @@ The product seeds a default stored row; that row is what the operator sees. Cons
 A field of one **Scheduled Task** / **Source** / **User** is not a **System Parameter**. **Schedule Timezone** is the site-wide key `schedule_timezone`, not a field of one row. Occupancy lost-detection, session TTL, and **Schedule Timezone** are **System Parameter**s. Changing session TTL does not rewrite existing **Session**s. Widening lost-detection is live; tightening waits one old renew interval before the reaper cutoff shrinks. The hidden system reaper **Scheduled Task** interval is derived from lost-detection. Worker concurrency is a deployment concern. Beat loop / reload intervals are in-code constants (`docs/business-system-parameters.md` §5.2).
 Avoid env as the home of these keys; avoid Settings Override as a second entity; avoid Platform Parameter; avoid **Account Center** preferences; avoid treating the Console Module as the key; avoid moving **Running Time Limit** here; avoid editing the hidden system **Scheduled Task** as the reaper-interval UI; avoid putting an engineering tuning knob (pool size, loop interval, replica count) on this page.
 
+### Email Account
+
+A site-wide saved SMTP account. An `action.email` node sends one plain-text message through it when that node executes. The catalog test sends one fixed message to an address supplied with the test. The platform does not send mail for any other reason. The password is optional and is not returned by the API. Deleting one that a Data Channel draft or published version still names is refused.
+Avoid the User contact `email`, an inbox, **Data Channel**, a per-workflow mail route, Cc, Bcc, HTML, attachments, **System Parameter**, **Management Audit Event**, and a platform event bus.
+
 ### Webhook
 
 A site-wide saved HTTPS endpoint. An `action.webhook` node POSTs one JSON body to it when that node executes. The catalog test POSTs a fixed body. The platform does not call a Webhook for any other reason. A bearer secret is optional and is not returned by the API. Deleting one that a Data Channel draft or published version still names is refused.
-Avoid **Data Channel**, a per-workflow route, email or chat integrations, **System Parameter**, **Management Audit Event**, and a platform event bus.
+Avoid **Data Channel**, a per-workflow route, chat integrations, **Email Account**, **System Parameter**, **Management Audit Event**, and a platform event bus.
 
 ### Settings Override
 
@@ -562,7 +567,7 @@ Avoid **Management Audit Event** for data access, or treating it as a database s
 ### Data Channel
 
 The product domain of user-orchestrated, versioned data workflows, and one such workflow. A Data Channel is a graph of trigger, read, transform, volume, state, write, and action nodes joined by edges that order execution. It owns the mapping, transform, and lineage that a **Business Entity** definition does not carry, and one Data Channel may write several **Entity Table**s. Its draft is edited freely. Unattended triggers run only a published **Channel Version**. An on-demand **Channel Run** may execute a frozen draft and still writes Entity Tables. The author orchestrates increments, deletes, concurrency, checkpoint policy, and error handling with nodes; the platform does not derive them. Write nodes are safe to re-execute. An `active` switch outside versions decides whether schedules and event triggers fire. A delivery target outside the Entity Table is another write target kind on this domain, not a second write implementation. Rules: `docs/business-data-channel.md`.
-Avoid conflating it with **Job** or **Scheduled Task**, or with structure collection (which reads a **Source** into the catalog). Avoid "one declared target table". Avoid platform-derived dirty keys, grain checks, or fan-out thresholds as Data Channel behaviour. Avoid an execution lock as a platform guarantee. Avoid a general automation engine. Network access belongs only to the **Webhook** node. Avoid an Entity-only name. Avoid reading "channel load" as request load in the load-shedding sense. Avoid treating the **Entity Data API** as a Data Channel, and avoid "Ingestion Job" or "sync task". Avoid treating an edge as a carrier of rows.
+Avoid conflating it with **Job** or **Scheduled Task**, or with structure collection (which reads a **Source** into the catalog). Avoid "one declared target table". Avoid platform-derived dirty keys, grain checks, or fan-out thresholds as Data Channel behaviour. Avoid an execution lock as a platform guarantee. Avoid a general automation engine. Network access belongs only to the **Webhook** node and the **Email Account** node. Avoid an Entity-only name. Avoid reading "channel load" as request load in the load-shedding sense. Avoid treating the **Entity Data API** as a Data Channel, and avoid "Ingestion Job" or "sync task". Avoid treating an edge as a carrier of rows.
 
 ### Channel Version
 

@@ -39,6 +39,7 @@ export type FieldSpec = (
   | { kind: "sql_source"; key: string; required: boolean; description: string }
   | { kind: "source"; key: string; required: boolean; description: string }
   | { kind: "webhook"; key: string; required: boolean; description: string }
+  | { kind: "email_account"; key: string; required: boolean; description: string }
   | { kind: "python"; key: string; required: boolean; description: string }
   | {
       kind: "integer";
@@ -124,6 +125,9 @@ function fieldFor(key: string, schema: SchemaObject, required: boolean): FieldSp
   }
   if (ref === "webhook") {
     return { kind: "webhook", key, required, description: schema.description ?? "" };
+  }
+  if (ref === "email_account") {
+    return { kind: "email_account", key, required, description: schema.description ?? "" };
   }
   if (ref === "entity_attribute" || ref === "match_key") {
     return { kind: "attribute", key, required, allowEmpty: ref === "match_key" };
@@ -263,6 +267,7 @@ function defaultValue(field: FieldSpec): unknown {
       return null;
     case "source":
     case "webhook":
+    case "email_account":
       return "";
     case "python":
       return "";

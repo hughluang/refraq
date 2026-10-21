@@ -420,6 +420,28 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         module_order=25,
     ),
     ConsoleModuleSeed(
+        id="email-accounts",
+        group_id="settings",
+        group_label_key="layout.navGroup.settings",
+        label_key="emailAccounts.title",
+        icon="mail",
+        routes=ModuleRoutes(
+            list="/console/email-accounts",
+            create="/console/email-accounts/new",
+            show="/console/email-accounts/:id",
+            edit="/console/email-accounts/:id/edit",
+        ),
+        actions=ModuleActions(
+            list="email_account:read",
+            create="email_account:write",
+            show="email_account:read",
+            edit="email_account:write",
+            delete="email_account:write",
+        ),
+        group_order=30,
+        module_order=26,
+    ),
+    ConsoleModuleSeed(
         id="model-services",
         group_id="settings",
         group_label_key="layout.navGroup.settings",

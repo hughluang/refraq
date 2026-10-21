@@ -60,6 +60,17 @@ describe("channel node type locales", () => {
       "channels.config.webhook.placeholder",
       "channels.config.webhook.missing",
       "channels.config.webhook.loadFailed",
+      "channels.config.fields.action.email.email_account_id",
+      "channels.config.fields.action.email.email_account_id.description",
+      "channels.config.fields.action.email.to",
+      "channels.config.fields.action.email.to.description",
+      "channels.config.fields.action.email.subject",
+      "channels.config.fields.action.email.subject.description",
+      "channels.config.fields.action.email.body",
+      "channels.config.fields.action.email.body.description",
+      "channels.config.emailAccount.placeholder",
+      "channels.config.emailAccount.missing",
+      "channels.config.emailAccount.loadFailed",
     ];
     const enMessages = en as Record<string, string>;
     const zhMessages = zh as Record<string, string>;

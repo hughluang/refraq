@@ -16,6 +16,7 @@ import { canAuthorNodeType } from "@/features/channels/nodePermission";
 import { PythonCodeField } from "@/features/channels/PythonCodeField";
 import { RegisteredSourceField } from "@/features/channels/RegisteredSourceField";
 import { WebhookField } from "@/features/webhooks/WebhookField";
+import { EmailAccountField } from "@/features/email-accounts/EmailAccountField";
 import { ScheduledCadenceFields } from "@/features/channels/ScheduledCadenceFields";
 import { SqlSourceField } from "@/features/channels/SqlSourceField";
 import {
@@ -415,6 +416,20 @@ function ConfigField({
   if (field.kind === "webhook") {
     return (
       <WebhookField
+        label={caption}
+        description={fieldDescription(t, nodeType, field.key, field.description)}
+        value={typeof value === "string" ? value : ""}
+        editable={editable}
+        notes={notes}
+        openSignal={openSignal}
+        bare={bare}
+        onChange={onChange}
+      />
+    );
+  }
+  if (field.kind === "email_account") {
+    return (
+      <EmailAccountField
         label={caption}
         description={fieldDescription(t, nodeType, field.key, field.description)}
         value={typeof value === "string" ? value : ""}

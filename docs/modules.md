@@ -197,6 +197,7 @@ Responsibilities:
 - Run records: node executions, truncated item samples, and `failed_node_id` when `on_error` `stop` fails the run
 - **Channel Run** runner and triggers: `channel_run` Job kind, version resolution at start, a pinned version for rerun and `retry`, run-timeout checks between node executions, version supersede of unpinned runs, error workflow, `failure_streak`. User cancel kills the run's child process
 - **Webhook** catalog and the `action.webhook` node that POSTs to one saved endpoint
+- **Email Account** catalog and the `action.email` node that sends one plain-text message through one saved SMTP account
 - Schedule sync of Scheduled nodes to `channel_run` **Scheduled Task** rows, and the `channel_run` schedule projection adapter
 - **Global Variable** store
 - `channel/parameters.py` (Data Channel-owned System Parameter specs)
@@ -418,6 +419,8 @@ For the login/permission slice, each concern should land here:
 - Model Service Console: `frontend/src/features/model-services/`
 - Webhook API: `backend/channel/routers/` and `backend/channel/` Webhook store
 - Webhook Console: `frontend/src/features/webhooks/`
+- Email Account API: `backend/channel/routers/` and `backend/channel/` Email Account store
+- Email Account Console: `frontend/src/features/email-accounts/`
 - Site Branding framework consumption and theme bridge: `frontend/src/providers/`; server-rendered public branding fetch: `frontend/src/features/branding/server.ts`
 
 ## 7. Metadata / Operations Console Ownership

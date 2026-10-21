@@ -48,6 +48,7 @@ import {
   IconUsers,
   IconUsersGroup,
   IconVariable,
+  IconMail,
   IconWebhook,
   IconX,
   type IconProps,
@@ -118,6 +119,7 @@ const MODULE_ICONS: Record<string, ReturnType<typeof withDefaults>> = {
   settings: withDefaults(IconSettings),
   palette: withDefaults(IconPalette),
   webhook: withDefaults(IconWebhook),
+  mail: withDefaults(IconMail),
   brain: withDefaults(IconBrain),
   "user-circle": withDefaults(IconUserCircle),
 };

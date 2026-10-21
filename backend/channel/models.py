@@ -78,6 +78,25 @@ class WebhookRow(Base):
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
 
+class EmailAccountRow(Base):
+    __tablename__ = "email_accounts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    host: Mapped[str] = mapped_column(String(255), nullable=False)
+    port: Mapped[int] = mapped_column(Integer, nullable=False)
+    encryption: Mapped[str] = mapped_column(String(16), nullable=False)
+    username: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    password_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    from_address: Mapped[str] = mapped_column(String(254), nullable=False)
+    tls_skip_verify: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    last_delivery_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    last_delivery_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    last_delivery_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
 class ChannelVariableRow(Base):
     __tablename__ = "channel_variables"
 

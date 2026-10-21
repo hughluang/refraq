@@ -21,6 +21,7 @@ export const ModuleId = {
   settings: "settings",
   branding: "branding",
   webhooks: "webhooks",
+  emailAccounts: "email-accounts",
   modelServices: "model-services",
   account: "account",
 } as const;

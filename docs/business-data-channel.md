@@ -4,11 +4,11 @@
 
 This document defines the **Data Channel** product domain: a user-orchestrated, versioned data workflow that reads from **Entity Table**s, **Source Mirror**s, **Change Log**s, and **Source**s, reshapes items, and writes rows into one or more Entity Tables. It defines the definition and its versions, the activation switch, the graph and its node families, write semantics and the match key, **Checkpoint**s, **Channel Run** semantics, triggers and the role of the **Scheduled Task**, **Global Variable**s, the unattended-first principle, authorization, and audit.
 
-It states the boundary rules of **Source Mirror**s and **Change Log**s that workflows rely on (§9), and the **Webhook** resource an `action.webhook` node calls (§4.4). It does not define the HTTP shapes (`docs/api-contracts-data-channel.md`, `docs/api-contracts-webhooks.md`), the CDC deployment, the mirror state machine and structure change policy in detail, or the Console canvas layout. Those are outside this document.
+It states the boundary rules of **Source Mirror**s and **Change Log**s that workflows rely on (§9), the **Webhook** resource an `action.webhook` node calls (§4.3), and the **Email Account** an `action.email` node uses (§4.3). It does not define the HTTP shapes (`docs/api-contracts-data-channel.md`, `docs/api-contracts-webhooks.md`, `docs/api-contracts-email-accounts.md`), the CDC deployment, the mirror state machine and structure change policy in detail, or the Console canvas layout. Those are outside this document.
 
 Related boundaries:
 
-- HTTP contract: `docs/api-contracts-data-channel.md`. **Webhook** HTTP: `docs/api-contracts-webhooks.md`.
+- HTTP contract: `docs/api-contracts-data-channel.md`. **Webhook** HTTP: `docs/api-contracts-webhooks.md`. **Email Account** HTTP: `docs/api-contracts-email-accounts.md`.
 - **Business Entity**, **Entity Version**, **Entity Table**, **Business Key**, and publish: `docs/business-entity.md`.
 - **Entity Data API**: `docs/api-contracts-entity-data.md`. **Entity Access Control**: `docs/business-entity-access.md`.
 - **Source**, **Catalog Object**, **Locator**, **Normalized Type**, and **Controlled Query**: `docs/business-metadata.md`.
@@ -143,7 +143,7 @@ Port names are lower snake case. `main` carries the node's primary items or data
 | Volume | For, Materialize, Batch Read | Iterate a list, and move large data by reference |
 | State | Global Variable get, set, delete, set-if-absent, compare-and-set | Cross-workflow shared state (§8) |
 | Write | Write Entity | Upsert, create, update, or delete Entity Table rows (§5) |
-| Action | Webhook | POST one JSON body to a saved **Webhook** (§4.4) |
+| Action | Webhook, Email | POST one JSON body to a saved **Webhook**, or send one plain-text message through a saved **Email Account** (§4.3) |
 
 Family rules:
 
@@ -160,6 +160,7 @@ Family rules:
 - **Live Source query** reads a small result from one registered **Source** through **Controlled Query**: one read-only statement, the platform `query_timeout_sec`, a per-node row cap, and a `query.run` **Management Audit Event** whose actor is the System Identity. It is the guarded alternative to the SQL node on a Source, which applies no Controlled Query guards (ADR 0058). `source_id` must resolve to a Source. `sql` is a string template. `row_cap` is an integer of at least 1 and defaults to 100; a cap above the platform `query_max_rows` fails the node. A successful execution returns `{rows, count, truncated}`. Each row is an object keyed by column name. `truncated` is true when the Source had more rows than the cap. A guard, timeout, or row-limit failure fails the node with `CHANNEL_NODE_FAILED`, the Controlled Query message, and that code in `error_detail.code`. Authoring it requires `channel:source_query` (§11). It does not require `query:run`.
 - **Error** (`trigger.error`) is the only trigger of a Data Channel used as another channel's error workflow (§6.8). It has no configuration. It has no schedule row. Its output is the failed run's identity when the platform starts it, or a test object when an operator starts it by hand (§7.1).
 - **Webhook** (`action.webhook`) POSTs the JSON value of a body template to one saved **Webhook**. The call uses HTTPS only, refuses a loopback, link-local, private, or cloud-metadata address, and waits at most 30 seconds. A stored bearer secret is sent as `Authorization: Bearer`. A refused address, a timeout, a connection failure, or an HTTP status of 400 or higher fails the node execution. The node's `on_error` then applies. The platform does not call a Webhook except from this node or from the catalog's test action. Authoring the node requires `channel:write` and a Webhook id that exists. Network access stays inside this node; the Code sandbox never gains it.
+- **Email** (`action.email`) sends one plain-text message through one saved **Email Account**. `to`, `subject`, and `body` are templates rendered once. `to` splits on comma and semicolon. `from` is the account's mailbox. The call waits at most 30 seconds. It sends nothing and fails the node when any address is not one mailbox, there are more than 50 recipients, `subject` is longer than 998 characters, `body` is larger than 256 KiB, the connection fails, TLS does not complete as configured, or the server refuses any recipient. A refused recipient aborts before the message data is sent. The node's `on_error` then applies. A success output is `{ok: true}`. The platform does not classify the SMTP host, require TLS, or require authentication. Certificate verification runs unless the account sets `tls_skip_verify`. The platform does not send mail except from this node or from the catalog's test action. Authoring the node requires `channel:write` and an Email Account id that exists. Retrying the node sends another message. Network access stays inside this node.
 - **Code** runs Python in the same sandbox as template expressions. The source is the body of `def main(self)`, and the returned value is the node output and must be JSON. One sandbox subprocess is reused per run. There is no network, and imports are limited to an allow-listed module set. Each call has its own wall-clock limit (`timeout_sec`, default 30, at most 300). The process CPU limit is only a safety net so a long run is not killed by accumulated CPU time. A syntax error found at validation is `CHANNEL_CODE_INVALID`. A run failure is `CHANNEL_NODE_FAILED` with `error_detail.reason` of `network`, `import`, `timeout`, `memory`, or `error`. Authoring or editing a Code node requires `channel:code_write`. Network access is never a sandbox relaxation; if needed it is a dedicated node type.
 
 ## 5. Writing Entities
@@ -292,7 +293,7 @@ A rerun of a failed published run is a new Job on the same published version as 
 - `run_retry_limit` is null or an integer 0 to 10. Null and 0 mint no further Job. When a published run ends `failed`, and this chain has minted fewer additional Jobs than the limit on the graph that ran, the platform mints one new `channel_run` pinned to that version. Its trigger kind is `retry`, its actor is the System Identity, and its input carries `retry_of_job_id`. Draft runs do not mint these Jobs. A run whose trigger kind is `error` does not mint one.
 - `error_channel_id` names another Data Channel. When a run ends `failed` and no further retry Job will be minted, the platform starts that channel once, including after a draft run fails. The target must be active, and its current published version's only trigger must be `trigger.error`. Otherwise the source Job records a log line and no error run is minted. The error run's trigger kind is `error`, its actor is the System Identity, and `trigger_ref` is the source Job id. Its trigger output carries the failed run's identity and error. A run with trigger kind `error` does not start another error workflow. An error run's failure does not change the source run. Cancel does not start an error workflow.
 - Publish refuses `error_channel_id` unless the target exists, is not this channel, and its current published version uses `trigger.error`.
-- `failure_streak` lives on the channel, outside versions. It counts a published run whose failure mints no further retry Job, and increases by one for that episode. A published run that succeeds sets it to zero. At 3 the Console shows the channel as persistently failing. The platform does not change `active` because of the streak and does not call a **Webhook** because of it.
+- `failure_streak` lives on the channel, outside versions. It counts a published run whose failure mints no further retry Job, and increases by one for that episode. A published run that succeeds sets it to zero. At 3 the Console shows the channel as persistently failing. The platform does not change `active` because of the streak and does not call a **Webhook** or send mail because of it.
 
 ### 6.9 Run Records
 
@@ -381,7 +382,7 @@ Operation assumes no person is watching. Every state that would otherwise need a
 | A cursor becomes invalid | One full read of the mirror as the new start (§6.1) |
 | An input mirror is not in sync | The read node's configured choice; continue by default |
 | A run hangs | The run timeout, when set (§6.6) |
-| Runs keep failing | Persistently failing flag in the Console; the channel stays active (§6.8). No Webhook is called |
+| Runs keep failing | Persistently failing flag in the Console; the channel stays active (§6.8). No Webhook is called and no mail is sent |
 | A mirror has a gap, a breaking structure change, or a pause beyond retention | Automatic resnapshot |
 | A Connect task fails | Restart with backoff |
 
@@ -390,7 +391,7 @@ Manual action is an optional override. Two situations require a person, and both
 1. A source-side CDC precondition is broken (for example capture disabled or retention below the required minimum).
 2. A write node's mapping is incompatible with a newly published Entity head and the node's policy is `fail` (§5.4).
 
-Neither situation calls a **Webhook**. An author who wants a call places an `action.webhook` node where the graph still runs, or in the error workflow.
+Neither situation calls a **Webhook** or sends mail. An author who wants a call or a message places an `action.webhook` or `action.email` node where the graph still runs, or in the error workflow.
 
 ## 11. Authorization
 
@@ -399,11 +400,13 @@ All keys are `platform`-scoped.
 | Permission | Grants |
 | --- | --- |
 | `channel:read` | Read channels, drafts, versions, run lists, and run records; read **Source Mirror** data through read nodes and records |
-| `channel:write` | Create, edit, save drafts, validate, publish, and delete channels; Template Preview against a run record; Global Variable writes; on-demand runs (target `draft` or `published`, with an optional stop node) and rerun; cancel a `channel_run` Job; reference an existing **Webhook** from an `action.webhook` node |
+| `channel:write` | Create, edit, save drafts, validate, publish, and delete channels; Template Preview against a run record; Global Variable writes; on-demand runs (target `draft` or `published`, with an optional stop node) and rerun; cancel a `channel_run` Job; reference an existing **Webhook** from an `action.webhook` node; reference an existing **Email Account** from an `action.email` node |
 | `channel:code_write` | Author a Code node. Required in addition to `channel:write` |
 | `channel:source_query` | Author a live Source query node. Required in addition to `channel:write`. Does not grant `query:run` |
 | `webhook:read` | List and read **Webhook**s. Controls the Console Module |
 | `webhook:write` | Create, update, test, and delete **Webhook**s. Not implied by `channel:write` |
+| `email_account:read` | List and read **Email Account**s. Controls the Console Module |
+| `email_account:write` | Create, update, test, and delete **Email Account**s. Not implied by `channel:write` |
 | `mirror:write` | Operate Source Mirrors (disable, delete data, resnapshot overrides) |
 
 Draft save compares the submitted graph with the stored draft. For a node whose type declares a permission: adding it (no stored node with that id, or the stored node had another type), or changing its `type`, `type_version`, or `config`, requires that permission. Otherwise the save is `403 AUTH_FORBIDDEN` and the detail names the node. An unchanged guarded node does not require the permission. Deleting one does not. Publish requires the caller to hold every permission declared by node types present in the draft, including nodes that did not change. Missing one is `403 AUTH_FORBIDDEN` and the detail names the node.
@@ -424,7 +427,7 @@ While the channel's latest draft **Channel Run** has not ended `succeeded`, `fai
 
 ## 13. Management Audit
 
-Persist a **Management Audit Event** for: channel create, identity edit, draft save, publish, activation change, delete, manual run enqueue, rerun enqueue, Global Variable manual delete, Webhook create, update, delete, and test, and every Source Mirror operation. Each event records actor, **Instant**, resource, action, and result.
+Persist a **Management Audit Event** for: channel create, identity edit, draft save, publish, activation change, delete, manual run enqueue, rerun enqueue, Global Variable manual delete, Webhook create, update, delete, and test, Email Account create, update, delete, and test, and every Source Mirror operation. Each event records actor, **Instant**, resource, action, and result.
 
 ## 14. Non-Goals
 
@@ -432,8 +435,8 @@ Persist a **Management Audit Event** for: channel create, identity edit, draft s
 2. An execution lock or platform serialization of runs.
 3. Data Product catalog and non-Entity delivery targets.
 4. Per-object authorization on Source Mirrors.
-5. A platform event that calls a **Webhook** without an `action.webhook` node.
-6. Binary items, and network access other than the Webhook node.
+5. A platform event that calls a **Webhook** without an `action.webhook` node, or that sends mail without an `action.email` node.
+6. Binary items, and network access other than the Webhook and Email nodes.
 7. MCP tools for Data Channel or Source Mirrors.
 8. Restoring source transaction boundaries at the target. Targets are atomic per batch and eventually consistent.
 9. Source-side triggers installed by the platform, and source writes other than a Data Channel SQL statement or the documented CDC signal and flush objects.
@@ -443,6 +446,7 @@ Persist a **Management Audit Event** for: channel create, identity edit, draft s
 
 - `docs/api-contracts-data-channel.md`
 - `docs/api-contracts-webhooks.md`
+- `docs/api-contracts-email-accounts.md`
 - `docs/business-entity.md`
 - `docs/business-entity-access.md`
 - `docs/business-metadata.md`

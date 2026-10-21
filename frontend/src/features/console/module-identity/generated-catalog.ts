@@ -414,6 +414,26 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
     }
   },
   {
+    "id": "email-accounts",
+    "label_key": "emailAccounts.title",
+    "icon": "mail",
+    "routes": {
+      "list": "/console/email-accounts",
+      "create": "/console/email-accounts/new",
+      "edit": "/console/email-accounts/:id/edit",
+      "show": "/console/email-accounts/:id",
+      "aliases": []
+    },
+    "actions": {
+      "list": "email_account:read",
+      "create": "email_account:write",
+      "edit": "email_account:write",
+      "delete": "email_account:write",
+      "show": "email_account:read",
+      "sample": null
+    }
+  },
+  {
     "id": "model-services",
     "label_key": "modelServices.title",
     "icon": "brain",

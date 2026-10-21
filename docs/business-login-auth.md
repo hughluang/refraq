@@ -183,6 +183,7 @@ Fixed Permission catalog (Foundation + metadata foundation extensions):
 - `channel:read` / `channel:write`
 - `channel:code_write` / `channel:source_query`
 - `webhook:read` / `webhook:write`
+- `email_account:read` / `email_account:write`
 
 Rules:
 
@@ -194,7 +195,7 @@ Rules:
 - Entity permission meanings: `docs/business-entity.md` §6; Entity Data API: `docs/api-contracts-entity-data.md`; Entity access control: `docs/business-entity-access.md` §18. `entity:access_manage` is not seeded onto `operator` and is not implied by `entity:write`. `entity:data_read` / `entity:data_write` are master switches: Entity data is reached only through **Access Grant**s, and no Permission, including those of `super_admin`, bypasses them.
 - An auto-provisioned provider default Role must not effectively contain `users:write`, `roles:write`, `identity_providers:write`, or `entity:access_manage`; the locked `super_admin` Role is therefore never valid as an auto-provisioning default.
 - Metadata permission meanings: `docs/business-metadata.md` §6; User PAT: `docs/business-user-tokens.md`
-- Data Channel permission meanings: `docs/business-data-channel.md` §11. `channel:code_write` and `channel:source_query` are not implied by `channel:write`. `webhook:read` and `webhook:write` are not implied by `channel:write` and are not seeded onto `operator`
+- Data Channel permission meanings: `docs/business-data-channel.md` §11. `channel:code_write` and `channel:source_query` are not implied by `channel:write`. `webhook:read` and `webhook:write`, and `email_account:read` and `email_account:write`, are not implied by `channel:write` and are not seeded onto `operator`
 - Session absolute lifetime and idle window used at login are the **effective** values of `admin_session_ttl_hours` (seeded 12) and `admin_session_idle_minutes` (seeded 30). There is no env fallback. Changing either parameter does not rewrite existing sessions — see `docs/business-system-parameters.md` and `docs/api-contracts-settings.md`
 
 ## 9. Route Protection Rule

@@ -18,6 +18,8 @@ __all__ = [
     "ChannelVariableNameInvalid",
     "ChannelVariableNotFound",
     "ChannelVersionNotFound",
+    "EmailAccountInUse",
+    "EmailAccountNotFound",
     "WebhookInUse",
     "WebhookNotFound",
     "WebhookUrlRejected",
@@ -121,6 +123,22 @@ class ChannelRunNotRerunnable(AppError):
 
     def _default_message(self) -> str:
         return "Only a failed published run can be rerun"
+
+
+class EmailAccountNotFound(AppError):
+    code = "EMAIL_ACCOUNT_NOT_FOUND"
+    http_status = 404
+
+    def _default_message(self) -> str:
+        return "Email Account not found"
+
+
+class EmailAccountInUse(AppError):
+    code = "EMAIL_ACCOUNT_IN_USE"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Email Account is still referenced by a Data Channel"
 
 
 class WebhookNotFound(AppError):

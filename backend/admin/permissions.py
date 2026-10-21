@@ -44,6 +44,8 @@ Permission = Literal[
     "channel:source_query",
     "webhook:read",
     "webhook:write",
+    "email_account:read",
+    "email_account:write",
 ]
 
 ALL_PERMISSIONS: tuple[Permission, ...] = (
@@ -83,6 +85,8 @@ ALL_PERMISSIONS: tuple[Permission, ...] = (
     "channel:source_query",
     "webhook:read",
     "webhook:write",
+    "email_account:read",
+    "email_account:write",
 )
 
 PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
@@ -122,6 +126,8 @@ PERMISSION_DESCRIPTIONS: dict[Permission, str] = {
     "channel:source_query": "Add or edit a Data Channel live Source query node, and publish a draft that contains one",
     "webhook:read": "List and view Webhooks",
     "webhook:write": "Create, update, test, and delete Webhooks",
+    "email_account:read": "List and view Email Accounts",
+    "email_account:write": "Create, update, test, and delete Email Accounts",
 }
 
 CATALOG_SET: frozenset[str] = frozenset(ALL_PERMISSIONS)

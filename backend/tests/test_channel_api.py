@@ -337,6 +337,7 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
         "volume.for",
         "state.variable",
         "write.entity",
+        "action.email",
         "action.webhook",
     ]
     manual = next(item for item in items if item["type"] == "trigger.manual")

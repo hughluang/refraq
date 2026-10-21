@@ -46,6 +46,7 @@ EXPECTED_ICONS = {
     "settings": "settings",
     "branding": "palette",
     "webhooks": "webhook",
+    "email-accounts": "mail",
     "model-services": "brain",
     "account": "user-circle",
 }
@@ -400,6 +401,24 @@ EXPECTED_IDENTITIES = {
             "edit": "webhook:write",
             "delete": "webhook:write",
             "show": "webhook:read",
+            "sample": None,
+        },
+    },
+    "email-accounts": {
+        "label_key": "emailAccounts.title",
+        "routes": {
+            "list": "/console/email-accounts",
+            "create": "/console/email-accounts/new",
+            "edit": "/console/email-accounts/:id/edit",
+            "show": "/console/email-accounts/:id",
+            "aliases": [],
+        },
+        "actions": {
+            "list": "email_account:read",
+            "create": "email_account:write",
+            "edit": "email_account:write",
+            "delete": "email_account:write",
+            "show": "email_account:read",
             "sample": None,
         },
     },

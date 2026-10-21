@@ -20,6 +20,7 @@ from backend.channel.nodes.transform.set_fields import NODE_TYPE as SET_FIELDS
 from backend.channel.nodes.trigger.error import NODE_TYPE as TRIGGER_ERROR
 from backend.channel.nodes.trigger.manual import NODE_TYPE as TRIGGER_MANUAL
 from backend.channel.nodes.trigger.scheduled import NODE_TYPE as TRIGGER_SCHEDULED
+from backend.channel.nodes.action.email import NODE_TYPE as ACTION_EMAIL
 from backend.channel.nodes.action.webhook import NODE_TYPE as ACTION_WEBHOOK
 from backend.channel.nodes.write.entity import NODE_TYPE as WRITE_ENTITY
 
@@ -56,6 +57,7 @@ _CATALOG: tuple[NodeType, ...] = (
     _FOR,
     STATE_VARIABLE,
     WRITE_ENTITY,
+    ACTION_EMAIL,
     ACTION_WEBHOOK,
 )
 

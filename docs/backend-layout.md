@@ -199,7 +199,7 @@ No module is created empty. `channel.errors`, `channel.routers`, `channel.tasks`
 | Mechanism-resource HTTP (get/cancel Job by id) | `jobs` |
 | Mechanism-resource HTTP (list/get/patch/delete Scheduled Task) | `worker` |
 | Domain use-case HTTP (Source, Catalog, Source schedule facade, schedule run-now / related Jobs) | product domain (`metadata`) |
-| Domain use-case HTTP (Data Channel definitions, drafts, versions, activation, manual runs, run lists, Webhooks) | product domain (`channel`) |
+| Domain use-case HTTP (Data Channel definitions, drafts, versions, activation, manual runs, run lists, Webhooks, Email Accounts) | product domain (`channel`) |
 | Outbound adapter families | Owning product domain (e.g. `metadata/connectors`: engine adapters + `runtime` invocation shell that binds an already-interpreted `SourceEndpoint`) |
 | Domain error types | That product domain (base in `core`) |
 | Site Branding singleton, assets, validation, cache policy, and HTTP | `admin/branding` language unit |
