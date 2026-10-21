@@ -3,6 +3,7 @@
 import {
   ActionIcon,
   Button,
+  Menu,
   Paper,
   Stack,
   Text,
@@ -52,7 +53,15 @@ import "@xyflow/react/dist/style.css";
 import "./ChannelCanvas.css";
 
 import { EmptyState } from "@/components/feedback/EmptyState";
+import { presentConsoleNotification } from "@/providers/notification-provider";
 import { CanvasToolbar } from "@/features/channels/CanvasToolbar";
+import { formatShortcutChord, type ShortcutChord } from "@/features/channels/CanvasShortcuts";
+import {
+  parseFragment,
+  pasteFragment,
+  serializeFragment,
+  type PasteSkip,
+} from "@/features/channels/canvasClipboard";
 import { canvasShortcutTarget, canvasViewportDuration } from "@/features/channels/useCanvasShortcuts";
 import { NodePicker, type PickerEntry } from "@/features/channels/NodePicker";
 
@@ -111,8 +120,13 @@ import {
   CircleDashedIcon,
   ClockIcon,
   CloseIcon,
+  CopyIcon,
+  CutIcon,
+  DuplicateIcon,
   ErrorIcon,
+  FitViewIcon,
   LoaderIcon,
+  PasteIcon,
   PlayIcon,
   PlusIcon,
 } from "@/components/icons";
@@ -175,6 +189,20 @@ export type PickerIntent =
   | { kind: "afterPort"; sourceId: string; sourceHandle: string }
   | { kind: "insertOnEdge"; edgeId: string };
 
+type CanvasMenuState =
+  | { kind: "node"; nodeId: string; x: number; y: number }
+  | { kind: "selection"; x: number; y: number }
+  | { kind: "edge"; edgeId: string; x: number; y: number }
+  | {
+      kind: "pane";
+      x: number;
+      y: number;
+      paste: "pending" | "ready" | "blocked";
+      text: string;
+    };
+
+const SKIP_NOTE_MS = 4000;
+
 const NODE_DRAG_THRESHOLD = 4;
 const NUDGE_STEP = 8;
 const NUDGE_SHIFT_STEP = 40;
@@ -203,12 +231,14 @@ const CanvasSurfaceContext = createContext<{
   mutable: boolean;
   openNode: (nodeId: string) => void;
   openPickerAt: (screenPoint: { x: number; y: number }, intent: PickerIntent) => void;
+  duplicateNode: (nodeId: string) => void;
   busyOutputs: ReadonlySet<string>;
 }>({
   editing: false,
   mutable: false,
   openNode: () => {},
   openPickerAt: () => {},
+  duplicateNode: () => {},
   busyOutputs: new Set<string>(),
 });
 const CanvasCatalogContext = createContext<readonly NodeTypeSpec[]>([]);
@@ -275,7 +305,8 @@ function ChannelCanvasBody({
   const t = useTranslate();
   const colorScheme = useComputedColorScheme("light", { getInitialValueInEffect: false });
   const { data: heldPermissions } = usePermissions<string[]>({});
-  const { screenToFlowPosition, flowToScreenPosition, setCenter, getInternalNode } = useReactFlow();
+  const { screenToFlowPosition, flowToScreenPosition, setCenter, getInternalNode, fitView } =
+    useReactFlow();
   const store = useStoreApi();
   const triggerTypes = useMemo(
     () => new Set(catalog.filter((item) => item.trigger).map((item) => item.type)),
@@ -297,6 +328,8 @@ function ChannelCanvasBody({
   const [highlight, setHighlight] = useState<ProblemHighlight | null>(null);
   const [problemsDismissed, setProblemsDismissed] = useState(0);
   const [connectNote, setConnectNote] = useState<{ x: number; y: number } | null>(null);
+  const [skipNote, setSkipNote] = useState("");
+  const [contextMenu, setContextMenu] = useState<CanvasMenuState | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const nodesRef = useRef(nodes);
@@ -313,6 +346,9 @@ function ChannelCanvasBody({
   const beginCloseRef = useRef<() => void>(() => {});
   const retainPickerRef = useRef(false);
   const pickerSeq = useRef(0);
+  const skipTimer = useRef<number | null>(null);
+  const pointerRef = useRef<{ x: number; y: number } | null>(null);
+  const menuSeq = useRef(0);
   const highlightRef = useRef<ProblemHighlight | null>(highlight);
   nodesRef.current = nodes;
   edgesRef.current = edges;
@@ -522,6 +558,11 @@ function ChannelCanvasBody({
     if (mutable) return;
     setPicker(null);
   }, [mutable]);
+
+  useEffect(() => {
+    if (mutable && appearance === "edit") return;
+    setContextMenu((current) => (current?.kind === "edge" ? null : current));
+  }, [mutable, appearance]);
 
   const clearHighlight = () => {
     if (highlightRef.current == null) return;
@@ -1128,6 +1169,19 @@ function ChannelCanvasBody({
     return () => window.removeEventListener("keydown", onKey);
   }, [overlayKey, pickerKey, leaving]);
   useEffect(() => {
+    if (contextMenu == null) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      menuSeq.current += 1;
+      setContextMenu(null);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [contextMenu]);
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
@@ -1247,6 +1301,180 @@ function ChannelCanvasBody({
     if (nextNodes.length !== 1) setConfigNodeId(null);
   };
 
+  const selectedNodeIds = () =>
+    nodesRef.current.filter((node) => node.selected).map((node) => node.id);
+
+  const showSkip = (skipped: PasteSkip) => {
+    const parts: string[] = [];
+    if (skipped.trigger > 0) {
+      parts.push(t("channels.canvas.skipTrigger", { count: skipped.trigger }));
+    }
+    if (skipped.permission > 0) {
+      parts.push(
+        t("channels.canvas.skipPermission", {
+          count: skipped.permission,
+          permission: skipped.permissions.join(", "),
+        }),
+      );
+    }
+    if (skipped.unknown > 0) {
+      parts.push(t("channels.canvas.skipUnknown", { count: skipped.unknown }));
+    }
+    if (parts.length === 0) return;
+    if (skipTimer.current != null) window.clearTimeout(skipTimer.current);
+    setSkipNote(parts.join(" "));
+    skipTimer.current = window.setTimeout(() => {
+      skipTimer.current = null;
+      setSkipNote("");
+    }, SKIP_NOTE_MS);
+  };
+
+  useEffect(
+    () => () => {
+      if (skipTimer.current != null) window.clearTimeout(skipTimer.current);
+    },
+    [],
+  );
+
+  const applyAdded = (result: ReturnType<typeof pasteFragment>) => {
+    showSkip(result.skipped);
+    if (result.nodes.length === 0) return;
+    const flow = flowFromGraph(
+      { nodes: result.nodes, edges: result.edges, settings: settingsRef.current },
+      triggerTypes,
+    );
+    const nextNodes: ChannelNode[] = [
+      ...nodesRef.current.map((node) => ({ ...node, selected: false })),
+      ...flow.nodes.map((node) => ({ ...node, type: "channel" as const, selected: true })),
+    ];
+    const nextEdges = channelEdges([
+      ...edgesRef.current.map((edge) => ({ ...edge, selected: false })),
+      ...flow.edges.map((edge) => ({ ...edge, selected: true })),
+    ]);
+    nodesRef.current = nextNodes;
+    edgesRef.current = nextEdges;
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+    setConfigNodeId(null);
+    setPicker(null);
+    emit(nextNodes, nextEdges);
+    commitNow();
+  };
+
+  const duplicateIds = (ids: readonly string[]) => {
+    if (!mutable || appearance !== "edit" || ids.length === 0) return;
+    const fragment = serializeFragment(graphNow(), ids);
+    applyAdded(pasteFragment(fragment, graphNow(), catalog, heldPermissions, null));
+  };
+
+  const writeFragment = async (ids: readonly string[]) => {
+    if (ids.length === 0) return false;
+    const text = JSON.stringify(serializeFragment(graphNow(), ids));
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      presentConsoleNotification({
+        type: "error",
+        title: t("channels.canvas.clipboardFailed"),
+      });
+      return false;
+    }
+  };
+
+  const removeNodes = (ids: readonly string[]) => {
+    const drop = new Set(ids);
+    if (!nodesRef.current.some((node) => drop.has(node.id))) return;
+    const nextNodes = nodesRef.current.filter((node) => !drop.has(node.id));
+    const nextEdges = edgesRef.current.filter(
+      (edge) => !drop.has(edge.source) && !drop.has(edge.target),
+    );
+    nodesRef.current = nextNodes;
+    edgesRef.current = nextEdges;
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+    setConfigNodeId((current) => (current != null && drop.has(current) ? null : current));
+    emit(nextNodes, nextEdges);
+    commitNow();
+  };
+
+  const removeEdge = (edgeId: string) => {
+    if (!edgesRef.current.some((edge) => edge.id === edgeId)) return;
+    const nextEdges = edgesRef.current.filter((edge) => edge.id !== edgeId);
+    edgesRef.current = nextEdges;
+    setEdges(nextEdges);
+    emit(nodesRef.current, nextEdges);
+    commitNow();
+  };
+
+  const pasteText = (text: string) => {
+    if (!mutable || appearance !== "edit") return;
+    const fragment = parseFragment(text);
+    if (!fragment) return;
+    const point = pointerRef.current;
+    applyAdded(
+      pasteFragment(
+        fragment,
+        graphNow(),
+        catalog,
+        heldPermissions,
+        point ? screenToFlowPosition(point) : null,
+      ),
+    );
+  };
+
+  const selectOnly = (nodeId: string) => {
+    const nextNodes = nodesRef.current.map((node) => ({ ...node, selected: node.id === nodeId }));
+    const nextEdges = edgesRef.current.map((edge) => ({ ...edge, selected: false }));
+    nodesRef.current = nextNodes;
+    edgesRef.current = nextEdges;
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+  };
+
+  const openNodeMenu = (nodeId: string, x: number, y: number) => {
+    const selected = nodesRef.current.filter((node) => node.selected);
+    const already = selected.some((node) => node.id === nodeId);
+    if (already && selected.length > 1) {
+      setContextMenu({ kind: "selection", x, y });
+      return;
+    }
+    if (!already) selectOnly(nodeId);
+    setContextMenu({ kind: "node", nodeId, x, y });
+  };
+
+  const openPaneMenu = (x: number, y: number) => {
+    const seq = menuSeq.current + 1;
+    menuSeq.current = seq;
+    const canPaste = mutable && appearance === "edit";
+    setContextMenu({ kind: "pane", x, y, paste: "pending", text: "" });
+    if (!canPaste) return;
+    const read = navigator.clipboard?.readText?.bind(navigator.clipboard);
+    if (!read) {
+      setContextMenu({ kind: "pane", x, y, paste: "blocked", text: "" });
+      return;
+    }
+    void read().then(
+      (text) => {
+        if (menuSeq.current !== seq) return;
+        setContextMenu((current) =>
+          current?.kind === "pane" ? { ...current, paste: "ready", text } : current,
+        );
+      },
+      () => {
+        if (menuSeq.current !== seq) return;
+        setContextMenu((current) =>
+          current?.kind === "pane" ? { ...current, paste: "blocked", text: "" } : current,
+        );
+      },
+    );
+  };
+
+  const closeMenu = () => {
+    menuSeq.current += 1;
+    setContextMenu(null);
+  };
+
   const openNodeConfig = (nodeId: string) => {
     cancelOverlayClose();
     setConfigNodeId(nodeId);
@@ -1293,6 +1521,7 @@ function ChannelCanvasBody({
             mutable,
             openNode: openNodeConfig,
             openPickerAt,
+            duplicateNode: (nodeId) => duplicateIds([nodeId]),
             busyOutputs,
           }}
         >
@@ -1309,7 +1538,16 @@ function ChannelCanvasBody({
           }
           onKeyDownCapture={onCanvasKeyDownCapture}
           onKeyDown={onCanvasKeyDown}
-          onPointerDown={() => setConnectNote(null)}
+          onPointerDown={(event) => {
+            setConnectNote(null);
+            pointerRef.current = { x: event.clientX, y: event.clientY };
+          }}
+          onPointerMove={(event) => {
+            pointerRef.current = { x: event.clientX, y: event.clientY };
+          }}
+          onPointerLeave={() => {
+            pointerRef.current = null;
+          }}
         >
           <ReactFlow
             colorMode={colorScheme}
@@ -1350,6 +1588,31 @@ function ChannelCanvasBody({
             onConnect={onConnect}
             onConnectEnd={onConnectEnd}
             onPaneClick={beginClose}
+            onNodeContextMenu={(event, node) => {
+              event.preventDefault();
+              event.stopPropagation();
+              openNodeMenu(node.id, event.clientX, event.clientY);
+            }}
+            onSelectionContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setContextMenu({ kind: "selection", x: event.clientX, y: event.clientY });
+            }}
+            onEdgeContextMenu={(event, edge) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (!mutable || appearance !== "edit") return;
+              setContextMenu({
+                kind: "edge",
+                edgeId: edge.id,
+                x: event.clientX,
+                y: event.clientY,
+              });
+            }}
+            onPaneContextMenu={(event) => {
+              event.preventDefault();
+              openPaneMenu(event.clientX, event.clientY);
+            }}
             isValidConnection={isValidConnection}
             nodesDraggable={mutable}
             nodesConnectable={mutable}
@@ -1375,11 +1638,22 @@ function ChannelCanvasBody({
               canUndo={canUndo}
               canRedo={canRedo}
               addExpanded={picker?.fromAdd ?? false}
-              overlayOpen={configNodeId != null || picker != null || leaving}
               onAdd={openToolbarPicker}
               onUndo={undo}
               onRedo={redo}
               onSelectAll={selectAll}
+              onCopy={() => {
+                void writeFragment(selectedNodeIds());
+              }}
+              onCut={() => {
+                const ids = selectedNodeIds();
+                void writeFragment(ids).then((copied) => {
+                  if (copied) removeNodes(ids);
+                });
+              }}
+              onDuplicate={() => duplicateIds(selectedNodeIds())}
+              onPaste={pasteText}
+              overlayOpen={configNodeId != null || picker != null || leaving || contextMenu != null}
               catalog={catalog}
               problems={problems}
               problemGraph={labelGraph}
@@ -1400,6 +1674,77 @@ function ChannelCanvasBody({
             >
               {t("channels.canvas.connectNone")}
             </Text>
+          ) : null}
+          {skipNote ? (
+            <Text className="channel-canvas-clipboard-note" size="sm" c="dimmed" aria-live="polite">
+              {skipNote}
+            </Text>
+          ) : null}
+          {contextMenu ? (
+            <CanvasContextMenu
+              menu={contextMenu}
+              editing={appearance === "edit"}
+              mutable={mutable}
+              onClose={closeMenu}
+              onSettings={(nodeId) => {
+                closeMenu();
+                openNodeConfig(nodeId);
+              }}
+              onRun={(nodeId) => {
+                closeMenu();
+                onRun(nodeId);
+              }}
+              onDuplicate={() => {
+                const ids =
+                  contextMenu.kind === "node" ? [contextMenu.nodeId] : selectedNodeIds();
+                closeMenu();
+                duplicateIds(ids);
+              }}
+              onCopy={() => {
+                const ids =
+                  contextMenu.kind === "node" ? [contextMenu.nodeId] : selectedNodeIds();
+                closeMenu();
+                void writeFragment(ids);
+              }}
+              onCut={() => {
+                const ids =
+                  contextMenu.kind === "node" ? [contextMenu.nodeId] : selectedNodeIds();
+                closeMenu();
+                void writeFragment(ids).then((copied) => {
+                  if (copied) removeNodes(ids);
+                });
+              }}
+              onDeleteNodes={() => {
+                const ids =
+                  contextMenu.kind === "node" ? [contextMenu.nodeId] : selectedNodeIds();
+                closeMenu();
+                removeNodes(ids);
+              }}
+              onInsert={(edgeId, point) => {
+                closeMenu();
+                openPickerAt(point, { kind: "insertOnEdge", edgeId });
+              }}
+              onDeleteEdge={(edgeId) => {
+                closeMenu();
+                removeEdge(edgeId);
+              }}
+              onAdd={(point) => {
+                closeMenu();
+                openPickerAt(point, { kind: "free" });
+              }}
+              onPaste={(text, point) => {
+                closeMenu();
+                const fragment = parseFragment(text);
+                if (!fragment) return;
+                applyAdded(
+                  pasteFragment(fragment, graphNow(), catalog, heldPermissions, screenToFlowPosition(point)),
+                );
+              }}
+              onFit={() => {
+                closeMenu();
+                void fitView({ duration: canvasViewportDuration() });
+              }}
+            />
           ) : null}
           {nodes.length === 0 ? (
             <div className="channel-canvas-empty">
@@ -1658,6 +2003,198 @@ function ConnectGhost({ ghost }: { ghost: PickerGhost }) {
   );
 }
 
+function CanvasContextMenu({
+  menu,
+  editing,
+  mutable,
+  onClose,
+  onSettings,
+  onRun,
+  onDuplicate,
+  onCopy,
+  onCut,
+  onDeleteNodes,
+  onInsert,
+  onDeleteEdge,
+  onAdd,
+  onPaste,
+  onFit,
+}: {
+  menu: CanvasMenuState;
+  editing: boolean;
+  mutable: boolean;
+  onClose: () => void;
+  onSettings: (nodeId: string) => void;
+  onRun: (nodeId: string) => void;
+  onDuplicate: () => void;
+  onCopy: () => void;
+  onCut: () => void;
+  onDeleteNodes: () => void;
+  onInsert: (edgeId: string, point: { x: number; y: number }) => void;
+  onDeleteEdge: (edgeId: string) => void;
+  onAdd: (point: { x: number; y: number }) => void;
+  onPaste: (text: string, point: { x: number; y: number }) => void;
+  onFit: () => void;
+}) {
+  const t = useTranslate();
+  const command = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
+  const canMutate = editing && mutable;
+  const point = { x: menu.x, y: menu.y };
+  const hint = (chord: ShortcutChord) => (
+    <Text size="xs" c="dimmed">
+      {formatShortcutChord(chord, command)}
+    </Text>
+  );
+  const entries: ReactNode[] = [];
+  if (menu.kind === "node") {
+    entries.push(
+      <Menu.Item
+        key="settings"
+        leftSection={<AdjustmentsIcon size={14} />}
+        rightSection={hint({ key: "Enter" })}
+        onClick={() => onSettings(menu.nodeId)}
+      >
+        {t("channels.node.settings")}
+      </Menu.Item>,
+    );
+    if (editing) {
+      entries.push(
+        <Menu.Item
+          key="run"
+          disabled={!mutable}
+          leftSection={<PlayIcon size={14} />}
+          onClick={() => onRun(menu.nodeId)}
+        >
+          {t("channels.canvas.runToNode")}
+        </Menu.Item>,
+      );
+    }
+  }
+  if ((menu.kind === "node" || menu.kind === "selection") && canMutate) {
+    entries.push(
+      <Menu.Item
+        key="duplicate"
+        leftSection={<DuplicateIcon size={14} />}
+        rightSection={hint({ mod: true, key: "D" })}
+        onClick={onDuplicate}
+      >
+        {t("channels.canvas.duplicate")}
+      </Menu.Item>,
+    );
+  }
+  if (menu.kind === "node" || menu.kind === "selection") {
+    entries.push(
+      <Menu.Item
+        key="copy"
+        leftSection={<CopyIcon size={14} />}
+        rightSection={hint({ mod: true, key: "C" })}
+        onClick={onCopy}
+      >
+        {t("channels.canvas.copy")}
+      </Menu.Item>,
+    );
+  }
+  if ((menu.kind === "node" || menu.kind === "selection") && canMutate) {
+    entries.push(
+      <Menu.Item
+        key="cut"
+        leftSection={<CutIcon size={14} />}
+        rightSection={hint({ mod: true, key: "X" })}
+        onClick={onCut}
+      >
+        {t("channels.canvas.cut")}
+      </Menu.Item>,
+      <Menu.Item
+        key="delete"
+        className="channel-canvas-menu__danger"
+        leftSection={<CloseIcon size={14} />}
+        rightSection={hint({ key: "Delete" })}
+        onClick={onDeleteNodes}
+      >
+        {t("channels.node.delete")}
+      </Menu.Item>,
+    );
+  }
+  if (menu.kind === "edge" && canMutate) {
+    entries.push(
+      <Menu.Item
+        key="insert"
+        leftSection={<PlusIcon size={14} />}
+        onClick={() => onInsert(menu.edgeId, point)}
+      >
+        {t("channels.canvas.insertNode")}
+      </Menu.Item>,
+      <Menu.Item
+        key="delete-edge"
+        className="channel-canvas-menu__danger"
+        leftSection={<CloseIcon size={14} />}
+        rightSection={hint({ key: "Delete" })}
+        onClick={() => onDeleteEdge(menu.edgeId)}
+      >
+        {t("channels.node.delete")}
+      </Menu.Item>,
+    );
+  }
+  if (menu.kind === "pane") {
+    if (canMutate) {
+      entries.push(
+        <Menu.Item key="add" leftSection={<PlusIcon size={14} />} onClick={() => onAdd(point)}>
+          {t("channels.canvas.addHere")}
+        </Menu.Item>,
+        <Menu.Item
+          key="paste"
+          disabled={menu.paste !== "ready"}
+          leftSection={<PasteIcon size={14} />}
+          rightSection={hint({ mod: true, key: "V" })}
+          onClick={() => onPaste(menu.text, point)}
+        >
+          {t("channels.canvas.paste")}
+        </Menu.Item>,
+      );
+    }
+    entries.push(
+      <Menu.Item
+        key="fit"
+        leftSection={<FitViewIcon size={14} />}
+        rightSection={hint({ shift: true, key: "1" })}
+        onClick={onFit}
+      >
+        {t("channels.canvas.fitView")}
+      </Menu.Item>,
+    );
+  }
+  if (entries.length === 0) return null;
+  return (
+    <Menu opened withinPortal position="bottom-start" offset={4} trapFocus={false} onClose={onClose}>
+      <Menu.Target>
+        <span
+          aria-hidden
+          style={{
+            position: "fixed",
+            left: menu.x,
+            top: menu.y,
+            width: 1,
+            height: 1,
+            pointerEvents: "none",
+          }}
+        />
+      </Menu.Target>
+      <Menu.Dropdown
+        onContextMenu={(event) => {
+          event.preventDefault();
+        }}
+      >
+        {entries}
+        {menu.kind === "pane" && menu.paste === "blocked" && canMutate ? (
+          <Text size="xs" c="dimmed" px="sm" pb={4}>
+            {t("channels.canvas.pasteShortcut")}
+          </Text>
+        ) : null}
+      </Menu.Dropdown>
+    </Menu>
+  );
+}
+
 function problemGraphOf(nodes: ChannelNode[], edges: Edge[]): ProblemGraph {
   return {
     nodes: nodes.map((node) => ({ id: node.id, name: node.data.name })),
@@ -1845,7 +2382,8 @@ function NodeToolButton({
 
 function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   const t = useTranslate();
-  const { editing, mutable, openNode, openPickerAt, busyOutputs } = useContext(CanvasSurfaceContext);
+  const { editing, mutable, openNode, openPickerAt, duplicateNode, busyOutputs } =
+    useContext(CanvasSurfaceContext);
   const catalog = useContext(CanvasCatalogContext);
   const spec = catalog.find((item) => item.type === data.nodeType);
   const { deleteElements } = useReactFlow();
@@ -1907,6 +2445,14 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
             onClick={() => onRun(id)}
           >
             <PlayIcon size={14} />
+          </NodeToolButton>
+          <NodeToolButton
+            label={t("channels.canvas.duplicate")}
+            className="channel-flow-node__duplicate"
+            disabled={!mutable}
+            onClick={() => duplicateNode(id)}
+          >
+            <DuplicateIcon size={14} />
           </NodeToolButton>
           <NodeToolButton
             label={t("channels.node.delete")}

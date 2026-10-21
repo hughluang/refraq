@@ -41,6 +41,30 @@ export const CANVAS_SHORTCUTS: readonly CanvasShortcut[] = [
     chords: [{ key: "Delete" }, { key: "Backspace" }],
   },
   {
+    id: "copy",
+    group: "edit",
+    labelKey: "channels.canvas.copy",
+    chords: [{ mod: true, key: "C" }],
+  },
+  {
+    id: "cut",
+    group: "edit",
+    labelKey: "channels.canvas.cut",
+    chords: [{ mod: true, key: "X" }],
+  },
+  {
+    id: "paste",
+    group: "edit",
+    labelKey: "channels.canvas.paste",
+    chords: [{ mod: true, key: "V" }],
+  },
+  {
+    id: "duplicate",
+    group: "edit",
+    labelKey: "channels.canvas.duplicate",
+    chords: [{ mod: true, key: "D" }],
+  },
+  {
     id: "open",
     group: "edit",
     labelKey: "channels.canvas.shortcuts.open",

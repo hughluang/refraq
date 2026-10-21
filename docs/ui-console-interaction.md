@@ -72,7 +72,7 @@ Single-key shortcuts are ignored while focus is in an editable field and while t
 
 ### 7.1 Channel canvas shortcuts
 
-These shortcuts apply only while focus is inside the channel canvas (a `.channel-canvas-stage` ancestor). Undo, redo, fit, zoom, shortcut help, select all, and arrow-key nudging do not run while focus is in an editable field, the node settings panel, or a modal. Escape still closes an open canvas overlay, including from a field in that overlay, unless that field already handled the key. Delete and Backspace remove the selection only while the graph can be edited. Tab opens the node picker when focus is in the canvas and no overlay is open. While an overlay is open, Tab moves focus.
+These shortcuts apply only while focus is inside the channel canvas (a `.channel-canvas-stage` ancestor). Undo, redo, fit, zoom, shortcut help, select all, and arrow-key nudging do not run while focus is in an editable field, the node settings panel, or a modal. Escape still closes an open canvas overlay, including from a field in that overlay, unless that field already handled the key. Delete and Backspace remove the selection only while the graph can be edited. Copy, cut, paste, and duplicate follow that same focus rule. Copy still runs while the graph is locked or the canvas is browsing. Cut, paste, and duplicate do not change the graph then. Tab opens the node picker when focus is in the canvas and no overlay is open. While an overlay is open, Tab moves focus.
 
 | Shortcut | Effect |
 | --- | --- |
@@ -81,6 +81,10 @@ These shortcuts apply only while focus is inside the channel canvas (a `.channel
 | Shift+click | Add or remove that node or edge from the selection |
 | Shift+drag | Box-select |
 | Ctrl+A or Cmd+A | Select every node and edge |
+| Ctrl+C or Cmd+C | Copy the selection |
+| Ctrl+X or Cmd+X | Cut the selection when the graph can be edited |
+| Ctrl+V or Cmd+V | Paste when the graph can be edited. The pointer is the top-left anchor when it is inside the canvas; otherwise the copy is offset by 40px |
+| Ctrl+D or Cmd+D | Duplicate the selection when the graph can be edited |
 | Arrow keys | Nudge the selection by 8px |
 | Shift+arrow keys | Nudge the selection by 40px. Presses within 500ms are one undo step |
 | Delete or Backspace | Delete the selection when the graph can be edited |
@@ -93,6 +97,8 @@ These shortcuts apply only while focus is inside the channel canvas (a `.channel
 | Ctrl+0 or Cmd+0 | Zoom to 100% |
 | ? | Open keyboard shortcut help |
 | Escape | Close the open canvas overlay, or clear the selection when none is open |
+
+Right-click opens a menu at the pointer on a node, a multi-selection, an edge, or empty canvas. Each item shows its shortcut. Delete uses the danger color. While browsing, the menu keeps settings, copy, and fit view. A run lock hides items that change the graph.
 
 The palette sections are Recent, Go to, Create, Records, and Actions. Recent is the latest eight record visits for this User in this browser. Go to lists permitted **Console Navigation** modules. Create lists modules that have a create route and create permission. Records searches the list endpoints for Users, Roles, Sources, Entities, Dictionaries, Channels, Business Domains, and User Groups when the actor may list that module, five results each, after a 250 ms pause. A failed module is omitted. A response for an older query is ignored. Actions toggle the color scheme, toggle navigation width, change language, and open **Account Center**. The palette footer lists the shortcuts with key hints.
 

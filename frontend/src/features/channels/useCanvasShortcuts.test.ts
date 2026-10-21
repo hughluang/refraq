@@ -23,6 +23,10 @@ function handlers(overrides: Partial<CanvasShortcutHandlers> = {}): CanvasShortc
     openHelp: vi.fn(),
     selectAll: vi.fn(),
     openPicker: vi.fn(),
+    copy: vi.fn(),
+    cut: vi.fn(),
+    duplicate: vi.fn(),
+    paste: vi.fn(),
     ...overrides,
   };
 }
@@ -57,6 +61,15 @@ function Host({
 
 function press(target: Element, init: KeyboardEventInit): KeyboardEvent {
   const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+  target.dispatchEvent(event);
+  return event;
+}
+
+function pasteOn(target: Element, text: string): Event {
+  const event = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clipboardData", {
+    value: { getData: () => text },
+  });
   target.dispatchEvent(event);
   return event;
 }
@@ -161,11 +174,16 @@ describe("useCanvasShortcuts", () => {
       { key: "y", code: "KeyY", ctrlKey: true },
       { key: "a", code: "KeyA", ctrlKey: true },
       { key: "a", code: "KeyA", metaKey: true },
+      { key: "c", code: "KeyC", ctrlKey: true },
+      { key: "x", code: "KeyX", metaKey: true },
+      { key: "d", code: "KeyD", ctrlKey: true },
       { key: "Tab" },
     ] satisfies KeyboardEventInit[]) {
       const event = press(name, init);
       expect(event.defaultPrevented).toBe(false);
     }
+    const pasted = pasteOn(name, "{\"kind\":\"refraq.channel.fragment\"}");
+    expect(pasted.defaultPrevented).toBe(false);
 
     const settings = press(buttonNamed("Settings"), { key: "!", code: "Digit1", shiftKey: true });
     const dialog = press(buttonNamed("Dialog"), { key: "?", code: "Slash", shiftKey: true });
@@ -184,6 +202,45 @@ describe("useCanvasShortcuts", () => {
     expect(api.redo).not.toHaveBeenCalled();
     expect(api.selectAll).not.toHaveBeenCalled();
     expect(api.openPicker).not.toHaveBeenCalled();
+    expect(api.copy).not.toHaveBeenCalled();
+    expect(api.cut).not.toHaveBeenCalled();
+    expect(api.duplicate).not.toHaveBeenCalled();
+    expect(api.paste).not.toHaveBeenCalled();
+  });
+
+  it("copies even while locked, and ignores cut, duplicate, and paste until the graph can change", () => {
+    const api = handlers();
+    const view = render(createElement(Host, { api }));
+    const stage = buttonNamed("Stage");
+
+    const copy = press(stage, { key: "c", code: "KeyC", ctrlKey: true });
+    const cut = press(stage, { key: "x", code: "KeyX", metaKey: true });
+    const duplicate = press(stage, { key: "d", code: "KeyD", ctrlKey: true });
+    const pasted = pasteOn(stage, "{\"nodes\":[]}");
+
+    expect(copy.defaultPrevented).toBe(true);
+    expect(cut.defaultPrevented).toBe(true);
+    expect(duplicate.defaultPrevented).toBe(true);
+    expect(pasted.defaultPrevented).toBe(true);
+    expect(api.copy).toHaveBeenCalledTimes(1);
+    expect(api.cut).toHaveBeenCalledTimes(1);
+    expect(api.duplicate).toHaveBeenCalledTimes(1);
+    expect(api.paste).toHaveBeenCalledWith("{\"nodes\":[]}");
+
+    view.rerender(createElement(Host, { api: handlers({ ...api, mutable: false }) }));
+    const lockedCut = press(buttonNamed("Stage"), { key: "x", code: "KeyX", ctrlKey: true });
+    const lockedDuplicate = press(buttonNamed("Stage"), { key: "d", code: "KeyD", ctrlKey: true });
+    const lockedPaste = pasteOn(buttonNamed("Stage"), "{\"nodes\":[1]}");
+    const lockedCopy = press(buttonNamed("Stage"), { key: "c", code: "KeyC", metaKey: true });
+
+    expect(lockedCut.defaultPrevented).toBe(true);
+    expect(lockedDuplicate.defaultPrevented).toBe(true);
+    expect(lockedPaste.defaultPrevented).toBe(true);
+    expect(lockedCopy.defaultPrevented).toBe(true);
+    expect(api.cut).toHaveBeenCalledTimes(1);
+    expect(api.duplicate).toHaveBeenCalledTimes(1);
+    expect(api.paste).toHaveBeenCalledTimes(1);
+    expect(api.copy).toHaveBeenCalledTimes(2);
   });
 
   it("uses a 200ms viewport transition and skips it when motion is reduced", () => {

@@ -20,6 +20,10 @@ vi.mock("@refinedev/core", () => ({
         "channels.canvas.undo": "Undo",
         "channels.canvas.redo": "Redo",
         "channels.canvas.shortcuts.delete": "Delete selection",
+        "channels.canvas.copy": "Copy",
+        "channels.canvas.cut": "Cut",
+        "channels.canvas.paste": "Paste",
+        "channels.canvas.duplicate": "Duplicate",
         "channels.canvas.shortcuts.open": "Open settings",
         "channels.canvas.shortcuts.addNode": "Add a node",
         "channels.canvas.shortcuts.selectAdd": "Add or remove from the selection",
@@ -74,6 +78,10 @@ describe("CanvasShortcuts", () => {
       "undo",
       "redo",
       "delete",
+      "copy",
+      "cut",
+      "paste",
+      "duplicate",
       "open",
       "addNode",
       "close",
@@ -105,6 +113,10 @@ describe("CanvasShortcuts", () => {
     expect(dialog.textContent).toContain("Ctrl+Z");
     expect(dialog.textContent).toContain("Ctrl+Shift+Z");
     expect(dialog.textContent).toContain("Ctrl+Y");
+    expect(dialog.textContent).toContain("Ctrl+C");
+    expect(dialog.textContent).toContain("Ctrl+X");
+    expect(dialog.textContent).toContain("Ctrl+V");
+    expect(dialog.textContent).toContain("Ctrl+D");
     expect(dialog.textContent).toContain("Delete");
     expect(dialog.textContent).toContain("Backspace");
     expect(dialog.textContent).toContain("Enter");
@@ -126,6 +138,10 @@ describe("CanvasShortcuts", () => {
     expect(dialog.textContent).toContain("⌘Y");
     expect(dialog.textContent).toContain("⌘=");
     expect(dialog.textContent).toContain("⌘A");
+    expect(dialog.textContent).toContain("⌘C");
+    expect(dialog.textContent).toContain("⌘X");
+    expect(dialog.textContent).toContain("⌘V");
+    expect(dialog.textContent).toContain("⌘D");
     expect(dialog.textContent).toContain("⇧Click");
     expect(dialog.textContent).not.toContain("Ctrl+");
   });
@@ -154,6 +170,11 @@ describe("CanvasShortcuts", () => {
     expect(section).toMatch(/Shift\+click/);
     expect(section).toMatch(/Shift\+drag/);
     expect(section).toMatch(/Ctrl\+A or Cmd\+A/);
+    expect(section).toMatch(/Ctrl\+C or Cmd\+C/);
+    expect(section).toMatch(/Ctrl\+X or Cmd\+X/);
+    expect(section).toMatch(/Ctrl\+V or Cmd\+V/);
+    expect(section).toMatch(/Ctrl\+D or Cmd\+D/);
+    expect(section).toMatch(/right-click/i);
     expect(section).toMatch(/Arrow keys/);
     expect(section).toMatch(/8px/);
     expect(section).toMatch(/40px/);

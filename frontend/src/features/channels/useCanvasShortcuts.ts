@@ -18,6 +18,10 @@ export type CanvasShortcutHandlers = {
   openHelp: () => void;
   selectAll: () => void;
   openPicker: () => void;
+  copy: () => void;
+  cut: () => void;
+  duplicate: () => void;
+  paste: (text: string) => void;
 };
 
 type ShortcutCommand =
@@ -29,7 +33,10 @@ type ShortcutCommand =
   | "zoom100"
   | "help"
   | "selectAll"
-  | "openPicker";
+  | "openPicker"
+  | "copy"
+  | "cut"
+  | "duplicate";
 
 /** Viewport buttons and keys share this duration. Reduced motion snaps. */
 export function canvasViewportDuration(): number {
@@ -53,6 +60,10 @@ export function useCanvasShortcuts(handlers: CanvasShortcutHandlers): void {
       const current = handlersRef.current;
       if ((command === "undo" || command === "redo") && !current.mutable) return;
       if (command === "openPicker" && (!current.mutable || current.overlayOpen)) return;
+      if ((command === "cut" || command === "duplicate") && !current.mutable) {
+        event.preventDefault();
+        return;
+      }
       event.preventDefault();
       if (command === "undo") current.undo();
       else if (command === "redo") current.redo();
@@ -62,10 +73,25 @@ export function useCanvasShortcuts(handlers: CanvasShortcutHandlers): void {
       else if (command === "zoom100") current.zoomTo100();
       else if (command === "selectAll") current.selectAll();
       else if (command === "openPicker") current.openPicker();
+      else if (command === "copy") current.copy();
+      else if (command === "cut") current.cut();
+      else if (command === "duplicate") current.duplicate();
       else current.openHelp();
     };
+    const onPaste = (event: ClipboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (!canvasShortcutTarget(event.target)) return;
+      event.preventDefault();
+      if (!handlersRef.current.mutable) return;
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      handlersRef.current.paste(text);
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("paste", onPaste);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("paste", onPaste);
+    };
   }, []);
 }
 
@@ -87,6 +113,9 @@ function matchCanvasShortcut(event: KeyboardEvent): ShortcutCommand | null {
   if (mod && event.code === "KeyZ") return event.shiftKey ? "redo" : "undo";
   if (mod && !event.shiftKey && event.code === "KeyY") return "redo";
   if (mod && !event.shiftKey && !event.altKey && event.code === "KeyA") return "selectAll";
+  if (mod && !event.shiftKey && !event.altKey && event.code === "KeyC") return "copy";
+  if (mod && !event.shiftKey && !event.altKey && event.code === "KeyX") return "cut";
+  if (mod && !event.shiftKey && !event.altKey && event.code === "KeyD") return "duplicate";
   if (!mod && !event.altKey && !event.shiftKey && event.key === "Tab") return "openPicker";
   if (!mod && !event.altKey && event.shiftKey && event.code === "Digit1") return "fit";
   if (!mod && !event.altKey && event.key === "?") return "help";

@@ -26,7 +26,11 @@ import {
   IconCircleX,
   IconClock,
   IconCode,
+  IconClipboard,
+  IconCopy,
   IconCopyOff,
+  IconCopyPlus,
+  IconCut,
   IconLoader,
   IconDatabase,
   IconDeviceDesktop,
@@ -126,7 +130,11 @@ export const BoltIcon = withDefaults(IconBolt);
 export const BoxIcon = withDefaults(IconBox);
 export const CalendarTimeIcon = withDefaults(IconCalendarTime);
 export const CodeIcon = withDefaults(IconCode);
+export const CopyIcon = withDefaults(IconCopy);
 export const CopyOffIcon = withDefaults(IconCopyOff);
+export const CutIcon = withDefaults(IconCut);
+export const DuplicateIcon = withDefaults(IconCopyPlus);
+export const PasteIcon = withDefaults(IconClipboard);
 export const DatabaseIcon = withDefaults(IconDatabase);
 export const FilterIcon = withDefaults(IconFilter);
 export const FormsIcon = withDefaults(IconForms);

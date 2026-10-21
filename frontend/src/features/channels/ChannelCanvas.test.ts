@@ -55,6 +55,18 @@ const LABELS: Record<string, string> = {
   "channels.canvas.searchEmpty": "No matching nodes",
   "channels.canvas.addFromPort": "Add the next step from {{port}}",
   "channels.canvas.insertNode": "Insert node",
+  "channels.canvas.copy": "Copy",
+  "channels.canvas.cut": "Cut",
+  "channels.canvas.paste": "Paste",
+  "channels.canvas.duplicate": "Duplicate",
+  "channels.canvas.addHere": "Add a node here",
+  "channels.canvas.runToNode": "Run to this node",
+  "channels.canvas.skipTrigger":
+    "Skipped {{count}} trigger nodes: a channel can have only one trigger",
+  "channels.canvas.skipPermission": "Skipped {{count}} nodes that require {{permission}}",
+  "channels.canvas.skipUnknown": "Skipped {{count}} nodes that are not in the catalog",
+  "channels.canvas.clipboardFailed": "Could not write to the clipboard",
+  "channels.canvas.pasteShortcut": "Use Ctrl+V or Cmd+V to paste",
   "channels.canvas.family.trigger": "Trigger",
   "channels.canvas.family.read": "Read",
   "channels.canvas.family.transform": "Transform",
@@ -2922,6 +2934,420 @@ describe("node picker", () => {
     card.dispatchEvent(tab);
     expect(tab.defaultPrevented).toBe(false);
     expect(screen.queryByRole("textbox", { name: "Search nodes" })).toBeNull();
+  });
+});
+
+function installClipboard(readText = vi.fn().mockResolvedValue("")) {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText, readText },
+  });
+  return { writeText, readText };
+}
+
+function fragmentText(item: Graph["nodes"][number]): string {
+  return JSON.stringify({
+    kind: "refraq.channel.fragment",
+    version: 1,
+    nodes: [item],
+    edges: [],
+    notes: [],
+  });
+}
+
+function dispatchPaste(target: Element, text: string) {
+  const event = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clipboardData", {
+    value: { getData: () => text },
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
+function pressKey(target: Element, init: KeyboardEventInit) {
+  const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+  target.dispatchEvent(event);
+  return event;
+}
+
+const brought: Graph["nodes"][number] = {
+  id: "nd_foreign",
+  ref: "read_sql",
+  type: "read.sql",
+  name: "Load",
+  position: { x: 10, y: 20 },
+  config: { sql: "select 1" },
+  on_error: "stop",
+  retry: null,
+};
+
+function loadGraph(): Graph {
+  return {
+    ...EMPTY_GRAPH,
+    nodes: [placed("load", "read.sql", "Load", 40)],
+  };
+}
+
+describe("channel canvas clipboard and menus", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  it("writes the selection to the clipboard on Ctrl+C and leaves the graph alone", async () => {
+    const onChange = vi.fn();
+    const { writeText } = installClipboard();
+    await renderCanvas([], loadGraph(), { catalog: [READ_SPEC], onChange });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+
+    fireEvent.click(node);
+    const copied = pressKey(node, { key: "c", code: "KeyC", ctrlKey: true });
+
+    expect(copied.defaultPrevented).toBe(true);
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    const envelope = JSON.parse(String(writeText.mock.calls[0]?.[0])) as {
+      kind: string;
+      notes: unknown[];
+      nodes: { id: string }[];
+    };
+    expect(envelope.kind).toBe("refraq.channel.fragment");
+    expect(envelope.notes).toEqual([]);
+    expect(envelope.nodes.map((item) => item.id)).toEqual(["load"]);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("does not intercept Ctrl+C while focus is in a field", async () => {
+    const { writeText } = installClipboard();
+    await renderCanvas([], nodeGraph);
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    openSettings(node);
+    const name = screen.getByRole("textbox", { name: "Name" });
+
+    const copied = pressKey(name, { key: "c", code: "KeyC", ctrlKey: true });
+
+    expect(copied.defaultPrevented).toBe(false);
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("pastes from the paste event, selects the new node, and undoes it in one step", async () => {
+    const onChange = vi.fn();
+    const { readText } = installClipboard();
+    await renderCanvas([], loadGraph(), { catalog: [READ_SPEC], onChange });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+
+    dispatchPaste(node, fragmentText({ ...brought, name: "Brought", ref: "brought" }));
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    expect(saved.nodes.map((item) => item.id)).toContain("load");
+    const created = saved.nodes.find((item) => item.id !== "load");
+    expect(created?.name).toBe("Brought");
+    expect(created?.position).toEqual({ x: 50, y: 60 });
+    expect(created?.config).toEqual({ sql: "select 1" });
+    expect(saved.nodes.find((item) => item.id === "load")?.position).toEqual({ x: 40, y: 40 });
+    expect(document.querySelectorAll(".react-flow__node.selected")).toHaveLength(1);
+    expect(document.querySelector(".react-flow__node.selected")?.getAttribute("data-id")).toBe(
+      created?.id,
+    );
+    expect(readText).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => {
+      const restored = onChange.mock.calls.at(-1)?.[0] as Graph;
+      expect(restored.nodes.map((item) => item.id)).toEqual(["load"]);
+    });
+    expect((screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("duplicates the selection with Ctrl+D without using the clipboard", async () => {
+    const onChange = vi.fn();
+    const { writeText, readText } = installClipboard();
+    await renderCanvas([], loadGraph(), { catalog: [READ_SPEC], onChange });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+
+    fireEvent.click(node);
+    pressKey(node, { key: "d", code: "KeyD", ctrlKey: true });
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    const created = saved.nodes.find((item) => item.id !== "load");
+    expect(created?.name).toBe("Load 2");
+    expect(created?.ref).toBe("load_2");
+    expect(created?.position).toEqual({ x: 80, y: 80 });
+    expect(saved.nodes.find((item) => item.id === "load")?.position).toEqual({ x: 40, y: 40 });
+    expect(document.querySelector(".react-flow__node.selected")?.getAttribute("data-id")).toBe(
+      created?.id,
+    );
+    expect(writeText).not.toHaveBeenCalled();
+    expect(readText).not.toHaveBeenCalled();
+  });
+
+  it("cuts the selection and restores it in one undo", async () => {
+    const onChange = vi.fn();
+    const { writeText } = installClipboard();
+    await renderCanvas([], loadGraph(), { catalog: [READ_SPEC], onChange });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+
+    fireEvent.click(node);
+    pressKey(node, { key: "x", code: "KeyX", ctrlKey: true });
+
+    await waitFor(() => expect(document.querySelector(".react-flow__node")).toBeNull());
+    const envelope = JSON.parse(String(writeText.mock.calls[0]?.[0])) as {
+      nodes: { id: string }[];
+    };
+    expect(envelope.nodes.map((item) => item.id)).toEqual(["load"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => {
+      const restored = onChange.mock.calls.at(-1)?.[0] as Graph;
+      expect(restored.nodes.map((item) => item.id)).toEqual(["load"]);
+    });
+  });
+
+  it("leaves the graph unchanged for cut, paste, and duplicate while a run lock is held", async () => {
+    const onChange = vi.fn();
+    const { writeText } = installClipboard();
+    await renderCanvas([], loadGraph(), { catalog: [READ_SPEC], mutable: false, onChange });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+
+    fireEvent.click(node);
+    pressKey(node, { key: "x", code: "KeyX", ctrlKey: true });
+    pressKey(node, { key: "d", code: "KeyD", ctrlKey: true });
+    dispatchPaste(node, fragmentText(brought));
+    pressKey(node, { key: "c", code: "KeyC", ctrlKey: true });
+
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(onChange).not.toHaveBeenCalled();
+    expect(document.querySelectorAll(".react-flow__node")).toHaveLength(1);
+  });
+
+  it("explains a skipped trigger inside the canvas", async () => {
+    const onChange = vi.fn();
+    installClipboard();
+    await renderCanvas([], nodeGraph, { onChange });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+
+    dispatchPaste(
+      node,
+      fragmentText({
+        ...nodeGraph.nodes[0]!,
+        id: "nd_other",
+        ref: "manual_2",
+        name: "Other",
+      }),
+    );
+
+    const note = await screen.findByText(
+      "Skipped 1 trigger nodes: a channel can have only one trigger",
+    );
+    expect(note.getAttribute("aria-live")).toBe("polite");
+    expect(note.className).toContain("channel-canvas-clipboard-note");
+    expect(onChange).not.toHaveBeenCalled();
+    expect(document.querySelectorAll(".react-flow__node")).toHaveLength(1);
+  });
+
+  it("duplicates the selected node from its toolbar", async () => {
+    const onChange = vi.fn();
+    await renderCanvas([], loadGraph(), { catalog: [READ_SPEC], onChange });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate" }));
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    expect(saved.nodes.map((item) => item.name).sort()).toEqual(["Load", "Load 2"]);
+    expect(saved.nodes.find((item) => item.id === "load")?.position).toEqual({ x: 40, y: 40 });
+  });
+
+  it("opens a node menu that selects the node and runs its actions", async () => {
+    const onRun = vi.fn();
+    const { writeText } = installClipboard();
+    await renderCanvas([], loadGraph(), { catalog: [READ_SPEC], onRun });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+
+    fireEvent.contextMenu(node);
+    expect(node.classList.contains("selected")).toBe(true);
+    expect(await screen.findByRole("menuitem", { name: /Settings/ })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: /Run to this node/ })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: /Duplicate/ })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: /Copy/ }).textContent).toContain("Ctrl+C");
+    expect(screen.getByRole("menuitem", { name: /Cut/ })).toBeTruthy();
+    const remove = screen.getByRole("menuitem", { name: /Delete/ });
+    expect(remove.className).toContain("channel-canvas-menu__danger");
+
+    fireEvent.click(screen.getByRole("menuitem", { name: /Settings/ }));
+    expect(document.querySelector(".channel-node-config")).not.toBeNull();
+
+    fireEvent.contextMenu(node);
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Run to this node/ }));
+    expect(onRun).toHaveBeenCalledWith("load");
+
+    fireEvent.contextMenu(node);
+    fireEvent.click(await screen.findByRole("menuitem", { name: /^Copy/ }));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+  });
+
+  it("closes the menu on Escape and keeps the selection", async () => {
+    await renderCanvas([], loadGraph(), { catalog: [READ_SPEC] });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+
+    fireEvent.contextMenu(node);
+    expect(await screen.findByRole("menuitem", { name: /Copy/ })).toBeTruthy();
+    expect(node.classList.contains("selected")).toBe(true);
+
+    fireEvent.keyDown(node, { key: "Escape" });
+
+    await waitFor(() => expect(screen.queryByRole("menuitem", { name: /Copy/ })).toBeNull());
+    expect(node.classList.contains("selected")).toBe(true);
+  });
+
+  it("shows the multi-selection menu without settings", async () => {
+    await renderCanvas(
+      [],
+      {
+        ...EMPTY_GRAPH,
+        nodes: [placed("load", "read.sql", "Load", 40), placed("next", "read.sql", "Next", 280)],
+      },
+      { catalog: [READ_SPEC] },
+    );
+    const node = (id: string) => {
+      const found = document.querySelector(`.react-flow__node[data-id="${id}"]`);
+      if (!(found instanceof HTMLElement)) throw new Error(`missing ${id}`);
+      return found;
+    };
+    fireEvent.click(node("load"));
+    fireEvent.keyDown(window, { key: "Shift", code: "ShiftLeft" });
+    fireEvent.click(node("next"), { shiftKey: true });
+
+    fireEvent.contextMenu(node("next"));
+
+    expect(await screen.findByRole("menuitem", { name: /Duplicate/ })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: /Copy/ })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: /Cut/ })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: /Delete/ })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /Settings/ })).toBeNull();
+  });
+
+  it("inserts from an edge menu without deleting the edge, and deletes from that menu", async () => {
+    const onChange = vi.fn();
+    const sqlSpec = { ...READ_SPEC, label: "SQL", summary: "Query rows" };
+    await renderCanvas(
+      [],
+      {
+        ...EMPTY_GRAPH,
+        nodes: [placed("left", "read.sql", "Left", 20), placed("right", "read.sql", "Right", 300)],
+        edges: [
+          {
+            id: "ed_link",
+            source: { node_id: "left", port: "main" },
+            target: { node_id: "right", port: "main" },
+          },
+        ],
+      },
+      { catalog: [sqlSpec], onChange },
+    );
+    const edge = await screen.findByRole("group", { name: "Main to Main" });
+
+    fireEvent.contextMenu(edge);
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Insert node/ }));
+
+    expect(screen.getByRole("textbox", { name: "Search nodes" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /SQL/ })).toBeTruthy();
+    expect(document.querySelector(".react-flow__edge")).not.toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Search nodes" }), { key: "Escape" });
+    fireEvent.contextMenu(edge);
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Delete/ }));
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    expect(saved.edges).toEqual([]);
+  });
+
+  it("adds, pastes, and fits from the empty-canvas menu", async () => {
+    const onChange = vi.fn();
+    const readText = vi.fn().mockResolvedValue(
+      fragmentText({ ...brought, name: "Brought", ref: "brought" }),
+    );
+    installClipboard(readText);
+    await renderCanvas([], EMPTY_GRAPH, { catalog: [READ_SPEC], onChange });
+    const pane = document.querySelector(".react-flow__pane");
+    if (!(pane instanceof HTMLElement)) throw new Error("missing pane");
+
+    fireEvent.contextMenu(pane);
+    expect(await screen.findByRole("menuitem", { name: /Fit view/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Add a node here/ }));
+    expect(screen.getByRole("option", { name: /read\.sql/ })).toBeTruthy();
+
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Search nodes" }), { key: "Escape" });
+    fireEvent.contextMenu(pane);
+    const paste = await screen.findByRole("menuitem", { name: /Paste/ });
+    await waitFor(() => expect((paste as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(paste);
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(readText).toHaveBeenCalled();
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    expect(saved.nodes.map((item) => item.name)).toEqual(["Brought"]);
+  });
+
+  it("disables pane paste and tells the user to use the shortcut when the clipboard cannot be read", async () => {
+    const readText = vi.fn().mockRejectedValue(new Error("denied"));
+    installClipboard(readText);
+    await renderCanvas([], EMPTY_GRAPH);
+    const pane = document.querySelector(".react-flow__pane");
+    if (!(pane instanceof HTMLElement)) throw new Error("missing pane");
+
+    fireEvent.contextMenu(pane);
+
+    expect(await screen.findByText("Use Ctrl+V or Cmd+V to paste")).toBeTruthy();
+    const paste = screen.getByRole("menuitem", { name: /Paste/ });
+    expect((paste as HTMLButtonElement).disabled || paste.getAttribute("aria-disabled")).toBeTruthy();
+  });
+
+  it("keeps only settings, copy, and fit view while browsing", async () => {
+    await renderCanvas([], loadGraph(), { appearance: "browse", mutable: false, catalog: [READ_SPEC] });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+
+    fireEvent.contextMenu(node);
+    expect(await screen.findByRole("menuitem", { name: /Settings/ })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: /Copy/ })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /Duplicate/ })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /Cut/ })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /Delete/ })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /Run to this node/ })).toBeNull();
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    const pane = document.querySelector(".react-flow__pane");
+    if (!(pane instanceof HTMLElement)) throw new Error("missing pane");
+    fireEvent.contextMenu(pane);
+    expect(await screen.findByRole("menuitem", { name: /Fit view/ })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /Add a node here/ })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /Paste/ })).toBeNull();
+  });
+
+  it("hides graph-changing menu items while a run lock is held", async () => {
+    await renderCanvas([], loadGraph(), { mutable: false, catalog: [READ_SPEC] });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+
+    fireEvent.contextMenu(node);
+    expect(await screen.findByRole("menuitem", { name: /Settings/ })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: /Copy/ })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: /Run to this node/ })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /Duplicate/ })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /Cut/ })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /Delete/ })).toBeNull();
   });
 });
 

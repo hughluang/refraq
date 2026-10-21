@@ -74,6 +74,10 @@ export function CanvasToolbar({
   onUndo,
   onRedo,
   onSelectAll,
+  onCopy,
+  onCut,
+  onDuplicate,
+  onPaste,
   catalog,
   problems,
   problemGraph,
@@ -94,6 +98,10 @@ export function CanvasToolbar({
   onUndo: () => void;
   onRedo: () => void;
   onSelectAll: () => void;
+  onCopy: () => void;
+  onCut: () => void;
+  onDuplicate: () => void;
+  onPaste: (text: string) => void;
   catalog: readonly NodeTypeSpec[];
   problems: readonly GraphProblem[];
   problemGraph: ProblemGraph;
@@ -132,6 +140,10 @@ export function CanvasToolbar({
     openHelp: () => setHelpOpen(true),
     selectAll: onSelectAll,
     openPicker: onAdd,
+    copy: onCopy,
+    cut: onCut,
+    duplicate: onDuplicate,
+    paste: onPaste,
     overlayOpen: overlayOpen || helpOpen,
   });
 

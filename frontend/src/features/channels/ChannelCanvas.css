@@ -14,11 +14,25 @@
   --channel-canvas-controls-clearance: calc(15px + 1.375rem * var(--mantine-scale) + var(--mantine-spacing-sm));
 }
 
-.channel-canvas-connect-note {
+.channel-canvas-connect-note,
+.channel-canvas-clipboard-note {
   position: absolute;
   z-index: 6;
-  max-width: 16rem;
   pointer-events: none;
+}
+
+.channel-canvas-connect-note {
+  max-width: 16rem;
+}
+
+.channel-canvas-clipboard-note {
+  top: var(--mantine-spacing-md);
+  left: var(--mantine-spacing-md);
+  max-width: 24rem;
+}
+
+.channel-canvas-menu__danger {
+  --menu-item-color: var(--refraq-tone-danger);
 }
 
 .channel-canvas-empty {
@@ -395,6 +409,7 @@
 
 .channel-flow-node__settings:focus-visible,
 .channel-flow-node__run:focus-visible,
+.channel-flow-node__duplicate:focus-visible,
 .channel-flow-node__delete:focus-visible,
 .channel-flow-edge__delete:focus-visible,
 .channel-flow-edge__insert:focus-visible,
