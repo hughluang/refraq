@@ -27,12 +27,18 @@ class FakeResolver:
         self.heads = heads or {}
         self.channels = channels or set()
         self.sources = sources or set()
+        self.triggers: dict[str, str] = {}
 
     def entity_head(self, entity_id: str) -> ResolvedEntity | None:
         return self.heads.get(entity_id)
 
     def channel_exists(self, channel_id: str) -> bool:
         return channel_id in self.channels
+
+    def published_trigger_type(self, channel_id: str) -> str | None:
+        if channel_id not in self.channels:
+            return None
+        return self.triggers.get(channel_id, "trigger.error")
 
     def source_exists(self, source_id: str) -> bool:
         return source_id in self.sources
@@ -665,6 +671,29 @@ def test_refine_upstream_names_only_ancestors_with_ref() -> None:
     )
     refine_ports(graph, FakeResolver(), [*list_node_types(), sink])
     assert seen["keys"] == {"named"}
+
+
+def test_continue_and_retry_validate() -> None:
+    node = _node("nd_trigger", "trigger.manual", "Run")
+    node["on_error"] = "continue"
+    node["retry"] = {"max_tries": 2, "wait_sec": 0}
+    assert _codes(_graph([node])) == set()
+
+
+def test_error_output_requires_an_error_port() -> None:
+    node = _node("nd_trigger", "trigger.manual", "Run")
+    node["on_error"] = "error_output"
+    assert _codes(_graph([node])) == {"CHANNEL_NODE_POLICY_UNSUPPORTED"}
+
+
+def test_error_channel_must_use_the_error_trigger() -> None:
+    graph = _graph(
+        [_node("nd_trigger", "trigger.manual", "Run")],
+        error_channel_id="chn_other",
+    )
+    resolver = FakeResolver(channels={"chn_other"})
+    resolver.triggers["chn_other"] = "trigger.manual"
+    assert _codes(graph, resolver) == {"CHANNEL_ERROR_TRIGGER_REQUIRED"}
 
 
 def test_error_channel_must_resolve() -> None:

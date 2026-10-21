@@ -130,6 +130,16 @@ export function publishChannel(id: string, draftRevision: number) {
   );
 }
 
+export function getVersion(id: string, number: number) {
+  return apiClient<{ version: ChannelVersion }>(`/channels/${id}/versions/${number}`);
+}
+
+export function rerunRun(id: string, jobId: string) {
+  return apiClient<{ run: ChannelRun }>(`/channels/${id}/runs/${jobId}/rerun`, {
+    method: "POST",
+  });
+}
+
 export function startRun(
   id: string,
   body: {

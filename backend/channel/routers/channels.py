@@ -58,6 +58,7 @@ from backend.channel.service import (
     save_draft,
     validate_draft,
 )
+from backend.channel.recovery import PERSISTENT_FAILURE_STREAK
 from backend.channel.store import ChannelRecord, ChannelVersionRecord
 from backend.core.pagination import PageBounds, PageParams, page_params
 
@@ -82,6 +83,8 @@ def _channel_out(
         draft_revision=record.draft_revision,
         draft_updated_at=record.draft_updated_at,
         latest_version=latest_out,
+        failure_streak=record.failure_streak,
+        persistently_failing=record.failure_streak >= PERSISTENT_FAILURE_STREAK,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )

@@ -323,6 +323,7 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
     assert catalog.status_code == 200, catalog.text
     items = catalog.json()["items"]
     assert [item["type"] for item in items] == [
+        "trigger.error",
         "trigger.manual",
         "trigger.scheduled",
         "read.source_query",
@@ -336,16 +337,21 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
         "volume.for",
         "state.variable",
         "write.entity",
+        "action.webhook",
     ]
-    assert items[0]["trigger"] is True
-    assert items[0]["label"] == "Manual trigger"
-    assert items[0]["summary"]
-    assert items[0]["description"]
-    assert items[0]["inputs"] == []
-    assert items[0]["outputs"][0]["port"] == "main"
-    assert items[0]["outputs"][0]["coarse_type"] == "object"
-    assert items[0]["outputs"][0]["description"]
-    assert items[0]["type_version"] == 1
+    manual = next(item for item in items if item["type"] == "trigger.manual")
+    assert manual["trigger"] is True
+    assert manual["label"] == "Manual trigger"
+    assert manual["summary"]
+    assert manual["description"]
+    assert manual["inputs"] == []
+    assert manual["outputs"][0]["port"] == "main"
+    assert manual["outputs"][0]["coarse_type"] == "object"
+    assert manual["outputs"][0]["description"]
+    assert manual["type_version"] == 1
+    error_trigger = next(item for item in items if item["type"] == "trigger.error")
+    assert error_trigger["trigger"] is True
+    assert error_trigger["config_schema"]["properties"] == {}
     by_type = {item["type"]: item for item in items}
     assert by_type["transform.code"]["permission"] == "channel:code_write"
     assert by_type["read.source_query"]["permission"] == "channel:source_query"
@@ -718,3 +724,52 @@ def test_test_run_creates_run_state(client: TestClient) -> None:
     assert after[1] == before[1] + 1
     assert after[2] == before[2] + 1
     assert after[3] == before[3] + 1
+
+
+def test_rerun_pins_a_failed_published_version(client: TestClient) -> None:
+    from backend.channel.channel_run import set_dispatcher
+    from backend.jobs.store import mark_failed
+
+    previous = set_dispatcher(lambda _job_id: None)
+    try:
+        created = client.post("/channels", json={"name": "Rerun", "description": None})
+        assert created.status_code == 201, created.text
+        assert created.json()["channel"]["failure_streak"] == 0
+        assert created.json()["channel"]["persistently_failing"] is False
+        channel_id = created.json()["channel"]["id"]
+        saved = client.put(
+            f"/channels/{channel_id}/draft",
+            json={"base_revision": 1, "graph": TRIGGER_GRAPH},
+        )
+        assert saved.status_code == 200, saved.text
+        published = client.post(
+            f"/channels/{channel_id}/publish",
+            json={"draft_revision": saved.json()["draft_revision"]},
+        )
+        assert published.status_code == 201, published.text
+        started = client.post(f"/channels/{channel_id}/runs", json={"target": "published"})
+        assert started.status_code == 202, started.text
+        job_id = started.json()["run"]["job_id"]
+        assert mark_failed(job_id, error_code="CHANNEL_NODE_FAILED", error_summary="failed")
+        rerun = client.post(f"/channels/{channel_id}/runs/{job_id}/rerun")
+        assert rerun.status_code == 202, rerun.text
+        body = rerun.json()["run"]
+        assert body["job_id"] != job_id
+        assert body["target"] == "published"
+        assert body["version"] == 1
+        assert body["trigger_kind"] == "user"
+        queued = get_job_store().get(body["job_id"])
+        assert queued is not None
+        assert queued.input["pin_version"] is True
+        assert queued.input["version"] == 1
+        assert "retry_of_job_id" not in queued.input
+        events, _cursor = get_audit_store().list_events(limit=50, cursor=None)
+        assert any(event.action == "channel.rerun_enqueue" for event in events)
+        draft = client.post(f"/channels/{channel_id}/runs", json={"target": "draft"})
+        assert draft.status_code == 202, draft.text
+        draft_id = draft.json()["run"]["job_id"]
+        assert mark_failed(draft_id, error_code="CHANNEL_NODE_FAILED", error_summary="failed")
+        refused = client.post(f"/channels/{channel_id}/runs/{draft_id}/rerun")
+        assert_problem(refused, status=422, code="CHANNEL_RUN_NOT_RERUNNABLE")
+    finally:
+        set_dispatcher(previous)

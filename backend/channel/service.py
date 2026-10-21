@@ -381,7 +381,8 @@ def _runs_to_cancel(channel_id: str) -> list[dict[str, Any]]:
     jobs, _total = get_job_store().list(kind="channel_run", status="running")
     items: list[dict[str, Any]] = []
     for job in jobs:
-        if (job.input or {}).get("channel_id") != channel_id:
+        payload = job.input or {}
+        if payload.get("channel_id") != channel_id or payload.get("pin_version"):
             continue
         run = get_run_store().get_run(job.id)
         if run is None or run.target != "published":

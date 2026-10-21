@@ -15,7 +15,7 @@ from backend.channel.run_store import (
     output_page,
     output_preview_with_truncated,
 )
-from backend.channel.runs import start_run
+from backend.channel.runs import rerun_failed, start_run
 from backend.channel.schemas.channels import GraphIn
 from backend.channel.template_preview import preview_template
 from backend.core.pagination import PageParams, page_params
@@ -101,6 +101,30 @@ def http_start_run(
     if stored is None:
         raise ChannelRunNotFound()
     return {"run": _present(job, stored)}
+
+
+@router.post(
+    "/channels/{channel_id}/runs/{job_id}/rerun",
+    status_code=202,
+    response_model=ChannelRunStartResponse,
+)
+def http_rerun(
+    channel_id: str,
+    job_id: str,
+    actor: UserRecord = Depends(require_permission("channel:write")),
+    actor_token_id: str | None = Depends(get_actor_token_id),
+) -> Any:
+    job, _record = rerun_failed(
+        channel_id=channel_id,
+        job_id=job_id,
+        actor=actor,
+        actor_token_id=actor_token_id,
+    )
+    stored = get_run_store().get_run(job.id)
+    current = get_job_store().get(job.id)
+    if stored is None or current is None:
+        raise ChannelRunNotFound()
+    return {"run": _present(current, stored)}
 
 
 @router.get("/channels/{channel_id}/runs", response_model=ChannelRunListResponse)

@@ -225,12 +225,9 @@ class _Run:
     ) -> RunOutcome | None:
         if node_id in self.loop_out:
             return self._run_loop(node_id, direct, done, stack)
-        seq, result = self._start(node_id)
-        node = self.nodes[node_id]
-        self.hooks.on_finish(seq, node, result)
-        failed = self._failure(node_id, result)
-        if failed is not None:
-            return failed
+        outcome, result = self._finish_tries(node_id)
+        if outcome is not None:
+            return outcome
         self._note(node_id, result)
         self._settle(node_id, result, set())
         self._push(node_id, direct, done, stack)
@@ -243,12 +240,20 @@ class _Run:
         done: set[str],
         stack: list[str],
     ) -> RunOutcome | None:
-        seq, result = self._start(node_id)
+        stopped, seq, result = self._tries(node_id)
+        if stopped is not None:
+            return stopped
         node = self.nodes[node_id]
         loop_port = self.loop_out[node_id]
         if result.status == "failed":
+            outcome = self._policy(node_id, result)
             self.hooks.on_finish(seq, node, result)
-            return self._failure(node_id, result)
+            if outcome is not None:
+                return outcome
+            self._note(node_id, result)
+            self._settle(node_id, result, {loop_port})
+            self._push(node_id, direct, done, stack)
+            return None
         if result.status != "succeeded":
             self.hooks.on_finish(seq, node, result)
             self._note(node_id, result)
@@ -318,6 +323,74 @@ class _Run:
         drop = getattr(self.hooks, "drop_outputs", None)
         if callable(drop) and refs:
             drop(refs)
+
+    def _finish_tries(self, node_id: str) -> tuple[RunOutcome | None, NodeResult]:
+        stopped, seq, result = self._tries(node_id)
+        if stopped is not None:
+            return stopped, result
+        outcome = self._policy(node_id, result)
+        self.hooks.on_finish(seq, self.nodes[node_id], result)
+        if outcome is not None:
+            return outcome, result
+        return None, result
+
+    def _tries(self, node_id: str) -> tuple[RunOutcome | None, int, NodeResult]:
+        node = self.nodes[node_id]
+        tries, wait = _retry_budget(node)
+        stopped = self._stopped(node_id)
+        if stopped is not None:
+            return (
+                stopped,
+                0,
+                NodeResult(
+                    status="failed",
+                    error_code="CHANNEL_NODE_FAILED",
+                    error_message="Node did not execute",
+                ),
+            )
+        seq, result = self._start(node_id)
+        attempt = 1
+        while result.status == "failed" and attempt < tries:
+            self.hooks.on_finish(seq, node, result)
+            stopped = self._pause(node_id, wait)
+            if stopped is not None:
+                return stopped, seq, result
+            stopped = self._stopped(node_id)
+            if stopped is not None:
+                return stopped, seq, result
+            seq, result = self._start(node_id)
+            attempt += 1
+        return None, seq, result
+
+    def _pause(self, node_id: str, wait_sec: int) -> RunOutcome | None:
+        stopped = self._stopped(node_id)
+        if stopped is not None or wait_sec <= 0:
+            return stopped
+        deadline = time.monotonic() + wait_sec
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            time.sleep(min(0.05, remaining))
+            stopped = self._stopped(node_id)
+            if stopped is not None:
+                return stopped
+        return None
+
+    def _policy(self, node_id: str, result: NodeResult) -> RunOutcome | None:
+        if result.status != "failed":
+            return None
+        policy = self.nodes[node_id].get("on_error") or "stop"
+        if policy == "continue":
+            result.output = None
+            return None
+        if policy == "error_output" and _declares_error(self.by_type.get(str(self.nodes[node_id]["type"]))):
+            result.output = {
+                "code": result.error_code or "CHANNEL_NODE_FAILED",
+                "message": result.error_message,
+                "detail": result.error_detail,
+            }
+            result.ports = frozenset({"error"})
+            return None
+        return self._failure(node_id, result)
 
     def _start(self, node_id: str) -> tuple[int, NodeResult]:
         node = self.nodes[node_id]
@@ -488,6 +561,25 @@ def _reachable(start: str, children: dict[str, list[str]]) -> set[str]:
                 seen.add(child)
                 stack.append(child)
     return seen
+
+
+def _retry_budget(node: Mapping[str, Any]) -> tuple[int, int]:
+    retry = node.get("retry")
+    if not isinstance(retry, dict):
+        return 1, 0
+    tries = retry.get("max_tries")
+    wait = retry.get("wait_sec")
+    if not isinstance(tries, int) or isinstance(tries, bool) or tries < 1:
+        tries = 1
+    if not isinstance(wait, int) or isinstance(wait, bool) or wait < 0:
+        wait = 0
+    return tries, wait
+
+
+def _declares_error(spec: NodeType | None) -> bool:
+    if spec is None:
+        return False
+    return any(port.port == "error" for port in spec.outputs)
 
 
 def _position(node: Mapping[str, Any]) -> tuple[float, float]:

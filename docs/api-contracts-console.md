@@ -246,3 +246,4 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
 | `settings` | `settings` | `settings` | `/console/settings` | `settings:read` | edit → `settings:write` |
 | `branding` | `settings` | `palette` | `/console/branding` | `branding:read` | edit → `branding:write` |
 | `model-services` | `settings` | `brain` | `/console/model-services` | `model_services:read` | create/edit/delete → `model_services:write` |
+| `webhooks` | `settings` | `webhook` | `/console/webhooks` | `webhook:read` | create/edit/delete/test → `webhook:write`; create `/console/webhooks/new`; edit `/console/webhooks/:id/edit`; show `/console/webhooks/:id` → `webhook:read` |

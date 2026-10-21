@@ -17,8 +17,10 @@ from backend.channel.nodes.transform.deduplicate import NODE_TYPE as DEDUPLICATE
 from backend.channel.nodes.transform.filter import NODE_TYPE as FILTER
 from backend.channel.nodes.transform.merge import NODE_TYPE as MERGE
 from backend.channel.nodes.transform.set_fields import NODE_TYPE as SET_FIELDS
+from backend.channel.nodes.trigger.error import NODE_TYPE as TRIGGER_ERROR
 from backend.channel.nodes.trigger.manual import NODE_TYPE as TRIGGER_MANUAL
 from backend.channel.nodes.trigger.scheduled import NODE_TYPE as TRIGGER_SCHEDULED
+from backend.channel.nodes.action.webhook import NODE_TYPE as ACTION_WEBHOOK
 from backend.channel.nodes.write.entity import NODE_TYPE as WRITE_ENTITY
 
 # `if` and `for` are keywords, so those modules load by name.
@@ -36,9 +38,11 @@ _FAMILY_ORDER = {
     "volume": 3,
     "state": 4,
     "write": 5,
+    "action": 6,
 }
 
 _CATALOG: tuple[NodeType, ...] = (
+    TRIGGER_ERROR,
     TRIGGER_MANUAL,
     TRIGGER_SCHEDULED,
     READ_SQL,
@@ -52,6 +56,7 @@ _CATALOG: tuple[NodeType, ...] = (
     _FOR,
     STATE_VARIABLE,
     WRITE_ENTITY,
+    ACTION_WEBHOOK,
 )
 
 

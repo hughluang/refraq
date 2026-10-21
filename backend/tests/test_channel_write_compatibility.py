@@ -141,6 +141,10 @@ class _Resolver:
         del channel_id
         return False
 
+    def published_trigger_type(self, channel_id: str) -> str | None:
+        del channel_id
+        return None
+
     def source_exists(self, source_id: str) -> bool:
         del source_id
         return False

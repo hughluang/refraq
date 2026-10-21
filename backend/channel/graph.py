@@ -68,7 +68,7 @@ def validate(
     problems: list[Problem] = []
     problems.extend(_name_problems(nodes))
     problems.extend(_ref_problems(nodes))
-    problems.extend(_policy_problems(nodes))
+    problems.extend(_policy_problems(nodes, by_type))
     problems.extend(_type_and_config_problems(nodes, by_type))
     problems.extend(_configuration_problems(nodes, by_type, resolver))
     problems.extend(_expression_problems(nodes, edges, by_id, by_type, resolver))
@@ -134,17 +134,24 @@ def _ref_problems(nodes: list[dict[str, Any]]) -> list[Problem]:
     return problems
 
 
-def _policy_problems(nodes: list[dict[str, Any]]) -> list[Problem]:
+def _policy_problems(
+    nodes: list[dict[str, Any]],
+    by_type: dict[str, NodeType],
+) -> list[Problem]:
     problems: list[Problem] = []
     for node in nodes:
-        if node.get("on_error", "stop") != "stop" or node.get("retry") is not None:
-            problems.append(
-                Problem(
-                    "CHANNEL_NODE_POLICY_UNSUPPORTED",
-                    "Only on_error stop with no retry is supported",
-                    node_id=str(node["id"]),
-                )
+        if node.get("on_error", "stop") != "error_output":
+            continue
+        spec = by_type.get(str(node.get("type")))
+        if spec is not None and any(port.port == "error" for port in spec.outputs):
+            continue
+        problems.append(
+            Problem(
+                "CHANNEL_NODE_POLICY_UNSUPPORTED",
+                "on_error error_output requires an error output",
+                node_id=str(node["id"]),
             )
+        )
     return problems
 
 
@@ -710,12 +717,19 @@ def _settings_problems(
     channel_id = settings.get("error_channel_id")
     if not isinstance(channel_id, str):
         return []
-    if resolver.channel_exists(channel_id):
+    if not resolver.channel_exists(channel_id):
+        return [
+            Problem(
+                "CHANNEL_REFERENCE_UNRESOLVED",
+                f"Data Channel does not resolve: {channel_id}",
+            )
+        ]
+    if resolver.published_trigger_type(channel_id) == "trigger.error":
         return []
     return [
         Problem(
-            "CHANNEL_REFERENCE_UNRESOLVED",
-            f"Data Channel does not resolve: {channel_id}",
+            "CHANNEL_ERROR_TRIGGER_REQUIRED",
+            "Error workflow must use trigger.error",
         )
     ]
 

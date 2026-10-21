@@ -82,6 +82,7 @@ from backend.entity.routers.entities import router as entities_router
 from backend.channel.routers.channels import router as channels_router
 from backend.channel.routers.runs import router as channel_runs_router
 from backend.channel.routers.variables import router as channel_variables_router
+from backend.channel.routers.webhooks import router as webhooks_router
 from backend.channel.write_targets import incompatible_writers
 from backend.entity.publish_confirmation import bind_write_target_port
 from backend.metadata.catalog_embed_jobs.schedule import ensure_catalog_embed_schedule
@@ -247,6 +248,7 @@ app.include_router(dictionaries_router)
 app.include_router(channels_router)
 app.include_router(channel_runs_router)
 app.include_router(channel_variables_router)
+app.include_router(webhooks_router)
 app.include_router(jobs_mechanism_router)
 app.include_router(schedules_mechanism_router)
 

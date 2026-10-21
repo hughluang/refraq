@@ -16,6 +16,10 @@ class _Resolver:
     def channel_exists(self, channel_id: str) -> bool:
         return False
 
+    def published_trigger_type(self, channel_id: str) -> str | None:
+        del channel_id
+        return None
+
     def source_exists(self, source_id: str) -> bool:
         return False
 
@@ -531,3 +535,131 @@ def test_output_check_uses_the_upstream_refined_schema() -> None:
 
     matched = execute(graph, "src", catalog({"n": 1}), _RESOLVER, FakeHooks())
     assert matched.status == "succeeded"
+
+
+def _error_type(run: Callable[..., NodeResult]) -> NodeType:
+    return NodeType(
+        type_id="fake",
+        family="test",
+        label="fake",
+        summary="Test node.",
+        description="Test node. Used only by the engine suite.",
+        trigger=False,
+        inputs=(PortSpec("main", "Input."),),
+        outputs=(PortSpec("main", "Output."), PortSpec("error", "Error.")),
+        config_schema={"type": "object"},
+        execute=run,
+    )
+
+
+def test_continue_keeps_the_main_branch_and_the_run() -> None:
+    def fail(node: dict, hooks: EngineHooks) -> NodeResult:
+        if node["id"] == "b":
+            return NodeResult(status="failed", error_code="CHANNEL_NODE_FAILED", error_message="bad")
+        return _ok(node, hooks)
+
+    broken = _node("b", 1)
+    broken["on_error"] = "continue"
+    graph = {
+        "nodes": [_node("a", 0), broken, _node("c", 2)],
+        "edges": [_edge("a", "b"), _edge("b", "c")],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(graph, "a", _catalog({"fake": fail}), _RESOLVER, hooks)
+    assert outcome.status == "succeeded"
+    assert outcome.failed_node_id is None
+    assert hooks.order == ["a", "b", "c"]
+    assert hooks.outputs["b"] is None
+    assert hooks.statuses == [("a", "succeeded"), ("b", "failed"), ("c", "succeeded")]
+
+
+def test_error_output_is_the_only_live_branch() -> None:
+    def fail(node: dict, hooks: EngineHooks) -> NodeResult:
+        if node["id"] == "b":
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_NODE_FAILED",
+                error_message="bad",
+                error_detail={"row": 1},
+            )
+        return _ok(node, hooks)
+
+    broken = _node("b", 1)
+    broken["on_error"] = "error_output"
+    graph = {
+        "nodes": [_node("a", 0), broken, _node("c", 2), _node("d", 3)],
+        "edges": [
+            _edge("a", "b"),
+            _edge("b", "c", "error"),
+            _edge("b", "d", "main"),
+        ],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(graph, "a", [_error_type(fail)], _RESOLVER, hooks)
+    assert outcome.status == "succeeded"
+    assert outcome.failed_node_id is None
+    assert hooks.order == ["a", "b", "c"]
+    assert hooks.outputs["b"] == {
+        "code": "CHANNEL_NODE_FAILED",
+        "message": "bad",
+        "detail": {"row": 1},
+    }
+
+
+def test_retry_runs_again_until_success() -> None:
+    calls = {"b": 0}
+
+    def flaky(node: dict, hooks: EngineHooks) -> NodeResult:
+        if node["id"] != "b":
+            return _ok(node, hooks)
+        calls["b"] += 1
+        if calls["b"] < 3:
+            return NodeResult(status="failed", error_code="CHANNEL_NODE_FAILED", error_message="later")
+        return _ok(node, hooks)
+
+    retried = _node("b", 1)
+    retried["retry"] = {"max_tries": 3, "wait_sec": 0}
+    graph = {
+        "nodes": [_node("a", 0), retried, _node("c", 2)],
+        "edges": [_edge("a", "b"), _edge("b", "c")],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(graph, "a", _catalog({"fake": flaky}), _RESOLVER, hooks)
+    assert outcome.status == "succeeded"
+    assert hooks.order == ["a", "b", "b", "b", "c"]
+    assert calls["b"] == 3
+
+
+def test_cancel_during_retry_wait_does_not_execute_again() -> None:
+    def fail(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        return NodeResult(status="failed", error_code="CHANNEL_NODE_FAILED", error_message="bad")
+
+    retried = _node("a", 0)
+    retried["retry"] = {"max_tries": 3, "wait_sec": 30}
+    graph = {"nodes": [retried], "edges": [], "settings": {}}
+    hooks = FakeHooks()
+    hooks.cancel_after = "a"
+    outcome = execute(graph, "a", _catalog({"fake": fail}), _RESOLVER, hooks)
+    assert outcome.status == "cancelled"
+    assert hooks.order == ["a"]
+
+
+def test_retries_exhausted_then_stop() -> None:
+    def fail(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        return NodeResult(status="failed", error_code="CHANNEL_NODE_FAILED", error_message="bad")
+
+    retried = _node("a", 0)
+    retried["retry"] = {"max_tries": 2, "wait_sec": 0}
+    retried["on_error"] = "stop"
+    graph = {"nodes": [retried, _node("b", 1)], "edges": [_edge("a", "b")], "settings": {}}
+    hooks = FakeHooks()
+    outcome = execute(graph, "a", _catalog({"fake": fail}), _RESOLVER, hooks)
+    assert outcome.status == "failed"
+    assert outcome.failed_node_id == "a"
+    assert hooks.order == ["a", "a"]
+    assert "b" not in hooks.order

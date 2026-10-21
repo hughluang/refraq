@@ -15,6 +15,7 @@ import { TextField } from "@/components/form/TextField";
 import { canAuthorNodeType } from "@/features/channels/nodePermission";
 import { PythonCodeField } from "@/features/channels/PythonCodeField";
 import { RegisteredSourceField } from "@/features/channels/RegisteredSourceField";
+import { WebhookField } from "@/features/webhooks/WebhookField";
 import { ScheduledCadenceFields } from "@/features/channels/ScheduledCadenceFields";
 import { SqlSourceField } from "@/features/channels/SqlSourceField";
 import {
@@ -157,8 +158,11 @@ export function NodeConfigPanel({
     update({ config: { ...data.config, [key]: value } });
   };
 
-  // Only stop is supported; another stored value stays selectable so it can be reset.
-  const onErrorOptions = [...new Set(["stop", data.onError])].map((value) => ({
+  const allowsErrorOutput = spec?.outputs.some((port) => port.port === "error") ?? false;
+  const onErrorValues = ["stop", "continue"];
+  if (allowsErrorOutput) onErrorValues.push("error_output");
+  if (!onErrorValues.includes(data.onError)) onErrorValues.push(data.onError);
+  const onErrorOptions = onErrorValues.map((value) => ({
     value,
     label: t(`channels.node.onError.${value}`),
   }));
@@ -279,15 +283,61 @@ export function NodeConfigPanel({
             />
           ))}
           <SelectField
-            editable={editable && data.onError !== "stop"}
+            editable={editable}
             label={t("channels.node.onError")}
             data={onErrorOptions}
             value={data.onError}
             onChange={(next) => {
-              if (next === "stop") update({ onError: next });
+              if (next === "stop" || next === "continue" || next === "error_output") {
+                update({ onError: next });
+              }
             }}
             allowDeselect={false}
           />
+          <NumberField
+            editable={editable}
+            label={t("channels.node.retryMax")}
+            description={t("channels.node.retryMaxHint")}
+            min={1}
+            max={10}
+            allowDecimal={false}
+            value={data.retry?.max_tries ?? ""}
+            onChange={(value) => {
+              if (value === "" || value == null) {
+                update({ retry: null });
+                return;
+              }
+              const maxTries = Math.floor(Number(value));
+              if (!Number.isFinite(maxTries)) return;
+              update({
+                retry: {
+                  max_tries: Math.min(10, Math.max(1, maxTries)),
+                  wait_sec: data.retry?.wait_sec ?? 0,
+                },
+              });
+            }}
+          />
+          {data.retry ? (
+            <NumberField
+              editable={editable}
+              label={t("channels.node.retryWait")}
+              description={t("channels.node.retryWaitHint")}
+              min={0}
+              max={3600}
+              allowDecimal={false}
+              value={data.retry.wait_sec}
+              onChange={(value) => {
+                const wait = value === "" || value == null ? 0 : Math.floor(Number(value));
+                if (!Number.isFinite(wait) || data.retry == null) return;
+                update({
+                  retry: {
+                    max_tries: data.retry.max_tries,
+                    wait_sec: Math.min(3600, Math.max(0, wait)),
+                  },
+                });
+              }}
+            />
+          ) : null}
         </Stack>
         </NodeRegion>
         {result}
@@ -354,6 +404,20 @@ function ConfigField({
         label={caption}
         description={fieldDescription(t, nodeType, field.key, field.description)}
         value={value}
+        editable={editable}
+        notes={notes}
+        openSignal={openSignal}
+        bare={bare}
+        onChange={onChange}
+      />
+    );
+  }
+  if (field.kind === "webhook") {
+    return (
+      <WebhookField
+        label={caption}
+        description={fieldDescription(t, nodeType, field.key, field.description)}
+        value={typeof value === "string" ? value : ""}
         editable={editable}
         notes={notes}
         openSignal={openSignal}

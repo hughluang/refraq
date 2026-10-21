@@ -1,6 +1,6 @@
 "use client";
 
-import { Table } from "@mantine/core";
+import { Group, Table } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useCallback } from "react";
 
@@ -79,10 +79,15 @@ export function ChannelList() {
               />
             </Table.Td>
             <Table.Td>
-              <StatusBadge
-                tone={presentChannelActive(channel.active).tone}
-                labelKey={presentChannelActive(channel.active).labelKey}
-              />
+              <Group gap={6} wrap="nowrap">
+                <StatusBadge
+                  tone={presentChannelActive(channel.active).tone}
+                  labelKey={presentChannelActive(channel.active).labelKey}
+                />
+                {channel.persistently_failing ? (
+                  <StatusBadge tone="warning" labelKey="channels.persistentlyFailing" />
+                ) : null}
+              </Group>
             </Table.Td>
             <Table.Td>
               {channel.latest_version ? channel.latest_version.number : "—"}

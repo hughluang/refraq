@@ -394,6 +394,26 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
     }
   },
   {
+    "id": "webhooks",
+    "label_key": "webhooks.title",
+    "icon": "webhook",
+    "routes": {
+      "list": "/console/webhooks",
+      "create": "/console/webhooks/new",
+      "edit": "/console/webhooks/:id/edit",
+      "show": "/console/webhooks/:id",
+      "aliases": []
+    },
+    "actions": {
+      "list": "webhook:read",
+      "create": "webhook:write",
+      "edit": "webhook:write",
+      "delete": "webhook:write",
+      "show": "webhook:read",
+      "sample": null
+    }
+  },
+  {
     "id": "model-services",
     "label_key": "modelServices.title",
     "icon": "brain",

@@ -37,5 +37,18 @@ class ChannelReferenceResolver:
             return False
         return get_channel_store().get(channel_id) is not None
 
+    def published_trigger_type(self, channel_id: str) -> str | None:
+        versions, _total = get_channel_store().list_versions(channel_id, limit=1, offset=0)
+        if not versions:
+            return None
+        triggers = [
+            str(node.get("type") or "")
+            for node in versions[0].graph.get("nodes") or []
+            if str(node.get("type") or "").startswith("trigger.")
+        ]
+        if len(triggers) != 1:
+            return None
+        return triggers[0]
+
     def source_exists(self, source_id: str) -> bool:
         return source_record_exists(source_id)

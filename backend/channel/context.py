@@ -22,13 +22,22 @@ __all__ = [
 ]
 
 
+def _settings(raw: Any) -> dict[str, Any]:
+    found = dict(raw) if isinstance(raw, dict) else {}
+    return {
+        "run_timeout_sec": found.get("run_timeout_sec"),
+        "run_retry_limit": found.get("run_retry_limit"),
+        "error_channel_id": found.get("error_channel_id"),
+    }
+
+
 def channel_context(channel: Any, run: Any) -> dict[str, Any]:
     return {
         "id": channel.id,
         "name": channel.name,
         "description": channel.description,
         "active": channel.active,
-        "settings": run.graph.get("settings") or {},
+        "settings": _settings(run.graph.get("settings")),
     }
 
 
@@ -82,8 +91,10 @@ def context_schema() -> dict[str, dict[str, Any]]:
                 "settings": _object(
                     {
                         "run_timeout_sec": {"type": ["integer", "null"]},
+                        "run_retry_limit": {"type": ["integer", "null"]},
                         "error_channel_id": {"type": ["string", "null"]},
                     },
+                    required=["run_timeout_sec", "run_retry_limit", "error_channel_id"],
                 ),
             },
             required=["id", "name", "description", "active", "settings"],

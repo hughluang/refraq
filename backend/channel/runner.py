@@ -7,6 +7,7 @@ from typing import Any
 
 from backend.admin.user_store import get_user_store
 from backend.channel.channel_run import execute_channel_run, expression_context, trigger_node_id
+from backend.channel.recovery import settle_failure, settle_success
 from backend.channel.run_store import get_run_store, note_killed_run
 from backend.channel.sandbox import SandboxFailed
 from backend.channel.store import get_channel_store
@@ -38,7 +39,7 @@ def run_channel_job(job_id: str) -> dict[str, str]:
     if channel is None:
         _cancel(job_id, run, run.trigger_node_id or None)
         return {"status": "cancelled"}
-    graph, version = _resolve_graph(run)
+    graph, version = _resolve_graph(run, claimed)
     if graph is None:
         _cancel(job_id, run, None)
         return {"status": "cancelled"}
@@ -50,6 +51,12 @@ def run_channel_job(job_id: str) -> dict[str, str]:
     if claimed.trigger_kind == "schedule" and (
         not channel.active or trigger_node.get("type") != "trigger.scheduled"
     ):
+        _cancel(job_id, run, trigger)
+        return {"status": "cancelled"}
+    if claimed.trigger_kind == "error" and (
+        not channel.active or trigger_node.get("type") != "trigger.error"
+    ):
+        _note_error_source(claimed, "Error workflow was not started: channel cannot run")
         _cancel(job_id, run, trigger)
         return {"status": "cancelled"}
     run.graph = graph
@@ -79,9 +86,20 @@ def run_channel_job(job_id: str) -> dict[str, str]:
             job=claimed,
             timeout_sec=timeout,
             started=time.monotonic() - elapsed,
+            pinned=bool((claimed.input or {}).get("pin_version")),
         )
     except SandboxFailed as exc:
-        mark_failed(job_id, error_code="CHANNEL_SANDBOX_FAILED", error_summary=str(exc))
+        failed = mark_failed(
+            job_id, error_code="CHANNEL_SANDBOX_FAILED", error_summary=str(exc)
+        )
+        if failed is not None and failed.status == "failed":
+            settle_failure(
+                job=failed,
+                run=run,
+                error_code="CHANNEL_SANDBOX_FAILED",
+                error_message=str(exc),
+                node_id=None,
+            )
         return {"status": "failed"}
     run.outcome = outcome.outcome
     run.failed_node_id = outcome.failed_node_id
@@ -95,7 +113,7 @@ def run_channel_job(job_id: str) -> dict[str, str]:
             message=f"stopped at node {outcome.stopped_node_id}",
         )
     if outcome.status == "succeeded":
-        mark_succeeded(
+        done = mark_succeeded(
             job_id,
             result={
                 "schema": "channel_run.v1",
@@ -104,15 +122,23 @@ def run_channel_job(job_id: str) -> dict[str, str]:
                 "outcome": outcome.outcome,
             },
         )
+        if done is not None and done.status == "succeeded":
+            settle_success(run)
         return {"status": "succeeded"}
     if outcome.status == "cancelled":
         mark_cancelled(job_id)
         return {"status": "cancelled"}
-    mark_failed(
-        job_id,
-        error_code=outcome.error_code or "CHANNEL_NODE_FAILED",
-        error_summary=outcome.error_message or "Channel run failed",
-    )
+    code = outcome.error_code or "CHANNEL_NODE_FAILED"
+    message = outcome.error_message or "Channel run failed"
+    failed = mark_failed(job_id, error_code=code, error_summary=message)
+    if failed is not None and failed.status == "failed":
+        settle_failure(
+            job=failed,
+            run=run,
+            error_code=code,
+            error_message=message,
+            node_id=outcome.failed_node_id or outcome.stopped_node_id,
+        )
     return {"status": "failed"}
 
 
@@ -124,9 +150,18 @@ def _cancel(job_id: str, run: Any, node_id: str | None) -> None:
     mark_cancelled(job_id)
 
 
-def _resolve_graph(run: Any) -> tuple[dict[str, Any] | None, int | None]:
+def _resolve_graph(run: Any, job: Any) -> tuple[dict[str, Any] | None, int | None]:
     if run.target == "draft":
         return run.graph, None
+    payload = job.input or {}
+    if payload.get("pin_version"):
+        number = payload.get("version")
+        if isinstance(number, bool) or not isinstance(number, int):
+            return None, None
+        pinned = get_channel_store().get_version(run.channel_id, number)
+        if pinned is None:
+            return None, None
+        return pinned.graph, pinned.number
     versions, _total = get_channel_store().list_versions(run.channel_id, limit=1, offset=0)
     if not versions:
         return None, None
@@ -134,8 +169,14 @@ def _resolve_graph(run: Any) -> tuple[dict[str, Any] | None, int | None]:
     return latest.graph, latest.number
 
 
+def _note_error_source(job: Any, message: str) -> None:
+    source_id = job.trigger_ref
+    if isinstance(source_id, str) and source_id:
+        append_job_log(source_id, level="warning", message=message)
+
+
 def _actor(job: Any) -> dict[str, str]:
-    if job.trigger_kind == "schedule":
+    if job.trigger_kind in {"schedule", "retry", "error"}:
         return {"id": "usr_system", "name": "System"}
     ref = job.trigger_ref or "usr_system"
     user = get_user_store().get_by_id(ref) if job.trigger_ref else None

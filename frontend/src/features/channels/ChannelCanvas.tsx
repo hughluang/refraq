@@ -199,6 +199,8 @@ type Props = {
   onRun?: (nodeId: string) => void;
   /** Set on the editor canvas. */
   channelId?: string;
+  /** Selects this node once when the canvas opens. */
+  focusNodeId?: string | null;
 };
 
 export function ChannelCanvas(props: Props) {
@@ -223,6 +225,7 @@ function ChannelCanvasBody({
   templatePreview = null,
   onRun = () => {},
   channelId,
+  focusNodeId = null,
 }: Props) {
   const t = useTranslate();
   const colorScheme = useComputedColorScheme("light", { getInitialValueInEffect: false });
@@ -514,6 +517,20 @@ function ChannelCanvasBody({
     setPicker(null);
     centerOnHighlight(next);
   };
+
+  const focusedNode = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusNodeId || focusedNode.current === focusNodeId) return;
+    if (!nodesRef.current.some((node) => node.id === focusNodeId)) return;
+    focusedNode.current = focusNodeId;
+    focusProblem({
+      code: "focus",
+      node_id: focusNodeId,
+      edge_id: null,
+      path: [],
+      detail: "",
+    });
+  }, [focusNodeId]);
 
   const placeNode = (
     spec: NodeTypeSpec,

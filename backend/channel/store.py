@@ -33,7 +33,11 @@ def empty_graph() -> dict[str, Any]:
     return {
         "nodes": [],
         "edges": [],
-        "settings": {"run_timeout_sec": None, "error_channel_id": None},
+        "settings": {
+            "run_timeout_sec": None,
+            "run_retry_limit": None,
+            "error_channel_id": None,
+        },
     }
 
 
@@ -48,6 +52,7 @@ class ChannelRecord:
     draft_updated_at: datetime
     created_at: datetime
     updated_at: datetime
+    failure_streak: int = 0
 
 
 @dataclass
@@ -119,6 +124,7 @@ def _clone_channel(record: ChannelRecord) -> ChannelRecord:
         draft_updated_at=record.draft_updated_at,
         created_at=record.created_at,
         updated_at=record.updated_at,
+        failure_streak=record.failure_streak,
     )
 
 
@@ -285,6 +291,7 @@ def _channel_from_row(row: ChannelRow) -> ChannelRecord:
         draft_updated_at=row.draft_updated_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        failure_streak=int(row.failure_streak),
     )
 
 
@@ -312,6 +319,7 @@ class SqlChannelStore:
                     draft_updated_at=record.draft_updated_at,
                     created_at=record.created_at,
                     updated_at=record.updated_at,
+                    failure_streak=record.failure_streak,
                 )
             )
             session.flush()
@@ -355,6 +363,7 @@ class SqlChannelStore:
             row.name = record.name
             row.description = record.description
             row.active = record.active
+            row.failure_streak = record.failure_streak
             row.updated_at = record.updated_at
             session.flush()
             return _channel_from_row(row)

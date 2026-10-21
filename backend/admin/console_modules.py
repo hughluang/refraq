@@ -398,6 +398,28 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         module_order=20,
     ),
     ConsoleModuleSeed(
+        id="webhooks",
+        group_id="settings",
+        group_label_key="layout.navGroup.settings",
+        label_key="webhooks.title",
+        icon="webhook",
+        routes=ModuleRoutes(
+            list="/console/webhooks",
+            create="/console/webhooks/new",
+            show="/console/webhooks/:id",
+            edit="/console/webhooks/:id/edit",
+        ),
+        actions=ModuleActions(
+            list="webhook:read",
+            create="webhook:write",
+            show="webhook:read",
+            edit="webhook:write",
+            delete="webhook:write",
+        ),
+        group_order=30,
+        module_order=25,
+    ),
+    ConsoleModuleSeed(
         id="model-services",
         group_id="settings",
         group_label_key="layout.navGroup.settings",

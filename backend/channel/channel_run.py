@@ -36,6 +36,7 @@ __all__ = [
     "trigger_node_id",
     "execute_channel_run",
     "expression_context",
+    "mint_followup_run",
     "mint_on_demand_run",
     "mint_scheduled_run",
     "schedule_context",
@@ -74,15 +75,20 @@ def mint_on_demand_run(
     draft_revision: int | None,
     graph: dict[str, Any] | None,
     stop_at_node_id: str | None,
+    pin_version: bool = False,
 ) -> tuple[JobRecord, ChannelRunRecord]:
+    payload: dict[str, Any] = {
+        "channel_id": channel_id,
+        "target": target,
+        "ignore_checkpoints": ignore_checkpoints,
+        "stop_at_node_id": stop_at_node_id,
+    }
+    if pin_version and version is not None:
+        payload["pin_version"] = True
+        payload["version"] = version
     job = create_queued_job(
         kind="channel_run",
-        input={
-            "channel_id": channel_id,
-            "target": target,
-            "ignore_checkpoints": ignore_checkpoints,
-            "stop_at_node_id": stop_at_node_id,
-        },
+        input=payload,
         trigger_kind="user",
         trigger_ref=actor_id,
         summary=f"channel_run {channel_name}",
@@ -99,6 +105,40 @@ def mint_on_demand_run(
         ignore_checkpoints=ignore_checkpoints,
         created_at=utc_now(),
         stop_at_node_id=stop_at_node_id,
+    )
+    get_run_store().insert_run(record)
+    return job, record
+
+
+def mint_followup_run(
+    *,
+    channel_id: str,
+    channel_name: str,
+    trigger_kind: Literal["retry", "error"],
+    trigger_ref: str,
+    trigger_node: str,
+    version: int | None,
+    job_input: dict[str, Any],
+) -> tuple[JobRecord, ChannelRunRecord]:
+    """Queue a pinned retry or an error-workflow run. The caller dispatches it."""
+    job = create_queued_job(
+        kind="channel_run",
+        input=job_input,
+        trigger_kind=trigger_kind,
+        trigger_ref=trigger_ref,
+        summary=f"channel_run {channel_name}",
+        created_by=None,
+    )
+    record = _channel_run_record(
+        job_id=job.id,
+        channel_id=channel_id,
+        target="published",
+        version=version,
+        draft_revision=None,
+        graph=None,
+        trigger_node_id=trigger_node,
+        ignore_checkpoints=False,
+        created_at=utc_now(),
     )
     get_run_store().insert_run(record)
     return job, record
@@ -265,6 +305,7 @@ def execute_channel_run(
     job: JobRecord,
     timeout_sec: int | None,
     started: float | None,
+    pinned: bool = False,
 ) -> RunOutcome:
     user = ensure_system_user(get_user_store())
     schedule = schedule_context(
@@ -286,6 +327,7 @@ def execute_channel_run(
             target=run.target,
             channel_id=run.channel_id,
             run_version=run.version,
+            pinned=pinned,
         )
         return _execute_graph(
             graph,
@@ -311,6 +353,7 @@ class _RunHooks:
         target: str,
         channel_id: str,
         run_version: int | None,
+        pinned: bool = False,
     ) -> None:
         self._sandbox = sandbox
         self.run_id = run_id
@@ -321,6 +364,7 @@ class _RunHooks:
         self.channel_id = channel_id
         self._target = target
         self._run_version = run_version
+        self._pinned = pinned
 
     def evaluate(self, expression: str) -> Any:
         return self._sandbox.evaluate(expression)
@@ -343,7 +387,7 @@ class _RunHooks:
         return record is not None and record.status == "cancelled"
 
     def superseded(self) -> bool:
-        if self._target != "published" or self._run_version is None:
+        if self._pinned or self._target != "published" or self._run_version is None:
             return False
         versions, _total = get_channel_store().list_versions(
             self.channel_id, limit=1, offset=0

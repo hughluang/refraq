@@ -194,8 +194,9 @@ Responsibilities:
 - **Dataset Reference**s: run-scoped tables in the entity database and their expiry
 - Entity writer: modes, match key, mapped attributes only, and head compatibility; writes through Entity's published row-write port
 - **Checkpoint** store: per (channel, checkpoint-capable node, stream) cursors; each business node declares when and how it advances its cursor
-- Run records: node executions, truncated item samples, last failed node and edge
-- **Channel Run** runner and triggers: `channel_run` Job kind, version resolution at start, run-timeout checks between node executions, version supersede, error workflow, persistent-failure flag. User cancel kills the run's child process
+- Run records: node executions, truncated item samples, and `failed_node_id` when `on_error` `stop` fails the run
+- **Channel Run** runner and triggers: `channel_run` Job kind, version resolution at start, a pinned version for rerun and `retry`, run-timeout checks between node executions, version supersede of unpinned runs, error workflow, `failure_streak`. User cancel kills the run's child process
+- **Webhook** catalog and the `action.webhook` node that POSTs to one saved endpoint
 - Schedule sync of Scheduled nodes to `channel_run` **Scheduled Task** rows, and the `channel_run` schedule projection adapter
 - **Global Variable** store
 - `channel/parameters.py` (Data Channel-owned System Parameter specs)
@@ -415,6 +416,8 @@ For the login/permission slice, each concern should land here:
 - Site Branding resolution, management page, and preview: `frontend/src/features/branding/`
 - Model Service API: `backend/admin/model_services/`
 - Model Service Console: `frontend/src/features/model-services/`
+- Webhook API: `backend/channel/routers/` and `backend/channel/` Webhook store
+- Webhook Console: `frontend/src/features/webhooks/`
 - Site Branding framework consumption and theme bridge: `frontend/src/providers/`; server-rendered public branding fetch: `frontend/src/features/branding/server.ts`
 
 ## 7. Metadata / Operations Console Ownership

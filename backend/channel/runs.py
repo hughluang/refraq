@@ -11,13 +11,17 @@ from backend.channel.errors import (
     ChannelGraphInvalid,
     ChannelNotFound,
     ChannelNotPublished,
+    ChannelRunNotFound,
+    ChannelRunNotRerunnable,
     ChannelTriggerInvalid,
 )
 from backend.channel.graph import ancestor_closure, validate
 from backend.channel.references import ChannelReferenceResolver
+from backend.channel.run_store import get_run_store
 from backend.channel.store import get_channel_store
+from backend.jobs.store import get_job_store
 
-__all__ = ["refuse_invalid_closure", "require_stop_closure", "start_run"]
+__all__ = ["refuse_invalid_closure", "require_stop_closure", "rerun_failed", "start_run"]
 
 
 def start_run(
@@ -73,6 +77,60 @@ def start_run(
         detail={"job_id": job.id, "target": target},
     )
     return job, record
+
+
+def rerun_failed(
+    *,
+    channel_id: str,
+    job_id: str,
+    actor: UserRecord,
+    actor_token_id: str | None,
+) -> Any:
+    """Queue a new published run pinned to a failed run's version."""
+    store = get_channel_store()
+    if store.get(channel_id) is None:
+        raise ChannelNotFound()
+    run = get_run_store().get_run(job_id)
+    if run is None or run.channel_id != channel_id:
+        raise ChannelRunNotFound()
+    job = get_job_store().get(job_id)
+    if (
+        job is None
+        or job.status != "failed"
+        or run.target != "published"
+        or run.version is None
+        or store.get_version(channel_id, run.version) is None
+    ):
+        raise ChannelRunNotRerunnable()
+    channel = store.get(channel_id)
+    assert channel is not None
+    version = store.get_version(channel_id, run.version)
+    assert version is not None
+    trigger = trigger_node_id(version.graph) or run.trigger_node_id
+    queued, record = mint_on_demand_run(
+        channel_id=channel_id,
+        channel_name=channel.name,
+        target="published",
+        ignore_checkpoints=False,
+        actor_id=actor.id,
+        trigger_node_id=trigger,
+        version=run.version,
+        draft_revision=None,
+        graph=None,
+        stop_at_node_id=None,
+        pin_version=True,
+    )
+    dispatch(queued.id)
+    persist_audit_event(
+        actor_user_id=actor.id,
+        actor_token_id=actor_token_id,
+        resource_type="channel",
+        resource_id=channel_id,
+        action="channel.rerun_enqueue",
+        result="success",
+        detail={"job_id": queued.id, "source_job_id": job_id, "version": run.version},
+    )
+    return queued, record
 
 
 def require_stop_closure(graph: dict[str, Any], stop_at_node_id: str | None) -> set[str] | None:

@@ -20,6 +20,7 @@ export const ModuleId = {
   schedules: "schedules",
   settings: "settings",
   branding: "branding",
+  webhooks: "webhooks",
   modelServices: "model-services",
   account: "account",
 } as const;

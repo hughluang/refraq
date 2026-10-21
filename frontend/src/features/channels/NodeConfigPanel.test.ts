@@ -22,6 +22,11 @@ const LABELS: Record<string, string> = {
   "channels.node.onError": "On error",
   "channels.node.onError.stop": "Stop",
   "channels.node.onError.continue": "Continue",
+  "channels.node.onError.error_output": "Error output",
+  "channels.node.retryMax": "Tries",
+  "channels.node.retryMaxHint": "Includes the first try. Empty runs once.",
+  "channels.node.retryWait": "Wait between tries (seconds)",
+  "channels.node.retryWaitHint": "Checked for cancel and timeout while waiting.",
   "channels.config.addItem": "Add",
   "channels.config.removeItem": "Remove",
   "channels.config.businessKey": "Business Key",
@@ -520,13 +525,14 @@ describe("NodeConfigPanel integers", () => {
     expect(next.config).not.toHaveProperty("statement_timeout_sec");
   });
 
-  it("shows the only supported on-error policy as text after the node fields", async () => {
-    await renderPanel(PAYLOAD, node({ payload: {} }, "trigger.manual"));
+  it("offers stop and continue after the node fields", async () => {
+    const onChange = await renderPanel(PAYLOAD, node({ payload: {} }, "trigger.manual"));
 
-    expect(screen.queryByRole("combobox", { name: "On error" })).toBeNull();
-    expect(screen.getByText("Stop")).toBeTruthy();
-    const text = document.querySelector(".channel-node-detail")?.textContent ?? "";
-    expect(text.indexOf("Output")).toBeLessThan(text.indexOf("On error"));
+    const select = screen.getByRole("combobox", { name: "On error" }) as HTMLInputElement;
+    expect(select.value).toBe("Stop");
+    fireEvent.change(screen.getByRole("textbox", { name: "Tries" }), { target: { value: "3" } });
+    const next = onChange.mock.calls.at(-1)?.[1] as FlowNodeData;
+    expect(next.retry).toEqual({ max_tries: 3, wait_sec: 0 });
   });
 
   it("lets an unsupported on-error value be reset to stop", async () => {

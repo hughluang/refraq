@@ -4,7 +4,7 @@
 
 This document defines the HTTP contract for **Data Channel** definitions and runs: the node type catalog, channel create, read, edit, and delete, draft save, validate, publish with its confirmation list, **Channel Version** reads, the activation switch, on-demand runs, the run list, and node-execution reads. Paths address a channel by opaque `id`.
 
-**Source Mirror**s and the **Notification Channel** are not defined here. Global Variable HTTP is `docs/api-contracts-global-variables.md`.
+**Source Mirror**s are not defined here. **Webhook** HTTP is `docs/api-contracts-webhooks.md`. Global Variable HTTP is `docs/api-contracts-global-variables.md`.
 
 Related boundaries:
 
@@ -51,6 +51,8 @@ Collection lists use the **Offset Page** envelope `{ "items", "total", "limit", 
   "name": "Material master",
   "description": "Material master from U9 and PLM",
   "active": false,
+  "failure_streak": 0,
+  "persistently_failing": false,
   "draft_revision": 12,
   "draft_updated_at": "2026-10-09T08:00:00Z",
   "latest_version": { "number": 3, "published_at": "2026-10-08T09:30:00Z" },
@@ -61,6 +63,8 @@ Collection lists use the **Offset Page** envelope `{ "items", "total", "limit", 
 
 - `name` is required, trimmed, 1 to 200 characters, and not unique. `description` is optional, at most 2000 characters, or `null`.
 - `active` is the activation switch. It starts `false` and changes only through §5.10.
+- `failure_streak` is the count of published failure episodes (§6.8 of the business rules). It starts at 0.
+- `persistently_failing` is true when `failure_streak` is at least 3.
 - `latest_version` is `null` until the first publish.
 
 ### 3.2 Graph
@@ -106,14 +110,14 @@ Collection lists use the **Offset Page** envelope `{ "items", "total", "limit", 
         "on_incompatible_head": "fail"
       },
       "on_error": "stop",
-      "retry": null
+      "retry": { "max_tries": 3, "wait_sec": 5 }
     }
   ],
   "edges": [
     { "id": "ed_1", "source": { "node_id": "nd_trigger", "port": "main" }, "target": { "node_id": "nd_read", "port": "main" } },
     { "id": "ed_2", "source": { "node_id": "nd_read", "port": "main" }, "target": { "node_id": "nd_write", "port": "main" } }
   ],
-  "settings": { "run_timeout_sec": null, "error_channel_id": null }
+  "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null }
 }
 ```
 
@@ -128,10 +132,10 @@ Node fields:
 | `name` | Trimmed, 1 to 128 characters, unique within the graph |
 | `position` | Canvas coordinates; numbers; not interpreted by the server |
 | `config` | Object validated against the node type's `config_schema` at validate and publish. Save accepts any object |
-| `on_error` | `stop`. `continue` and `error_output` are reserved and fail validation |
-| `retry` | `null`. A non-null retry fails validation |
+| `on_error` | `stop`, `continue`, or `error_output`. `error_output` fails validation unless the node type declares an `error` output |
+| `retry` | `null`, or `{ "max_tries", "wait_sec" }`. `max_tries` is 1 to 10 and includes the first execution. `wait_sec` is 0 to 3600. Null executes once |
 
-Edge `source.port` and `target.port` name ports declared by the node types. Graph `settings.run_timeout_sec` is `null` or a positive integer of seconds at most 252460800. `settings.error_channel_id` is `null` or another Data Channel id.
+Edge `source.port` and `target.port` name ports declared by the node types. Graph `settings.run_timeout_sec` is `null` or a positive integer of seconds at most 252460800. `settings.run_retry_limit` is `null` or an integer 0 to 10. `settings.error_channel_id` is `null` or another Data Channel id. Publish requires that channel's current published version to use `trigger.error` as its only trigger.
 
 Write Entity configuration (`write.entity`):
 
@@ -270,7 +274,7 @@ A successful execution returns `{rows, count, truncated}`. `rows` is an array of
 {
   "channel_id": "chn_01HZX",
   "number": 3,
-  "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "error_channel_id": null } },
+  "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null } },
   "published_at": "2026-10-08T09:30:00Z",
   "published_by_user_id": "usr_01HZX",
   "published_by_name": "Alice"
@@ -346,10 +350,10 @@ Sections are empty lists, or `false`, when there is nothing to show.
 - `target` is `draft` or `published` for an on-demand run, and `published` for every unattended run.
 - `version` is the Channel Version a `published` run resolved at start, or `null` before it starts, when it ended before resolving one, or when `target` is `draft`.
 - `draft_revision` is the frozen draft revision when `target` is `draft`, otherwise `null`.
-- `failed_node_id` names the node that failed the run, or `null`.
+- `failed_node_id` names the node whose `on_error` `stop` failed the run, or `null`. A `continue` or `error_output` execution does not set it.
 - `stop_at_node_id` is the optional on-demand stop node, or `null` when the run executes every node reachable from the trigger.
 - `stopped_node_id` names the node that was next when a timeout or a newer version stopped the run between nodes, or the node a user cancel interrupted, or `null` when cancel killed the process before that node was recorded.
-- `trigger_kind` is `user` for an on-demand run, `schedule` for a Scheduled node, and `system` for platform-event and change-arrival triggers. `trigger_ref`, `trigger_actor_name`, and `trigger_schedule_name` follow the Job contract.
+- `trigger_kind` is `user` for an on-demand run or a rerun, `schedule` for a Scheduled node, `retry` for a Job minted by `run_retry_limit`, `error` for an error workflow, and `system` for platform-event and change-arrival triggers. `trigger_ref` is the acting User for `user`, the source Job id for `error`, and otherwise follows the Job contract. `trigger_actor_name` and `trigger_schedule_name` follow the Job contract.
 - Duration is derived by clients from `started_at` and `finished_at`.
 
 ### 3.7 Node Type
@@ -387,7 +391,7 @@ Sections are empty lists, or `false`, when there is nothing to show.
 }
 ```
 
-- `family` is `trigger`, `read`, `transform`, `volume`, `state`, or `write`.
+- `family` is `trigger`, `read`, `transform`, `volume`, `state`, `write`, or `action`.
 - `label`, `summary`, and `description` are English. `summary` is one sentence. `description` states the type's function and its place in a workflow.
 - `trigger` is `true` for trigger types; they declare no inputs.
 - Each port is `{ "port", "description", "coarse_type", "loop_back" }`. `port` is lower snake case. `coarse_type` is `object`, `items`, or `unknown`. `loop_back` is true on the output that starts a loop body (`each` on `volume.for`) and false otherwise. `main` is the primary data port. `error` is an output that carries items the node failed when `on_error` is `error_output`.
@@ -405,10 +409,19 @@ A `channel_run` Job follows the platform Job lifecycle (`docs/business-jobs.md`)
 ### 4.2 Input
 
 ```json
-{ "channel_id": "chn_01HZX", "target": "published", "ignore_checkpoints": false, "stop_at_node_id": null }
+{
+  "channel_id": "chn_01HZX",
+  "target": "published",
+  "ignore_checkpoints": false,
+  "stop_at_node_id": null,
+  "pin_version": false,
+  "version": null,
+  "retry_of_job_id": null,
+  "error_source": null
+}
 ```
 
-The input carries no version. A `published` run resolves the current published version at start. A `draft` run executes the snapshot stored on the run record. `stop_at_node_id` is optional. When set, the run enters the graph's only trigger and executes that node's ancestor closure, including the node. Unattended runs set `target` to `published`, omit `stop_at_node_id`, and omit a user-chosen trigger when the schedule names the node.
+`pin_version` defaults to false. When it is true, `version` is the published version number the runner must execute, and a newer version neither replaces it nor cancels the run. A `published` run with `pin_version` false resolves the current published version at start. A `draft` run executes the snapshot stored on the run record and ignores `pin_version`. `stop_at_node_id` is optional. When set, the run enters the graph's only trigger and executes that node's ancestor closure, including the node. `retry_of_job_id` is the previous Job in a `run_retry_limit` chain, or null. `error_source` is null except on an error workflow, where it is `{ "channel_id", "channel_name", "job_id", "version", "attempt", "error": { "code", "message", "node_id" } }`. Unattended schedule runs set `target` to `published`, omit `stop_at_node_id`, and omit a user-chosen trigger when the schedule names the node.
 
 ### 4.3 Result
 
@@ -440,6 +453,7 @@ On `succeeded` only:
 | `POST` | `/channels/{id}/activate` | `channel:write` | Turn the activation switch on |
 | `POST` | `/channels/{id}/deactivate` | `channel:write` | Turn the activation switch off |
 | `POST` | `/channels/{id}/runs` | `channel:write` | Start an on-demand run |
+| `POST` | `/channels/{id}/runs/{job_id}/rerun` | `channel:write` | Rerun a failed published run on its version |
 | `GET` | `/channels/{id}/runs` | `channel:read` | List this channel's runs (**Offset Page**) |
 | `GET` | `/channels/{id}/runs/{job_id}` | `channel:read` | Read one run with its graph and node executions |
 | `GET` | `/channels/{id}/runs/{job_id}/executions/{seq}/output` | `channel:read` | Page one node execution's output |
@@ -455,7 +469,7 @@ On `succeeded` only:
 { "name": "Material master", "description": null }
 ```
 
-`201` `{ "channel": { … } }`. The draft starts as `{ "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "error_channel_id": null } }` with `draft_revision` 1. `active` is `false`.
+`201` `{ "channel": { … } }`. The draft starts as `{ "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null } }` with `draft_revision` 1. `active` is `false`.
 
 ### 5.3 `GET /channels`
 
@@ -478,7 +492,7 @@ Any subset of `name` and `description`. Present `description` `null` clears it. 
 `PUT` body:
 
 ```json
-{ "base_revision": 12, "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "error_channel_id": null } } }
+{ "base_revision": 12, "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null } } }
 ```
 
 - `base_revision` must equal the stored `draft_revision`; otherwise `409 CHANNEL_DRAFT_CONFLICT`.
@@ -489,7 +503,7 @@ Any subset of `name` and `description`. Present `description` `null` clears it. 
 ### 5.7 `POST /channels/{id}/draft/validate`
 
 ```json
-{ "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "error_channel_id": null } } }
+{ "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null } } }
 ```
 
 `graph` is the same shape as a draft save (§3.2). The body is required. Validate checks that graph and does not read or write the stored draft. It does not record an audit event. A graph that fails the save shape is `422`. The channel must exist (`404` otherwise). `200`:
@@ -513,7 +527,7 @@ Any subset of `name` and `description`. Present `description` `null` clears it. 
 
 The response describes the submitted graph. `valid` is false when any problem has severity `error`. `ports` lists every declared port of that graph. `schema` is the refined JSON Schema, or `null` when it is not known. An invalid graph is a `200` result, not a Problem Details failure.
 
-`context` is the JSON Schema of `self.channel`, `self.run`, and `self.platform`. It does not depend on the submitted graph. `channel` has `id`, `name`, `description`, `active`, and `settings` (`run_timeout_sec`, `error_channel_id`). `run` has `id`, `target`, `version`, `draft_revision`, `trigger_kind`, `started_at`, and `triggered_by` (`id`, `name`). `platform` has `site_name`, `schedule_timezone`, `now`, and `parameters`. `parameters` lists every registered System Parameter: an integer constraint is `integer`, and every other constraint is `string`.
+`context` is the JSON Schema of `self.channel`, `self.run`, and `self.platform`. It does not depend on the submitted graph. `channel` has `id`, `name`, `description`, `active`, and `settings` (`run_timeout_sec`, `run_retry_limit`, `error_channel_id`). `run` has `id`, `target`, `version`, `draft_revision`, `trigger_kind`, `started_at`, and `triggered_by` (`id`, `name`). `platform` has `site_name`, `schedule_timezone`, `now`, and `parameters`. `parameters` lists every registered System Parameter: an integer constraint is `integer`, and every other constraint is `string`.
 
 ### 5.8 `POST /channels/{id}/publish/preview` and `POST /channels/{id}/publish`
 
@@ -569,7 +583,7 @@ Query: `status` (optional Job status), `target` (`draft` | `published` | omitted
 ```json
 {
   "run": { },
-  "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "error_channel_id": null } },
+  "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null } },
   "node_executions": [
     {
       "seq": 1,
@@ -600,7 +614,7 @@ When the value at `path` is a list, `200` is an **Offset Page** of its elements.
 
 ```json
 {
-  "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "error_channel_id": null } },
+  "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null } },
   "node_id": "nd_write",
   "path": ["source"]
 }
@@ -631,6 +645,10 @@ Evaluates the **Template Field** at `path` in node `node_id` of `graph` against 
 - `failed` and `missing` are `200` result documents, not Problem Details failures.
 - `node_id` and `path` that do not name a template field of `graph` are `422 REQUEST_INVALID`. A `graph` that fails the save shape is `422`. Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`.
 
+### 5.16 `POST /channels/{id}/runs/{job_id}/rerun`
+
+Empty body. Requires `channel:write`. The source run must be `failed` and `target` `published`, and it must have a version number. `202` `{ "run": { … } }` for a new Job pinned to that version (`pin_version` true, `trigger_kind` `user`). The new run does not set `retry_of_job_id`. `422` `CHANNEL_RUN_NOT_RERUNNABLE` otherwise. `404` `CHANNEL_RUN_NOT_FOUND` when the Job is not a run of this channel.
+
 ## 6. Errors
 
 ### 6.1 HTTP Problem Codes
@@ -645,6 +663,7 @@ Evaluates the **Template Field** at `path` in node `node_id` of `graph` against 
 | `CHANNEL_TRIGGER_INVALID` | 422 | The graph does not have exactly one trigger node |
 | `CHANNEL_RUN_NOT_FOUND` | 404 | No run with this Job id on the channel |
 | `REQUEST_INVALID` | 422 | Unknown fields, malformed identifiers, out-of-range fields, a Template Preview `node_id` and `path` that name no template field, or a body that contains `pinned` |
+| `CHANNEL_RUN_NOT_RERUNNABLE` | 422 | Rerun of a run that is not `failed` or whose `target` is not `published` |
 
 ### 6.2 Validation Problem Codes
 
@@ -671,7 +690,8 @@ Evaluates the **Template Field** at `path` in node `node_id` of `graph` against 
 | `CHANNEL_PORT_TYPE_MISMATCH` | An edge joins ports whose coarse types differ and both are known |
 | `CHANNEL_PORT_TYPE_UNKNOWN` | Warning. An edge's upstream coarse type is `unknown` |
 | `CHANNEL_NODE_TYPE_VERSION` | A node's `type_version` is not the node type's current version |
-| `CHANNEL_NODE_POLICY_UNSUPPORTED` | `on_error` is not `stop`, or `retry` is not null |
+| `CHANNEL_NODE_POLICY_UNSUPPORTED` | `on_error` is `error_output` and the node type does not declare an `error` output |
+| `CHANNEL_ERROR_TRIGGER_REQUIRED` | `error_channel_id` names a channel whose current published version does not use `trigger.error` as its only trigger |
 
 ### 6.3 Job Error Codes
 
@@ -690,7 +710,7 @@ Evaluates the **Template Field** at `path` in node `node_id` of `graph` against 
 
 ## 7. Non-Goals
 
-1. Rerun and resume endpoints.
+1. Resume from the failed node.
 2. A channel-scoped cancel route; cancel is the platform Job cancel.
 3. Creating, editing, deleting, or running channel schedule rows through the schedule surface.
 4. MCP tools for Data Channel.

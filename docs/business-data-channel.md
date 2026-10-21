@@ -4,11 +4,11 @@
 
 This document defines the **Data Channel** product domain: a user-orchestrated, versioned data workflow that reads from **Entity Table**s, **Source Mirror**s, **Change Log**s, and **Source**s, reshapes items, and writes rows into one or more Entity Tables. It defines the definition and its versions, the activation switch, the graph and its node families, write semantics and the match key, **Checkpoint**s, **Channel Run** semantics, triggers and the role of the **Scheduled Task**, **Global Variable**s, the unattended-first principle, authorization, and audit.
 
-It states the boundary rules of **Source Mirror**s and **Change Log**s that workflows rely on (§9). It does not define the HTTP shapes (`docs/api-contracts-data-channel.md`), the CDC deployment, the mirror state machine and structure change policy in detail, the **Notification Channel** resource contract, or the Console canvas layout. Those are outside this document.
+It states the boundary rules of **Source Mirror**s and **Change Log**s that workflows rely on (§9), and the **Webhook** resource an `action.webhook` node calls (§4.4). It does not define the HTTP shapes (`docs/api-contracts-data-channel.md`, `docs/api-contracts-webhooks.md`), the CDC deployment, the mirror state machine and structure change policy in detail, or the Console canvas layout. Those are outside this document.
 
 Related boundaries:
 
-- HTTP contract: `docs/api-contracts-data-channel.md`.
+- HTTP contract: `docs/api-contracts-data-channel.md`. **Webhook** HTTP: `docs/api-contracts-webhooks.md`.
 - **Business Entity**, **Entity Version**, **Entity Table**, **Business Key**, and publish: `docs/business-entity.md`.
 - **Entity Data API**: `docs/api-contracts-entity-data.md`. **Entity Access Control**: `docs/business-entity-access.md`.
 - **Source**, **Catalog Object**, **Locator**, **Normalized Type**, and **Controlled Query**: `docs/business-metadata.md`.
@@ -32,7 +32,7 @@ Related boundaries:
 
 ### 3.1 Identity
 
-A Data Channel is a `platform`-scoped definition identified by an opaque server-issued id. It carries a required `name` and an optional `description`. `name` is a display label and is not unique. A Data Channel is not owned by a **Source** or by a **Business Entity**; one channel may read several Sources and write several Entities.
+A Data Channel is a `platform`-scoped definition identified by an opaque server-issued id. It carries a required `name` and an optional `description`. `name` is a display label and is not unique. A Data Channel is not owned by a **Source** or by a **Business Entity**; one channel may read several Sources and write several Entities. `failure_streak` lives on the channel, outside versions (§6.8). It starts at 0.
 
 ### 3.2 Draft And Channel Versions
 
@@ -52,7 +52,7 @@ A graph is a set of nodes, a set of directed edges, and graph settings.
 - **Edge.** An edge connects one output port of a node to one input port of another node. An edge orders execution and selects a branch. It does not carry items (ADR 0056).
 - **A trigger node starts a run.** A trigger node has no input port and no inbound edge. A run starts at exactly one trigger node: the one that minted it.
 - **A loop node is the only legal back edge.** A cycle is legal only when it passes through a loop node's loop-back port. A loop node is a node type that declares a loop-back output port; For is the only one in this release.
-- **Graph settings** carry the optional run timeout (§6.6) and the optional error workflow (§6.8). Graph settings are part of the version.
+- **Graph settings** carry the optional run timeout (§6.6), the optional run-retry limit, and the optional error workflow (§6.8). Graph settings are part of the version.
 
 ### 3.4 Validation
 
@@ -70,7 +70,7 @@ Validation is a pure function over a graph and a reference resolver. It reports 
 10. node names are not unique;
 11. node `ref` values are not unique, are not Python identifiers, start with `_`, are Python keywords, or are the reserved names `nodes`, `channel`, `run`, or `platform`;
 12. a template field does not parse, names a node that does not exist or is not upstream, or contains no `{{ }}` and does not match its declared value type;
-13. a node's `on_error` is not `stop`, or its `retry` is not null, while only stop-without-retry is supported;
+13. a node's `on_error` is `error_output` while its node type does not declare an `error` output, or `error_channel_id` names a Data Channel whose current published version does not use `trigger.error` as its only trigger;
 14. a Manual trigger's payload uses the reserved keys `triggered_by` or `triggered_at`;
 15. an edge joins ports whose coarse types are both known and not the same;
 16. a node's `type_version` is not the current version of its node type;
@@ -119,7 +119,7 @@ Deleting a Data Channel withdraws its Scheduled Task rows by `owner_ref` (`docs/
 - A node outside a For body executes once. A For node executes its executor once, then runs the body once per element. The body is the set of nodes reachable from the loop-back port without passing through the For node again. Each body node records a new execution on each iteration. The For node records one execution. Its final output is the executor output plus `results`, one entry per iteration, taken from the node that feeds the `loop` input. That entry is null when the feeding node did not run on that iteration. No return edge yields `results: []`. An empty list runs the body zero times. A nested For runs inside the body. Cancel, supersede, and the run timeout are checked between body nodes. `stop_at_node_id` limits the body to that node's ancestor closure. An edge into the `loop` input does not gate the For node.
 - A node's **output** is the JSON value its execute function returns: an object, a list, or a scalar. Binary values are not supported. The node type declares the output's coarse type and, when the configuration allows it, a refined JSON Schema. The run record stores the output in full (§6.9). A successful output that does not match that schema fails the node.
 - A **template field** is one configuration string. The node type declares which fields are templates and the declared value type of each result. `{{ }}` marks one Python expression; `\{{` is a literal `{{`. After trimming, a field that is exactly one `{{ expression }}` yields that expression's Python value. Any other text, including text with no `{{ }}`, is concatenation: each expression is evaluated, converted to text, and joined. Concatenated `None` becomes an empty string. A bare `None` is not a string. Joined text is the result when the declared type is string; otherwise it is parsed once as JSON. The result must already match the declared type. The only conversion of a Python value is into a declared string. A mismatch fails the node. Expressions evaluate in one sandbox subprocess reused for the run: no network, an allow-listed import set, and time and memory limits (ADR 0056). The only workflow name in scope is `self`. Objects in `self` are dicts: a key is also an attribute, and the key wins when it shares a name with a dict method. Arrays are lists. `dict(row)`, `{**row}`, `row.get("x")`, and a comprehension over `self.<ref>.output.rows` are usable, and the value that leaves the sandbox is JSON.
-- `self.<ref>.output` is that node's output. `self.nodes["<node name>"].output` is the same value. `self.channel` carries `id`, `name`, `description`, `active`, and `settings` (`run_timeout_sec`, `error_channel_id`). `self.run` carries `id`, `target` (`draft` or `published`), `version`, `draft_revision`, `trigger_kind`, `started_at`, and `triggered_by` (`id`, `name`). `self.platform` carries `site_name`, `schedule_timezone`, `now`, and `parameters` (the current **System Parameter** values), all read-only. The validate response publishes the JSON Schema of these three objects (`docs/api-contracts-data-channel.md`). Global Variable values are not in `self`; a node reads and writes them. Credentials and other channels' run data are never in `self`.
+- `self.<ref>.output` is that node's output. `self.nodes["<node name>"].output` is the same value. `self.channel` carries `id`, `name`, `description`, `active`, and `settings` (`run_timeout_sec`, `run_retry_limit`, `error_channel_id`). `self.run` carries `id`, `target` (`draft` or `published`), `version`, `draft_revision`, `trigger_kind`, `started_at`, and `triggered_by` (`id`, `name`). `self.platform` carries `site_name`, `schedule_timezone`, `now`, and `parameters` (the current **System Parameter** values), all read-only. The validate response publishes the JSON Schema of these three objects (`docs/api-contracts-data-channel.md`). Global Variable values are not in `self`; a node reads and writes them. Credentials and other channels' run data are never in `self`.
 - Naming a node that did not run, or a path that does not resolve, fails the node that holds the expression.
 - A **Template Preview** evaluates one template field of a graph against one recorded **Channel Run** of the same channel. The run's recorded Expression Context and the recorded outputs of the upstream nodes the template names go into a fresh sandbox, and the result is converted to the declared value type as at run time. The graph may differ from the one the run executed; nodes match by id, and the template names them by their current `ref` and name. A template that validation rejects fails the preview with that problem. An expression or conversion failure is the error the node would record. A named node with no recorded output in that run, or a context the run did not record, is reported missing rather than failed. A Template Preview executes no node, reads no Source, and writes nothing.
 - A **Dataset Reference** is a value that names a run-scoped table in the entity database. Read and SQL nodes may return one instead of a list when the result is large; Materialize turns a list into one; Batch Read turns one into batches; write nodes accept one and write in bulk inside the database. Dataset References expire with run data retention (§6.9).
@@ -137,12 +137,13 @@ Port names are lower snake case. `main` carries the node's primary items or data
 
 | Family | Node types | Role |
 | --- | --- | --- |
-| Trigger | Manual, Scheduled, Platform event, Changes arrived | Starts a run (§7) |
+| Trigger | Manual, Scheduled, Error, Platform event, Changes arrived | Starts a run (§7) |
 | Read | SQL, live Source query, Read Mirror, Read Changes | Run a SQL statement, read a guarded Source query, or read mirror and change rows |
 | Transform | Set fields, If, Filter, Merge, Deduplicate, Code | Reshape, route, or drop items |
 | Volume | For, Materialize, Batch Read | Iterate a list, and move large data by reference |
 | State | Global Variable get, set, delete, set-if-absent, compare-and-set | Cross-workflow shared state (§8) |
 | Write | Write Entity | Upsert, create, update, or delete Entity Table rows (§5) |
+| Action | Webhook | POST one JSON body to a saved **Webhook** (§4.4) |
 
 Family rules:
 
@@ -157,6 +158,8 @@ Family rules:
 - **Deduplicate** keeps the first object for each key combination. A missing key is null. Keys are compared as canonical JSON.
 - **For** iterates a JSON array of at most 100000 elements. Past that limit the node fails with `CHANNEL_ITEM_LIMIT_EXCEEDED`. During an iteration the output is `{current, index, count}`. After the body, the output adds `results`. `current` and `index` are the last element, or null when the list is empty. The `each` port is the loop-back port. The `done` port runs after the body. The `loop` input collects results.
 - **Live Source query** reads a small result from one registered **Source** through **Controlled Query**: one read-only statement, the platform `query_timeout_sec`, a per-node row cap, and a `query.run` **Management Audit Event** whose actor is the System Identity. It is the guarded alternative to the SQL node on a Source, which applies no Controlled Query guards (ADR 0058). `source_id` must resolve to a Source. `sql` is a string template. `row_cap` is an integer of at least 1 and defaults to 100; a cap above the platform `query_max_rows` fails the node. A successful execution returns `{rows, count, truncated}`. Each row is an object keyed by column name. `truncated` is true when the Source had more rows than the cap. A guard, timeout, or row-limit failure fails the node with `CHANNEL_NODE_FAILED`, the Controlled Query message, and that code in `error_detail.code`. Authoring it requires `channel:source_query` (§11). It does not require `query:run`.
+- **Error** (`trigger.error`) is the only trigger of a Data Channel used as another channel's error workflow (§6.8). It has no configuration. It has no schedule row. Its output is the failed run's identity when the platform starts it, or a test object when an operator starts it by hand (§7.1).
+- **Webhook** (`action.webhook`) POSTs the JSON value of a body template to one saved **Webhook**. The call uses HTTPS only, refuses a loopback, link-local, private, or cloud-metadata address, and waits at most 30 seconds. A stored bearer secret is sent as `Authorization: Bearer`. A refused address, a timeout, a connection failure, or an HTTP status of 400 or higher fails the node execution. The node's `on_error` then applies. The platform does not call a Webhook except from this node or from the catalog's test action. Authoring the node requires `channel:write` and a Webhook id that exists. Network access stays inside this node; the Code sandbox never gains it.
 - **Code** runs Python in the same sandbox as template expressions. The source is the body of `def main(self)`, and the returned value is the node output and must be JSON. One sandbox subprocess is reused per run. There is no network, and imports are limited to an allow-listed module set. Each call has its own wall-clock limit (`timeout_sec`, default 30, at most 300). The process CPU limit is only a safety net so a long run is not killed by accumulated CPU time. A syntax error found at validation is `CHANNEL_CODE_INVALID`. A run failure is `CHANNEL_NODE_FAILED` with `error_detail.reason` of `network`, `import`, `timeout`, `memory`, or `error`. Authoring or editing a Code node requires `channel:code_write`. Network access is never a sandbox relaxation; if needed it is a dedicated node type.
 
 ## 5. Writing Entities
@@ -214,7 +217,7 @@ A value that cannot be encoded as the attribute's **Attribute Type** is not an i
 
 ### 5.4 Incompatible Head Policy
 
-- `fail` (default): the node execution fails, the run ends `failed` with a channel Problem Code, and a Notification Channel event is sent (§10).
+- `fail` (default): the node execution fails and the run ends `failed` with a channel Problem Code. The node's `on_error` applies (§6.8).
 - `skip`: the node is skipped for this execution and the run record marks it.
 
 Entity publish does not block on incompatible write nodes. Its confirmation lists the write nodes (channel and node) that the new head would make incompatible.
@@ -231,9 +234,10 @@ Schedule instants (`last_run_at`, `scheduled_for`) are never checkpoints.
 
 ### 6.2 A Run Is One Job
 
-Each run is one **Job** of kind `channel_run`, executed in one worker child process. Its `input` names the channel, the target (`draft` or `published`), and run options (`docs/api-contracts-data-channel.md` §4.2). It carries no version. The runner enters the graph's single trigger node. An on-demand run may set `stop_at_node_id`. The run still enters that trigger and executes only the node's ancestor closure, including the node. When the stop field is omitted, the run executes every node reachable from the trigger. A closure that finishes ends `succeeded` with outcome `completed`.
+Each run is one **Job** of kind `channel_run`, executed in one worker child process. Its `input` names the channel, the target (`draft` or `published`), and run options (`docs/api-contracts-data-channel.md` §4.2). A rerun and a `retry` Job also pin a published version. Every other `published` run carries no version. The runner enters the graph's single trigger node. An on-demand run may set `stop_at_node_id`. The run still enters that trigger and executes only the node's ancestor closure, including the node. When the stop field is omitted, the run executes every node reachable from the trigger. A closure that finishes ends `succeeded` with outcome `completed`.
 
-- Target `published`: at start the runner resolves the current published version, records it and the graph on the run, and enters at the trigger node.
+- Target `published`, without a pin: at start the runner resolves the current published version, records it and the graph on the run, and enters at the trigger node.
+- Target `published`, with a pin: the runner loads that version and does not replace it with a newer one. A missing version ends the Job `cancelled`. A pinned run does not end because a newer version exists (§6.5).
 - Target `draft`: the runner executes the graph and `draft_revision` frozen when the run was queued.
 - A Job whose trigger node no longer exists in the graph it executes ends `cancelled`.
 - A schedule-minted Job of an inactive channel ends `cancelled`. An on-demand run is allowed while inactive.
@@ -251,14 +255,14 @@ Overlapping runs may write out of order: an older run can overwrite a newer valu
 | --- | --- |
 | `succeeded`, outcome `completed` | Every reached node finished; each checkpoint-owning node applies its configured advancement policy |
 | `succeeded`, outcome `skipped` | A read node chose to skip this run; checkpoint effects follow the owning node's configured policy; not a failure |
-| `failed` | A node failed with stop semantics, the run timeout elapsed, or the worker was lost; the run records the last failed node and edge |
+| `failed` | A node failed with `on_error` `stop` after its tries were used, the run timeout elapsed, or the worker was lost; a node failure records `failed_node_id` |
 | `cancelled` | Cancel was requested, a newer version superseded the run, or §6.2 cancelled it |
 
 A run that read a mirror while it was not in sync is marked "input mirror not in sync".
 
 ### 6.5 Version Supersede
 
-A published run stops between node executions when a newer published version exists, and ends `cancelled`. Publish does not write Job rows; the confirmation list names the running published runs that will stop. It does not include a run with target `draft`. Queued Jobs with target `published` are not cancelled; they resolve the new version when they start. A queued Job minted by a schedule that publish withdrew is cancelled by that withdraw (§7.2). Two published versions of one channel therefore never write at the same time, except for the window between node executions while a published run notices a newer version. A `draft` run may write while a published run of the same channel writes; serializing them is the author's choice (§6.3).
+A published run that is not pinned to a version stops between node executions when a newer published version exists, and ends `cancelled`. A pinned run keeps its version. Publish does not write Job rows; the confirmation list names the running published runs that will stop. It does not include a run with target `draft` or a pinned run. Queued Jobs with target `published` and no pin are not cancelled; they resolve the new version when they start. A queued pinned Job keeps its version. A queued Job minted by a schedule that publish withdrew is cancelled by that withdraw (§7.2). Two published versions of one channel therefore never write at the same time, except for the window between node executions while a published run notices a newer version. A `draft` run may write while a published run of the same channel writes; serializing them is the author's choice (§6.3).
 
 ### 6.6 Cancel And Layered Timeouts
 
@@ -276,18 +280,23 @@ Publish warns when the graph has no run timeout.
 
 ### 6.7 Reruns
 
-A rerun of a run is a new Job on the same published version as the original, reading from the checkpoints as they stand. A Job is one attempt and is never retried in place. Resuming from the failed node is outside this document.
+A rerun of a failed published run is a new Job on the same published version as the original. The runner executes that pinned version. Checkpoints are whatever each node reads when it runs; the rerun does not store or restore a cursor. A Job is one attempt and is never retried in place. Resuming from the failed node is outside this document. Requires `channel:write`. A run that is not both `failed` and `target` `published` is refused.
 
-### 6.8 Node Errors And Persistent Failure
+### 6.8 Node Errors, Run Retry, And Persistent Failure
 
-- Each node has an on-error setting. `stop` fails the run. `continue` and `error_output` are reserved; a graph that sets them, or that sets a retry, does not validate. A failing expression or a failing source row fails the node execution.
-- Retry on failure is reserved the same way: a graph with `retry` set does not validate.
-- A channel may name an error workflow, another Data Channel that runs when this channel's run fails.
-- A channel whose runs keep failing stays active, is flagged persistently failing in the Console, and is announced through the Notification Channel. The platform never deactivates a workflow.
+- Each node has `on_error` of `stop`, `continue`, or `error_output`. A failing expression or a failing source row fails that node execution. The engine does not split one execution into successful and failed rows.
+- `stop` fails the run and records `failed_node_id`.
+- `continue` records the node execution as failed with a null output, keeps every output except `error` live, and does not fail the run or set `failed_node_id`.
+- `error_output` is valid only when the node type declares an `error` output. The execution is recorded as failed, only the `error` port is live, and the output is an object `{code, message, detail}`. The run does not fail because of that node.
+- `retry` is null or `{max_tries, wait_sec}`. `max_tries` is 1 to 10 and counts the first execution. `wait_sec` is 0 to 3600. Null executes once. The engine repeats the node until it succeeds or the tries are used. Each try is its own node execution. Cancel and the run timeout end the run before the next try, including during `wait_sec`. `on_error` applies only after the tries are used.
+- `run_retry_limit` is null or an integer 0 to 10. Null and 0 mint no further Job. When a published run ends `failed`, and this chain has minted fewer additional Jobs than the limit on the graph that ran, the platform mints one new `channel_run` pinned to that version. Its trigger kind is `retry`, its actor is the System Identity, and its input carries `retry_of_job_id`. Draft runs do not mint these Jobs. A run whose trigger kind is `error` does not mint one.
+- `error_channel_id` names another Data Channel. When a run ends `failed` and no further retry Job will be minted, the platform starts that channel once, including after a draft run fails. The target must be active, and its current published version's only trigger must be `trigger.error`. Otherwise the source Job records a log line and no error run is minted. The error run's trigger kind is `error`, its actor is the System Identity, and `trigger_ref` is the source Job id. Its trigger output carries the failed run's identity and error. A run with trigger kind `error` does not start another error workflow. An error run's failure does not change the source run. Cancel does not start an error workflow.
+- Publish refuses `error_channel_id` unless the target exists, is not this channel, and its current published version uses `trigger.error`.
+- `failure_streak` lives on the channel, outside versions. It counts a published run whose failure mints no further retry Job, and increases by one for that episode. A published run that succeeds sets it to zero. At 3 the Console shows the channel as persistently failing. The platform does not change `active` because of the streak and does not call a **Webhook** because of it.
 
 ### 6.9 Run Records
 
-Every run records the graph it executed, the Expression Context it evaluated with (`self.channel`, `self.run`, and `self.platform` as fixed at run start), and, for each node execution, its output, duration, status, and error, plus the last failed node. The output is stored in full. A recorded output is the value later expressions read, including the output of a skipped node. Run detail cuts each list in `output_preview` to 100 elements and marks `output_truncated` when it did so; the separate output read pages the full stored value. Dataset References in a record are pageable in full during the retention window. Run data retention is a System Parameter in days.
+Every run records the graph it executed, the Expression Context it evaluated with (`self.channel`, `self.run`, and `self.platform` as fixed at run start), and, for each node execution, its output, duration, status, and error, plus `failed_node_id` when a node failed the run with `on_error` `stop`. The output is stored in full. A recorded output is the value later expressions read, including the output of a skipped node. Run detail cuts each list in `output_preview` to 100 elements and marks `output_truncated` when it did so; the separate output read pages the full stored value. Dataset References in a record are pageable in full during the retention window. Run data retention is a System Parameter in days.
 
 There is no editor-execution resource and no dry-run. The framework does not suppress writes, roll back node effects, limit rows during execution, or create a synthetic run identity. Every Channel Run shares the Job, worker, run record, cancellation, audit, and node semantics.
 
@@ -300,6 +309,7 @@ Channel Run records are kept for `channel_run_record_retention_days`. The hidden
 | Trigger | Mints a Channel Run when |
 | --- | --- |
 | Manual | An operator with `channel:write` asks for an on-demand run of the graph's only trigger, optionally stopping at one node or requesting that checkpoint-aware nodes ignore stored cursors. The run's target is `draft` or `published`. Allowed while inactive. The node's payload is a static JSON object; the node's output is that object plus `triggered_by` and `triggered_at` |
+| Error | The platform starts this channel as another channel's error workflow (§6.8). The trigger output is `channel_id`, `channel_name`, `job_id`, `version`, `attempt`, `error` (`code`, `message`, `node_id`), `triggered_by`, and `triggered_at` for the failed run. `attempt` counts the failed run and the retry Jobs already minted for that chain. An on-demand run of this trigger is a test: `channel_id`, `job_id`, and `version` are null, `attempt` is 0, and `error.code` is `CHANNEL_ERROR_TRIGGER_TEST` |
 | Scheduled | Its synced Scheduled Task row is due (§7.2) |
 | Platform event | A platform event matches: workflow failed, entity head switched, mirror resnapshot completed, mirror status changed |
 | Changes arrived | New entries appear in a chosen mirror or entity Change Log |
@@ -371,16 +381,16 @@ Operation assumes no person is watching. Every state that would otherwise need a
 | A cursor becomes invalid | One full read of the mirror as the new start (§6.1) |
 | An input mirror is not in sync | The read node's configured choice; continue by default |
 | A run hangs | The run timeout, when set (§6.6) |
-| Runs keep failing | Persistently failing flag and notification; the channel stays active (§6.8) |
+| Runs keep failing | Persistently failing flag in the Console; the channel stays active (§6.8). No Webhook is called |
 | A mirror has a gap, a breaking structure change, or a pause beyond retention | Automatic resnapshot |
 | A Connect task fails | Restart with backoff |
 
-Manual action is an optional override. Only two situations require a person, and both fail the run and alert through the site-wide **Notification Channel**:
+Manual action is an optional override. Two situations require a person, and both fail the run:
 
 1. A source-side CDC precondition is broken (for example capture disabled or retention below the required minimum).
 2. A write node's mapping is incompatible with a newly published Entity head and the node's policy is `fail` (§5.4).
 
-A Notification Channel delivery failure never fails the operation that raised the event.
+Neither situation calls a **Webhook**. An author who wants a call places an `action.webhook` node where the graph still runs, or in the error workflow.
 
 ## 11. Authorization
 
@@ -389,9 +399,11 @@ All keys are `platform`-scoped.
 | Permission | Grants |
 | --- | --- |
 | `channel:read` | Read channels, drafts, versions, run lists, and run records; read **Source Mirror** data through read nodes and records |
-| `channel:write` | Create, edit, save drafts, validate, publish, and delete channels; Template Preview against a run record; Global Variable writes; on-demand runs (target `draft` or `published`, with an optional stop node) and rerun; cancel a `channel_run` Job |
+| `channel:write` | Create, edit, save drafts, validate, publish, and delete channels; Template Preview against a run record; Global Variable writes; on-demand runs (target `draft` or `published`, with an optional stop node) and rerun; cancel a `channel_run` Job; reference an existing **Webhook** from an `action.webhook` node |
 | `channel:code_write` | Author a Code node. Required in addition to `channel:write` |
 | `channel:source_query` | Author a live Source query node. Required in addition to `channel:write`. Does not grant `query:run` |
+| `webhook:read` | List and read **Webhook**s. Controls the Console Module |
+| `webhook:write` | Create, update, test, and delete **Webhook**s. Not implied by `channel:write` |
 | `mirror:write` | Operate Source Mirrors (disable, delete data, resnapshot overrides) |
 
 Draft save compares the submitted graph with the stored draft. For a node whose type declares a permission: adding it (no stored node with that id, or the stored node had another type), or changing its `type`, `type_version`, or `config`, requires that permission. Otherwise the save is `403 AUTH_FORBIDDEN` and the detail names the node. An unchanged guarded node does not require the permission. Deleting one does not. Publish requires the caller to hold every permission declared by node types present in the draft, including nodes that did not change. Missing one is `403 AUTH_FORBIDDEN` and the detail names the node.
@@ -412,7 +424,7 @@ While the channel's latest draft **Channel Run** has not ended `succeeded`, `fai
 
 ## 13. Management Audit
 
-Persist a **Management Audit Event** for: channel create, identity edit, draft save, publish, activation change, delete, manual run enqueue, Global Variable manual delete, and every Source Mirror operation. Each event records actor, **Instant**, resource, action, and result.
+Persist a **Management Audit Event** for: channel create, identity edit, draft save, publish, activation change, delete, manual run enqueue, rerun enqueue, Global Variable manual delete, Webhook create, update, delete, and test, and every Source Mirror operation. Each event records actor, **Instant**, resource, action, and result.
 
 ## 14. Non-Goals
 
@@ -420,8 +432,8 @@ Persist a **Management Audit Event** for: channel create, identity edit, draft s
 2. An execution lock or platform serialization of runs.
 3. Data Product catalog and non-Entity delivery targets.
 4. Per-object authorization on Source Mirrors.
-5. Notification channels other than one site-wide webhook.
-6. Binary items, and node types with network access.
+5. A platform event that calls a **Webhook** without an `action.webhook` node.
+6. Binary items, and network access other than the Webhook node.
 7. MCP tools for Data Channel or Source Mirrors.
 8. Restoring source transaction boundaries at the target. Targets are atomic per batch and eventually consistent.
 9. Source-side triggers installed by the platform, and source writes other than a Data Channel SQL statement or the documented CDC signal and flush objects.
@@ -430,6 +442,7 @@ Persist a **Management Audit Event** for: channel create, identity edit, draft s
 ## 15. References
 
 - `docs/api-contracts-data-channel.md`
+- `docs/api-contracts-webhooks.md`
 - `docs/business-entity.md`
 - `docs/business-entity-access.md`
 - `docs/business-metadata.md`

@@ -25,6 +25,7 @@ class ChannelRow(Base):
     draft_updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    failure_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class ChannelVersionRow(Base):
@@ -61,6 +62,20 @@ class ChannelRunRow(Base):
     skipped_node_ids: Mapped[list[Any]] = mapped_column(JSONB, nullable=False)
     context: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
+class WebhookRow(Base):
+    __tablename__ = "webhooks"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    secret_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_delivery_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    last_delivery_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    last_delivery_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
 
 class ChannelVariableRow(Base):

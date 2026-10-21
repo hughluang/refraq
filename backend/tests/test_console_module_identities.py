@@ -45,6 +45,7 @@ EXPECTED_ICONS = {
     "schedules": "clock",
     "settings": "settings",
     "branding": "palette",
+    "webhooks": "webhook",
     "model-services": "brain",
     "account": "user-circle",
 }
@@ -381,6 +382,24 @@ EXPECTED_IDENTITIES = {
             "edit": "branding:write",
             "delete": None,
             "show": None,
+            "sample": None,
+        },
+    },
+    "webhooks": {
+        "label_key": "webhooks.title",
+        "routes": {
+            "list": "/console/webhooks",
+            "create": "/console/webhooks/new",
+            "edit": "/console/webhooks/:id/edit",
+            "show": "/console/webhooks/:id",
+            "aliases": [],
+        },
+        "actions": {
+            "list": "webhook:read",
+            "create": "webhook:write",
+            "edit": "webhook:write",
+            "delete": "webhook:write",
+            "show": "webhook:read",
             "sample": None,
         },
     },

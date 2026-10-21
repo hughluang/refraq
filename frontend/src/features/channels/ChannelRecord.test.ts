@@ -57,6 +57,8 @@ vi.mock("@/features/channels/api", () => ({
   getChannel: vi.fn(),
   getDraft: vi.fn(),
   getRun: vi.fn(),
+  getVersion: vi.fn(),
+  listChannels: vi.fn(),
   listNodeTypes: vi.fn(),
   listRuns: vi.fn(),
   patchChannel: vi.fn(),
@@ -99,6 +101,8 @@ function channel(): Channel {
     draft_revision: 1,
     draft_updated_at: now,
     latest_version: null,
+    failure_streak: 0,
+    persistently_failing: false,
     created_at: now,
     updated_at: now,
   };

@@ -162,7 +162,7 @@ No module is created empty. `channel.errors`, `channel.routers`, `channel.tasks`
 
 - `jobs`: Job create, status transitions, cancel request, run log.
 - `worker`: schedule store port and seam (`worker.api`, `worker.schedules`, `worker.errors`, `worker.schemas`, `worker.due`) for publish sync, activation, withdraw, and due consumption.
-- `admin`: deps and permissions, audit, the System Parameter resolver, and the Notification Channel sender.
+- `admin`: deps and permissions, audit, and the System Parameter resolver.
 - `metadata`: Locator parsing and resolution, Catalog Object and column reads, Controlled Query guards and execution, Source statement execution, and Normalized Type.
 - `entity`: head resolution and head shape by Entity id (`entity.heads`), the head-table row read and batch write port (`entity.rows`), entity Change Log reads, and head-switch events. Row writes go through Entity Access Control as the System Identity.
 
@@ -199,7 +199,7 @@ No module is created empty. `channel.errors`, `channel.routers`, `channel.tasks`
 | Mechanism-resource HTTP (get/cancel Job by id) | `jobs` |
 | Mechanism-resource HTTP (list/get/patch/delete Scheduled Task) | `worker` |
 | Domain use-case HTTP (Source, Catalog, Source schedule facade, schedule run-now / related Jobs) | product domain (`metadata`) |
-| Domain use-case HTTP (Data Channel definitions, drafts, versions, activation, manual runs, run lists) | product domain (`channel`) |
+| Domain use-case HTTP (Data Channel definitions, drafts, versions, activation, manual runs, run lists, Webhooks) | product domain (`channel`) |
 | Outbound adapter families | Owning product domain (e.g. `metadata/connectors`: engine adapters + `runtime` invocation shell that binds an already-interpreted `SourceEndpoint`) |
 | Domain error types | That product domain (base in `core`) |
 | Site Branding singleton, assets, validation, cache policy, and HTTP | `admin/branding` language unit |

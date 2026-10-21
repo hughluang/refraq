@@ -18,6 +18,7 @@
   "DELETE /tokens/{token_id}": [],
   "DELETE /user-groups/{group_id}": [],
   "DELETE /user-groups/{group_id}/members/{user_id}": [],
+  "DELETE /webhooks/{webhook_id}": [],
   "GET /account/groups": [],
   "GET /audit/events": [
     "items[].created_at"
@@ -34,6 +35,10 @@
   "GET /business-domains": [
     "items[].created_at",
     "items[].updated_at"
+  ],
+  "GET /business-domains/{domain_id}": [
+    "domain.created_at",
+    "domain.updated_at"
   ],
   "GET /catalog/columns/search": [],
   "GET /catalog/objects/search": [
@@ -295,6 +300,16 @@
     "groups[].updated_at"
   ],
   "GET /users/{user_id}/subject-attributes": [],
+  "GET /webhooks": [
+    "items[].created_at",
+    "items[].last_delivery_at",
+    "items[].updated_at"
+  ],
+  "GET /webhooks/{webhook_id}": [
+    "webhook.created_at",
+    "webhook.last_delivery_at",
+    "webhook.updated_at"
+  ],
   "PATCH /account/profile": [],
   "PATCH /business-domains/{domain_id}": [
     "domain.created_at",
@@ -388,6 +403,11 @@
   "PATCH /users/{user_id}/status": [
     "user.last_login_at"
   ],
+  "PATCH /webhooks/{webhook_id}": [
+    "webhook.created_at",
+    "webhook.last_delivery_at",
+    "webhook.updated_at"
+  ],
   "POST /account/password": [],
   "POST /auth/login": [],
   "POST /auth/logout": [],
@@ -424,6 +444,11 @@
     "runs_to_cancel[].started_at"
   ],
   "POST /channels/{channel_id}/runs": [
+    "run.created_at",
+    "run.finished_at",
+    "run.started_at"
+  ],
+  "POST /channels/{channel_id}/runs/{job_id}/rerun": [
     "run.created_at",
     "run.finished_at",
     "run.started_at"
@@ -598,6 +623,16 @@
   ],
   "POST /users/{user_id}/unfederate": [
     "user.last_login_at"
+  ],
+  "POST /webhooks": [
+    "webhook.created_at",
+    "webhook.last_delivery_at",
+    "webhook.updated_at"
+  ],
+  "POST /webhooks/{webhook_id}/test": [
+    "webhook.created_at",
+    "webhook.last_delivery_at",
+    "webhook.updated_at"
   ],
   "PUT /branding": [],
   "PUT /channels/{channel_id}/draft": [

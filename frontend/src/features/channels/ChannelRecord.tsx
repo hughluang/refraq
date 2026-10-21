@@ -46,6 +46,7 @@ import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
 import { AdjustmentsIcon, ListIcon, VersionsIcon } from "@/components/icons";
 import { NumberField } from "@/components/form/NumberField";
+import { SelectField } from "@/components/form/SelectField";
 import { TextareaField } from "@/components/form/TextareaField";
 import { TextField } from "@/components/form/TextField";
 import { FillColumn } from "@/components/layout/FillColumn";
@@ -59,6 +60,8 @@ import {
   getChannel,
   getDraft,
   getRun,
+  getVersion,
+  listChannels,
   listNodeTypes,
   listRuns,
   patchChannel,
@@ -99,6 +102,23 @@ const DESCRIPTION_MAX = 2000;
 
 function runTimeoutSec(value: number | string): number | null {
   return typeof value === "number" && value > 0 ? Math.floor(value) : null;
+}
+
+function errorChannelOptions(
+  options: { value: string; label: string }[],
+  selected: string | null,
+) {
+  if (selected && !options.some((item) => item.value === selected)) {
+    return [{ value: selected, label: selected }, ...options];
+  }
+  return options;
+}
+
+function runRetryLimit(value: number | string): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const next = Math.floor(value);
+  if (next < 0 || next > 10) return null;
+  return next;
 }
 
 type IdentityValues = {
@@ -245,11 +265,15 @@ function ChannelExisting({
       },
     },
   });
+  const [errorChannels, setErrorChannels] = useState<{ value: string; label: string }[]>([]);
+  const [errorChannelsFailed, setErrorChannelsFailed] = useState(false);
   const detailsForm = useConsoleForm<{
     description: string;
     timeout: number | string;
+    retryLimit: number | string;
+    errorChannelId: string | null;
   }>({
-    initialValues: { description: "", timeout: "" },
+    initialValues: { description: "", timeout: "", retryLimit: "", errorChannelId: null },
   });
   const formRef = useRef(form);
   formRef.current = form;
@@ -630,24 +654,69 @@ function ChannelExisting({
   const togglePanel = (next: "versions" | "runs") => {
     setPanel((current) => (current === next ? null : next));
   };
+  const loadErrorChannels = () => {
+    setErrorChannelsFailed(false);
+    void listChannels({ limit: 200 })
+      .then(async (page) => {
+        const found = await Promise.all(
+          page.items
+            .filter((item) => item.id !== channelId && item.latest_version)
+            .map(async (item) => {
+              const loaded = await getVersion(item.id, item.latest_version!.number);
+              const triggers = (loaded.version.graph?.nodes ?? []).filter((node) =>
+                node.type.startsWith("trigger."),
+              );
+              if (triggers.length === 1 && triggers[0]?.type === "trigger.error") {
+                return { value: item.id, label: item.name };
+              }
+              return null;
+            }),
+        );
+        setErrorChannels(
+          found.filter((item): item is { value: string; label: string } => item != null),
+        );
+        setErrorChannelsFailed(false);
+      })
+      .catch(() => {
+        setErrorChannels([]);
+        setErrorChannelsFailed(true);
+      });
+  };
   const openDescription = () => {
     detailsForm.setValues({
       description: form.values.description,
       timeout: graph.settings.run_timeout_sec ?? "",
+      retryLimit: graph.settings.run_retry_limit ?? "",
+      errorChannelId: graph.settings.error_channel_id,
     });
     detailsForm.markSaved();
     setDescriptionOpen(true);
+    loadErrorChannels();
   };
   const closeDescription = () => {
     detailsForm.reset();
     setDescriptionOpen(false);
   };
-  const applyDescription = (values: { description: string; timeout: number | string }) => {
+  const applyDescription = (values: {
+    description: string;
+    timeout: number | string;
+    retryLimit: number | string;
+    errorChannelId: string | null;
+  }) => {
     form.setFieldValue("description", values.description.trim().slice(0, DESCRIPTION_MAX));
     const next = runTimeoutSec(values.timeout);
+    const retryLimit = runRetryLimit(values.retryLimit);
     setGraph((current) =>
       current
-        ? { ...current, settings: { ...current.settings, run_timeout_sec: next } }
+        ? {
+            ...current,
+            settings: {
+              ...current.settings,
+              run_timeout_sec: next,
+              run_retry_limit: retryLimit,
+              error_channel_id: values.errorChannelId,
+            },
+          }
         : current,
     );
     detailsForm.markSaved();
@@ -692,6 +761,9 @@ function ChannelExisting({
             editable={draftEditable && !busy}
             onToggle={() => form.setFieldValue("active", !form.values.active)}
           />
+          {channel.persistently_failing ? (
+            <StatusBadge tone="warning" labelKey="channels.persistentlyFailing" />
+          ) : null}
           <Group gap={4} wrap="nowrap">
             <Button
               variant="subtle"
@@ -984,6 +1056,31 @@ function ChannelExisting({
               w={280}
               {...detailsForm.fieldProps("timeout")}
             />
+            <NumberField
+              editable
+              label={t("channels.settings.runRetryLimit")}
+              description={t("channels.settings.runRetryLimitHint")}
+              min={0}
+              max={10}
+              allowDecimal={false}
+              w={280}
+              {...detailsForm.fieldProps("retryLimit")}
+            />
+            <SelectField
+              editable
+              label={t("channels.settings.errorChannel")}
+              description={t("channels.settings.errorChannelHint")}
+              data={errorChannelOptions(
+                errorChannels,
+                detailsForm.values.errorChannelId,
+              )}
+              value={detailsForm.values.errorChannelId}
+              error={
+                errorChannelsFailed ? t("channels.settings.errorChannelLoadFailed") : undefined
+              }
+              clearable
+              onChange={(next) => detailsForm.setFieldValue("errorChannelId", next)}
+            />
           </Stack>
         </FormDialog>
       ) : (
@@ -1007,6 +1104,23 @@ function ChannelExisting({
               description={t("channels.settings.runTimeoutHint")}
               w={280}
               value={graph.settings.run_timeout_sec ?? ""}
+            />
+            <NumberField
+              editable={false}
+              label={t("channels.settings.runRetryLimit")}
+              description={t("channels.settings.runRetryLimitHint")}
+              w={280}
+              value={graph.settings.run_retry_limit ?? ""}
+            />
+            <SelectField
+              editable={false}
+              label={t("channels.settings.errorChannel")}
+              description={t("channels.settings.errorChannelHint")}
+              data={errorChannelOptions(errorChannels, graph.settings.error_channel_id)}
+              value={graph.settings.error_channel_id}
+              error={
+                errorChannelsFailed ? t("channels.settings.errorChannelLoadFailed") : undefined
+              }
             />
             <Group justify="flex-end">
               <Button variant="default" onClick={closeDescription}>

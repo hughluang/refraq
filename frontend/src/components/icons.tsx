@@ -48,6 +48,7 @@ import {
   IconUsers,
   IconUsersGroup,
   IconVariable,
+  IconWebhook,
   IconX,
   type IconProps,
 } from "@tabler/icons-react";
@@ -116,6 +117,7 @@ const MODULE_ICONS: Record<string, ReturnType<typeof withDefaults>> = {
   clock: withDefaults(IconClock),
   settings: withDefaults(IconSettings),
   palette: withDefaults(IconPalette),
+  webhook: withDefaults(IconWebhook),
   brain: withDefaults(IconBrain),
   "user-circle": withDefaults(IconUserCircle),
 };

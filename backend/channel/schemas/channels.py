@@ -85,6 +85,7 @@ class GraphSettingsIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     run_timeout_sec: int | None = None
+    run_retry_limit: int | None = None
     error_channel_id: str | None = None
 
     @field_validator("run_timeout_sec")
@@ -94,6 +95,15 @@ class GraphSettingsIn(BaseModel):
             return None
         if value < 1 or value > _RUN_TIMEOUT_MAX:
             raise ValueError("run_timeout_sec is out of range")
+        return value
+
+    @field_validator("run_retry_limit")
+    @classmethod
+    def _retry_limit(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        if value < 0 or value > 10:
+            raise ValueError("run_retry_limit is out of range")
         return value
 
     @field_validator("error_channel_id")
@@ -203,6 +213,8 @@ class ChannelOut(BaseModel):
     draft_revision: int
     draft_updated_at: Instant
     latest_version: LatestVersionOut | None
+    failure_streak: int
+    persistently_failing: bool
     created_at: Instant
     updated_at: Instant
 

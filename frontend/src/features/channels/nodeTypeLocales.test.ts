@@ -53,6 +53,13 @@ describe("channel node type locales", () => {
       "channels.node.permissionReadOnly",
       "channels.config.source.placeholder",
       "channels.config.source.loadFailed",
+      "channels.config.fields.action.webhook.webhook_id",
+      "channels.config.fields.action.webhook.webhook_id.description",
+      "channels.config.fields.action.webhook.body",
+      "channels.config.fields.action.webhook.body.description",
+      "channels.config.webhook.placeholder",
+      "channels.config.webhook.missing",
+      "channels.config.webhook.loadFailed",
     ];
     const enMessages = en as Record<string, string>;
     const zhMessages = zh as Record<string, string>;

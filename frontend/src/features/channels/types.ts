@@ -22,6 +22,7 @@ export type GraphEdge = {
 
 export type GraphSettings = {
   run_timeout_sec: number | null;
+  run_retry_limit?: number | null;
   error_channel_id: string | null;
 };
 
@@ -39,6 +40,8 @@ export type Channel = {
   draft_revision: number;
   draft_updated_at: Instant;
   latest_version: { number: number; published_at: Instant } | null;
+  failure_streak: number;
+  persistently_failing: boolean;
   created_at: Instant;
   updated_at: Instant;
 };
@@ -166,5 +169,5 @@ export type NodeTypeSpec = {
 export const EMPTY_GRAPH: Graph = {
   nodes: [],
   edges: [],
-  settings: { run_timeout_sec: null, error_channel_id: null },
+  settings: { run_timeout_sec: null, run_retry_limit: null, error_channel_id: null },
 };

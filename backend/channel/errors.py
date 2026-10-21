@@ -13,10 +13,14 @@ __all__ = [
     "ChannelNotPublished",
     "ChannelRequestInvalid",
     "ChannelRunNotFound",
+    "ChannelRunNotRerunnable",
     "ChannelTriggerInvalid",
     "ChannelVariableNameInvalid",
     "ChannelVariableNotFound",
     "ChannelVersionNotFound",
+    "WebhookInUse",
+    "WebhookNotFound",
+    "WebhookUrlRejected",
 ]
 
 
@@ -109,6 +113,38 @@ class ChannelRunNotFound(AppError):
 
     def _default_message(self) -> str:
         return "Channel run not found"
+
+
+class ChannelRunNotRerunnable(AppError):
+    code = "CHANNEL_RUN_NOT_RERUNNABLE"
+    http_status = 422
+
+    def _default_message(self) -> str:
+        return "Only a failed published run can be rerun"
+
+
+class WebhookNotFound(AppError):
+    code = "WEBHOOK_NOT_FOUND"
+    http_status = 404
+
+    def _default_message(self) -> str:
+        return "Webhook not found"
+
+
+class WebhookUrlRejected(AppError):
+    code = "WEBHOOK_URL_REJECTED"
+    http_status = 422
+
+    def _default_message(self) -> str:
+        return "Webhook URL is not allowed"
+
+
+class WebhookInUse(AppError):
+    code = "WEBHOOK_IN_USE"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Webhook is still referenced by a Data Channel"
 
 
 class ChannelRequestInvalid(AppError):

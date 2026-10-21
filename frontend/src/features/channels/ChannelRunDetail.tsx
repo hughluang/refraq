@@ -1,7 +1,7 @@
 "use client";
 
-import { Button, Stack, Text } from "@mantine/core";
-import { useTranslate } from "@refinedev/core";
+import { Button, Group, Stack, Text } from "@mantine/core";
+import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useEffect, useState } from "react";
 
 import { LiveStatusAnnouncer } from "@/components/display/LiveStatusAnnouncer";
@@ -12,7 +12,8 @@ import { HeaderActions } from "@/components/layout/HeaderActions";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
-import { getRun, listNodeTypes } from "@/features/channels/api";
+import { getRun, listNodeTypes, rerunRun } from "@/features/channels/api";
+import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { RecordReference } from "@/components/display/RecordReference";
 import { formatFailedNode, formatRunSubject, nodeDisplayName } from "@/features/channels/formatRunSubject";
 import { formatRunError } from "@/features/channels/problemLabel";
@@ -33,7 +34,13 @@ export function ChannelRunDetail({
   jobId: string;
 }) {
   const t = useTranslate();
+  const { open } = useNotification();
+  const { data: canWrite } = useCan({
+    resource: ModuleId.channels,
+    action: ModuleAction.edit,
+  });
   const [catalog, setCatalog] = useState<NodeTypeSpec[]>([]);
+  const [rerunning, setRerunning] = useState(false);
   const live = useLiveStatus({
     key: `${channelId}:${jobId}`,
     fetch: (signal) => getRun(channelId, jobId, { signal }),
@@ -51,17 +58,45 @@ export function ChannelRunDetail({
       cancelled = true;
     };
   }, []);
+  const rerun =
+    canWrite?.can && detail?.run.status === "failed" && detail.run.target === "published" ? (
+      <Button
+        size="sm"
+        loading={rerunning}
+        onClick={() => {
+          setRerunning(true);
+          void rerunRun(channelId, jobId)
+            .then((body) => {
+              window.location.assign(
+                `/console/channels/${channelId}/runs/${body.run.job_id}`,
+              );
+            })
+            .catch((error: unknown) => {
+              open?.({
+                type: "error",
+                message: problemMessage(t, error, t("channels.runDetail.rerunFailed")),
+              });
+              setRerunning(false);
+            });
+        }}
+      >
+        {t("channels.runDetail.rerun")}
+      </Button>
+    ) : null;
   const back = (
     <HeaderActions
       navigation={
-        <Button
-          component={ConsoleLink}
-          href={`/console/channels/${channelId}`}
-          variant="default"
-          size="sm"
-        >
-          {t("channels.runDetail.back")}
-        </Button>
+        <Group gap="xs">
+          {rerun}
+          <Button
+            component={ConsoleLink}
+            href={`/console/channels/${channelId}`}
+            variant="default"
+            size="sm"
+          >
+            {t("channels.runDetail.back")}
+          </Button>
+        </Group>
       }
     />
   );
@@ -133,6 +168,7 @@ export function ChannelRunDetail({
           appearance="browse"
           mutable={false}
           sessionRun={detail}
+          focusNodeId={detail.run.failed_node_id}
           problems={[]}
           onChange={() => undefined}
         />

@@ -50,7 +50,7 @@ The side nav carries only module structural navigation and **renders exactly the
 | Metadata | `metadata` | Sources (`sources`), Catalog (`catalog`), Business Domains (`business-domains`), Type Mappings (`type-mappings`) |
 | Entity | `entity` | Entities (`entities`) |
 | Operations | `operations` | Jobs (`jobs`), Schedules (`schedules`) |
-| Platform settings | `settings` | System parameters (`settings`), Site branding (`branding`), Model Services (`model-services`) |
+| Platform settings | `settings` | System parameters (`settings`), Site branding (`branding`), Model Services (`model-services`), Webhooks (`webhooks`) |
 
 - The `entity` group sits after `metadata` and before `operations`. The `operations` group sits after `entity` and before `settings`. Module field details: `docs/business-metadata.md`, `docs/business-entity.md`, `docs/business-user-tokens.md`, `docs/business-jobs.md`, `docs/business-scheduled-tasks.md`.
 - Module `entities` is registered under nav group `entity`. It is not mounted under `metadata`. Its record carries the access control tab and the data page (`docs/business-entity-access.md` §19); they are tabs of that module, not modules of their own.
