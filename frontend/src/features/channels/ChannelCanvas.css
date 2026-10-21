@@ -16,11 +16,8 @@
 
 .channel-canvas-connect-note {
   position: absolute;
-  z-index: 5;
-  top: 0;
-  left: 0;
-  max-width: 24rem;
-  margin: var(--mantine-spacing-md);
+  z-index: 6;
+  max-width: 16rem;
   pointer-events: none;
 }
 
@@ -399,12 +396,20 @@
 .channel-flow-node__settings:focus-visible,
 .channel-flow-node__run:focus-visible,
 .channel-flow-node__delete:focus-visible,
-.channel-flow-edge__delete:focus-visible {
+.channel-flow-edge__delete:focus-visible,
+.channel-flow-edge__insert:focus-visible,
+.channel-flow-port-add:focus-visible {
   outline: 2px solid var(--mantine-primary-color-filled);
   outline-offset: 1px;
 }
 
-.channel-flow-edge__delete {
+.channel-flow-edge__tools {
+  display: flex;
+  gap: 4px;
+}
+
+.channel-flow-edge__delete,
+.channel-flow-edge__insert {
   display: grid;
   place-items: center;
   width: 18px;
@@ -415,6 +420,22 @@
   background: var(--mantine-color-body);
   color: var(--mantine-color-dimmed);
   box-shadow: var(--mantine-shadow-xs);
+  cursor: pointer;
+}
+
+.channel-flow-port-add {
+  position: absolute;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin-top: -8px;
+  padding: 0;
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: 999px;
+  background: var(--mantine-color-body);
+  color: var(--mantine-color-text);
   cursor: pointer;
 }
 
@@ -437,7 +458,8 @@
     transition: stroke var(--refraq-motion-fast) var(--refraq-ease-standard);
   }
 
-  .channel-flow-edge__delete {
+  .channel-flow-edge__delete,
+  .channel-flow-edge__insert {
     animation: channel-flow-edge-delete-in var(--refraq-motion-fast) var(--refraq-ease-enter);
     transition:
       background-color var(--refraq-motion-fast) var(--refraq-ease-standard),
@@ -623,15 +645,68 @@
   border-bottom: 1px solid var(--mantine-color-default-border);
 }
 
-.channel-node-picker__option {
-  height: auto;
-  padding-top: 6px;
-  padding-bottom: 6px;
+.channel-node-picker {
+  position: absolute;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.channel-node-picker__option .mantine-Button-label {
-  white-space: normal;
+.channel-node-picker__list {
+  min-height: 0;
+  margin-top: var(--mantine-spacing-xs);
+  overflow: auto;
+}
+
+.channel-node-picker__family {
+  padding: 6px 6px 2px;
+}
+
+.channel-node-picker__empty {
+  padding: var(--mantine-spacing-xs);
+}
+
+.channel-node-picker__option {
+  display: flex;
+  align-items: center;
+  gap: var(--mantine-spacing-xs);
+  width: 100%;
+  padding: 6px;
+  border: 0;
+  border-radius: var(--mantine-radius-sm);
+  background: transparent;
+  color: inherit;
   text-align: start;
+  cursor: pointer;
+}
+
+.channel-node-picker__option[aria-selected="true"] {
+  background: var(--mantine-color-default-hover);
+}
+
+.channel-node-picker__option[aria-disabled="true"] {
+  cursor: default;
+  color: var(--mantine-color-dimmed);
+}
+
+.channel-node-picker__icon {
+  flex: none;
+}
+
+.channel-node-placeholder {
+  width: 208px;
+  height: 56px;
+  box-sizing: border-box;
+  border: 1px dashed var(--mantine-color-dimmed);
+  border-radius: var(--mantine-radius-sm);
+  background: var(--mantine-color-default);
+  pointer-events: none;
+}
+
+.channel-node-placeholder__edge {
+  overflow: visible;
+  pointer-events: none;
 }
 
 .channel-node-picker__copy {

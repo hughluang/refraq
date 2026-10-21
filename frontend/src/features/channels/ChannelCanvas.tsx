@@ -3,8 +3,6 @@
 import {
   ActionIcon,
   Button,
-  CloseButton,
-  Group,
   Paper,
   Stack,
   Text,
@@ -23,6 +21,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   SelectionMode,
+  ViewportPortal,
   addEdge,
   applyEdgeChanges,
   applyNodeChanges,
@@ -54,7 +53,8 @@ import "./ChannelCanvas.css";
 
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { CanvasToolbar } from "@/features/channels/CanvasToolbar";
-import { canvasShortcutTarget } from "@/features/channels/useCanvasShortcuts";
+import { canvasShortcutTarget, canvasViewportDuration } from "@/features/channels/useCanvasShortcuts";
+import { NodePicker, type PickerEntry } from "@/features/channels/NodePicker";
 
 import {
   createHistory,
@@ -73,6 +73,7 @@ import {
   connectionAllowed,
   emptyNodeData,
   flowFromGraph,
+  insertableTypes,
   nodeRef,
   graphFromFlow,
   newGraphId,
@@ -91,7 +92,7 @@ import {
 } from "@/features/channels/runSession";
 import type { ChannelTemplatePreview } from "@/features/channels/TemplateRunPreview";
 import { canAuthorNodeType } from "@/features/channels/nodePermission";
-import { nodeTypeLabel, nodeTypeSummary } from "@/features/channels/nodeTypeCopy";
+import { nodeTypeLabel } from "@/features/channels/nodeTypeCopy";
 import {
   isLoopReturn,
   layoutNodePorts,
@@ -113,6 +114,7 @@ import {
   ErrorIcon,
   LoaderIcon,
   PlayIcon,
+  PlusIcon,
 } from "@/components/icons";
 import { problemIdentity, type ProblemGraph } from "@/features/channels/problemLabel";
 import { upstreamOutputs } from "@/features/channels/templateLogic";
@@ -138,15 +140,40 @@ type ProblemHighlight = {
   key: string;
 };
 
-type PickerState =
-  | { kind: "catalog" }
+type PickerPlace =
+  | { mode: "open" }
+  | { mode: "beside"; sourceId: string }
+  | { mode: "point"; position: { x: number; y: number } }
   | {
-      kind: "connect";
-      position: { x: number; y: number };
+      mode: "after-port";
       sourceId: string;
       sourceHandle: string;
-      specs: NodeTypeSpec[];
-    };
+      position: { x: number; y: number };
+      besideSource: boolean;
+    }
+  | { mode: "insert-edge"; edgeId: string; position: { x: number; y: number } };
+
+type PickerGhost = {
+  position: { x: number; y: number };
+  sourceId: string;
+  sourceHandle: string;
+};
+
+type PickerState = {
+  key: number;
+  /** Toolbar and empty-canvas add toggle this picker shut and mark the button. */
+  fromAdd: boolean;
+  anchor: { x: number; y: number };
+  preferAbove: boolean;
+  place: PickerPlace;
+  ghost: PickerGhost | null;
+  returnFocusId: string | null;
+};
+
+export type PickerIntent =
+  | { kind: "free" }
+  | { kind: "afterPort"; sourceId: string; sourceHandle: string }
+  | { kind: "insertOnEdge"; edgeId: string };
 
 const NODE_DRAG_THRESHOLD = 4;
 const NUDGE_STEP = 8;
@@ -175,7 +202,15 @@ const CanvasSurfaceContext = createContext<{
   editing: boolean;
   mutable: boolean;
   openNode: (nodeId: string) => void;
-}>({ editing: false, mutable: false, openNode: () => {} });
+  openPickerAt: (screenPoint: { x: number; y: number }, intent: PickerIntent) => void;
+  busyOutputs: ReadonlySet<string>;
+}>({
+  editing: false,
+  mutable: false,
+  openNode: () => {},
+  openPickerAt: () => {},
+  busyOutputs: new Set<string>(),
+});
 const CanvasCatalogContext = createContext<readonly NodeTypeSpec[]>([]);
 const CanvasRunContext = createContext<{
   phases: ReadonlyMap<string, string>;
@@ -240,7 +275,7 @@ function ChannelCanvasBody({
   const t = useTranslate();
   const colorScheme = useComputedColorScheme("light", { getInitialValueInEffect: false });
   const { data: heldPermissions } = usePermissions<string[]>({});
-  const { screenToFlowPosition, setCenter, getInternalNode } = useReactFlow();
+  const { screenToFlowPosition, flowToScreenPosition, setCenter, getInternalNode } = useReactFlow();
   const store = useStoreApi();
   const triggerTypes = useMemo(
     () => new Set(catalog.filter((item) => item.trigger).map((item) => item.type)),
@@ -261,7 +296,7 @@ function ChannelCanvasBody({
   const [picker, setPicker] = useState<PickerState | null>(null);
   const [highlight, setHighlight] = useState<ProblemHighlight | null>(null);
   const [problemsDismissed, setProblemsDismissed] = useState(0);
-  const [connectNote, setConnectNote] = useState(false);
+  const [connectNote, setConnectNote] = useState<{ x: number; y: number } | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const nodesRef = useRef(nodes);
@@ -276,6 +311,8 @@ function ChannelCanvasBody({
   const focusReturnRef = useRef<string | null>(null);
   const cancelOverlayCloseRef = useRef<() => void>(() => {});
   const beginCloseRef = useRef<() => void>(() => {});
+  const retainPickerRef = useRef(false);
+  const pickerSeq = useRef(0);
   const highlightRef = useRef<ProblemHighlight | null>(highlight);
   nodesRef.current = nodes;
   edgesRef.current = edges;
@@ -508,7 +545,7 @@ function ChannelCanvasBody({
     };
     if (active.nodeId) {
       const center = centerOf(active.nodeId);
-      if (center) void setCenter(center.x, center.y, { duration: 200 });
+      if (center) void setCenter(center.x, center.y, { duration: canvasViewportDuration() });
       return;
     }
     if (!active.edgeId) return;
@@ -517,7 +554,9 @@ function ChannelCanvasBody({
     const source = centerOf(edge.source);
     const target = centerOf(edge.target);
     if (!source || !target) return;
-    void setCenter((source.x + target.x) / 2, (source.y + target.y) / 2, { duration: 200 });
+    void setCenter((source.x + target.x) / 2, (source.y + target.y) / 2, {
+      duration: canvasViewportDuration(),
+    });
   };
 
   const focusProblem = (problem: GraphProblem) => {
@@ -567,7 +606,11 @@ function ChannelCanvasBody({
   const placeNode = (
     spec: NodeTypeSpec,
     position: { x: number; y: number },
-    link?: { sourceId: string; sourceHandle: string },
+    options?: {
+      link?: { sourceId: string; sourceHandle: string };
+      continueTo?: { targetId: string; targetHandle: string };
+      removeEdgeId?: string;
+    },
   ) => {
     if (!mutable || !canAuthorNodeType(spec.permission, heldPermissions)) return;
     cancelOverlayCloseRef.current();
@@ -594,15 +637,17 @@ function ChannelCanvasBody({
       ),
     };
     const nextNodes = [...nodesRef.current.map((node) => ({ ...node, selected: false })), created];
-    let nextEdges: Edge[] = edgesRef.current.map((edge) => ({ ...edge, selected: false }));
-    if (link) {
-      const draft = graphFromFlow(
+    let nextEdges: Edge[] = edgesRef.current
+      .filter((edge) => edge.id !== options?.removeEdgeId)
+      .map((edge) => ({ ...edge, selected: false }));
+    const draftOf = (edgesNow: Edge[]) =>
+      graphFromFlow(
         nextNodes.map((node) => ({
           id: node.id,
           position: node.position,
           data: node.data,
         })),
-        nextEdges.map((edge) => ({
+        edgesNow.map((edge) => ({
           id: edge.id,
           source: edge.source,
           target: edge.target,
@@ -611,37 +656,79 @@ function ChannelCanvasBody({
         })),
         settingsRef.current,
       );
+    const link = options?.link;
+    if (link) {
       const input = spec.inputs.find((port) =>
-        connectionAllowed(draft, catalog, {
+        connectionAllowed(draftOf(nextEdges), catalog, {
           source: link.sourceId,
           target: id,
           sourceHandle: link.sourceHandle,
           targetHandle: port.port,
         }),
       );
-      if (input) {
-        nextEdges = channelEdges(
-          addEdge(
-            {
-              source: link.sourceId,
-              target: id,
-              sourceHandle: link.sourceHandle,
-              targetHandle: input.port,
-            },
-            nextEdges,
-            { getEdgeId: () => newGraphId("ed") },
-          ),
-        );
-      }
+      if (!input) return;
+      nextEdges = channelEdges(
+        addEdge(
+          {
+            source: link.sourceId,
+            target: id,
+            sourceHandle: link.sourceHandle,
+            targetHandle: input.port,
+          },
+          nextEdges,
+          { getEdgeId: () => newGraphId("ed") },
+        ),
+      );
+    }
+    const continueTo = options?.continueTo;
+    if (continueTo) {
+      const output = spec.outputs.find((port) =>
+        connectionAllowed(draftOf(nextEdges), catalog, {
+          source: id,
+          target: continueTo.targetId,
+          sourceHandle: port.port,
+          targetHandle: continueTo.targetHandle,
+        }),
+      );
+      if (!output) return;
+      nextEdges = channelEdges(
+        addEdge(
+          {
+            source: id,
+            target: continueTo.targetId,
+            sourceHandle: output.port,
+            targetHandle: continueTo.targetHandle,
+          },
+          nextEdges,
+          { getEdgeId: () => newGraphId("ed") },
+        ),
+      );
     }
     nodesRef.current = nextNodes;
     edgesRef.current = nextEdges;
     setNodes(nextNodes);
     setEdges(nextEdges);
-    setConfigNodeId(id);
+    setConfigNodeId(null);
     setPicker(null);
     emit(nextNodes, nextEdges);
     commitNow();
+    ensureVisible(position);
+  };
+
+  const ensureVisible = (position: { x: number; y: number }) => {
+    const pane = flowRootRef.current?.querySelector(".react-flow");
+    if (!(pane instanceof HTMLElement)) return;
+    const rect = pane.getBoundingClientRect();
+    if (rect.width < 8 || rect.height < 8) return;
+    const topLeft = flowToScreenPosition(position);
+    const bottomRight = flowToScreenPosition({ x: position.x + 208, y: position.y + 56 });
+    const inside =
+      topLeft.x >= rect.left &&
+      topLeft.y >= rect.top &&
+      bottomRight.x <= rect.right &&
+      bottomRight.y <= rect.bottom;
+    if (inside) return;
+    void setCenter(position.x + 104, position.y + 28, { duration: canvasViewportDuration() });
   };
 
   const openPosition = () => {
@@ -672,6 +759,127 @@ function ChannelCanvasBody({
     return { x: center.x + nodesRef.current.length * 24, y: center.y };
   };
 
+  const stagePoint = (screen: { x: number; y: number }) => {
+    const stage = flowRootRef.current?.getBoundingClientRect();
+    if (!stage) return screen;
+    return { x: screen.x - stage.left, y: screen.y - stage.top };
+  };
+
+  const focusedNodeId = () => {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement)) return null;
+    const node = active.closest(".react-flow__node");
+    return node instanceof HTMLElement ? node.getAttribute("data-id") : null;
+  };
+
+  const showPicker = (next: Omit<PickerState, "key">) => {
+    if (!mutable || appearance !== "edit") return;
+    retainPickerRef.current = true;
+    queueMicrotask(() => {
+      retainPickerRef.current = false;
+    });
+    pickerSeq.current += 1;
+    cancelOverlayCloseRef.current();
+    setConfigNodeId(null);
+    setConnectNote(null);
+    setPicker({ ...next, key: pickerSeq.current });
+  };
+
+  const firstOutputHandle = (sourceId: string, spec: NodeTypeSpec): string | null => {
+    const source = nodesRef.current.find((node) => node.id === sourceId);
+    if (!source) return null;
+    const sourceSpec = catalog.find((item) => item.type === source.data.nodeType);
+    const outputs = sourceSpec?.outputs ?? [];
+    const graph = graphNow();
+    for (const output of outputs) {
+      const targets = outputTargetTypes(graph, catalog, sourceId, output.port);
+      if (targets.some((item) => item.type === spec.type)) return output.port;
+    }
+    return null;
+  };
+
+  /** Named entry for a later canvas menu. Toolbar, Tab, and a dragged wire use their own openers. */
+  function openPickerAt(screenPoint: { x: number; y: number }, intent: PickerIntent) {
+    const anchor = stagePoint(screenPoint);
+    if (intent.kind === "free") {
+      showPicker({
+        fromAdd: false,
+        anchor,
+        preferAbove: false,
+        place: { mode: "point", position: screenToFlowPosition(screenPoint) },
+        ghost: null,
+        returnFocusId: focusedNodeId(),
+      });
+      return;
+    }
+    if (intent.kind === "afterPort") {
+      const source = nodesRef.current.find((node) => node.id === intent.sourceId);
+      if (!source) return;
+      showPicker({
+        fromAdd: false,
+        anchor,
+        preferAbove: false,
+        place: {
+          mode: "after-port",
+          sourceId: intent.sourceId,
+          sourceHandle: intent.sourceHandle,
+          position: { x: source.position.x + 280, y: source.position.y },
+          besideSource: true,
+        },
+        ghost: null,
+        returnFocusId: intent.sourceId,
+      });
+      return;
+    }
+    const edge = edgesRef.current.find((item) => item.id === intent.edgeId);
+    if (!edge) return;
+    const source = nodesRef.current.find((node) => node.id === edge.source);
+    const target = nodesRef.current.find((node) => node.id === edge.target);
+    const position =
+      source && target
+        ? {
+            x: (source.position.x + target.position.x) / 2,
+            y: (source.position.y + target.position.y) / 2,
+          }
+        : screenToFlowPosition(screenPoint);
+    showPicker({
+      fromAdd: false,
+      anchor,
+      preferAbove: false,
+      place: { mode: "insert-edge", edgeId: edge.id, position },
+      ghost: null,
+      returnFocusId: focusedNodeId(),
+    });
+  }
+
+  const openAddPicker = (screen: { x: number; y: number }, preferAbove: boolean) => {
+    if (!mutable || appearance !== "edit") return;
+    if (picker?.fromAdd) {
+      beginCloseRef.current();
+      return;
+    }
+    const selected = nodesRef.current.filter((node) => node.selected);
+    const place: PickerPlace =
+      selected.length === 1 && selected[0]
+        ? { mode: "beside", sourceId: selected[0].id }
+        : { mode: "open" };
+    showPicker({
+      fromAdd: true,
+      anchor: stagePoint(screen),
+      preferAbove,
+      place,
+      ghost: null,
+      returnFocusId: selected.length === 1 ? selected[0]!.id : focusedNodeId(),
+    });
+  };
+
+  const openToolbarPicker = () => {
+    const button = flowRootRef.current?.querySelector(".channel-canvas-toolbar__add");
+    if (!(button instanceof HTMLElement)) return;
+    const rect = button.getBoundingClientRect();
+    openAddPicker({ x: rect.left, y: rect.top }, true);
+  };
+
   const onNodesChange = (changes: NodeChange<ChannelNode>[]) => {
     const next = applyNodeChanges(changes, nodesRef.current);
     nodesRef.current = next;
@@ -688,7 +896,7 @@ function ChannelCanvasBody({
     });
     const marked = highlightRef.current;
     if (marked && selected && selected.id !== marked.nodeId) clearHighlight();
-    if (selected) setPicker(null);
+    if (selected && !retainPickerRef.current) setPicker(null);
     if (
       !store.getState().multiSelectionActive &&
       selected &&
@@ -756,18 +964,27 @@ function ChannelCanvasBody({
     if (!under?.closest(".react-flow")) return;
     const sourceHandle = connectionState.fromHandle.id || "main";
     const specs = outputTargetTypes(graphNow(), catalog, connectionState.fromNode.id, sourceHandle);
+    const anchor = stagePoint(point);
     if (specs.length === 0) {
-      setConnectNote(true);
+      setConnectNote({ x: anchor.x + 12, y: anchor.y + 12 });
       return;
     }
-    setConnectNote(false);
+    setConnectNote(null);
     releaseSelection();
-    setPicker({
-      kind: "connect",
-      position: screenToFlowPosition(point),
-      sourceId: connectionState.fromNode.id,
-      sourceHandle,
-      specs,
+    const position = screenToFlowPosition(point);
+    showPicker({
+      fromAdd: false,
+      anchor,
+      preferAbove: false,
+      place: {
+        mode: "after-port",
+        sourceId: connectionState.fromNode.id,
+        sourceHandle,
+        position,
+        besideSource: false,
+      },
+      ghost: { position, sourceId: connectionState.fromNode.id, sourceHandle },
+      returnFocusId: connectionState.fromNode.id,
     });
   };
 
@@ -831,6 +1048,13 @@ function ChannelCanvasBody({
   };
 
   const beginClose = () => {
+    if (picker != null && configNodeId == null) {
+      const returnId = picker.returnFocusId;
+      setPicker(null);
+      setConnectNote(null);
+      restoreNodeFocus(returnId);
+      return;
+    }
     const overlayOpen = configNodeId != null || picker != null;
     if (!overlayOpen) {
       clearSelection();
@@ -853,16 +1077,6 @@ function ChannelCanvasBody({
     }, MOTION_MS.base);
   };
   beginCloseRef.current = beginClose;
-
-  const openFullCatalog = () => {
-    if (picker?.kind === "catalog") {
-      beginClose();
-      return;
-    }
-    cancelOverlayClose();
-    releaseSelection();
-    setPicker({ kind: "catalog" });
-  };
 
   const selected = nodes.find((node) => node.id === configNodeId) ?? null;
   const selectedSpec = catalog.find((item) => item.type === selected?.data.nodeType);
@@ -891,28 +1105,28 @@ function ChannelCanvasBody({
         : new Map<string, number>(),
     [sessionRun],
   );
-  const showCatalog = picker !== null && selected == null;
-  const overlayKey = selected?.id ?? (showCatalog ? "catalog" : null);
+  const overlayKey = selected?.id ?? null;
+  const pickerKey = picker?.key ?? null;
   useEffect(() => {
     if (overlayKey == null || leaving) return;
     overlayRef.current?.focus();
   }, [overlayKey, leaving]);
   useEffect(() => {
-    if (overlayKey != null || leaving) return;
+    if (overlayKey != null || leaving || pickerKey != null) return;
     const nodeId = focusReturnRef.current;
     if (!nodeId) return;
     focusReturnRef.current = null;
     restoreNodeFocus(nodeId);
-  }, [overlayKey, leaving]);
+  }, [overlayKey, leaving, pickerKey]);
   useEffect(() => {
-    if (overlayKey == null || leaving) return;
+    if ((overlayKey == null && pickerKey == null) || leaving) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       beginCloseRef.current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [overlayKey, leaving]);
+  }, [overlayKey, pickerKey, leaving]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
@@ -932,18 +1146,92 @@ function ChannelCanvasBody({
     [],
   );
   const hasTrigger = nodes.some((node) => node.data.trigger);
-  const catalogSpecs = (picker?.kind === "connect" ? picker.specs : catalog).filter(
-    (spec) => !hasTrigger || !spec.trigger,
-  );
-  const catalogTitle =
-    picker?.kind === "connect" ? t("channels.canvas.nextStep") : t("channels.canvas.palette");
+  const pickerTypes = (): NodeTypeSpec[] => {
+    if (!picker) return [];
+    const visible = catalog.filter((item) => !hasTrigger || !item.trigger);
+    const place = picker.place;
+    if (place.mode === "after-port") {
+      const reachable = new Set(
+        outputTargetTypes(graphNow(), catalog, place.sourceId, place.sourceHandle).map(
+          (item) => item.type,
+        ),
+      );
+      return visible.filter((item) => reachable.has(item.type));
+    }
+    if (place.mode === "insert-edge") {
+      const edge = edges.find((item) => item.id === place.edgeId);
+      if (!edge) return [];
+      const reachable = new Set(
+        insertableTypes(graphNow(), catalog, {
+          source: { node_id: edge.source, port: edge.sourceHandle || "main" },
+          target: { node_id: edge.target, port: edge.targetHandle || "main" },
+        }).map((item) => item.type),
+      );
+      return visible.filter((item) => reachable.has(item.type));
+    }
+    if (place.mode === "beside") {
+      const linked = visible.filter((item) => firstOutputHandle(place.sourceId, item) != null);
+      return linked.length > 0 ? linked : visible;
+    }
+    return visible;
+  };
+  const pickerEntries: PickerEntry[] = pickerTypes().map((item) => {
+    const allowed = canAuthorNodeType(item.permission, heldPermissions);
+    const reason =
+      !allowed && item.permission
+        ? t("channels.canvas.permissionRequired", { permission: item.permission })
+        : "";
+    return { spec: item, disabled: !allowed, reason };
+  });
 
   const chooseSpec = (spec: NodeTypeSpec) => {
-    if (picker?.kind === "connect") {
-      placeNode(spec, picker.position, {
-        sourceId: picker.sourceId,
-        sourceHandle: picker.sourceHandle,
+    if (!picker) return;
+    const place = picker.place;
+    if (place.mode === "after-port") {
+      const source = nodesRef.current.find((node) => node.id === place.sourceId);
+      const position =
+        place.besideSource && source
+          ? { x: source.position.x + 280, y: source.position.y }
+          : place.position;
+      placeNode(spec, position, {
+        link: { sourceId: place.sourceId, sourceHandle: place.sourceHandle },
       });
+      return;
+    }
+    if (place.mode === "insert-edge") {
+      const edge = edgesRef.current.find((item) => item.id === place.edgeId);
+      if (!edge) return;
+      const source = nodesRef.current.find((node) => node.id === edge.source);
+      const target = nodesRef.current.find((node) => node.id === edge.target);
+      const position =
+        source && target
+          ? {
+              x: (source.position.x + target.position.x) / 2,
+              y: (source.position.y + target.position.y) / 2,
+            }
+          : place.position;
+      placeNode(spec, position, {
+        removeEdgeId: edge.id,
+        link: { sourceId: edge.source, sourceHandle: edge.sourceHandle || "main" },
+        continueTo: { targetId: edge.target, targetHandle: edge.targetHandle || "main" },
+      });
+      return;
+    }
+    if (place.mode === "beside") {
+      const source = nodesRef.current.find((node) => node.id === place.sourceId);
+      const handle = firstOutputHandle(place.sourceId, spec);
+      const position = source
+        ? { x: source.position.x + 280, y: source.position.y }
+        : openPosition();
+      placeNode(
+        spec,
+        position,
+        handle ? { link: { sourceId: place.sourceId, sourceHandle: handle } } : undefined,
+      );
+      return;
+    }
+    if (place.mode === "point") {
+      placeNode(spec, place.position);
       return;
     }
     placeNode(spec, openPosition());
@@ -991,11 +1279,22 @@ function ChannelCanvasBody({
 
   const selectedNodes = nodes.filter((node) => node.selected);
   const adjacentTo = selectedNodes.length === 1 ? selectedNodes[0]!.id : null;
+  const busyOutputs = new Set(
+    edges.map((edge) => `${edge.source}:${edge.sourceHandle || "main"}`),
+  );
+  const stageRect = flowRootRef.current?.getBoundingClientRect();
+  const pickerFrame = { width: stageRect?.width ?? 0, height: stageRect?.height ?? 0 };
 
   return (
     <Stack gap={0} flex={1} mih={0} h="100%" w="100%" pos="relative">
         <CanvasSurfaceContext.Provider
-          value={{ editing: appearance === "edit", mutable, openNode: openNodeConfig }}
+          value={{
+            editing: appearance === "edit",
+            mutable,
+            openNode: openNodeConfig,
+            openPickerAt,
+            busyOutputs,
+          }}
         >
         <CanvasCatalogContext.Provider value={catalog}>
         <CanvasRunContext.Provider
@@ -1010,7 +1309,7 @@ function ChannelCanvasBody({
           }
           onKeyDownCapture={onCanvasKeyDownCapture}
           onKeyDown={onCanvasKeyDown}
-          onPointerDown={() => setConnectNote(false)}
+          onPointerDown={() => setConnectNote(null)}
         >
           <ReactFlow
             colorMode={colorScheme}
@@ -1069,13 +1368,15 @@ function ChannelCanvasBody({
             fitView
           >
             {appearance === "edit" ? <Background gap={16} /> : null}
+            {picker?.ghost ? <ConnectGhost ghost={picker.ghost} /> : null}
             <CanvasToolbar
               editing={appearance === "edit"}
               mutable={mutable}
               canUndo={canUndo}
               canRedo={canRedo}
-              addExpanded={picker?.kind === "catalog"}
-              onAdd={openFullCatalog}
+              addExpanded={picker?.fromAdd ?? false}
+              overlayOpen={configNodeId != null || picker != null || leaving}
+              onAdd={openToolbarPicker}
               onUndo={undo}
               onRedo={redo}
               onSelectAll={selectAll}
@@ -1090,7 +1391,13 @@ function ChannelCanvasBody({
             />
           </ReactFlow>
           {connectNote ? (
-            <Text className="channel-canvas-connect-note" size="sm" c="dimmed" aria-live="polite">
+            <Text
+              className="channel-canvas-connect-note"
+              style={{ left: connectNote.x, top: connectNote.y }}
+              size="sm"
+              c="dimmed"
+              aria-live="polite"
+            >
               {t("channels.canvas.connectNone")}
             </Text>
           ) : null}
@@ -1100,7 +1407,15 @@ function ChannelCanvasBody({
                 message={t("channels.canvas.empty")}
                 action={
                   appearance === "edit" && mutable ? (
-                    <Button type="button" size="xs" variant="default" onClick={openFullCatalog}>
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="default"
+                      onClick={(event) => {
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        openAddPicker({ x: rect.left, y: rect.bottom }, false);
+                      }}
+                    >
                       {t("channels.canvas.add")}
                     </Button>
                   ) : null
@@ -1108,17 +1423,17 @@ function ChannelCanvasBody({
               />
             </div>
           ) : null}
-          {showCatalog || selected ? (
+          {selected ? (
             <Paper
               ref={overlayRef}
               withBorder
               shadow="md"
               p="sm"
               tabIndex={-1}
-              aria-label={selected ? selected.data.name : undefined}
+              aria-label={selected.data.name}
               className={[
                 "channel-node-config",
-                selected ? "channel-node-config--detail" : "",
+                "channel-node-config--detail",
                 leaving ? "channel-node-config--leave" : "",
               ]
                 .filter(Boolean)
@@ -1126,64 +1441,7 @@ function ChannelCanvasBody({
               aria-hidden={leaving || undefined}
               onPointerDown={(event) => event.stopPropagation()}
             >
-              {showCatalog ? (
-                <>
-                  <div className="channel-node-config__header">
-                    <Group justify="space-between" align="center" wrap="nowrap" gap="xs">
-                      <Text size="sm" fw={600}>
-                        {catalogTitle}
-                      </Text>
-                      <CloseButton
-                        size="sm"
-                        aria-label={t("channels.node.close")}
-                        onClick={beginClose}
-                      />
-                    </Group>
-                  </div>
-                  <div className="channel-node-config__body">
-                    <Stack gap={4}>
-                      {catalogSpecs.map((spec) => {
-                        const allowed = canAuthorNodeType(spec.permission, heldPermissions);
-                        const reason =
-                          !allowed && spec.permission
-                            ? t("channels.canvas.permissionRequired", {
-                                permission: spec.permission,
-                              })
-                            : "";
-                        return (
-                          <Button
-                            key={spec.type}
-                            type="button"
-                            className="channel-node-picker__option"
-                            variant="subtle"
-                            size="xs"
-                            justify="flex-start"
-                            disabled={!allowed}
-                            title={reason || undefined}
-                            onClick={() => {
-                              if (!allowed) return;
-                              chooseSpec(spec);
-                            }}
-                          >
-                            <span className="channel-node-picker__copy">
-                              <span className="channel-node-picker__label">
-                                {nodeTypeLabel(t, spec)}
-                              </span>
-                              <span className="channel-node-picker__summary">
-                                {nodeTypeSummary(t, spec)}
-                              </span>
-                              {reason ? (
-                                <span className="channel-node-picker__summary">{reason}</span>
-                              ) : null}
-                            </span>
-                          </Button>
-                        );
-                      })}
-                    </Stack>
-                  </div>
-                </>
-              ) : selected ? (
-                <NodeConfigPanel
+              <NodeConfigPanel
                   nodeId={selected.id}
                   data={selected.data}
                   spec={selectedSpec ?? null}
@@ -1246,8 +1504,18 @@ function ChannelCanvasBody({
                   }}
                   onRun={onRun}
                 />
-              ) : null}
             </Paper>
+          ) : null}
+          {picker ? (
+            <NodePicker
+              key={picker.key}
+              entries={pickerEntries}
+              anchor={picker.anchor}
+              frame={pickerFrame}
+              preferAbove={picker.preferAbove}
+              onSelect={chooseSpec}
+              onClose={beginClose}
+            />
           ) : null}
         </div>
         </CanvasRunContext.Provider>
@@ -1340,6 +1608,56 @@ function eventPoint(event: MouseEvent | TouchEvent): { x: number; y: number } | 
   return { x: event.clientX, y: event.clientY };
 }
 
+function ConnectGhost({ ghost }: { ghost: PickerGhost }) {
+  const { getInternalNode } = useReactFlow();
+  const internal = getInternalNode(ghost.sourceId);
+  const bounds = internal?.internals.handleBounds?.source ?? [];
+  const handle = bounds.find((item) => (item.id ?? "main") === ghost.sourceHandle) ?? bounds[0];
+  const sourceX = internal
+    ? internal.internals.positionAbsolute.x +
+      (handle ? handle.x + handle.width / 2 : (internal.measured.width ?? 208))
+    : ghost.position.x;
+  const sourceY = internal
+    ? internal.internals.positionAbsolute.y +
+      (handle ? handle.y + handle.height / 2 : (internal.measured.height ?? 56) / 2)
+    : ghost.position.y + 28;
+  const [path] = getBezierPath({
+    sourceX,
+    sourceY,
+    targetX: ghost.position.x,
+    targetY: ghost.position.y + 28,
+    sourcePosition: Position.Right,
+    targetPosition: Position.Left,
+  });
+  return (
+    <ViewportPortal>
+      <svg
+        className="channel-node-placeholder__edge"
+        width={1}
+        height={1}
+        style={{ position: "absolute", overflow: "visible" }}
+      >
+        <path
+          d={path}
+          fill="none"
+          stroke="var(--mantine-color-dimmed)"
+          strokeDasharray="6 4"
+          strokeWidth={1.5}
+        />
+      </svg>
+      <div
+        className="channel-node-placeholder"
+        style={{
+          position: "absolute",
+          width: 208,
+          height: 56,
+          transform: `translate(${ghost.position.x}px, ${ghost.position.y}px)`,
+        }}
+      />
+    </ViewportPortal>
+  );
+}
+
 function problemGraphOf(nodes: ChannelNode[], edges: Edge[]): ProblemGraph {
   return {
     nodes: nodes.map((node) => ({ id: node.id, name: node.data.name })),
@@ -1355,7 +1673,8 @@ function pointerStillOnEdge(target: EventTarget | null, edgeId: string): boolean
   if (!(target instanceof Element)) return false;
   if (target.closest(".react-flow__edge")?.getAttribute("data-id") === edgeId) return true;
   if (target.closest(".react-flow__edge-toolbar")?.getAttribute("data-id") === edgeId) return true;
-  return target.closest(".channel-flow-edge__delete")?.getAttribute("data-edge-id") === edgeId;
+  if (target.closest(".channel-flow-edge__delete")?.getAttribute("data-edge-id") === edgeId) return true;
+  return target.closest(".channel-flow-edge__insert")?.getAttribute("data-edge-id") === edgeId;
 }
 
 function channelEdges(edges: Edge[]): Edge[] {
@@ -1382,7 +1701,7 @@ function ChannelFlowEdge({
   deletable = true,
 }: EdgeProps) {
   const t = useTranslate();
-  const { editing, mutable } = useContext(CanvasSurfaceContext);
+  const { editing, mutable, openPickerAt } = useContext(CanvasSurfaceContext);
   const { deleteElements } = useReactFlow();
   const [hovered, setHovered] = useState(false);
   const hideTimer = useRef<number | null>(null);
@@ -1446,22 +1765,44 @@ function ChannelFlowEdge({
           isVisible
           className="nodrag nopan"
         >
-          <button
-            type="button"
-            className="channel-flow-edge__delete nodrag nopan"
-            data-edge-id={id}
-            aria-label={t("channels.node.delete")}
-            disabled={!mutable}
-            onMouseEnter={enter}
-            onMouseLeave={leave}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              void deleteElements({ edges: [{ id }] });
-            }}
-          >
-            <CloseIcon size={10} />
-          </button>
+          <span className="channel-flow-edge__tools">
+            {mutable ? (
+              <button
+                type="button"
+                className="channel-flow-edge__insert nodrag nopan"
+                data-edge-id={id}
+                aria-label={t("channels.canvas.insertNode")}
+                onMouseEnter={enter}
+                onMouseLeave={leave}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openPickerAt(
+                    { x: event.clientX, y: event.clientY },
+                    { kind: "insertOnEdge", edgeId: id },
+                  );
+                }}
+              >
+                <PlusIcon size={10} />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="channel-flow-edge__delete nodrag nopan"
+              data-edge-id={id}
+              aria-label={t("channels.node.delete")}
+              disabled={!mutable}
+              onMouseEnter={enter}
+              onMouseLeave={leave}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                void deleteElements({ edges: [{ id }] });
+              }}
+            >
+              <CloseIcon size={10} />
+            </button>
+          </span>
         </EdgeToolbar>
       ) : null}
     </>
@@ -1504,10 +1845,11 @@ function NodeToolButton({
 
 function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   const t = useTranslate();
-  const { editing, mutable, openNode } = useContext(CanvasSurfaceContext);
+  const { editing, mutable, openNode, openPickerAt, busyOutputs } = useContext(CanvasSurfaceContext);
   const catalog = useContext(CanvasCatalogContext);
   const spec = catalog.find((item) => item.type === data.nodeType);
   const { deleteElements } = useReactFlow();
+  const [hovered, setHovered] = useState(false);
   const inputs = spec ? spec.inputs : data.trigger ? [] : [{ port: "main", description: "" }];
   const outputs = spec ? spec.outputs : [{ port: "main", description: "" }];
   const laid = layoutNodePorts(inputs, outputs);
@@ -1546,6 +1888,8 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
     <div
       className={className}
       style={depth > 1 ? { minHeight: 24 + depth * 28 } : undefined}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
       {editing ? (
         <NodeToolbar className="channel-node-toolbar" offset={8}>
@@ -1599,7 +1943,17 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
       {phaseStatus && phase && isNodeRunPhase(phase) ? (
         <NodePhaseMark phase={phase} tone={phaseStatus.tone} label={t(phaseStatus.labelKey)} />
       ) : null}
-      <PortHandles ports={laid.outputs} nodeName={data.name} kind="source" />
+      <PortHandles
+        ports={laid.outputs}
+        nodeName={data.name}
+        kind="source"
+        addable={editing && mutable && (hovered || Boolean(selected))}
+        busyOutputs={busyOutputs}
+        nodeId={id}
+        onAdd={(port, point) =>
+          openPickerAt(point, { kind: "afterPort", sourceId: id, sourceHandle: port })
+        }
+      />
       {errorAnchor ? (
         <Handle
           type="source"
@@ -1659,16 +2013,26 @@ function PortHandles({
   ports,
   nodeName,
   kind,
+  addable = false,
+  busyOutputs,
+  nodeId,
+  onAdd,
 }: {
   ports: readonly PortPlacement[];
   nodeName: string;
   kind: "target" | "source";
+  addable?: boolean;
+  busyOutputs?: ReadonlySet<string>;
+  nodeId?: string;
+  onAdd?: (port: string, point: { x: number; y: number }) => void;
 }) {
   const t = useTranslate();
   return (
     <>
       {ports.map((port) => {
         const name = portLabel(t, port.port);
+        const occupied = busyOutputs?.has(`${nodeId}:${port.port}`) ?? false;
+        const showAdd = kind === "source" && addable && !occupied && onAdd != null;
         return (
           <Fragment key={`${kind}-${port.port}`}>
             <Handle
@@ -1684,6 +2048,22 @@ function PortHandles({
               })}
               role="button"
             />
+            {showAdd ? (
+              <button
+                type="button"
+                className="channel-flow-port-add nodrag nopan"
+                style={{ top: port.top, left: "calc(100% + 16px)" }}
+                aria-label={t("channels.canvas.addFromPort", { port: name })}
+                onPointerDown={(event) => event.stopPropagation()}
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onAdd(port.port, { x: event.clientX, y: event.clientY });
+                }}
+              >
+                <PlusIcon size={10} />
+              </button>
+            ) : null}
             {port.labelled ? (
               <span
                 className={`channel-flow-port channel-flow-port--${port.position}`}

@@ -4,6 +4,7 @@ import {
   connectionAllowed,
   flowFromGraph,
   graphFromFlow,
+  insertableTypes,
   outputTargetTypes,
   VALIDATION_PAUSE_MS,
   validationContentKey,
@@ -242,6 +243,82 @@ describe("connectionAllowed", () => {
       "main",
     ).map((item) => item.type);
     expect(types).toEqual(["read.sql", "write.entity"]);
+  });
+});
+
+describe("insertableTypes", () => {
+  type Item = ConnectionCatalogItem & { trigger?: boolean };
+  const catalog: Item[] = [
+    { type: "trigger.manual", trigger: true, inputs: [{ port: "main" }], outputs: [{ port: "main" }] },
+    { type: "read.sql", inputs: [{ port: "main" }], outputs: [{ port: "main" }] },
+    {
+      type: "transform.if",
+      inputs: [{ port: "main" }],
+      outputs: [{ port: "true" }, { port: "false" }],
+    },
+    {
+      type: "volume.for",
+      inputs: [{ port: "main" }, { port: "loop" }],
+      outputs: [{ port: "each" }, { port: "done" }],
+    },
+    { type: "transform.merge", inputs: [{ port: "main" }], outputs: [{ port: "main" }] },
+    { type: "write.sink", inputs: [{ port: "main" }], outputs: [] },
+  ];
+  const nodes = [
+    node("nd_trigger", "trigger.manual"),
+    node("nd_if", "transform.if"),
+    node("nd_for", "volume.for"),
+    node("nd_read", "read.sql"),
+    node("nd_left", "read.sql"),
+    node("nd_right", "read.sql"),
+    node("nd_merge", "transform.merge"),
+  ];
+  const expectTypes = (
+    source: string,
+    sourcePort: string,
+    target: string,
+    targetPort: string,
+  ) =>
+    insertableTypes(
+      { nodes, edges: [edge("ed_mid", source, target, sourcePort, targetPort)] },
+      catalog,
+      {
+        source: { node_id: source, port: sourcePort },
+        target: { node_id: target, port: targetPort },
+      },
+    ).map((item) => item.type);
+
+  it("lists types that can sit on an If true or false edge, and never a trigger", () => {
+    const expected = ["read.sql", "transform.if", "volume.for", "transform.merge"];
+    expect(expectTypes("nd_if", "true", "nd_read", "main")).toEqual(expected);
+    expect(expectTypes("nd_if", "false", "nd_read", "main")).toEqual(expected);
+  });
+
+  it("lists types that can sit on For each, done, and loop edges", () => {
+    const expected = ["read.sql", "transform.if", "volume.for", "transform.merge"];
+    expect(expectTypes("nd_for", "each", "nd_read", "main")).toEqual(expected);
+    expect(expectTypes("nd_for", "done", "nd_read", "main")).toEqual(expected);
+    expect(expectTypes("nd_read", "main", "nd_for", "loop")).toEqual(expected);
+  });
+
+  it("still lists types into Merge when that input already has an edge", () => {
+    const types = insertableTypes(
+      {
+        nodes,
+        edges: [
+          edge("ed_left", "nd_left", "nd_merge"),
+          edge("ed_right", "nd_right", "nd_merge"),
+        ],
+      },
+      catalog,
+      {
+        source: { node_id: "nd_left", port: "main" },
+        target: { node_id: "nd_merge", port: "main" },
+      },
+    ).map((item) => item.type);
+    expect(types).toEqual(["read.sql", "transform.if", "volume.for", "transform.merge"]);
+    expect(types).not.toContain("trigger.manual");
+    expect(types).not.toContain("write.sink");
   });
 });
 

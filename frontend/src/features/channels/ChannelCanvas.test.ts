@@ -51,6 +51,18 @@ const LABELS: Record<string, string> = {
   "channels.canvas.shortcuts.close": "Close the overlay, or clear the selection",
   "channels.canvas.shortcuts.help": "Show keyboard shortcuts",
   "channels.canvas.palette": "Nodes",
+  "channels.canvas.searchNodes": "Search nodes",
+  "channels.canvas.searchEmpty": "No matching nodes",
+  "channels.canvas.addFromPort": "Add the next step from {{port}}",
+  "channels.canvas.insertNode": "Insert node",
+  "channels.canvas.family.trigger": "Trigger",
+  "channels.canvas.family.read": "Read",
+  "channels.canvas.family.transform": "Transform",
+  "channels.canvas.family.volume": "Volume",
+  "channels.canvas.family.state": "State",
+  "channels.canvas.family.write": "Write",
+  "channels.canvas.family.action": "Action",
+  "channels.canvas.shortcuts.addNode": "Add a node",
   "channels.canvas.problemsSummary": "{{errors}} errors, {{warnings}} warnings",
   "channels.node.run": "Run node",
   "channels.node.settings": "Settings",
@@ -368,8 +380,9 @@ describe("ChannelCanvas controls", () => {
 
     fireEvent.click(add);
     expect(add.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByText("Nodes")).toBeTruthy();
-    expect(screen.getByText("Manual")).toBeTruthy();
+    const search = screen.getByRole("textbox", { name: "Search nodes" });
+    expect(document.activeElement).toBe(search);
+    expect(screen.getByRole("option", { name: /Manual/ })).toBeTruthy();
   });
 
   it("drops the dot grid and authoring controls while browsing", async () => {
@@ -491,7 +504,7 @@ describe("ChannelCanvas controls", () => {
     await renderCanvas();
     const toolbar = screen.getByRole("toolbar", { name: "Canvas tools" });
     fireEvent.click(within(toolbar).getByRole("button", { name: "Add" }));
-    fireEvent.click(screen.getByRole("button", { name: /Manual/ }));
+    fireEvent.click(screen.getByRole("option", { name: /Manual/ }));
     expect(document.querySelectorAll(".react-flow__node")).toHaveLength(1);
 
     const node = document.querySelector(".react-flow__node");
@@ -1163,8 +1176,8 @@ describe("empty canvas", () => {
       .find((button) => !toolbar.contains(button));
     if (!(emptyAdd instanceof HTMLButtonElement)) throw new Error("missing empty-canvas add");
     fireEvent.click(emptyAdd);
-    expect(screen.getByText("Nodes")).toBeTruthy();
-    expect(screen.getByText("Manual")).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Search nodes" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /Manual/ })).toBeTruthy();
   });
 
   it("states the next step on an empty canvas without an add action while browsing", async () => {
@@ -1237,7 +1250,8 @@ describe("unreachable output", () => {
 
     releaseOutput("Start out output");
 
-    expect(screen.getByText("Next step")).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Search nodes" })).toBeTruthy();
+    expect(document.querySelector(".channel-node-placeholder")).not.toBeNull();
     expect(screen.queryByText("This output cannot connect to another node.")).toBeNull();
   });
 });
@@ -2572,13 +2586,13 @@ describe("guarded node authoring", () => {
       }),
     );
 
-    const guarded = screen.getByRole("button", { name: /Requires channel:code_write/ });
+    const guarded = screen.getByRole("option", { name: /Requires channel:code_write/ });
     expect(guarded.textContent).toContain("Code");
-    expect((guarded as HTMLButtonElement).disabled).toBe(true);
+    expect(guarded.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(guarded);
     expect(document.querySelectorAll(".react-flow__node")).toHaveLength(0);
 
-    fireEvent.click(screen.getByRole("button", { name: /Manual/ }));
+    fireEvent.click(screen.getByRole("option", { name: /Manual/ }));
     expect(document.querySelectorAll(".react-flow__node")).toHaveLength(1);
   });
 
@@ -2615,6 +2629,299 @@ describe("guarded node authoring", () => {
     expect((screen.getByRole("textbox", { name: "Timeout (seconds)" }) as HTMLInputElement).value).toBe(
       "45",
     );
+  });
+});
+
+function pickerSearch(): HTMLElement {
+  return screen.getByRole("textbox", { name: "Search nodes" });
+}
+
+describe("node picker", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  const manual = { ...spec, label: "Manual", summary: "Start here" };
+  const code = { ...CODE_SPEC, label: "Code", summary: "Runs Python" };
+  const sql = { ...READ_SPEC, label: "SQL", summary: "Query rows" };
+
+  it("filters the open picker by name or summary", async () => {
+    await renderCanvas([], EMPTY_GRAPH, { catalog: [manual, code, sql] });
+    fireEvent.click(within(screen.getByRole("toolbar")).getByRole("button", { name: "Add" }));
+    const search = pickerSearch();
+    expect(document.activeElement).toBe(search);
+    expect(screen.getByText("Trigger")).toBeTruthy();
+    expect(screen.getByRole("option", { name: /Manual/ }).querySelector("svg")).not.toBeNull();
+
+    fireEvent.change(search, { target: { value: "QUERY" } });
+    expect(screen.getByRole("option", { name: /SQL/ })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /Manual/ })).toBeNull();
+    expect(screen.queryByRole("option", { name: /Code/ })).toBeNull();
+
+    fireEvent.change(search, { target: { value: "zzzz" } });
+    expect(screen.getByText("No matching nodes")).toBeTruthy();
+    expect(screen.queryByRole("option")).toBeNull();
+  });
+
+  it("places the second available type from ArrowDown ArrowDown Enter and does not open settings", async () => {
+    const onChange = vi.fn();
+    await renderCanvas([], EMPTY_GRAPH, { catalog: [manual, code, sql], onChange });
+    fireEvent.click(within(screen.getByRole("toolbar")).getByRole("button", { name: "Add" }));
+    const search = pickerSearch();
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    fireEvent.keyDown(search, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(document.querySelectorAll(".react-flow__node")).toHaveLength(1);
+    });
+    const node = document.querySelector(".react-flow__node");
+    expect(node?.textContent).toContain("SQL");
+    expect(node?.classList.contains("selected")).toBe(true);
+    expect(document.querySelector(".channel-node-config")).toBeNull();
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    expect(saved.nodes.map((item) => item.type)).toEqual(["read.sql"]);
+    expect(saved.edges).toEqual([]);
+  });
+
+  it("wires a node placed beside the single selection from the first output that can reach it", async () => {
+    const onChange = vi.fn();
+    await renderCanvas(
+      [],
+      {
+        ...EMPTY_GRAPH,
+        nodes: [placed("check", "transform.if", "Check", 40)],
+      },
+      { catalog: [IF_SPEC, sql], onChange },
+    );
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(screen.getByRole("option", { name: /transform.if/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("option", { name: /SQL/ }));
+
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    const created = saved.nodes.find((item) => item.type === "read.sql");
+    expect(created?.position).toEqual({ x: 320, y: 40 });
+    expect(saved.edges).toEqual([
+      expect.objectContaining({
+        source: { node_id: "check", port: "true" },
+        target: { node_id: created?.id, port: "main" },
+      }),
+    ]);
+    expect(document.querySelectorAll(".react-flow__node.selected")).toHaveLength(1);
+    expect(document.querySelector(".react-flow__node.selected")?.textContent).toContain("SQL");
+    expect(document.querySelector(".channel-node-config")).toBeNull();
+  });
+
+  it("places beside the selection without a wire when nothing can connect", async () => {
+    const onChange = vi.fn();
+    const blocked = catalogSpec("read.sql", [{ port: "main", description: "" }], []);
+    await renderCanvas(
+      [],
+      {
+        ...EMPTY_GRAPH,
+        nodes: [placed("read", "read.sql", "Read", 40)],
+      },
+      { catalog: [blocked, { ...manual, label: "Manual" }], onChange },
+    );
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("option", { name: /Manual/ }));
+
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    expect(saved.edges).toEqual([]);
+    expect(saved.nodes.find((item) => item.type === "manual")?.position).toEqual({ x: 320, y: 40 });
+    expect(document.querySelector(".channel-node-config")).toBeNull();
+  });
+
+  it("opens from Tab on the canvas and leaves Tab alone while settings are open", async () => {
+    await renderCanvas([], nodeGraph);
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    node.focus();
+    const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    await act(async () => {
+      node.dispatchEvent(tab);
+    });
+    expect(tab.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(pickerSearch());
+
+    fireEvent.keyDown(pickerSearch(), { key: "Escape" });
+    expect(screen.queryByRole("textbox", { name: "Search nodes" })).toBeNull();
+
+    openSettings(node);
+    node.focus();
+    const blocked = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    node.dispatchEvent(blocked);
+    expect(blocked.defaultPrevented).toBe(false);
+    expect(screen.queryByRole("textbox", { name: "Search nodes" })).toBeNull();
+  });
+
+  it("shows a placeholder while a dragged wire is choosing a node, then drops it on Escape", async () => {
+    const onChange = vi.fn();
+    await renderCanvas([], nodeGraph, { catalog: [spec, sql], onChange });
+    await waitFor(() => {
+      const node = document.querySelector(".react-flow__node");
+      if (!(node instanceof HTMLElement) || node.style.visibility === "hidden") {
+        throw new Error("node not measured");
+      }
+    });
+
+    releaseOutput("Start out output");
+
+    const ghost = document.querySelector(".channel-node-placeholder");
+    if (!(ghost instanceof HTMLElement)) throw new Error("missing placeholder");
+    expect(ghost.style.width).toBe("208px");
+    expect(ghost.style.height).toBe("56px");
+    expect(document.querySelector(".channel-node-placeholder__edge")).not.toBeNull();
+    expect((screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(onChange).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(pickerSearch(), { key: "Escape" });
+    expect(document.querySelector(".channel-node-placeholder")).toBeNull();
+    expect(document.querySelector(".channel-node-placeholder__edge")).toBeNull();
+    expect(document.querySelectorAll(".react-flow__node")).toHaveLength(1);
+    expect((screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("adds the next node from an output that has no outgoing edge", async () => {
+    const onChange = vi.fn();
+    await renderCanvas(
+      [],
+      {
+        ...EMPTY_GRAPH,
+        nodes: [
+          placed("check", "transform.if", "Check", 40),
+          placed("read", "read.sql", "Read", 280),
+        ],
+        edges: [
+          {
+            id: "ed_true",
+            source: { node_id: "check", port: "true" },
+            target: { node_id: "read", port: "main" },
+          },
+        ],
+      },
+      { catalog: [IF_SPEC, sql], onChange },
+    );
+    const card = document.querySelector(".react-flow__node[data-id='check'] .channel-flow-node");
+    if (!(card instanceof HTMLElement)) throw new Error("missing if node");
+    expect(screen.queryByRole("button", { name: "Add the next step from False" })).toBeNull();
+
+    fireEvent.mouseEnter(card);
+    expect(screen.getByRole("button", { name: "Add the next step from False" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add the next step from True" })).toBeNull();
+    fireEvent.mouseLeave(card);
+    expect(screen.queryByRole("button", { name: "Add the next step from False" })).toBeNull();
+
+    fireEvent.click(card);
+    fireEvent.click(screen.getByRole("button", { name: "Add the next step from False" }));
+    fireEvent.click(screen.getByRole("option", { name: /SQL/ }));
+
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    const created = saved.nodes.find((item) => item.id !== "check" && item.id !== "read");
+    expect(created?.position).toEqual({ x: 320, y: 40 });
+    expect(saved.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: { node_id: "check", port: "false" },
+          target: { node_id: created?.id, port: "main" },
+        }),
+      ]),
+    );
+    expect(document.querySelector(".channel-node-config")).toBeNull();
+    expect(document.querySelectorAll(".react-flow__node.selected")).toHaveLength(1);
+  });
+
+  it("inserts a node into an edge and undoes both new edges in one step", async () => {
+    const onChange = vi.fn();
+    const sqlSpec = { ...READ_SPEC, label: "SQL", summary: "Query rows" };
+    await renderCanvas(
+      [],
+      {
+        ...EMPTY_GRAPH,
+        nodes: [placed("left", "read.sql", "Left", 20), placed("right", "read.sql", "Right", 300)],
+        edges: [
+          {
+            id: "ed_link",
+            source: { node_id: "left", port: "main" },
+            target: { node_id: "right", port: "main" },
+          },
+        ],
+      },
+      { catalog: [manual, sqlSpec], onChange },
+    );
+    const edge = await screen.findByRole("group", { name: "Main to Main" });
+    const path = edge.querySelector(".react-flow__edge-path");
+    if (path) fireEvent.mouseOver(path);
+    fireEvent.click(edge);
+    fireEvent.click(screen.getByRole("button", { name: "Insert node" }));
+    expect(screen.queryByRole("option", { name: /Manual/ })).toBeNull();
+    fireEvent.click(screen.getByRole("option", { name: /SQL/ }));
+
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    const created = saved.nodes.find((item) => item.id !== "left" && item.id !== "right");
+    expect(created?.position).toEqual({ x: 160, y: 40 });
+    expect(saved.edges).toHaveLength(2);
+    expect(saved.edges.map((item) => [item.source.node_id, item.target.node_id])).toEqual([
+      ["left", created?.id],
+      [created?.id, "right"],
+    ]);
+    expect(document.querySelector(".channel-node-config")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => {
+      const restored = onChange.mock.calls.at(-1)?.[0] as Graph;
+      expect(restored.nodes.map((item) => item.id)).toEqual(["left", "right"]);
+      expect(restored.edges.map((item) => item.id)).toEqual(["ed_link"]);
+    });
+  });
+
+  it("hides trigger types once the graph already has one", async () => {
+    await renderCanvas([], nodeGraph, { catalog: [manual, sql] });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(screen.queryByRole("option", { name: /Manual/ })).toBeNull();
+    expect(screen.getByRole("option", { name: /SQL/ })).toBeTruthy();
+  });
+
+  it("disables add and hides the port and edge insert controls while the graph is locked", async () => {
+    await renderCanvas(
+      [],
+      {
+        ...EMPTY_GRAPH,
+        nodes: [placed("left", "read.sql", "Left", 20), placed("right", "read.sql", "Right", 300)],
+        edges: [
+          {
+            id: "ed_link",
+            source: { node_id: "left", port: "main" },
+            target: { node_id: "right", port: "main" },
+          },
+        ],
+      },
+      { mutable: false, catalog: [READ_SPEC] },
+    );
+    expect((screen.getByRole("button", { name: "Add" }) as HTMLButtonElement).disabled).toBe(true);
+    const card = document.querySelector(".channel-flow-node");
+    if (!(card instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(card);
+    fireEvent.mouseEnter(card);
+    expect(screen.queryByRole("button", { name: /Add the next step from/ })).toBeNull();
+
+    const edge = await screen.findByRole("group", { name: "Main to Main" });
+    const path = edge.querySelector(".react-flow__edge-path");
+    if (path) fireEvent.mouseOver(path);
+    fireEvent.click(edge);
+    expect(screen.queryByRole("button", { name: "Insert node" })).toBeNull();
+
+    card.focus();
+    const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    card.dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(false);
+    expect(screen.queryByRole("textbox", { name: "Search nodes" })).toBeNull();
   });
 });
 

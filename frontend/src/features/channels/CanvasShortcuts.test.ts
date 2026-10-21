@@ -21,6 +21,7 @@ vi.mock("@refinedev/core", () => ({
         "channels.canvas.redo": "Redo",
         "channels.canvas.shortcuts.delete": "Delete selection",
         "channels.canvas.shortcuts.open": "Open settings",
+        "channels.canvas.shortcuts.addNode": "Add a node",
         "channels.canvas.shortcuts.selectAdd": "Add or remove from the selection",
         "channels.canvas.shortcuts.boxSelect": "Box select",
         "channels.canvas.shortcuts.selectAll": "Select all",
@@ -74,6 +75,7 @@ describe("CanvasShortcuts", () => {
       "redo",
       "delete",
       "open",
+      "addNode",
       "close",
       "fit",
       "zoomIn",
@@ -106,6 +108,7 @@ describe("CanvasShortcuts", () => {
     expect(dialog.textContent).toContain("Delete");
     expect(dialog.textContent).toContain("Backspace");
     expect(dialog.textContent).toContain("Enter");
+    expect(dialog.textContent).toContain("Tab");
     expect(dialog.textContent).toContain("Escape");
     expect(dialog.textContent).toContain("Shift+1");
     expect(dialog.textContent).toContain("Ctrl+=");

@@ -69,6 +69,7 @@ export function CanvasToolbar({
   canUndo,
   canRedo,
   addExpanded,
+  overlayOpen = false,
   onAdd,
   onUndo,
   onRedo,
@@ -87,6 +88,8 @@ export function CanvasToolbar({
   canUndo: boolean;
   canRedo: boolean;
   addExpanded: boolean;
+  /** Settings, the node picker, or another canvas overlay already has focus duty. */
+  overlayOpen?: boolean;
   onAdd: () => void;
   onUndo: () => void;
   onRedo: () => void;
@@ -128,6 +131,8 @@ export function CanvasToolbar({
     zoomTo100: () => runViewport("reset"),
     openHelp: () => setHelpOpen(true),
     selectAll: onSelectAll,
+    openPicker: onAdd,
+    overlayOpen: overlayOpen || helpOpen,
   });
 
   const toggleMinimap = () => {
@@ -147,6 +152,7 @@ export function CanvasToolbar({
           {editing ? (
             <>
               <ToolButton
+                className="channel-canvas-toolbar__add"
                 label={t("channels.canvas.add")}
                 disabled={!mutable}
                 expanded={addExpanded}
@@ -267,6 +273,7 @@ export function CanvasToolbar({
 
 function ToolButton({
   label,
+  className,
   disabled,
   pressed,
   expanded,
@@ -274,6 +281,7 @@ function ToolButton({
   children,
 }: {
   label: string;
+  className?: string;
   disabled?: boolean;
   pressed?: boolean;
   expanded?: boolean;
@@ -283,6 +291,7 @@ function ToolButton({
   return (
     <Tooltip label={label} openDelay={200}>
       <ActionIcon
+        className={className}
         variant="subtle"
         size="sm"
         aria-label={label}

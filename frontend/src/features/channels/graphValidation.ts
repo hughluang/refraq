@@ -260,6 +260,49 @@ export function outputTargetTypes<T extends ConnectionCatalogItem>(
   );
 }
 
+type InsertableSpec = ConnectionCatalogItem & { trigger?: boolean };
+
+/** Types that can replace one edge: source reaches the type, and one of its outputs reaches the target. */
+export function insertableTypes<T extends InsertableSpec>(
+  graph: Pick<Graph, "nodes" | "edges">,
+  catalog: readonly T[],
+  edge: {
+    source: { node_id: string; port: string };
+    target: { node_id: string; port: string };
+  },
+): T[] {
+  return catalog.filter((spec) => {
+    if (spec.trigger) return false;
+    const enters = spec.inputs.some((input) =>
+      connectionAllowed(
+        graph,
+        catalog,
+        {
+          source: edge.source.node_id,
+          target: PROBE_NODE_ID,
+          sourceHandle: edge.source.port,
+          targetHandle: input.port,
+        },
+        { id: PROBE_NODE_ID, type: spec.type },
+      ),
+    );
+    if (!enters) return false;
+    return spec.outputs.some((output) =>
+      connectionAllowed(
+        graph,
+        catalog,
+        {
+          source: PROBE_NODE_ID,
+          target: edge.target.node_id,
+          sourceHandle: output.port,
+          targetHandle: edge.target.port,
+        },
+        { id: PROBE_NODE_ID, type: spec.type },
+      ),
+    );
+  });
+}
+
 /** Problems the server named as blocking a refused run or publish (`CHANNEL_GRAPH_INVALID`). */
 export function refusedProblems(error: unknown): GraphProblem[] {
   if (!(error instanceof ApiError) || error.code !== "CHANNEL_GRAPH_INVALID") return [];

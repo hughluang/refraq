@@ -72,11 +72,12 @@ Single-key shortcuts are ignored while focus is in an editable field and while t
 
 ### 7.1 Channel canvas shortcuts
 
-These shortcuts apply only while focus is inside the channel canvas (a `.channel-canvas-stage` ancestor). Undo, redo, fit, zoom, shortcut help, select all, and arrow-key nudging do not run while focus is in an editable field, the node settings panel, or a modal. Escape still closes an open canvas overlay, including from a field in that overlay, unless that field already handled the key. Delete and Backspace remove the selection only while the graph can be edited.
+These shortcuts apply only while focus is inside the channel canvas (a `.channel-canvas-stage` ancestor). Undo, redo, fit, zoom, shortcut help, select all, and arrow-key nudging do not run while focus is in an editable field, the node settings panel, or a modal. Escape still closes an open canvas overlay, including from a field in that overlay, unless that field already handled the key. Delete and Backspace remove the selection only while the graph can be edited. Tab opens the node picker when focus is in the canvas and no overlay is open. While an overlay is open, Tab moves focus.
 
 | Shortcut | Effect |
 | --- | --- |
 | Double-click or Enter | Open the settings panel for the node |
+| Tab | Open the node picker when no canvas overlay is open |
 | Shift+click | Add or remove that node or edge from the selection |
 | Shift+drag | Box-select |
 | Ctrl+A or Cmd+A | Select every node and edge |

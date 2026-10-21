@@ -281,7 +281,7 @@ describe("ChannelRecord draft access", () => {
     const panel = await screen.findByRole("toolbar", { name: "channels.canvas.toolbar" });
     const add = within(panel).getByRole("button", { name: "channels.canvas.add" });
     fireEvent.click(add);
-    fireEvent.click(screen.getByRole("button", { name: /Manual/ }));
+    fireEvent.click(screen.getByRole("option", { name: /Manual/ }));
     const undo = screen.getByRole("button", { name: "channels.canvas.undo" });
     expect((undo as HTMLButtonElement).disabled).toBe(false);
 
@@ -469,7 +469,7 @@ describe("ChannelRecord draft access", () => {
 
     await renderRecord("edit");
     fireEvent.click(await screen.findByRole("button", { name: "channels.canvas.add" }));
-    fireEvent.click(screen.getByRole("button", { name: /Filter/ }));
+    fireEvent.click(screen.getByRole("option", { name: /Filter/ }));
     fireEvent.click(screen.getByRole("button", { name: "channels.run.open" }));
     const dialog = await screen.findByRole("dialog");
     const confirm = within(dialog).getByRole("button", { name: "channels.run.confirm" });
@@ -493,7 +493,7 @@ describe("ChannelRecord draft access", () => {
     vi.mocked(previewPublish).mockClear();
     await renderRecord("edit");
     fireEvent.click(await screen.findByRole("button", { name: "channels.canvas.add" }));
-    fireEvent.click(screen.getByRole("button", { name: /Filter/ }));
+    fireEvent.click(screen.getByRole("option", { name: /Filter/ }));
     fireEvent.click(screen.getByRole("button", { name: "channels.run.open" }));
     const secondDialog = await screen.findByRole("dialog");
     const secondConfirm = within(secondDialog).getByRole("button", { name: "channels.run.confirm" });

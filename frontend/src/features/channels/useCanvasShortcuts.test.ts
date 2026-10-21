@@ -13,6 +13,7 @@ import {
 function handlers(overrides: Partial<CanvasShortcutHandlers> = {}): CanvasShortcutHandlers {
   return {
     mutable: true,
+    overlayOpen: false,
     undo: vi.fn(),
     redo: vi.fn(),
     fitView: vi.fn(),
@@ -21,6 +22,7 @@ function handlers(overrides: Partial<CanvasShortcutHandlers> = {}): CanvasShortc
     zoomTo100: vi.fn(),
     openHelp: vi.fn(),
     selectAll: vi.fn(),
+    openPicker: vi.fn(),
     ...overrides,
   };
 }
@@ -119,6 +121,30 @@ describe("useCanvasShortcuts", () => {
     expect(api.selectAll).toHaveBeenCalledTimes(2);
   });
 
+  it("opens the node picker from Tab unless an overlay is open or the graph is locked", () => {
+    const api = handlers();
+    const view = render(createElement(Host, { api }));
+    const stage = buttonNamed("Stage");
+
+    const tab = press(stage, { key: "Tab" });
+    expect(tab.defaultPrevented).toBe(true);
+    expect(api.openPicker).toHaveBeenCalledTimes(1);
+
+    const shiftTab = press(stage, { key: "Tab", shiftKey: true });
+    expect(shiftTab.defaultPrevented).toBe(false);
+    expect(api.openPicker).toHaveBeenCalledTimes(1);
+
+    view.rerender(createElement(Host, { api: handlers({ ...api, overlayOpen: true }) }));
+    const overlaid = press(buttonNamed("Stage"), { key: "Tab" });
+    expect(overlaid.defaultPrevented).toBe(false);
+    expect(api.openPicker).toHaveBeenCalledTimes(1);
+
+    view.rerender(createElement(Host, { api: handlers({ ...api, mutable: false }) }));
+    const locked = press(buttonNamed("Stage"), { key: "Tab" });
+    expect(locked.defaultPrevented).toBe(false);
+    expect(api.openPicker).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores viewport and history keys in fields, the settings panel, a modal, and outside the canvas", () => {
     const api = handlers();
     render(createElement(Host, { api, outside: true }));
@@ -135,6 +161,7 @@ describe("useCanvasShortcuts", () => {
       { key: "y", code: "KeyY", ctrlKey: true },
       { key: "a", code: "KeyA", ctrlKey: true },
       { key: "a", code: "KeyA", metaKey: true },
+      { key: "Tab" },
     ] satisfies KeyboardEventInit[]) {
       const event = press(name, init);
       expect(event.defaultPrevented).toBe(false);
@@ -156,6 +183,7 @@ describe("useCanvasShortcuts", () => {
     expect(api.undo).not.toHaveBeenCalled();
     expect(api.redo).not.toHaveBeenCalled();
     expect(api.selectAll).not.toHaveBeenCalled();
+    expect(api.openPicker).not.toHaveBeenCalled();
   });
 
   it("uses a 200ms viewport transition and skips it when motion is reduced", () => {
