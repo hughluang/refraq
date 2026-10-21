@@ -6,7 +6,15 @@ import keyword
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from backend.core.pagination import OffsetPage
 from backend.core.time import Instant
@@ -114,12 +122,36 @@ class GraphSettingsIn(BaseModel):
         return value
 
 
+class SizeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    width: float = Field(ge=160, le=2000)
+    height: float = Field(ge=80, le=2000)
+
+
+class NoteIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=_ID_RE.pattern)
+    position: PositionIn
+    size: SizeIn
+    text: str = Field(max_length=4000)
+
+
 class GraphIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     nodes: list[NodeIn]
     edges: list[EdgeIn]
+    notes: list[NoteIn] = Field(default_factory=list, max_length=200)
     settings: GraphSettingsIn
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_notes(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        document = handler(self)
+        if not document.get("notes"):
+            document.pop("notes", None)
+        return document
 
     @model_validator(mode="after")
     def _unique_ids(self) -> GraphIn:
@@ -129,6 +161,11 @@ class GraphIn(BaseModel):
         edge_ids = [edge.id for edge in self.edges]
         if len(edge_ids) != len(set(edge_ids)):
             raise ValueError("edge id is duplicated")
+        note_ids = [note.id for note in self.notes]
+        if len(note_ids) != len(set(note_ids)):
+            raise ValueError("note id is duplicated")
+        if set(note_ids) & (set(node_ids) | set(edge_ids)):
+            raise ValueError("note id is used by a node or an edge")
         refs = [node.ref for node in self.nodes]
         if len(refs) != len(set(refs)):
             raise ValueError("node ref is duplicated")

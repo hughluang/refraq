@@ -39,6 +39,7 @@ Collection lists use the **Offset Page** envelope `{ "items", "total", "limit", 
 | Channel Version | `3` | Positive integer, numbered from 1 per channel |
 | Node | `nd_7f3a9c` | Client-assigned when the node is created; 1 to 64 characters of ASCII letters, digits, `_`, and `-`; unique within a graph; stable across saves and versions |
 | Edge | `ed_19b2` | Client-assigned; same character rule; unique within a graph |
+| Channel Note | `nt_intro` | Client-assigned; same character rule as a node id; unique across the node, edge, and note ids of the graph |
 | Job | `job_01HZX` | Platform Job id (`docs/api-contracts-jobs.md`) |
 
 ## 3. Resource Shapes
@@ -117,6 +118,14 @@ Collection lists use the **Offset Page** envelope `{ "items", "total", "limit", 
     { "id": "ed_1", "source": { "node_id": "nd_trigger", "port": "main" }, "target": { "node_id": "nd_read", "port": "main" } },
     { "id": "ed_2", "source": { "node_id": "nd_read", "port": "main" }, "target": { "node_id": "nd_write", "port": "main" } }
   ],
+  "notes": [
+    {
+      "id": "nt_intro",
+      "position": { "x": 40, "y": 80 },
+      "size": { "width": 280, "height": 140 },
+      "text": "Suppliers land in the material entity."
+    }
+  ],
   "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null }
 }
 ```
@@ -136,6 +145,23 @@ Node fields:
 | `retry` | `null`, or `{ "max_tries", "wait_sec" }`. `max_tries` is 1 to 10 and includes the first execution. `wait_sec` is 0 to 3600. Null executes once |
 
 Edge `source.port` and `target.port` name ports declared by the node types. Graph `settings.run_timeout_sec` is `null` or a positive integer of seconds at most 252460800. `settings.run_retry_limit` is `null` or an integer 0 to 10. `settings.error_channel_id` is `null` or another Data Channel id. Publish requires that channel's current published version to use `trigger.error` as its only trigger.
+
+`notes` is optional and defaults to an empty list. A graph has at most 200 **Channel Note**s. Draft save, validate, and template preview accept this same graph shape.
+
+Note fields:
+
+| Field | Rule |
+| --- | --- |
+| `id` | §2.3 |
+| `position` | `{ "x", "y" }`. Numbers. The server does not interpret them |
+| `size` | `{ "width", "height" }`. Numbers. `width` is 160 to 2000 inclusive. `height` is 80 to 2000 inclusive |
+| `text` | 0 to 4000 characters |
+
+An unknown field on a note, on its `position`, or on its `size` is `422 REQUEST_INVALID`. A duplicate note id, or a note id equal to a node id or an edge id, is `422 REQUEST_INVALID` and names the field `graph`. More than 200 notes is `422 REQUEST_INVALID`.
+
+A response that returns a stored graph omits `notes` when that graph has none. A client treats a missing `notes` as an empty list. Saving `notes` as `[]` stores no `notes` key.
+
+A Channel Note does not take part in execution, validation problems, connections, or node-type permission checks.
 
 Write Entity configuration (`write.entity`):
 
@@ -496,7 +522,7 @@ Any subset of `name` and `description`. Present `description` `null` clears it. 
 ```
 
 - `base_revision` must equal the stored `draft_revision`; otherwise `409 CHANNEL_DRAFT_CONFLICT`.
-- Save checks shape only: identifier rules, unique node and edge ids, field types and ranges in §3.2. It does not check node configuration against the catalog, references, or graph rules; a draft may be incomplete.
+- Save checks shape only: identifier rules, unique node, edge, and note ids, field types and ranges in §3.2. It does not check node configuration against the catalog, references, or graph rules; a draft may be incomplete. A change that only adds, edits, or removes notes does not require a node-type Permission.
 - Compared with the stored draft, a node whose type declares a `permission` requires that Permission when the node is added (its id is absent, or the stored node with that id had another type) or when its `type`, `type_version`, or `config` changes. An unchanged guarded node does not. Deleting a guarded node does not. Missing the Permission is `403 AUTH_FORBIDDEN`; `detail` names the node.
 - `200` `{ "draft_revision", "draft_updated_at", "graph" }` with `draft_revision` incremented by one. Save never changes a version or a schedule row.
 

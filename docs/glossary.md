@@ -579,6 +579,11 @@ Avoid **Entity Version**, a mutable published graph, and an unattended trigger r
 One run of a **Data Channel**: exactly one **Job** of kind `channel_run`, executed in one worker child process, entered at the trigger node that minted it. An on-demand run may name a stop node and then execute only that node's ancestor closure, including the node. There is no separate testing action and no pinned output. Every node the run reaches performs its normal effects. User cancel kills the worker child process. Runs may target a frozen draft or the published version and may overlap; there is no execution lock. A run ends `succeeded` (outcome `completed` or `skipped`), `failed`, or `cancelled`; a newer published version cancels runs still executing an older published version and does not cancel a `draft` run or a run pinned to a version. A rerun of a failed published run is a new Job pinned to that version. The run stores the graph it executed, the **Expression Context** it evaluated with, and each node execution's output.
 Avoid Ingestion Job, sync job, a Scheduled Task, in-place retry, and **Kind execution lock** or `JOB_ALREADY_ACTIVE` for this kind. Avoid "execution" for the whole run; one node's step inside a run is a node execution. Avoid a dry-run interpretation: every node the run reaches performs its normal effects. Avoid a separate testing action and a pinned output that skips execution.
 
+### Channel Note
+
+Explanatory text on a **Data Channel** graph. It has an id, a canvas position, a size, and text. It is saved with the draft and published with the **Channel Version**. It has no effect on execution or validation.
+Avoid treating it as a node, an edge, a port, or a configuration value an expression can read.
+
 ### Node Ref
 
 The Python identifier on a **Data Channel** node, unique in the graph, generated when the node is created and editable. An expression reads that node's output as `self.<ref>.output`. The same output is `self.nodes["<node name>"].output`.
