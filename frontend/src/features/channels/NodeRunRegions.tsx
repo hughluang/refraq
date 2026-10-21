@@ -12,7 +12,7 @@ type NodeInfo = Pick<GraphNode, "id" | "name" | "ref">;
 type Translate = (key: string, options?: Record<string, unknown>) => string;
 
 function ancestorExecutions(nodeId: string, detail: ChannelRunDetail): NodeExecution[] {
-  const ancestors = ancestorIds(nodeId, detail.graph?.edges ?? []);
+  const ancestors = ancestorIds(nodeId, detail.graph?.edges ?? [], detail.graph?.nodes ?? []);
   return detail.node_executions
     .filter((item) => ancestors.has(item.node_id))
     .slice()

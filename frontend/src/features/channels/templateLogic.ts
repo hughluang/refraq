@@ -1,5 +1,5 @@
 import type { SchemaObject } from "@/features/channels/configSchemaForm";
-import { isLoopReturn } from "@/features/channels/portLayout";
+import { crossesFrame } from "@/features/channels/frameLink";
 import { scanTemplate, templatePosition } from "@/features/channels/templateScan";
 import {
   memberOptions,
@@ -126,20 +126,20 @@ export type ScopeEdge = {
   target: string;
   /** Output port the edge leaves. Selects that port's refined schema. */
   sourcePort?: string;
-  /** Input port the edge enters. A loop return is not an upstream dependency. */
   targetPort?: string;
 };
 
 export function upstreamOutputs(
   nodeId: string,
-  nodes: readonly { id: string; ref: string; name: string }[],
+  nodes: readonly { id: string; ref: string; name: string; parent?: string | null }[],
   edges: readonly ScopeEdge[],
   schemas: ReadonlyMap<string, SchemaObject | null>,
   samples: ReadonlyMap<string, unknown> = new Map(),
 ): ScopeNodeOutput[] {
+  const parentOf = new Map(nodes.map((node) => [node.id, node.parent]));
   const incoming = new Map<string, ScopeEdge[]>();
   for (const edge of edges) {
-    if (isLoopReturn(edge.targetPort)) continue;
+    if (crossesFrame(parentOf.get(edge.source), parentOf.get(edge.target), edge.source)) continue;
     const list = incoming.get(edge.target) ?? [];
     list.push(edge);
     incoming.set(edge.target, list);

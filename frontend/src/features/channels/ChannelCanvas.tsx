@@ -136,6 +136,12 @@ import {
   PlayIcon,
   PlusIcon,
 } from "@/components/icons";
+import {
+  edgesAfterReparent,
+  frameLinkAllowed,
+  placementFromPort,
+  reparentDrop,
+} from "@/features/channels/frameLink";
 import { problemIdentity, type ProblemGraph } from "@/features/channels/problemLabel";
 import { upstreamOutputs } from "@/features/channels/templateLogic";
 import type {
@@ -164,6 +170,21 @@ function isChannelNode(node: CanvasNode): node is ChannelNode {
 
 function isNoteNode(node: CanvasNode): node is NoteCanvasNode {
   return node.type === "note";
+}
+
+function linkMembers(nodes: readonly CanvasNode[]) {
+  return nodes.flatMap((node) =>
+    isChannelNode(node)
+      ? [
+          {
+            id: node.id,
+            parentId: node.parentId,
+            position: node.position,
+            nodeType: node.data.nodeType,
+          },
+        ]
+      : [],
+  );
 }
 
 function noteCanvasNode(note: FlowNoteShape, selected: boolean): NoteCanvasNode {
@@ -780,10 +801,14 @@ function ChannelCanvasBody({
       nodesRef.current.flatMap((node) => (isChannelNode(node) ? [node.data.ref] : [])),
     );
     const link = options?.link;
+    const placement = link
+      ? placementFromPort(linkMembers(nodesRef.current), link.sourceId, link.sourceHandle, position)
+      : { position };
     const created: ChannelNode = {
       id,
       type: "channel",
-      position,
+      position: placement.position,
+      ...(placement.parentId ? { parentId: placement.parentId } : {}),
       zIndex: 1,
       selected: true,
       data: emptyNodeData(
@@ -800,7 +825,8 @@ function ChannelCanvasBody({
       .map((edge) => ({ ...edge, selected: false }));
     const draftOf = (edgesNow: Edge[]) => graphOf(nextNodes, edgesNow);
     const accepts = (connection: Connection) =>
-      connectionAllowed(draftOf(nextEdges), catalog, connection);
+      connectionAllowed(draftOf(nextEdges), catalog, connection) &&
+      frameLinkAllowed(linkMembers(nextNodes), connection);
     if (link) {
       const input = spec.inputs.find((port) => {
         const connection = {
@@ -1101,8 +1127,44 @@ function ChannelCanvasBody({
     }
   };
 
+  const onNodeDragStop = (
+    event: MouseEvent | TouchEvent,
+    _node: CanvasNode,
+    dragged: CanvasNode[],
+  ) => {
+    const point = eventPoint(event);
+    const draggedIds = dragged.flatMap((node) => (isChannelNode(node) ? [node.id] : []));
+    if (!point || draggedIds.length === 0) return;
+    const dropped = reparentDrop(
+      linkMembers(nodesRef.current),
+      draggedIds,
+      screenToFlowPosition(point),
+    );
+    const byId = new Map(dropped.map((member) => [member.id, member]));
+    const nextNodes = nodesRef.current.map((node) => {
+      if (!isChannelNode(node)) return node;
+      const next = byId.get(node.id);
+      if (!next) return node;
+      const sameParent = (node.parentId ?? undefined) === next.parentId;
+      const samePosition = node.position.x === next.position.x && node.position.y === next.position.y;
+      if (sameParent && samePosition) return node;
+      const { parentId: _previous, ...rest } = node;
+      return next.parentId
+        ? { ...rest, parentId: next.parentId, position: { ...next.position } }
+        : { ...rest, position: { ...next.position } };
+    });
+    const nextEdges = edgesAfterReparent(edgesRef.current, dropped);
+    nodesRef.current = nextNodes;
+    edgesRef.current = nextEdges;
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+    emit(nextNodes, nextEdges);
+    commitNow();
+  };
+
   const onConnect = (connection: Connection) => {
     if (!connectionAllowed(graphNow(), catalog, connection)) return;
+    if (!frameLinkAllowed(linkMembers(nodesRef.current), connection)) return;
     const priorEdges = edgesRef.current;
     const next = channelEdges(
       addEdge(connection, edgesRef.current, { getEdgeId: () => newGraphId("ed") }),
@@ -1829,6 +1891,7 @@ function ChannelCanvasBody({
             edgeTypes={edgeTypes}
             defaultEdgeOptions={{ type: CHANNEL_EDGE_TYPE, markerEnd: CHANNEL_EDGE_MARKER }}
             onNodesChange={onNodesChange}
+            onNodeDragStop={onNodeDragStop}
             onEdgesChange={onEdgesChange}
             onNodeClick={(event, node) => {
               if (isNoteNode(node)) return;
@@ -2081,6 +2144,7 @@ function ChannelCanvasBody({
                             id: node.id,
                             ref: node.data.ref,
                             name: node.data.name,
+                            parent: node.parentId,
                           }]
                         : [],
                     ),
@@ -2179,7 +2243,10 @@ function ChannelCanvasBody({
 
   function isValidConnection(connection: Connection | Edge) {
     if (!mutable) return false;
-    return connectionAllowed(graphNow(), catalog, connection);
+    return (
+      connectionAllowed(graphNow(), catalog, connection) &&
+      frameLinkAllowed(linkMembers(nodesRef.current), connection)
+    );
   }
 
   function rememberEntering(ids: readonly string[]) {
@@ -2289,6 +2356,7 @@ function structural(snap: CanvasSnapshot) {
             onError: node.data.onError,
             retry: node.data.retry,
             trigger: node.data.trigger,
+            parent: node.parentId ?? null,
           },
     ),
     edges: snap.edges.map((edge) => ({

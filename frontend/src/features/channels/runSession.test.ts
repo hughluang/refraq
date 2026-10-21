@@ -106,11 +106,12 @@ describe("phaseByNode", () => {
 });
 
 describe("execution scope", () => {
-  it("includes a loop body and still closes on the stop node", () => {
+  it("follows every outgoing edge without a stop and skips the body after done", () => {
+    const base = graph();
     const loop: Graph = {
-      ...graph(),
+      ...base,
       nodes: [
-        ...graph().nodes,
+        ...base.nodes.map((node) => (node.id === "body" ? { ...node, parent: "loop" } : node)),
         {
           id: "loop",
           ref: "walk",
@@ -146,7 +147,9 @@ describe("execution scope", () => {
       ],
     };
     expect([...executionScope(loop, null)].sort()).toEqual(["after", "body", "loop", "trigger"]);
-    expect(ancestorIds("body", loop.edges).has("loop")).toBe(true);
-    expect(ancestorIds("after", loop.edges).has("body")).toBe(true);
+    expect(ancestorIds("body", loop.edges, loop.nodes).has("loop")).toBe(true);
+    expect(ancestorIds("body", loop.edges, loop.nodes).has("trigger")).toBe(true);
+    expect(ancestorIds("after", loop.edges, loop.nodes).has("body")).toBe(false);
+    expect([...executionScope(loop, "after")].sort()).toEqual(["after", "loop", "trigger"]);
   });
 });

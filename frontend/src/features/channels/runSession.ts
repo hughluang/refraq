@@ -1,3 +1,4 @@
+import { ancestorIds as frameAncestorIds } from "@/features/channels/frameLink";
 import type { Graph, GraphEdge } from "@/features/channels/types";
 import type { ChannelRunDetail, NodeExecution } from "@/features/channels/types";
 
@@ -9,27 +10,21 @@ export function isTerminalRun(status: string): boolean {
   return TERMINAL.has(status);
 }
 
-export function ancestorIds(nodeId: string, edges: readonly GraphEdge[]): Set<string> {
-  const incoming = new Map<string, string[]>();
-  for (const edge of edges) {
-    const list = incoming.get(edge.target.node_id) ?? [];
-    list.push(edge.source.node_id);
-    incoming.set(edge.target.node_id, list);
-  }
-  const seen = new Set<string>();
-  const stack = [...(incoming.get(nodeId) ?? [])];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current || seen.has(current)) continue;
-    seen.add(current);
-    stack.push(...(incoming.get(current) ?? []));
-  }
-  return seen;
+export function ancestorIds(
+  nodeId: string,
+  edges: readonly GraphEdge[],
+  nodes: readonly { id: string; parent?: string | null }[],
+): Set<string> {
+  return frameAncestorIds(
+    nodeId,
+    edges.map((edge) => ({ source: edge.source.node_id, target: edge.target.node_id })),
+    nodes.map((node) => ({ id: node.id, parentId: node.parent })),
+  );
 }
 
 export function executionScope(graph: Graph, stopAt: string | null): Set<string> {
   if (stopAt) {
-    const closure = ancestorIds(stopAt, graph.edges);
+    const closure = ancestorIds(stopAt, graph.edges, graph.nodes);
     closure.add(stopAt);
     return closure;
   }

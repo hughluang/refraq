@@ -61,14 +61,6 @@ export function layoutNodePorts(
   };
 }
 
-/**
- * True when an edge enters the removed `loop` port.
- * Template ancestor walks still skip that edge. Cross-frame rules replace this later.
- */
-export function isLoopReturn(port: string | null | undefined): boolean {
-  return port === LOOP_RETURN_PORT;
-}
-
 export type FrameMember = {
   id: string;
   parentId?: string;

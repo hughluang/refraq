@@ -2021,6 +2021,109 @@ describe("channel ports", () => {
     expect(translationOf("step")).toEqual({ x: 250, y: 268 });
   });
 
+  it("drops the each edge when a child leaves the frame and restores it on undo", async () => {
+    const onChange = vi.fn();
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [
+        { ...placed("walk", "volume.for", "Walk", 80), position: { x: 80, y: 80 } },
+        { ...placed("step", "read.sql", "Step", 0), position: { x: 48, y: 48 }, parent: "walk" },
+      ],
+      edges: [
+        {
+          id: "each",
+          source: { node_id: "walk", port: "each" },
+          target: { node_id: "step", port: "main" },
+        },
+      ],
+    }, { catalog: [FOR_SPEC, READ_SPEC], onChange });
+    await measured("step");
+
+    dragNode("step", [
+      { x: 128, y: 128 },
+      { x: 160, y: 128 },
+      { x: 520, y: 360 },
+    ]);
+
+    await waitFor(() => {
+      const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+      expect(saved.nodes.find((item) => item.id === "step")).not.toHaveProperty("parent");
+      expect(saved.edges).toEqual([]);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => {
+      const restored = onChange.mock.calls.at(-1)?.[0] as Graph;
+      expect(restored.nodes.find((item) => item.id === "step")).toMatchObject({
+        parent: "walk",
+        position: { x: 48, y: 48 },
+      });
+      expect(restored.edges.map((item) => item.id)).toEqual(["each"]);
+    });
+  });
+
+  it("drops the done edge when a node enters the frame", async () => {
+    const onChange = vi.fn();
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [
+        { ...placed("walk", "volume.for", "Walk", 80), position: { x: 80, y: 80 } },
+        { ...placed("step", "read.sql", "Step", 520), position: { x: 520, y: 360 } },
+      ],
+      edges: [
+        {
+          id: "done",
+          source: { node_id: "walk", port: "done" },
+          target: { node_id: "step", port: "main" },
+        },
+      ],
+    }, { catalog: [FOR_SPEC, READ_SPEC], onChange });
+    await measured("step");
+
+    dragNode("step", [
+      { x: 520, y: 360 },
+      { x: 480, y: 320 },
+      { x: 120, y: 120 },
+    ]);
+
+    await waitFor(() => {
+      const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+      const step = saved.nodes.find((item) => item.id === "step");
+      expect(step?.parent).toBe("walk");
+      expect(saved.edges).toEqual([]);
+    });
+  });
+
+  it("parents a node created from each inside the frame", async () => {
+    const onChange = vi.fn();
+    const sql = { ...READ_SPEC, label: "SQL", summary: "Query rows" };
+    await renderCanvas(
+      [],
+      {
+        ...EMPTY_GRAPH,
+        nodes: [{ ...placed("walk", "volume.for", "Walk", 0), position: { x: 40, y: 40 } }],
+      },
+      { catalog: [FOR_SPEC, sql], onChange },
+    );
+    await measured("walk");
+
+    releaseOutputAt("Walk Each output", { x: 80, y: 80 });
+    fireEvent.click(screen.getByRole("option", { name: /SQL/ }));
+
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    const created = saved.nodes.find((item) => item.id !== "walk");
+    expect(created?.parent).toBe("walk");
+    expect(created?.position.x).toBeGreaterThanOrEqual(0);
+    expect(created?.position.y).toBeGreaterThanOrEqual(0);
+    expect(created!.position.x + 208).toBeLessThanOrEqual(320);
+    expect(created!.position.y + 56).toBeLessThanOrEqual(180);
+    expect(saved.edges).toEqual([
+      expect.objectContaining({
+        source: { node_id: "walk", port: "each" },
+        target: { node_id: created?.id, port: "main" },
+      }),
+    ]);
+  });
+
   it("keeps a done drop that is already outside the frame", async () => {
     const onChange = vi.fn();
     const sql = { ...READ_SPEC, label: "SQL", summary: "Query rows" };
