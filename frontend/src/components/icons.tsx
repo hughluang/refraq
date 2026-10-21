@@ -8,6 +8,7 @@ import {
   IconArrowBackUp,
   IconArrowForwardUp,
   IconArrowsExchange,
+  IconArrowsMaximize,
   IconArrowsJoin2,
   IconArrowsSplit2,
   IconBolt,
@@ -17,6 +18,7 @@ import {
   IconCalendarTime,
   IconCategory,
   IconCheck,
+  IconChevronDown,
   IconChevronLeft,
   IconChevronRight,
   IconCircleDashed,
@@ -36,6 +38,7 @@ import {
   IconIdBadge,
   IconInfoCircle,
   IconKey,
+  IconKeyboard,
   IconLanguage,
   IconLayoutDashboard,
   IconList,
@@ -62,8 +65,11 @@ import {
   IconUsersGroup,
   IconVariable,
   IconMail,
+  IconMap,
   IconWebhook,
   IconX,
+  IconZoomIn,
+  IconZoomOut,
   type IconProps,
 } from "@tabler/icons-react";
 
@@ -109,6 +115,12 @@ export const CloseIcon = withDefaults(IconX);
 export const SearchIcon = withDefaults(IconSearch);
 export const NavCollapseIcon = withDefaults(IconChevronLeft);
 export const NavExpandIcon = withDefaults(IconChevronRight);
+export const ChevronDownIcon = withDefaults(IconChevronDown);
+export const FitViewIcon = withDefaults(IconArrowsMaximize);
+export const KeyboardIcon = withDefaults(IconKeyboard);
+export const MinimapIcon = withDefaults(IconMap);
+export const ZoomInIcon = withDefaults(IconZoomIn);
+export const ZoomOutIcon = withDefaults(IconZoomOut);
 
 export const BoltIcon = withDefaults(IconBolt);
 export const BoxIcon = withDefaults(IconBox);

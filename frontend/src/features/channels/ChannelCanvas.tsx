@@ -5,7 +5,6 @@ import {
   CloseButton,
   Group,
   Paper,
-  Popover,
   Stack,
   Text,
   Tooltip,
@@ -15,8 +14,6 @@ import { usePermissions, useTranslate } from "@refinedev/core";
 import {
   Background,
   BaseEdge,
-  ControlButton,
-  Controls,
   EdgeToolbar,
   Handle,
   Position,
@@ -51,6 +48,7 @@ import "@xyflow/react/dist/style.css";
 import "./ChannelCanvas.css";
 
 import { EmptyState } from "@/components/feedback/EmptyState";
+import { CanvasToolbar } from "@/features/channels/CanvasToolbar";
 
 import {
   createHistory,
@@ -97,13 +95,10 @@ import {
 } from "@/features/channels/portLayout";
 import {
   presentNodeStatus,
-  presentProblemSeverity,
-  toneMantineColor,
   toneVariable,
   type Tone,
 } from "@/components/display/statusTone";
 import {
-  AlertIcon,
   CheckIcon,
   CircleDashedIcon,
   ClockIcon,
@@ -111,15 +106,8 @@ import {
   ErrorIcon,
   LoaderIcon,
   PlayIcon,
-  PlusIcon,
-  RedoIcon,
-  UndoIcon,
 } from "@/components/icons";
-import {
-  formatGraphProblem,
-  problemIdentity,
-  type ProblemGraph,
-} from "@/features/channels/problemLabel";
+import { problemIdentity, type ProblemGraph } from "@/features/channels/problemLabel";
 import { upstreamOutputs } from "@/features/channels/templateLogic";
 import type {
   ChannelRunDetail,
@@ -154,12 +142,13 @@ type PickerState =
     };
 
 const NODE_DRAG_THRESHOLD = 4;
+const CANVAS_MIN_ZOOM = 0.25;
+const CANVAS_MAX_ZOOM = 2;
 const CHANNEL_EDGE_TYPE = "channel";
 const CHANNEL_EDGE_MARKER = { type: MarkerType.ArrowClosed, color: "context-stroke" };
 const nodeTypes = { channel: ChannelFlowNode };
 const edgeTypes = { [CHANNEL_EDGE_TYPE]: ChannelFlowEdge };
 const PROBLEM_STROKE = "var(--refraq-tone-danger)";
-const PROBLEM_HOVER_CLOSE_MS = 120;
 
 function highlightTargets(problem: GraphProblem, active: ProblemHighlight): boolean {
   return active.nodeId
@@ -266,8 +255,6 @@ function ChannelCanvasBody({
   const focusReturnRef = useRef<string | null>(null);
   const cancelOverlayCloseRef = useRef<() => void>(() => {});
   const beginCloseRef = useRef<() => void>(() => {});
-  const undoRef = useRef<() => void>(() => {});
-  const redoRef = useRef<() => void>(() => {});
   const highlightRef = useRef<ProblemHighlight | null>(highlight);
   nodesRef.current = nodes;
   edgesRef.current = edges;
@@ -392,9 +379,6 @@ function ChannelCanvasBody({
     restore(next.present);
   };
 
-  undoRef.current = undo;
-  redoRef.current = redo;
-
   const adoptedToken = useRef(adoptToken);
   useEffect(() => {
     if (adoptedToken.current === adoptToken) return;
@@ -436,23 +420,6 @@ function ChannelCanvasBody({
   useEffect(() => {
     if (mutable) return;
     setPicker(null);
-  }, [mutable]);
-
-  useEffect(() => {
-    if (!mutable) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.code !== "KeyZ") return;
-      const target = event.target;
-      if (target instanceof HTMLElement) {
-        const tag = target.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) return;
-      }
-      event.preventDefault();
-      if (event.shiftKey) redoRef.current();
-      else undoRef.current();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
   }, [mutable]);
 
   const clearHighlight = () => {
@@ -980,61 +947,32 @@ function ChannelCanvasBody({
             multiSelectionKeyCode={null}
             selectionKeyCode={null}
             deleteKeyCode={mutable ? ["Backspace", "Delete"] : null}
+            zoomOnDoubleClick={false}
+            snapToGrid
+            snapGrid={[8, 8]}
+            minZoom={CANVAS_MIN_ZOOM}
+            maxZoom={CANVAS_MAX_ZOOM}
             fitView
           >
-            {appearance === "edit" ? <Background /> : null}
-            <Controls
-              showZoom={false}
-              showInteractive={appearance === "edit" && mutable}
-              className="channel-canvas-controls"
-            >
-              {problems.length > 0 ? (
-                <ProblemsControl
-                  problems={problems}
-                  graph={labelGraph}
-                  activeKey={highlight?.key ?? null}
-                  dismissToken={problemsDismissed}
-                  onFocus={focusProblem}
-                />
-              ) : null}
-              {appearance === "edit" ? (
-                <Tooltip label={t("channels.canvas.add")} openDelay={200}>
-                  <ControlButton
-                    className="channel-canvas-add"
-                    aria-label={t("channels.canvas.add")}
-                    aria-expanded={picker?.kind === "catalog"}
-                    disabled={!mutable}
-                    onClick={openFullCatalog}
-                  >
-                    <PlusIcon size={14} />
-                  </ControlButton>
-                </Tooltip>
-              ) : null}
-              {appearance === "edit" ? (
-                <Tooltip label={t("channels.canvas.undo")} openDelay={200}>
-                  <ControlButton
-                    className="channel-canvas-undo"
-                    aria-label={t("channels.canvas.undo")}
-                    disabled={!mutable || !canUndo}
-                    onClick={undo}
-                  >
-                    <UndoIcon size={14} />
-                  </ControlButton>
-                </Tooltip>
-              ) : null}
-              {appearance === "edit" ? (
-                <Tooltip label={t("channels.canvas.redo")} openDelay={200}>
-                  <ControlButton
-                    className="channel-canvas-redo"
-                    aria-label={t("channels.canvas.redo")}
-                    disabled={!mutable || !canRedo}
-                    onClick={redo}
-                  >
-                    <RedoIcon size={14} />
-                  </ControlButton>
-                </Tooltip>
-              ) : null}
-            </Controls>
+            {appearance === "edit" ? <Background gap={16} /> : null}
+            <CanvasToolbar
+              editing={appearance === "edit"}
+              mutable={mutable}
+              canUndo={canUndo}
+              canRedo={canRedo}
+              addExpanded={picker?.kind === "catalog"}
+              onAdd={openFullCatalog}
+              onUndo={undo}
+              onRedo={redo}
+              catalog={catalog}
+              problems={problems}
+              problemGraph={labelGraph}
+              activeProblemKey={highlight?.key ?? null}
+              problemsDismissed={problemsDismissed}
+              onFocusProblem={focusProblem}
+              minZoom={CANVAS_MIN_ZOOM}
+              maxZoom={CANVAS_MAX_ZOOM}
+            />
           </ReactFlow>
           {connectNote ? (
             <Text className="channel-canvas-connect-note" size="sm" c="dimmed" aria-live="polite">
@@ -1296,146 +1234,6 @@ function problemGraphOf(nodes: ChannelNode[], edges: Edge[]): ProblemGraph {
       target: { node_id: edge.target },
     })),
   };
-}
-
-function ProblemsControl({
-  problems,
-  graph,
-  activeKey,
-  dismissToken,
-  onFocus,
-}: {
-  problems: GraphProblem[];
-  graph: ProblemGraph;
-  activeKey: string | null;
-  dismissToken: number;
-  onFocus: (problem: GraphProblem) => void;
-}) {
-  const t = useTranslate();
-  const [pinned, setPinned] = useState(false);
-  const [hovered, setHovered] = useState(false);
-  const hideTimer = useRef<number | null>(null);
-  const previousCount = useRef(0);
-  const [pulseToken, setPulseToken] = useState(0);
-  const seenDismiss = useRef(dismissToken);
-
-  useEffect(() => {
-    if (seenDismiss.current === dismissToken) return;
-    seenDismiss.current = dismissToken;
-    setPinned(false);
-  }, [dismissToken]);
-
-  useEffect(() => {
-    if (problems.length > previousCount.current) {
-      setPulseToken((token) => token + 1);
-    }
-    previousCount.current = problems.length;
-  }, [problems.length]);
-
-  useEffect(
-    () => () => {
-      if (hideTimer.current != null) window.clearTimeout(hideTimer.current);
-    },
-    [],
-  );
-
-  const enter = () => {
-    if (hideTimer.current != null) {
-      window.clearTimeout(hideTimer.current);
-      hideTimer.current = null;
-    }
-    setHovered(true);
-  };
-
-  const leave = () => {
-    if (hideTimer.current != null) window.clearTimeout(hideTimer.current);
-    hideTimer.current = window.setTimeout(() => {
-      hideTimer.current = null;
-      setHovered(false);
-    }, PROBLEM_HOVER_CLOSE_MS);
-  };
-
-  const open = pinned || hovered;
-  const errorCount = problems.filter((problem) => problem.severity !== "warning").length;
-  const warningCount = problems.length - errorCount;
-  const warningsOnly = errorCount === 0;
-  const label = t("channels.canvas.problemsSummary", {
-    errors: errorCount,
-    warnings: warningCount,
-  });
-
-  return (
-    <Popover
-      opened={open}
-      onChange={(next) => {
-        if (!next) setPinned(false);
-      }}
-      position="right-end"
-      withinPortal
-    >
-      <Popover.Target>
-        <ControlButton
-          className={
-            warningsOnly
-              ? "channel-canvas-problems channel-canvas-problems--warning"
-              : "channel-canvas-problems"
-          }
-          title={label}
-          aria-label={label}
-          aria-expanded={open}
-          onClick={() => setPinned((current) => !current)}
-          onMouseEnter={enter}
-          onMouseLeave={leave}
-        >
-          {pulseToken > 0 ? (
-            <span key={pulseToken} className="channel-canvas-problems__pulse" />
-          ) : null}
-          <AlertIcon size={14} />
-          <span className="channel-canvas-problems__badge">{problems.length}</span>
-        </ControlButton>
-      </Popover.Target>
-      <Popover.Dropdown onMouseEnter={enter} onMouseLeave={leave}>
-        <Stack gap={4}>
-          <Text size="sm" fw={600}>
-            {label}
-          </Text>
-          {problems.map((problem) => {
-            const itemLabel = formatGraphProblem(t, problem, graph);
-            const key = problemIdentity(problem);
-            const toneName = presentProblemSeverity(problem.severity);
-            const color = toneMantineColor(toneName);
-            const tone =
-              toneName === "warning" ? "channel-canvas-problems__item--warning" : undefined;
-            if (!problem.node_id && !problem.edge_id) {
-              return (
-                <Text key={key} c={color} className={tone} size="sm">
-                  {itemLabel}
-                </Text>
-              );
-            }
-            const active = key === activeKey;
-            return (
-              <Button
-                key={key}
-                type="button"
-                variant="subtle"
-                color={color}
-                size="compact-sm"
-                justify="flex-start"
-                className={[tone, active ? "channel-canvas-problems__item--active" : undefined]
-                  .filter(Boolean)
-                  .join(" ") || undefined}
-                aria-current={active ? "true" : undefined}
-                onClick={() => onFocus(problem)}
-              >
-                {itemLabel}
-              </Button>
-            );
-          })}
-        </Stack>
-      </Popover.Dropdown>
-    </Popover>
-  );
 }
 
 function pointerStillOnEdge(target: EventTarget | null, edgeId: string): boolean {

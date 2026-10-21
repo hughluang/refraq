@@ -36,6 +36,20 @@ const LABELS: Record<string, string> = {
   "channels.config.fields.transform.code.timeout_sec": "Timeout (seconds)",
   "channels.canvas.undo": "Undo",
   "channels.canvas.redo": "Redo",
+  "channels.canvas.toolbar": "Canvas tools",
+  "channels.canvas.zoomIn": "Zoom in",
+  "channels.canvas.zoomOut": "Zoom out",
+  "channels.canvas.zoomPercent": "Zoom {{percent}}%",
+  "channels.canvas.zoom100": "100%",
+  "channels.canvas.fitView": "Fit view",
+  "channels.canvas.minimap": "Minimap",
+  "channels.canvas.shortcuts": "Keyboard shortcuts",
+  "channels.canvas.shortcuts.group.edit": "Edit",
+  "channels.canvas.shortcuts.group.view": "View",
+  "channels.canvas.shortcuts.delete": "Delete selection",
+  "channels.canvas.shortcuts.open": "Open settings",
+  "channels.canvas.shortcuts.close": "Close overlay",
+  "channels.canvas.shortcuts.help": "Show keyboard shortcuts",
   "channels.canvas.palette": "Nodes",
   "channels.canvas.problemsSummary": "{{errors}} errors, {{warnings}} warnings",
   "channels.node.run": "Run node",
@@ -79,6 +93,7 @@ vi.mock("@refinedev/core", () => ({
 
 function stubDomApis() {
   sessionPermissions.current = [];
+  localStorage.removeItem("refraq.channelCanvas.minimap");
   Object.defineProperty(window, "matchMedia", {
     writable: true,
     value: (query: string) => ({
@@ -318,24 +333,28 @@ describe("ChannelCanvas controls", () => {
     cleanup();
   });
 
-  it("puts add, undo, and redo in the control panel and drops zoom", async () => {
+  it("puts authoring, zoom, minimap, and shortcut help on the bottom toolbar", async () => {
     await renderCanvas();
 
-    const panel = screen.getByTestId("rf__controls");
+    const toolbar = screen.getByRole("toolbar", { name: "Canvas tools" });
     expect(document.querySelector(".channel-canvas-stage--browse")).toBeNull();
-    expect(panel.querySelector(".react-flow__controls-zoomin")).toBeNull();
-    expect(panel.querySelector(".react-flow__controls-zoomout")).toBeNull();
-    expect(panel.querySelector(".react-flow__controls-fitview")).not.toBeNull();
-    expect(panel.querySelector(".react-flow__controls-interactive")).not.toBeNull();
+    expect(document.querySelector(".react-flow__controls")).toBeNull();
+    expect(document.querySelector(".react-flow__controls-interactive")).toBeNull();
+    expect(document.querySelector(".react-flow__background pattern")?.getAttribute("width")).toBe(
+      "16",
+    );
 
-    const add = within(panel).getByRole("button", { name: "Add" });
-    const undo = screen.getByRole("button", { name: "Undo" });
-    const redo = screen.getByRole("button", { name: "Redo" });
+    const add = within(toolbar).getByRole("button", { name: "Add" });
+    const undo = within(toolbar).getByRole("button", { name: "Undo" });
+    const redo = within(toolbar).getByRole("button", { name: "Redo" });
     expect(add.querySelector("svg")).not.toBeNull();
-    expect(add.textContent).toBe("");
-    expect(panel.contains(add)).toBe(true);
-    expect(panel.contains(undo)).toBe(true);
-    expect(panel.contains(redo)).toBe(true);
+    expect(within(toolbar).getByRole("button", { name: "Zoom out" })).toBeTruthy();
+    expect(within(toolbar).getByRole("button", { name: /Zoom \d+%/ })).toBeTruthy();
+    expect(within(toolbar).getByRole("button", { name: "Zoom in" })).toBeTruthy();
+    expect(within(toolbar).getByRole("button", { name: "Fit view" })).toBeTruthy();
+    expect(within(toolbar).getByRole("button", { name: "Minimap" })).toBeTruthy();
+    expect(within(toolbar).getByRole("button", { name: "Keyboard shortcuts" })).toBeTruthy();
+    expect(toolbar.querySelectorAll("[role='separator']")).toHaveLength(3);
     expect((undo as HTMLButtonElement).disabled).toBe(true);
     expect((redo as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("button", { name: /problems/ })).toBeNull();
@@ -353,13 +372,18 @@ describe("ChannelCanvas controls", () => {
       { appearance: "browse", mutable: false },
     );
 
-    const panel = screen.getByTestId("rf__controls");
+    const toolbar = screen.getByRole("toolbar", { name: "Canvas tools" });
     expect(document.querySelector(".channel-canvas-stage--browse")).not.toBeNull();
     expect(document.querySelector(".react-flow__background")).toBeNull();
     expect(document.querySelector(".react-flow__handle")).not.toBeNull();
-    expect(panel.querySelector(".react-flow__controls-fitview")).not.toBeNull();
-    expect(panel.querySelector(".react-flow__controls-interactive")).toBeNull();
-    expect(screen.getByRole("button", { name: "1 errors, 0 warnings" })).toBeTruthy();
+    expect(document.querySelector(".react-flow__controls-interactive")).toBeNull();
+    expect(within(toolbar).getByRole("button", { name: "Zoom out" })).toBeTruthy();
+    expect(within(toolbar).getByRole("button", { name: /Zoom \d+%/ })).toBeTruthy();
+    expect(within(toolbar).getByRole("button", { name: "Zoom in" })).toBeTruthy();
+    expect(within(toolbar).getByRole("button", { name: "Fit view" })).toBeTruthy();
+    expect(within(toolbar).getByRole("button", { name: "Minimap" })).toBeTruthy();
+    expect(within(toolbar).getByRole("button", { name: "Keyboard shortcuts" })).toBeTruthy();
+    expect(within(toolbar).getByRole("button", { name: "1 errors, 0 warnings" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Redo" })).toBeNull();
@@ -371,14 +395,135 @@ describe("ChannelCanvas controls", () => {
     expect(screen.queryByRole("button", { name: "Run node" })).toBeNull();
   });
 
+  it("zooms from the percentage menu", async () => {
+    await renderCanvas([], nodeGraph);
+    window.matchMedia = (query: string) => ({
+      matches: query.includes("reduce"),
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    const viewport = document.querySelector(".react-flow__viewport");
+    if (!(viewport instanceof HTMLElement)) throw new Error("missing viewport");
+    const before = viewport.getAttribute("style");
+
+    fireEvent.click(screen.getByRole("button", { name: /Zoom \d+%/ }));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Zoom in" })).toBeTruthy();
+    expect(within(menu).getByRole("menuitem", { name: "Zoom out" })).toBeTruthy();
+    expect(within(menu).getByRole("menuitem", { name: "100%" })).toBeTruthy();
+    expect(within(menu).getByRole("menuitem", { name: "Fit view" })).toBeTruthy();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "100%" }));
+
+    await waitFor(() => {
+      expect(viewport.getAttribute("style")).toContain("scale(1)");
+      expect(viewport.getAttribute("style")).not.toBe(before);
+    });
+  });
+
+  it("remembers the minimap and paints nodes with the family color", async () => {
+    localStorage.removeItem("refraq.channelCanvas.minimap");
+    await renderCanvas([], nodeGraph);
+    expect(document.querySelector(".react-flow__minimap")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Minimap" }));
+    expect(screen.getByRole("button", { name: "Minimap" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(localStorage.getItem("refraq.channelCanvas.minimap")).toBe("1");
+    await waitFor(() => {
+      const swatch = document.querySelector(".react-flow__minimap-node");
+      if (!(swatch instanceof SVGElement)) throw new Error("missing minimap node");
+      expect(swatch.style.fill).toBe("var(--mantine-color-orange-filled)");
+    });
+
+    cleanup();
+    await renderCanvas([], nodeGraph);
+    expect(document.querySelector(".react-flow__minimap")).not.toBeNull();
+    localStorage.removeItem("refraq.channelCanvas.minimap");
+  });
+
+  it("opens shortcut help from ? and leaves viewport keys alone in a field", async () => {
+    await renderCanvas([], nodeGraph);
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    node.focus();
+    fireEvent.keyDown(node, { key: "?" });
+    expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" })).toBeNull();
+    });
+
+    fireEvent.click(node);
+    const name = screen.getByRole("textbox", { name: "Name" });
+    const zoom = new KeyboardEvent("keydown", {
+      key: "0",
+      code: "Digit0",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    const fit = new KeyboardEvent("keydown", {
+      key: "!",
+      code: "Digit1",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    name.dispatchEvent(zoom);
+    name.dispatchEvent(fit);
+    expect(zoom.defaultPrevented).toBe(false);
+    expect(fit.defaultPrevented).toBe(false);
+    expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" })).toBeNull();
+  });
+
+  it("undoes with ctrl+z and redoes with ctrl+y while the canvas is focused", async () => {
+    await renderCanvas();
+    const toolbar = screen.getByRole("toolbar", { name: "Canvas tools" });
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: /Manual/ }));
+    expect(document.querySelectorAll(".react-flow__node")).toHaveLength(1);
+
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    node.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "z",
+        code: "KeyZ",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await waitFor(() => {
+      expect(document.querySelectorAll(".react-flow__node")).toHaveLength(0);
+    });
+
+    within(screen.getByRole("toolbar", { name: "Canvas tools" }))
+      .getByRole("button", { name: "Add" })
+      .dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "y",
+          code: "KeyY",
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    await waitFor(() => {
+      expect(document.querySelectorAll(".react-flow__node")).toHaveLength(1);
+    });
+  });
+
   it("puts the problem control in the panel with a count badge", async () => {
     await renderCanvas([
       { code: "graph.empty", node_id: null, edge_id: null, path: [], detail: "Empty graph" },
     ]);
 
     const problems = screen.getByRole("button", { name: "1 errors, 0 warnings" });
-    const panel = screen.getByTestId("rf__controls");
-    expect(panel.contains(problems)).toBe(true);
+    const toolbar = screen.getByRole("toolbar", { name: "Canvas tools" });
+    expect(toolbar.contains(problems)).toBe(true);
     expect(problems.querySelector(".channel-canvas-problems__badge")?.textContent).toBe("1");
   });
 
@@ -969,10 +1114,11 @@ describe("ChannelCanvas controls", () => {
 
     const detail = css.match(/^\.channel-node-config--detail \{([\s\S]*?)\n\}/m)?.[1] ?? "";
     expect(css).toMatch(
-      /--channel-canvas-controls-clearance:\s*calc\(15px \+ 26px \+ var\(--mantine-spacing-sm\)\)/,
+      /--channel-canvas-controls-clearance:\s*calc\(15px \+ 1\.375rem \* var\(--mantine-scale\) \+ var\(--mantine-spacing-sm\)\)/,
     );
+    expect(detail).toMatch(/width:\s*calc\(100% - 16px\)/);
     expect(detail).toMatch(
-      /width:\s*calc\(100% - 8px - var\(--channel-canvas-controls-clearance\)\)/,
+      /height:\s*calc\(100% - 8px - var\(--channel-canvas-controls-clearance\)\)/,
     );
     expect(detail).not.toMatch(/container-type/);
 
@@ -993,10 +1139,10 @@ describe("empty canvas", () => {
     await renderCanvas();
 
     expect(screen.getByText("Add a trigger to start this channel.")).toBeTruthy();
-    const panel = screen.getByTestId("rf__controls");
+    const toolbar = screen.getByRole("toolbar", { name: "Canvas tools" });
     const emptyAdd = screen
       .getAllByRole("button", { name: "Add" })
-      .find((button) => !panel.contains(button));
+      .find((button) => !toolbar.contains(button));
     if (!(emptyAdd instanceof HTMLButtonElement)) throw new Error("missing empty-canvas add");
     fireEvent.click(emptyAdd);
     expect(screen.getByText("Nodes")).toBeTruthy();
@@ -2024,7 +2170,11 @@ describe("guarded node authoring", () => {
 
   it("does not add a guarded node when the session lacks its permission", async () => {
     await renderCanvas([], EMPTY_GRAPH, { catalog: [spec, CODE_SPEC] });
-    fireEvent.click(within(screen.getByTestId("rf__controls")).getByRole("button", { name: "Add" }));
+    fireEvent.click(
+      within(screen.getByRole("toolbar", { name: "Canvas tools" })).getByRole("button", {
+        name: "Add",
+      }),
+    );
 
     const guarded = screen.getByRole("button", { name: /Requires channel:code_write/ });
     expect(guarded.textContent).toContain("Code");

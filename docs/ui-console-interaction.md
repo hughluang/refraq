@@ -70,6 +70,24 @@ A **Job** reference shows the status badge and the translated kind, with the id 
 
 Single-key shortcuts are ignored while focus is in an editable field and while the channel canvas has focus (a `.react-flow` ancestor). Ctrl+K and Cmd+K open the palette even then.
 
+### 7.1 Channel canvas shortcuts
+
+These shortcuts apply only while focus is inside the channel canvas (a `.channel-canvas-stage` ancestor). Undo, redo, fit, zoom, and shortcut help do not run while focus is in an editable field, the node settings panel, or a modal. Escape still closes an open canvas overlay, including from a field in that overlay, unless that field already handled the key. Delete and Backspace remove the selection only while the graph can be edited.
+
+| Shortcut | Effect |
+| --- | --- |
+| Enter | Open the settings panel for the focused node |
+| Delete or Backspace | Delete the selection when the graph can be edited |
+| Ctrl+Z or Cmd+Z | Undo |
+| Shift+Ctrl+Z or Shift+Cmd+Z | Redo |
+| Ctrl+Y or Cmd+Y | Redo |
+| Shift+1 | Fit the view |
+| Ctrl+= or Cmd+= | Zoom in |
+| Ctrl+- or Cmd+- | Zoom out |
+| Ctrl+0 or Cmd+0 | Zoom to 100% |
+| ? | Open keyboard shortcut help |
+| Escape | Close the open canvas overlay |
+
 The palette sections are Recent, Go to, Create, Records, and Actions. Recent is the latest eight record visits for this User in this browser. Go to lists permitted **Console Navigation** modules. Create lists modules that have a create route and create permission. Records searches the list endpoints for Users, Roles, Sources, Entities, Dictionaries, Channels, Business Domains, and User Groups when the actor may list that module, five results each, after a 250 ms pause. A failed module is omitted. A response for an older query is ignored. Actions toggle the color scheme, toggle navigation width, change language, and open **Account Center**. The palette footer lists the shortcuts with key hints.
 
 ## 8. Motion
