@@ -43,6 +43,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -338,6 +339,27 @@ const CanvasRunContext = createContext<{
   onRun: () => {},
 });
 
+const CanvasMotionContext = createContext<{
+  entering: ReadonlySet<string>;
+  drawing: ReadonlySet<string>;
+}>({
+  entering: new Set(),
+  drawing: new Set(),
+});
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
+function idsAdded(before: readonly { id: string }[], after: readonly { id: string }[]): string[] {
+  const known = new Set(before.map((item) => item.id));
+  return after.flatMap((item) => (known.has(item.id) ? [] : [item.id]));
+}
+
 type Props = {
   graph: Graph;
   catalog: NodeTypeSpec[];
@@ -411,6 +433,8 @@ function ChannelCanvasBody({
   const seededEdges = channelEdges(initial.edges);
   const [nodes, setNodes] = useState<CanvasNode[]>(seededNodes);
   const [edges, setEdges] = useState<Edge[]>(seededEdges);
+  const [enteringIds, setEnteringIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [drawingIds, setDrawingIds] = useState<ReadonlySet<string>>(() => new Set());
   const [configNodeId, setConfigNodeId] = useState<string | null>(null);
   const [leaving, setLeaving] = useState(false);
   const [picker, setPicker] = useState<PickerState | null>(null);
@@ -571,6 +595,7 @@ function ChannelCanvasBody({
     edgesRef.current = painted.edges;
     setNodes(painted.nodes);
     setEdges(painted.edges);
+    forgetMotion();
     setConfigNodeId(
       painted.nodes.find((node) => node.selected && isChannelNode(node))?.id ?? null,
     );
@@ -632,6 +657,7 @@ function ChannelCanvasBody({
     edgesRef.current = painted.edges;
     setNodes(painted.nodes);
     setEdges(painted.edges);
+    forgetMotion();
     setConfigNodeId((current) =>
       current != null && painted.nodes.some((node) => node.id === current) ? current : null,
     );
@@ -747,11 +773,13 @@ function ChannelCanvasBody({
       (node) => isChannelNode(node) && node.data.nodeType === spec.type,
     ).length;
     const name = count === 0 ? label : `${label} ${count + 1}`;
+    const priorEdges = edgesRef.current;
     const id = newGraphId("nd");
     const ref = nodeRef(
       spec.type,
       nodesRef.current.flatMap((node) => (isChannelNode(node) ? [node.data.ref] : [])),
     );
+    const link = options?.link;
     const created: ChannelNode = {
       id,
       type: "channel",
@@ -771,16 +799,18 @@ function ChannelCanvasBody({
       .filter((edge) => edge.id !== options?.removeEdgeId)
       .map((edge) => ({ ...edge, selected: false }));
     const draftOf = (edgesNow: Edge[]) => graphOf(nextNodes, edgesNow);
-    const link = options?.link;
+    const accepts = (connection: Connection) =>
+      connectionAllowed(draftOf(nextEdges), catalog, connection);
     if (link) {
-      const input = spec.inputs.find((port) =>
-        connectionAllowed(draftOf(nextEdges), catalog, {
+      const input = spec.inputs.find((port) => {
+        const connection = {
           source: link.sourceId,
           target: id,
           sourceHandle: link.sourceHandle,
           targetHandle: port.port,
-        }),
-      );
+        };
+        return accepts(connection);
+      });
       if (!input) return;
       nextEdges = channelEdges(
         addEdge(
@@ -798,7 +828,7 @@ function ChannelCanvasBody({
     const continueTo = options?.continueTo;
     if (continueTo) {
       const output = spec.outputs.find((port) =>
-        connectionAllowed(draftOf(nextEdges), catalog, {
+        accepts({
           source: id,
           target: continueTo.targetId,
           sourceHandle: port.port,
@@ -823,6 +853,8 @@ function ChannelCanvasBody({
     edgesRef.current = nextEdges;
     setNodes(nextNodes);
     setEdges(nextEdges);
+    rememberEntering([id]);
+    rememberDrawing(idsAdded(priorEdges, nextEdges), nextEdges);
     setConfigNodeId(null);
     setPicker(null);
     emit(nextNodes, nextEdges);
@@ -1071,12 +1103,14 @@ function ChannelCanvasBody({
 
   const onConnect = (connection: Connection) => {
     if (!connectionAllowed(graphNow(), catalog, connection)) return;
+    const priorEdges = edgesRef.current;
     const next = channelEdges(
       addEdge(connection, edgesRef.current, { getEdgeId: () => newGraphId("ed") }),
     );
     if (next === edgesRef.current) return;
     edgesRef.current = next;
     setEdges(next);
+    rememberDrawing(idsAdded(priorEdges, next), next);
     emit(nodesRef.current, next);
     commitNow();
   };
@@ -1233,6 +1267,41 @@ function ChannelCanvasBody({
     () => (sessionRun ? phaseByNode(sessionRun, sessionRun.graph ?? graph) : new Map()),
     [sessionRun, graph],
   );
+  useEffect(() => {
+    setDrawingIds((current) => {
+      if (current.size === 0) return current;
+      let changed = false;
+      const next = new Set(current);
+      for (const id of current) {
+        const edge = edgesRef.current.find((item) => item.id === id);
+        if (edge && phases.get(edge.target) === "running") {
+          next.delete(id);
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [phases]);
+  useEffect(() => {
+    const root = flowRootRef.current;
+    if (!root) return;
+    const onEnd = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const name = "animationName" in event ? String(event.animationName) : "";
+      if (name === "channel-flow-node-enter") {
+        const id = target.closest(".react-flow__node")?.getAttribute("data-id");
+        if (id) releaseEntering(id);
+        return;
+      }
+      if (name === "channel-flow-edge-draw") {
+        const id = target.closest(".react-flow__edge")?.getAttribute("data-id");
+        if (id) releaseDrawing(id);
+      }
+    };
+    root.addEventListener("animationend", onEnd);
+    return () => root.removeEventListener("animationend", onEnd);
+  });
   const counts = useMemo(
     () =>
       sessionRun
@@ -1433,6 +1502,8 @@ function ChannelCanvasBody({
   const applyAdded = (result: ReturnType<typeof pasteFragment>) => {
     showSkip(result.skipped);
     if (result.nodes.length === 0 && result.notes.length === 0) return;
+    const priorNodes = nodesRef.current;
+    const priorEdges = edgesRef.current;
     const flow = flowFromGraph(
       {
         nodes: result.nodes,
@@ -1460,6 +1531,8 @@ function ChannelCanvasBody({
     edgesRef.current = nextEdges;
     setNodes(nextNodes);
     setEdges(nextEdges);
+    rememberEntering(idsAdded(priorNodes, nextNodes));
+    rememberDrawing(idsAdded(priorEdges, nextEdges), nextEdges);
     setConfigNodeId(null);
     setPicker(null);
     emit(nextNodes, nextEdges);
@@ -1561,6 +1634,7 @@ function ChannelCanvasBody({
     edgesRef.current = nextEdges;
     setNodes(nextNodes);
     setEdges(nextEdges);
+    rememberEntering([created.id]);
     setConfigNodeId(null);
     setPicker(null);
     noteEditOrigin.current = { id: created.id, text: "" };
@@ -1705,6 +1779,7 @@ function ChannelCanvasBody({
         <CanvasRunContext.Provider
           value={{ phases, counts, onRun }}
         >
+        <CanvasMotionContext.Provider value={{ entering: enteringIds, drawing: drawingIds }}>
         <div
           ref={flowRootRef}
           className={
@@ -1737,6 +1812,9 @@ function ChannelCanvasBody({
               className: [
                 edge.className,
                 phases.get(edge.target) === "running" ? "channel-flow-edge--live" : "",
+                drawingIds.has(edge.id) && phases.get(edge.target) !== "running"
+                  ? "channel-flow-edge--draw"
+                  : "",
                 phases.get(edge.source) === "dead" || phases.get(edge.target) === "dead"
                   ? "channel-flow-edge--settled"
                   : "",
@@ -1999,7 +2077,11 @@ function ChannelCanvasBody({
                       selected.id,
                       nodes.flatMap((node) =>
                       isChannelNode(node)
-                        ? [{ id: node.id, ref: node.data.ref, name: node.data.name }]
+                        ? [{
+                            id: node.id,
+                            ref: node.data.ref,
+                            name: node.data.name,
+                          }]
                         : [],
                     ),
                       edges.map((edge) => ({
@@ -2065,6 +2147,7 @@ function ChannelCanvasBody({
             />
           ) : null}
         </div>
+        </CanvasMotionContext.Provider>
         </CanvasRunContext.Provider>
         </CanvasCatalogContext.Provider>
         </CanvasSurfaceContext.Provider>
@@ -2098,6 +2181,53 @@ function ChannelCanvasBody({
     if (!mutable) return false;
     return connectionAllowed(graphNow(), catalog, connection);
   }
+
+  function rememberEntering(ids: readonly string[]) {
+    if (ids.length === 0 || prefersReducedMotion()) return;
+    setEnteringIds((current) => {
+      const next = new Set(current);
+      for (const id of ids) next.add(id);
+      return next;
+    });
+  }
+
+  function rememberDrawing(ids: readonly string[], pool: readonly Edge[]) {
+    if (ids.length === 0 || prefersReducedMotion()) return;
+    const fresh = ids.filter((id) => {
+      const edge = pool.find((item) => item.id === id);
+      return edge != null && phases.get(edge.target) !== "running";
+    });
+    if (fresh.length === 0) return;
+    setDrawingIds((current) => {
+      const next = new Set(current);
+      for (const id of fresh) next.add(id);
+      return next;
+    });
+  }
+
+  function forgetMotion() {
+    setEnteringIds((current) => (current.size === 0 ? current : new Set()));
+    setDrawingIds((current) => (current.size === 0 ? current : new Set()));
+  }
+
+  function releaseEntering(id: string) {
+    setEnteringIds((current) => {
+      if (!current.has(id)) return current;
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+  }
+
+  function releaseDrawing(id: string) {
+    setDrawingIds((current) => {
+      if (!current.has(id)) return current;
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+  }
+
 }
 
 function snapshotOf(nodes: CanvasNode[], edges: Edge[]): CanvasSnapshot {
@@ -2471,8 +2601,28 @@ function ChannelFlowEdge({
 }: EdgeProps) {
   const t = useTranslate();
   const { editing, mutable, openPickerAt } = useContext(CanvasSurfaceContext);
+  const drawing = useContext(CanvasMotionContext).drawing.has(id);
   const { deleteElements } = useReactFlow();
   const [hovered, setHovered] = useState(false);
+  useLayoutEffect(() => {
+    if (!drawing) return;
+    const group = document.querySelector(`.react-flow__edge[data-id="${CSS.escape(id)}"]`);
+    const path = group?.querySelector(".react-flow__edge-path");
+    if (!(group instanceof SVGElement) || !(path instanceof SVGElement)) return;
+    const measure = path as SVGElement & { getTotalLength?: () => number };
+    if (typeof measure.getTotalLength !== "function") return;
+    let length = 0;
+    try {
+      length = measure.getTotalLength();
+    } catch {
+      return;
+    }
+    if (!(length > 0)) return;
+    group.style.setProperty("--channel-edge-length", `${length}`);
+    path.style.animation = "none";
+    void path.getBoundingClientRect();
+    path.style.removeProperty("animation");
+  }, [drawing, id]);
   const hideTimer = useRef<number | null>(null);
   const [path, labelX, labelY] = getBezierPath({
     sourceX,
@@ -2610,6 +2760,7 @@ function NodeToolButton({
 function NoteFlowNode({ id, data, selected }: NodeProps<Node<NoteData, "note">>) {
   const t = useTranslate();
   const { editing, mutable, editingNoteId, draftNoteText, endNoteEdit } = useContext(CanvasSurfaceContext);
+  const entering = useContext(CanvasMotionContext).entering.has(id);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const live = editingNoteId === id;
   const canEdit = editing && mutable;
@@ -2620,7 +2771,10 @@ function NoteFlowNode({ id, data, selected }: NodeProps<Node<NoteData, "note">>)
   }, [live]);
 
   return (
-    <div className="channel-note" aria-label={t("channels.canvas.noteLabel")}>
+    <div
+      className={entering ? "channel-note channel-flow-node--entering" : "channel-note"}
+      aria-label={t("channels.canvas.noteLabel")}
+    >
       {selected && canEdit ? (
         <NodeResizer
           minWidth={NOTE_MIN_WIDTH}
@@ -2674,7 +2828,26 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   const laid = layoutNodePorts(inputs, outputs, { frame });
   const errorAnchor = outputs.some((port) => port.port === "error");
   const run = useContext(CanvasRunContext);
+  const entering = useContext(CanvasMotionContext).entering.has(id);
   const phase = run.phases.get(id);
+  const phaseSeen = useRef(false);
+  const phasePrior = useRef<string | null>(null);
+  const [pop, setPop] = useState(false);
+  useEffect(() => {
+    const next = phase ?? null;
+    if (!phaseSeen.current) {
+      phaseSeen.current = true;
+      phasePrior.current = next;
+      return;
+    }
+    const prior = phasePrior.current;
+    phasePrior.current = next;
+    if (next === "succeeded" && (prior === "running" || prior == null) && !prefersReducedMotion()) {
+      setPop(true);
+    } else if (next !== "succeeded") {
+      setPop(false);
+    }
+  }, [phase]);
   const presented = phase ? presentNodeStatus(phase) : null;
   const phaseStatus = presented
     ? {
@@ -2695,6 +2868,7 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
     frame ? "channel-flow-node--frame" : "",
     emphasis,
     phase ? `channel-flow-node--${phase}` : "",
+    entering ? "channel-flow-node--entering" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -2765,7 +2939,13 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
         ) : null}
       </div>
       {phaseStatus && phase && isNodeRunPhase(phase) ? (
-        <NodePhaseMark phase={phase} tone={phaseStatus.tone} label={t(phaseStatus.labelKey)} />
+        <NodePhaseMark
+          phase={phase}
+          tone={phaseStatus.tone}
+          label={t(phaseStatus.labelKey)}
+          pop={pop}
+          onPopEnd={() => setPop(false)}
+        />
       ) : null}
       <PortHandles
         ports={laid.outputs}
@@ -2818,15 +2998,40 @@ function NodePhaseMark({
   phase,
   tone,
   label,
+  pop,
+  onPopEnd,
 }: {
   phase: NodeRunPhase;
   tone: Tone;
   label: string;
+  pop: boolean;
+  onPopEnd: () => void;
 }) {
   const Icon = PHASE_ICON[phase];
+  const markRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    const node = markRef.current;
+    if (!node || !pop) return;
+    const onEnd = (event: Event) => {
+      if (event.target !== node) return;
+      if (!("animationName" in event) || event.animationName !== "channel-flow-status-pop") return;
+      onPopEnd();
+    };
+    node.addEventListener("animationend", onEnd);
+    return () => node.removeEventListener("animationend", onEnd);
+  }, [pop, onPopEnd]);
   return (
     <Tooltip label={label} openDelay={200}>
-      <span className="channel-flow-node__status nodrag nopan" role="img" aria-label={label}>
+      <span
+        ref={markRef}
+        className={
+          pop
+            ? "channel-flow-node__status channel-flow-node__status--pop nodrag nopan"
+            : "channel-flow-node__status nodrag nopan"
+        }
+        role="img"
+        aria-label={label}
+      >
         <Icon size={14} color={toneVariable(tone)} />
       </span>
     </Tooltip>

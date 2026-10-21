@@ -113,11 +113,21 @@ Motion tokens live in `frontend/src/theme/tokens.ts`.
 | Slow | 300 ms |
 | Feedback delay | 200 ms |
 
-Easing is standard, enter, and exit. Overlay transitions use the base duration. Motion is for overlays, navigation width, section collapse, notification enter and exit, the route progress bar, pending indicators, and the **Data Channel** canvas edge that enters the node currently running. Route content, list refetch, and polling refresh do not animate, and motion does not shift layout.
+Easing is standard, enter, and exit. Overlay transitions use the base duration. Motion is for overlays, navigation width, section collapse, notification enter and exit, the route progress bar, pending indicators, and the **Data Channel** canvas motions listed below. Route content, list refetch, and polling refresh do not animate, and motion does not shift layout.
 
-That edge is the only canvas motion. While motion is allowed, it flows along its stroke by animating `stroke-dashoffset`. The flow may be slower than the transition tokens above, and it does not move layout. A reduced-motion preference keeps the running color and leaves the edge solid. No other canvas glyph moves.
+While motion is allowed, Data Channel canvas motion uses opacity, transform, box-shadow, and stroke. It does not move layout. The canvas motions are:
 
-The node settings overlay may fade in and out. That motion does not shift layout. A reduced-motion preference shows and hides the overlay immediately. The canvas still moves only the edge that enters the node currently running.
+- The edge that enters the node currently running flows along its stroke by animating `stroke-dashoffset`. That flow may be slower than the transition tokens above.
+- The running node's status icon rotates.
+- When a node's phase changes from running, or from no phase, to succeeded, its status icon appears once. A node that is already succeeded on first load does not play that appearance.
+- A node or **Channel Note** created in this session fades in. Pasting, duplicating, and inserting count as creating. Undo and redo do not replay that entrance.
+- An edge connected in this session draws along its stroke. The running edge takes priority over that draw.
+- Selection and hover change color at the fast duration. That covers the selection ring, the node border, handles, and edge color and width.
+- Viewport controls transition at the base duration.
+
+A reduced-motion preference freezes every canvas motion and keeps the running edge in its running color, solid rather than flowing.
+
+The node settings overlay may fade in and out. That motion does not shift layout. A reduced-motion preference shows and hides the overlay immediately.
 
 `respectReducedMotion` is set. Every custom transition and keyframe follows the reduced-motion preference.
 

@@ -181,7 +181,9 @@ describe("CanvasShortcuts", () => {
     expect(section).toMatch(/8px/);
     expect(section).toMatch(/40px/);
     const motion = doc.split(/^## 8\. Motion/m)[1]?.split(/^## 9\. /m)[0] ?? "";
-    expect(motion).toMatch(/That edge is the only canvas motion/);
+    expect(motion).toMatch(/The running node's status icon rotates/);
+    expect(motion).toMatch(/Viewport controls transition at the base duration/);
+    expect(motion).not.toMatch(/That edge is the only canvas motion/);
   });
 });
 

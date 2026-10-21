@@ -17,6 +17,7 @@ import {
 } from "@/features/channels/types";
 import en from "@/locales/en-US/common.json";
 import zh from "@/locales/zh-CN/common.json";
+import { canvasViewportDuration } from "@/features/channels/useCanvasShortcuts";
 import { Instant } from "@/lib/instant";
 
 const sessionPermissions = vi.hoisted(() => ({ current: [] as string[] }));
@@ -1153,7 +1154,20 @@ describe("ChannelCanvas controls", () => {
     expect(section).toMatch(/does not shift layout/i);
     expect(section).not.toMatch(/focus altitude/i);
     expect(section).toMatch(/reduced-motion preference shows and hides the overlay immediately/i);
-    expect(section).toMatch(/edge that enters the node currently running/i);
+    expect(section).toMatch(/The edge that enters the node currently running flows along its stroke/);
+    expect(section).toMatch(/The running node's status icon rotates/);
+    expect(section).toMatch(/its status icon appears once/);
+    expect(section).toMatch(/A node or \*\*Channel Note\*\* created in this session fades in/);
+    expect(section).toMatch(/An edge connected in this session draws along its stroke/);
+    expect(section).toMatch(/Selection and hover change color at the fast duration/);
+    expect(section).toMatch(/Viewport controls transition at the base duration/);
+    expect(section).toMatch(/does not move layout/);
+    expect(section).toMatch(
+      /reduced-motion preference freezes every canvas motion and keeps the running edge in its running color/i,
+    );
+    expect(section).not.toMatch(/That edge is the only canvas motion/);
+    expect(section).not.toMatch(/No other canvas glyph moves/);
+    expect(section).not.toMatch(/The canvas still moves only the edge/);
   });
 
   it("sizes the node window and keeps three columns", () => {
@@ -1891,6 +1905,65 @@ describe("channel ports", () => {
     return { x: Number(match[1]), y: Number(match[2]) };
   }
 
+  function clientFor(flow: { x: number; y: number }) {
+    const viewport = document.querySelector(".react-flow__viewport");
+    if (!(viewport instanceof HTMLElement)) throw new Error("missing viewport");
+    const match = /translate\(([-\d.]+)px,\s*([-\d.]+)px\) scale\(([-\d.]+)\)/.exec(
+      viewport.style.transform,
+    );
+    if (!match) throw new Error(`viewport ${viewport.style.transform}`);
+    const pane = document.querySelector(".react-flow");
+    const rect = pane instanceof HTMLElement ? pane.getBoundingClientRect() : { left: 0, top: 0 };
+    const zoom = Number(match[3]);
+    return {
+      x: flow.x * zoom + Number(match[1]) + rect.left,
+      y: flow.y * zoom + Number(match[2]) + rect.top,
+    };
+  }
+
+  function pointer(type: string, target: EventTarget, client: { x: number; y: number }) {
+    const event = new MouseEvent(type, {
+      button: 0,
+      clientX: client.x,
+      clientY: client.y,
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(event, "view", { value: window });
+    target.dispatchEvent(event);
+  }
+
+  function dragNode(id: string, points: { x: number; y: number }[]) {
+    const node = flowNode(id);
+    const [start, ...rest] = points;
+    if (!start) throw new Error("missing drag start");
+    act(() => {
+      pointer("mousedown", node, clientFor(start));
+      for (const point of rest) pointer("mousemove", window, clientFor(point));
+      pointer("mouseup", window, clientFor(rest.at(-1) ?? start));
+    });
+  }
+
+  async function measured(id: string) {
+    await waitFor(() => {
+      if (flowNode(id).style.visibility === "hidden") throw new Error(`${id} not measured`);
+    });
+  }
+
+  function releaseOutputAt(name: string, flow: { x: number; y: number }) {
+    const handle = screen.getAllByRole("button", { hidden: true }).find(
+      (element) => element.getAttribute("aria-label") === name,
+    );
+    if (!(handle instanceof HTMLElement)) throw new Error(`missing output ${name}`);
+    const pane = document.querySelector(".react-flow");
+    if (!(pane instanceof HTMLElement)) throw new Error("missing flow");
+    Document.prototype.elementFromPoint = () => pane;
+    const client = clientFor(flow);
+    fireEvent.mouseDown(handle, { button: 0, clientX: client.x, clientY: client.y });
+    fireEvent.mouseMove(document, { clientX: client.x + 24, clientY: client.y });
+    fireEvent.mouseUp(document, { clientX: client.x, clientY: client.y });
+  }
+
   it("keeps a body's parent and relative position when the body is nudged", async () => {
     const onChange = vi.fn();
     await renderCanvas([], {
@@ -1946,6 +2019,28 @@ describe("channel ports", () => {
     expect(inner.style.height).toBe("304px");
     expect(translationOf("inner")).toEqual({ x: 50, y: 68 });
     expect(translationOf("step")).toEqual({ x: 250, y: 268 });
+  });
+
+  it("keeps a done drop that is already outside the frame", async () => {
+    const onChange = vi.fn();
+    const sql = { ...READ_SPEC, label: "SQL", summary: "Query rows" };
+    await renderCanvas(
+      [],
+      {
+        ...EMPTY_GRAPH,
+        nodes: [{ ...placed("walk", "volume.for", "Walk", 0), position: { x: 40, y: 40 } }],
+      },
+      { catalog: [FOR_SPEC, sql], onChange },
+    );
+    await measured("walk");
+
+    releaseOutputAt("Walk Done output", { x: 472, y: 32 });
+    fireEvent.click(screen.getByRole("option", { name: /SQL/ }));
+
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    const created = saved.nodes.find((item) => item.id !== "walk");
+    expect(created).not.toHaveProperty("parent");
+    expect(created?.position).toEqual({ x: 480, y: 40 });
   });
 
   it("names the done port in Chinese and drops the loop port label", () => {
@@ -3616,6 +3711,341 @@ describe("canvas notes", () => {
     fireEvent.keyDown(document, { key: "Delete", code: "Delete" });
     expect(onChange).not.toHaveBeenCalled();
     expect(document.querySelector(".react-flow__node-note")?.textContent).toContain("keep this");
+  });
+});
+
+describe("canvas motion", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  function finishAnimation(element: Element, animationName: string) {
+    const event = new Event("animationend", { bubbles: true });
+    Object.defineProperty(event, "animationName", { value: animationName });
+    act(() => {
+      element.dispatchEvent(event);
+    });
+  }
+
+  async function renderPhase(
+    graph: Graph,
+    catalog: NodeTypeSpec[],
+    sessionRun: ChannelRunDetail | null,
+  ) {
+    const { ChannelCanvas } = await import("@/features/channels/ChannelCanvas");
+    const element = (run: ChannelRunDetail | null) =>
+      createElement(
+        MantineProvider,
+        { env: "test" },
+        createElement(ChannelCanvas, {
+          graph,
+          catalog,
+          appearance: "browse",
+          mutable: false,
+          problems: [],
+          onChange: vi.fn(),
+          sessionRun: run,
+        }),
+      );
+    const view = render(element(sessionRun));
+    return {
+      show(next: ChannelRunDetail | null) {
+        view.rerender(element(next));
+      },
+    };
+  }
+
+  function statusOf(nodeId: string): Element | null {
+    return document.querySelector(
+      `.react-flow__node[data-id='${nodeId}'] .channel-flow-node__status`,
+    );
+  }
+
+  it("fades in a node created in this session and removes the class when the animation ends", async () => {
+    await renderCanvas();
+    const toolbar = screen.getByRole("toolbar", { name: "Canvas tools" });
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("option", { name: /Manual/ }));
+
+    const entering = document.querySelector(".channel-flow-node--entering");
+    if (!(entering instanceof HTMLElement)) throw new Error("missing entering node");
+    finishAnimation(entering, "channel-flow-node-enter");
+    expect(document.querySelector(".channel-flow-node--entering")).toBeNull();
+    expect(document.querySelector(".channel-flow-node")).not.toBeNull();
+  });
+
+  it("does not fade in a node that undo or redo restores", async () => {
+    await renderCanvas();
+    const toolbar = screen.getByRole("toolbar", { name: "Canvas tools" });
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("option", { name: /Manual/ }));
+    expect(document.querySelector(".channel-flow-node--entering")).not.toBeNull();
+
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Undo" }));
+    await waitFor(() => {
+      expect(document.querySelector(".react-flow__node")).toBeNull();
+    });
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Redo" }));
+    await waitFor(() => {
+      expect(document.querySelector(".react-flow__node")).not.toBeNull();
+    });
+    expect(document.querySelector(".channel-flow-node--entering")).toBeNull();
+  });
+
+  it("fades in a note created in this session and leaves a loaded note still", async () => {
+    await renderCanvas([], graphWithNote());
+    expect(document.querySelector(".channel-flow-node--entering")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Note" }));
+    const created = document.querySelector(".channel-note.channel-flow-node--entering");
+    expect(created).not.toBeNull();
+    expect(document.querySelectorAll(".channel-flow-node--entering")).toHaveLength(1);
+  });
+
+  it("fades in a duplicated node and not the node it was copied from", async () => {
+    await renderCanvas([], loadGraph(), { catalog: [READ_SPEC] });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
+    pressKey(node, { key: "d", code: "KeyD", ctrlKey: true });
+
+    await waitFor(() => {
+      expect(document.querySelectorAll(".channel-flow-node--entering")).toHaveLength(1);
+    });
+    expect(document.querySelectorAll(".react-flow__node")).toHaveLength(2);
+    expect(
+      document
+        .querySelector(".channel-flow-node--entering")
+        ?.closest(".react-flow__node")
+        ?.getAttribute("data-id"),
+    ).not.toBe("load");
+  });
+
+  it("draws a newly connected edge and clears that class when the stroke finishes", async () => {
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [placed("check", "transform.if", "Check", 20), placed("read", "read.sql", "Read", 280)],
+      edges: [
+        {
+          id: "ed_old",
+          source: { node_id: "check", port: "false" },
+          target: { node_id: "read", port: "main" },
+        },
+      ],
+    }, { catalog: [IF_SPEC, READ_SPEC] });
+
+    const loaded = await screen.findByRole("group", { name: "False to Main" });
+    expect(loaded.classList.contains("channel-flow-edge--draw")).toBe(false);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Check True output" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Read Main input" }));
+    const created = await screen.findByRole("group", { name: "True to Main" });
+    expect(created.classList.contains("channel-flow-edge--draw")).toBe(true);
+    expect(loaded.classList.contains("channel-flow-edge--draw")).toBe(false);
+
+    finishAnimation(created, "channel-flow-edge-draw");
+    expect(created.classList.contains("channel-flow-edge--draw")).toBe(false);
+  });
+
+  it("does not draw an edge that redo restores", async () => {
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [placed("check", "transform.if", "Check", 20), placed("read", "read.sql", "Read", 280)],
+    }, { catalog: [IF_SPEC, READ_SPEC] });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Check True output" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Read Main input" }));
+    expect((await screen.findByRole("group", { name: "True to Main" })).classList.contains(
+      "channel-flow-edge--draw",
+    )).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("group", { name: "True to Main" })).toBeNull();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+    const restored = await screen.findByRole("group", { name: "True to Main" });
+    expect(restored.classList.contains("channel-flow-edge--draw")).toBe(false);
+  });
+
+  it("keeps a new edge into the running node live instead of drawing it", async () => {
+    const graph: Graph = {
+      ...EMPTY_GRAPH,
+      nodes: [
+        placed("start", "trigger.manual", "Start", 20),
+        placed("body", "read.sql", "Body", 280),
+        placed("extra", "read.sql", "Extra", 520),
+      ],
+      edges: [
+        {
+          id: "ed_old",
+          source: { node_id: "start", port: "main" },
+          target: { node_id: "body", port: "main" },
+        },
+      ],
+    };
+    await renderCanvas([], graph, {
+      catalog: [
+        catalogSpec("trigger.manual", [], [{ port: "main", description: "" }], true),
+        READ_SPEC,
+      ],
+      sessionRun: runDetail(graph, "running", [
+        { seq: 1, node_id: "start", status: "succeeded" },
+        { seq: 2, node_id: "body", status: "running" },
+      ]),
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Extra Main output" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Body Main input" }));
+    const edges = await screen.findAllByRole("group", { name: "Main to Main" });
+    expect(edges).toHaveLength(2);
+    expect(edges.every((edge) => edge.classList.contains("channel-flow-edge--live"))).toBe(true);
+    expect(edges.some((edge) => edge.classList.contains("channel-flow-edge--draw"))).toBe(false);
+  });
+
+  it("does not pop a status icon that is already succeeded on first load", async () => {
+    const graph: Graph = {
+      ...EMPTY_GRAPH,
+      nodes: [placed("start", "trigger.manual", "Start", 20)],
+    };
+    await renderCanvas([], graph, {
+      catalog: [catalogSpec("trigger.manual", [], [{ port: "main", description: "" }], true)],
+      appearance: "browse",
+      mutable: false,
+      sessionRun: runDetail(graph, "succeeded", [
+        { seq: 1, node_id: "start", status: "succeeded" },
+      ]),
+    });
+
+    const status = statusOf("start");
+    expect(status?.getAttribute("aria-label")).toBe("Succeeded");
+    expect(status?.classList.contains("channel-flow-node__status--pop")).toBe(false);
+  });
+
+  it("pops the status icon when a running phase becomes succeeded, and not from waiting", async () => {
+    const graph: Graph = {
+      ...EMPTY_GRAPH,
+      nodes: [
+        placed("start", "trigger.manual", "Start", 20),
+        placed("body", "read.sql", "Body", 280),
+      ],
+      edges: [
+        {
+          id: "e1",
+          source: { node_id: "start", port: "main" },
+          target: { node_id: "body", port: "main" },
+        },
+      ],
+    };
+    const catalog = [
+      catalogSpec("trigger.manual", [], [{ port: "main", description: "" }], true),
+      READ_SPEC,
+    ];
+    const view = await renderPhase(
+      graph,
+      catalog,
+      runDetail(graph, "running", [{ seq: 1, node_id: "start", status: "running" }]),
+    );
+    expect(statusOf("start")?.getAttribute("aria-label")).toBe("Running");
+    expect(statusOf("start")?.classList.contains("channel-flow-node__status--pop")).toBe(false);
+    expect(statusOf("body")?.getAttribute("aria-label")).toBe("Waiting");
+    expect(statusOf("body")?.classList.contains("channel-flow-node__status--pop")).toBe(false);
+
+    view.show(
+      runDetail(graph, "running", [
+        { seq: 1, node_id: "start", status: "succeeded" },
+        { seq: 2, node_id: "body", status: "succeeded" },
+      ]),
+    );
+
+    const started = statusOf("start");
+    if (!(started instanceof HTMLElement)) throw new Error("missing succeeded mark");
+    expect(started.classList.contains("channel-flow-node__status--pop")).toBe(true);
+    expect(statusOf("body")?.classList.contains("channel-flow-node__status--pop")).toBe(false);
+    finishAnimation(started, "channel-flow-status-pop");
+    expect(statusOf("start")?.classList.contains("channel-flow-node__status--pop")).toBe(false);
+    expect(statusOf("start")?.getAttribute("aria-label")).toBe("Succeeded");
+  });
+
+  it("pops the status icon when a node with no phase becomes succeeded", async () => {
+    const graph: Graph = {
+      ...EMPTY_GRAPH,
+      nodes: [placed("start", "trigger.manual", "Start", 20)],
+    };
+    const catalog = [catalogSpec("trigger.manual", [], [{ port: "main", description: "" }], true)];
+    const view = await renderPhase(graph, catalog, null);
+    expect(statusOf("start")).toBeNull();
+
+    view.show(
+      runDetail(graph, "succeeded", [{ seq: 1, node_id: "start", status: "succeeded" }]),
+    );
+    expect(statusOf("start")?.classList.contains("channel-flow-node__status--pop")).toBe(true);
+  });
+
+  it("skips the entering class and uses a zero viewport duration when motion is reduced", async () => {
+    window.matchMedia = (query: string) => ({
+      matches: query.includes("reduce"),
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    expect(canvasViewportDuration()).toBe(0);
+
+    await renderCanvas();
+    const toolbar = screen.getByRole("toolbar", { name: "Canvas tools" });
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("option", { name: /Manual/ }));
+    expect(document.querySelector(".react-flow__node")).not.toBeNull();
+    expect(document.querySelector(".channel-flow-node--entering")).toBeNull();
+
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Note" }));
+    expect(document.querySelector(".channel-note")).not.toBeNull();
+    expect(document.querySelector(".channel-flow-node--entering")).toBeNull();
+  });
+
+  it("keeps canvas motion inside the no-preference media query", () => {
+    const css = readFileSync(resolve(__dirname, "ChannelCanvas.css"), "utf8");
+    const motion = mediaBlocks(css, "prefers-reduced-motion: no-preference").join("\n");
+    const names = [
+      "channel-flow-node-enter",
+      "channel-flow-status-spin",
+      "channel-flow-status-pop",
+      "channel-flow-edge-draw",
+    ];
+    for (const name of names) {
+      expect(motion).toContain(`@keyframes ${name}`);
+      expect(css.split(`@keyframes ${name}`).length - 1).toBe(
+        motion.split(`@keyframes ${name}`).length - 1,
+      );
+    }
+
+    const enter = motion.match(/@keyframes channel-flow-node-enter \{([\s\S]*?)\n  \}/)?.[1] ?? "";
+    expect(enter).toMatch(/opacity:\s*0/);
+    expect(enter).toMatch(/scale\(0\.96\)/);
+    expect(enter).not.toMatch(/\b(?:width|height|margin|top|left)\s*:/);
+    expect(motion).toMatch(
+      /\.channel-flow-node--entering[\s\S]*var\(--refraq-motion-base\)[\s\S]*var\(--refraq-ease-enter\)/,
+    );
+
+    const pop = motion.match(/@keyframes channel-flow-status-pop \{([\s\S]*?)\n  \}/)?.[1] ?? "";
+    expect(pop).toMatch(/opacity:\s*0/);
+    expect(pop).toMatch(/scale\(0\.6\)/);
+    expect(pop).not.toMatch(/\b(?:width|height|margin|top|left)\s*:/);
+
+    const spin = motion.match(/@keyframes channel-flow-status-spin \{([\s\S]*?)\n  \}/)?.[1] ?? "";
+    expect(spin).toMatch(/rotate\(360deg\)/);
+    expect(motion).toMatch(/channel-flow-status-spin 1s linear infinite/);
+
+    const draw = motion.match(/@keyframes channel-flow-edge-draw \{([\s\S]*?)\n  \}/)?.[1] ?? "";
+    expect(draw).toMatch(/stroke-dashoffset:\s*0/);
+    expect(draw).not.toMatch(/\b(?:width|height|margin|top|left)\s*:/);
+    expect(motion).toMatch(
+      /channel-flow-edge--draw[\s\S]*stroke-dasharray:\s*var\(--channel-edge-length\)/,
+    );
+    expect(motion).toMatch(
+      /channel-flow-edge--draw[\s\S]*var\(--refraq-motion-slow\)/,
+    );
+    expect(motion).toMatch(/stroke-width var\(--refraq-motion-fast\) var\(--refraq-ease-standard\)/);
+    expect(motion).toMatch(/box-shadow var\(--refraq-motion-fast\) var\(--refraq-ease-standard\)/);
   });
 });
 

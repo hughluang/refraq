@@ -510,7 +510,63 @@
   }
 
   .channel-canvas-stage .react-flow__edge-path {
-    transition: stroke var(--refraq-motion-fast) var(--refraq-ease-standard);
+    transition:
+      stroke var(--refraq-motion-fast) var(--refraq-ease-standard),
+      stroke-width var(--refraq-motion-fast) var(--refraq-ease-standard);
+  }
+
+  .channel-flow-node--entering {
+    animation: channel-flow-node-enter var(--refraq-motion-base) var(--refraq-ease-enter) both;
+  }
+
+  @keyframes channel-flow-node-enter {
+    from {
+      opacity: 0;
+      transform: scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  .channel-flow-node--running .channel-flow-node__status svg {
+    transform-origin: center;
+    animation: channel-flow-status-spin 1s linear infinite;
+  }
+
+  @keyframes channel-flow-status-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .channel-flow-node__status--pop {
+    transform-origin: center;
+    animation: channel-flow-status-pop var(--refraq-motion-base) var(--refraq-ease-enter) both;
+  }
+
+  @keyframes channel-flow-status-pop {
+    from {
+      opacity: 0;
+      transform: scale(0.6);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  .channel-canvas-stage .react-flow__edge.channel-flow-edge--draw .react-flow__edge-path {
+    stroke-dasharray: var(--channel-edge-length);
+    stroke-dashoffset: var(--channel-edge-length);
+    animation: channel-flow-edge-draw var(--refraq-motion-slow) var(--refraq-ease-enter) forwards;
+  }
+
+  @keyframes channel-flow-edge-draw {
+    to {
+      stroke-dashoffset: 0;
+    }
   }
 
   .channel-flow-edge__delete,
