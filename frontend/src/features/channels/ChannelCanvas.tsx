@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ActionIcon,
   Button,
   CloseButton,
   Group,
@@ -16,15 +17,18 @@ import {
   BaseEdge,
   EdgeToolbar,
   Handle,
+  MarkerType,
+  NodeToolbar,
   Position,
   ReactFlow,
   ReactFlowProvider,
+  SelectionMode,
   addEdge,
   applyEdgeChanges,
   applyNodeChanges,
   getBezierPath,
-  MarkerType,
   useReactFlow,
+  useStoreApi,
   type Connection,
   type Edge,
   type EdgeChange,
@@ -42,6 +46,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
 } from "react";
 
 import "@xyflow/react/dist/style.css";
@@ -49,6 +54,7 @@ import "./ChannelCanvas.css";
 
 import { EmptyState } from "@/components/feedback/EmptyState";
 import { CanvasToolbar } from "@/features/channels/CanvasToolbar";
+import { canvasShortcutTarget } from "@/features/channels/useCanvasShortcuts";
 
 import {
   createHistory,
@@ -99,6 +105,7 @@ import {
   type Tone,
 } from "@/components/display/statusTone";
 import {
+  AdjustmentsIcon,
   CheckIcon,
   CircleDashedIcon,
   ClockIcon,
@@ -142,6 +149,15 @@ type PickerState =
     };
 
 const NODE_DRAG_THRESHOLD = 4;
+const NUDGE_STEP = 8;
+const NUDGE_SHIFT_STEP = 40;
+const NUDGE_COALESCE_MS = 500;
+const ARROW_DELTA: Record<string, { x: number; y: number }> = {
+  ArrowUp: { x: 0, y: -1 },
+  ArrowDown: { x: 0, y: 1 },
+  ArrowLeft: { x: -1, y: 0 },
+  ArrowRight: { x: 1, y: 0 },
+};
 const CANVAS_MIN_ZOOM = 0.25;
 const CANVAS_MAX_ZOOM = 2;
 const CHANNEL_EDGE_TYPE = "channel";
@@ -155,7 +171,11 @@ function highlightTargets(problem: GraphProblem, active: ProblemHighlight): bool
     ? problem.node_id === active.nodeId
     : problem.edge_id != null && problem.edge_id === active.edgeId;
 }
-const CanvasSurfaceContext = createContext({ editing: false, mutable: false });
+const CanvasSurfaceContext = createContext<{
+  editing: boolean;
+  mutable: boolean;
+  openNode: (nodeId: string) => void;
+}>({ editing: false, mutable: false, openNode: () => {} });
 const CanvasCatalogContext = createContext<readonly NodeTypeSpec[]>([]);
 const CanvasRunContext = createContext<{
   phases: ReadonlyMap<string, string>;
@@ -221,6 +241,7 @@ function ChannelCanvasBody({
   const colorScheme = useComputedColorScheme("light", { getInitialValueInEffect: false });
   const { data: heldPermissions } = usePermissions<string[]>({});
   const { screenToFlowPosition, setCenter, getInternalNode } = useReactFlow();
+  const store = useStoreApi();
   const triggerTypes = useMemo(
     () => new Set(catalog.filter((item) => item.trigger).map((item) => item.type)),
     [catalog],
@@ -352,6 +373,44 @@ function ChannelCanvasBody({
     });
   };
 
+  const nudgeTimer = useRef<number | null>(null);
+
+  const flushNudge = () => {
+    if (nudgeTimer.current == null) return;
+    window.clearTimeout(nudgeTimer.current);
+    nudgeTimer.current = null;
+    pushSnap();
+  };
+
+  const nudgeDirty = () =>
+    !sameSnapshot(historyRef.current.present, snapshotOf(nodesRef.current, edgesRef.current));
+
+  const scheduleNudgeCommit = () => {
+    if (nudgeTimer.current != null) window.clearTimeout(nudgeTimer.current);
+    nudgeTimer.current = window.setTimeout(() => {
+      nudgeTimer.current = null;
+      pushSnap();
+    }, NUDGE_COALESCE_MS);
+    // Undo during the burst flushes it first. Flags follow the uncommitted snap:
+    // a burst that lands back on the current snapshot must not enable undo or hide redo.
+    const dirty = nudgeDirty();
+    setCanUndo(dirty || historyRef.current.past.length > 0);
+    setCanRedo(!dirty && historyRef.current.future.length > 0);
+  };
+
+  const nudgeSelection = (dx: number, dy: number) => {
+    if (!nodesRef.current.some((node) => node.selected)) return;
+    const next = nodesRef.current.map((node) =>
+      node.selected
+        ? { ...node, position: { x: node.position.x + dx, y: node.position.y + dy } }
+        : node,
+    );
+    nodesRef.current = next;
+    setNodes(next);
+    emit(next, edgesRef.current);
+    scheduleNudgeCommit();
+  };
+
   const restore = (snap: CanvasSnapshot) => {
     cancelOverlayCloseRef.current();
     const painted = paintProblems(snap.nodes, snap.edges);
@@ -364,6 +423,7 @@ function ChannelCanvasBody({
   };
 
   const undo = () => {
+    flushNudge();
     flushCommit();
     const next = undoHistory(historyRef.current);
     if (next === historyRef.current) return;
@@ -372,6 +432,10 @@ function ChannelCanvasBody({
   };
 
   const redo = () => {
+    // A dirty burst is an uncommitted edit. Flushing it would drop the redo stack
+    // and then find nothing to redo. Leave both in place until the burst settles.
+    if (nudgeTimer.current != null && nudgeDirty()) return;
+    flushNudge();
     flushCommit();
     const next = redoHistory(historyRef.current);
     if (next === historyRef.current) return;
@@ -625,7 +689,11 @@ function ChannelCanvasBody({
     const marked = highlightRef.current;
     if (marked && selected && selected.id !== marked.nodeId) clearHighlight();
     if (selected) setPicker(null);
-    if (selected && edgesRef.current.some((edge) => edge.selected)) {
+    if (
+      !store.getState().multiSelectionActive &&
+      selected &&
+      edgesRef.current.some((edge) => edge.selected)
+    ) {
       const cleared = edgesRef.current.map((edge) => ({ ...edge, selected: false }));
       edgesRef.current = cleared;
       setEdges(cleared);
@@ -645,7 +713,7 @@ function ChannelCanvasBody({
     const selected = next.find((edge) => edge.selected);
     const marked = highlightRef.current;
     if (marked && selected && selected.id !== marked.edgeId) clearHighlight();
-    if (selected) {
+    if (selected && !store.getState().multiSelectionActive) {
       focusReturnRef.current = null;
       setConfigNodeId(null);
       if (nodesRef.current.some((node) => node.selected)) {
@@ -845,9 +913,21 @@ function ChannelCanvasBody({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [overlayKey, leaving]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+      if (!canvasShortcutTarget(event.target)) return;
+      if (configNodeId != null || picker != null || leaving) return;
+      clearSelection();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [configNodeId, picker, leaving]);
   useEffect(
     () => () => {
       if (closeTimerRef.current != null) window.clearTimeout(closeTimerRef.current);
+      if (nudgeTimer.current != null) window.clearTimeout(nudgeTimer.current);
     },
     [],
   );
@@ -869,6 +949,16 @@ function ChannelCanvasBody({
     placeNode(spec, openPosition());
   };
 
+  const selectAll = () => {
+    const nextNodes = nodesRef.current.map((node) => ({ ...node, selected: true }));
+    const nextEdges = edgesRef.current.map((edge) => ({ ...edge, selected: true }));
+    nodesRef.current = nextNodes;
+    edgesRef.current = nextEdges;
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+    if (nextNodes.length !== 1) setConfigNodeId(null);
+  };
+
   const openNodeConfig = (nodeId: string) => {
     cancelOverlayClose();
     setConfigNodeId(nodeId);
@@ -877,12 +967,25 @@ function ChannelCanvasBody({
     if (marked && marked.nodeId !== nodeId) clearHighlight();
   };
 
+  const onCanvasKeyDownCapture = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const delta = ARROW_DELTA[event.key];
+    if (!delta) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (!canvasShortcutTarget(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!mutable) return;
+    const step = event.shiftKey ? NUDGE_SHIFT_STEP : NUDGE_STEP;
+    nudgeSelection(delta.x * step, delta.y * step);
+  };
+
   const onCanvasKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Enter") return;
     const target = event.target;
     if (!(target instanceof HTMLElement) || !target.classList.contains("react-flow__node")) return;
     const nodeId = target.getAttribute("data-id");
     if (!nodeId) return;
+    if (nodesRef.current.filter((node) => node.selected).length > 1) return;
     openNodeConfig(nodeId);
   };
 
@@ -891,7 +994,9 @@ function ChannelCanvasBody({
 
   return (
     <Stack gap={0} flex={1} mih={0} h="100%" w="100%" pos="relative">
-        <CanvasSurfaceContext.Provider value={{ editing: appearance === "edit", mutable }}>
+        <CanvasSurfaceContext.Provider
+          value={{ editing: appearance === "edit", mutable, openNode: openNodeConfig }}
+        >
         <CanvasCatalogContext.Provider value={catalog}>
         <CanvasRunContext.Provider
           value={{ phases, counts, onRun }}
@@ -903,6 +1008,7 @@ function ChannelCanvasBody({
               ? "channel-canvas-stage"
               : "channel-canvas-stage channel-canvas-stage--browse"
           }
+          onKeyDownCapture={onCanvasKeyDownCapture}
           onKeyDown={onCanvasKeyDown}
           onPointerDown={() => setConnectNote(false)}
         >
@@ -934,7 +1040,14 @@ function ChannelCanvasBody({
             defaultEdgeOptions={{ type: CHANNEL_EDGE_TYPE, markerEnd: CHANNEL_EDGE_MARKER }}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
-            onNodeClick={(_, node) => openNodeConfig(node.id)}
+            onNodeClick={(event, node) => {
+              if (event.shiftKey || configNodeId == null) return;
+              openNodeConfig(node.id);
+            }}
+            onNodeDoubleClick={(_, node) => {
+              if (nodesRef.current.filter((item) => item.selected).length > 1) return;
+              openNodeConfig(node.id);
+            }}
             onConnect={onConnect}
             onConnectEnd={onConnectEnd}
             onPaneClick={beginClose}
@@ -944,8 +1057,9 @@ function ChannelCanvasBody({
             elementsSelectable
             nodeDragThreshold={NODE_DRAG_THRESHOLD}
             nodeClickDistance={NODE_DRAG_THRESHOLD}
-            multiSelectionKeyCode={null}
-            selectionKeyCode={null}
+            multiSelectionKeyCode="Shift"
+            selectionKeyCode="Shift"
+            selectionMode={SelectionMode.Partial}
             deleteKeyCode={mutable ? ["Backspace", "Delete"] : null}
             zoomOnDoubleClick={false}
             snapToGrid
@@ -964,6 +1078,7 @@ function ChannelCanvasBody({
               onAdd={openFullCatalog}
               onUndo={undo}
               onRedo={redo}
+              onSelectAll={selectAll}
               catalog={catalog}
               problems={problems}
               problemGraph={labelGraph}
@@ -1353,9 +1468,43 @@ function ChannelFlowEdge({
   );
 }
 
+function NodeToolButton({
+  label,
+  className,
+  disabled = false,
+  onClick,
+  children,
+}: {
+  label: string;
+  className: string;
+  disabled?: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip label={label} openDelay={200}>
+      <ActionIcon
+        type="button"
+        variant="default"
+        size="sm"
+        className={`${className} nodrag nopan`}
+        aria-label={label}
+        disabled={disabled}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          onClick();
+        }}
+      >
+        {children}
+      </ActionIcon>
+    </Tooltip>
+  );
+}
+
 function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   const t = useTranslate();
-  const { editing, mutable } = useContext(CanvasSurfaceContext);
+  const { editing, mutable, openNode } = useContext(CanvasSurfaceContext);
   const catalog = useContext(CanvasCatalogContext);
   const spec = catalog.find((item) => item.type === data.nodeType);
   const { deleteElements } = useReactFlow();
@@ -1399,35 +1548,33 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
       style={depth > 1 ? { minHeight: 24 + depth * 28 } : undefined}
     >
       {editing ? (
-        <>
-          <button
-            type="button"
-            className="channel-flow-node__run nodrag nopan"
-            aria-label={t("channels.node.run")}
-            title={t("channels.node.run")}
-            disabled={!mutable}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              onRun(id);
-            }}
+        <NodeToolbar className="channel-node-toolbar" offset={8}>
+          <NodeToolButton
+            label={t("channels.node.settings")}
+            className="channel-flow-node__settings"
+            onClick={() => openNode(id)}
           >
-            <PlayIcon size={10} />
-          </button>
-          <button
-            type="button"
-            className="channel-flow-node__delete nodrag nopan"
-            aria-label={t("channels.node.delete")}
+            <AdjustmentsIcon size={14} />
+          </NodeToolButton>
+          <NodeToolButton
+            label={t("channels.node.run")}
+            className="channel-flow-node__run"
             disabled={!mutable}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
+            onClick={() => onRun(id)}
+          >
+            <PlayIcon size={14} />
+          </NodeToolButton>
+          <NodeToolButton
+            label={t("channels.node.delete")}
+            className="channel-flow-node__delete"
+            disabled={!mutable}
+            onClick={() => {
               void deleteElements({ nodes: [{ id }] });
             }}
           >
-            <CloseIcon size={10} />
-          </button>
-        </>
+            <CloseIcon size={14} />
+          </NodeToolButton>
+        </NodeToolbar>
       ) : null}
       <PortHandles ports={laid.inputs} nodeName={data.name} kind="target" />
       <span

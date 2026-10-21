@@ -3,7 +3,7 @@
 import { Modal, Stack, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 
-export type ShortcutGroup = "edit" | "view";
+export type ShortcutGroup = "edit" | "view" | "select";
 
 export type ShortcutChord = {
   key: string;
@@ -44,7 +44,7 @@ export const CANVAS_SHORTCUTS: readonly CanvasShortcut[] = [
     id: "open",
     group: "edit",
     labelKey: "channels.canvas.shortcuts.open",
-    chords: [{ key: "Enter" }],
+    chords: [{ key: "Enter" }, { key: "Double-click" }],
   },
   {
     id: "close",
@@ -82,13 +82,38 @@ export const CANVAS_SHORTCUTS: readonly CanvasShortcut[] = [
     labelKey: "channels.canvas.shortcuts.help",
     chords: [{ key: "?" }],
   },
+  {
+    id: "selectAdd",
+    group: "select",
+    labelKey: "channels.canvas.shortcuts.selectAdd",
+    chords: [{ shift: true, key: "Click" }],
+  },
+  {
+    id: "boxSelect",
+    group: "select",
+    labelKey: "channels.canvas.shortcuts.boxSelect",
+    chords: [{ shift: true, key: "Drag" }],
+  },
+  {
+    id: "selectAll",
+    group: "select",
+    labelKey: "channels.canvas.shortcuts.selectAll",
+    chords: [{ mod: true, key: "A" }],
+  },
+  {
+    id: "nudge",
+    group: "select",
+    labelKey: "channels.canvas.shortcuts.nudge",
+    chords: [{ key: "Arrows" }, { shift: true, key: "Arrows" }],
+  },
 ];
 
-const GROUP_ORDER: readonly ShortcutGroup[] = ["edit", "view"];
+const GROUP_ORDER: readonly ShortcutGroup[] = ["edit", "view", "select"];
 
 const GROUP_LABEL: Record<ShortcutGroup, string> = {
   edit: "channels.canvas.shortcuts.group.edit",
   view: "channels.canvas.shortcuts.group.view",
+  select: "channels.canvas.shortcuts.group.select",
 };
 
 export function formatShortcutChord(chord: ShortcutChord, command: boolean): string {

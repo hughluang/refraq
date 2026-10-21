@@ -72,6 +72,7 @@ export function CanvasToolbar({
   onAdd,
   onUndo,
   onRedo,
+  onSelectAll,
   catalog,
   problems,
   problemGraph,
@@ -89,6 +90,7 @@ export function CanvasToolbar({
   onAdd: () => void;
   onUndo: () => void;
   onRedo: () => void;
+  onSelectAll: () => void;
   catalog: readonly NodeTypeSpec[];
   problems: readonly GraphProblem[];
   problemGraph: ProblemGraph;
@@ -125,6 +127,7 @@ export function CanvasToolbar({
     zoomOut: () => runViewport("out"),
     zoomTo100: () => runViewport("reset"),
     openHelp: () => setHelpOpen(true),
+    selectAll: onSelectAll,
   });
 
   const toggleMinimap = () => {

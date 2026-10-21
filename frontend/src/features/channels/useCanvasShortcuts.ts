@@ -14,9 +14,10 @@ export type CanvasShortcutHandlers = {
   zoomOut: () => void;
   zoomTo100: () => void;
   openHelp: () => void;
+  selectAll: () => void;
 };
 
-type ShortcutCommand = "undo" | "redo" | "fit" | "zoomIn" | "zoomOut" | "zoom100" | "help";
+type ShortcutCommand = "undo" | "redo" | "fit" | "zoomIn" | "zoomOut" | "zoom100" | "help" | "selectAll";
 
 /** Viewport buttons and keys share this duration. Reduced motion snaps. */
 export function canvasViewportDuration(): number {
@@ -46,6 +47,7 @@ export function useCanvasShortcuts(handlers: CanvasShortcutHandlers): void {
       else if (command === "zoomIn") current.zoomIn();
       else if (command === "zoomOut") current.zoomOut();
       else if (command === "zoom100") current.zoomTo100();
+      else if (command === "selectAll") current.selectAll();
       else current.openHelp();
     };
     window.addEventListener("keydown", onKey);
@@ -53,7 +55,7 @@ export function useCanvasShortcuts(handlers: CanvasShortcutHandlers): void {
   }, []);
 }
 
-function canvasShortcutTarget(target: EventTarget | null): boolean {
+export function canvasShortcutTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   if (!target.closest(".channel-canvas-stage")) return false;
   if (insideEditable(target)) return false;
@@ -70,6 +72,7 @@ function matchCanvasShortcut(event: KeyboardEvent): ShortcutCommand | null {
   const mod = event.ctrlKey || event.metaKey;
   if (mod && event.code === "KeyZ") return event.shiftKey ? "redo" : "undo";
   if (mod && !event.shiftKey && event.code === "KeyY") return "redo";
+  if (mod && !event.shiftKey && !event.altKey && event.code === "KeyA") return "selectAll";
   if (!mod && !event.altKey && event.shiftKey && event.code === "Digit1") return "fit";
   if (!mod && !event.altKey && event.key === "?") return "help";
   if (mod && !event.altKey && isZoomIn(event)) return "zoomIn";

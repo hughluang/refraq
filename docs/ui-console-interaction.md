@@ -72,11 +72,16 @@ Single-key shortcuts are ignored while focus is in an editable field and while t
 
 ### 7.1 Channel canvas shortcuts
 
-These shortcuts apply only while focus is inside the channel canvas (a `.channel-canvas-stage` ancestor). Undo, redo, fit, zoom, and shortcut help do not run while focus is in an editable field, the node settings panel, or a modal. Escape still closes an open canvas overlay, including from a field in that overlay, unless that field already handled the key. Delete and Backspace remove the selection only while the graph can be edited.
+These shortcuts apply only while focus is inside the channel canvas (a `.channel-canvas-stage` ancestor). Undo, redo, fit, zoom, shortcut help, select all, and arrow-key nudging do not run while focus is in an editable field, the node settings panel, or a modal. Escape still closes an open canvas overlay, including from a field in that overlay, unless that field already handled the key. Delete and Backspace remove the selection only while the graph can be edited.
 
 | Shortcut | Effect |
 | --- | --- |
-| Enter | Open the settings panel for the focused node |
+| Double-click or Enter | Open the settings panel for the node |
+| Shift+click | Add or remove that node or edge from the selection |
+| Shift+drag | Box-select |
+| Ctrl+A or Cmd+A | Select every node and edge |
+| Arrow keys | Nudge the selection by 8px |
+| Shift+arrow keys | Nudge the selection by 40px. Presses within 500ms are one undo step |
 | Delete or Backspace | Delete the selection when the graph can be edited |
 | Ctrl+Z or Cmd+Z | Undo |
 | Shift+Ctrl+Z or Shift+Cmd+Z | Redo |
@@ -86,7 +91,7 @@ These shortcuts apply only while focus is inside the channel canvas (a `.channel
 | Ctrl+- or Cmd+- | Zoom out |
 | Ctrl+0 or Cmd+0 | Zoom to 100% |
 | ? | Open keyboard shortcut help |
-| Escape | Close the open canvas overlay |
+| Escape | Close the open canvas overlay, or clear the selection when none is open |
 
 The palette sections are Recent, Go to, Create, Records, and Actions. Recent is the latest eight record visits for this User in this browser. Go to lists permitted **Console Navigation** modules. Create lists modules that have a create route and create permission. Records searches the list endpoints for Users, Roles, Sources, Entities, Dictionaries, Channels, Business Domains, and User Groups when the actor may list that module, five results each, after a 250 ms pause. A failed module is omitted. A response for an older query is ignored. Actions toggle the color scheme, toggle navigation width, change language, and open **Account Center**. The palette footer lists the shortcuts with key hints.
 

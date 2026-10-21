@@ -48,11 +48,13 @@ const LABELS: Record<string, string> = {
   "channels.canvas.shortcuts.group.view": "View",
   "channels.canvas.shortcuts.delete": "Delete selection",
   "channels.canvas.shortcuts.open": "Open settings",
-  "channels.canvas.shortcuts.close": "Close overlay",
+  "channels.canvas.shortcuts.close": "Close the overlay, or clear the selection",
   "channels.canvas.shortcuts.help": "Show keyboard shortcuts",
   "channels.canvas.palette": "Nodes",
   "channels.canvas.problemsSummary": "{{errors}} errors, {{warnings}} warnings",
   "channels.node.run": "Run node",
+  "channels.node.settings": "Settings",
+  "channels.node.delete": "Delete",
   "channels.run.showFullOutput": "Show full output",
   "channels.run.outputFailed": "Output failed",
   "channels.editor.status.running": "Running",
@@ -255,6 +257,11 @@ const twoNodeGraph: Graph = {
   settings: nodeGraph.settings,
 };
 
+function openSettings(node: HTMLElement) {
+  node.focus();
+  fireEvent.keyDown(node, { key: "Enter" });
+}
+
 function renderCanvas(
   problems: GraphProblem[] = [],
   graph: Graph = EMPTY_GRAPH,
@@ -391,7 +398,9 @@ describe("ChannelCanvas controls", () => {
     const node = document.querySelector(".react-flow__node");
     if (!(node instanceof HTMLElement)) throw new Error("missing node");
     fireEvent.click(node);
-    expect(screen.getByRole("region", { name: "Configuration" })).toBeTruthy();
+    expect(node.classList.contains("selected")).toBe(true);
+    expect(document.querySelector(".channel-node-config")).toBeNull();
+    expect(document.querySelector(".react-flow__node-toolbar")).toBeNull();
     expect(screen.queryByRole("button", { name: "Run node" })).toBeNull();
   });
 
@@ -455,7 +464,7 @@ describe("ChannelCanvas controls", () => {
       expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" })).toBeNull();
     });
 
-    fireEvent.click(node);
+    openSettings(node);
     const name = screen.getByRole("textbox", { name: "Name" });
     const zoom = new KeyboardEvent("keydown", {
       key: "0",
@@ -640,16 +649,23 @@ describe("ChannelCanvas controls", () => {
     const add = screen.getByRole("button", { name: "Add" });
     const undo = screen.getByRole("button", { name: "Undo" });
     const redo = screen.getByRole("button", { name: "Redo" });
-    const run = document.querySelector(".channel-flow-node__run");
-    if (!(run instanceof HTMLButtonElement)) throw new Error("missing run button");
     expect((add as HTMLButtonElement).disabled).toBe(true);
     expect((undo as HTMLButtonElement).disabled).toBe(true);
     expect((redo as HTMLButtonElement).disabled).toBe(true);
-    expect(run.disabled).toBe(true);
 
     const node = document.querySelector(".react-flow__node");
     if (!(node instanceof HTMLElement)) throw new Error("missing node");
     fireEvent.click(node);
+    const toolbar = document.querySelector(".react-flow__node-toolbar");
+    if (!(toolbar instanceof HTMLElement)) throw new Error("missing node toolbar");
+    const run = within(toolbar).getByRole("button", { name: "Run node" });
+    const remove = within(toolbar).getByRole("button", { name: "Delete" });
+    expect((run as HTMLButtonElement).disabled).toBe(true);
+    expect((remove as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (within(toolbar).getByRole("button", { name: "Settings" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    openSettings(node);
     const header = document.querySelector(".channel-node-config__header");
     if (!(header instanceof HTMLElement)) throw new Error("missing header");
     const configRun = within(header).getByRole("button", { name: "Run node" });
@@ -691,6 +707,9 @@ describe("ChannelCanvas controls", () => {
     const onRun = vi.fn();
     await renderCanvas([], nodeGraph, { sessionRun, onRun });
 
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
     const run = document.querySelector(".channel-flow-node__run");
     if (!(run instanceof HTMLButtonElement)) throw new Error("missing run button");
     fireEvent.click(run);
@@ -698,9 +717,7 @@ describe("ChannelCanvas controls", () => {
     expect(onRun).toHaveBeenCalledWith("nd_1");
     expect(screen.queryByText("This node has not executed yet")).toBeNull();
 
-    const node = document.querySelector(".react-flow__node");
-    if (!(node instanceof HTMLElement)) throw new Error("missing node");
-    fireEvent.click(node);
+    openSettings(node);
     const header = document.querySelector(".channel-node-config__header");
     if (!(header instanceof HTMLElement)) throw new Error("missing header");
     expect(within(header).getByText("Manual")).toBeTruthy();
@@ -726,7 +743,7 @@ describe("ChannelCanvas controls", () => {
     await renderCanvas([], nodeGraph);
     const idleNode = document.querySelector(".react-flow__node");
     if (!(idleNode instanceof HTMLElement)) throw new Error("missing node");
-    fireEvent.click(idleNode);
+    openSettings(idleNode);
     const idleHeader = document.querySelector(".channel-node-config__header");
     if (!(idleHeader instanceof HTMLElement)) throw new Error("missing header");
     expect(within(idleHeader).queryByText("Waiting")).toBeNull();
@@ -776,7 +793,7 @@ describe("ChannelCanvas controls", () => {
     await renderCanvas([], nodeGraph, { sessionRun });
     const node = document.querySelector(".react-flow__node");
     if (!(node instanceof HTMLElement)) throw new Error("missing node");
-    fireEvent.click(node);
+    openSettings(node);
     const header = document.querySelector(".channel-node-config__header");
     if (!(header instanceof HTMLElement)) throw new Error("missing header");
     expect(within(header).getByText("Succeeded")).toBeTruthy();
@@ -784,12 +801,12 @@ describe("ChannelCanvas controls", () => {
     expect(screen.queryByRole("button", { name: "Show input and output" })).toBeNull();
   });
 
-  it("opens the three-column window when a node is clicked", async () => {
+  it("opens the three-column window for the focused node", async () => {
     await renderCanvas([], nodeGraph);
 
     const node = document.querySelector(".react-flow__node");
     if (!(node instanceof HTMLElement)) throw new Error("missing node");
-    fireEvent.click(node);
+    openSettings(node);
     expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
     expect(screen.getByRole("region", { name: "Configuration" })).toBeTruthy();
     expect(screen.getByRole("region", { name: "This node's result" })).toBeTruthy();
@@ -835,7 +852,7 @@ describe("ChannelCanvas controls", () => {
       throw new Error("missing nodes");
     }
 
-    fireEvent.click(first);
+    openSettings(first);
     expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
 
     fireEvent.click(second);
@@ -847,7 +864,7 @@ describe("ChannelCanvas controls", () => {
       expect(screen.queryByRole("region", { name: "Configuration" })).toBeNull();
     });
 
-    fireEvent.click(second);
+    openSettings(second);
     expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
     expect(document.querySelector(".channel-node-config")?.className).toContain(
       "channel-node-config--detail",
@@ -880,6 +897,7 @@ describe("ChannelCanvas controls", () => {
     }
 
     fireEvent.click(first);
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
 
     fireEvent.keyDown(document, { key: "Delete", code: "Delete" });
@@ -887,7 +905,7 @@ describe("ChannelCanvas controls", () => {
       expect(document.querySelector('.react-flow__node[data-id="nd_1"]')).toBeNull();
     });
 
-    fireEvent.click(second);
+    openSettings(second);
     expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Next");
     expect(screen.getByRole("region", { name: "Upstream outputs" })).toBeTruthy();
     expect(document.querySelector(".channel-node-config")?.className).toContain(
@@ -899,7 +917,7 @@ describe("ChannelCanvas controls", () => {
     await renderCanvas([], nodeGraph);
     const node = document.querySelector(".react-flow__node");
     if (!(node instanceof HTMLElement)) throw new Error("missing node");
-    fireEvent.click(node);
+    openSettings(node);
 
     const panel = document.querySelector(".channel-node-config");
     if (!(panel instanceof HTMLElement)) throw new Error("missing panel");
@@ -914,7 +932,7 @@ describe("ChannelCanvas controls", () => {
     await renderCanvas([], nodeGraph);
     const node = document.querySelector('.react-flow__node[data-id="nd_1"]');
     if (!(node instanceof HTMLElement)) throw new Error("missing node");
-    fireEvent.click(node);
+    openSettings(node);
     const pane = document.querySelector(".react-flow__pane");
     if (!(pane instanceof HTMLElement)) throw new Error("missing pane");
 
@@ -967,7 +985,7 @@ describe("ChannelCanvas controls", () => {
     );
     const node = document.querySelector('.react-flow__node[data-id="nd_1"]');
     if (!(node instanceof HTMLElement)) throw new Error("missing node");
-    fireEvent.click(node);
+    openSettings(node);
     const pane = document.querySelector(".react-flow__pane");
     if (!(pane instanceof HTMLElement)) throw new Error("missing pane");
     fireEvent.click(pane);
@@ -991,7 +1009,7 @@ describe("ChannelCanvas controls", () => {
     if (!(closed instanceof HTMLElement) || !(other instanceof HTMLElement)) {
       throw new Error("missing node");
     }
-    fireEvent.click(closed);
+    openSettings(closed);
     expect(document.querySelector(".channel-node-config")).not.toBeNull();
 
     fireEvent.keyDown(window, { key: "Escape" });
@@ -1006,7 +1024,7 @@ describe("ChannelCanvas controls", () => {
     await renderCanvas([], nodeGraph);
     const node = document.querySelector('.react-flow__node[data-id="nd_1"]');
     if (!(node instanceof HTMLElement)) throw new Error("missing node");
-    fireEvent.click(node);
+    openSettings(node);
     fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
       target: { value: "Renamed" },
     });
@@ -1024,7 +1042,7 @@ describe("ChannelCanvas controls", () => {
     await renderCanvas([], nodeGraph);
     const node = document.querySelector(".react-flow__node");
     if (!(node instanceof HTMLElement)) throw new Error("missing node");
-    fireEvent.click(node);
+    openSettings(node);
     const name = screen.getByRole("textbox", { name: "Name" });
     name.addEventListener("keydown", (event) => {
       event.preventDefault();
@@ -1051,7 +1069,7 @@ describe("ChannelCanvas controls", () => {
     if (!(closed instanceof HTMLElement) || !(other instanceof HTMLElement)) {
       throw new Error("missing node");
     }
-    fireEvent.click(closed);
+    openSettings(closed);
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(document.querySelector(".channel-node-config")).toBeNull();
@@ -1228,17 +1246,395 @@ describe("canvas selection", () => {
   beforeEach(stubDomApis);
   afterEach(cleanup);
 
-  it("does not box-select while shift is held", async () => {
+  it("selects a node on click and shows its toolbar without opening settings", async () => {
+    await renderCanvas([], nodeGraph);
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+
+    fireEvent.click(node);
+
+    expect(node.classList.contains("selected")).toBe(true);
+    expect(document.querySelector(".channel-node-config")).toBeNull();
+    const toolbar = document.querySelector(".react-flow__node-toolbar");
+    if (!(toolbar instanceof HTMLElement)) throw new Error("missing node toolbar");
+    expect(within(toolbar).getByRole("button", { name: "Settings" })).toBeTruthy();
+    expect(within(toolbar).getByRole("button", { name: "Run node" })).toBeTruthy();
+    expect(within(toolbar).getByRole("button", { name: "Delete" })).toBeTruthy();
+  });
+
+  it("opens settings from a double-click, Enter, or the toolbar settings button", async () => {
+    await renderCanvas([], nodeGraph);
+    const node = () => {
+      const found = document.querySelector(".react-flow__node");
+      if (!(found instanceof HTMLElement)) throw new Error("missing node");
+      return found;
+    };
+
+    fireEvent.doubleClick(node());
+    expect(document.querySelector(".channel-node-config")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "channels.node.close" }));
+    await waitFor(() => {
+      expect(document.querySelector(".channel-node-config")).toBeNull();
+    });
+
+    node().focus();
+    fireEvent.keyDown(node(), { key: "Enter" });
+    expect(document.querySelector(".channel-node-config")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "channels.node.close" }));
+    await waitFor(() => {
+      expect(document.querySelector(".channel-node-config")).toBeNull();
+    });
+
+    fireEvent.click(node());
+    const toolbar = document.querySelector(".react-flow__node-toolbar");
+    if (!(toolbar instanceof HTMLElement)) throw new Error("missing node toolbar");
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Settings" }));
+    expect(document.querySelector(".channel-node-config")).not.toBeNull();
+  });
+
+  it("shift-clicks nodes into one selection that deletes and undoes together", async () => {
+    await renderCanvas([], twoNodeGraph);
+    const node = (id: string) => {
+      const found = document.querySelector(`.react-flow__node[data-id="${id}"]`);
+      if (!(found instanceof HTMLElement)) throw new Error(`missing ${id}`);
+      return found;
+    };
+
+    fireEvent.click(node("nd_1"));
+    fireEvent.keyDown(window, { key: "Shift", code: "ShiftLeft" });
+    fireEvent.click(node("nd_2"), { shiftKey: true });
+
+    expect(node("nd_1").classList.contains("selected")).toBe(true);
+    expect(node("nd_2").classList.contains("selected")).toBe(true);
+    expect(document.querySelector(".react-flow__node-toolbar")).toBeNull();
+    expect(document.querySelector(".channel-node-config")).toBeNull();
+
+    fireEvent.keyDown(document, { key: "Delete", code: "Delete" });
+    await waitFor(() => {
+      expect(document.querySelectorAll(".react-flow__node")).toHaveLength(0);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => {
+      expect(document.querySelectorAll(".react-flow__node")).toHaveLength(2);
+    });
+  });
+
+  it("box-selects while shift is held", async () => {
     await renderCanvas([], nodeGraph);
     const pane = document.querySelector(".react-flow__pane");
     if (!(pane instanceof HTMLElement)) throw new Error("missing pane");
 
     fireEvent.keyDown(window, { key: "Shift", code: "ShiftLeft" });
-    fireEvent.pointerDown(pane, { button: 0, clientX: 12, clientY: 12, pointerId: 1, shiftKey: true });
-    fireEvent.pointerMove(pane, { clientX: 90, clientY: 90, pointerId: 1, shiftKey: true });
+    fireEvent.pointerDown(pane, {
+      button: 0,
+      clientX: 12,
+      clientY: 12,
+      pointerId: 1,
+      shiftKey: true,
+      isPrimary: true,
+    });
+    fireEvent.pointerMove(pane, {
+      clientX: 90,
+      clientY: 90,
+      pointerId: 1,
+      shiftKey: true,
+      isPrimary: true,
+    });
 
-    expect(pane.classList.contains("selection")).toBe(false);
-    expect(document.querySelector(".react-flow__selection")).toBeNull();
+    expect(pane.classList.contains("selection")).toBe(true);
+    expect(document.querySelector(".react-flow__selection")).not.toBeNull();
+  });
+
+  it("keeps a plain click exclusive and lets shift add a node beside a selected edge", async () => {
+    const sink: NodeTypeSpec = {
+      ...spec,
+      type: "step",
+      family: "transform",
+      label: "Step",
+      summary: "Next",
+      trigger: false,
+      inputs: [{ port: "in", description: "" }],
+      outputs: [],
+    };
+    await renderCanvas(
+      [],
+      {
+        nodes: [
+          nodeGraph.nodes[0]!,
+          {
+            id: "nd_2",
+            ref: "step",
+            type: "step",
+            name: "Next",
+            position: { x: 280, y: 40 },
+            config: {},
+            on_error: "stop",
+            retry: null,
+          },
+        ],
+        edges: [
+          {
+            id: "ed_1",
+            source: { node_id: "nd_1", port: "out" },
+            target: { node_id: "nd_2", port: "in" },
+          },
+        ],
+        settings: nodeGraph.settings,
+      },
+      { catalog: [spec, sink] },
+    );
+    const edge = await waitFor(() => {
+      const found = document.querySelector(".react-flow__edge[data-id='ed_1']");
+      if (!(found instanceof Element)) throw new Error("missing edge");
+      return found;
+    });
+    const node = document.querySelector('.react-flow__node[data-id="nd_2"]');
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+
+    fireEvent.click(edge);
+    expect(edge.classList.contains("selected")).toBe(true);
+    fireEvent.click(node);
+    expect(node.classList.contains("selected")).toBe(true);
+    expect(edge.classList.contains("selected")).toBe(false);
+
+    fireEvent.click(edge);
+    expect(edge.classList.contains("selected")).toBe(true);
+    expect(node.classList.contains("selected")).toBe(false);
+    fireEvent.keyDown(window, { key: "Shift", code: "ShiftLeft" });
+    fireEvent.click(node, { shiftKey: true });
+    expect(node.classList.contains("selected")).toBe(true);
+    expect(edge.classList.contains("selected")).toBe(true);
+  });
+
+  it("nudges the selection 8px, or 40px with shift, and merges presses within 500ms", async () => {
+    await renderCanvas([], twoNodeGraph);
+    const node = (id: string) => {
+      const found = document.querySelector(`.react-flow__node[data-id="${id}"]`);
+      if (!(found instanceof HTMLElement)) throw new Error(`missing ${id}`);
+      return found;
+    };
+    const at = (id: string) => {
+      const match = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/.exec(node(id).style.transform);
+      if (!match) throw new Error(`missing transform for ${id}`);
+      return { x: Number(match[1]), y: Number(match[2]) };
+    };
+    const start = at("nd_1");
+    const other = at("nd_2");
+
+    fireEvent.click(node("nd_1"));
+    node("nd_1").focus();
+    fireEvent.keyDown(node("nd_1"), { key: "ArrowRight" });
+    fireEvent.keyDown(node("nd_1"), { key: "ArrowRight" });
+    expect(at("nd_1")).toEqual({ x: start.x + 16, y: start.y });
+    expect(at("nd_2")).toEqual(other);
+
+    fireEvent.keyDown(node("nd_1"), { key: "ArrowDown", shiftKey: true });
+    expect(at("nd_1")).toEqual({ x: start.x + 16, y: start.y + 40 });
+    expect(at("nd_2")).toEqual(other);
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(at("nd_1")).toEqual(start);
+    expect(at("nd_2")).toEqual(other);
+    expect((screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(node("nd_1"));
+    node("nd_1").focus();
+    fireEvent.keyDown(node("nd_1"), { key: "ArrowRight" });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 520)));
+    fireEvent.keyDown(node("nd_1"), { key: "ArrowRight" });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 520)));
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(at("nd_1")).toEqual({ x: start.x + 8, y: start.y });
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    expect(at("nd_1")).toEqual(start);
+  });
+
+  it("drops a cancelled nudge and keeps redo until that burst commits", async () => {
+    await renderCanvas([], nodeGraph);
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    const at = () => {
+      const match = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/.exec(node.style.transform);
+      if (!match) throw new Error("missing transform");
+      return { x: Number(match[1]), y: Number(match[2]) };
+    };
+    const undo = () => screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement;
+    const redo = () => screen.getByRole("button", { name: "Redo" }) as HTMLButtonElement;
+    const start = at();
+
+    fireEvent.click(node);
+    node.focus();
+    fireEvent.keyDown(node, { key: "ArrowRight" });
+    fireEvent.keyDown(node, { key: "ArrowLeft" });
+    expect(at()).toEqual(start);
+    expect(undo().disabled).toBe(true);
+    expect(redo().disabled).toBe(true);
+
+    fireEvent.keyDown(node, { key: "ArrowRight" });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 520)));
+    fireEvent.click(undo());
+    expect(at()).toEqual(start);
+    expect(redo().disabled).toBe(false);
+
+    fireEvent.click(node);
+    node.focus();
+    fireEvent.keyDown(node, { key: "ArrowRight" });
+    expect(at()).toEqual({ x: start.x + 8, y: start.y });
+    expect(redo().disabled).toBe(true);
+    fireEvent.keyDown(node, { key: "z", code: "KeyZ", ctrlKey: true, shiftKey: true });
+    expect(at()).toEqual({ x: start.x + 8, y: start.y });
+    expect(redo().disabled).toBe(true);
+
+    fireEvent.keyDown(node, { key: "ArrowLeft" });
+    expect(at()).toEqual(start);
+    expect(undo().disabled).toBe(true);
+    expect(redo().disabled).toBe(false);
+    fireEvent.click(redo());
+    expect(at()).toEqual({ x: start.x + 8, y: start.y });
+  });
+
+  it("selects every node and edge from ctrl or cmd A and ignores that chord in a field", async () => {
+    const sink: NodeTypeSpec = {
+      ...spec,
+      type: "step",
+      family: "transform",
+      label: "Step",
+      summary: "Next",
+      trigger: false,
+      inputs: [{ port: "in", description: "" }],
+      outputs: [],
+    };
+    await renderCanvas(
+      [],
+      {
+        nodes: [
+          nodeGraph.nodes[0]!,
+          {
+            id: "nd_2",
+            ref: "step",
+            type: "step",
+            name: "Next",
+            position: { x: 280, y: 40 },
+            config: {},
+            on_error: "stop",
+            retry: null,
+          },
+        ],
+        edges: [
+          {
+            id: "ed_1",
+            source: { node_id: "nd_1", port: "out" },
+            target: { node_id: "nd_2", port: "in" },
+          },
+        ],
+        settings: nodeGraph.settings,
+      },
+      { catalog: [spec, sink] },
+    );
+    const node = (id: string) => {
+      const found = document.querySelector(`.react-flow__node[data-id="${id}"]`);
+      if (!(found instanceof HTMLElement)) throw new Error(`missing ${id}`);
+      return found;
+    };
+    const edge = await waitFor(() => {
+      const found = document.querySelector(".react-flow__edge[data-id='ed_1']");
+      if (!(found instanceof Element)) throw new Error("missing edge");
+      return found;
+    });
+
+    node("nd_1").focus();
+    const selectAll = new KeyboardEvent("keydown", {
+      key: "a",
+      code: "KeyA",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      node("nd_1").dispatchEvent(selectAll);
+    });
+    expect(selectAll.defaultPrevented).toBe(true);
+    expect(node("nd_1").classList.contains("selected")).toBe(true);
+    expect(node("nd_2").classList.contains("selected")).toBe(true);
+    expect(edge.classList.contains("selected")).toBe(true);
+    expect(document.querySelector(".react-flow__node-toolbar")).toBeNull();
+    expect(document.querySelector(".channel-node-config")).toBeNull();
+
+    const pane = document.querySelector(".react-flow__pane");
+    if (!(pane instanceof HTMLElement)) throw new Error("missing pane");
+    fireEvent.click(pane);
+    fireEvent.click(node("nd_1"));
+    openSettings(node("nd_1"));
+    const name = screen.getByRole("textbox", { name: "Name" });
+    const inField = new KeyboardEvent("keydown", {
+      key: "a",
+      code: "KeyA",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      name.dispatchEvent(inField);
+    });
+    expect(inField.defaultPrevented).toBe(false);
+  });
+
+  it("clears the selection on Escape when no overlay is open", async () => {
+    await renderCanvas([], twoNodeGraph);
+    const node = (id: string) => {
+      const found = document.querySelector(`.react-flow__node[data-id="${id}"]`);
+      if (!(found instanceof HTMLElement)) throw new Error(`missing ${id}`);
+      return found;
+    };
+    fireEvent.click(node("nd_1"));
+    fireEvent.keyDown(window, { key: "Shift", code: "ShiftLeft" });
+    fireEvent.click(node("nd_2"), { shiftKey: true });
+    expect(node("nd_1").classList.contains("selected")).toBe(true);
+    expect(node("nd_2").classList.contains("selected")).toBe(true);
+
+    node("nd_1").focus();
+    fireEvent.keyDown(node("nd_1"), { key: "Escape" });
+    expect(node("nd_1").classList.contains("selected")).toBe(false);
+    expect(node("nd_2").classList.contains("selected")).toBe(false);
+  });
+
+  it("does not nudge a locked graph or arrow keys inside settings", async () => {
+    await renderCanvas([], nodeGraph, { appearance: "edit", mutable: false });
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    const at = () => {
+      const match = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/.exec(node.style.transform);
+      if (!match) throw new Error("missing transform");
+      return { x: Number(match[1]), y: Number(match[2]) };
+    };
+    const start = at();
+    fireEvent.click(node);
+    node.focus();
+    fireEvent.keyDown(node, { key: "ArrowRight" });
+    fireEvent.keyDown(node, { key: "ArrowDown", shiftKey: true });
+    expect(at()).toEqual(start);
+
+    cleanup();
+    await renderCanvas([], nodeGraph);
+    const editable = document.querySelector(".react-flow__node");
+    if (!(editable instanceof HTMLElement)) throw new Error("missing node");
+    const placed = () => {
+      const match = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/.exec(editable.style.transform);
+      if (!match) throw new Error("missing transform");
+      return { x: Number(match[1]), y: Number(match[2]) };
+    };
+    const origin = placed();
+    fireEvent.click(editable);
+    openSettings(editable);
+    const name = screen.getByRole("textbox", { name: "Name" });
+    const arrow = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      bubbles: true,
+      cancelable: true,
+    });
+    name.dispatchEvent(arrow);
+    expect(arrow.defaultPrevented).toBe(false);
+    expect(placed()).toEqual(origin);
   });
 });
 
@@ -2190,7 +2586,7 @@ describe("guarded node authoring", () => {
     await renderCanvas([], codeGraph(), { catalog: [CODE_SPEC] });
     const node = document.querySelector(".react-flow__node");
     if (!(node instanceof HTMLElement)) throw new Error("missing node");
-    fireEvent.click(node);
+    openSettings(node);
 
     const editor = await screen.findByRole("textbox", { name: "Code" });
     expect(editor.getAttribute("contenteditable")).toBe("false");
@@ -2209,7 +2605,7 @@ describe("guarded node authoring", () => {
     await renderCanvas([], codeGraph(), { catalog: [CODE_SPEC] });
     const node = document.querySelector(".react-flow__node");
     if (!(node instanceof HTMLElement)) throw new Error("missing node");
-    fireEvent.click(node);
+    openSettings(node);
 
     const editor = await screen.findByRole("textbox", { name: "Code" });
     expect(editor.getAttribute("contenteditable")).toBe("true");

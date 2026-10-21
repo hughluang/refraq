@@ -246,11 +246,6 @@
   white-space: nowrap;
 }
 
-/* Run and delete controls use top: -8px and height: 18px, so their boxes end at 10px. */
-.channel-flow-node:has(.channel-flow-node__run) .channel-flow-node__status {
-  top: 10px;
-}
-
 .channel-flow-node--running {
   border-color: var(--refraq-tone-running);
 }
@@ -384,43 +379,14 @@
   opacity: 1;
 }
 
-.channel-flow-node__run,
-.channel-flow-node__delete {
-  position: absolute;
-  top: -8px;
-  right: -8px;
-  z-index: 1;
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
+.channel-node-toolbar {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
   border: 1px solid var(--mantine-color-default-border);
-  border-radius: 999px;
+  border-radius: var(--mantine-radius-sm);
   background: var(--mantine-color-body);
-  color: var(--mantine-color-dimmed);
   box-shadow: var(--mantine-shadow-xs);
-  cursor: pointer;
-  opacity: 0;
-  transform: scale(0.85);
-  pointer-events: none;
-}
-
-.channel-flow-node__delete {
-  right: -8px;
-}
-
-.channel-flow-node__run {
-  right: 16px;
-}
-
-.channel-flow-node:hover > .channel-flow-node__run,
-.channel-flow-node:focus-within > .channel-flow-node__run,
-.channel-flow-node:hover > .channel-flow-node__delete,
-.channel-flow-node:focus-within > .channel-flow-node__delete {
-  opacity: 1;
-  transform: scale(1);
-  pointer-events: auto;
 }
 
 .channel-flow-node__delete:hover,
@@ -430,6 +396,7 @@
   color: var(--refraq-tone-on-solid);
 }
 
+.channel-flow-node__settings:focus-visible,
 .channel-flow-node__run:focus-visible,
 .channel-flow-node__delete:focus-visible,
 .channel-flow-edge__delete:focus-visible {
@@ -468,16 +435,6 @@
 
   .channel-canvas-stage .react-flow__edge-path {
     transition: stroke var(--refraq-motion-fast) var(--refraq-ease-standard);
-  }
-
-  .channel-flow-node__run,
-  .channel-flow-node__delete {
-    transition:
-      opacity var(--refraq-motion-fast) var(--refraq-ease-standard),
-      transform var(--refraq-motion-fast) var(--refraq-ease-standard),
-      background-color var(--refraq-motion-fast) var(--refraq-ease-standard),
-      border-color var(--refraq-motion-fast) var(--refraq-ease-standard),
-      color var(--refraq-motion-fast) var(--refraq-ease-standard);
   }
 
   .channel-flow-edge__delete {

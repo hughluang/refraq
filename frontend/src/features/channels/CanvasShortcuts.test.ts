@@ -16,11 +16,16 @@ vi.mock("@refinedev/core", () => ({
         "channels.canvas.shortcuts": "Keyboard shortcuts",
         "channels.canvas.shortcuts.group.edit": "Edit",
         "channels.canvas.shortcuts.group.view": "View",
+        "channels.canvas.shortcuts.group.select": "Select",
         "channels.canvas.undo": "Undo",
         "channels.canvas.redo": "Redo",
         "channels.canvas.shortcuts.delete": "Delete selection",
         "channels.canvas.shortcuts.open": "Open settings",
-        "channels.canvas.shortcuts.close": "Close overlay",
+        "channels.canvas.shortcuts.selectAdd": "Add or remove from the selection",
+        "channels.canvas.shortcuts.boxSelect": "Box select",
+        "channels.canvas.shortcuts.selectAll": "Select all",
+        "channels.canvas.shortcuts.nudge": "Nudge the selection",
+        "channels.canvas.shortcuts.close": "Close the overlay, or clear the selection",
         "channels.canvas.fitView": "Fit view",
         "channels.canvas.zoomIn": "Zoom in",
         "channels.canvas.zoomOut": "Zoom out",
@@ -62,7 +67,7 @@ describe("CanvasShortcuts", () => {
     cleanup();
   });
 
-  it("lists only the shortcuts that work, grouped into edit and view", () => {
+  it("lists only the shortcuts that work, grouped into edit, view, and select", () => {
     const ids = CANVAS_SHORTCUTS.map((row) => row.id);
     expect(ids).toEqual([
       "undo",
@@ -75,13 +80,26 @@ describe("CanvasShortcuts", () => {
       "zoomOut",
       "zoom100",
       "help",
+      "selectAdd",
+      "boxSelect",
+      "selectAll",
+      "nudge",
     ]);
-    expect(new Set(CANVAS_SHORTCUTS.map((row) => row.group))).toEqual(new Set(["edit", "view"]));
+    expect(new Set(CANVAS_SHORTCUTS.map((row) => row.group))).toEqual(
+      new Set(["edit", "view", "select"]),
+    );
 
     renderHelp(WINDOWS);
     const dialog = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
     expect(withinText(dialog, "Edit")).toBe(true);
     expect(withinText(dialog, "View")).toBe(true);
+    expect(withinText(dialog, "Select")).toBe(true);
+    expect(dialog.textContent).toContain("Double-click");
+    expect(dialog.textContent).toContain("Shift+Click");
+    expect(dialog.textContent).toContain("Shift+Drag");
+    expect(dialog.textContent).toContain("Ctrl+A");
+    expect(dialog.textContent).toContain("Arrows");
+    expect(dialog.textContent).toContain("Shift+Arrows");
     expect(dialog.textContent).toContain("Ctrl+Z");
     expect(dialog.textContent).toContain("Ctrl+Shift+Z");
     expect(dialog.textContent).toContain("Ctrl+Y");
@@ -104,6 +122,8 @@ describe("CanvasShortcuts", () => {
     expect(dialog.textContent).toContain("⇧⌘Z");
     expect(dialog.textContent).toContain("⌘Y");
     expect(dialog.textContent).toContain("⌘=");
+    expect(dialog.textContent).toContain("⌘A");
+    expect(dialog.textContent).toContain("⇧Click");
     expect(dialog.textContent).not.toContain("Ctrl+");
   });
 
@@ -127,6 +147,13 @@ describe("CanvasShortcuts", () => {
     expect(section).toMatch(/Ctrl\+=/);
     expect(section).toMatch(/Ctrl\+Y/);
     expect(section).toMatch(/Delete or Backspace/);
+    expect(section).toMatch(/Double-click or Enter/);
+    expect(section).toMatch(/Shift\+click/);
+    expect(section).toMatch(/Shift\+drag/);
+    expect(section).toMatch(/Ctrl\+A or Cmd\+A/);
+    expect(section).toMatch(/Arrow keys/);
+    expect(section).toMatch(/8px/);
+    expect(section).toMatch(/40px/);
     const motion = doc.split(/^## 8\. Motion/m)[1]?.split(/^## 9\. /m)[0] ?? "";
     expect(motion).toMatch(/That edge is the only canvas motion/);
   });

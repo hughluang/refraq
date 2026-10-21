@@ -20,6 +20,7 @@ function handlers(overrides: Partial<CanvasShortcutHandlers> = {}): CanvasShortc
     zoomOut: vi.fn(),
     zoomTo100: vi.fn(),
     openHelp: vi.fn(),
+    selectAll: vi.fn(),
     ...overrides,
   };
 }
@@ -99,6 +100,8 @@ describe("useCanvasShortcuts", () => {
     const zoomOut = press(stage, { key: "-", code: "Minus", ctrlKey: true });
     const zoom100 = press(stage, { key: "0", code: "Digit0", metaKey: true });
     const help = press(stage, { key: "?" });
+    const selectAll = press(stage, { key: "a", code: "KeyA", ctrlKey: true });
+    const selectAllMac = press(stage, { key: "a", code: "KeyA", metaKey: true });
 
     expect(fit.defaultPrevented).toBe(true);
     expect(zoomIn.defaultPrevented).toBe(true);
@@ -106,11 +109,14 @@ describe("useCanvasShortcuts", () => {
     expect(zoomOut.defaultPrevented).toBe(true);
     expect(zoom100.defaultPrevented).toBe(true);
     expect(help.defaultPrevented).toBe(true);
+    expect(selectAll.defaultPrevented).toBe(true);
+    expect(selectAllMac.defaultPrevented).toBe(true);
     expect(api.fitView).toHaveBeenCalledTimes(1);
     expect(api.zoomIn).toHaveBeenCalledTimes(2);
     expect(api.zoomOut).toHaveBeenCalledTimes(1);
     expect(api.zoomTo100).toHaveBeenCalledTimes(1);
     expect(api.openHelp).toHaveBeenCalledTimes(1);
+    expect(api.selectAll).toHaveBeenCalledTimes(2);
   });
 
   it("ignores viewport and history keys in fields, the settings panel, a modal, and outside the canvas", () => {
@@ -127,6 +133,8 @@ describe("useCanvasShortcuts", () => {
       { key: "?" },
       { key: "z", code: "KeyZ", ctrlKey: true },
       { key: "y", code: "KeyY", ctrlKey: true },
+      { key: "a", code: "KeyA", ctrlKey: true },
+      { key: "a", code: "KeyA", metaKey: true },
     ] satisfies KeyboardEventInit[]) {
       const event = press(name, init);
       expect(event.defaultPrevented).toBe(false);
@@ -134,9 +142,11 @@ describe("useCanvasShortcuts", () => {
 
     const settings = press(buttonNamed("Settings"), { key: "!", code: "Digit1", shiftKey: true });
     const dialog = press(buttonNamed("Dialog"), { key: "?", code: "Slash", shiftKey: true });
+    const dialogSelect = press(buttonNamed("Dialog"), { key: "a", code: "KeyA", metaKey: true });
     const outside = press(buttonNamed("Outside"), { key: "0", code: "Digit0", ctrlKey: true });
     expect(settings.defaultPrevented).toBe(false);
     expect(dialog.defaultPrevented).toBe(false);
+    expect(dialogSelect.defaultPrevented).toBe(false);
     expect(outside.defaultPrevented).toBe(false);
     expect(api.fitView).not.toHaveBeenCalled();
     expect(api.zoomIn).not.toHaveBeenCalled();
@@ -145,6 +155,7 @@ describe("useCanvasShortcuts", () => {
     expect(api.openHelp).not.toHaveBeenCalled();
     expect(api.undo).not.toHaveBeenCalled();
     expect(api.redo).not.toHaveBeenCalled();
+    expect(api.selectAll).not.toHaveBeenCalled();
   });
 
   it("uses a 200ms viewport transition and skips it when motion is reduced", () => {

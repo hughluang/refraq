@@ -333,6 +333,9 @@ describe("ChannelRecord draft access", () => {
       expect(screen.queryByRole("dialog")).toBeNull();
     });
 
+    const node = document.querySelector(".react-flow__node");
+    if (!(node instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.click(node);
     const nodeRun = document.querySelector(".channel-flow-node__run");
     if (!(nodeRun instanceof HTMLButtonElement)) throw new Error("missing node run button");
     fireEvent.click(nodeRun);
