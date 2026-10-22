@@ -20,13 +20,13 @@ import {
   KeyboardIcon,
   MinimapIcon,
   NoteIcon,
-  PlusIcon,
   RedoIcon,
   UndoIcon,
   ZoomInIcon,
   ZoomOutIcon,
 } from "@/components/icons";
 import { presentProblemSeverity, toneMantineColor } from "@/components/display/statusTone";
+import { CanvasPlusIcon } from "@/features/channels/CanvasPlusIcon";
 import { CanvasShortcuts } from "@/features/channels/CanvasShortcuts";
 import type { FlowNodeData } from "@/features/channels/graphValidation";
 import { familyTint } from "@/features/channels/nodeVisual";
@@ -173,7 +173,7 @@ export function CanvasToolbar({
                 expanded={addExpanded}
                 onClick={onAdd}
               >
-                <PlusIcon size={14} />
+                <CanvasPlusIcon />
               </ToolButton>
               <ToolButton
                 label={t("channels.canvas.note")}

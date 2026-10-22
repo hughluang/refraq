@@ -8,6 +8,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { CANVAS_PLUS_PATH } from "@/features/channels/CanvasPlusIcon";
 import { EACH_INSET } from "@/features/channels/portLayout";
 import {
   EMPTY_GRAPH,
@@ -20,6 +21,12 @@ import en from "@/locales/en-US/common.json";
 import zh from "@/locales/zh-CN/common.json";
 import { canvasViewportDuration } from "@/features/channels/useCanvasShortcuts";
 import { Instant } from "@/lib/instant";
+
+function canvasPlus(root: ParentNode): SVGElement {
+  const glyph = root.querySelector("svg.channel-canvas-plus");
+  if (!(glyph instanceof SVGElement)) throw new Error("missing canvas plus");
+  return glyph;
+}
 
 const sessionPermissions = vi.hoisted(() => ({ current: [] as string[] }));
 
@@ -387,7 +394,8 @@ describe("ChannelCanvas controls", () => {
     const add = within(toolbar).getByRole("button", { name: "Add" });
     const undo = within(toolbar).getByRole("button", { name: "Undo" });
     const redo = within(toolbar).getByRole("button", { name: "Redo" });
-    expect(add.querySelector("svg")).not.toBeNull();
+    expect(canvasPlus(add).getAttribute("viewBox")).toBe("0 0 14 14");
+    expect(canvasPlus(add).querySelector("path")?.getAttribute("d")).toBe(CANVAS_PLUS_PATH);
     expect(within(toolbar).getByRole("button", { name: "Zoom out" })).toBeTruthy();
     expect(within(toolbar).getByRole("button", { name: /Zoom \d+%/ })).toBeTruthy();
     expect(within(toolbar).getByRole("button", { name: "Zoom in" })).toBeTruthy();
@@ -1844,6 +1852,10 @@ describe("channel ports", () => {
     const doneAdd = screen.getByRole("button", { name: "Add the next step from Done" });
     expect(eachAdd.classList.contains("channel-flow-port-add--outside")).toBe(false);
     expect(doneAdd.classList.contains("channel-flow-port-add--outside")).toBe(true);
+    expect(canvasPlus(eachAdd).getAttribute("viewBox")).toBe("0 0 14 14");
+    expect(canvasPlus(eachAdd).querySelector("path")?.getAttribute("d")).toBe(CANVAS_PLUS_PATH);
+    expect(canvasPlus(doneAdd).getAttribute("viewBox")).toBe("0 0 14 14");
+    expect(canvasPlus(doneAdd).querySelector("path")?.getAttribute("d")).toBe(CANVAS_PLUS_PATH);
   });
 
   it("keeps a non-main port when an edge is created, including through undo", async () => {

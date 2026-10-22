@@ -470,8 +470,7 @@
   gap: 4px;
 }
 
-.channel-flow-edge__delete,
-.channel-flow-edge__insert {
+.channel-flow-edge__delete {
   display: grid;
   place-items: center;
   width: 18px;
@@ -485,28 +484,44 @@
   cursor: pointer;
 }
 
-.channel-flow-port-add {
-  position: absolute;
-  z-index: 3;
-  display: grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  margin-top: -8px;
+.channel-flow-plus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  margin: 0;
   padding: 0;
   border: 1px solid var(--mantine-color-default-border);
   border-radius: 999px;
   background: var(--mantine-color-body);
   color: var(--mantine-color-text);
+  box-shadow: var(--mantine-shadow-xs);
+  line-height: 0;
   cursor: pointer;
 }
 
+.channel-canvas-plus {
+  display: block;
+  flex: none;
+}
+
+.channel-flow-port-add {
+  position: absolute;
+  z-index: 3;
+  /* The card is a grid. Without this, each button is aligned inside a different cell. */
+  justify-self: start;
+  align-self: start;
+  transform: translateY(-50%);
+}
+
 /* Right handle extends ~5px past the node; this button starts at 16px.
-   Fill only that gap, and extend 8px above and below the 16px control. */
+   Fill only that gap, and extend above and below the 18px control. */
 .channel-flow-port-add--outside::before {
   content: "";
   position: absolute;
-  top: -8px;
+  top: -7px;
   left: -11px;
   width: 11px;
   height: 32px;

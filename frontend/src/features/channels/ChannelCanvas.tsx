@@ -134,8 +134,8 @@ import {
   NoteIcon,
   PasteIcon,
   PlayIcon,
-  PlusIcon,
 } from "@/components/icons";
+import { CanvasPlusIcon } from "@/features/channels/CanvasPlusIcon";
 import {
   absolutePosition,
   edgesAfterReparent,
@@ -2587,7 +2587,7 @@ function CanvasContextMenu({
     entries.push(
       <Menu.Item
         key="insert"
-        leftSection={<PlusIcon size={14} />}
+        leftSection={<CanvasPlusIcon />}
         onClick={() => onInsert(menu.edgeId, point)}
       >
         {t("channels.canvas.insertNode")}
@@ -2606,7 +2606,7 @@ function CanvasContextMenu({
   if (menu.kind === "pane") {
     if (canMutate) {
       entries.push(
-        <Menu.Item key="add" leftSection={<PlusIcon size={14} />} onClick={() => onAdd(point)}>
+        <Menu.Item key="add" leftSection={<CanvasPlusIcon />} onClick={() => onAdd(point)}>
           {t("channels.canvas.addHere")}
         </Menu.Item>,
         <Menu.Item key="add-note" leftSection={<NoteIcon size={14} />} onClick={() => onAddNote(point)}>
@@ -2791,24 +2791,14 @@ function ChannelFlowEdge({
         >
           <span className="channel-flow-edge__tools">
             {mutable ? (
-              <button
-                type="button"
-                className="channel-flow-edge__insert nodrag nopan"
-                data-edge-id={id}
-                aria-label={t("channels.canvas.insertNode")}
+              <FlowPlusButton
+                className="channel-flow-edge__insert"
+                edgeId={id}
+                label={t("channels.canvas.insertNode")}
                 onMouseEnter={enter}
                 onMouseLeave={leave}
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  openPickerAt(
-                    { x: event.clientX, y: event.clientY },
-                    { kind: "insertOnEdge", edgeId: id },
-                  );
-                }}
-              >
-                <PlusIcon size={10} />
-              </button>
+                onClick={(point) => openPickerAt(point, { kind: "insertOnEdge", edgeId: id })}
+              />
             ) : null}
             <button
               type="button"
@@ -3176,6 +3166,44 @@ function NodePhaseMark({
   );
 }
 
+function FlowPlusButton({
+  className,
+  label,
+  edgeId,
+  style,
+  onMouseEnter,
+  onMouseLeave,
+  onClick,
+}: {
+  className?: string;
+  label: string;
+  edgeId?: string;
+  style?: { top: string; left: string | number };
+  onMouseEnter?: () => void;
+  onMouseLeave?: (event: { relatedTarget: EventTarget | null }) => void;
+  onClick: (point: { x: number; y: number }) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={["channel-flow-plus nodrag nopan", className].filter(Boolean).join(" ")}
+      style={style}
+      data-edge-id={edgeId}
+      aria-label={label}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onPointerDown={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick({ x: event.clientX, y: event.clientY });
+      }}
+    >
+      <CanvasPlusIcon />
+    </button>
+  );
+}
+
 function PortHandles({
   ports,
   nodeName,
@@ -3220,30 +3248,22 @@ function PortHandles({
               role="button"
             />
             {showAdd ? (
-              <button
-                type="button"
+              <FlowPlusButton
                 className={
                   port.inset
-                    ? "channel-flow-port-add nodrag nopan"
-                    : "channel-flow-port-add channel-flow-port-add--outside nodrag nopan"
+                    ? "channel-flow-port-add"
+                    : "channel-flow-port-add channel-flow-port-add--outside"
                 }
                 style={
                   port.inset
                     ? { top: port.top, left: EACH_INSET + 16 }
                     : { top: port.top, left: "calc(100% + 16px)" }
                 }
-                aria-label={t("channels.canvas.addFromPort", { port: name })}
+                label={t("channels.canvas.addFromPort", { port: name })}
                 onMouseEnter={onAddEnter}
                 onMouseLeave={onAddLeave}
-                onPointerDown={(event) => event.stopPropagation()}
-                onMouseDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onAdd(port.port, { x: event.clientX, y: event.clientY });
-                }}
-              >
-                <PlusIcon size={10} />
-              </button>
+                onClick={(point) => onAdd(port.port, point)}
+              />
             ) : null}
             {port.labelled ? (
               <span
