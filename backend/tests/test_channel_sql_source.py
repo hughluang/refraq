@@ -236,6 +236,7 @@ def test_source_sql_fails_when_the_result_does_not_fit(
             statement_timeout_sec=30,
         )
     assert raised.value.code == "CHANNEL_ITEM_LIMIT_EXCEEDED"
+    assert raised.value.message == "Use Dataset Query, then Batch Read."
 
 
 def test_source_sql_decodes_utf8_and_fails_on_binary(

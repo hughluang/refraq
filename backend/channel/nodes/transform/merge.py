@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from backend.channel.item_limit import ITEM_LIMIT, LIST_ITEM_LIMIT_MESSAGE
 from backend.channel.node_support import canonical_json, render_field
 from backend.channel.nodes.spec import MAIN_INPUT, MAIN_OUTPUT, EngineHooks, NodeResult, NodeType, object_schema
 from backend.channel.values import LIST_OF_OBJECTS
@@ -89,6 +90,12 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
         rows, error = render_field(hooks, text, LIST_OF_OBJECTS)
         if error is not None:
             return error
+        if len(rows) > ITEM_LIMIT:
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_ITEM_LIMIT_EXCEEDED",
+                error_message=LIST_ITEM_LIMIT_MESSAGE,
+            )
         groups.append(rows)
     mode = str(config["mode"])
     join = str(config.get("join") or "inner")
@@ -108,6 +115,12 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
         for group in groups[1:]:
             merged = _by_key(merged, group, key, join)
         rows = merged
+    if len(rows) > ITEM_LIMIT:
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_ITEM_LIMIT_EXCEEDED",
+            error_message=LIST_ITEM_LIMIT_MESSAGE,
+        )
     return NodeResult(status="succeeded", output={"rows": rows, "count": len(rows)})
 
 

@@ -91,6 +91,28 @@ def test_every_node_module_is_registered_and_exports_only_node_type() -> None:
         assert registered[type_id] is node
 
 
+def test_dataset_query_and_materialize_are_registered() -> None:
+    types = {item.type_id: item for item in list_node_types()}
+    query = types["volume.dataset_query"]
+    materialize = types["volume.materialize"]
+    sql = types["read.sql"]
+    timeout = query.config_schema["properties"]["statement_timeout_sec"]
+    assert timeout["type"] == "integer"
+    assert timeout["minimum"] == 1
+    assert timeout["maximum"] == 3600
+    assert timeout["default"] == 300
+    assert "statement_timeout_sec" not in query.config_schema["required"]
+    assert query.config_schema["properties"]["source"]["properties"]["kind"]["enum"] == (
+        sql.config_schema["properties"]["source"]["properties"]["kind"]["enum"]
+    )
+    assert query.config_schema["properties"]["sql"]["x-refraq-template"] == {"type": "string"}
+    assert set(query.config_schema["required"]) == {"source", "sql"}
+    assert materialize.config_schema["required"] == ["items"]
+    assert materialize.config_schema["properties"]["items"]["x-refraq-template"]["type"] == "array"
+    assert [port.port for port in query.outputs] == ["main", "error"]
+    assert [port.port for port in materialize.outputs] == ["main", "error"]
+
+
 def _sentence_count(text: str) -> int:
     return len([part for part in re.split(r"[.?!]", text.strip()) if part.strip()])
 

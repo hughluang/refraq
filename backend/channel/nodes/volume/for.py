@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from backend.channel.item_limit import ITEM_LIMIT, LIST_ITEM_LIMIT_MESSAGE
 from backend.channel.node_support import render_field
 from backend.channel.nodes.spec import MAIN_INPUT, EngineHooks, NodeResult, NodeType, PortSpec, object_schema
 
 __all__ = ["NODE_TYPE"]
-
-_ITEM_LIMIT = 100_000
 _ARRAY = {"type": "array"}
 
 _ANY: dict[str, Any] = {
@@ -51,11 +50,11 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     items, error = render_field(hooks, node["config"].get("items"), _ARRAY)
     if error is not None:
         return error
-    if len(items) > _ITEM_LIMIT:
+    if len(items) > ITEM_LIMIT:
         return NodeResult(
             status="failed",
             error_code="CHANNEL_ITEM_LIMIT_EXCEEDED",
-            error_message="For items exceed 100000 elements",
+            error_message=LIST_ITEM_LIMIT_MESSAGE,
         )
     count = len(items)
     iterations = [

@@ -12,14 +12,13 @@ from backend.entity.statements import (
     EntityStatementRejected,
     execute_entity_statement,
 )
+from backend.channel.item_limit import ITEM_LIMIT, SQL_ITEM_LIMIT_MESSAGE
 from backend.metadata.source_statements import (
     SourceStatementRejected,
     execute_source_statement,
 )
 
 __all__ = ["ITEM_LIMIT", "SqlReadError", "run_channel_sql"]
-
-ITEM_LIMIT = 100_000
 
 
 class SqlReadError(Exception):
@@ -64,7 +63,7 @@ def run_channel_sql(
             if page.truncated:
                 raise SqlReadError(
                     "CHANNEL_ITEM_LIMIT_EXCEEDED",
-                    f"SQL returned more than {ITEM_LIMIT} rows",
+                    SQL_ITEM_LIMIT_MESSAGE,
                 )
             rows = [
                 {
@@ -84,7 +83,7 @@ def run_channel_sql(
     except EntityStatementLimit:
         raise SqlReadError(
             "CHANNEL_ITEM_LIMIT_EXCEEDED",
-            f"SQL returned more than {ITEM_LIMIT} rows",
+            SQL_ITEM_LIMIT_MESSAGE,
         ) from None
     except DBAPIError as exc:
         raise SqlReadError("CHANNEL_NODE_FAILED", _db_message(exc)) from exc

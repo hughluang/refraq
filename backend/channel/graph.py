@@ -3,7 +3,8 @@
 `validate` reports every problem it finds. It does not read stores; callers
 pass a reference resolver. Every cycle is illegal. A container frame is the
 set of nodes whose parent is a container. ``CONTAINER_TYPES`` is that set;
-For is its only member. An edge may enter a frame only from that container's
+For is its only member. Dataset Query and Materialize are rejected anywhere
+inside that set. An edge may enter a frame only from that container's
 each port. Ancestors walk incoming edges and skip edges that cross a frame.
 """
 
@@ -80,6 +81,7 @@ def validate(
     problems.extend(_reachability_problems(nodes, edges, by_id, by_type))
     problems.extend(_cycle_problems(nodes, edges, by_id))
     problems.extend(_for_frame_problems(nodes, edges, by_id))
+    problems.extend(_dataset_container_problems(nodes, by_id))
     problems.extend(_reference_problems(nodes, by_type, resolver))
     problems.extend(_settings_problems(graph["settings"], resolver))
     return problems
@@ -905,6 +907,46 @@ def _for_frame_problems(
                 )
             )
     return problems
+
+
+_DATASET_NODES = frozenset({"volume.dataset_query", "volume.materialize"})
+_DATASET_IN_CONTAINER = "A Dataset Query or Materialize cannot run inside a container"
+
+
+def _dataset_container_problems(
+    nodes: list[dict[str, Any]],
+    by_id: dict[str, dict[str, Any]],
+) -> list[Problem]:
+    problems: list[Problem] = []
+    for node in nodes:
+        if str(node.get("type")) not in _DATASET_NODES:
+            continue
+        if not _has_container_ancestor(str(node["id"]), by_id):
+            continue
+        problems.append(
+            Problem(
+                "CHANNEL_LOOP_BODY_INVALID",
+                _DATASET_IN_CONTAINER,
+                node_id=str(node["id"]),
+            )
+        )
+    return problems
+
+
+def _has_container_ancestor(
+    node_id: str,
+    by_id: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    seen = {node_id}
+    current = node_id
+    while True:
+        parent = _parent_ref(by_id[current])
+        if parent is None or parent not in by_id or parent in seen:
+            return False
+        if _is_container(by_id[parent].get("type")):
+            return True
+        seen.add(parent)
+        current = parent
 
 
 def refine_ports(

@@ -903,6 +903,111 @@ def test_for_frame_is_entered_only_from_each() -> None:
     assert each_problems[0].detail == "each connects only to a direct child of this container"
 
 
+_DATASET_IN_CONTAINER = "A Dataset Query or Materialize cannot run inside a container"
+
+
+def _dataset_query(node_id: str, *, parent: str | None = None) -> dict:
+    return _node(
+        node_id,
+        "volume.dataset_query",
+        "Query",
+        {"source": {"kind": "entity"}, "sql": "SELECT 1"},
+        parent=parent,
+    )
+
+
+def _materialize(node_id: str, *, parent: str | None = None) -> dict:
+    return _node(
+        node_id,
+        "volume.materialize",
+        "Load",
+        {"items": "[]"},
+        parent=parent,
+    )
+
+
+def test_dataset_producers_cannot_sit_inside_a_container() -> None:
+    top = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _dataset_query("nd_query"),
+            _materialize("nd_load"),
+        ],
+        [
+            _edge("ed_query", "nd_trigger", "nd_query"),
+            _edge("ed_load", "nd_query", "nd_load"),
+        ],
+    )
+    assert [item for item in validate(top, FakeResolver()) if item.severity == "error"] == []
+
+    inside = _for_frame()
+    inside["nodes"][2] = _dataset_query("nd_step", parent="nd_walk")
+    placed = [
+        item
+        for item in validate(inside, FakeResolver())
+        if item.detail == _DATASET_IN_CONTAINER
+    ]
+    assert [(item.code, item.node_id) for item in placed] == [
+        ("CHANNEL_LOOP_BODY_INVALID", "nd_step")
+    ]
+
+    nested = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_outer", "volume.for", "Outer", {"items": "[1]"}),
+            _node("nd_inner", "volume.for", "Inner", {"items": "[2]"}, parent="nd_outer"),
+            _materialize("nd_leaf", parent="nd_inner"),
+            _node("nd_after", "transform.set_fields", "After", _fields("1")),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_outer"),
+            _edge("ed_outer_each", "nd_outer", "nd_inner", source_port="each"),
+            _edge("ed_inner_each", "nd_inner", "nd_leaf", source_port="each"),
+            _edge("ed_outer_done", "nd_outer", "nd_after", source_port="done"),
+        ],
+    )
+    nested_problems = [
+        item
+        for item in validate(nested, FakeResolver())
+        if item.code == "CHANNEL_LOOP_BODY_INVALID"
+    ]
+    assert [(item.node_id, item.detail) for item in nested_problems] == [
+        ("nd_leaf", _DATASET_IN_CONTAINER)
+    ]
+
+
+def test_dataset_producers_use_the_container_set(monkeypatch) -> None:
+    from backend.channel.graph import CONTAINER_TYPES, ContainerType
+
+    monkeypatch.setitem(
+        CONTAINER_TYPES,
+        "volume.batch_read",
+        ContainerType(accumulate=False),
+    )
+    catalog = [*list_node_types(), _container_type("volume.batch_read")]
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_batch", "volume.batch_read", "Batch"),
+            _dataset_query("nd_query", parent="nd_batch"),
+            _node("nd_after", "transform.set_fields", "After", _fields("1")),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_batch"),
+            _edge("ed_each", "nd_batch", "nd_query", source_port="each"),
+            _edge("ed_done", "nd_batch", "nd_after", source_port="done"),
+        ],
+    )
+    problems = [
+        item
+        for item in validate(graph, FakeResolver(), catalog)
+        if item.code == "CHANNEL_LOOP_BODY_INVALID"
+    ]
+    assert [(item.node_id, item.detail) for item in problems] == [
+        ("nd_query", _DATASET_IN_CONTAINER)
+    ]
+
+
 def test_for_is_the_only_container_type() -> None:
     from backend.channel.graph import CONTAINER_TYPES
 

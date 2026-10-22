@@ -271,6 +271,45 @@ def test_for_exposes_iterations_and_rejects_the_limit(monkeypatch: pytest.Monkey
     assert empty.iterations == []
     assert empty.output["current"] is None
     assert empty.output["index"] is None
-    monkeypatch.setattr("backend.channel.nodes.volume.for._ITEM_LIMIT", 1)
+    monkeypatch.setattr("backend.channel.nodes.volume.for.ITEM_LIMIT", 1)
     limited = _run("volume.for")(_node("volume.for", {"items": "[1, 2]"}), Hooks())
     assert limited.error_code == "CHANNEL_ITEM_LIMIT_EXCEEDED"
+    assert limited.error_message == "Use Materialize or Dataset Query, then Batch Read."
+
+
+def test_filter_merge_and_deduplicate_reject_the_shared_item_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message = "Use Materialize or Dataset Query, then Batch Read."
+    monkeypatch.setattr("backend.channel.nodes.transform.filter.ITEM_LIMIT", 1)
+    filtered = _run("transform.filter")(
+        _node(
+            "transform.filter",
+            {"items": "{{ rows }}", "conditions": [], "combinator": "all"},
+        ),
+        Hooks({"rows": [{"n": 1}, {"n": 2}]}),
+    )
+    assert filtered.error_code == "CHANNEL_ITEM_LIMIT_EXCEEDED"
+    assert filtered.error_message == message
+
+    monkeypatch.setattr("backend.channel.nodes.transform.merge.ITEM_LIMIT", 1)
+    merged = _run("transform.merge")(
+        _node(
+            "transform.merge",
+            {"mode": "append", "inputs": ["{{ left }}", "{{ right }}"]},
+        ),
+        Hooks({"left": [{"n": 1}, {"n": 2}], "right": []}),
+    )
+    assert merged.error_code == "CHANNEL_ITEM_LIMIT_EXCEEDED"
+    assert merged.error_message == message
+
+    monkeypatch.setattr("backend.channel.nodes.transform.deduplicate.ITEM_LIMIT", 1)
+    deduped = _run("transform.deduplicate")(
+        _node(
+            "transform.deduplicate",
+            {"items": "{{ rows }}", "keys": ["n"]},
+        ),
+        Hooks({"rows": [{"n": 1}, {"n": 1}]}),
+    )
+    assert deduped.error_code == "CHANNEL_ITEM_LIMIT_EXCEEDED"
+    assert deduped.error_message == message

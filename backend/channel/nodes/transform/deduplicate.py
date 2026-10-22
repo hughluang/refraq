@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from backend.channel.item_limit import ITEM_LIMIT, LIST_ITEM_LIMIT_MESSAGE
 from backend.channel.node_support import canonical_json, render_field
 from backend.channel.nodes.spec import MAIN_INPUT, MAIN_OUTPUT, EngineHooks, NodeResult, NodeType, object_schema
 from backend.channel.values import LIST_OF_OBJECTS
@@ -36,6 +37,12 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     items, error = render_field(hooks, config.get("items"), LIST_OF_OBJECTS)
     if error is not None:
         return error
+    if len(items) > ITEM_LIMIT:
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_ITEM_LIMIT_EXCEEDED",
+            error_message=LIST_ITEM_LIMIT_MESSAGE,
+        )
     keys = [str(key) for key in config["keys"]]
     seen: set[str] = set()
     kept: list[Any] = []
