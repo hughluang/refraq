@@ -631,8 +631,8 @@ Avoid watermark, treating `last_run_at` or `scheduled_for` as a checkpoint, a pe
 
 ### Dataset Reference
 
-A value that names a run-scoped table in the entity database, passed between nodes instead of in-memory items when data is large. Created by Materialize or by read and SQL nodes, consumed by Batch Read, SQL, and write nodes, and expired with run data retention.
-Avoid temp table as a user concept, **Entity Table**, **Source Mirror**, and an item list.
+A claim check. The value `{dataset_id, columns, count}` names a run-scoped table in the entity database and has no `relation`. The registry row is the only fact source. **Data Channel** owns the registry and the lifecycle. `backend.entity.datasets` creates, reads, and drops the table and does not own the registry. Only Dataset Query and Materialize produce one. Batch Read and Write Entity consume one.
+Avoid a `relation` on the value, rows traveling on an edge, a Read or SQL node producing one, temp table as a user concept, **Entity Table**, **Source Mirror**, an item list, and expiry with run-record retention as the only clock.
 
 ### Global Variable
 

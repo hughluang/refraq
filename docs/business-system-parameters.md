@@ -9,7 +9,6 @@ A System Parameter is a platform mechanism, like **Job** and **Scheduled Task** 
 Related boundaries:
 
 - Terminology: `docs/glossary.md` and root `CONTEXT.md`.
-- Decision: `docs/adr/0028-system-parameters.md`.
 - HTTP: `docs/api-contracts-settings.md`.
 - Console module and IA: `docs/business-management-console.md` §5.
 - Environment variables: `docs/env.md`.
@@ -132,7 +131,10 @@ The mechanism stores keys and values and never names an occupancy window, a Beat
 | `query_max_rows` | `metadata` | 1000 | 100–10000 | No | Next Controlled Query / `run_sql` `max_rows` and Catalog Sample `offset + limit`. Request default 100 and Sample page size stay product constants |
 | `entity_access.max_profile_combinations` | `entity` | 64 | 1–1024 | No | Per Business Entity cap on multi-profile **Profile View** combinations. Raising it lets the next regeneration create views that were refused; lowering it never drops existing views, and new combinations above the cap stay refused (`docs/business-entity-access.md` §11.2) |
 | `entity_access.access_log_retention_days` | `entity` | 90 | 7–3650 | No | Entity Access Log records older than the value are deleted by the next retention pass (`docs/business-entity-access.md` §16) |
-| `channel_run_record_retention_days` | `channel` | 30 | 1–3650 | No | Channel run records whose Job is terminal and whose `created_at` is older than the value are deleted, with their node executions, by the next hourly retention pass. Jobs stay (`docs/business-data-channel.md` §7.4) |
+| `channel_run_record_retention_days` | `channel` | 30 | 1–3650 | No | Channel run records whose Job is terminal and whose `created_at` is older than the value are deleted, with their node executions and datasets, by the next hourly retention pass. Jobs stay (`docs/business-data-channel.md` §7.4) |
+| `channel_dataset_retention_days` | `channel` | 7 | 1–3650 | No | Day clock for a failed run, a cancelled run, and every draft run (`target` `draft`), including a succeeded draft. A published run a user starts is not a draft run. `expires_at` is `finished_at` plus this value when the run first becomes terminal. A later edit does not change an `expires_at` already written. A run that is not terminal keeps `expires_at` null and is not purged. The parameters do not constrain each other (`docs/business-data-channel.md` §6.9) |
+| `channel_dataset_success_retention_hours` | `channel` | 24 | 0–720 | No | Hour clock for a succeeded run whose `target` is not `draft`. Same `expires_at` rule as `channel_dataset_retention_days`. 0 means the next purge deletes those datasets. When the run record is deleted, its datasets are deleted with it, whichever comes first (`docs/business-data-channel.md` §6.9) |
+| `channel_dataset_max_total_gb` | `channel` | 100 | 1–100000 | No | The next check before a dataset table is created, and the next chunk of a streaming load. Used capacity is the sum of `size_bytes` on registry rows in `loading` or `ready`. Over the ceiling fails with `CHANNEL_DATASET_QUOTA_EXCEEDED` and does not evict. An entity-database Dataset Query checks only before its create statement and may exceed the ceiling by one dataset (`docs/business-data-channel.md` §6.9) |
 
 Ownership follows business language, not the file that reads the value: occupancy lost-detection is a **Job** primitive, so `jobs` owns it even though `worker` reaps.
 

@@ -158,7 +158,8 @@ Responsibilities:
 - Minting `entity_reconcile` (publish create), `entity_table_drop`, and `entity_access_views` Jobs; own Celery task and kind dispatch (`entity/tasks.py`), discovered by `worker`. Not registered on `metadata.tasks`
 - **Entity Data API** core under `entity/data/` (head schema and row verbs; `docs/api-contracts-entity-data.md`). Reads select from the caller's **Profile View** on the reader connection; the data plane does not assemble its own access predicates
 - **Entity Access Control** language unit `entity/access/` (`docs/business-entity-access.md`): presentation ladders, Access Profiles, Access Grants, Access Restrictions, policy revision, and compiled view bindings (ORM and store); row-rule DSL and type checking; the policy compiler; combination computation and the cap; Profile View generation in the entity database; effective-grant resolution, narrowing, and signed-context issuance; write attribution; the Entity Access Log and its retention; upgrade seeding; access management HTTP
-- Entity database bootstrap process entry (`python -m backend.entity.bootstrap`): roles, schemas, `pgcrypto`, the `acl` schema, and migration of existing tables, run with admin credentials only
+- Entity database bootstrap process entry (`python -m backend.entity.bootstrap`): roles, schemas including `channel_dataset` (the reader role is not granted on it), `pgcrypto`, the `acl` schema, and migration of existing tables, run with admin credentials only
+- Published `backend.entity.datasets`: create a dataset table from a query or from a chunked copy of rows, read a page or a batch by `_ord`, check that the table has a row, read its size, and delete it. The module does not own the dataset registry or the lifecycle and does not import `channel`
 - `entity/parameters.py` (Entity-owned System Parameter specs: `entity_access.max_profile_combinations`, `entity_access.access_log_retention_days`)
 - Domain use-case HTTP under `entity/routers/` (definition plus `routers/data.py`) and shapes under `entity/schemas/` (including `schemas/data.py`)
 - Published API listed in `docs/backend-layout.md` §3
@@ -166,13 +167,14 @@ Responsibilities:
 Must not contain:
 
 - Owning the platform Job table (lives in `backend/jobs/`)
-- An entity-database engine or pool in the Metadata MCP process; persistent API opens entity owner and reader pools for Entity Data API; the worker opens the owner pool for publish, drop, view regeneration, and Data Channel SQL against the entity database
+- An entity-database engine or pool in the Metadata MCP process; persistent API opens entity owner and reader pools for Entity Data API; the worker opens the owner pool for publish, drop, view regeneration, Data Channel SQL, and dataset-table operations against the entity database
 - A superuser runtime connection, or an entity database that is the metadata database
 - Entity Data API read-path SQL that selects from `entity_data` physical tables or stem views instead of a Profile View
 - Duplicating the **Normalized Type** closed set (import the published `metadata` leaf module)
 - Mapping, transform, lineage, or channel write admission (**Data Channel**)
 - Importing `worker.app`
 - Importing `channel`; the Entity publish confirmation reads incompatible write nodes through a port bound by composition
+- Owning the dataset registry, the retention clocks, or the capacity ceiling (**Data Channel** owns those)
 - Metadata MCP tools for Business Entity definition or Entity Data API (Entity SQL over MCP is a separate surface with its own host)
 - `entity/present.py` importing `entity/table_name.py` or `entity/inbound.py`
 - Owning User Group or Subject Attribute storage (lives in `admin/subjects/`)
@@ -191,10 +193,10 @@ Responsibilities:
 - Node type modules under `channel/nodes/`. `nodes/spec.py` holds the shared declaration (`NodeType`, `PortSpec`). `nodes/__init__.py` is the only registry: an explicit catalog tuple exporting `list_node_types` and `get_node_type`. Each type is one module, `nodes/<family>/<name>.py`, and that module exports only `NODE_TYPE`. Family packages do not re-export types. Callers outside a node module import the registry or `nodes.spec`, not the node module. A type becomes its own directory (`spec.py` for the declaration, `config.py` for the configuration schema, `execute.py` for execution) when it gains an execute function or no longer fits one module
 - Execution engine with n8n v1 semantics; it knows nothing about specific node types, storage, or Celery. With no stop node it runs every node reachable from the entry. With a stop node it runs that node's ancestor closure, including the node
 - Expression evaluator and Code node sandbox (one reused subprocess per run; no network; allow-listed modules; time and memory limits)
-- **Dataset Reference**s: run-scoped tables in the entity database and their expiry
+- **Dataset Reference**s as claim checks. Channel owns the dataset registry and the lifecycle: retention, the capacity ceiling, purge, and cascade with the run record. The physical tables are `backend.entity.datasets`
 - Entity writer: modes, match key, mapped attributes only, and head compatibility; writes through Entity's published row-write port
 - **Checkpoint** store: per (channel, checkpoint-capable node, stream) cursors; each business node declares when and how it advances its cursor
-- Run records: node executions, truncated item samples, and `failed_node_id` when `on_error` `stop` fails the run
+- Run records: node executions (including `container_seq` and `round`), preview storage for a successful execution under a Batch Read, and `failed_node_id` when `on_error` `stop` fails the run
 - **Channel Run** runner and triggers: `channel_run` Job kind, version resolution at start, a pinned version for rerun and `retry`, run-timeout checks between node executions, version supersede of unpinned runs, error workflow, `failure_streak`. User cancel kills the run's child process
 - **Webhook** catalog and the `action.webhook` node that POSTs to one saved endpoint
 - **Email Account** catalog and the `action.email` node that sends one plain-text message through one saved SMTP account
@@ -208,6 +210,7 @@ Must not contain:
 
 - Owning the platform Job table (lives in `backend/jobs/`) or the Scheduled Task table (lives in `backend/worker/`)
 - Entity Table DDL, Entity Version publish, or the entity Change Log (live in `backend/entity/`)
+- Creating or dropping dataset tables in the entity database (`backend.entity.datasets` does that)
 - Catalog, Locator, or Controlled Query internals (live in `backend/metadata/`); use their published modules
 - An execution lock for `channel_run`
 - Importing `worker.app`
@@ -231,7 +234,7 @@ Must not contain:
 - Domain collector logic (stay in `metadata/`)
 - Interactive Console HTTP routes (pages stay in `frontend/`; mechanism REST is allowed)
 
-Deploy **one** Beat replica. See `docs/adr/0006-celery-platform-async-runtime.md` and `docs/env.md` §8.
+Deploy **one** Beat replica. See `docs/env.md` §8.
 Schedule Timezone / Instant rules: [`docs/conventions-time.md`](conventions-time.md).
 
 ### Celery worker process
@@ -367,7 +370,7 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 - `jobs` → `core`; published `admin` (including System Parameter resolver) when needed; process entry `job_child` may import `worker.parameters`
 - `metadata` → `core`; published `admin` / `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; process entries `mcp_http` / `mcp_server` may import `worker.parameters`
 - `entity` → `core`; published `admin` (including `admin.subjects` and the System Parameter resolver) / `jobs`
-- `channel` → `core`; published `admin` / `jobs` / `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules` / `worker.due`; published `metadata` and `entity` modules listed for Data Channel use, including `entity.heads` (`docs/backend-layout.md` §3)
+- `channel` → `core`; published `admin` / `jobs` / `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules` / `worker.due`; published `metadata` and `entity` modules listed for Data Channel use, including `entity.heads` and `entity.datasets` (`docs/backend-layout.md` §3)
 - `worker` → `core`; published surfaces for assembly, including `entity.tasks` and `channel.tasks`
 - `main` → `core` + package routers / bootstrap via published surfaces
 - `alembic` → `core` Base + every package `models` module

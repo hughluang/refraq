@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document defines the HTTP contract for **Data Channel** definitions and runs: the node type catalog, channel create, read, edit, and delete, draft save, validate, publish with its confirmation list, **Channel Version** reads, the activation switch, on-demand runs, the run list, and node-execution reads. Paths address a channel by opaque `id`.
+This document defines the HTTP contract for **Data Channel** definitions and runs: the node type catalog, channel create, read, edit, and delete, draft save, validate, publish with its confirmation list, **Channel Version** reads, the activation switch, on-demand runs, the run list, run detail, the execution list, one execution's stored output, and dataset-row reads. Paths address a channel by opaque `id`.
 
 **Source Mirror**s are not defined here. **Webhook** HTTP is `docs/api-contracts-webhooks.md`. **Email Account** HTTP is `docs/api-contracts-email-accounts.md`. Global Variable HTTP is `docs/api-contracts-global-variables.md`.
 
@@ -41,6 +41,7 @@ Collection lists use the **Offset Page** envelope `{ "items", "total", "limit", 
 | Edge | `ed_19b2` | Client-assigned; same character rule; unique within a graph |
 | Channel Note | `nt_intro` | Client-assigned; same character rule as a node id; unique across the node, edge, and note ids of the graph |
 | Job | `job_01HZX` | Platform Job id (`docs/api-contracts-jobs.md`) |
+| Dataset | `ds_01HZX` | Opaque server-issued id. The reference carries this id and no physical relation |
 
 ## 3. Resource Shapes
 
@@ -139,13 +140,13 @@ Node fields:
 | `type` | A node type id from the catalog (§3.7) |
 | `type_version` | Integer, default `1`. Must equal the node type's current `type_version` |
 | `name` | Trimmed, 1 to 128 characters, unique within the graph |
-| `position` | Canvas coordinates; numbers; not interpreted by the server. When `parent` is set, the coordinates are relative to that **For**'s frame |
-| `parent` | Optional node id of a For, omitted when the node is not a direct child of a For. JSON `null` means no parent. A stored node omits `parent` when it has none. The server stores no frame size |
+| `position` | Canvas coordinates; numbers; not interpreted by the server. When `parent` is set, the coordinates are relative to that container's frame. A container is a **For** or a Batch Read |
+| `parent` | Optional node id of a For or a Batch Read, omitted when the node is not a direct child of one. JSON `null` means no parent. A stored node omits `parent` when it has none. The server stores no frame size |
 | `config` | Object validated against the node type's `config_schema` at validate and publish. Save accepts any object |
 | `on_error` | `stop`, `continue`, or `error_output`. `error_output` fails validation unless the node type declares an `error` output |
 | `retry` | `null`, or `{ "max_tries", "wait_sec" }`. `max_tries` is 1 to 10 and includes the first execution. `wait_sec` is 0 to 3600. Null executes once |
 
-Edge `source.port` and `target.port` name ports declared by the node types. An edge from S to T crosses a For frame when the two `parent` values differ and S is not T's parent. Two omitted `parent` values are equal. A crossing is `CHANNEL_LOOP_BODY_INVALID` in either direction, including an edge from a body node to its For. The only edge that may enter a frame is that For's `each` port connected to a node whose `parent` is that For, and `each` connects only to such a node. `done` connects only to a node outside that frame. A `parent` that names a missing node or a node that is not a For, or a parent chain that contains a cycle, is `CHANNEL_LOOP_BODY_INVALID`. A cycle among edges is `CHANNEL_GRAPH_CYCLE`. Graph `settings.run_timeout_sec` is `null` or a positive integer of seconds at most 252460800. `settings.run_retry_limit` is `null` or an integer 0 to 10. `settings.error_channel_id` is `null` or another Data Channel id. Publish requires that channel's current published version to use `trigger.error` as its only trigger.
+Edge `source.port` and `target.port` name ports declared by the node types. A container is a **For** or a Batch Read. An edge from S to T crosses a container frame when the two `parent` values differ and S is not T's parent. Two omitted `parent` values are equal. A crossing is `CHANNEL_LOOP_BODY_INVALID` in either direction, including an edge from a body node to its container. The only edge that may enter a frame is that container's `each` port connected to a node whose `parent` is that container, and `each` connects only to such a node. `done` connects only to a node outside that frame. A `parent` that names a missing node or a node that is not a For or a Batch Read, a parent chain that contains a cycle, or a Dataset Query or Materialize that has a `parent`, is `CHANNEL_LOOP_BODY_INVALID`. A For and a Batch Read may nest in either direction. A cycle among edges is `CHANNEL_GRAPH_CYCLE`. Graph `settings.run_timeout_sec` is `null` or a positive integer of seconds at most 252460800. `settings.run_retry_limit` is `null` or an integer 0 to 10. `settings.error_channel_id` is `null` or another Data Channel id. Publish requires that channel's current published version to use `trigger.error` as its only trigger.
 
 `notes` is optional and defaults to an empty list. A graph has at most 200 **Channel Note**s. Draft save, validate, and template preview accept this same graph shape.
 
@@ -171,9 +172,12 @@ Write Entity configuration (`write.entity`):
 | `entity_id` | Target Business Entity id |
 | `mode` | `upsert`, `create`, `update`, or `delete` |
 | `match_key` | `null` means the target head's **Business Key**; otherwise the name of a `unique` attribute on the head. `row_id` is never accepted |
-| `source` | A template whose value is a list of objects. Static JSON is the text itself. `{{ }}` calculates |
+| `source` | A template whose value is a list of objects or a **Dataset Reference** `{dataset_id, columns, count}` with no `relation`. Static JSON is the text itself. `{{ }}` calculates. A reference is resolved by `dataset_id` against the registry. Mapping renames columns by name the same way it renames object keys. A list longer than 100000 objects fails the node with `CHANNEL_ITEM_LIMIT_EXCEEDED` and the message `Use Materialize or Dataset Query, then Batch Read.` |
 | `mapping` | List of `{ "attribute", "key" }`; `attribute` names a head attribute at most once; `key` is the source-object key renamed to it. Unmapped source keys are written under their own name. Every mode applies the list |
 | `on_incompatible_head` | `fail` (default) or `skip` |
+| `statement_timeout_sec` | Integer seconds from 1 to 3600. Absent means 300. Wall-clock limit of the whole write. Before each statement the remaining time is that statement's server timeout |
+
+A dataset source is staged in full, validated in full, and written in one transaction. Any failure rolls the execution back and leaves the target unchanged. A list source is the same one transaction. One round of a Batch Read is one such transaction; the rounds are not combined. A dataset the node cannot read fails the node with `CHANNEL_DATASET_UNAVAILABLE`.
 
 SQL configuration (`read.sql`):
 
@@ -183,7 +187,7 @@ SQL configuration (`read.sql`):
 | `sql` | A template. Each `{{ }}` result is spliced as text, and the author quotes literals in the statement. The rendered text must be exactly one statement; otherwise the node fails with `CHANNEL_SQL_NOT_ONE_STATEMENT` and the driver is not called. On the entity database, unqualified names resolve in schema `entity_data` |
 | `statement_timeout_sec` | Integer seconds from 1 to 3600. Absent means 30 |
 
-A successful SQL execution returns `{rows, count, rowcount}`. `rows` is an array of objects and `count` is its length. Both are empty and 0 when the statement returns no result set. `rowcount` is an integer when the driver reports an affected-row count, otherwise `null`. More than 100000 rows fails the node with `CHANNEL_ITEM_LIMIT_EXCEEDED`. Text that is not exactly one statement fails the node with `CHANNEL_SQL_NOT_ONE_STATEMENT` before the driver runs. A database error fails the node with `CHANNEL_NODE_FAILED` and the database message.
+A successful SQL execution returns `{rows, count, rowcount}`. `rows` is an array of objects and `count` is its length. Both are empty and 0 when the statement returns no result set. `rowcount` is an integer when the driver reports an affected-row count, otherwise `null`. More than 100000 rows fails the node with `CHANNEL_ITEM_LIMIT_EXCEEDED` and the message `Use Dataset Query, then Batch Read.` SQL does not return a **Dataset Reference**. Text that is not exactly one statement fails the node with `CHANNEL_SQL_NOT_ONE_STATEMENT` before the driver runs. A database error fails the node with `CHANNEL_NODE_FAILED` and the database message.
 
 Scheduled trigger configuration (`trigger.scheduled`):
 
@@ -259,9 +263,36 @@ For configuration (`volume.for`):
 
 | Field | Rule |
 | --- | --- |
-| `items` | A JSON array template. Each element is any JSON value. More than 100000 elements fails the node with `CHANNEL_ITEM_LIMIT_EXCEEDED` |
+| `items` | A JSON array template. Each element is any JSON value. More than 100000 elements fails the node with `CHANNEL_ITEM_LIMIT_EXCEEDED` and the message `Use Materialize or Dataset Query, then Batch Read.` |
 
 Ports are the input `main` and the outputs `each` and `done`. There is no `loop` port, and `each` is not a loop-back port. During a round the output visible to the body is `{"current", "index", "count"}` for that element. The stored output adds `"iterations"`. `current` is the last element and `index` is its zero-based position; both are null when `items` is empty. `count` is the number of elements, 0 when `items` is empty. `iterations` is an array of one object per element, in order, and is `[]` when `items` is empty. Each object's keys are the `ref` values of direct child nodes that ran on that element, sorted by `ref`. Each value is that node's output. A node that did not run is omitted, not stored as null. A round in which no child ran is `{}`. An If that ran stores that node's output; a branch that did not run adds no key. A nested For stores one key whose value is that For's whole output. The body does not read `iterations` or an earlier element, and may read outputs of nodes upstream of the For. A node reached from `done` reads the stored output, including `iterations`, and does not name a child node. After each element, the UTF-8 byte length of the compact JSON of `iterations` is measured: `,` and `:` with no extra whitespace, and characters outside ASCII are not written as `\u` escapes. Above 16 MiB (16777216 bytes) the node fails with `CHANNEL_ITERATION_VOLUME_EXCEEDED`. `done` runs after the body, including when `items` is empty.
+
+Dataset Query configuration (`volume.dataset_query`):
+
+| Field | Rule |
+| --- | --- |
+| `source` | Same object as SQL `source` |
+| `sql` | A template. The rendered text must be exactly one statement for the source engine. Otherwise the node fails with `CHANNEL_SQL_NOT_ONE_STATEMENT` and the driver is not called |
+| `statement_timeout_sec` | Integer seconds from 1 to 3600. Absent means 300. Wall-clock limit of the whole import |
+
+Ports are the input `main` and the outputs `main` and `error`. A successful execution returns `{dataset, count}`. `dataset` is a **Dataset Reference** `{dataset_id, columns, count}` with no `relation`. `columns` is `[{name, type}]` and `type` is a **Normalized Type**. `count` is the number of rows. On the entity database the platform runs the author's query as the body of one statement that creates the dataset table on the owner connection with `search_path` `entity_data`. `_ord` is arrival order. A query that contains `ORDER BY` keeps that order when the database keeps it, and the platform does not guarantee it. On a registered **Source** (PostgreSQL, Oracle, or MSSQL) the platform streams the result into the dataset. Each call to the source uses the remaining wall-clock time as its timeout. PostgreSQL and Oracle run that read in a read-only transaction so the statement cannot write; that transaction is not an extra snapshot promise. MSSQL does not change isolation level, and a long read is not snapshot-consistent. A database error, including snapshot-too-old or a lock wait, fails the node with the database message and is not retried. Between chunks of a streamed Source the run checks the wall-clock deadline, cancel, supersede, and the capacity ceiling. Crossing the ceiling fails the node with `CHANNEL_DATASET_QUOTA_EXCEEDED` and drops that attempt's table. An entity-database create is one statement: it checks the ceiling only before that statement and may exceed it by one dataset. A Dataset Query whose `parent` is set is `CHANNEL_LOOP_BODY_INVALID`.
+
+Materialize configuration (`volume.materialize`):
+
+| Field | Rule |
+| --- | --- |
+| `items` | A template whose value is a list of objects. More than 100000 objects fails the node with `CHANNEL_ITEM_LIMIT_EXCEEDED` and the message `Use Materialize or Dataset Query, then Batch Read.` |
+
+Ports are the input `main` and the outputs `main` and `error`. A successful execution returns the same `{dataset, count}` as Dataset Query. Column types are inferred from the whole list: boolean, integer, float, and string stay themselves; mixed integer and float is float; an integer that does not fit in a 64-bit integer is decimal; an object, an array, or mixed types is json; an all-null column is string. The physical column follows that **Normalized Type**. The list is copied in chunks, and the capacity ceiling is checked after each chunk. A Materialize whose `parent` is set is `CHANNEL_LOOP_BODY_INVALID`.
+
+Batch Read configuration (`volume.batch_read`):
+
+| Field | Rule |
+| --- | --- |
+| `dataset` | A template whose value is a **Dataset Reference**. Any other value fails the node |
+| `batch_size` | Integer from 1 to 100000. Absent means 1000 |
+
+Ports are the input `main` and the outputs `each` and `done`. There is no `loop` port. The node is a container: a direct child sets `parent` to this node's id, and a For may nest inside it or the other way around. During a round the output visible to the body is `{"rows", "index", "count", "total"}`. `index` starts at 0. `rows` is every row whose `_ord` is in `(index × batch_size, (index + 1) × batch_size]`, in `_ord` order, and those objects omit `_ord`. That page is the full round input, not a preview. `count` is the number of batches. `total` is the number of rows. The stored output is `{"count", "total", "batch_size"}` and has no `iterations`. An empty dataset runs no child. `done` still runs. The path is not atomic: each round's write is its own transaction, and a failure leaves batches already committed. `stop` fails the run, does not run `done`, and the error names the failed batch `index`. A dataset the node cannot read fails the node with `CHANNEL_DATASET_UNAVAILABLE`.
 
 Code configuration (`transform.code`):
 
@@ -396,14 +427,14 @@ Sections are empty lists, or `false`, when there is nothing to show.
   "inputs": [
     {
       "port": "main",
-      "description": "Items or a dataset reference from the previous node.",
+      "description": "Primary input port. It orders execution. The node reads an upstream output by name.",
       "coarse_type": "object"
     }
   ],
   "outputs": [
     {
       "port": "main",
-      "description": "Items or a dataset reference from a successful execution.",
+      "description": "Primary output port of a successful execution. A downstream node reads that output by name.",
       "coarse_type": "object"
     },
     {
@@ -421,7 +452,7 @@ Sections are empty lists, or `false`, when there is nothing to show.
 - `family` is `trigger`, `read`, `transform`, `volume`, `state`, `write`, or `action`.
 - `label`, `summary`, and `description` are English. `summary` is one sentence. `description` states the type's function and its place in a workflow.
 - `trigger` is `true` for trigger types; they declare no inputs.
-- Each port is `{ "port", "description", "coarse_type", "loop_back" }`. `port` is lower snake case. `coarse_type` is `object`, `items`, or `unknown`. `loop_back` is false on every port. `main` is the primary data port. `error` is an output that carries items the node failed when `on_error` is `error_output`.
+- Each port is `{ "port", "description", "coarse_type", "loop_back" }`. `port` is lower snake case. `coarse_type` is `object`, `items`, or `unknown`. `loop_back` is false on every port. `main` is the primary input or output port. It orders execution. An expression reads an upstream output by name; the port does not deliver items or a dataset reference from the previous node. `error` is an output that carries items the node failed when `on_error` is `error_output`.
 - `type_version` is the current version of the node type. A node instance's `type_version` must match it.
 - `config_schema` is a JSON Schema object that the Console renders as the configuration panel and the server enforces at validate and publish. Every property, including properties nested under array items, has `title` and `description`.
 - `permission` names the extra Permission needed to add or edit a node of this type (`channel:code_write` for `transform.code`, `channel:source_query` for `read.source_query`), or `null`.
@@ -482,8 +513,10 @@ On `succeeded` only:
 | `POST` | `/channels/{id}/runs` | `channel:write` | Start an on-demand run |
 | `POST` | `/channels/{id}/runs/{job_id}/rerun` | `channel:write` | Rerun a failed published run on its version |
 | `GET` | `/channels/{id}/runs` | `channel:read` | List this channel's runs (**Offset Page**) |
-| `GET` | `/channels/{id}/runs/{job_id}` | `channel:read` | Read one run with its graph and node executions |
-| `GET` | `/channels/{id}/runs/{job_id}/executions/{seq}/output` | `channel:read` | Page one node execution's output |
+| `GET` | `/channels/{id}/runs/{job_id}` | `channel:read` | Read one run with its graph and node summaries |
+| `GET` | `/channels/{id}/runs/{job_id}/executions` | `channel:read` | List node executions (**Offset Page**) |
+| `GET` | `/channels/{id}/runs/{job_id}/executions/{seq}/output` | `channel:read` | Page one node execution's stored output |
+| `GET` | `/channels/{id}/runs/{job_id}/datasets/{dataset_id}/rows` | `channel:read` | Page dataset rows by `_ord` |
 | `POST` | `/channels/{id}/runs/{job_id}/template-preview` | `channel:write` | Evaluate one template field against a run record |
 
 ### 5.1 `GET /channel-node-types`
@@ -611,31 +644,23 @@ Query: `status` (optional Job status), `target` (`draft` | `published` | omitted
 {
   "run": { },
   "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null } },
-  "node_executions": [
+  "node_summaries": [
     {
-      "seq": 1,
       "node_id": "nd_read",
-      "status": "succeeded",
-      "started_at": "2026-10-09T08:00:01Z",
-      "finished_at": "2026-10-09T08:00:02Z",
-      "output_bytes": 1204,
-      "output_preview": { "rows": [], "count": 0 },
-      "output_truncated": false,
-      "error_code": null,
-      "error_message": null,
-      "error_detail": null
+      "execution_count": 1,
+      "status_counts": { "succeeded": 1 }
     }
   ]
 }
 ```
 
-`graph` is the snapshot the run executes, or `null` before a `published` run has resolved a version. `output_preview` is the output with each list cut to its first 100 elements. `output_truncated` is true when any list in that preview was cut; it is a presentation fact and does not mean execution was row-limited. Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`.
+`graph` is the snapshot the run executes, or `null` before a `published` run has resolved a version. `node_summaries` has one object per node that has at least one execution, ordered by that node's smallest `seq`. `execution_count` is the number of executions. `status_counts` maps each status that occurred (`running`, `succeeded`, `failed`, `skipped`) to its count. The response does not include `node_executions`. Executions are §5.17. Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`. Requires `channel:read`.
 
 ### 5.14 `GET /channels/{id}/runs/{job_id}/executions/{seq}/output`
 
 Query: `path` (optional dot path into the output, such as `rows`), `limit` (default 50, max 200), `offset` (default 0).
 
-When the value at `path` is a list, `200` is an **Offset Page** of its elements. Otherwise `200` is `{ "value": … }` and `limit` / `offset` are ignored. An unknown `seq` is `404 CHANNEL_RUN_NOT_FOUND`.
+When the value at `path` is a list, `200` is an **Offset Page** of its elements. Otherwise `200` is `{ "value": … }` and `limit` / `offset` are ignored. The value is the stored output. When the execution is preview-only (§5.17), a stored list is the preview, not the runtime value, and `preview_totals` on the execution holds the runtime length. An unknown `seq` is `404 CHANNEL_RUN_NOT_FOUND`. Requires `channel:read`.
 
 ### 5.15 `POST /channels/{id}/runs/{job_id}/template-preview`
 
@@ -650,7 +675,7 @@ When the value at `path` is a list, `200` is an **Offset Page** of its elements.
 Evaluates the **Template Field** at `path` in node `node_id` of `graph` against run `job_id` of this channel (**Template Preview**, `docs/business-data-channel.md` §4.1). `graph` is the same shape as a draft save (§3.2), usually the graph on screen; the run may have executed an earlier graph. `path` is the configuration path, as in a problem entry (§3.4). The request executes no node and writes nothing. It does not record an audit event.
 
 - Template validation (§5.7) applies to that field of `graph`. A field with a validation error is `failed` with that problem's `code`, and its `detail` as `message`.
-- Each upstream node the template names by `ref` or name in `graph` reads the output of its latest `succeeded` or `skipped` execution in the run, matched by node id. `self.channel`, `self.run`, and `self.platform` are the values the run recorded at start.
+- Each upstream node the template names by `ref` or name in `graph` reads the output of its latest `succeeded` or `skipped` execution in the run, matched by node id. A preview-only execution supplies the stored preview (§5.17). `self.channel`, `self.run`, and `self.platform` are the values the run recorded at start.
 - Evaluation uses the run sandbox and the run's conversion to the declared value type. An expression failure is `failed` with `CHANNEL_NODE_FAILED`. A result that does not match the declared value type is `failed` with `CHANNEL_VALUE_TYPE_MISMATCH`. A sandbox that cannot start is `failed` with `CHANNEL_SANDBOX_FAILED`. `message` is the error the node would record.
 
 `200` is one of:
@@ -676,6 +701,55 @@ Evaluates the **Template Field** at `path` in node `node_id` of `graph` against 
 
 Empty body. Requires `channel:write`. The source run must be `failed` and `target` `published`, and it must have a version number. `202` `{ "run": { … } }` for a new Job pinned to that version (`pin_version` true, `trigger_kind` `user`). The new run does not set `retry_of_job_id`. `422` `CHANNEL_RUN_NOT_RERUNNABLE` otherwise. `404` `CHANNEL_RUN_NOT_FOUND` when the Job is not a run of this channel.
 
+### 5.17 `GET /channels/{id}/runs/{job_id}/executions`
+
+Query: `node_id` (optional), `container_seq` (optional integer), `round` (optional integer), `status` (optional: `running`, `succeeded`, `failed`, or `skipped`), `limit` (default 50, max 200), `offset` (default 0). `200` is an **Offset Page** ordered by `seq` ascending. Requires `channel:read`. Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`.
+
+```json
+{
+  "seq": 4,
+  "node_id": "nd_write",
+  "container_seq": 2,
+  "round": 0,
+  "status": "succeeded",
+  "started_at": "2026-10-09T08:00:03Z",
+  "finished_at": "2026-10-09T08:00:04Z",
+  "output_bytes": 4096,
+  "output_preview": { "rows": [], "count": 100 },
+  "output_truncated": false,
+  "preview_only": true,
+  "preview_totals": { "rows": 1000000 },
+  "error_code": null,
+  "error_message": null,
+  "error_detail": null
+}
+```
+
+- `container_seq` and `round` are null when the execution is not inside a **For** or a Batch Read. Otherwise `container_seq` is the `seq` of the direct container's execution, and `round` is the zero-based round index.
+- `output_preview` is the stored output with each list cut to its first 100 elements. `output_truncated` is true when this response cut a list.
+- `preview_only` is true when the execution succeeded and a Batch Read is in its container-ancestor chain. The stored output then keeps the first 100 elements of each list. `preview_totals` maps each such list's dot path to the runtime length. `preview_only` false stores `preview_totals` as `{}`, and a failed execution stores its full output.
+- A **Template Preview** reads this stored output, so a preview-only execution supplies the preview.
+
+### 5.18 `GET /channels/{id}/runs/{job_id}/datasets/{dataset_id}/rows`
+
+Query: `after_ord` (optional integer, default 0), `limit` (default 50, max 200). Requires `channel:read`. Paging these rows is part of reading the run record.
+
+`200`:
+
+```json
+{
+  "items": [
+    { "_ord": 1, "code": "S-01" }
+  ],
+  "limit": 50,
+  "next_after_ord": 50
+}
+```
+
+Items are the rows with `_ord` greater than `after_ord`, ordered by `_ord` ascending. Each item includes `_ord` and the dataset columns. `next_after_ord` is the last `_ord` in `items`, or `null` when the page is empty or is the last page. This is not an **Offset Page**: the response has no `total` and no `offset`.
+
+The registry row must belong to `job_id` and be readable. Otherwise `404` `CHANNEL_DATASET_UNAVAILABLE`. The problem carries `reason`: `not_found`, `expired`, `lost`, or `foreign_run`. `lost` means the registry row count is greater than 0 and the table has no row; the check does not count the table. `foreign_run` means the dataset is registered to a different Job than the path. Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`. `detail` stays English occurrence text. Reading rows does not consult the capacity ceiling.
+
 ## 6. Errors
 
 ### 6.1 HTTP Problem Codes
@@ -689,6 +763,7 @@ Empty body. Requires `channel:write`. The source run must be `failed` and `targe
 | `CHANNEL_NOT_PUBLISHED` | 409 | On-demand run with target `published` of a channel with no published version |
 | `CHANNEL_TRIGGER_INVALID` | 422 | The graph does not have exactly one trigger node |
 | `CHANNEL_RUN_NOT_FOUND` | 404 | No run with this Job id on the channel |
+| `CHANNEL_DATASET_UNAVAILABLE` | 404 | The dataset row endpoint cannot read the dataset. `reason` is `not_found`, `expired`, `lost`, or `foreign_run`. `reason` is a domain extension on this code |
 | `REQUEST_INVALID` | 422 | Unknown fields, malformed identifiers, out-of-range fields, a Template Preview `node_id` and `path` that name no template field, or a body that contains `pinned` |
 | `CHANNEL_RUN_NOT_RERUNNABLE` | 422 | Rerun of a run that is not `failed` or whose `target` is not `published` |
 
@@ -701,7 +776,7 @@ Empty body. Requires `channel:write`. The source run must be `failed` and `targe
 | `CHANNEL_GRAPH_TRIGGER_INPUT` | A trigger node has an inbound edge |
 | `CHANNEL_GRAPH_UNREACHABLE` | A node is not reachable from any trigger node |
 | `CHANNEL_GRAPH_CYCLE` | The graph contains a cycle |
-| `CHANNEL_LOOP_BODY_INVALID` | A node's `parent` names a missing node or a node that is not a **For**, a parent chain contains a cycle, or an edge crosses a For frame. An edge from S to T crosses when the two `parent` values differ and S is not T's parent. The only entry is that For's `each` connected to a node whose `parent` is that For, and `each` connects only to such a node. `done` connects only outside that frame |
+| `CHANNEL_LOOP_BODY_INVALID` | A node's `parent` names a missing node or a node that is not a **For** or a Batch Read, a parent chain contains a cycle, an edge crosses a container frame, or a Dataset Query or Materialize has a `parent`. A container is a For or a Batch Read. An edge from S to T crosses when the two `parent` values differ and S is not T's parent. The only entry is that container's `each` connected to a node whose `parent` is that container, and `each` connects only to such a node. `done` connects only outside that frame |
 | `CHANNEL_GRAPH_EDGE_INVALID` | An edge names an unknown node or port |
 | `CHANNEL_NODE_TYPE_UNKNOWN` | A node names an unknown node type |
 | `CHANNEL_NODE_CONFIG_INVALID` | A node configuration does not satisfy its `config_schema` |
@@ -712,7 +787,7 @@ Empty body. Requires `channel:write`. The source run must be `failed` and `targe
 | `CHANNEL_MATCH_KEY_INVALID` | A write node's match key does not resolve |
 | `CHANNEL_EXPRESSION_INVALID` | A template expression does not parse |
 | `CHANNEL_TEMPLATE_TYPE_MISMATCH` | A template with no `{{ }}` does not match its declared value type |
-| `CHANNEL_TEMPLATE_REF_INVALID` | A template names a node that does not exist or is not an ancestor. Ancestors skip an edge that crosses a For frame (`docs/business-data-channel.md` §4.1) |
+| `CHANNEL_TEMPLATE_REF_INVALID` | A template names a node that does not exist or is not an ancestor. Ancestors skip an edge that crosses a For or Batch Read frame (`docs/business-data-channel.md` §4.1) |
 | `CHANNEL_TEMPLATE_TYPE_UNKNOWN` | Warning. A template result type cannot be known until run time |
 | `CHANNEL_PORT_TYPE_MISMATCH` | An edge joins ports whose coarse types differ and both are known |
 | `CHANNEL_PORT_TYPE_UNKNOWN` | Warning. An edge's upstream coarse type is `unknown` |
@@ -726,7 +801,9 @@ Empty body. Requires `channel:write`. The source run must be `failed` and `targe
 | --- | --- |
 | `CHANNEL_RUN_TIMEOUT` | The graph run timeout elapsed; the run log names the node it stopped at |
 | `CHANNEL_WRITE_INCOMPATIBLE` | A write node with policy `fail` met a head its mapping is incompatible with |
-| `CHANNEL_ITEM_LIMIT_EXCEEDED` | One node execution held more than 100000 items |
+| `CHANNEL_ITEM_LIMIT_EXCEEDED` | One node execution held more than 100000 items. SQL uses the message `Use Dataset Query, then Batch Read.` Every other capped item list uses `Use Materialize or Dataset Query, then Batch Read.` |
+| `CHANNEL_DATASET_UNAVAILABLE` | A node that reads a dataset cannot use it. `error_detail.reason` is `not_found`, `expired`, `lost`, or `foreign_run`. The same code is HTTP on the dataset row endpoint (§6.1) |
+| `CHANNEL_DATASET_QUOTA_EXCEEDED` | Creating or loading a dataset would exceed `channel_dataset_max_total_gb`. The platform does not evict a dataset. Reading dataset rows does not raise this code |
 | `CHANNEL_ITERATION_VOLUME_EXCEEDED` | The UTF-8 byte length of a **For** node's compact JSON `iterations` exceeded 16 MiB (16777216 bytes). The error message is `For iteration output exceeds 16 MiB. Read the items in batches.` |
 | `CHANNEL_SQL_NOT_ONE_STATEMENT` | The rendered SQL text is empty, unreadable, or more than one statement |
 | `CHANNEL_NODE_FAILED` | A node failed with `on_error` `stop`; the run record names the node and its error. A Code node sets `error_detail.reason` to `network`, `import`, `timeout`, `memory`, or `error` (and, for `error`, `type`, `message`, and `line`). A live Source query keeps the Controlled Query code in `error_detail.code` |
@@ -742,3 +819,4 @@ Empty body. Requires `channel:write`. The source run must be `failed` and `targe
 2. A channel-scoped cancel route; cancel is the platform Job cancel.
 3. Creating, editing, deleting, or running channel schedule rows through the schedule surface.
 4. MCP tools for Data Channel.
+5. Continuing a Batch Read from the failed batch. Batches already committed stay.

@@ -147,12 +147,12 @@ class NodeType:
 
 MAIN_INPUT = PortSpec(
     "main",
-    "Items or a dataset reference from the previous node.",
+    "Primary input port. It orders execution. The node reads an upstream output by name.",
     coarse_type="object",
 )
 MAIN_OUTPUT = PortSpec(
     "main",
-    "Items or a dataset reference from a successful execution.",
+    "Primary output port of a successful execution. A downstream node reads that output by name.",
     coarse_type="object",
 )
 ERROR_OUTPUT = PortSpec(

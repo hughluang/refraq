@@ -139,18 +139,19 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | `backend.entity.heads` | Current published head shape by Entity id (`get_entity_head`): attribute name, type, unique, required, and Business Key. Data Channel validation reads this and does not import Entity stores |
 | `backend.entity.rows` | Head-table row read and batch write by Entity id (`read_rows`, `write_rows`), executed as a given User through Entity Access Control. Data Channel runs pass the System Identity. Does not import `channel` |
 | `backend.entity.statements` | Execute one statement on the entity owner connection (`execute_entity_statement`) for Data Channel SQL that selects the entity database. Sets `search_path` to `entity_data` for that transaction. |
+| `backend.entity.datasets` | Create, read, and drop run-scoped dataset tables in entity-database schema `channel_dataset` (the reader role is not granted): a query that builds the table, a chunked copy from rows, a page or a batch by `_ord`, an existence check, the relation size, and delete. Does not import `channel`. Channel owns the registry and the lifecycle |
 | `backend.entity.publish_confirmation` | Port a Data Channel adapter fills with write nodes a candidate head would make incompatible; bound by composition. Entity HTTP calls it and does not import `channel` |
 | `backend.entity.routers.*` | Domain use-case HTTP (definition, access management, and Entity Data API); mounted by `main` |
 
 ### `channel` published modules
 
-`channel` is the **Data Channel** product domain (`docs/business-data-channel.md`). It owns channel definitions, drafts, **Channel Version**s, the activation switch, validation, the node type catalog, the execution engine, the expression evaluator and code sandbox, **Dataset Reference**s, the entity writer, **Checkpoint**s, run records, **Global Variable**s, schedule sync, and the `channel_run` Job kind. It does not own the Job table, the Scheduled Task table, Entity Tables, the entity Change Log, or the catalog.
+`channel` is the **Data Channel** product domain (`docs/business-data-channel.md`). It owns channel definitions, drafts, **Channel Version**s, the activation switch, validation, the node type catalog, the execution engine, the expression evaluator and code sandbox, **Dataset Reference**s as claim checks (the registry and the lifecycle), the entity writer, **Checkpoint**s, run records, **Global Variable**s, schedule sync, and the `channel_run` Job kind. It does not own the Job table, the Scheduled Task table, Entity Tables, dataset tables (`backend.entity.datasets`), the entity Change Log, or the catalog.
 
 | Module | Published for |
 |--------|----------------|
 | `backend.channel.errors` | Domain errors (subclass `AppError`, not `admin` concrete types) |
-| `backend.channel.tasks` | Job kind handler dispatch (`channel_run`) and the run-record retention purge (`purge_run_records`); discovered by `worker`. Not registered on `metadata.tasks` or `entity.tasks` |
-| `backend.channel.parameters` | Data Channel-owned System Parameter specs and typed accessors (`channel_run_record_retention_days`), and the in-code identity of the run-record retention Scheduled Task. Collected by `worker.parameters` assembly |
+| `backend.channel.tasks` | Job kind handler dispatch (`channel_run`) and the run-record retention purge (`purge_run_records`), which also deletes due datasets, cascades datasets with a deleted run record, and drops a dataset table that has no registry row; discovered by `worker`. Not registered on `metadata.tasks` or `entity.tasks` |
+| `backend.channel.parameters` | Data Channel-owned System Parameter specs and typed accessors (`channel_run_record_retention_days`, `channel_dataset_retention_days`, `channel_dataset_success_retention_hours`, `channel_dataset_max_total_gb`), and the in-code identity of the run-record retention Scheduled Task. Collected by `worker.parameters` assembly |
 | `backend.channel.schedule_projection` | `channel_run` schedule `work_kind` / `target` projection adapter, bound by composition into the platform schedule list |
 | `backend.channel.schedules` | Publish sync, activation, withdraw, and the due-tick task that mints `channel_run` Jobs |
 | `backend.channel.write_targets` | Write-node consumers of a Business Entity, bound by composition into the Entity publish confirmation |
@@ -164,7 +165,7 @@ No module is created empty. `channel.errors`, `channel.routers`, `channel.tasks`
 - `worker`: schedule store port and seam (`worker.api`, `worker.schedules`, `worker.errors`, `worker.schemas`, `worker.due`) for publish sync, activation, withdraw, and due consumption.
 - `admin`: deps and permissions, audit, and the System Parameter resolver.
 - `metadata`: Locator parsing and resolution, Catalog Object and column reads, Controlled Query guards and execution, Source statement execution, and Normalized Type.
-- `entity`: head resolution and head shape by Entity id (`entity.heads`), the head-table row read and batch write port (`entity.rows`), entity Change Log reads, and head-switch events. Row writes go through Entity Access Control as the System Identity.
+- `entity`: head resolution and head shape by Entity id (`entity.heads`), the head-table row read and batch write port (`entity.rows`), dataset tables (`entity.datasets`), entity Change Log reads, and head-switch events. Row writes go through Entity Access Control as the System Identity. Dataset table calls do not import `channel`.
 
 `metadata` and `entity` publish those capabilities as named leaf modules in their own §3 tables when the consuming code lands. Neither imports `channel`; where they need channel facts (the Entity publish confirmation listing incompatible write nodes, the platform schedule list projecting `channel_run` rows) they define a port that composition binds to a `channel` adapter.
 
