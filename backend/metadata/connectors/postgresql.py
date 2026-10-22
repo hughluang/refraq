@@ -11,12 +11,17 @@ from sqlalchemy import create_engine, event, text
 from backend.metadata.connectors.base import (
     CollectedStructure,
     CollectProgress,
+    ChunkIterator,
     ConnectorError,
     QueryResult,
     SourceEndpoint,
+    StreamColumn,
+    StreamedStatement,
     fetch_query_result,
     finish_statement,
     query_endpoint_error,
+    release_stream,
+    remaining_millis,
 )
 from backend.metadata.connectors.structure_rows import (
     ColumnRow,
@@ -117,6 +122,39 @@ class PostgresqlConnector:
         finally:
             eng.dispose()
 
+    def stream_statement(
+        self,
+        endpoint: SourceEndpoint,
+        sql: str,
+        *,
+        chunk_rows: int,
+        deadline: float,
+    ) -> StreamedStatement:
+        """Stream one read in a read-only transaction. The first statement is read-only."""
+        eng = self._engine(endpoint)
+        conn = eng.connect()
+        cursor = None
+        try:
+            raw = conn.connection.driver_connection
+            columns, cursor = _open_postgresql_stream(
+                raw, sql, chunk_rows=chunk_rows, deadline=deadline
+            )
+        except ConnectorError:
+            release_stream(cursor, conn, eng)
+            raise
+        except Exception as exc:  # noqa: BLE001
+            release_stream(cursor, conn, eng)
+            raise query_endpoint_error(exc) from exc
+
+        def pull() -> object:
+            _set_postgresql_timeout(raw, deadline)
+            return cursor.fetchmany(chunk_rows)
+
+        return StreamedStatement(
+            columns=columns,
+            chunks=ChunkIterator(pull, lambda: release_stream(cursor, conn, eng)),
+        )
+
     def collect_structure(
         self,
         endpoint: SourceEndpoint,
@@ -203,6 +241,43 @@ class PostgresqlConnector:
 
         eng.dispose = dispose  # type: ignore[method-assign]
         return eng
+
+
+_STREAM_CURSOR = "refraq_dataset_stream"
+
+
+def _open_postgresql_stream(raw: object, sql: str, *, chunk_rows: int, deadline: float):
+    """Read-only is the first statement. ``statement_timeout`` is the time still left."""
+    with raw.cursor() as setup:  # type: ignore[attr-defined]
+        setup.execute("SET TRANSACTION READ ONLY")
+    _set_postgresql_timeout(raw, deadline)
+    cursor = raw.cursor(name=_STREAM_CURSOR)  # type: ignore[attr-defined]
+    cursor.itersize = chunk_rows
+    cursor.execute(sql)
+    return _postgresql_columns(raw, cursor), cursor
+
+
+def _set_postgresql_timeout(raw: object, deadline: float) -> None:
+    timeout_ms = remaining_millis(deadline)
+    with raw.cursor() as cursor:  # type: ignore[attr-defined]
+        cursor.execute(f"SET LOCAL statement_timeout = {timeout_ms}")
+
+
+def _postgresql_columns(raw: object, cursor: object) -> list[StreamColumn]:
+    described = cursor.description or []  # type: ignore[attr-defined]
+    result = cursor.pgresult  # type: ignore[attr-defined]
+    columns: list[StreamColumn] = []
+    with raw.cursor() as meta:  # type: ignore[attr-defined]
+        for index, column in enumerate(described):
+            name = column.name if hasattr(column, "name") else column[0]
+            meta.execute(
+                "SELECT pg_catalog.format_type(%s, %s)",
+                (result.ftype(index), result.fmod(index)),
+            )
+            row = meta.fetchone()
+            native = "" if row is None or row[0] is None else str(row[0])
+            columns.append(StreamColumn(name=str(name), native_type=native))
+    return columns
 
 
 _SCOPE_SQL = text(

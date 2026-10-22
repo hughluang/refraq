@@ -1,4 +1,9 @@
-"""MSSQL structure connector via sys.* catalog views."""
+"""MSSQL structure connector via sys.* catalog views.
+
+pymssql's query timeout is process-global (``dbsettime``). ``stream_statement``
+sets that timeout for the fetch and restores the previous value afterward.
+A long read does not change the session isolation level.
+"""
 
 from __future__ import annotations
 
@@ -11,10 +16,15 @@ from backend.metadata.connectors.base import (
     CollectProgress,
     QueryResult,
     SourceEndpoint,
+    ChunkIterator,
     ConnectorError,
+    StreamColumn,
+    StreamedStatement,
     fetch_query_result,
     finish_statement,
     query_endpoint_error,
+    release_stream,
+    remaining_seconds,
 )
 from backend.metadata.connectors.structure_rows import (
     ColumnRow,
@@ -88,6 +98,46 @@ class MssqlConnector:
         finally:
             eng.dispose()
 
+    def stream_statement(
+        self,
+        endpoint: SourceEndpoint,
+        sql: str,
+        *,
+        chunk_rows: int,
+        deadline: float,
+    ) -> StreamedStatement:
+        """Stream one read with ``fetchmany``. Isolation is left unchanged.
+
+        The pymssql query timeout is process-global. It is set for this fetch
+        and the previous value is restored when the stream closes.
+        """
+        eng = self._engine(endpoint)
+        conn = eng.connect()
+        raw = conn.connection.driver_connection
+        previous = raw._conn.query_timeout
+        data = None
+        try:
+            raw._conn.query_timeout = remaining_seconds(deadline)
+            columns, data = _open_mssql_stream(raw, sql)
+        except ConnectorError:
+            _restore_mssql_timeout(raw, previous)
+            release_stream(data, conn, eng)
+            raise
+        except Exception as exc:  # noqa: BLE001
+            _restore_mssql_timeout(raw, previous)
+            release_stream(data, conn, eng)
+            raise query_endpoint_error(exc) from exc
+
+        def pull() -> object:
+            raw._conn.query_timeout = remaining_seconds(deadline)
+            return data.fetchmany(chunk_rows)
+
+        def cleanup() -> None:
+            _restore_mssql_timeout(raw, previous)
+            release_stream(data, conn, eng)
+
+        return StreamedStatement(columns=columns, chunks=ChunkIterator(pull, cleanup))
+
     def collect_structure(
         self,
         endpoint: SourceEndpoint,
@@ -158,6 +208,36 @@ class MssqlConnector:
             # pymssql: query timeout in seconds (not LOCK_TIMEOUT).
             connect_args["timeout"] = max(1, int(timeout_sec))
         return create_engine(url, pool_pre_ping=True, connect_args=connect_args)
+
+
+def _open_mssql_stream(raw: object, sql: str) -> tuple[list[StreamColumn], object]:
+    meta = raw.cursor()  # type: ignore[attr-defined]
+    try:
+        meta.execute(
+            "EXEC sys.sp_describe_first_result_set @tsql=%s, @params=NULL, @browser_mode=0",
+            (sql,),
+        )
+        described = meta.fetchall()
+        names = [str(column[0]) for column in (meta.description or [])]
+        name_at = names.index("name")
+        type_at = names.index("system_type_name")
+    finally:
+        meta.close()
+    columns = [
+        StreamColumn(name=str(row[name_at]), native_type=str(row[type_at]))
+        for row in described
+        if row[name_at]
+    ]
+    data = raw.cursor()  # type: ignore[attr-defined]
+    data.execute(sql)
+    return columns, data
+
+
+def _restore_mssql_timeout(raw: object, previous: int) -> None:
+    try:
+        raw._conn.query_timeout = previous  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 — still close the connection
+        pass
 
 
 _SCOPE_SQL = text(

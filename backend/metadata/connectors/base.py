@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -83,6 +85,102 @@ class StatementResult:
     truncated: bool
 
 
+@dataclass(frozen=True)
+class StreamColumn:
+    """One result column. ``native_type`` is the engine's own type description."""
+
+    name: str
+    native_type: str
+
+
+@dataclass
+class StreamedStatement:
+    """Column metadata plus a chunk iterator. Closing the iterator releases the connection."""
+
+    columns: list[StreamColumn]
+    chunks: Iterator[list[list[Any]]]
+
+    def close(self) -> None:
+        closer = getattr(self.chunks, "close", None)
+        if closer is not None:
+            closer()
+
+
+class ChunkIterator:
+    """Pull chunks until one is empty. ``close`` releases the driver even if nothing was pulled.
+
+    A generator's ``close`` does not run ``finally`` until the generator has started.
+    The connection is already open before the first fetch, so cleanup cannot live
+    only in that ``finally``.
+    """
+
+    def __init__(self, pull: Callable[[], Any], cleanup: Callable[[], None]) -> None:
+        self._pull = pull
+        self._cleanup = cleanup
+        self._closed = False
+
+    def __iter__(self) -> ChunkIterator:
+        return self
+
+    def __next__(self) -> list[list[Any]]:
+        if self._closed:
+            raise StopIteration
+        try:
+            fetched = self._pull()
+        except BaseException:
+            self.close()
+            raise
+        if not fetched:
+            self.close()
+            raise StopIteration
+        return [list(row) for row in fetched]
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._cleanup()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:  # noqa: BLE001 — GC must not raise
+            pass
+
+
+def release_stream(cursor: object, conn: object, eng: object) -> None:
+    """Close a driver cursor, connection, and engine. Errors while releasing are ignored."""
+    if cursor is not None:
+        try:
+            cursor.close()  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        conn.close()  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        eng.dispose()  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def remaining_millis(deadline: float) -> int:
+    """Milliseconds left until a monotonic ``deadline``. Zero remaining is a timeout."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise ConnectorError("QUERY_TIMEOUT", "statement timeout")
+    return max(1, int(remaining * 1000))
+
+
+def remaining_seconds(deadline: float) -> int:
+    """Whole seconds left until a monotonic ``deadline``. Zero remaining is a timeout."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise ConnectorError("QUERY_TIMEOUT", "statement timeout")
+    return max(1, int(remaining))
+
+
 @runtime_checkable
 class CollectProgress(Protocol):
     """Observer for collect_structure. Implementations must not live in connectors."""
@@ -138,6 +236,20 @@ class EngineConnector(Protocol):
         """Execute one author statement and return the driver result.
 
         Commits when the result fits in ``max_rows``. Rolls back when it does not.
+        """
+
+    def stream_statement(
+        self,
+        endpoint: SourceEndpoint,
+        sql: str,
+        *,
+        chunk_rows: int,
+        deadline: float,
+    ) -> StreamedStatement:
+        """Stream one statement. ``deadline`` is a monotonic timestamp.
+
+        The driver timeout is the time remaining until ``deadline``.
+        PostgreSQL and Oracle begin with ``SET TRANSACTION READ ONLY``.
         """
 
 

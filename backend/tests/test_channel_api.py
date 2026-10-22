@@ -334,6 +334,7 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
         "transform.if",
         "transform.merge",
         "transform.set_fields",
+        "volume.batch_read",
         "volume.dataset_query",
         "volume.for",
         "volume.materialize",

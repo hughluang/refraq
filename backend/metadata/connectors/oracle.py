@@ -12,12 +12,17 @@ from sqlalchemy import create_engine, text
 from backend.metadata.connectors.base import (
     CollectedStructure,
     CollectProgress,
+    ChunkIterator,
     ConnectorError,
     QueryResult,
     SourceEndpoint,
+    StreamColumn,
+    StreamedStatement,
     fetch_query_result,
     finish_statement,
     query_endpoint_error,
+    release_stream,
+    remaining_millis,
 )
 from backend.metadata.connectors.structure_rows import (
     ColumnRow,
@@ -88,6 +93,43 @@ class OracleConnector:
             raise query_endpoint_error(exc) from exc
         finally:
             eng.dispose()
+
+    def stream_statement(
+        self,
+        endpoint: SourceEndpoint,
+        sql: str,
+        *,
+        chunk_rows: int,
+        deadline: float,
+    ) -> StreamedStatement:
+        """Stream one read. ``SET TRANSACTION READ ONLY`` is the first statement."""
+        eng = self._engine(endpoint)
+        conn = eng.connect()
+        cursor = None
+        try:
+            raw = conn.connection.driver_connection
+            raw.call_timeout = remaining_millis(deadline)
+            cursor = raw.cursor()
+            cursor.arraysize = chunk_rows
+            cursor.prefetchrows = chunk_rows
+            cursor.execute("SET TRANSACTION READ ONLY")
+            cursor.execute(sql)
+            columns = _oracle_columns(cursor)
+        except ConnectorError:
+            release_stream(cursor, conn, eng)
+            raise
+        except Exception as exc:  # noqa: BLE001
+            release_stream(cursor, conn, eng)
+            raise query_endpoint_error(exc) from exc
+
+        def pull() -> object:
+            raw.call_timeout = remaining_millis(deadline)
+            return cursor.fetchmany(chunk_rows)
+
+        return StreamedStatement(
+            columns=columns,
+            chunks=ChunkIterator(pull, lambda: release_stream(cursor, conn, eng)),
+        )
 
     def collect_structure(
         self,
@@ -172,6 +214,58 @@ class OracleConnector:
             # oracledb: call_timeout in milliseconds (JDBC setQueryTimeout analogue).
             connect_args["call_timeout"] = max(1, int(timeout_sec) * 1000)
         return create_engine(url, pool_pre_ping=True, connect_args=connect_args)
+
+
+# DbType.name is ``DB_TYPE_NUMBER``. The native string uses the Oracle type
+# name Type Mapping already seeds, plus precision and scale.
+_ORACLE_TYPE_NAMES = {
+    "DB_TYPE_NUMBER": "NUMBER",
+    "DB_TYPE_VARCHAR": "VARCHAR2",
+    "DB_TYPE_CHAR": "CHAR",
+    "DB_TYPE_NVARCHAR": "NVARCHAR2",
+    "DB_TYPE_NCHAR": "NCHAR",
+    "DB_TYPE_DATE": "DATE",
+    "DB_TYPE_TIMESTAMP": "TIMESTAMP",
+    "DB_TYPE_TIMESTAMP_TZ": "TIMESTAMP WITH TIME ZONE",
+    "DB_TYPE_TIMESTAMP_LTZ": "TIMESTAMP WITH LOCAL TIME ZONE",
+    "DB_TYPE_CLOB": "CLOB",
+    "DB_TYPE_NCLOB": "NCLOB",
+    "DB_TYPE_BLOB": "BLOB",
+    "DB_TYPE_RAW": "RAW",
+    "DB_TYPE_LONG": "LONG",
+    "DB_TYPE_LONG_RAW": "LONG RAW",
+    "DB_TYPE_LONG_NVARCHAR": "NVARCHAR2",
+    "DB_TYPE_ROWID": "ROWID",
+    "DB_TYPE_UROWID": "UROWID",
+    "DB_TYPE_BINARY_FLOAT": "BINARY_FLOAT",
+    "DB_TYPE_BINARY_DOUBLE": "BINARY_DOUBLE",
+    "DB_TYPE_JSON": "JSON",
+    "DB_TYPE_BOOLEAN": "BOOLEAN",
+    "DB_TYPE_BINARY_INTEGER": "BINARY_INTEGER",
+}
+
+
+def _oracle_native(dbtype: object, precision: object, scale: object) -> str:
+    key = getattr(dbtype, "name", None) or str(dbtype)
+    base = _ORACLE_TYPE_NAMES.get(str(key), str(key))
+    if isinstance(precision, bool) or not isinstance(precision, int) or precision <= 0:
+        return base
+    if isinstance(scale, bool) or not isinstance(scale, int) or scale < 0:
+        return f"{base}({precision})"
+    return f"{base}({precision},{scale})"
+
+
+def _oracle_columns(cursor: object) -> list[StreamColumn]:
+    described = cursor.description or []  # type: ignore[attr-defined]
+    columns: list[StreamColumn] = []
+    for item in described:
+        columns.append(
+            StreamColumn(
+                name=str(item[0]),
+                native_type=_oracle_native(item[1], item[4], item[5]),
+            )
+        )
+    return columns
 
 
 def _object_key(owner: str, name: str, object_type: str) -> str:

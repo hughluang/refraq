@@ -91,6 +91,27 @@ def test_every_node_module_is_registered_and_exports_only_node_type() -> None:
         assert registered[type_id] is node
 
 
+def test_batch_read_is_registered_as_a_container() -> None:
+    from backend.channel.dataset_ref import DATASET_REFERENCE_SCHEMA
+    from backend.channel.item_limit import ITEM_LIMIT
+
+    node = next(item for item in list_node_types() if item.type_id == "volume.batch_read")
+    assert [port.port for port in node.inputs] == ["main"]
+    assert [port.port for port in node.outputs] == ["each", "done"]
+    assert all(port.loop_back is False for port in node.outputs)
+    schema = node.config_schema
+    assert schema["required"] == ["dataset"]
+    dataset = schema["properties"]["dataset"]
+    assert dataset["type"] == "string"
+    assert dataset["x-refraq-template"] is DATASET_REFERENCE_SCHEMA
+    size = schema["properties"]["batch_size"]
+    assert size["type"] == "integer"
+    assert size["minimum"] == 1
+    assert size["maximum"] == ITEM_LIMIT
+    assert size["default"] == 1000
+    assert "batch_size" not in schema["required"]
+
+
 def test_dataset_query_and_materialize_are_registered() -> None:
     types = {item.type_id: item for item in list_node_types()}
     query = types["volume.dataset_query"]

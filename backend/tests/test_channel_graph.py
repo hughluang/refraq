@@ -1008,11 +1008,76 @@ def test_dataset_producers_use_the_container_set(monkeypatch) -> None:
     ]
 
 
-def test_for_is_the_only_container_type() -> None:
+def test_batch_read_is_a_legal_parent_and_still_rejects_dataset_nodes() -> None:
+    dataset = '{"dataset_id":"dset","columns":[{"name":"n","type":"integer"}],"count":1}'
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_batch", "volume.batch_read", "Batch", {"dataset": dataset, "batch_size": 2}),
+            _node("nd_step", "transform.set_fields", "Step", _fields("1"), parent="nd_batch"),
+            _node("nd_inner", "volume.for", "Walk", {"items": "[1]"}, parent="nd_batch"),
+            _node("nd_after", "transform.set_fields", "After", _fields("2")),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_batch"),
+            _edge("ed_each", "nd_batch", "nd_step", source_port="each"),
+            _edge("ed_inner", "nd_step", "nd_inner"),
+            _edge("ed_done", "nd_batch", "nd_after", source_port="done"),
+        ],
+    )
+    assert [item for item in validate(graph, FakeResolver()) if item.severity == "error"] == []
+
+    nested = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_walk", "volume.for", "Walk", {"items": "[1]"}),
+            _node(
+                "nd_batch",
+                "volume.batch_read",
+                "Batch",
+                {"dataset": dataset},
+                parent="nd_walk",
+            ),
+            _node("nd_step", "transform.set_fields", "Step", _fields("1"), parent="nd_batch"),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_walk"),
+            _edge("ed_each", "nd_walk", "nd_batch", source_port="each"),
+            _edge("ed_batch", "nd_batch", "nd_step", source_port="each"),
+        ],
+    )
+    assert [item for item in validate(nested, FakeResolver()) if item.severity == "error"] == []
+
+    blocked = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_batch", "volume.batch_read", "Batch", {"dataset": dataset}),
+            _dataset_query("nd_query", parent="nd_batch"),
+            _materialize("nd_load", parent="nd_batch"),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_batch"),
+            _edge("ed_query", "nd_batch", "nd_query", source_port="each"),
+            _edge("ed_load", "nd_query", "nd_load"),
+        ],
+    )
+    problems = [
+        (item.node_id, item.detail)
+        for item in validate(blocked, FakeResolver())
+        if item.code == "CHANNEL_LOOP_BODY_INVALID"
+    ]
+    assert problems == [
+        ("nd_query", _DATASET_IN_CONTAINER),
+        ("nd_load", _DATASET_IN_CONTAINER),
+    ]
+
+
+def test_for_and_batch_read_are_the_container_types() -> None:
     from backend.channel.graph import CONTAINER_TYPES
 
-    assert set(CONTAINER_TYPES) == {"volume.for"}
+    assert set(CONTAINER_TYPES) == {"volume.for", "volume.batch_read"}
     assert CONTAINER_TYPES["volume.for"].accumulate is True
+    assert CONTAINER_TYPES["volume.batch_read"].accumulate is False
 
 
 def test_a_non_for_container_in_the_set_is_a_legal_parent(monkeypatch) -> None:

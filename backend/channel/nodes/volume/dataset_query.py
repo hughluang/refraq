@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Iterator, Mapping
+import time
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
@@ -16,6 +17,7 @@ from sqlglot.errors import SqlglotError
 import backend.entity.datasets as entity_datasets
 from backend.channel.dataset_ref import DATASET_REFERENCE_SCHEMA, dataset_reference
 from backend.channel.dataset_registry import (
+    DatasetColumnSpec,
     DatasetQuotaExceeded,
     DatasetRegistry,
     get_dataset_store,
@@ -32,12 +34,17 @@ from backend.channel.nodes.spec import (
     ReferenceResolver,
 )
 from backend.channel.run_store import get_run_store
+from backend.channel.nodes.volume.materialize import _CHUNK_ROWS
+from backend.metadata.source_statements import (
+    SourceStatementRejected,
+    stream_source_statement,
+)
 
 __all__ = ["NODE_TYPE"]
 
 _DEFAULT_TIMEOUT_SEC = 300
-_UNSUPPORTED_SOURCE = "Dataset Query against an external Source is not supported."
 _ONE_STATEMENT = "SQL must be exactly one statement"
+_TIMEOUT_MESSAGE = "Dataset Query exceeded the statement timeout"
 
 _OUTPUT: dict[str, Any] = {
     "type": "object",
@@ -74,17 +81,16 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
         return error
     source = config["source"]
     if source.get("kind") == "source":
-        return NodeResult(
-            status="failed",
-            error_code="CHANNEL_NODE_FAILED",
-            error_message=_UNSUPPORTED_SOURCE,
+        timeout_sec = int(config.get("statement_timeout_sec", _DEFAULT_TIMEOUT_SEC))
+        return _execute_source(
+            node,
+            hooks,
+            str(statement),
+            str(source["source_id"]),
+            timeout_sec,
         )
     if source.get("kind") != "entity":
-        return NodeResult(
-            status="failed",
-            error_code="CHANNEL_NODE_FAILED",
-            error_message="Dataset Query source must be the entity database",
-        )
+        return _node_failed("Dataset Query source must be the entity database")
     if not _exactly_one_postgres_statement(str(statement)):
         return NodeResult(
             status="failed",
@@ -101,38 +107,99 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
                 query=str(statement),
             )
     except DatasetQuotaExceeded:
-        return NodeResult(
-            status="failed",
-            error_code=DatasetQuotaExceeded.code,
-            error_message="Dataset storage is already at the capacity ceiling",
-        )
+        return _quota_failed()
     except DBAPIError as exc:
-        return NodeResult(
-            status="failed",
-            error_code="CHANNEL_NODE_FAILED",
-            error_message=_db_message(exc),
-        )
+        return _node_failed(_db_message(exc))
     except ValueError as exc:
-        return NodeResult(
-            status="failed",
-            error_code="CHANNEL_NODE_FAILED",
-            error_message=str(exc),
-        )
+        return _node_failed(str(exc))
     except Exception as exc:  # noqa: BLE001
+        return _node_failed(str(exc))
+    return _succeeded(record)
+
+
+class _StreamHalted(Exception):
+    def __init__(self, kind: str) -> None:
+        super().__init__(kind)
+        self.kind = kind
+
+
+def _execute_source(
+    node: Mapping[str, Any],
+    hooks: EngineHooks,
+    statement: str,
+    source_id: str,
+    timeout_sec: int,
+) -> NodeResult:
+    deadline = time.monotonic() + timeout_sec
+    stream = None
+    try:
+        _halt_if_needed(hooks, deadline)
+        stream = stream_source_statement(
+            source_id,
+            statement,
+            chunk_rows=_CHUNK_ROWS,
+            deadline=deadline,
+        )
+        record = DatasetRegistry(get_dataset_store()).create_from_chunks(
+            job_id=hooks.run_id,
+            node_id=str(node["id"]),
+            seq=_execution_seq(node, hooks),
+            columns=[
+                DatasetColumnSpec(
+                    column.name,
+                    column.normalized_type,
+                    precision=column.precision,
+                    scale=column.scale,
+                    with_time_zone=column.with_time_zone,
+                )
+                for column in stream.columns
+            ],
+            chunks=_guarded_chunks(stream.chunks, hooks, deadline),
+        )
+    except _StreamHalted as halted:
+        if halted.kind == "timeout":
+            return _node_failed(_TIMEOUT_MESSAGE)
+        raise
+    except SourceStatementRejected:
         return NodeResult(
             status="failed",
-            error_code="CHANNEL_NODE_FAILED",
-            error_message=str(exc),
+            error_code="CHANNEL_SQL_NOT_ONE_STATEMENT",
+            error_message=_ONE_STATEMENT,
         )
-    reference = dataset_reference(
-        dataset_id=record.id,
-        columns=record.columns,
-        count=record.row_count,
-    )
-    return NodeResult(
-        status="succeeded",
-        output={"dataset": reference, "count": record.row_count},
-    )
+    except DatasetQuotaExceeded:
+        return _quota_failed()
+    except DBAPIError as exc:
+        return _node_failed(_db_message(exc))
+    except Exception as exc:  # noqa: BLE001
+        return _node_failed(str(exc))
+    finally:
+        if stream is not None:
+            stream.close()
+    return _succeeded(record)
+
+
+def _halt_if_needed(hooks: EngineHooks, deadline: float) -> None:
+    if hooks.cancelled():
+        raise _StreamHalted("cancelled")
+    if hooks.superseded():
+        raise _StreamHalted("superseded")
+    if time.monotonic() >= deadline:
+        raise _StreamHalted("timeout")
+
+
+def _guarded_chunks(
+    chunks: Iterator[Sequence[Sequence[Any]]],
+    hooks: EngineHooks,
+    deadline: float,
+) -> Iterator[Sequence[Sequence[Any]]]:
+    iterator = iter(chunks)
+    while True:
+        _halt_if_needed(hooks, deadline)
+        try:
+            chunk = next(iterator)
+        except StopIteration:
+            return
+        yield chunk
 
 
 def _check(config: Mapping[str, Any], resolver: ReferenceResolver) -> list[Problem]:
@@ -214,6 +281,34 @@ def _wall_clock(timeout_sec: int) -> Iterator[None]:
         _TIMEOUT_MS.reset(token)
 
 
+def _succeeded(record: Any) -> NodeResult:
+    reference = dataset_reference(
+        dataset_id=record.id,
+        columns=record.columns,
+        count=record.row_count,
+    )
+    return NodeResult(
+        status="succeeded",
+        output={"dataset": reference, "count": record.row_count},
+    )
+
+
+def _node_failed(message: str) -> NodeResult:
+    return NodeResult(
+        status="failed",
+        error_code="CHANNEL_NODE_FAILED",
+        error_message=message,
+    )
+
+
+def _quota_failed() -> NodeResult:
+    return NodeResult(
+        status="failed",
+        error_code=DatasetQuotaExceeded.code,
+        error_message="Dataset storage is already at the capacity ceiling",
+    )
+
+
 def _db_message(exc: DBAPIError) -> str:
     origin = exc.orig
     text_value = str(origin or exc).strip()
@@ -224,12 +319,17 @@ NODE_TYPE = NodeType(
     type_id="volume.dataset_query",
     family="volume",
     label="Dataset Query",
-    summary="Turns one entity-database query into a dataset reference.",
+    summary=(
+        "Turns one query on the entity database or a registered Source "
+        "into a dataset reference."
+    ),
     description=(
         "The source selects the entity database or a registered Source. "
         "On the entity database the statement is loaded into a dataset table "
-        "and the node returns a dataset reference. "
-        "An external Source fails this node."
+        "in one step and the node returns a dataset reference. "
+        "PostgreSQL and Oracle run the read in a read-only transaction "
+        "and stream it into the dataset. "
+        "SQL Server does not change isolation, and a long read is not a snapshot."
     ),
     trigger=False,
     inputs=(MAIN_INPUT,),

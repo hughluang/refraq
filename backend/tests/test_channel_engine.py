@@ -990,3 +990,628 @@ def test_retries_exhausted_then_stop() -> None:
     assert outcome.failed_node_id == "a"
     assert hooks.order == ["a", "a"]
     assert "b" not in hooks.order
+
+
+def test_batch_read_hands_each_round_one_page_and_stores_only_the_totals(monkeypatch) -> None:
+    from datetime import datetime, timezone
+
+    import backend.channel.nodes.volume.batch_read as batch_read
+    from backend.channel.dataset_registry import DatasetRecord, MemoryDatasetStore
+
+    pages = {
+        0: [{"_ord": 1, "n": 1}, {"_ord": 2, "n": 2}],
+        2: [{"_ord": 3, "n": 3}],
+    }
+    trace: list[tuple[str, int]] = []
+
+    def page(relation: str, *, after_ord: int, limit: int) -> list[dict]:
+        del relation
+        assert limit == 2
+        trace.append(("page", after_ord))
+        return [dict(row) for row in pages[after_ord]]
+
+    store = MemoryDatasetStore()
+    store.save(
+        DatasetRecord(
+            id="dset",
+            job_id="run",
+            node_id="load",
+            seq=1,
+            relation='"channel_dataset"."ds_dset"',
+            columns=[{"name": "n", "type": "bigint", "normalized_type": "integer"}],
+            row_count=3,
+            size_bytes=1,
+            status="ready",
+            created_at=datetime(2026, 10, 22, tzinfo=timezone.utc),
+        )
+    )
+
+    def used_bytes() -> int:
+        raise AssertionError("quota checked on read")
+
+    store.used_bytes = used_bytes  # type: ignore[method-assign]
+    monkeypatch.setattr(batch_read, "get_dataset_store", lambda: store)
+    monkeypatch.setattr(batch_read, "read_keyset_page", page)
+    monkeypatch.setattr(batch_read, "any_row_exists", lambda relation: True)
+
+    seen: list[dict] = []
+
+    def step(node: dict, hooks: EngineHooks) -> NodeResult:
+        if node["id"] != "step":
+            return NodeResult(status="succeeded", output={"id": node["id"]})
+        current = hooks.outputs["batch"]
+        trace.append(("body", current["index"]))
+        seen.append(dict(current))
+        return NodeResult(status="succeeded", output={"rows": current["rows"]})
+
+    node = _node("batch", 0, type_id="volume.batch_read")
+    node["config"] = {
+        "dataset": '{"dataset_id":"dset","columns":[{"name":"n","type":"integer"}],"count":3}',
+        "batch_size": 2,
+    }
+    graph = {
+        "nodes": [node, _node("step", 1, parent="batch"), _node("after", 2)],
+        "edges": [
+            _edge("batch", "step", "each"),
+            _edge("batch", "after", "done"),
+        ],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(graph, "batch", [batch_read.NODE_TYPE, _type("fake", step)], _RESOLVER, hooks)
+    assert outcome.status == "succeeded"
+    assert outcome.error_code is None
+    assert trace == [("page", 0), ("body", 0), ("page", 2), ("body", 1)]
+    assert seen == [
+        {"rows": [{"n": 1}, {"n": 2}], "index": 0, "count": 2, "total": 3},
+        {"rows": [{"n": 3}], "index": 1, "count": 2, "total": 3},
+    ]
+    assert hooks.order == ["batch", "step", "step", "after"]
+    assert hooks.outputs["batch"] == {"count": 2, "total": 3, "batch_size": 2}
+    assert "iterations" not in hooks.outputs["batch"]
+
+
+def _plant_dataset(
+    monkeypatch,
+    batch_read,
+    *,
+    row_count: int,
+    page,
+    exists=None,
+    job_id: str = "run",
+    status: str = "ready",
+    expires_at=None,
+    dataset_id: str = "dset",
+    save: bool = True,
+) -> None:
+    from datetime import datetime, timezone
+
+    from backend.channel.dataset_registry import DatasetRecord, MemoryDatasetStore
+
+    store = MemoryDatasetStore()
+    if save:
+        store.save(
+            DatasetRecord(
+                id=dataset_id,
+                job_id=job_id,
+                node_id="load",
+                seq=1,
+                relation='"channel_dataset"."ds_dset"',
+                columns=[{"name": "n", "type": "bigint", "normalized_type": "integer"}],
+                row_count=row_count,
+                size_bytes=1,
+                status=status,
+                created_at=datetime(2026, 10, 22, tzinfo=timezone.utc),
+                expires_at=expires_at,
+            )
+        )
+    monkeypatch.setattr(batch_read, "get_dataset_store", lambda: store)
+    monkeypatch.setattr(batch_read, "read_keyset_page", page)
+    monkeypatch.setattr(
+        batch_read,
+        "any_row_exists",
+        exists if exists is not None else (lambda relation: True),
+    )
+
+
+def _batch_node(*, batch_size: int | None = None) -> dict:
+    config = {
+        "dataset": '{"dataset_id":"dset","columns":[{"name":"n","type":"integer"}],"count":0}',
+    }
+    if batch_size is not None:
+        config["batch_size"] = batch_size
+    node = _node("batch", 0, type_id="volume.batch_read")
+    node["config"] = config
+    return node
+
+
+def test_batch_read_empty_dataset_skips_the_body_and_still_runs_done(monkeypatch) -> None:
+    import backend.channel.nodes.volume.batch_read as batch_read
+
+    calls = {"exists": 0, "page": 0}
+
+    def exists(relation: str) -> bool:
+        del relation
+        calls["exists"] += 1
+        return True
+
+    def page(relation: str, *, after_ord: int, limit: int) -> list[dict]:
+        del relation, after_ord, limit
+        calls["page"] += 1
+        return []
+
+    _plant_dataset(monkeypatch, batch_read, row_count=0, page=page, exists=exists)
+    node = _batch_node()
+    graph = {
+        "nodes": [node, _node("step", 1, parent="batch"), _node("after", 2)],
+        "edges": [_edge("batch", "step", "each"), _edge("batch", "after", "done")],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(graph, "batch", [batch_read.NODE_TYPE, _type("fake", _ok)], _RESOLVER, hooks)
+    assert outcome.status == "succeeded"
+    assert hooks.order == ["batch", "after"]
+    assert hooks.outputs["batch"] == {"count": 0, "total": 0, "batch_size": 1000}
+    assert "iterations" not in hooks.outputs["batch"]
+    assert calls == {"exists": 0, "page": 0}
+
+
+class _Finished(FakeHooks):
+    def __init__(self) -> None:
+        super().__init__()
+        self.finished: list[tuple[str, str, dict | None]] = []
+
+    def on_finish(self, seq: int, node: dict, result: NodeResult) -> None:
+        super().on_finish(seq, node, result)
+        self.finished.append((str(node["id"]), result.status, result.error_detail))
+
+
+def test_batch_read_stop_names_the_failed_batch_and_skips_done(monkeypatch) -> None:
+    import backend.channel.nodes.volume.batch_read as batch_read
+
+    _plant_dataset(
+        monkeypatch,
+        batch_read,
+        row_count=2,
+        page=lambda relation, *, after_ord, limit: [{"_ord": after_ord + 1, "n": after_ord}],
+    )
+    node = _batch_node(batch_size=1)
+
+    def step(body: dict, hooks: EngineHooks) -> NodeResult:
+        if body["id"] == "step" and hooks.outputs["batch"]["index"] == 1:
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_NODE_FAILED",
+                error_message="bad row",
+            )
+        return NodeResult(status="succeeded", output={"index": hooks.outputs["batch"]["index"]})
+
+    broken = _node("step", 1, parent="batch")
+    graph = {
+        "nodes": [node, broken, _node("after", 2)],
+        "edges": [_edge("batch", "step", "each"), _edge("batch", "after", "done")],
+        "settings": {},
+    }
+    hooks = _Finished()
+    outcome = execute(graph, "batch", [batch_read.NODE_TYPE, _type("fake", step)], _RESOLVER, hooks)
+    assert outcome.status == "failed"
+    assert outcome.failed_node_id == "step"
+    assert hooks.order == ["batch", "step", "step"]
+    assert "after" not in hooks.order
+    assert ("step", "succeeded", None) in hooks.finished
+    assert ("batch", "failed", {"index": 1}) in hooks.finished
+
+
+def test_batch_read_and_for_nest_in_either_direction(monkeypatch) -> None:
+    import importlib
+
+    import backend.channel.nodes.volume.batch_read as batch_read
+
+    for_type = importlib.import_module("backend.channel.nodes.volume.for").NODE_TYPE
+
+    def one_row(relation: str, *, after_ord: int, limit: int) -> list[dict]:
+        del relation, limit
+        return [{"_ord": after_ord + 1, "n": after_ord + 1}]
+
+    _plant_dataset(monkeypatch, batch_read, row_count=1, page=one_row)
+    batch = _batch_node(batch_size=1)
+    inner = _node("inner", 1, type_id="volume.for", parent="batch")
+    inner["config"] = {"items": "[10, 20]"}
+    inside = {
+        "nodes": [batch, inner, _node("leaf", 2, parent="inner")],
+        "edges": [
+            _edge("batch", "inner", "each"),
+            _edge("inner", "leaf", "each"),
+        ],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(
+        inside,
+        "batch",
+        [batch_read.NODE_TYPE, for_type, _type("fake", _ok)],
+        _RESOLVER,
+        hooks,
+    )
+    assert outcome.status == "succeeded"
+    assert hooks.starts == [
+        ("batch", None, None),
+        ("inner", 1, 0),
+        ("leaf", 2, 0),
+        ("leaf", 2, 1),
+    ]
+    assert "iterations" not in hooks.outputs["batch"]
+    assert hooks.outputs["inner"]["iterations"] == [
+        {"leaf": {"id": "leaf"}},
+        {"leaf": {"id": "leaf"}},
+    ]
+
+    _plant_dataset(monkeypatch, batch_read, row_count=2, page=one_row)
+    outer = _node("outer", 0, type_id="volume.for")
+    outer["config"] = {"items": "[1]"}
+    nested = _batch_node(batch_size=1)
+    nested["parent"] = "outer"
+    nested["position"] = {"x": 0, "y": 1}
+    outside = {
+        "nodes": [outer, nested, _node("leaf", 2, parent="batch")],
+        "edges": [
+            _edge("outer", "batch", "each"),
+            _edge("batch", "leaf", "each"),
+        ],
+        "settings": {},
+    }
+    again = FakeHooks()
+    outcome = execute(
+        outside,
+        "outer",
+        [batch_read.NODE_TYPE, for_type, _type("fake", _ok)],
+        _RESOLVER,
+        again,
+    )
+    assert outcome.status == "succeeded"
+    assert again.starts == [
+        ("outer", None, None),
+        ("batch", 1, 0),
+        ("leaf", 2, 0),
+        ("leaf", 2, 1),
+    ]
+    assert again.outputs["outer"]["iterations"] == [
+        {"batch": {"count": 2, "total": 2, "batch_size": 1}}
+    ]
+
+
+def test_batch_read_continue_and_error_output_follow_the_body(monkeypatch) -> None:
+    import backend.channel.nodes.volume.batch_read as batch_read
+
+    _plant_dataset(
+        monkeypatch,
+        batch_read,
+        row_count=2,
+        page=lambda relation, *, after_ord, limit: [{"_ord": after_ord + 1, "n": after_ord}],
+    )
+
+    def run(node: dict, hooks: EngineHooks) -> NodeResult:
+        if node["id"] == "step" and hooks.outputs["batch"]["index"] == 0:
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_NODE_FAILED",
+                error_message="bad",
+                error_detail={"row": 1},
+            )
+        return NodeResult(status="succeeded", output={"id": node["id"]})
+
+    continued = _node("step", 1, parent="batch")
+    continued["on_error"] = "continue"
+    graph = {
+        "nodes": [_batch_node(batch_size=1), continued, _node("tail", 2, parent="batch"), _node("after", 3)],
+        "edges": [
+            _edge("batch", "step", "each"),
+            _edge("step", "tail"),
+            _edge("batch", "after", "done"),
+        ],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(graph, "batch", [batch_read.NODE_TYPE, _type("fake", run)], _RESOLVER, hooks)
+    assert outcome.status == "succeeded"
+    assert hooks.order == ["batch", "step", "tail", "step", "tail", "after"]
+    assert [status for node_id, status in hooks.statuses if node_id == "step"] == [
+        "failed",
+        "succeeded",
+    ]
+
+    routed = _node("step", 1, parent="batch")
+    routed["on_error"] = "error_output"
+    branched = {
+        "nodes": [
+            _batch_node(batch_size=1),
+            routed,
+            _node("bad", 2, parent="batch"),
+            _node("good", 3, parent="batch"),
+            _node("after", 4),
+        ],
+        "edges": [
+            _edge("batch", "step", "each"),
+            _edge("step", "bad", "error"),
+            _edge("step", "good"),
+            _edge("batch", "after", "done"),
+        ],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(branched, "batch", [batch_read.NODE_TYPE, _error_type(run)], _RESOLVER, hooks)
+    assert outcome.status == "succeeded"
+    assert hooks.order == ["batch", "step", "bad", "step", "good", "after"]
+    assert [status for node_id, status in hooks.statuses if node_id == "step"] == [
+        "failed",
+        "succeeded",
+    ]
+
+
+def test_batch_read_converts_json_values_like_sql_read(monkeypatch) -> None:
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
+    import backend.channel.nodes.volume.batch_read as batch_read
+
+    seen = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
+
+    def page(relation: str, *, after_ord: int, limit: int) -> list[dict]:
+        del relation, after_ord, limit
+        return [{"_ord": 1, "amount": Decimal("1.50"), "seen": seen}]
+
+    _plant_dataset(monkeypatch, batch_read, row_count=1, page=page)
+    caught: list[dict] = []
+
+    def step(body: dict, hooks: EngineHooks) -> NodeResult:
+        if body["id"] == "step":
+            caught.append(hooks.outputs["batch"]["rows"][0])
+        return NodeResult(status="succeeded", output={"id": body["id"]})
+
+    graph = {
+        "nodes": [_batch_node(batch_size=1), _node("step", 1, parent="batch")],
+        "edges": [_edge("batch", "step", "each")],
+        "settings": {},
+    }
+    outcome = execute(
+        graph, "batch", [batch_read.NODE_TYPE, _type("fake", step)], _RESOLVER, FakeHooks()
+    )
+    assert outcome.status == "succeeded"
+    assert caught == [{"amount": "1.50", "seen": "2026-10-22T12:00:00Z"}]
+
+
+def test_batch_read_fails_before_the_body_when_the_dataset_is_unusable(monkeypatch) -> None:
+    from datetime import datetime, timezone
+
+    import backend.channel.nodes.volume.batch_read as batch_read
+    from sqlalchemy.exc import ProgrammingError
+
+    past = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    pages = {"n": 0}
+
+    def page(relation: str, *, after_ord: int, limit: int) -> list[dict]:
+        del relation, after_ord, limit
+        pages["n"] += 1
+        return []
+
+    def ran(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        raise AssertionError(node["id"])
+
+    cases = [
+        ("not_found", {"save": False}, None),
+        ("not_found", {"empty_id": True}, None),
+        ("foreign_run", {"job_id": "other", "expires_at": past}, None),
+        ("expired", {"expires_at": past}, None),
+        ("expired", {"status": "dropped"}, None),
+        ("not_found", {"status": "loading"}, None),
+        ("lost", {"row_count": 2}, lambda relation: False),
+    ]
+    for reason, overrides, exists in cases:
+        pages["n"] = 0
+        _plant_dataset(
+            monkeypatch,
+            batch_read,
+            row_count=overrides.get("row_count", 1),
+            page=page,
+            exists=exists,
+            job_id=overrides.get("job_id", "run"),
+            status=overrides.get("status", "ready"),
+            expires_at=overrides.get("expires_at"),
+            save=overrides.get("save", True),
+        )
+        node = _batch_node(batch_size=1)
+        if overrides.get("save") is False:
+            node["config"]["dataset"] = '{"dataset_id":"missing","columns":[],"count":0}'
+        if overrides.get("empty_id") is True:
+            node["config"]["dataset"] = '{"dataset_id":"","columns":[],"count":0}'
+        graph = {
+            "nodes": [node, _node("step", 1, parent="batch"), _node("after", 2)],
+            "edges": [_edge("batch", "step", "each"), _edge("batch", "after", "done")],
+            "settings": {},
+        }
+        hooks = _Finished()
+        outcome = execute(
+            graph, "batch", [batch_read.NODE_TYPE, _type("fake", ran)], _RESOLVER, hooks
+        )
+        assert outcome.status == "failed", reason
+        assert outcome.error_code == "CHANNEL_DATASET_UNAVAILABLE", reason
+        assert outcome.failed_node_id == "batch"
+        assert hooks.order == ["batch"], reason
+        assert ("batch", "failed", {"reason": reason}) in hooks.finished
+        assert pages["n"] == 0
+
+    def missing(relation: str) -> bool:
+        del relation
+        raise ProgrammingError(
+            "SELECT 1",
+            {},
+            Exception('relation "channel_dataset"."ds_dset" does not exist'),
+        )
+
+    pages["n"] = 0
+    _plant_dataset(monkeypatch, batch_read, row_count=2, page=page, exists=missing)
+    hooks = _Finished()
+    outcome = execute(
+        {
+            "nodes": [_batch_node(batch_size=1), _node("step", 1, parent="batch")],
+            "edges": [_edge("batch", "step", "each")],
+            "settings": {},
+        },
+        "batch",
+        [batch_read.NODE_TYPE, _type("fake", ran)],
+        _RESOLVER,
+        hooks,
+    )
+    assert outcome.status == "failed"
+    assert outcome.error_code == "CHANNEL_NODE_FAILED"
+    assert "does not exist" in (outcome.error_message or "")
+    assert hooks.order == ["batch"]
+    assert pages["n"] == 0
+    assert all(detail != {"reason": "lost"} for _node_id, _status, detail in hooks.finished)
+
+
+def test_batch_read_stores_a_preview_of_a_successful_body_and_the_full_failed_body(
+    monkeypatch,
+) -> None:
+    import uuid
+
+    import backend.channel.nodes.volume.batch_read as batch_read
+    from backend.admin.user_store import UserRecord
+    from backend.channel.channel_run import _RunHooks
+    from backend.channel.run_store import ChannelRunRecord, get_run_store, output_size
+    from backend.channel.sandbox import SandboxSession
+    from backend.core.time import utc_now
+
+    rows = list(range(120))
+    tags = ["a", "b"]
+
+    def succeed(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        return NodeResult(status="succeeded", output={"rows": rows, "tags": tags})
+
+    def fail(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        return NodeResult(
+            status="failed",
+            output={"rows": rows},
+            error_code="CHANNEL_NODE_FAILED",
+            error_message="bad row",
+        )
+
+    def page(relation: str, *, after_ord: int, limit: int) -> list[dict]:
+        del relation, after_ord, limit
+        return [{"_ord": 1, "n": 1}]
+
+    user = UserRecord(
+        id="usr_system",
+        account="system",
+        display_name="System",
+        password_hash=None,
+        role_id=None,
+        status="active",
+        identity_source="system",
+    )
+
+    def run(body, *, on_error: str) -> str:
+        job_id = f"job_{uuid.uuid4().hex[:12]}"
+        _plant_dataset(monkeypatch, batch_read, row_count=1, page=page, job_id=job_id)
+        step = _node("step", 1, parent="batch")
+        step["on_error"] = on_error
+        graph = {
+            "nodes": [_batch_node(batch_size=1), step],
+            "edges": [_edge("batch", "step", "each")],
+            "settings": {},
+        }
+        get_run_store().insert_run(
+            ChannelRunRecord(
+                job_id=job_id,
+                channel_id="chn_preview",
+                target="draft",
+                version=None,
+                draft_revision=1,
+                graph=graph,
+                trigger_node_id="batch",
+                ignore_checkpoints=False,
+                outcome=None,
+                failed_node_id=None,
+                skipped_node_ids=[],
+                created_at=utc_now(),
+            )
+        )
+        return job_id, graph
+
+    success_id, success_graph = run(succeed, on_error="stop")
+    with SandboxSession() as sandbox:
+        sandbox.set_context(channel={}, run={}, platform={})
+        hooks = _RunHooks(
+            sandbox,
+            run_id=success_id,
+            actor={"id": "usr_system", "name": "System"},
+            started_at="2026-10-22T00:00:00Z",
+            user=user,
+            schedule={"schedule_id": None, "name": "", "scheduled_for": "2026-10-22T00:00:00Z"},
+            target="draft",
+            channel_id="chn_preview",
+            run_version=None,
+        )
+        outcome = execute(
+            success_graph,
+            "batch",
+            [batch_read.NODE_TYPE, _type("fake", succeed)],
+            _RESOLVER,
+            hooks,
+        )
+        assert outcome.status == "succeeded"
+        assert sandbox.evaluate("len(self.step.output.rows)") == 120
+    stored = {item.node_id: item for item in get_run_store().list_executions(success_id)}
+    assert stored["step"].preview_only is True
+    assert stored["step"].preview_totals == {"rows": 120, "tags": 2}
+    assert stored["step"].output["rows"] == list(range(100))
+    assert stored["step"].output["tags"] == ["a", "b"]
+    assert stored["step"].output_bytes == output_size({"rows": rows, "tags": tags})
+    assert (stored["step"].container_seq, stored["step"].round) == (stored["batch"].seq, 0)
+    assert stored["batch"].preview_only is False
+    assert "iterations" not in stored["batch"].output
+
+    failed_id, failed_graph = run(fail, on_error="stop")
+    quiet = _PreviewSandbox()
+    hooks = _RunHooks(
+        quiet,
+        run_id=failed_id,
+        actor={"id": "usr_system", "name": "System"},
+        started_at="2026-10-22T00:00:00Z",
+        user=user,
+        schedule={"schedule_id": None, "name": "", "scheduled_for": "2026-10-22T00:00:00Z"},
+        target="draft",
+        channel_id="chn_preview",
+        run_version=None,
+    )
+    outcome = execute(
+        failed_graph,
+        "batch",
+        [batch_read.NODE_TYPE, _type("fake", fail)],
+        _RESOLVER,
+        hooks,
+    )
+    assert outcome.status == "failed"
+    failed = {item.node_id: item for item in get_run_store().list_executions(failed_id)}
+    assert failed["step"].preview_only is False
+    assert failed["step"].preview_totals == {}
+    assert failed["step"].output["rows"] is rows
+    assert len(failed["step"].output["rows"]) == 120
+    assert failed["batch"].error_detail == {"index": 0}
+
+
+class _PreviewSandbox:
+    def put_output(self, *, ref: str, name: str, output: object) -> None:
+        del ref, name, output
+
+    def drop_outputs(self, refs: list[str]) -> None:
+        del refs
+
+    def evaluate(self, expression: str) -> object:
+        raise AssertionError(expression)
+
+    def run_code(self, source: str, timeout_sec: float) -> object:
+        raise AssertionError(source)

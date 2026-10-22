@@ -19,7 +19,6 @@ _MAINTENANCE = os.getenv(
     "postgresql+psycopg://refraq:refraq@127.0.0.1:5432/refraq",
 )
 _LIST_LIMIT = "Use Materialize or Dataset Query, then Batch Read."
-_UNSUPPORTED = "Dataset Query against an external Source is not supported."
 
 
 def _execute(type_id: str):
@@ -51,30 +50,60 @@ def test_item_limit_has_one_definition() -> None:
         assert module.ITEM_LIMIT is item_limit.ITEM_LIMIT
 
 
-def test_dataset_query_rejects_an_external_source(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dataset_query_rejects_more_than_one_external_statement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rendered external SQL is counted in the source dialect before any connector."""
+    from backend.core.time import utc_now
+    from backend.metadata.sources.store import SourceRecord, get_source_store
+
     def forbid(*_args, **_kwargs):
         raise AssertionError("source connector was called")
 
     monkeypatch.setattr("backend.metadata.connectors.runtime.prepare", forbid)
-    monkeypatch.setattr("backend.metadata.source_statements.execute_source_statement", forbid)
+    monkeypatch.setattr("backend.metadata.source_statements.prepare", forbid)
     monkeypatch.setattr(
         "backend.channel.dataset_registry.DatasetRegistry.create_from_query",
         forbid,
     )
+    now = utc_now()
+    get_source_store().create_source(
+        SourceRecord(
+            id="src_live",
+            key="live",
+            locator_key="src/postgresql/live",
+            name="Live",
+            kind="database",
+            status="active",
+            description=None,
+            engine="postgresql",
+            access_ciphertext="sealed",
+            access_updated_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    seen: list[str] = []
+
+    def evaluate(expression: str) -> str:
+        seen.append(expression)
+        return "SELECT 1; SELECT 2"
+
     result = _execute("volume.dataset_query")(
         {
             "id": "nd_query",
             "type": "volume.dataset_query",
             "config": {
                 "source": {"kind": "source", "source_id": "src_live"},
-                "sql": "SELECT 1",
+                "sql": "{{ body }}",
             },
         },
-        FakeHooks(),
+        FakeHooks(evaluate=evaluate),
     )
+    assert seen == ["body"]
     assert result.status == "failed"
-    assert result.error_code == "CHANNEL_NODE_FAILED"
-    assert result.error_message == _UNSUPPORTED
+    assert result.error_code == "CHANNEL_SQL_NOT_ONE_STATEMENT"
+    assert result.error_message == "SQL must be exactly one statement"
 
 
 def test_dataset_query_rejects_more_than_one_statement(

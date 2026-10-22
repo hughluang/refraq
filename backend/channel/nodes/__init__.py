@@ -22,6 +22,7 @@ from backend.channel.nodes.trigger.manual import NODE_TYPE as TRIGGER_MANUAL
 from backend.channel.nodes.trigger.scheduled import NODE_TYPE as TRIGGER_SCHEDULED
 from backend.channel.nodes.action.email import NODE_TYPE as ACTION_EMAIL
 from backend.channel.nodes.action.webhook import NODE_TYPE as ACTION_WEBHOOK
+from backend.channel.nodes.volume.batch_read import NODE_TYPE as VOLUME_BATCH_READ
 from backend.channel.nodes.volume.dataset_query import NODE_TYPE as VOLUME_DATASET_QUERY
 from backend.channel.nodes.volume.materialize import NODE_TYPE as VOLUME_MATERIALIZE
 from backend.channel.nodes.write.entity import NODE_TYPE as WRITE_ENTITY
@@ -57,6 +58,7 @@ _CATALOG: tuple[NodeType, ...] = (
     MERGE,
     DEDUPLICATE,
     _FOR,
+    VOLUME_BATCH_READ,
     VOLUME_DATASET_QUERY,
     VOLUME_MATERIALIZE,
     STATE_VARIABLE,

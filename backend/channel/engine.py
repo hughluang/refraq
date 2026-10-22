@@ -7,9 +7,10 @@ smaller canvas y, then x, is explored first, and that branch finishes before
 the next sibling.
 
 A container runs once for each element. Its body is the nodes whose parent is
-that container. ``CONTAINER_TYPES`` names the containers; For is the only one.
-Each accumulated round records the outputs of the body nodes that ran. An
-incoming edge that does not target main does not gate the container.
+that container. ``CONTAINER_TYPES`` names the containers. Each accumulated
+round records the outputs of the body nodes that ran. A container that does
+not accumulate leaves those rounds off its output. An incoming edge that does
+not target main does not gate the container.
 """
 
 from __future__ import annotations
@@ -282,6 +283,9 @@ class _Run:
                 self._frames.pop()
             ran = self.ran_stack.pop()
             if outcome is not None:
+                detail = None
+                if outcome.status == "failed" and not accumulate:
+                    detail = {"index": index}
                 self.hooks.on_finish(
                     seq,
                     node,
@@ -289,6 +293,7 @@ class _Run:
                         status="failed",
                         error_code=outcome.error_code,
                         error_message=outcome.error_message or "cancelled",
+                        error_detail=detail,
                     ),
                 )
                 return outcome
@@ -449,13 +454,14 @@ class _Run:
         return _position(self.nodes[node_id])
 
 
-def _iteration_steps(iterations: Any) -> list[Any]:
+def _iteration_steps(iterations: Any) -> Any:
+    """Rounds to walk. A list stays a list. Any other iterable stays lazy."""
     if isinstance(iterations, list):
         return iterations
     if iterations is None or isinstance(iterations, (str, bytes, bytearray)):
         return []
     try:
-        return list(iterations)
+        return iter(iterations)
     except TypeError:
         return []
 

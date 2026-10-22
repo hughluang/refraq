@@ -2,8 +2,8 @@
 
 `validate` reports every problem it finds. It does not read stores; callers
 pass a reference resolver. Every cycle is illegal. A container frame is the
-set of nodes whose parent is a container. ``CONTAINER_TYPES`` is that set;
-For is its only member. Dataset Query and Materialize are rejected anywhere
+set of nodes whose parent is a container. ``CONTAINER_TYPES`` is that set.
+Dataset Query and Materialize are rejected anywhere
 inside that set. An edge may enter a frame only from that container's
 each port. Ancestors walk incoming edges and skip edges that cross a frame.
 """
@@ -790,9 +790,10 @@ class ContainerType:
     accumulate: bool = True
 
 
-# The engine and graph validation both read this set. For is the only member.
+# The engine and graph validation both read this set.
 CONTAINER_TYPES: dict[str, ContainerType] = {
     "volume.for": ContainerType(),
+    "volume.batch_read": ContainerType(accumulate=False),
 }
 
 
