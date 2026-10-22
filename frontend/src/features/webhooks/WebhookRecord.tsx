@@ -5,6 +5,7 @@ import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useState } from "react";
 
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import {
   FormErrorSummary,
   saveFailureFrom,
@@ -26,6 +27,7 @@ import {
   testWebhook,
 } from "@/features/webhooks/api";
 import type { Webhook, WebhookTestResult } from "@/features/webhooks/types";
+import { ApiError } from "@/lib/api";
 import { problemMessage } from "@/lib/problem";
 
 const FORM_ID = "webhook-record-form";
@@ -158,6 +160,7 @@ function WebhookExisting({
         title={t("webhooks.title")}
         status={error ? "error" : "loading"}
         errorMessage={error ? problemMessage(t, error, t("webhooks.loadFailed")) : undefined}
+        requestId={error instanceof ApiError ? error.requestId : null}
         onRetry={load}
       />
     );
@@ -210,10 +213,7 @@ function WebhookExisting({
                       setRecord(result.webhook);
                     })
                     .catch((err: unknown) => {
-                      open?.({
-                        type: "error",
-                        message: problemMessage(t, err, t("webhooks.testFailed")),
-                      });
+                      presentProblemNotification(t, err);
                     })
                     .finally(() => setTesting(false));
                 }}
@@ -280,10 +280,7 @@ function WebhookExisting({
             .catch((err: unknown) => {
               setDeleting(false);
               setConfirmDelete(false);
-              open?.({
-                type: "error",
-                message: problemMessage(t, err, t("webhooks.deleteFailed")),
-              });
+              presentProblemNotification(t, err);
             });
         }}
       />

@@ -394,7 +394,7 @@ def _reply_text(code: int, reply: Any) -> str:
 
 
 def _cipher(secret: str | None) -> str | None:
-    if secret is None or secret == "":
+    if secret is None:
         return None
     return encrypt_secret(secret)
 
@@ -437,7 +437,7 @@ def _clean_username(username: str | None) -> str | None:
 
 
 def _clean_password(password: str | None) -> str | None:
-    if password is None or password == "":
+    if password is None:
         return None
     if not 1 <= len(password) <= 512:
         raise ChannelRequestInvalid("Password must be 1 to 512 characters")

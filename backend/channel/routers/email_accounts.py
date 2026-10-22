@@ -64,7 +64,7 @@ class EmailAccountCreateRequest(BaseModel):
     port: int = Field(ge=1, le=65535)
     encryption: Literal["none", "starttls", "implicit_tls"]
     username: str | None = Field(default=None, max_length=200)
-    password: str | None = Field(default=None, max_length=512)
+    password: str | None = Field(default=None, min_length=1, max_length=512)
     from_address: str = Field(alias="from", min_length=1, max_length=254)
     tls_skip_verify: bool = False
 
@@ -77,7 +77,7 @@ class EmailAccountPatchRequest(BaseModel):
     port: int | None = Field(default=None, ge=1, le=65535)
     encryption: Literal["none", "starttls", "implicit_tls"] | None = None
     username: str | None = Field(default=None, max_length=200)
-    password: str | None = Field(default=None, max_length=512)
+    password: str | None = Field(default=None, min_length=1, max_length=512)
     from_address: str | None = Field(default=None, alias="from", max_length=254)
     tls_skip_verify: bool | None = None
 

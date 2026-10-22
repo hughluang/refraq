@@ -19,11 +19,19 @@ from backend.admin.role_store import get_role_store  # noqa: E402
 from backend.admin.security import hash_password  # noqa: E402
 from backend.admin.user_store import get_user_store  # noqa: E402
 from backend.channel.channel_run import mint_on_demand_run, set_dispatcher  # noqa: E402
+from backend.channel.errors import ChannelRequestInvalid  # noqa: E402
 from backend.channel.ids import new_channel_id  # noqa: E402
 from backend.channel.runner import run_channel_job  # noqa: E402
 from backend.channel.run_store import get_run_store  # noqa: E402
 from backend.channel.store import ChannelRecord, get_channel_store  # noqa: E402
-from backend.channel.webhooks import set_poster, set_resolver  # noqa: E402
+from backend.channel.webhooks import (  # noqa: E402
+    create_webhook,
+    get_webhook,
+    set_poster,
+    set_resolver,
+    update_webhook,
+)
+from backend.core.secrets import decrypt_secret  # noqa: E402
 from backend.core.time import utc_now  # noqa: E402
 from backend.main import app  # noqa: E402
 from backend.worker.parameters import assemble_system_parameters  # noqa: E402
@@ -83,6 +91,54 @@ def test_illegal_addresses_are_refused(client: TestClient) -> None:
     ):
         response = client.post("/webhooks", json={"name": "Bad", "url": url})
         assert_problem(response, status=422, code="WEBHOOK_URL_REJECTED")
+
+
+def test_empty_secret_is_refused_and_the_stored_bearer_stays(client: TestClient) -> None:
+    refused = client.post("/webhooks", json={"name": "Bad", "url": PUBLIC, "secret": ""})
+    assert_problem(refused, status=422, code="REQUEST_INVALID")
+    with pytest.raises(ChannelRequestInvalid):
+        create_webhook(
+            name="Empty",
+            url=PUBLIC,
+            secret="",
+            actor_user_id="usr_test",
+            actor_token_id=None,
+        )
+
+    webhook = _create(client, name="Keep me", secret="token")
+    patched = client.patch(
+        f"/webhooks/{webhook['id']}",
+        json={"name": "Renamed", "secret": ""},
+    )
+    assert_problem(patched, status=422, code="REQUEST_INVALID")
+    _assert_secret(webhook["id"], name="Keep me", secret="token")
+    with pytest.raises(ChannelRequestInvalid):
+        update_webhook(
+            webhook_id=webhook["id"],
+            name="Nope",
+            url=None,
+            secret="",
+            secret_set=True,
+            actor_user_id="usr_test",
+            actor_token_id=None,
+        )
+    _assert_secret(webhook["id"], name="Keep me", secret="token")
+
+    omitted = client.patch(f"/webhooks/{webhook['id']}", json={"name": "Renamed"})
+    assert omitted.status_code == 200, omitted.text
+    _assert_secret(webhook["id"], name="Renamed", secret="token")
+
+    cleared = client.patch(f"/webhooks/{webhook['id']}", json={"secret": None})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["webhook"]["secret_set"] is False
+    assert get_webhook(webhook["id"]).secret_ciphertext is None
+
+
+def _assert_secret(webhook_id: str, *, name: str, secret: str) -> None:
+    stored = get_webhook(webhook_id)
+    assert stored.name == name
+    assert stored.secret_ciphertext is not None
+    assert decrypt_secret(stored.secret_ciphertext) == secret
 
 
 def test_referenced_delete_is_conflict_and_a_failed_test_keeps_the_url(

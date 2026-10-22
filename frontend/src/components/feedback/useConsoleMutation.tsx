@@ -6,10 +6,8 @@ import { useRef, useState, type ReactNode } from "react";
 
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { type ConsoleMutation } from "@/components/feedback/consoleAction";
-import { ProblemDetails } from "@/components/feedback/ProblemDetails";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import { saveFailureFrom, type SaveFailure } from "@/components/form/FormErrorSummary";
-import { ApiError } from "@/lib/api";
-import { problemMessage } from "@/lib/problem";
 import {
   dismissConsoleNotification,
   presentConsoleNotification,
@@ -35,16 +33,6 @@ function successTitle(t: Translate, outcome: string, recordName: string) {
   return t("feedback.success.title", { outcome, record: recordName });
 }
 
-function detailLabels(t: Translate) {
-  return {
-    summary: t("form.error.details"),
-    requestId: t("common.requestId"),
-    copy: t("form.error.copy"),
-    copied: t("common.copy.success"),
-    copyFailed: t("common.copy.failed"),
-  };
-}
-
 function reportFailure(
   t: Translate,
   operation: ConsoleMutation,
@@ -58,19 +46,7 @@ function reportFailure(
     return;
   }
   setFailure(null);
-  const api = error instanceof ApiError ? error : null;
-  const detail = api?.detail?.trim() ? api.detail : null;
-  const requestId = api?.requestId?.trim() ? api.requestId : null;
-  presentConsoleNotification({
-    type: "error",
-    title: problemMessage(t, error, t("problems.unknown")),
-    message:
-      detail || requestId
-        ? (
-            <ProblemDetails detail={detail} requestId={requestId} labels={detailLabels(t)} />
-          )
-        : "",
-  });
+  presentProblemNotification(t, error);
 }
 
 function UndoNotice({ label, onUndo }: { label: string; onUndo: () => void }) {

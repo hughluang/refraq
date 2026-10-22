@@ -24,13 +24,17 @@ from backend.channel.email_accounts import (  # noqa: E402
     SmtpDeliveryError,
     create_email_account,
     deliver,
+    get_email_account,
     prepare_message,
     set_opener,
+    update_email_account,
 )
+from backend.channel.errors import ChannelRequestInvalid  # noqa: E402
 from backend.channel.ids import new_channel_id  # noqa: E402
 from backend.channel.run_store import get_run_store  # noqa: E402
 from backend.channel.runner import run_channel_job  # noqa: E402
 from backend.channel.store import ChannelRecord, get_channel_store  # noqa: E402
+from backend.core.secrets import decrypt_secret  # noqa: E402
 from backend.core.time import utc_now  # noqa: E402
 from backend.main import app  # noqa: E402
 from backend.tests.problem import assert_problem  # noqa: E402
@@ -157,6 +161,65 @@ def test_illegal_fields_are_refused(client: TestClient) -> None:
     ):
         response = client.post("/email-accounts", json=body)
         assert_problem(response, status=422, code="REQUEST_INVALID")
+
+
+def test_empty_password_is_refused_and_the_stored_secret_stays(client: TestClient) -> None:
+    refused = client.post("/email-accounts", json=_body(password=""))
+    assert_problem(refused, status=422, code="REQUEST_INVALID")
+    with pytest.raises(ChannelRequestInvalid):
+        create_email_account(
+            name="Empty",
+            host="smtp.example.com",
+            port=587,
+            encryption="starttls",
+            username="refraq",
+            password="",
+            from_address="refraq@example.com",
+            tls_skip_verify=False,
+            actor_user_id="usr_test",
+            actor_token_id=None,
+        )
+
+    account = _create(client, name="Keep me", password="secret-pass")
+    patched = client.patch(
+        f"/email-accounts/{account['id']}",
+        json={"name": "Renamed", "password": ""},
+    )
+    assert_problem(patched, status=422, code="REQUEST_INVALID")
+    _assert_password(account["id"], name="Keep me", password="secret-pass")
+    with pytest.raises(ChannelRequestInvalid):
+        update_email_account(
+            account_id=account["id"],
+            name="Nope",
+            host=None,
+            port=None,
+            encryption=None,
+            username=None,
+            username_set=False,
+            password="",
+            password_set=True,
+            from_address=None,
+            tls_skip_verify=None,
+            actor_user_id="usr_test",
+            actor_token_id=None,
+        )
+    _assert_password(account["id"], name="Keep me", password="secret-pass")
+
+    omitted = client.patch(f"/email-accounts/{account['id']}", json={"name": "Renamed"})
+    assert omitted.status_code == 200, omitted.text
+    _assert_password(account["id"], name="Renamed", password="secret-pass")
+
+    cleared = client.patch(f"/email-accounts/{account['id']}", json={"password": None})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["email_account"]["password_set"] is False
+    assert get_email_account(account["id"]).password_ciphertext is None
+
+
+def _assert_password(account_id: str, *, name: str, password: str) -> None:
+    stored = get_email_account(account_id)
+    assert stored.name == name
+    assert stored.password_ciphertext is not None
+    assert decrypt_secret(stored.password_ciphertext) == password
 
 
 def test_referenced_delete_is_conflict_and_a_failed_test_keeps_the_account(

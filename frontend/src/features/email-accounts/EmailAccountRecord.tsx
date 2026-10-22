@@ -5,6 +5,7 @@ import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useState } from "react";
 
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
+import { presentProblemNotification } from "@/components/feedback/presentProblemNotification";
 import {
   FormErrorSummary,
   saveFailureFrom,
@@ -33,6 +34,7 @@ import type {
   EmailAccountTestResult,
   EmailEncryption,
 } from "@/features/email-accounts/types";
+import { ApiError } from "@/lib/api";
 import { problemMessage } from "@/lib/problem";
 
 const FORM_ID = "email-account-record-form";
@@ -199,6 +201,7 @@ function EmailAccountExisting({
         title={t("emailAccounts.title")}
         status={error ? "error" : "loading"}
         errorMessage={error ? problemMessage(t, error, t("emailAccounts.loadFailed")) : undefined}
+        requestId={error instanceof ApiError ? error.requestId : null}
         onRetry={load}
       />
     );
@@ -256,10 +259,7 @@ function EmailAccountExisting({
                       setRecord(result.email_account);
                     })
                     .catch((err: unknown) => {
-                      open?.({
-                        type: "error",
-                        message: problemMessage(t, err, t("emailAccounts.testFailed")),
-                      });
+                      presentProblemNotification(t, err);
                     })
                     .finally(() => setTesting(false));
                 }}
@@ -351,10 +351,7 @@ function EmailAccountExisting({
             .catch((err: unknown) => {
               setDeleting(false);
               setConfirmDelete(false);
-              open?.({
-                type: "error",
-                message: problemMessage(t, err, t("emailAccounts.deleteFailed")),
-              });
+              presentProblemNotification(t, err);
             });
         }}
       />

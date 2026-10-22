@@ -17,7 +17,12 @@ import httpx
 from sqlalchemy import func, select
 
 from backend.admin.audit import persist_audit_event
-from backend.channel.errors import WebhookInUse, WebhookNotFound, WebhookUrlRejected
+from backend.channel.errors import (
+    ChannelRequestInvalid,
+    WebhookInUse,
+    WebhookNotFound,
+    WebhookUrlRejected,
+)
 from backend.channel.models import WebhookRow
 from backend.channel.store import get_channel_store
 from backend.core.config import get_settings
@@ -196,7 +201,7 @@ def create_webhook(
         id=new_webhook_id(),
         name=name.strip(),
         url=url,
-        secret_ciphertext=_cipher(secret),
+        secret_ciphertext=_cipher(_clean_secret(secret)),
         last_delivery_at=None,
         last_delivery_ok=None,
         last_delivery_error=None,
@@ -225,7 +230,7 @@ def update_webhook(
         assert_webhook_url(url)
         record.url = url
     if secret_set:
-        record.secret_ciphertext = _cipher(secret)
+        record.secret_ciphertext = _cipher(_clean_secret(secret))
     record.updated_at = utc_now()
     saved = get_webhook_store().save(record)
     _audit(actor_user_id, actor_token_id, saved.id, "webhook.update", {"name": saved.name})
@@ -296,8 +301,16 @@ def _graph_uses(graph: dict[str, Any] | None, webhook_id: str) -> bool:
     return False
 
 
+def _clean_secret(secret: str | None) -> str | None:
+    if secret is None:
+        return None
+    if not 1 <= len(secret) <= 512:
+        raise ChannelRequestInvalid("Secret must be 1 to 512 characters")
+    return secret
+
+
 def _cipher(secret: str | None) -> str | None:
-    if secret is None or secret == "":
+    if secret is None:
         return None
     return encrypt_secret(secret)
 

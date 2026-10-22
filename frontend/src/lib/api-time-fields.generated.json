@@ -4,6 +4,7 @@
   "DELETE /channel-variables/{name}": [],
   "DELETE /channels/{channel_id}": [],
   "DELETE /dictionaries/{dictionary_id}": [],
+  "DELETE /email-accounts/{account_id}": [],
   "DELETE /entities/{entity_id}": [],
   "DELETE /entities/{entity_id}/access/grants/{grant_id}": [],
   "DELETE /entities/{entity_id}/access/profiles/{profile_id}": [],
@@ -95,6 +96,16 @@
     "dictionary.created_at",
     "dictionary.deprecated_at",
     "dictionary.updated_at"
+  ],
+  "GET /email-accounts": [
+    "items[].created_at",
+    "items[].last_delivery_at",
+    "items[].updated_at"
+  ],
+  "GET /email-accounts/{account_id}": [
+    "email_account.created_at",
+    "email_account.last_delivery_at",
+    "email_account.updated_at"
   ],
   "GET /entities": [
     "items[].created_at",
@@ -327,6 +338,11 @@
     "dictionary.deprecated_at",
     "dictionary.updated_at"
   ],
+  "PATCH /email-accounts/{account_id}": [
+    "email_account.created_at",
+    "email_account.last_delivery_at",
+    "email_account.updated_at"
+  ],
   "PATCH /entities/{entity_id}": [
     "entity.created_at",
     "entity.deprecated_at",
@@ -458,6 +474,16 @@
     "dictionary.created_at",
     "dictionary.deprecated_at",
     "dictionary.updated_at"
+  ],
+  "POST /email-accounts": [
+    "email_account.created_at",
+    "email_account.last_delivery_at",
+    "email_account.updated_at"
+  ],
+  "POST /email-accounts/{account_id}/test": [
+    "email_account.created_at",
+    "email_account.last_delivery_at",
+    "email_account.updated_at"
   ],
   "POST /entities": [
     "entity.created_at",

@@ -62,7 +62,7 @@ class WebhookPatchRequest(BaseModel):
 
     name: str | None = Field(default=None, min_length=1, max_length=200)
     url: str | None = Field(default=None, min_length=1, max_length=2048)
-    secret: str | None = Field(default=None, max_length=512)
+    secret: str | None = Field(default=None, min_length=1, max_length=512)
 
 
 class WebhookTestResponse(BaseModel):
@@ -118,18 +118,11 @@ def http_patch_webhook(
     actor: UserRecord = Depends(require_permission("webhook:write")),
     actor_token_id: str | None = Depends(get_actor_token_id),
 ) -> dict[str, Any]:
-    secret = body.secret
-    if secret is not None and secret == "":
-        secret = None
-    if secret is not None and not 1 <= len(secret) <= 512:
-        from backend.channel.errors import ChannelRequestInvalid
-
-        raise ChannelRequestInvalid("Secret must be 1 to 512 characters")
     record = update_webhook(
         webhook_id=webhook_id,
         name=body.name,
         url=body.url,
-        secret=secret,
+        secret=body.secret,
         secret_set="secret" in body.model_fields_set,
         actor_user_id=actor.id,
         actor_token_id=actor_token_id,
