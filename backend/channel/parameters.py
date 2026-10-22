@@ -10,6 +10,8 @@ __all__ = [
     "RUN_RECORD_SCHEDULE_KEY",
     "RUN_RECORD_TASK_NAME",
     "channel_dataset_max_total_gb",
+    "channel_dataset_retention_days",
+    "channel_dataset_success_retention_hours",
     "channel_run_record_retention_days",
 ]
 
@@ -68,6 +70,14 @@ CHANNEL_PARAMETER_SPECS: tuple[ParameterSpec, ...] = (
 
 def channel_run_record_retention_days() -> int:
     return resolve_int("channel_run_record_retention_days").value
+
+
+def channel_dataset_retention_days() -> int:
+    return resolve_int("channel_dataset_retention_days").value
+
+
+def channel_dataset_success_retention_hours() -> int:
+    return resolve_int("channel_dataset_success_retention_hours").value
 
 
 def channel_dataset_max_total_gb() -> int:

@@ -1065,6 +1065,35 @@ def test_bad_row_in_the_last_chunk_leaves_the_target_unchanged(data_client) -> N
     assert [row["sku"] for row in stored] == []
 
 
+def test_ordinal_pairs_keep_that_ord_and_roll_back(data_client) -> None:
+    _client, _stem, _physical, entity_id = data_client
+    from backend.admin.user_store import get_user_store
+    from backend.entity.errors import EntityRowWriteFailed
+    from backend.entity.rows import read_rows, write_rows
+
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+
+    def chunks():
+        yield [(1, {"sku": "OK", "qty": 1, "note": "keep"})]
+        yield [(7, {"sku": "BAD", "qty": "nope", "note": "drop"})]
+
+    with pytest.raises(EntityRowWriteFailed) as raised:
+        write_rows(
+            entity_id,
+            mode="upsert",
+            match_key="sku",
+            rows=chunks(),
+            user=admin,
+            statement_timeout_ms=5000,
+        )
+    assert raised.value.reason == "invalid"
+    assert raised.value.row_index == 7
+    assert "integer" in raised.value.message
+    stored, _total = read_rows(entity_id, filters=[], user=admin, limit=20)
+    assert [row["sku"] for row in stored] == []
+
+
 def test_duplicate_match_key_reports_the_smallest_index_and_rolls_back(data_client) -> None:
     _client, _stem, _physical, entity_id = data_client
     from backend.admin.user_store import get_user_store

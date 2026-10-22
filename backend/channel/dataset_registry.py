@@ -3,24 +3,31 @@
 ``channel_datasets.job_id`` is a plain column, not a foreign key to
 ``channel_runs.job_id``. The physical table lives in the entity database, so
 deleting a run record cannot drop it. ``ON DELETE CASCADE`` would remove the
-only stored relation name before a later purge could drop the table. This unit
-leaves ``expires_at`` null; sealing and purge are later.
+only stored relation name before a later purge could drop the table.
+``expires_at`` stays null until a terminal job is sealed from ``finished_at``.
 """
 
 from __future__ import annotations
 
 import copy
+import logging
 import threading
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from backend.channel.models import ChannelDatasetRow
-from backend.channel.parameters import channel_dataset_max_total_gb
+from backend.channel.parameters import (
+    channel_dataset_max_total_gb,
+    channel_dataset_retention_days,
+    channel_dataset_success_retention_hours,
+)
+from backend.channel.run_store import get_run_store
+from backend.core.config import get_settings
 from backend.core.db import session_scope
 from backend.core.time import utc_now
 from backend.entity.datasets import (
@@ -29,11 +36,13 @@ from backend.entity.datasets import (
     copy_chunks,
     create_table_from_query,
     drop_relation,
+    list_dataset_relations,
     normalized_type_of,
     physical_relation,
     postgres_type,
     read_keyset_page,
 )
+from backend.jobs.store import TERMINAL, get_job_store
 
 __all__ = [
     "DatasetColumnSpec",
@@ -42,7 +51,12 @@ __all__ = [
     "DatasetRegistry",
     "MemoryDatasetStore",
     "SqlDatasetStore",
+    "get_dataset_store",
+    "reset_dataset_store",
+    "seal_dataset_expiry",
 ]
+
+logger = logging.getLogger(__name__)
 
 _CAPACITY_STATUSES = frozenset({"loading", "ready"})
 # pg_total_relation_size is bytes. One gigabyte of the capacity parameter is 2**30 bytes.
@@ -106,6 +120,47 @@ class MemoryDatasetStore:
                 row.size_bytes for row in self._rows.values() if row.status in _CAPACITY_STATUSES
             )
 
+    def seal_null_expiry(self, job_id: str, expires_at: datetime) -> None:
+        with self._lock:
+            for record in self._rows.values():
+                if record.job_id == job_id and record.expires_at is None:
+                    record.expires_at = expires_at
+
+    def unsealed_job_ids(self) -> list[str]:
+        with self._lock:
+            return list(
+                {record.job_id for record in self._rows.values() if record.expires_at is None}
+            )
+
+    def list_for_jobs(self, job_ids: Sequence[str]) -> list[DatasetRecord]:
+        wanted = set(job_ids)
+        if not wanted:
+            return []
+        with self._lock:
+            return [
+                copy.deepcopy(record)
+                for record in self._rows.values()
+                if record.job_id in wanted
+            ]
+
+    def list_expired(self, now: datetime) -> list[DatasetRecord]:
+        with self._lock:
+            return [
+                copy.deepcopy(record)
+                for record in self._rows.values()
+                if record.expires_at is not None
+                and record.expires_at <= now
+                and record.status in _CAPACITY_STATUSES
+            ]
+
+    def active_relations(self) -> set[str]:
+        with self._lock:
+            return {
+                record.relation
+                for record in self._rows.values()
+                if record.status in _CAPACITY_STATUSES
+            }
+
 
 class SqlDatasetStore:
     """Platform-database registry rows."""
@@ -131,6 +186,55 @@ class SqlDatasetStore:
                 )
             )
             return int(value)
+
+    def seal_null_expiry(self, job_id: str, expires_at: datetime) -> None:
+        with session_scope() as session:
+            session.execute(
+                update(ChannelDatasetRow)
+                .where(
+                    ChannelDatasetRow.job_id == job_id,
+                    ChannelDatasetRow.expires_at.is_(None),
+                )
+                .values(expires_at=expires_at)
+            )
+
+    def unsealed_job_ids(self) -> list[str]:
+        with session_scope() as session:
+            rows = session.scalars(
+                select(ChannelDatasetRow.job_id)
+                .where(ChannelDatasetRow.expires_at.is_(None))
+                .distinct()
+            ).all()
+            return [str(job_id) for job_id in rows]
+
+    def list_for_jobs(self, job_ids: Sequence[str]) -> list[DatasetRecord]:
+        if not job_ids:
+            return []
+        with session_scope() as session:
+            rows = session.scalars(
+                select(ChannelDatasetRow).where(ChannelDatasetRow.job_id.in_(tuple(job_ids)))
+            ).all()
+            return [_from_row(row) for row in rows]
+
+    def list_expired(self, now: datetime) -> list[DatasetRecord]:
+        with session_scope() as session:
+            rows = session.scalars(
+                select(ChannelDatasetRow).where(
+                    ChannelDatasetRow.expires_at.is_not(None),
+                    ChannelDatasetRow.expires_at <= now,
+                    ChannelDatasetRow.status.in_(tuple(_CAPACITY_STATUSES)),
+                )
+            ).all()
+            return [_from_row(row) for row in rows]
+
+    def active_relations(self) -> set[str]:
+        with session_scope() as session:
+            rows = session.scalars(
+                select(ChannelDatasetRow.relation).where(
+                    ChannelDatasetRow.status.in_(tuple(_CAPACITY_STATUSES))
+                )
+            ).all()
+            return {str(relation) for relation in rows}
 
 
 def _to_row(record: DatasetRecord) -> ChannelDatasetRow:
@@ -301,6 +405,103 @@ def _pg_column(column: DatasetColumnSpec) -> tuple[str, str]:
         scale=column.scale,
         with_time_zone=column.with_time_zone,
     )
+
+
+def seal_dataset_expiry(job_id: str) -> None:
+    """Write ``expires_at`` once, anchored on the job's ``finished_at``.
+
+    A succeeded run whose target is not ``draft`` uses success retention hours.
+    Zero hours is due at ``finished_at``. Every other terminal run, including
+    every draft, uses retention days. An existing timestamp is left alone.
+    A non-terminal job is left null.
+    """
+    job = get_job_store().get(job_id)
+    if job is None or job.status not in TERMINAL or job.finished_at is None:
+        return
+    run = get_run_store().get_run(job_id)
+    target = run.target if run is not None else None
+    if job.status == "succeeded" and target != "draft":
+        expires_at = job.finished_at + timedelta(
+            hours=channel_dataset_success_retention_hours()
+        )
+    else:
+        expires_at = job.finished_at + timedelta(days=channel_dataset_retention_days())
+    get_dataset_store().seal_null_expiry(job_id, expires_at)
+
+
+def seal_unsealed_terminal_datasets() -> None:
+    """Safety net: seal any still-null row whose job is already terminal."""
+    for job_id in get_dataset_store().unsealed_job_ids():
+        seal_dataset_expiry(job_id)
+
+
+def drop_expired_datasets(now: datetime) -> None:
+    """Drop tables whose ``expires_at`` is due.
+
+    A ``loading`` row stays while its job is not terminal.
+    """
+    jobs = get_job_store()
+    for record in get_dataset_store().list_expired(now):
+        if record.status == "loading":
+            job = jobs.get(record.job_id)
+            if job is None or job.status not in TERMINAL:
+                continue
+        _drop_and_mark(record)
+
+
+def drop_orphan_dataset_tables() -> None:
+    """Drop ``ds_*`` tables that have no loading or ready registry row."""
+    protected = get_dataset_store().active_relations()
+    for relation in list_dataset_relations():
+        if relation in protected:
+            continue
+        try:
+            drop_relation(relation)
+        except Exception:
+            logger.exception("orphan dataset drop failed relation=%s", relation)
+
+
+def drop_datasets_for_due_runs(cutoff: datetime) -> None:
+    """Drop physical tables for runs the retention purge is about to delete."""
+    _drop_registered(get_run_store().job_ids_due(cutoff))
+
+
+def _drop_registered(job_ids: Sequence[str]) -> None:
+    for record in get_dataset_store().list_for_jobs(job_ids):
+        if record.status not in _CAPACITY_STATUSES:
+            continue
+        _drop_and_mark(record)
+
+
+def _drop_and_mark(record: DatasetRecord) -> None:
+    try:
+        drop_relation(record.relation)
+    except Exception:
+        logger.exception("dataset table drop failed id=%s", record.id)
+        return
+    record.status = "dropped"
+    get_dataset_store().save(record)
+
+
+_memory_datasets: MemoryDatasetStore | None = None
+_dataset_lock = threading.Lock()
+
+
+def get_dataset_store() -> MemoryDatasetStore | SqlDatasetStore:
+    settings = get_settings()
+    if settings.store_backend == "memory":
+        global _memory_datasets
+        with _dataset_lock:
+            if _memory_datasets is None:
+                _memory_datasets = MemoryDatasetStore()
+            return _memory_datasets
+    return SqlDatasetStore()
+
+
+def reset_dataset_store() -> None:
+    global _memory_datasets
+    with _dataset_lock:
+        _memory_datasets = None
 
 
 def _with_normalized_types(

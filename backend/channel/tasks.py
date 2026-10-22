@@ -7,6 +7,13 @@ from datetime import timedelta
 
 from celery import shared_task
 
+from backend.channel.dataset_registry import (
+    drop_datasets_for_due_runs,
+    drop_expired_datasets,
+    drop_orphan_dataset_tables,
+    seal_dataset_expiry,
+    seal_unsealed_terminal_datasets,
+)
 from backend.channel.parameters import (
     RUN_RECORD_SCHEDULE_KEY,
     RUN_RECORD_TASK_NAME,
@@ -26,6 +33,7 @@ logger = logging.getLogger(__name__)
 def run_job(job_id: str) -> dict[str, str]:
     try:
         result = supervise(job_id, "backend.channel.runner:run_channel_job")
+        seal_dataset_expiry(job_id)
         if result.get("status") == "cancelled":
             note_killed_run(job_id)
         return result
@@ -35,17 +43,29 @@ def run_job(job_id: str) -> dict[str, str]:
         if current is not None and current.status not in TERMINAL:
             summary = str(exc)[:400]
             mark_failed(job_id, error_code="JOB_EXECUTION_FAILED", error_summary=summary)
+            seal_dataset_expiry(job_id)
             return {"status": "failed"}
+        if current is not None and current.status in TERMINAL:
+            seal_dataset_expiry(job_id)
         raise
 
 
 def purge_expired_run_records() -> int:
     """Delete terminal channel run records older than the retention parameter.
 
-    Node executions go with the run. Jobs stay.
+    First seal any still-null dataset whose job is terminal, drop dataset
+    tables that are due, and drop tables owned by runs about to be deleted.
+    Node executions go with the run. Jobs stay. ``ds_*`` tables with no
+    loading or ready registry row are dropped after the run records.
     """
-    cutoff = utc_now() - timedelta(days=channel_run_record_retention_days())
-    return get_run_store().delete_expired_terminal_runs(cutoff)
+    seal_unsealed_terminal_datasets()
+    now = utc_now()
+    drop_expired_datasets(now)
+    cutoff = now - timedelta(days=channel_run_record_retention_days())
+    drop_datasets_for_due_runs(cutoff)
+    deleted = get_run_store().delete_expired_terminal_runs(cutoff)
+    drop_orphan_dataset_tables()
+    return deleted
 
 
 @shared_task(name=RUN_RECORD_TASK_NAME)

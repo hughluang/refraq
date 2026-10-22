@@ -7,6 +7,7 @@ from typing import Any
 
 from backend.admin.user_store import get_user_store
 from backend.channel.channel_run import execute_channel_run, expression_context, trigger_node_id
+from backend.channel.dataset_registry import seal_dataset_expiry
 from backend.channel.recovery import settle_failure, settle_success
 from backend.channel.run_store import get_run_store, note_killed_run
 from backend.channel.sandbox import SandboxFailed
@@ -34,6 +35,7 @@ def run_channel_job(job_id: str) -> dict[str, str]:
     run = store.get_run(job_id)
     if run is None:
         mark_cancelled(job_id)
+        seal_dataset_expiry(job_id)
         return {"status": "cancelled"}
     channel = get_channel_store().get(run.channel_id)
     if channel is None:
@@ -100,6 +102,7 @@ def run_channel_job(job_id: str) -> dict[str, str]:
                 error_message=str(exc),
                 node_id=None,
             )
+        seal_dataset_expiry(job_id)
         return {"status": "failed"}
     run.outcome = outcome.outcome
     run.failed_node_id = outcome.failed_node_id
@@ -124,9 +127,11 @@ def run_channel_job(job_id: str) -> dict[str, str]:
         )
         if done is not None and done.status == "succeeded":
             settle_success(run)
+        seal_dataset_expiry(job_id)
         return {"status": "succeeded"}
     if outcome.status == "cancelled":
         mark_cancelled(job_id)
+        seal_dataset_expiry(job_id)
         return {"status": "cancelled"}
     code = outcome.error_code or "CHANNEL_NODE_FAILED"
     message = outcome.error_message or "Channel run failed"
@@ -139,6 +144,7 @@ def run_channel_job(job_id: str) -> dict[str, str]:
             error_message=message,
             node_id=outcome.failed_node_id or outcome.stopped_node_id,
         )
+    seal_dataset_expiry(job_id)
     return {"status": "failed"}
 
 
@@ -148,6 +154,7 @@ def _cancel(job_id: str, run: Any, node_id: str | None) -> None:
         get_run_store().update_run(run)
         append_job_log(job_id, level="warning", message=f"stopped at node {node_id}")
     mark_cancelled(job_id)
+    seal_dataset_expiry(job_id)
 
 
 def _resolve_graph(run: Any, job: Any) -> tuple[dict[str, Any] | None, int | None]:

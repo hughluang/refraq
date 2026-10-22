@@ -44,11 +44,15 @@ from backend.entity.reference_binding import business_key_attr
 from backend.entity.store import get_entity_store
 
 __all__ = [
+    "WRITE_CHUNK_SIZE",
     "RowWriteResult",
     "head_target",
     "read_rows",
     "write_rows",
 ]
+
+# Rows held in memory while a dataset page is staged. Callers page by this size.
+WRITE_CHUNK_SIZE = 1000
 
 Mode = Literal["upsert", "create", "update", "delete"]
 
@@ -119,10 +123,11 @@ def write_rows(
     """Stage every chunk, validate the whole set, then write it in one transaction.
 
     A sequence of row mappings is one chunk, and ``_ord`` is the list index.
-    Any other iterable yields chunks. Each chunk is a sequence of row mappings.
-    ``pulse`` returns the remaining wall-clock milliseconds and raises to stop
-    the write. The target is unchanged when validation, the deadline, or the
-    callback fails.
+    Any other iterable yields chunks. A chunk of mappings continues ``_ord``
+    from the previous mapping chunk, starting at 0. A chunk of ``(ord, row)``
+    pairs keeps those ordinals. ``pulse`` returns the remaining wall-clock
+    milliseconds and raises to stop the write. The target is unchanged when
+    validation, the deadline, or the callback fails.
     """
     entity = get_entity_store().get_entity(entity_id)
     if entity is None:
@@ -258,7 +263,8 @@ def _write_in_transaction(
         _tick(conn, pulse)
         if not chunk:
             continue
-        encoded = _encode_chunk(chunk, target, mode, key_name, codes, ordinal)
+        paired = _is_ord_pair(chunk[0])
+        encoded = _encode_chunk(chunk, target, mode, key_name, codes, ordinal, paired=paired)
         _tick(conn, pulse)
         data_sql.copy_write_stage(
             conn,
@@ -274,7 +280,8 @@ def _write_in_transaction(
                 for name in present:
                     column_ords.setdefault(name, ord_)
         total += len(chunk)
-        ordinal += len(chunk)
+        if not paired:
+            ordinal += len(chunk)
     _validate(conn, pulse, access, target, stage, mode, key_name, columns, column_ords)
     _tick(conn, pulse)
     inserted, updated, unchanged, deleted, unmatched = data_sql.write_staged_counts(
@@ -308,26 +315,47 @@ def _dictionary_codes(target: HeadTarget) -> dict[str, frozenset[str]]:
     return found
 
 
+def _is_ord_pair(item: Any) -> bool:
+    return (
+        isinstance(item, tuple)
+        and len(item) == 2
+        and isinstance(item[0], int)
+        and not isinstance(item[0], bool)
+        and isinstance(item[1], Mapping)
+    )
+
+
 def _encode_chunk(
-    chunk: Sequence[Mapping[str, Any]],
+    chunk: Sequence[Any],
     target: HeadTarget,
     mode: Mode,
     key_name: str,
     codes: dict[str, frozenset[str]],
     start: int,
+    *,
+    paired: bool,
 ) -> list[tuple[int, list[str], dict[str, Any]]]:
     encoded_rows: list[tuple[int, list[str], dict[str, Any]]] = []
     users: list[tuple[int, dict[str, Any]]] = []
     key_attr = next(attr for attr in target.attributes if attr.name == key_name)
     for offset, raw in enumerate(chunk):
-        ordinal = start + offset
+        if paired:
+            if not _is_ord_pair(raw):
+                raise EntityRowWriteFailed(
+                    "Source row is not an ordinal pair",
+                    row_index=start + offset,
+                    reason="invalid",
+                )
+            ordinal, row = int(raw[0]), raw[1]
+        else:
+            ordinal, row = start + offset, raw
         try:
             if mode == "delete":
-                if key_name not in raw:
+                if key_name not in row:
                     raise EntityRowInvalid(f"Attribute '{key_name}' is required")
-                encoded = {key_name: _encode_one(key_attr, raw[key_name], target, codes)}
+                encoded = {key_name: _encode_one(key_attr, row[key_name], target, codes)}
             else:
-                encoded = _encode_map(dict(raw), target, partial=mode == "update", codes=codes)
+                encoded = _encode_map(dict(row), target, partial=mode == "update", codes=codes)
                 if key_name not in encoded:
                     raise EntityRowInvalid(f"Attribute '{key_name}' is required")
         except EntityRowInvalid as exc:

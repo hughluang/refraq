@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
+from backend.channel.dataset_ref import DATASET_REFERENCE_SCHEMA
+from backend.channel.dataset_registry import DatasetRegistry, get_dataset_store
 from backend.channel.item_limit import ITEM_LIMIT
 from backend.channel.node_support import render_field
 from backend.channel.nodes.spec import (
@@ -22,12 +24,26 @@ from backend.channel.nodes.spec import (
 )
 from backend.channel.values import LIST_OF_OBJECTS
 from backend.channel.write_compatibility import write_reasons
+from backend.core.time import utc_now
+from backend.entity import rows as entity_rows
+from backend.entity.datasets import iter_dataset_chunks
 from backend.entity.errors import EntityRowWriteFailed
 from backend.entity.rows import head_target, write_rows
 
 __all__ = ["NODE_TYPE"]
 
 _DEFAULT_TIMEOUT_SEC = 300
+
+# ``items`` belongs to the list branch. The dataset-reference keywords belong to
+# the object branch. A type array keeps each branch's keywords on that branch.
+_SOURCE_SCHEMA: dict[str, Any] = {
+    "type": ["array", "object"],
+    "items": LIST_OF_OBJECTS["items"],
+    "additionalProperties": DATASET_REFERENCE_SCHEMA["additionalProperties"],
+    "required": DATASET_REFERENCE_SCHEMA["required"],
+    "properties": DATASET_REFERENCE_SCHEMA["properties"],
+    "x-refraq-dataset-reference": DATASET_REFERENCE_SCHEMA["x-refraq-dataset-reference"],
+}
 
 _COUNT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -84,30 +100,27 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             error_message="Write mapping is incompatible with the current head",
             error_detail={"reasons": reasons},
         )
-    source, error = render_field(hooks, config.get("source"), LIST_OF_OBJECTS)
+    source, error = render_field(hooks, config.get("source"), _SOURCE_SCHEMA)
     if error is not None:
         return error
-    if isinstance(source, list) and len(source) > ITEM_LIMIT:
-        return NodeResult(
-            status="failed",
-            error_code="CHANNEL_ITEM_LIMIT_EXCEEDED",
-            error_message="Use Materialize or Dataset Query, then Batch Read.",
-        )
+    timeout_sec = config.get("statement_timeout_sec", _DEFAULT_TIMEOUT_SEC)
+    mapping = config.get("mapping") or []
+    prepared, error = _prepare_rows(source, mapping, hooks, int(timeout_sec))
+    if error is not None:
+        return error
     mode = config["mode"]
-    projected, error = _project(source, config.get("mapping") or [])
-    if error is not None:
-        return error
     try:
-        result = write_rows(
-            str(config["entity_id"]),
-            mode=mode,
-            match_key=config.get("match_key"),
-            rows=projected,
-            user=hooks.user,
-            pulse=_pulse(
-                hooks, config.get("statement_timeout_sec", _DEFAULT_TIMEOUT_SEC)
-            ),
-        )
+        try:
+            result = write_rows(
+                str(config["entity_id"]),
+                mode=mode,
+                match_key=config.get("match_key"),
+                rows=prepared,
+                user=hooks.user,
+                pulse=_pulse(hooks, int(timeout_sec)),
+            )
+        except _SourceRejected as rejected:
+            return rejected.result
     except _WriteStopped as exc:
         if exc.kind == "timeout":
             return NodeResult(
@@ -138,6 +151,10 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             error_code="CHANNEL_NODE_FAILED",
             error_message=str(exc),
         )
+    finally:
+        close = getattr(prepared, "close", None)
+        if close is not None:
+            close()
     output: dict[str, Any] = {
         "inserted": result.inserted,
         "updated": result.updated,
@@ -148,31 +165,126 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     return NodeResult(status="succeeded", output=output)
 
 
+class _SourceRejected(Exception):
+    def __init__(self, result: NodeResult) -> None:
+        super().__init__(result.error_message or "source rejected")
+        self.result = result
+
+
+def _prepare_rows(
+    source: Any,
+    mapping: list[dict[str, Any]],
+    hooks: EngineHooks,
+    timeout_sec: int,
+) -> tuple[Any, NodeResult | None]:
+    if isinstance(source, list):
+        if len(source) > ITEM_LIMIT:
+            return None, NodeResult(
+                status="failed",
+                error_code="CHANNEL_ITEM_LIMIT_EXCEEDED",
+                error_message="Use Materialize or Dataset Query, then Batch Read.",
+            )
+        return _project(source, mapping)
+    return _dataset_rows(source, mapping, hooks, timeout_sec)
+
+
+def _dataset_rows(
+    source: Mapping[str, Any],
+    mapping: list[dict[str, Any]],
+    hooks: EngineHooks,
+    timeout_sec: int,
+) -> tuple[Any, NodeResult | None]:
+    dataset_id = source.get("dataset_id")
+    if not isinstance(dataset_id, str) or dataset_id == "":
+        return None, _unavailable("not_found")
+    record = get_dataset_store().get(dataset_id)
+    if record is None:
+        return None, _unavailable("not_found")
+    if record.job_id != hooks.run_id:
+        return None, _unavailable("foreign_run")
+    if record.expires_at is not None and record.expires_at <= utc_now():
+        return None, _unavailable("expired")
+    if record.status != "ready":
+        return None, _unavailable("not_found")
+    if DatasetRegistry(get_dataset_store()).is_lost(dataset_id):
+        return None, _unavailable("lost")
+    if record.row_count <= 0:
+        return [], None
+    return (
+        _projected_dataset(record.relation, mapping, max(1, timeout_sec * 1000)),
+        None,
+    )
+
+
+def _projected_dataset(
+    relation: str,
+    mapping: list[dict[str, Any]],
+    timeout_ms: int,
+) -> Iterator[list[tuple[int, dict[str, Any]]]]:
+    chunks = iter_dataset_chunks(
+        relation,
+        chunk_size=entity_rows.WRITE_CHUNK_SIZE,
+        timeout_ms=timeout_ms,
+    )
+    try:
+        for chunk in chunks:
+            projected: list[tuple[int, dict[str, Any]]] = []
+            for ordinal, row in chunk:
+                item, error = _project_one(row, ordinal, mapping)
+                if error is not None:
+                    raise _SourceRejected(error)
+                projected.append((ordinal, item))
+            if projected:
+                yield projected
+    finally:
+        chunks.close()
+
+
+def _unavailable(reason: str) -> NodeResult:
+    return NodeResult(
+        status="failed",
+        error_code="CHANNEL_DATASET_UNAVAILABLE",
+        error_message="Dataset is not available",
+        error_detail={"reason": reason},
+    )
+
+
 def _project(
     source: list[dict[str, Any]],
     mapping: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], NodeResult | None]:
-    consumed = {entry["key"] for entry in mapping}
     rows: list[dict[str, Any]] = []
     for index, item in enumerate(source):
-        projected: dict[str, Any] = {
-            key: value for key, value in item.items() if key not in consumed
-        }
-        for entry in mapping:
-            key = entry["key"]
-            if key not in item:
-                return [], NodeResult(
-                    status="failed",
-                    error_code="CHANNEL_NODE_FAILED",
-                    error_message=(
-                        f"Source object {index} has no key '{key}' "
-                        f"for attribute '{entry['attribute']}'"
-                    ),
-                    error_detail={"row_index": index, "attribute": entry["attribute"]},
-                )
-            projected[entry["attribute"]] = item[key]
+        projected, error = _project_one(item, index, mapping)
+        if error is not None:
+            return [], error
         rows.append(projected)
     return rows, None
+
+
+def _project_one(
+    item: Mapping[str, Any],
+    index: int,
+    mapping: list[dict[str, Any]],
+) -> tuple[dict[str, Any], NodeResult | None]:
+    consumed = {entry["key"] for entry in mapping}
+    projected: dict[str, Any] = {
+        key: value for key, value in item.items() if key not in consumed
+    }
+    for entry in mapping:
+        key = entry["key"]
+        if key not in item:
+            return {}, NodeResult(
+                status="failed",
+                error_code="CHANNEL_NODE_FAILED",
+                error_message=(
+                    f"Source object {index} has no key '{key}' "
+                    f"for attribute '{entry['attribute']}'"
+                ),
+                error_detail={"row_index": index, "attribute": entry["attribute"]},
+            )
+        projected[entry["attribute"]] = item[key]
+    return projected, None
 
 
 def _check(config: Mapping[str, Any], resolver: ReferenceResolver) -> list[Problem]:
@@ -284,10 +396,10 @@ NODE_TYPE = NodeType(
                 "minLength": 1,
                 "title": "Source",
                 "description": (
-                    "Template whose value is a list of objects. "
-                    "Text with no {{ }} is static JSON."
+                    "Template whose value is a list of objects or a dataset reference. "
+                    "Text with no {{ }} is static JSON. A reference is read by dataset_id."
                 ),
-                "x-refraq-template": LIST_OF_OBJECTS,
+                "x-refraq-template": _SOURCE_SCHEMA,
             },
             "mapping": {
                 "type": "array",

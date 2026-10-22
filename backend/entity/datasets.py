@@ -8,13 +8,14 @@ row-level security.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from typing import Any
 
 from sqlalchemy import text
 from sqlglot import exp, parse
 from sqlglot.errors import SqlglotError
 
+from backend.entity.data.sql import set_write_timeouts
 from backend.entity.ddl import ENTITY_DATA_SCHEMA, ident, qualified_table
 from backend.entity.entity_db import get_entity_engine
 
@@ -26,6 +27,8 @@ __all__ = [
     "copy_chunks",
     "create_table_from_query",
     "drop_relation",
+    "iter_dataset_chunks",
+    "list_dataset_relations",
     "normalized_type_of",
     "physical_relation",
     "postgres_type",
@@ -197,13 +200,69 @@ def read_keyset_page(relation: str, *, after_ord: int, limit: int) -> list[dict[
         raise ValueError("limit must be a positive integer")
     if isinstance(after_ord, bool) or not isinstance(after_ord, int):
         raise ValueError("after_ord must be an integer")
+    with get_entity_engine().connect() as conn:
+        return _select_keyset_page(conn, relation, after_ord=after_ord, limit=limit)
+
+
+def iter_dataset_chunks(
+    relation: str,
+    *,
+    chunk_size: int,
+    timeout_ms: int | None = None,
+) -> Iterator[list[tuple[int, dict[str, Any]]]]:
+    """Page ``relation`` by ``_ord`` on one read-only owner connection.
+
+    The caller resolves the table name and the page size. This function does
+    not read the dataset registry. The transaction is not the write transaction.
+    One page is in memory at a time. ``timeout_ms`` is the write budget, applied
+    after read-only is set so a long write does not drop this connection.
+    """
+    _require_relation(relation)
+    if isinstance(chunk_size, bool) or not isinstance(chunk_size, int) or chunk_size < 1:
+        raise ValueError("chunk_size must be a positive integer")
+    conn = get_entity_engine().connect()
+    transaction = conn.begin()
+    try:
+        conn.execute(text("SET TRANSACTION READ ONLY"))
+        if timeout_ms is not None:
+            set_write_timeouts(conn, max(1, int(timeout_ms)))
+        after = 0
+        while True:
+            page: list[tuple[int, dict[str, Any]]] = []
+            for item in _select_keyset_page(conn, relation, after_ord=after, limit=chunk_size):
+                order = int(item.pop(ORD_COLUMN))
+                page.append((order, item))
+            if not page:
+                break
+            yield page
+            after = page[-1][0]
+            if len(page) < chunk_size:
+                break
+        transaction.commit()
+    finally:
+        # A closed read must not hide the caller's error, including GeneratorExit
+        # after the connection is already gone.
+        if transaction.is_active:
+            try:
+                transaction.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _select_keyset_page(
+    conn: Any, relation: str, *, after_ord: int, limit: int
+) -> list[dict[str, Any]]:
+    """Rows with ``_ord`` greater than ``after_ord``. The caller checked ``relation``."""
     ordinal = ident(ORD_COLUMN)
     statement = text(
         f"SELECT * FROM {relation} WHERE {ordinal} > :after ORDER BY {ordinal} LIMIT :limit"
     )
-    with get_entity_engine().connect() as conn:
-        rows = conn.execute(statement, {"after": after_ord, "limit": limit}).mappings()
-        return [dict(row) for row in rows]
+    rows = conn.execute(statement, {"after": after_ord, "limit": limit}).mappings()
+    return [dict(row) for row in rows]
 
 
 def any_row_exists(relation: str) -> bool:
@@ -219,6 +278,31 @@ def drop_relation(relation: str) -> None:
     _require_relation(relation)
     with get_entity_engine().begin() as conn:
         conn.exec_driver_sql(f"DROP TABLE IF EXISTS {relation}")
+
+
+def list_dataset_relations() -> list[str]:
+    """Qualified names of ordinary ``ds_*`` tables in ``channel_dataset``.
+
+    The underscore is literal. Tables in other schemas, and tables in this
+    schema whose names do not start with ``ds_``, are not listed.
+    """
+    statement = text(
+        """
+        SELECT c.relname
+        FROM pg_class AS c
+        JOIN pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = :schema
+          AND c.relkind = 'r'
+          AND c.relname LIKE :prefix ESCAPE :escape
+        ORDER BY c.relname
+        """
+    )
+    with get_entity_engine().connect() as conn:
+        names = conn.execute(
+            statement,
+            {"schema": CHANNEL_DATASET_SCHEMA, "prefix": r"ds\_%", "escape": "\\"},
+        ).scalars()
+        return [qualified_table(CHANNEL_DATASET_SCHEMA, str(name)) for name in names]
 
 
 def _require_relation(relation: str) -> None:

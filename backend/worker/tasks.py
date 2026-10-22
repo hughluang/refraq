@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from celery import shared_task
 
+from backend.channel.tasks import seal_dataset_expiry
 from backend.entity.tasks import ACCESS_LOG_SCHEDULE_KEY, purge_expired_access_logs
-from backend.jobs.store import reap_stuck_running_jobs
+from backend.jobs.store import get_job_store, reap_stuck_running_jobs
 from backend.worker.due import consume_due_tick
 from backend.worker.models import REAPER_SCHEDULE_KEY
 from backend.worker.schedules import get_schedule_store
@@ -16,7 +17,10 @@ def reap_stuck_jobs() -> dict[str, int]:
     record = get_schedule_store().get_by_key(REAPER_SCHEDULE_KEY)
     if record is not None:
         consume_due_tick(record.id)
+    running_ids = [item.id for item in get_job_store().list(status="running")[0]]
     count = reap_stuck_running_jobs()
+    for job_id in running_ids:
+        seal_dataset_expiry(job_id)
     return {"reaped": count}
 
 
