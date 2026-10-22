@@ -20,6 +20,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, make_url
 
 from backend.core.config import Settings
+from backend.entity.datasets import CHANNEL_DATASET_SCHEMA
 from backend.entity.ddl import (
     ACL_OWNER_ROLE,
     ACL_SCHEMA,
@@ -148,15 +149,20 @@ def schema_statements() -> list[str]:
     data = ident(ENTITY_DATA_SCHEMA)
     access = ident(ENTITY_ACCESS_SCHEMA)
     acl = ident(ACL_SCHEMA)
+    dataset = ident(CHANNEL_DATASET_SCHEMA)
     return [
         f"CREATE SCHEMA IF NOT EXISTS {data} AUTHORIZATION {owner}",
         f"CREATE SCHEMA IF NOT EXISTS {access} AUTHORIZATION {owner}",
         f"CREATE SCHEMA IF NOT EXISTS {acl} AUTHORIZATION {ident(ACL_OWNER_ROLE)}",
+        f"CREATE SCHEMA IF NOT EXISTS {dataset} AUTHORIZATION {owner}",
         f"ALTER SCHEMA {data} OWNER TO {owner}",
         f"ALTER SCHEMA {access} OWNER TO {owner}",
         f"ALTER SCHEMA {acl} OWNER TO {ident(ACL_OWNER_ROLE)}",
+        f"ALTER SCHEMA {dataset} OWNER TO {owner}",
         f"REVOKE ALL ON SCHEMA {data}, {access}, {acl} FROM PUBLIC",
+        f"REVOKE ALL ON SCHEMA {dataset} FROM PUBLIC",
         f"REVOKE ALL ON SCHEMA {data} FROM {reader}",
+        f"REVOKE ALL ON SCHEMA {dataset} FROM {reader}",
         f"GRANT USAGE ON SCHEMA {data} TO {exposure}",
         f"GRANT USAGE, CREATE ON SCHEMA {access} TO {exposure}",
         f"GRANT USAGE ON SCHEMA {access} TO {reader}",

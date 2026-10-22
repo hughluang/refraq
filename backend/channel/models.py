@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -123,3 +123,26 @@ class ChannelNodeExecutionRow(Base):
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_detail: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+
+class ChannelDatasetRow(Base):
+    """Registry fact for one run-scoped dataset table.
+
+    ``job_id`` is not a foreign key. The physical table is in the entity
+    database, so deleting a run cannot drop it, and a cascade would erase the
+    relation name first.
+    """
+
+    __tablename__ = "channel_datasets"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    node_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    relation: Mapped[str] = mapped_column(Text, nullable=False)
+    columns: Mapped[list[Any]] = mapped_column(JSONB, nullable=False)
+    row_count: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)

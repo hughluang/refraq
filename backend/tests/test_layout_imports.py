@@ -84,6 +84,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "entity.rows",
             "entity.publish_confirmation",
             "entity.statements",
+            "entity.datasets",
             "entity.routers",
         }
     ),

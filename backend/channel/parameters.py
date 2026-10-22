@@ -9,6 +9,7 @@ __all__ = [
     "RUN_RECORD_INTERVAL_SECONDS",
     "RUN_RECORD_SCHEDULE_KEY",
     "RUN_RECORD_TASK_NAME",
+    "channel_dataset_max_total_gb",
     "channel_run_record_retention_days",
 ]
 
@@ -29,8 +30,45 @@ CHANNEL_PARAMETER_SPECS: tuple[ParameterSpec, ...] = (
         label_key="settings.parameter.channel_run_record_retention_days.label",
         help_key="settings.parameter.channel_run_record_retention_days.help",
     ),
+    ParameterSpec(
+        key="channel_dataset_retention_days",
+        constraint=IntConstraint(minimum=1, maximum=3650),
+        seed=7,
+        owner="channel",
+        group="data_channel",
+        operator_action_required=False,
+        apply_note_key="settings.parameter.channel_dataset_retention_days.apply",
+        label_key="settings.parameter.channel_dataset_retention_days.label",
+        help_key="settings.parameter.channel_dataset_retention_days.help",
+    ),
+    ParameterSpec(
+        key="channel_dataset_success_retention_hours",
+        constraint=IntConstraint(minimum=0, maximum=720),
+        seed=24,
+        owner="channel",
+        group="data_channel",
+        operator_action_required=False,
+        apply_note_key="settings.parameter.channel_dataset_success_retention_hours.apply",
+        label_key="settings.parameter.channel_dataset_success_retention_hours.label",
+        help_key="settings.parameter.channel_dataset_success_retention_hours.help",
+    ),
+    ParameterSpec(
+        key="channel_dataset_max_total_gb",
+        constraint=IntConstraint(minimum=1, maximum=100000),
+        seed=100,
+        owner="channel",
+        group="data_channel",
+        operator_action_required=False,
+        apply_note_key="settings.parameter.channel_dataset_max_total_gb.apply",
+        label_key="settings.parameter.channel_dataset_max_total_gb.label",
+        help_key="settings.parameter.channel_dataset_max_total_gb.help",
+    ),
 )
 
 
 def channel_run_record_retention_days() -> int:
     return resolve_int("channel_run_record_retention_days").value
+
+
+def channel_dataset_max_total_gb() -> int:
+    return resolve_int("channel_dataset_max_total_gb").value

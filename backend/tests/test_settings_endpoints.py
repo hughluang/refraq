@@ -40,6 +40,12 @@ REGISTERED_KEYS = {
     "schedule_timezone",
     "query_max_rows",
     "query_timeout_sec",
+    "access_log_retention_days",
+    "max_profile_combinations",
+    "channel_dataset_max_total_gb",
+    "channel_dataset_retention_days",
+    "channel_dataset_success_retention_hours",
+    "channel_run_record_retention_days",
 }
 
 CATALOG_KEY_ORDER = [
@@ -50,6 +56,12 @@ CATALOG_KEY_ORDER = [
     "schedule_timezone",
     "query_max_rows",
     "query_timeout_sec",
+    "access_log_retention_days",
+    "max_profile_combinations",
+    "channel_dataset_max_total_gb",
+    "channel_dataset_retention_days",
+    "channel_dataset_success_retention_hours",
+    "channel_run_record_retention_days",
 ]
 
 
