@@ -728,14 +728,28 @@ def test_if_and_for_run_the_live_branch(channel_client: TestClient) -> None:
             f"/channels/{channel_id}/runs/{finished['job_id']}"
         )
         assert detail.status_code == 200, detail.text
-        executions = detail.json()["node_executions"]
-        by_node: dict[str, list] = {}
-        for item in executions:
-            by_node.setdefault(item["node_id"], []).append(item)
-        assert "nd_missed" not in by_node
-        assert len(by_node["nd_step"]) == 2
-        walk = by_node["nd_walk"]
+        detail_body = detail.json()
+        assert "node_executions" not in detail_body
+        summaries = {item["node_id"]: item for item in detail_body["node_summaries"]}
+        assert "nd_missed" not in summaries
+        assert summaries["nd_step"]["execution_count"] == 2
+        assert summaries["nd_walk"]["execution_count"] == 1
+        steps = _execution_items(channel_client, channel_id, finished["job_id"], node_id="nd_step")
+        assert [item["round"] for item in steps] == [0, 1]
+        walk = _execution_items(channel_client, channel_id, finished["job_id"], node_id="nd_walk")
         assert len(walk) == 1
+        assert walk[0]["container_seq"] is None
+        assert walk[0]["round"] is None
+        assert {item["container_seq"] for item in steps} == {walk[0]["seq"]}
+        scoped = _execution_items(
+            channel_client,
+            channel_id,
+            finished["job_id"],
+            container_seq=walk[0]["seq"],
+            round=1,
+        )
+        assert [item["node_id"] for item in scoped] == ["nd_step"]
+        assert scoped[0]["round"] == 1
         assert walk[0]["output_preview"]["iterations"] == [
             {"step": {"n": 1}},
             {"step": {"n": 2}},
@@ -865,6 +879,20 @@ def test_run_record_preview_and_retention(channel_client: TestClient) -> None:
         assert jobs.get(job_id) is not None
 
 
+def _execution_items(
+    client: TestClient, channel_id: str, job_id: str, **params: object
+) -> list[dict]:
+    response = client.get(
+        f"/channels/{channel_id}/runs/{job_id}/executions",
+        params=params,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["limit"] == params.get("limit", 50)
+    assert body["offset"] == params.get("offset", 0)
+    return body["items"]
+
+
 def _test_run(client: TestClient, channel_id: str, graph: dict, **body) -> object:
     stop_at_node_id = body.pop("stop_at_node_id")
     draft = client.get(f"/channels/{channel_id}/draft").json()
@@ -964,8 +992,13 @@ def test_test_run_is_a_recorded_run_and_writes(channel_client: TestClient) -> No
         body = response.json()
         assert body["run"]["status"] == "succeeded", body
         assert body["run"]["stopped_node_id"] is None
-        by_node = {item["node_id"]: item for item in body["node_executions"]}
-        assert set(by_node) == {"nd_trigger", "nd_sql", "nd_write"}
+        assert "node_executions" not in body
+        summaries = {item["node_id"]: item for item in body["node_summaries"]}
+        assert set(summaries) == {"nd_trigger", "nd_sql", "nd_write"}
+        by_node = {
+            item["node_id"]: item
+            for item in _execution_items(channel_client, channel_id, body["run"]["job_id"])
+        }
         assert "dry_run" not in by_node["nd_write"]["output_preview"]
         assert by_node["nd_write"]["output_preview"]["updated"] == 1
         assert by_node["nd_write"]["output_preview"]["inserted"] == 1
@@ -1015,7 +1048,13 @@ def test_test_run_is_a_recorded_run_and_writes(channel_client: TestClient) -> No
         assert capped.status_code == 200, capped.text
         capped_body = capped.json()
         assert capped_body["run"]["status"] == "succeeded", capped_body
-        capped_nodes = {item["node_id"]: item for item in capped_body["node_executions"]}
+        assert "node_executions" not in capped_body
+        capped_nodes = {
+            item["node_id"]: item
+            for item in _execution_items(
+                channel_client, channel_id, capped_body["run"]["job_id"]
+            )
+        }
         assert len(capped_nodes["nd_sql"]["output_preview"]["rows"]) == 20
         assert capped_nodes["nd_sql"]["output_truncated"] is False
         assert capped_nodes["nd_cut"]["output_preview"]["n"] == [1, 2, 3, 4, 5]
@@ -1087,9 +1126,17 @@ def test_test_run_is_a_recorded_run_and_writes(channel_client: TestClient) -> No
         assert blocked.status_code == 200, blocked.text
         blocked_body = blocked.json()
         assert blocked_body["run"]["status"] == "failed"
-        sql_node = next(
-            item for item in blocked_body["node_executions"] if item["node_id"] == "nd_sql"
+        assert "node_executions" not in blocked_body
+        sql_summary = next(
+            item for item in blocked_body["node_summaries"] if item["node_id"] == "nd_sql"
         )
+        assert sql_summary["status_counts"]["failed"] == 1
+        sql_node = _execution_items(
+            channel_client,
+            channel_id,
+            blocked_body["run"]["job_id"],
+            node_id="nd_sql",
+        )[0]
         assert sql_node["status"] == "failed"
 
         listed = channel_client.get(f"/channels/{channel_id}/runs")
@@ -1097,3 +1144,206 @@ def test_test_run_is_a_recorded_run_and_writes(channel_client: TestClient) -> No
         assert listed.json()["total"] > 0
     finally:
         set_dispatcher(previous)
+
+
+def test_dataset_rows_are_a_keyset_page(
+    channel_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.channel.channel_run import set_dispatcher
+    from backend.channel.dataset_registry import get_dataset_store
+    from backend.channel.models import ChannelDatasetRow
+    from backend.core.config import reset_settings_cache
+    from backend.core.db import session_scope
+    from backend.entity.datasets import drop_relation
+    from backend.entity.entity_db import reset_entity_engine
+    from backend.tests.entity_pg import bootstrapped_entity_database
+
+    created = channel_client.post(
+        "/channels", json={"name": "Dataset rows", "description": None}
+    )
+    assert created.status_code == 201, created.text
+    channel_id = created.json()["channel"]["id"]
+    _save_draft(channel_client, channel_id, TRIGGER, base_revision=1)
+    previous = set_dispatcher(lambda _job_id: None)
+    created_sets = []
+    try:
+        with bootstrapped_entity_database(_MAINTENANCE_DATABASE_URL, "refraq_rows") as urls:
+            monkeypatch.setenv("ENTITY_DATABASE_URL", urls.owner_url)
+            monkeypatch.setenv("ENTITY_READER_DATABASE_URL", urls.reader_url)
+            reset_settings_cache()
+            reset_entity_engine()
+            try:
+                _assert_dataset_row_page(channel_client, channel_id, created_sets)
+            finally:
+                store = get_dataset_store()
+                for record in created_sets:
+                    record.status = "dropped"
+                    record.size_bytes = 0
+                    store.save(record)
+                try:
+                    for record in created_sets:
+                        drop_relation(record.relation)
+                finally:
+                    reset_entity_engine()
+    finally:
+        set_dispatcher(previous)
+        with session_scope() as session:
+            for record in created_sets:
+                row = session.get(ChannelDatasetRow, record.id)
+                if row is not None:
+                    session.delete(row)
+        reset_settings_cache()
+
+
+def _assert_dataset_row_page(
+    channel_client: TestClient, channel_id: str, created_sets: list
+) -> None:
+    from datetime import timedelta
+
+    from sqlalchemy import text
+
+    from backend.channel.dataset_registry import (
+        DatasetColumnSpec,
+        DatasetRegistry,
+        get_dataset_store,
+    )
+    from backend.channel.parameters import channel_dataset_max_total_gb
+    from backend.core.time import utc_now
+    from backend.entity.entity_db import get_entity_engine
+    from backend.tests.problem import assert_problem
+
+    started = channel_client.post(
+        f"/channels/{channel_id}/runs", json={"target": "draft"}
+    )
+    assert started.status_code == 202, started.text
+    job_id = started.json()["run"]["job_id"]
+    missing_run = channel_client.get(
+        f"/channels/{channel_id}/runs/job_missing/datasets/dmissing/rows"
+    )
+    assert_problem(missing_run, status=404, code="CHANNEL_RUN_NOT_FOUND")
+    missing = channel_client.get(
+        f"/channels/{channel_id}/runs/{job_id}/datasets/dmissing/rows"
+    )
+    body = assert_problem(missing, status=404, code="CHANNEL_DATASET_UNAVAILABLE")
+    assert body["reason"] == "not_found"
+    assert "CHANNEL_DATASET_QUOTA_EXCEEDED" not in missing.text
+
+    registry = DatasetRegistry(get_dataset_store())
+    page_set = registry.create_from_chunks(
+        job_id=job_id,
+        node_id="nd_read",
+        seq=1,
+        columns=[DatasetColumnSpec(name="code", normalized_type="string")],
+        chunks=[[("S-01",), ("S-02",), ("S-03",)]],
+    )
+    created_sets.append(page_set)
+    assert page_set.row_count == 3
+
+    def rows(dataset_id: str, **params: object):
+        return channel_client.get(
+            f"/channels/{channel_id}/runs/{job_id}/datasets/{dataset_id}/rows",
+            params=params,
+        )
+
+    first = rows(page_set.id, limit=2)
+    assert first.status_code == 200, first.text
+    first_body = first.json()
+    assert first_body["limit"] == 2
+    assert "total" not in first_body
+    assert "offset" not in first_body
+    assert [item["_ord"] for item in first_body["items"]] == [1, 2]
+    assert [item["code"] for item in first_body["items"]] == ["S-01", "S-02"]
+    assert first_body["next_after_ord"] == 2
+    second = rows(page_set.id, after_ord=first_body["next_after_ord"], limit=2)
+    assert second.status_code == 200, second.text
+    second_body = second.json()
+    assert [item["_ord"] for item in second_body["items"]] == [3]
+    assert second_body["items"][0]["code"] == "S-03"
+    assert second_body["next_after_ord"] is None
+    exact = rows(page_set.id, limit=3)
+    assert exact.json()["next_after_ord"] is None
+    assert [item["_ord"] for item in exact.json()["items"]] == [1, 2, 3]
+    tail = rows(page_set.id, after_ord=3)
+    assert tail.json()["items"] == []
+    assert tail.json()["limit"] == 50
+    assert tail.json()["next_after_ord"] is None
+    refused = rows(page_set.id, limit=201)
+    assert_problem(refused, status=422, code="REQUEST_INVALID")
+
+    foreign = registry.create_from_query(
+        job_id="job_other",
+        node_id="nd_read",
+        seq=1,
+        query="SELECT 'Z' AS code",
+    )
+    created_sets.append(foreign)
+    foreign.expires_at = utc_now() - timedelta(seconds=1)
+    get_dataset_store().save(foreign)
+    foreign_response = rows(foreign.id)
+    foreign_body = assert_problem(
+        foreign_response, status=404, code="CHANNEL_DATASET_UNAVAILABLE"
+    )
+    assert foreign_body["reason"] == "foreign_run"
+
+    expired = registry.create_from_query(
+        job_id=job_id,
+        node_id="nd_read",
+        seq=2,
+        query="SELECT 'E' AS code",
+    )
+    created_sets.append(expired)
+    expired.expires_at = utc_now() - timedelta(seconds=1)
+    get_dataset_store().save(expired)
+    expired_body = assert_problem(
+        rows(expired.id), status=404, code="CHANNEL_DATASET_UNAVAILABLE"
+    )
+    assert expired_body["reason"] == "expired"
+
+    loading = registry.create_from_query(
+        job_id=job_id,
+        node_id="nd_read",
+        seq=3,
+        query="SELECT 'L' AS code",
+    )
+    created_sets.append(loading)
+    loading.status = "loading"
+    get_dataset_store().save(loading)
+    loading_body = assert_problem(
+        rows(loading.id), status=404, code="CHANNEL_DATASET_UNAVAILABLE"
+    )
+    assert loading_body["reason"] == "not_found"
+
+    lost = registry.create_from_query(
+        job_id=job_id,
+        node_id="nd_read",
+        seq=4,
+        query="SELECT 'gone' AS code",
+    )
+    created_sets.append(lost)
+    assert lost.row_count > 0
+    with get_entity_engine().begin() as conn:
+        conn.execute(text(f"DELETE FROM {lost.relation}"))
+    lost_body = assert_problem(
+        rows(lost.id), status=404, code="CHANNEL_DATASET_UNAVAILABLE"
+    )
+    assert lost_body["reason"] == "lost"
+
+    empty = registry.create_from_query(
+        job_id=job_id,
+        node_id="nd_read",
+        seq=5,
+        query="SELECT 'x' AS code WHERE false",
+    )
+    created_sets.append(empty)
+    assert empty.row_count == 0
+    empty_body = rows(empty.id).json()
+    assert empty_body["items"] == []
+    assert empty_body["next_after_ord"] is None
+
+    page_set.size_bytes = 10**18
+    get_dataset_store().save(page_set)
+    assert get_dataset_store().used_bytes() >= channel_dataset_max_total_gb() * 1024**3
+    still = rows(page_set.id, limit=1)
+    assert still.status_code == 200, still.text
+    assert still.json()["items"][0]["_ord"] == 1
+    assert "CHANNEL_DATASET_QUOTA_EXCEEDED" not in still.text

@@ -9,8 +9,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
-from backend.channel.errors import ChannelRunNotFound
+from backend.channel.dataset_registry import get_dataset_store
+from backend.channel.errors import ChannelDatasetUnavailable, ChannelRunNotFound
 from backend.channel.run_store import (
+    NodeExecutionRecord,
     get_run_store,
     output_page,
     output_preview_with_truncated,
@@ -19,7 +21,8 @@ from backend.channel.runs import rerun_failed, start_run
 from backend.channel.schemas.channels import GraphIn
 from backend.channel.template_preview import preview_template
 from backend.core.pagination import PageParams, page_params
-from backend.core.time import Instant, format_instant
+from backend.core.time import Instant, format_instant, utc_now
+from backend.entity.datasets import any_row_exists, read_keyset_page
 from backend.jobs.store import get_job_store
 
 router = APIRouter(tags=["channels"])
@@ -70,11 +73,28 @@ class NodeExecutionOut(BaseModel):
     finished_at: Instant | None = None
 
 
+class NodeSummaryOut(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    node_id: str
+    execution_count: int
+    status_counts: dict[str, int]
+
+
 class ChannelRunDetailResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     run: ChannelRunOut
-    node_executions: list[NodeExecutionOut]
+    node_summaries: list[NodeSummaryOut]
+
+
+class ExecutionListResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    items: list[NodeExecutionOut]
+    total: int
+    limit: int
+    offset: int
 
 
 @router.post(
@@ -162,25 +182,47 @@ def http_get_run(
 ) -> dict[str, Any]:
     record = _owned(channel_id, job_id)
     job = get_job_store().get(job_id)
-    executions = []
-    for item in get_run_store().list_executions(job_id):
-        preview, truncated = output_preview_with_truncated(item.output)
-        executions.append(
-            {
-                "seq": item.seq,
-                "node_id": item.node_id,
-                "status": item.status,
-                "started_at": format_instant(item.started_at) if item.started_at else None,
-                "finished_at": format_instant(item.finished_at) if item.finished_at else None,
-                "output_bytes": item.output_bytes,
-                "output_preview": preview,
-                "output_truncated": truncated,
-                "error_code": item.error_code,
-                "error_message": item.error_message,
-                "error_detail": item.error_detail,
-            }
-        )
-    return {"run": _present(job, record), "graph": record.graph, "node_executions": executions}
+    summaries = [
+        {
+            "node_id": item.node_id,
+            "execution_count": item.execution_count,
+            "status_counts": item.status_counts,
+        }
+        for item in get_run_store().execution_summaries(job_id)
+    ]
+    return {"run": _present(job, record), "graph": record.graph, "node_summaries": summaries}
+
+
+@router.get(
+    "/channels/{channel_id}/runs/{job_id}/executions",
+    response_model=ExecutionListResponse,
+)
+def http_list_executions(
+    channel_id: str,
+    job_id: str,
+    _actor: UserRecord = Depends(require_permission("channel:read")),
+    node_id: str | None = None,
+    container_seq: int | None = None,
+    round_index: int | None = Query(default=None, alias="round"),
+    status: Literal["running", "succeeded", "failed", "skipped"] | None = None,
+    page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
+) -> dict[str, Any]:
+    _owned(channel_id, job_id)
+    items, total = get_run_store().query_executions(
+        job_id,
+        node_id=node_id,
+        container_seq=container_seq,
+        round_index=round_index,
+        status=status,
+        limit=page.limit,
+        offset=page.offset,
+    )
+    return {
+        "items": [_execution_body(item) for item in items],
+        "total": total,
+        "limit": page.limit,
+        "offset": page.offset,
+    }
 
 
 @router.get("/channels/{channel_id}/runs/{job_id}/executions/{seq}/output")
@@ -200,6 +242,36 @@ def http_execution_output(
     return output_page(record.output, path, limit=limit, offset=offset)
 
 
+@router.get("/channels/{channel_id}/runs/{job_id}/datasets/{dataset_id}/rows")
+def http_dataset_rows(
+    channel_id: str,
+    job_id: str,
+    dataset_id: str,
+    _actor: UserRecord = Depends(require_permission("channel:read")),
+    after_ord: int = Query(default=0),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict[str, Any]:
+    """Page dataset rows. This read does not consult the capacity ceiling."""
+    _owned(channel_id, job_id)
+    record = get_dataset_store().get(dataset_id)
+    if record is None:
+        raise ChannelDatasetUnavailable("not_found")
+    if record.job_id != job_id:
+        raise ChannelDatasetUnavailable("foreign_run")
+    if record.expires_at is not None and record.expires_at <= utc_now():
+        raise ChannelDatasetUnavailable("expired")
+    if record.status != "ready":
+        raise ChannelDatasetUnavailable("not_found")
+    # Lost means the registry still counts rows and the table has none.
+    # EXISTS, not count(*).
+    if record.row_count > 0 and not any_row_exists(record.relation):
+        raise ChannelDatasetUnavailable("lost")
+    fetched = read_keyset_page(record.relation, after_ord=after_ord, limit=limit + 1)
+    items = fetched[:limit]
+    next_after_ord = int(items[-1]["_ord"]) if len(fetched) > limit else None
+    return {"items": items, "limit": limit, "next_after_ord": next_after_ord}
+
+
 @router.post("/channels/{channel_id}/runs/{job_id}/template-preview")
 def http_preview_template(
     channel_id: str,
@@ -214,6 +286,27 @@ def http_preview_template(
         node_id=body.node_id,
         path=body.path,
     )
+
+
+def _execution_body(item: NodeExecutionRecord) -> dict[str, Any]:
+    preview, truncated = output_preview_with_truncated(item.output)
+    return {
+        "seq": item.seq,
+        "node_id": item.node_id,
+        "container_seq": item.container_seq,
+        "round": item.round,
+        "status": item.status,
+        "started_at": format_instant(item.started_at) if item.started_at else None,
+        "finished_at": format_instant(item.finished_at) if item.finished_at else None,
+        "output_bytes": item.output_bytes,
+        "output_preview": preview,
+        "output_truncated": truncated,
+        "preview_only": item.preview_only,
+        "preview_totals": item.preview_totals,
+        "error_code": item.error_code,
+        "error_message": item.error_message,
+        "error_detail": item.error_detail,
+    }
 
 
 def _owned(channel_id: str, job_id: str) -> Any:

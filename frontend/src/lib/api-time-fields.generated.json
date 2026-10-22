@@ -72,11 +72,14 @@
     "items[].started_at"
   ],
   "GET /channels/{channel_id}/runs/{job_id}": [
-    "node_executions[].finished_at",
-    "node_executions[].started_at",
     "run.created_at",
     "run.finished_at",
     "run.started_at"
+  ],
+  "GET /channels/{channel_id}/runs/{job_id}/datasets/{dataset_id}/rows": [],
+  "GET /channels/{channel_id}/runs/{job_id}/executions": [
+    "items[].finished_at",
+    "items[].started_at"
   ],
   "GET /channels/{channel_id}/runs/{job_id}/executions/{seq}/output": [],
   "GET /channels/{channel_id}/versions": [

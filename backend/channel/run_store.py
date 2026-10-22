@@ -16,11 +16,11 @@ from backend.core.config import get_settings
 from backend.core.db import session_scope
 from backend.core.time import utc_now
 from backend.jobs.store import TERMINAL, get_job_store
-from backend.jobs.store import TERMINAL, get_job_store
 
 __all__ = [
     "ChannelRunRecord",
     "NodeExecutionRecord",
+    "NodeExecutionSummary",
     "get_run_store",
     "note_killed_run",
 ]
@@ -64,6 +64,84 @@ class NodeExecutionRecord:
     round: int | None = None
     preview_only: bool = False
     preview_totals: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class NodeExecutionSummary:
+    node_id: str
+    execution_count: int
+    status_counts: dict[str, int]
+
+
+def _execution_matches(
+    item: NodeExecutionRecord,
+    *,
+    node_id: str | None,
+    container_seq: int | None,
+    round_index: int | None,
+    status: str | None,
+) -> bool:
+    if node_id is not None and item.node_id != node_id:
+        return False
+    if container_seq is not None and item.container_seq != container_seq:
+        return False
+    if round_index is not None and item.round != round_index:
+        return False
+    if status is not None and item.status != status:
+        return False
+    return True
+
+
+def _summarize(items: list[NodeExecutionRecord]) -> list[NodeExecutionSummary]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for item in sorted(items, key=lambda record: record.seq):
+        bucket = grouped.get(item.node_id)
+        if bucket is None:
+            bucket = {
+                "execution_count": 0,
+                "status_counts": {},
+                "first_seq": item.seq,
+            }
+            grouped[item.node_id] = bucket
+        bucket["execution_count"] += 1
+        counts: dict[str, int] = bucket["status_counts"]
+        counts[item.status] = counts.get(item.status, 0) + 1
+    ordered = sorted(grouped.items(), key=lambda entry: entry[1]["first_seq"])
+    return [
+        NodeExecutionSummary(
+            node_id=node_id,
+            execution_count=bucket["execution_count"],
+            status_counts=bucket["status_counts"],
+        )
+        for node_id, bucket in ordered
+    ]
+
+
+def _summaries_from_groups(
+    rows: list[tuple[Any, ...]],
+) -> list[NodeExecutionSummary]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for node_id, status, count, min_seq in rows:
+        bucket = grouped.get(str(node_id))
+        if bucket is None:
+            bucket = {
+                "execution_count": 0,
+                "status_counts": {},
+                "first_seq": int(min_seq),
+            }
+            grouped[str(node_id)] = bucket
+        bucket["execution_count"] += int(count)
+        bucket["status_counts"][str(status)] = int(count)
+        bucket["first_seq"] = min(int(bucket["first_seq"]), int(min_seq))
+    ordered = sorted(grouped.items(), key=lambda entry: entry[1]["first_seq"])
+    return [
+        NodeExecutionSummary(
+            node_id=node_id,
+            execution_count=bucket["execution_count"],
+            status_counts=bucket["status_counts"],
+        )
+        for node_id, bucket in ordered
+    ]
 
 
 def _run_is_due(created_at: datetime, job_id: str, cutoff: datetime, jobs: Any) -> bool:
@@ -167,6 +245,38 @@ class MemoryRunStore:
             items = [item for item in self._execs.values() if item.job_id == job_id]
         items.sort(key=lambda item: item.seq)
         return items
+
+    def execution_summaries(self, job_id: str) -> list[NodeExecutionSummary]:
+        with self._lock:
+            items = [item for item in self._execs.values() if item.job_id == job_id]
+        return _summarize(items)
+
+    def query_executions(
+        self,
+        job_id: str,
+        *,
+        node_id: str | None,
+        container_seq: int | None,
+        round_index: int | None,
+        status: str | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[NodeExecutionRecord], int]:
+        with self._lock:
+            items = [item for item in self._execs.values() if item.job_id == job_id]
+        matched = [
+            item
+            for item in items
+            if _execution_matches(
+                item,
+                node_id=node_id,
+                container_seq=container_seq,
+                round_index=round_index,
+                status=status,
+            )
+        ]
+        matched.sort(key=lambda item: item.seq)
+        return matched[offset : offset + limit], len(matched)
 
     def get_execution(self, job_id: str, seq: int) -> NodeExecutionRecord | None:
         for item in self.list_executions(job_id):
@@ -314,6 +424,57 @@ class SqlRunStore:
             ).all()
             return [_exec_record(row) for row in rows]
 
+    def execution_summaries(self, job_id: str) -> list[NodeExecutionSummary]:
+        with session_scope() as session:
+            rows = session.execute(
+                select(
+                    ChannelNodeExecutionRow.node_id,
+                    ChannelNodeExecutionRow.status,
+                    func.count(),
+                    func.min(ChannelNodeExecutionRow.seq),
+                )
+                .where(ChannelNodeExecutionRow.job_id == job_id)
+                .group_by(
+                    ChannelNodeExecutionRow.node_id,
+                    ChannelNodeExecutionRow.status,
+                )
+            ).all()
+            return _summaries_from_groups([tuple(row) for row in rows])
+
+    def query_executions(
+        self,
+        job_id: str,
+        *,
+        node_id: str | None,
+        container_seq: int | None,
+        round_index: int | None,
+        status: str | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[NodeExecutionRecord], int]:
+        clauses = _execution_clauses(
+            job_id,
+            node_id=node_id,
+            container_seq=container_seq,
+            round_index=round_index,
+            status=status,
+        )
+        with session_scope() as session:
+            total = int(
+                session.scalar(
+                    select(func.count()).select_from(ChannelNodeExecutionRow).where(*clauses)
+                )
+                or 0
+            )
+            rows = session.scalars(
+                select(ChannelNodeExecutionRow)
+                .where(*clauses)
+                .order_by(ChannelNodeExecutionRow.seq)
+                .limit(limit)
+                .offset(offset)
+            ).all()
+            return [_exec_record(row) for row in rows], total
+
     def get_execution(self, job_id: str, seq: int) -> NodeExecutionRecord | None:
         with session_scope() as session:
             row = session.scalar(
@@ -349,6 +510,26 @@ class SqlRunStore:
                 params,
             )
             return int(result.rowcount or 0)
+
+
+def _execution_clauses(
+    job_id: str,
+    *,
+    node_id: str | None,
+    container_seq: int | None,
+    round_index: int | None,
+    status: str | None,
+) -> list[Any]:
+    clauses: list[Any] = [ChannelNodeExecutionRow.job_id == job_id]
+    if node_id is not None:
+        clauses.append(ChannelNodeExecutionRow.node_id == node_id)
+    if container_seq is not None:
+        clauses.append(ChannelNodeExecutionRow.container_seq == container_seq)
+    if round_index is not None:
+        clauses.append(ChannelNodeExecutionRow.round == round_index)
+    if status is not None:
+        clauses.append(ChannelNodeExecutionRow.status == status)
+    return clauses
 
 
 def _run_row(record: ChannelRunRecord) -> ChannelRunRow:

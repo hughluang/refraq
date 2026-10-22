@@ -210,7 +210,11 @@ def test_publish_and_runs_carry_notes(client: TestClient) -> None:
         detail = client.get(f"/channels/{channel_id}/runs/{job_id}").json()
         assert detail["run"]["status"] == "succeeded"
         assert detail["graph"]["notes"] == [NOTE]
-        assert [item["node_id"] for item in detail["node_executions"]] == ["nd_trigger"]
+        assert "node_executions" not in detail
+        assert [item["node_id"] for item in detail["node_summaries"]] == ["nd_trigger"]
+        listed = client.get(f"/channels/{channel_id}/runs/{job_id}/executions")
+        assert listed.status_code == 200, listed.text
+        assert [item["node_id"] for item in listed.json()["items"]] == ["nd_trigger"]
 
 
 def test_template_preview_accepts_notes(client: TestClient) -> None:

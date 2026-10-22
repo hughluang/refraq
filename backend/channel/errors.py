@@ -7,6 +7,7 @@ from typing import Any
 from backend.core.errors import AppError
 
 __all__ = [
+    "ChannelDatasetUnavailable",
     "ChannelDraftConflict",
     "ChannelGraphInvalid",
     "ChannelNotFound",
@@ -40,6 +41,21 @@ class ChannelVersionNotFound(AppError):
 
     def _default_message(self) -> str:
         return "Channel Version not found"
+
+
+class ChannelDatasetUnavailable(AppError):
+    code = "CHANNEL_DATASET_UNAVAILABLE"
+    http_status = 404
+
+    def __init__(self, reason: str, message: str | None = None) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+    def extra_members(self) -> dict[str, Any]:
+        return {"reason": self.reason}
+
+    def _default_message(self) -> str:
+        return "Dataset is not available"
 
 
 class ChannelDraftConflict(AppError):

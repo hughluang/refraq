@@ -334,7 +334,9 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
         "transform.if",
         "transform.merge",
         "transform.set_fields",
+        "volume.dataset_query",
         "volume.for",
+        "volume.materialize",
         "state.variable",
         "write.entity",
         "action.email",
@@ -710,21 +712,189 @@ def test_test_run_creates_run_state(client: TestClient) -> None:
     assert detail.status_code == 200, detail.text
     body = detail.json()
     assert body["run"]["status"] == "succeeded"
-    assert [item["node_id"] for item in body["node_executions"]] == ["nd_trigger"]
+    assert "node_executions" not in body
+    assert body["node_summaries"] == [
+        {
+            "node_id": "nd_trigger",
+            "execution_count": 1,
+            "status_counts": {"succeeded": 1},
+        }
+    ]
     execution = get_run_store().get_execution(job_id, 1)
     assert execution is not None
     execution.output = {"rows": [{"n": index} for index in range(101)]}
     execution.output_bytes = 1
     get_run_store().finish_execution(execution)
-    detailed = client.get(f"/channels/{channel_id}/runs/{job_id}").json()
-    shown = detailed["node_executions"][0]
+    listed = client.get(f"/channels/{channel_id}/runs/{job_id}/executions")
+    assert listed.status_code == 200, listed.text
+    page = listed.json()
+    assert page["total"] == 1
+    assert page["limit"] == 50
+    assert page["offset"] == 0
+    shown = page["items"][0]
     assert len(shown["output_preview"]["rows"]) == 100
     assert shown["output_truncated"] is True
+    assert shown["container_seq"] is None
+    assert shown["round"] is None
+    assert shown["preview_only"] is False
+    assert shown["preview_totals"] == {}
     after = _persisted_counts(channel_id)
     assert after[0] == before[0] + 1
     assert after[1] == before[1] + 1
     assert after[2] == before[2] + 1
     assert after[3] == before[3] + 1
+
+
+def test_execution_list_filters_pages_and_requires_read(client: TestClient) -> None:
+    from backend.channel.channel_run import set_dispatcher
+    from backend.channel.tasks import run_job
+
+    created = client.post("/channels", json={"name": "Paged runs", "description": None})
+    assert created.status_code == 201, created.text
+    channel_id = created.json()["channel"]["id"]
+    saved = client.put(
+        f"/channels/{channel_id}/draft",
+        json={"base_revision": 1, "graph": TRIGGER_GRAPH},
+    )
+    assert saved.status_code == 200, saved.text
+    previous = set_dispatcher(run_job)
+    try:
+        started = client.post(f"/channels/{channel_id}/runs", json={"target": "draft"})
+    finally:
+        set_dispatcher(previous)
+    assert started.status_code == 202, started.text
+    job_id = started.json()["run"]["job_id"]
+    store = get_run_store()
+    failed = store.start_execution(job_id, "nd_step", container_seq=1, round=0)
+    failed.status = "failed"
+    failed.finished_at = utc_now()
+    failed.output = {"n": 1}
+    failed.output_bytes = 1
+    failed.error_code = "CHANNEL_NODE_FAILED"
+    failed.error_message = "nope"
+    store.finish_execution(failed)
+    preview = store.start_execution(job_id, "nd_step", container_seq=1, round=1)
+    preview.status = "succeeded"
+    preview.finished_at = utc_now()
+    preview.output = {"rows": [{"n": 1}]}
+    preview.output_bytes = 4
+    preview.preview_only = True
+    preview.preview_totals = {"rows": 1000000}
+    store.finish_execution(preview)
+    running = store.start_execution(job_id, "nd_step", container_seq=1, round=2)
+
+    detail = client.get(f"/channels/{channel_id}/runs/{job_id}")
+    assert detail.status_code == 200, detail.text
+    assert "node_executions" not in detail.json()
+    assert detail.json()["node_summaries"] == [
+        {
+            "node_id": "nd_trigger",
+            "execution_count": 1,
+            "status_counts": {"succeeded": 1},
+        },
+        {
+            "node_id": "nd_step",
+            "execution_count": 3,
+            "status_counts": {"failed": 1, "succeeded": 1, "running": 1},
+        },
+    ]
+
+    steps = client.get(
+        f"/channels/{channel_id}/runs/{job_id}/executions",
+        params={"node_id": "nd_step", "container_seq": 1},
+    )
+    assert steps.status_code == 200, steps.text
+    step_page = steps.json()
+    assert step_page["total"] == 3
+    assert [item["seq"] for item in step_page["items"]] == [2, 3, 4]
+    assert [item["round"] for item in step_page["items"]] == [0, 1, 2]
+    shown = step_page["items"][1]
+    assert shown["preview_only"] is True
+    assert shown["preview_totals"] == {"rows": 1000000}
+    assert shown["container_seq"] == 1
+    assert shown["status"] == "succeeded"
+
+    one_round = client.get(
+        f"/channels/{channel_id}/runs/{job_id}/executions",
+        params={"round": 0, "status": "failed"},
+    )
+    assert one_round.json()["total"] == 1
+    assert one_round.json()["items"][0]["seq"] == 2
+    assert one_round.json()["items"][0]["error_code"] == "CHANNEL_NODE_FAILED"
+
+    first = client.get(
+        f"/channels/{channel_id}/runs/{job_id}/executions",
+        params={"limit": 1, "offset": 0},
+    )
+    assert first.json()["items"][0]["seq"] == 1
+    assert first.json()["total"] == 4
+    assert first.json()["limit"] == 1
+    second = client.get(
+        f"/channels/{channel_id}/runs/{job_id}/executions",
+        params={"limit": 1, "offset": 1},
+    )
+    assert second.json()["items"][0]["seq"] == 2
+    past = client.get(
+        f"/channels/{channel_id}/runs/{job_id}/executions",
+        params={"offset": 4},
+    )
+    assert past.json()["items"] == []
+    assert past.json()["total"] == 4
+    assert past.json()["limit"] == 50
+    empty = client.get(
+        f"/channels/{channel_id}/runs/{job_id}/executions",
+        params={"node_id": "nd_missing"},
+    )
+    assert empty.json()["items"] == []
+    assert empty.json()["total"] == 0
+
+    invalid = client.get(
+        f"/channels/{channel_id}/runs/{job_id}/executions",
+        params={"status": "nope"},
+    )
+    assert_problem(invalid, status=422, code="REQUEST_INVALID")
+    missing = client.get(f"/channels/{channel_id}/runs/job_missing/executions")
+    assert_problem(missing, status=404, code="CHANNEL_RUN_NOT_FOUND")
+    other = client.get(f"/channels/chn_other/runs/{job_id}")
+    assert_problem(other, status=404, code="CHANNEL_RUN_NOT_FOUND")
+
+    role = create_role(
+        get_role_store(),
+        key="plain_user",
+        name="Plain user",
+        permissions=["console:access"],
+    )
+    get_user_store().create_user(
+        account="plain",
+        display_name="Plain",
+        password_hash=hash_password("secret"),
+        role_id=role.id,
+        status="active",
+    )
+    reader = create_role(
+        get_role_store(),
+        key="channel_reader",
+        name="Channel reader",
+        permissions=["console:access", "channel:read"],
+    )
+    get_user_store().create_user(
+        account="reader",
+        display_name="Reader",
+        password_hash=hash_password("secret"),
+        role_id=reader.id,
+        status="active",
+    )
+    rows = f"/channels/{channel_id}/runs/{job_id}/datasets/dmissing/rows"
+    with TestClient(app) as plain:
+        _login(plain, "plain", "secret")
+        assert plain.get(f"/channels/{channel_id}/runs/{job_id}").status_code == 403
+        assert plain.get(f"/channels/{channel_id}/runs/{job_id}/executions").status_code == 403
+        assert plain.get(rows).status_code == 403
+    with TestClient(app) as allowed:
+        _login(allowed, "reader", "secret")
+        assert allowed.get(f"/channels/{channel_id}/runs/{job_id}").status_code == 200
+        assert allowed.get(f"/channels/{channel_id}/runs/{job_id}/executions").status_code == 200
+    assert running.status == "running"
 
 
 def test_rerun_pins_a_failed_published_version(client: TestClient) -> None:
