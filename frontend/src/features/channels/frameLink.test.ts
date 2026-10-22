@@ -6,9 +6,10 @@ import {
   crossesFrame,
   edgesAfterReparent,
   frameLinkAllowed,
+  freezeFrames,
   placementFromPort,
   placementOnEdge,
-  reparentDrop,
+  reparentDrag,
   type LinkEdge,
   type LinkMember,
 } from "@/features/channels/frameLink";
@@ -60,30 +61,73 @@ describe("frameLinkAllowed", () => {
   });
 });
 
-describe("reparentDrop", () => {
-  it("parents a node to the innermost frame and keeps its absolute position", () => {
+describe("reparentDrag", () => {
+  it("parents a node to the innermost frozen frame and keeps its absolute position", () => {
     const outer = frame("outer", { x: 0, y: 0 });
     const inner = frame("inner", { x: 40, y: 48 }, "outer");
     const card = member("step", "read.sql", { x: 100, y: 100 });
-    const [nextOuter, nextInner, nextStep] = reparentDrop([outer, inner, card], ["step"], { x: 50, y: 60 });
+    const members = [outer, inner, card];
+    const [nextOuter, nextInner, nextStep] = reparentDrag(members, ["step"], freezeFrames(members));
+    expect(freezeFrames(members)).toEqual([
+      { id: "outer", x: 0, y: 0, width: 408, height: 276 },
+      { id: "inner", x: 40, y: 48, width: 320, height: 180 },
+    ]);
     expect(nextOuter).toEqual(outer);
     expect(nextInner).toEqual(inner);
     expect(nextStep).toEqual({ id: "step", nodeType: "read.sql", parentId: "inner", position: { x: 60, y: 52 } });
   });
 
-  it("clears parent when the pointer leaves the frame measured without the dragged node", () => {
+  it("keeps a child that grew the frame when its center stays inside the frozen rect", () => {
     const walk = frame("walk", { x: 0, y: 0 });
     const step = member("step", "read.sql", { x: 400, y: 400 }, "walk");
-    const [nextWalk, nextStep] = reparentDrop([walk, step], ["step"], { x: 400, y: 100 });
+    const frozen = freezeFrames([walk, step]);
+    expect(frozen).toEqual([{ id: "walk", x: 0, y: 0, width: 656, height: 504 }]);
+    const nudged = member("step", "read.sql", { x: 420, y: 400 }, "walk");
+    const [nextWalk, nextStep] = reparentDrag([walk, nudged], ["step"], frozen);
     expect(nextWalk).toEqual(walk);
-    expect(nextStep).toEqual({ id: "step", nodeType: "read.sql", position: { x: 400, y: 400 } });
+    expect(nextStep).toEqual(nudged);
+  });
+
+  it("clears parent when the center leaves the frozen frame", () => {
+    const walk = frame("walk", { x: 0, y: 0 });
+    const step = member("step", "read.sql", { x: 400, y: 400 }, "walk");
+    const frozen = freezeFrames([walk, step]);
+    const moved = member("step", "read.sql", { x: 700, y: 400 }, "walk");
+    const [nextWalk, nextStep] = reparentDrag([walk, moved], ["step"], frozen);
+    expect(nextWalk).toEqual(walk);
+    expect(nextStep).toEqual({ id: "step", nodeType: "read.sql", position: { x: 700, y: 400 } });
     expect(nextStep).not.toHaveProperty("parentId");
+  });
+
+  it("leaves a card outside when only its corner overlaps the frozen frame", () => {
+    const walk = frame("walk", { x: 0, y: 0 });
+    const step = member("step", "read.sql", { x: 220, y: 40 });
+    const members = [walk, step];
+    const [nextWalk, nextStep] = reparentDrag(members, ["step"], freezeFrames(members));
+    expect(nextWalk).toEqual(walk);
+    expect(nextStep).toEqual(step);
+  });
+
+  it("promotes a child to the outer frame when its center leaves the inner one", () => {
+    const outer = frame("outer", { x: 0, y: 0 });
+    const inner = frame("inner", { x: 40, y: 48 }, "outer");
+    const step = member("step", "read.sql", { x: 16, y: 16 }, "inner");
+    const frozen = freezeFrames([outer, inner, step]);
+    const moved = member("step", "read.sql", { x: 236, y: 24 }, "inner");
+    const next = reparentDrag([outer, inner, moved], ["step"], frozen);
+    expect(next.find((node) => node.id === "step")).toEqual({
+      id: "step",
+      nodeType: "read.sql",
+      parentId: "outer",
+      position: { x: 276, y: 72 },
+    });
   });
 
   it("does not drop into the dragged frame or its descendant", () => {
     const outer = frame("outer", { x: 0, y: 0 });
     const inner = frame("inner", { x: 40, y: 48 }, "outer");
-    const [nextOuter, nextInner] = reparentDrop([outer, inner], ["outer"], { x: 50, y: 60 });
+    const members = [outer, inner];
+    const [nextOuter, nextInner] = reparentDrag(members, ["outer"], freezeFrames(members));
     expect(nextOuter).toEqual(outer);
     expect(nextInner).toEqual(inner);
   });
@@ -91,7 +135,8 @@ describe("reparentDrop", () => {
   it("leaves a child of a dragged frame parented to that frame", () => {
     const walk = frame("walk", { x: 16, y: 24 });
     const step = member("step", "read.sql", { x: 32, y: 40 }, "walk");
-    const next = reparentDrop([walk, step], ["walk", "step"], { x: 800, y: 800 });
+    const members = [walk, step];
+    const next = reparentDrag(members, ["walk", "step"], freezeFrames(members));
     expect(next.find((node) => node.id === "step")).toEqual(step);
     expect(next.find((node) => node.id === "walk")?.parentId).toBeUndefined();
   });
@@ -107,10 +152,20 @@ describe("edgesAfterReparent", () => {
       edge("leak", "step", "after", "main"),
       edge("feed", "after", "walk", "main"),
     ];
-    const left = reparentDrop([walk, step, after], ["step"], { x: 480, y: 80 });
+    const frozen = freezeFrames([walk, step, after]);
+    const left = reparentDrag(
+      [walk, member("step", "read.sql", { x: 480, y: 40 }, "walk"), after],
+      ["step"],
+      frozen,
+    );
     expect(edgesAfterReparent(edges, left).map((item) => item.id)).toEqual(["leak", "feed"]);
     const outside = member("step", "read.sql", { x: 480, y: 40 });
-    const entered = reparentDrop([walk, outside, after], ["step"], { x: 48, y: 48 });
+    const parked = [walk, outside, after];
+    const entered = reparentDrag(
+      [walk, member("step", "read.sql", { x: 48, y: 48 }), after],
+      ["step"],
+      freezeFrames(parked),
+    );
     const enteredEdges = [
       edge("done", "walk", "step", "done"),
       edge("into", "after", "step", "main"),

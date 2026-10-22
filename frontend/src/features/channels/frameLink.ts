@@ -1,4 +1,4 @@
-/** For-frame linking: which edges may cross, where a drop belongs, and which ancestors stay visible. */
+/** For-frame linking: which edges may cross, where a drag belongs, and which ancestors stay visible. */
 
 import {
   CARD_HEIGHT,
@@ -59,23 +59,42 @@ export function frameLinkAllowed(
   return targetParent !== source.id;
 }
 
-export function reparentDrop(
+/** A For rect in flow space, captured when a drag starts and kept for the whole gesture. */
+export type FrozenFrame = {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+/** Frame rects from the membership committed at drag start. */
+export function freezeFrames(members: readonly LinkMember[]): FrozenFrame[] {
+  const byId = index(members);
+  return members.flatMap((node) => {
+    if (node.nodeType !== FOR_NODE_TYPE) return [];
+    const origin = absoluteOf(node, byId);
+    const box = frameBox(node.id, members);
+    return [{ id: node.id, x: origin.x, y: origin.y, width: box.width, height: box.height }];
+  });
+}
+
+/**
+ * Provisional parents for `draggedIds`. Each dragged node's center is tested against `frozen`.
+ * The deepest containing frame wins. A child of a dragged frame keeps its parent.
+ * Position is rewritten only when the parent changes, and the absolute position stays put.
+ */
+export function reparentDrag(
   members: readonly LinkMember[],
   draggedIds: readonly string[],
-  point: Point,
+  frozen: readonly FrozenFrame[],
 ): LinkMember[] {
   const dragged = new Set(draggedIds);
   const byId = index(members);
-  const measured = members.filter((node) => !dragged.has(node.id));
-  const target = innermostFrame(
-    members,
-    point,
-    measured,
-    (id) => dragged.has(id) || under(id, dragged, byId),
-    byId,
-  );
+  const excluded = (id: string) => dragged.has(id) || under(id, dragged, byId);
   return members.map((node) => {
     if (!dragged.has(node.id) || under(node.id, dragged, byId)) return node;
+    const target = innermostFrozen(frozen, centerOf(node, members, byId), excluded, byId);
     if (none(node.parentId) === target) return node;
     const absolute = absoluteOf(node, byId);
     const frame = target ? byId.get(target) : undefined;
@@ -235,28 +254,38 @@ function under(id: string, dragged: ReadonlySet<string>, byId: ReadonlyMap<strin
   return false;
 }
 
-function innermostFrame(
+function centerOf(
+  node: LinkMember,
   members: readonly LinkMember[],
-  point: Point,
-  measured: readonly LinkMember[],
+  byId: ReadonlyMap<string, LinkMember>,
+): Point {
+  const origin = absoluteOf(node, byId);
+  const box =
+    node.nodeType === FOR_NODE_TYPE
+      ? frameBox(node.id, members)
+      : { width: CARD_WIDTH, height: CARD_HEIGHT };
+  return { x: origin.x + box.width / 2, y: origin.y + box.height / 2 };
+}
+
+function innermostFrozen(
+  frozen: readonly FrozenFrame[],
+  center: Point,
   excluded: (id: string) => boolean,
   byId: ReadonlyMap<string, LinkMember>,
 ): string | null {
   let chosen: string | null = null;
   let depth = -1;
-  for (const candidate of members) {
-    if (candidate.nodeType !== FOR_NODE_TYPE || excluded(candidate.id)) continue;
-    const origin = absoluteOf(candidate, byId);
-    const box = frameBox(candidate.id, measured);
+  for (const frame of frozen) {
+    if (excluded(frame.id)) continue;
     const inside =
-      point.x >= origin.x &&
-      point.x <= origin.x + box.width &&
-      point.y >= origin.y &&
-      point.y <= origin.y + box.height;
+      center.x >= frame.x &&
+      center.x <= frame.x + frame.width &&
+      center.y >= frame.y &&
+      center.y <= frame.y + frame.height;
     if (!inside) continue;
-    const nextDepth = chainDepth(candidate.id, byId);
+    const nextDepth = chainDepth(frame.id, byId);
     if (nextDepth <= depth) continue;
-    chosen = candidate.id;
+    chosen = frame.id;
     depth = nextDepth;
   }
   return chosen;

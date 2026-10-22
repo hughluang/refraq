@@ -140,9 +140,12 @@ import {
   absolutePosition,
   edgesAfterReparent,
   frameLinkAllowed,
+  freezeFrames,
   placementFromPort,
   placementOnEdge,
-  reparentDrop,
+  reparentDrag,
+  type FrozenFrame,
+  type LinkMember,
 } from "@/features/channels/frameLink";
 import { problemIdentity, type ProblemGraph } from "@/features/channels/problemLabel";
 import { upstreamOutputs } from "@/features/channels/templateLogic";
@@ -159,6 +162,11 @@ type ChannelNode = Node<FlowNodeData, "channel">;
 type NoteData = { text: string };
 type NoteCanvasNode = Node<NoteData, "note"> & { width: number; height: number };
 type CanvasNode = ChannelNode | NoteCanvasNode;
+
+type DragPreview = {
+  ids: readonly string[];
+  frozen: readonly FrozenFrame[];
+};
 
 const NOTE_WIDTH = 240;
 const NOTE_HEIGHT = 120;
@@ -230,19 +238,7 @@ function flowNoteOf(node: NoteCanvasNode): FlowNoteShape {
   };
 }
 
-function presentNodes(nodes: CanvasNode[]): CanvasNode[] {
-  const members = nodes.flatMap((node) =>
-    isChannelNode(node)
-      ? [
-          {
-            id: node.id,
-            parentId: node.parentId,
-            position: node.position,
-            nodeType: node.data.nodeType,
-          },
-        ]
-      : [],
-  );
+function presentNodes(nodes: CanvasNode[], members: readonly LinkMember[]): CanvasNode[] {
   return parentsFirst(nodes).map((node) => {
     if (!isChannelNode(node) || node.data.nodeType !== FOR_NODE_TYPE) return node;
     const box = frameBox(node.id, members);
@@ -508,12 +504,22 @@ function ChannelCanvasBody({
   const pickerSeq = useRef(0);
   const skipTimer = useRef<number | null>(null);
   const pointerRef = useRef<{ x: number; y: number } | null>(null);
+  const dragRef = useRef<DragPreview | null>(null);
+  const [drag, setDrag] = useState<DragPreview | null>(null);
   const menuSeq = useRef(0);
   const highlightRef = useRef<ProblemHighlight | null>(highlight);
   nodesRef.current = nodes;
   edgesRef.current = edges;
   highlightRef.current = highlight;
-  const flowNodes = useMemo(() => presentNodes(nodes), [nodes]);
+  const frameMembers = useMemo(() => {
+    const members = linkMembers(nodes);
+    return drag ? reparentDrag(members, drag.ids, drag.frozen) : members;
+  }, [nodes, drag]);
+  const flowNodes = useMemo(() => presentNodes(nodes, frameMembers), [nodes, frameMembers]);
+  const flowEdges = useMemo(
+    () => (drag ? edgesAfterReparent(edges, frameMembers) : edges),
+    [drag, edges, frameMembers],
+  );
   const settingsRef = useRef(graph.settings);
   settingsRef.current = graph.settings;
   const problemKey = problems.map((problem) => problemIdentity(problem)).join("|");
@@ -1178,19 +1184,30 @@ function ChannelCanvasBody({
     }
   };
 
-  const onNodeDragStop = (
-    event: MouseEvent | TouchEvent,
+  const onNodeDragStart = (
+    _event: MouseEvent | TouchEvent,
     _node: CanvasNode,
     dragged: CanvasNode[],
   ) => {
-    const point = eventPoint(event);
-    const draggedIds = dragged.flatMap((node) => (isChannelNode(node) ? [node.id] : []));
-    if (!point || draggedIds.length === 0) return;
-    const dropped = reparentDrop(
-      linkMembers(nodesRef.current),
-      draggedIds,
-      screenToFlowPosition(point),
-    );
+    const ids = dragged.flatMap((node) => (isChannelNode(node) ? [node.id] : []));
+    if (ids.length === 0) return;
+    const gesture = { ids, frozen: freezeFrames(linkMembers(nodesRef.current)) };
+    dragRef.current = gesture;
+    setDrag(gesture);
+  };
+
+  const onNodeDragStop = (
+    _event: MouseEvent | TouchEvent,
+    _node: CanvasNode,
+    _dragged: CanvasNode[],
+  ) => {
+    const gesture = dragRef.current;
+    dragRef.current = null;
+    if (!gesture) {
+      setDrag(null);
+      return;
+    }
+    const dropped = reparentDrag(linkMembers(nodesRef.current), gesture.ids, gesture.frozen);
     const byId = new Map(dropped.map((member) => [member.id, member]));
     const nextNodes = nodesRef.current.map((node) => {
       if (!isChannelNode(node)) return node;
@@ -1207,6 +1224,7 @@ function ChannelCanvasBody({
     const nextEdges = edgesAfterReparent(edgesRef.current, dropped);
     nodesRef.current = nextNodes;
     edgesRef.current = nextEdges;
+    setDrag(null);
     setNodes(nextNodes);
     setEdges(nextEdges);
     emit(nextNodes, nextEdges);
@@ -1903,7 +1921,7 @@ function ChannelCanvasBody({
           <ReactFlow
             colorMode={colorScheme}
             nodes={flowNodes}
-            edges={edges.map((edge) => ({
+            edges={flowEdges.map((edge) => ({
               ...edge,
               ariaLabel: t("channels.canvas.edge", {
                 source: portLabel(t, edge.sourceHandle || "main"),
@@ -1929,6 +1947,7 @@ function ChannelCanvasBody({
             edgeTypes={edgeTypes}
             defaultEdgeOptions={{ type: CHANNEL_EDGE_TYPE, markerEnd: CHANNEL_EDGE_MARKER }}
             onNodesChange={onNodesChange}
+            onNodeDragStart={onNodeDragStart}
             onNodeDragStop={onNodeDragStop}
             onEdgesChange={onEdgesChange}
             onNodeClick={(event, node) => {

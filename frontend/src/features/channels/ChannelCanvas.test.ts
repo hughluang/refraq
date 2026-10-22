@@ -2128,6 +2128,187 @@ describe("channel ports", () => {
     });
   });
 
+  function dragThrough(
+    id: string,
+    points: { x: number; y: number }[],
+    visit: (index: number) => void,
+  ) {
+    const node = flowNode(id);
+    const [start, ...rest] = points;
+    const [first, ...later] = rest;
+    if (!start || !first) throw new Error("missing drag points");
+    // The pointer leads the node by this much: the opening move only starts the gesture.
+    const shift = 40;
+    const lead = (point: { x: number; y: number }) => clientFor({ x: point.x + shift, y: point.y });
+    act(() => {
+      pointer("mousedown", node, clientFor(start));
+      pointer("mousemove", window, lead(start));
+      pointer("mousemove", window, lead(first));
+    });
+    try {
+      visit(0);
+      later.forEach((point, index) => {
+        act(() => {
+          pointer("mousemove", window, lead(point));
+        });
+        visit(index + 1);
+      });
+    } finally {
+      act(() => {
+        pointer("mouseup", window, lead(rest.at(-1) ?? start));
+      });
+    }
+  }
+
+  it("keeps a child that sits in the grown frame, and the frame keeps hugging it", async () => {
+    const onChange = vi.fn();
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [
+        { ...placed("walk", "volume.for", "Walk", 0), position: { x: 0, y: 0 } },
+        { ...placed("step", "read.sql", "Step", 0), position: { x: 200, y: 40 }, parent: "walk" },
+      ],
+      edges: [
+        {
+          id: "each",
+          source: { node_id: "walk", port: "each" },
+          target: { node_id: "step", port: "main" },
+        },
+      ],
+    }, { catalog: [FOR_SPEC, READ_SPEC], onChange });
+    await measured("step");
+    expect(flowNode("walk").style.width).toBe("456px");
+
+    dragThrough("step", [
+      { x: 200, y: 40 },
+      { x: 216, y: 40 },
+    ], () => {
+      expect(translationOf("step")).toEqual({ x: 216, y: 40 });
+      expect(flowNode("walk").style.width).toBe("472px");
+      expect(screen.getByRole("group", { name: "Each to Main" })).toBeTruthy();
+    });
+
+    await waitFor(() => {
+      const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+      expect(saved.nodes.find((item) => item.id === "step")).toMatchObject({
+        parent: "walk",
+        position: { x: 216, y: 40 },
+      });
+      expect(saved.edges.map((item) => item.id)).toEqual(["each"]);
+    });
+  });
+
+  it("previews leaving and restores the each edge when the center comes back", async () => {
+    const onChange = vi.fn();
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [
+        { ...placed("walk", "volume.for", "Walk", 0), position: { x: 0, y: 0 } },
+        { ...placed("step", "read.sql", "Step", 0), position: { x: 48, y: 48 }, parent: "walk" },
+      ],
+      edges: [
+        {
+          id: "each",
+          source: { node_id: "walk", port: "each" },
+          target: { node_id: "step", port: "main" },
+        },
+      ],
+    }, { catalog: [FOR_SPEC, READ_SPEC], onChange });
+    await measured("step");
+
+    dragThrough("step", [
+      { x: 48, y: 48 },
+      { x: 400, y: 40 },
+      { x: 48, y: 48 },
+    ], (index) => {
+      if (index === 0) {
+        expect(flowNode("walk").style.width).toBe("320px");
+        expect(flowNode("walk").style.height).toBe("180px");
+        expect(screen.queryByRole("group", { name: "Each to Main" })).toBeNull();
+        return;
+      }
+      expect(screen.getByRole("group", { name: "Each to Main" })).toBeTruthy();
+    });
+
+    await waitFor(() => {
+      const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+      expect(saved.nodes.find((item) => item.id === "step")).toMatchObject({
+        parent: "walk",
+        position: { x: 48, y: 48 },
+      });
+      expect(saved.edges.map((item) => item.id)).toEqual(["each"]);
+    });
+  });
+
+  it("does not adopt a card whose center stays outside the frame", async () => {
+    const onChange = vi.fn();
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [
+        { ...placed("walk", "volume.for", "Walk", 0), position: { x: 0, y: 0 } },
+        { ...placed("step", "read.sql", "Step", 0), position: { x: 220, y: 40 } },
+      ],
+      edges: [
+        {
+          id: "done",
+          source: { node_id: "walk", port: "done" },
+          target: { node_id: "step", port: "main" },
+        },
+      ],
+    }, { catalog: [FOR_SPEC, READ_SPEC], onChange });
+    await measured("step");
+
+    dragThrough("step", [
+      { x: 220, y: 40 },
+      { x: 230, y: 40 },
+    ], () => {
+      expect(flowNode("walk").style.width).toBe("320px");
+      expect(flowNode("walk").style.height).toBe("180px");
+      expect(screen.getByRole("group", { name: "Done to Main" })).toBeTruthy();
+    });
+
+    await waitFor(() => {
+      const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+      expect(saved.nodes.find((item) => item.id === "step")).not.toHaveProperty("parent");
+      expect(saved.edges.map((item) => item.id)).toEqual(["done"]);
+    });
+    expect(flowNode("walk").style.width).toBe("320px");
+  });
+
+  it("grows the frame while a card's center is inside, then parents it on release", async () => {
+    const onChange = vi.fn();
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [
+        { ...placed("walk", "volume.for", "Walk", 0), position: { x: 80, y: 80 } },
+        { ...placed("step", "read.sql", "Step", 0), position: { x: 300, y: 100 } },
+      ],
+      edges: [
+        {
+          id: "done",
+          source: { node_id: "walk", port: "done" },
+          target: { node_id: "step", port: "main" },
+        },
+      ],
+    }, { catalog: [FOR_SPEC, READ_SPEC], onChange });
+    await measured("step");
+
+    dragThrough("step", [
+      { x: 300, y: 100 },
+      { x: 270, y: 100 },
+    ], () => {
+      expect(Number.parseFloat(flowNode("walk").style.width)).toBeGreaterThan(320);
+      expect(screen.queryByRole("group", { name: "Done to Main" })).toBeNull();
+    });
+
+    await waitFor(() => {
+      const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+      expect(saved.nodes.find((item) => item.id === "step")?.parent).toBe("walk");
+      expect(saved.edges).toEqual([]);
+    });
+    expect(Number.parseFloat(flowNode("walk").style.width)).toBeGreaterThan(320);
+  });
+
   it("parents a node created from each inside the frame", async () => {
     const onChange = vi.fn();
     const sql = { ...READ_SPEC, label: "SQL", summary: "Query rows" };
