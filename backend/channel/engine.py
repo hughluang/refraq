@@ -6,9 +6,10 @@ whose incoming edges are all dead does not run. Among ready siblings, the
 smaller canvas y, then x, is explored first, and that branch finishes before
 the next sibling.
 
-A volume.for node runs once for each element. Its body is the nodes whose
-parent is that For. Each iteration records the outputs of the body nodes that
-ran. An incoming edge that does not target main does not gate the For.
+A container runs once for each element. Its body is the nodes whose parent is
+that container. ``CONTAINER_TYPES`` names the containers; For is the only one.
+Each accumulated round records the outputs of the body nodes that ran. An
+incoming edge that does not target main does not gate the container.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
-from backend.channel.graph import ancestor_closure, refine_ports
+from backend.channel.graph import CONTAINER_TYPES, ancestor_closure, refine_ports
 from backend.channel.nodes.spec import EngineHooks, NodeResult, NodeType, ReferenceResolver
 from backend.channel.template import output_matches
 from backend.channel.variables import value_size
@@ -29,7 +30,6 @@ __all__ = [
 ]
 
 ITERATION_VOLUME_MAX_BYTES = 16 * 1024 * 1024
-_FOR_TYPE = "volume.for"
 _EACH_PORT = "each"
 
 
@@ -82,7 +82,9 @@ class _Run:
         self.produced: dict[str, Any] = {}
         self.ran_stack: list[set[str]] = [set()]
         self.loops: set[str] = set()
+        self.accumulating: set[str] = set()
         self.bodies: dict[str, set[str]] = {}
+        self._frames: list[tuple[int, int]] = []
         self._index_loops()
 
     def _index_loops(self) -> None:
@@ -92,10 +94,13 @@ class _Run:
             if isinstance(parent, str) and parent in self.nodes and parent != node_id:
                 children.setdefault(parent, set()).add(node_id)
         for node_id, node in self.nodes.items():
-            if str(node.get("type")) != _FOR_TYPE:
+            kind = CONTAINER_TYPES.get(str(node.get("type")))
+            if kind is None:
                 continue
             self.loops.add(node_id)
             self.bodies[node_id] = set(children.get(node_id, ()))
+            if kind.accumulate:
+                self.accumulating.add(node_id)
 
     def walk(self, scope: set[str], *, start: str | None) -> RunOutcome | None:
         direct = (scope & self.reachable) - self._hidden(scope)
@@ -259,9 +264,10 @@ class _Run:
     def _iterate(self, node_id: str, seq: int, result: NodeResult) -> RunOutcome | None:
         node = self.nodes[node_id]
         body = self.bodies[node_id]
-        steps = result.iterations if isinstance(result.iterations, list) else []
+        steps = _iteration_steps(result.iterations)
         collected: list[Any] = []
-        for step in steps:
+        accumulate = node_id in self.accumulating
+        for index, step in enumerate(steps):
             self._drop(body)
             for body_id in body:
                 self.produced.pop(body_id, None)
@@ -269,7 +275,11 @@ class _Run:
             self.produced[node_id] = step
             self._arm(node_id, body)
             self.ran_stack.append(set())
-            outcome = self.walk(body, start=None)
+            self._frames.append((seq, index))
+            try:
+                outcome = self.walk(body, start=None)
+            finally:
+                self._frames.pop()
             ran = self.ran_stack.pop()
             if outcome is not None:
                 self.hooks.on_finish(
@@ -282,6 +292,8 @@ class _Run:
                     ),
                 )
                 return outcome
+            if not accumulate:
+                continue
             collected.append(self._round(ran))
             if value_size(collected) > ITERATION_VOLUME_MAX_BYTES:
                 message = "For iteration output exceeds 16 MiB. Read the items in batches."
@@ -298,8 +310,9 @@ class _Run:
                     failed_node_id=node_id,
                     skipped_node_ids=list(self.skipped),
                 )
-        base = result.output if isinstance(result.output, dict) else {}
-        result.output = {**base, "iterations": collected}
+        if accumulate:
+            base = result.output if isinstance(result.output, dict) else {}
+            result.output = {**base, "iterations": collected}
         self.hooks.on_finish(seq, node, result)
         self._note(node_id, result)
         return None
@@ -395,7 +408,11 @@ class _Run:
 
     def _start(self, node_id: str) -> tuple[int, NodeResult]:
         node = self.nodes[node_id]
-        seq = self.hooks.on_start(node)
+        container_seq = None
+        round_index = None
+        if self._frames:
+            container_seq, round_index = self._frames[-1]
+        seq = self.hooks.on_start(node, container_seq=container_seq, round=round_index)
         spec = self.by_type.get(str(node["type"]))
         if spec is None:
             result = NodeResult(
@@ -430,6 +447,17 @@ class _Run:
 
     def _position(self, node_id: str) -> tuple[float, float]:
         return _position(self.nodes[node_id])
+
+
+def _iteration_steps(iterations: Any) -> list[Any]:
+    if isinstance(iterations, list):
+        return iterations
+    if iterations is None or isinstance(iterations, (str, bytes, bytearray)):
+        return []
+    try:
+        return list(iterations)
+    except TypeError:
+        return []
 
 
 def execute(

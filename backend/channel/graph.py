@@ -1,10 +1,10 @@
 """Pure graph validation for a Data Channel draft.
 
 `validate` reports every problem it finds. It does not read stores; callers
-pass a reference resolver. Every cycle is illegal. A For frame is the set of
-nodes whose parent is that For. An edge may enter a frame only from that For
-node's each port. Ancestors walk incoming edges and skip edges that cross a
-frame.
+pass a reference resolver. Every cycle is illegal. A container frame is the
+set of nodes whose parent is a container. ``CONTAINER_TYPES`` is that set;
+For is its only member. An edge may enter a frame only from that container's
+each port. Ancestors walk incoming edges and skip edges that cross a frame.
 """
 
 from __future__ import annotations
@@ -26,6 +26,8 @@ from backend.channel.template import (
 from backend.channel.values import attribute_value_schema
 
 __all__ = [
+    "CONTAINER_TYPES",
+    "ContainerType",
     "RefinedPort",
     "TemplateSite",
     "refine_ports",
@@ -775,7 +777,25 @@ def _is_trigger(node: Mapping[str, Any], by_type: dict[str, NodeType]) -> bool:
     return spec is not None and spec.trigger
 
 
-_FOR_TYPE = "volume.for"
+@dataclass(frozen=True, slots=True)
+class ContainerType:
+    """How a container type runs the frame named by its ``CONTAINER_TYPES`` key.
+
+    ``accumulate`` keeps each round on the container output. For does. A
+    container that opts out does not.
+    """
+
+    accumulate: bool = True
+
+
+# The engine and graph validation both read this set. For is the only member.
+CONTAINER_TYPES: dict[str, ContainerType] = {
+    "volume.for": ContainerType(),
+}
+
+
+def _is_container(type_id: object) -> bool:
+    return str(type_id) in CONTAINER_TYPES
 
 
 def _parent_ref(node: Mapping[str, Any]) -> str | None:
@@ -807,7 +827,7 @@ def _parent_cycle(start: str, by_id: Mapping[str, Mapping[str, Any]]) -> bool:
             return False
         if parent in seen:
             return True
-        if str(by_id[parent].get("type")) != _FOR_TYPE:
+        if not _is_container(by_id[parent].get("type")):
             return False
         seen.add(parent)
         current = parent
@@ -828,12 +848,12 @@ def _for_frame_problems(
             not isinstance(parent, str)
             or not parent
             or parent not in by_id
-            or str(by_id[parent].get("type")) != _FOR_TYPE
+            or not _is_container(by_id[parent].get("type"))
         ):
             problems.append(
                 Problem(
                     "CHANNEL_LOOP_BODY_INVALID",
-                    "parent does not name a For node",
+                    "parent does not name a container",
                     node_id=node_id,
                 )
             )
@@ -855,14 +875,14 @@ def _for_frame_problems(
             problems.append(
                 Problem(
                     "CHANNEL_LOOP_BODY_INVALID",
-                    "Edge crosses a For frame",
+                    "Edge crosses a container frame",
                     node_id=source_id,
                     edge_id=str(edge["id"]),
                 )
             )
             continue
         source = by_id[source_id]
-        if str(source.get("type")) != _FOR_TYPE:
+        if not _is_container(source.get("type")):
             continue
         source_port = str(edge["source"]["port"])
         target_parent = _parent_ref(by_id[target_id])
@@ -870,7 +890,7 @@ def _for_frame_problems(
             problems.append(
                 Problem(
                     "CHANNEL_LOOP_BODY_INVALID",
-                    "For frame is entered only from each",
+                    "A container frame is entered only from each",
                     node_id=source_id,
                     edge_id=str(edge["id"]),
                 )
@@ -879,7 +899,7 @@ def _for_frame_problems(
             problems.append(
                 Problem(
                     "CHANNEL_LOOP_BODY_INVALID",
-                    "each connects only to a direct child of this For",
+                    "each connects only to a direct child of this container",
                     node_id=source_id,
                     edge_id=str(edge["id"]),
                 )

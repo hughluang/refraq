@@ -53,7 +53,13 @@ class EngineHooks(Protocol):
 
     def superseded(self) -> bool: ...
 
-    def on_start(self, node: Mapping[str, Any]) -> int: ...
+    def on_start(
+        self,
+        node: Mapping[str, Any],
+        *,
+        container_seq: int | None = None,
+        round: int | None = None,
+    ) -> int: ...
 
     def on_finish(self, seq: int, node: Mapping[str, Any], result: NodeResult) -> None: ...
 

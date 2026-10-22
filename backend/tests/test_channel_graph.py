@@ -828,14 +828,18 @@ def test_parent_must_name_an_existing_for() -> None:
         if item.code == "CHANNEL_LOOP_BODY_INVALID" and item.edge_id is None
     ]
     assert [item.node_id for item in missing_problems] == ["nd_step"]
-    assert missing_problems[0].detail == "parent does not name a For node"
+    assert missing_problems[0].detail == "parent does not name a container"
+    assert "For" not in missing_problems[0].detail
 
     not_for = _for_frame()
     not_for["nodes"][2]["parent"] = "nd_trigger"
     not_for_problems = [
         item for item in validate(not_for, FakeResolver()) if item.code == "CHANNEL_LOOP_BODY_INVALID"
     ]
-    assert any(item.node_id == "nd_step" and item.detail == "parent does not name a For node" for item in not_for_problems)
+    assert any(
+        item.node_id == "nd_step" and item.detail == "parent does not name a container"
+        for item in not_for_problems
+    )
 
     cycled = _graph(
         [
@@ -860,7 +864,7 @@ def test_edge_that_crosses_a_for_frame_is_invalid() -> None:
         item for item in validate(entered, FakeResolver()) if item.code == "CHANNEL_LOOP_BODY_INVALID"
     ]
     assert [item.edge_id for item in entered_problems] == ["ed_from_trigger"]
-    assert entered_problems[0].detail == "Edge crosses a For frame"
+    assert entered_problems[0].detail == "Edge crosses a container frame"
 
     left = _for_frame()
     left["edges"].append(_edge("ed_escape", "nd_tail", "nd_after"))
@@ -886,7 +890,7 @@ def test_for_frame_is_entered_only_from_each() -> None:
         item for item in validate(done_into, FakeResolver()) if item.code == "CHANNEL_LOOP_BODY_INVALID"
     ]
     assert [item.edge_id for item in done_problems] == ["ed_done_in"]
-    assert done_problems[0].detail == "For frame is entered only from each"
+    assert done_problems[0].detail == "A container frame is entered only from each"
 
     each_out = _for_frame()
     each_out["edges"].append(_edge("ed_each_out", "nd_walk", "nd_after", source_port="each"))
@@ -896,7 +900,88 @@ def test_for_frame_is_entered_only_from_each() -> None:
         if item.code == "CHANNEL_LOOP_BODY_INVALID" and item.edge_id == "ed_each_out"
     ]
     assert len(each_problems) == 1
-    assert each_problems[0].detail == "each connects only to a direct child of this For"
+    assert each_problems[0].detail == "each connects only to a direct child of this container"
+
+
+def test_for_is_the_only_container_type() -> None:
+    from backend.channel.graph import CONTAINER_TYPES
+
+    assert set(CONTAINER_TYPES) == {"volume.for"}
+    assert CONTAINER_TYPES["volume.for"].accumulate is True
+
+
+def test_a_non_for_container_in_the_set_is_a_legal_parent(monkeypatch) -> None:
+    from backend.channel.graph import CONTAINER_TYPES, ContainerType
+    from backend.channel.nodes import list_node_types
+
+    monkeypatch.setitem(
+        CONTAINER_TYPES,
+        "volume.batch_read",
+        ContainerType(accumulate=False),
+    )
+    catalog = [*list_node_types(), _container_type("volume.batch_read")]
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_batch", "volume.batch_read", "Batch"),
+            _node("nd_step", "transform.set_fields", "Step", _fields("1"), parent="nd_batch"),
+            _node("nd_after", "transform.set_fields", "After", _fields("2")),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_batch"),
+            _edge("ed_each", "nd_batch", "nd_step", source_port="each"),
+            _edge("ed_done", "nd_batch", "nd_after", source_port="done"),
+        ],
+    )
+    assert [item for item in validate(graph, FakeResolver(), catalog) if item.severity == "error"] == []
+
+    crossed = _graph(
+        graph["nodes"],
+        [
+            *graph["edges"],
+            _edge("ed_cross", "nd_trigger", "nd_step"),
+        ],
+    )
+    cross = [
+        item
+        for item in validate(crossed, FakeResolver(), catalog)
+        if item.code == "CHANNEL_LOOP_BODY_INVALID"
+    ]
+    assert [item.edge_id for item in cross] == ["ed_cross"]
+    assert cross[0].detail == "Edge crosses a container frame"
+
+    stray = _graph(
+        graph["nodes"],
+        [
+            *[edge for edge in graph["edges"] if edge["id"] != "ed_done"],
+            _edge("ed_each_out", "nd_batch", "nd_after", source_port="each"),
+        ],
+    )
+    each = [
+        item
+        for item in validate(stray, FakeResolver(), catalog)
+        if item.code == "CHANNEL_LOOP_BODY_INVALID" and item.edge_id == "ed_each_out"
+    ]
+    assert len(each) == 1
+    assert each[0].detail == "each connects only to a direct child of this container"
+
+
+def _container_type(type_id: str) -> NodeType:
+    return NodeType(
+        type_id=type_id,
+        family="volume",
+        label="Batch",
+        summary="Test container.",
+        description="Test container used to extend the container set.",
+        trigger=False,
+        inputs=(PortSpec("main", "Input.", coarse_type="object"),),
+        outputs=(
+            PortSpec("each", "Each round.", coarse_type="object"),
+            PortSpec("done", "After the rounds.", coarse_type="object"),
+        ),
+        config_schema={"type": "object", "additionalProperties": True},
+        execute=_idle,
+    )
 
 
 def test_ancestor_closure_skips_edges_that_cross_a_for_frame() -> None:

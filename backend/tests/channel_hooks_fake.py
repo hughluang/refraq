@@ -43,6 +43,7 @@ class FakeHooks:
         self.outputs: dict[str, Any] = {}
         self.dropped: list[list[str]] = []
         self.statuses: list[tuple[str, str]] = []
+        self.starts: list[tuple[str, int | None, int | None]] = []
         self.cancel_after: str | None = None
 
     def cancelled(self) -> bool:
@@ -51,9 +52,16 @@ class FakeHooks:
     def superseded(self) -> bool:
         return False
 
-    def on_start(self, node: Mapping[str, Any]) -> int:
+    def on_start(
+        self,
+        node: Mapping[str, Any],
+        *,
+        container_seq: int | None = None,
+        round: int | None = None,
+    ) -> int:
         node_id = str(node["id"])
         self.order.append(node_id)
+        self.starts.append((node_id, container_seq, round))
         self.statuses.append((node_id, "running"))
         return len(self.order)
 

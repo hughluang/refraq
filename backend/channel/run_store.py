@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -60,6 +60,34 @@ class NodeExecutionRecord:
     error_code: str | None
     error_message: str | None
     error_detail: dict[str, Any] | None
+    container_seq: int | None = None
+    round: int | None = None
+    preview_only: bool = False
+    preview_totals: dict[str, int] = field(default_factory=dict)
+
+
+def _run_is_due(created_at: datetime, job_id: str, cutoff: datetime, jobs: Any) -> bool:
+    """A memory run created before ``cutoff`` whose Job is terminal."""
+    job = jobs.get(job_id)
+    return created_at < cutoff and job is not None and job.status in TERMINAL
+
+
+def _due_runs_clause(cutoff: datetime) -> tuple[str, dict[str, Any]]:
+    """SQL for ``created_at < cutoff`` and a terminal Job.
+
+    ``DELETE`` and the id lookup share this text so the two cannot drift.
+    """
+    statuses = list(TERMINAL)
+    holders = ", ".join(f":status_{index}" for index in range(len(statuses)))
+    params: dict[str, Any] = {
+        f"status_{index}": status for index, status in enumerate(statuses)
+    }
+    params["cutoff"] = cutoff
+    clause = (
+        "created_at < :cutoff "
+        f"AND job_id IN (SELECT id FROM jobs WHERE status IN ({holders}))"
+    )
+    return clause, params
 
 
 class MemoryRunStore:
@@ -100,9 +128,17 @@ class MemoryRunStore:
         items.sort(key=lambda item: (item.created_at, item.job_id), reverse=True)
         return items[offset : offset + limit], len(items)
 
-    def start_execution(self, job_id: str, node_id: str) -> NodeExecutionRecord:
+    def start_execution(
+        self,
+        job_id: str,
+        node_id: str,
+        *,
+        container_seq: int | None = None,
+        round: int | None = None,
+    ) -> NodeExecutionRecord:
         with self._lock:
-            seq = 1 + sum(1 for item in self._execs.values() if item.job_id == job_id)
+            seqs = [item.seq for item in self._execs.values() if item.job_id == job_id]
+            seq = (max(seqs) if seqs else 0) + 1
             record = NodeExecutionRecord(
                 id=f"cne_{uuid.uuid4().hex[:12]}",
                 job_id=job_id,
@@ -116,6 +152,8 @@ class MemoryRunStore:
                 error_code=None,
                 error_message=None,
                 error_detail=None,
+                container_seq=container_seq,
+                round=round,
             )
             self._execs[record.id] = record
             return record
@@ -136,6 +174,20 @@ class MemoryRunStore:
                 return item
         return None
 
+    def job_ids_due(self, cutoff: datetime) -> list[str]:
+        """Job ids of runs created before ``cutoff`` whose Job is terminal.
+
+        Same predicate as ``delete_expired_terminal_runs``. Does not delete.
+        """
+        jobs = get_job_store()
+        with self._lock:
+            snapshot = [(record.created_at, record.job_id) for record in self._runs.values()]
+        return [
+            job_id
+            for created_at, job_id in snapshot
+            if _run_is_due(created_at, job_id, cutoff, jobs)
+        ]
+
     def delete_expired_terminal_runs(self, cutoff: datetime) -> int:
         """Delete runs created before ``cutoff`` whose Job is terminal.
 
@@ -147,9 +199,7 @@ class MemoryRunStore:
             doomed = [
                 record.job_id
                 for record in self._runs.values()
-                if record.created_at < cutoff
-                and (job := jobs.get(record.job_id)) is not None
-                and job.status in TERMINAL
+                if _run_is_due(record.created_at, record.job_id, cutoff, jobs)
             ]
             for job_id in doomed:
                 del self._runs[job_id]
@@ -206,13 +256,20 @@ class SqlRunStore:
             ).all()
             return [_run_record(row) for row in rows], total
 
-    def start_execution(self, job_id: str, node_id: str) -> NodeExecutionRecord:
+    def start_execution(
+        self,
+        job_id: str,
+        node_id: str,
+        *,
+        container_seq: int | None = None,
+        round: int | None = None,
+    ) -> NodeExecutionRecord:
         with session_scope() as session:
             seq = int(
                 session.scalar(
-                    select(func.count())
-                    .select_from(ChannelNodeExecutionRow)
-                    .where(ChannelNodeExecutionRow.job_id == job_id)
+                    select(func.max(ChannelNodeExecutionRow.seq)).where(
+                        ChannelNodeExecutionRow.job_id == job_id
+                    )
                 )
                 or 0
             ) + 1
@@ -229,6 +286,8 @@ class SqlRunStore:
                 error_code=None,
                 error_message=None,
                 error_detail=None,
+                container_seq=container_seq,
+                round=round,
             )
             session.add(_exec_row(record))
             return record
@@ -240,7 +299,7 @@ class SqlRunStore:
                 raise RuntimeError(f"channel node execution {record.id} is missing")
             row.status = record.status
             row.finished_at = record.finished_at
-            row.output = record.output
+            row.output = _pack_output(record)
             row.output_bytes = record.output_bytes
             row.error_code = record.error_code
             row.error_message = record.error_message
@@ -265,23 +324,28 @@ class SqlRunStore:
             )
             return None if row is None else _exec_record(row)
 
+    def job_ids_due(self, cutoff: datetime) -> list[str]:
+        """Job ids of runs created before ``cutoff`` whose Job is terminal.
+
+        Same predicate as ``delete_expired_terminal_runs``. Does not delete.
+        """
+        clause, params = _due_runs_clause(cutoff)
+        with session_scope() as session:
+            rows = session.execute(
+                text(f"SELECT job_id FROM channel_runs WHERE {clause}"),
+                params,
+            ).scalars()
+            return [str(job_id) for job_id in rows]
+
     def delete_expired_terminal_runs(self, cutoff: datetime) -> int:
         """Delete runs created before ``cutoff`` whose Job is terminal.
 
         ``channel_node_executions`` cascade with the run. Jobs stay.
         """
-        statuses = list(TERMINAL)
-        holders = ", ".join(f":status_{index}" for index in range(len(statuses)))
-        params: dict[str, Any] = {
-            f"status_{index}": status for index, status in enumerate(statuses)
-        }
-        params["cutoff"] = cutoff
+        clause, params = _due_runs_clause(cutoff)
         with session_scope() as session:
             result = session.execute(
-                text(
-                    "DELETE FROM channel_runs WHERE created_at < :cutoff "
-                    f"AND job_id IN (SELECT id FROM jobs WHERE status IN ({holders}))"
-                ),
+                text(f"DELETE FROM channel_runs WHERE {clause}"),
                 params,
             )
             return int(result.rowcount or 0)
@@ -336,15 +400,18 @@ def _exec_row(record: NodeExecutionRecord) -> ChannelNodeExecutionRow:
         status=record.status,
         started_at=record.started_at,
         finished_at=record.finished_at,
-        output=record.output,
+        output=_pack_output(record),
         output_bytes=record.output_bytes,
         error_code=record.error_code,
         error_message=record.error_message,
         error_detail=record.error_detail,
+        container_seq=record.container_seq,
+        round=record.round,
     )
 
 
 def _exec_record(row: ChannelNodeExecutionRow) -> NodeExecutionRecord:
+    output, preview_only, preview_totals = _unpack_output(row.output)
     return NodeExecutionRecord(
         id=row.id,
         job_id=row.job_id,
@@ -353,12 +420,49 @@ def _exec_record(row: ChannelNodeExecutionRow) -> NodeExecutionRecord:
         status=row.status,
         started_at=row.started_at,
         finished_at=row.finished_at,
-        output=row.output,
+        output=output,
         output_bytes=row.output_bytes,
         error_code=row.error_code,
         error_message=row.error_message,
         error_detail=row.error_detail,
+        container_seq=row.container_seq,
+        round=row.round,
+        preview_only=preview_only,
+        preview_totals=preview_totals,
     )
+
+
+_PREVIEW_MARK = "$refraq_preview"
+_PREVIEW_VALUE = "$refraq_value"
+
+
+def _pack_output(record: NodeExecutionRecord) -> Any:
+    """Persist preview metadata beside the value without a second column.
+
+    The marker keys are reserved. Node code never sets them. A non-preview
+    execution stores its output unchanged.
+    """
+    if not record.preview_only:
+        return record.output
+    return {
+        _PREVIEW_MARK: {
+            "preview_only": True,
+            "preview_totals": record.preview_totals,
+        },
+        _PREVIEW_VALUE: record.output,
+    }
+
+
+def _unpack_output(raw: Any) -> tuple[Any, bool, dict[str, int]]:
+    if (
+        isinstance(raw, dict)
+        and set(raw) == {_PREVIEW_MARK, _PREVIEW_VALUE}
+        and isinstance(raw.get(_PREVIEW_MARK), dict)
+        and raw[_PREVIEW_MARK].get("preview_only") is True
+    ):
+        totals = raw[_PREVIEW_MARK].get("preview_totals") or {}
+        return raw[_PREVIEW_VALUE], True, {str(key): int(value) for key, value in totals.items()}
+    return raw, False, {}
 
 
 def output_page(output: Any, path: str | None, *, limit: int, offset: int) -> dict[str, Any]:
@@ -380,12 +484,16 @@ def output_page(output: Any, path: str | None, *, limit: int, offset: int) -> di
     return {"value": value}
 
 
-def output_preview(output: Any, *, cap: int = 100) -> Any:
+# Stored previews and the read-time helper cut lists at the same length.
+PREVIEW_LIST_CAP = 100
+
+
+def output_preview(output: Any, *, cap: int = PREVIEW_LIST_CAP) -> Any:
     return output_preview_with_truncated(output, cap=cap)[0]
 
 
 def output_preview_with_truncated(
-    output: Any, *, cap: int = 100
+    output: Any, *, cap: int = PREVIEW_LIST_CAP
 ) -> tuple[Any, bool]:
     return _cut(output, cap)
 

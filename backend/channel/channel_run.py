@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -14,7 +15,12 @@ from backend.channel.engine import RunOutcome, execute
 from backend.channel.nodes import list_node_types
 from backend.channel.nodes.spec import EngineHooks, NodeResult
 from backend.channel.references import ChannelReferenceResolver
-from backend.channel.run_store import ChannelRunRecord, get_run_store, output_size
+from backend.channel.run_store import (
+    ChannelRunRecord,
+    PREVIEW_LIST_CAP,
+    get_run_store,
+    output_size,
+)
 from backend.channel.sandbox import SandboxSession
 from backend.channel.store import get_channel_store
 from backend.channel.tasks import run_job
@@ -396,23 +402,40 @@ class _RunHooks:
             return False
         return versions[0].number > self._run_version
 
-    def on_start(self, node: Mapping[str, Any]) -> int:
-        record = get_run_store().start_execution(self.run_id, str(node["id"]))
+    def on_start(
+        self,
+        node: Mapping[str, Any],
+        *,
+        container_seq: int | None = None,
+        round: int | None = None,
+    ) -> int:
+        record = get_run_store().start_execution(
+            self.run_id,
+            str(node["id"]),
+            container_seq=container_seq,
+            round=round,
+        )
         return record.seq
 
     def on_finish(self, seq: int, node: Mapping[str, Any], result: NodeResult) -> None:
-        del node
         store = get_run_store()
         record = store.get_execution(self.run_id, seq)
         if record is None:
             return
         record.status = result.status
         record.finished_at = utc_now()
-        record.output = result.output
         record.output_bytes = output_size(result.output)
         record.error_code = result.error_code
         record.error_message = result.error_message
         record.error_detail = result.error_detail
+        record.preview_only = False
+        record.preview_totals = {}
+        record.output = result.output
+        if result.status == "succeeded" and _batch_read_ancestor(
+            store.get_run(self.run_id), str(node["id"])
+        ):
+            record.output, record.preview_totals = _preview_copy(result.output)
+            record.preview_only = True
         store.finish_execution(record)
 
 
@@ -425,6 +448,57 @@ def _sandbox_session(context: dict[str, Any]) -> Iterator[SandboxSession]:
             platform=context["platform"],
         )
         yield sandbox
+
+
+_BATCH_READ = "volume.batch_read"
+
+
+def _batch_read_ancestor(run: ChannelRunRecord | None, node_id: str) -> bool:
+    """True when a parent-chain ancestor, not the node itself, is a Batch Read."""
+    if run is None or not isinstance(run.graph, dict):
+        return False
+    nodes = {
+        str(node["id"]): node
+        for node in run.graph.get("nodes") or []
+        if isinstance(node, dict) and "id" in node
+    }
+    seen: set[str] = set()
+    current = nodes.get(node_id)
+    while isinstance(current, dict):
+        parent_id = current.get("parent")
+        if not isinstance(parent_id, str) or not parent_id or parent_id in seen:
+            return False
+        seen.add(parent_id)
+        parent = nodes.get(parent_id)
+        if not isinstance(parent, dict):
+            return False
+        if str(parent.get("type")) == _BATCH_READ:
+            return True
+        current = parent
+    return False
+
+
+def _preview_copy(output: Any, *, cap: int = PREVIEW_LIST_CAP) -> tuple[Any, dict[str, int]]:
+    """Deep-copy ``output`` and keep the first ``cap`` elements of each list."""
+    copied = copy.deepcopy(output)
+    totals: dict[str, int] = {}
+    _clip_lists(copied, cap, "", totals)
+    return copied, totals
+
+
+def _clip_lists(value: Any, cap: int, path: str, totals: dict[str, int]) -> None:
+    if isinstance(value, list):
+        totals[path] = len(value)
+        if len(value) > cap:
+            del value[cap:]
+        for index, item in enumerate(value):
+            child = str(index) if path == "" else f"{path}.{index}"
+            _clip_lists(item, cap, child, totals)
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            child = str(key) if path == "" else f"{path}.{key}"
+            _clip_lists(item, cap, child, totals)
 
 
 def _execute_graph(

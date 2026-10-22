@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import pytest
+
 from backend.channel.engine import execute
 from backend.channel.nodes.spec import EngineHooks, NodeResult, NodeType, PortSpec
 from backend.tests.channel_hooks_fake import FakeHooks
@@ -251,6 +253,33 @@ def test_supersede_stops_before_the_next_node() -> None:
     assert hooks.order == ["a"]
 
 
+def test_a_node_that_raises_because_the_run_stopped_is_not_marked_failed() -> None:
+    def write(node: dict, hooks: EngineHooks) -> NodeResult:
+        if hooks.cancelled() or hooks.superseded():
+            raise RuntimeError("cancelled")
+        return NodeResult(status="succeeded", output={"id": node["id"]})
+
+    class _Superseded(FakeHooks):
+        def superseded(self) -> bool:
+            return "write" in self.order
+
+    graph = {
+        "nodes": [_node("a", 0), _node("write", 1)],
+        "edges": [_edge("a", "write")],
+        "settings": {},
+    }
+    cancelled = FakeHooks()
+    cancelled.cancel_after = "write"
+    with pytest.raises(RuntimeError, match="cancelled"):
+        execute(graph, "a", _catalog({"fake": write}), _RESOLVER, cancelled)
+    assert cancelled.statuses == [("a", "succeeded"), ("write", "running")]
+
+    superseded = _Superseded()
+    with pytest.raises(RuntimeError, match="cancelled"):
+        execute(graph, "a", _catalog({"fake": write}), _RESOLVER, superseded)
+    assert superseded.statuses == [("a", "succeeded"), ("write", "running")]
+
+
 def test_cancel_between_nodes() -> None:
     graph = {
         "nodes": [_node("a", 0), _node("b", 1)],
@@ -354,6 +383,33 @@ def test_for_runs_the_body_once_per_element_and_records_iterations() -> None:
     assert hooks.dropped == [["step"], ["step"]]
 
 
+def test_for_runs_each_element_of_a_non_list_iterable() -> None:
+    def walk(node: dict, hooks: EngineHooks) -> NodeResult:
+        result = _walk(node, hooks)
+        if result.iterations is not None:
+            result.iterations = tuple(result.iterations)
+        return result
+
+    walk_node = _node("walk", 0, type_id="volume.for")
+    walk_node["config"] = {"items": ["a", "b"]}
+    graph = {
+        "nodes": [walk_node, _node("step", 1, parent="walk"), _node("after", 2)],
+        "edges": [
+            _edge("walk", "step", "each"),
+            _edge("walk", "after", "done"),
+        ],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(graph, "walk", _catalog({"volume.for": walk, "fake": walk}), _RESOLVER, hooks)
+    assert outcome.status == "succeeded"
+    assert hooks.order == ["walk", "step", "step", "after"]
+    assert hooks.outputs["walk"]["iterations"] == [
+        {"step": {"saw": "a", "id": "step"}},
+        {"step": {"saw": "b", "id": "step"}},
+    ]
+
+
 def test_for_empty_list_skips_the_body_and_still_runs_done() -> None:
     walk = _node("walk", 0, type_id="volume.for")
     walk["config"] = {"items": []}
@@ -443,6 +499,105 @@ def test_for_iteration_omits_the_branch_that_did_not_run() -> None:
     ]
 
 
+def test_a_container_in_the_set_runs_its_body_once_per_element(monkeypatch) -> None:
+    from backend.channel.graph import CONTAINER_TYPES, ContainerType
+
+    monkeypatch.setitem(
+        CONTAINER_TYPES,
+        "volume.batch_read",
+        ContainerType(),
+    )
+
+    def batch(node: dict, hooks: EngineHooks) -> NodeResult:
+        if node["type"] != "volume.batch_read":
+            current = hooks.outputs.get("batch") or {}
+            return NodeResult(status="succeeded", output={"saw": current.get("current"), "id": node["id"]})
+        items = list(node["config"].get("items") or [])
+        iterations = [{"current": item, "index": index, "count": len(items)} for index, item in enumerate(items)]
+        return NodeResult(
+            status="succeeded",
+            output={"count": len(items)},
+            iterations=iterations,
+            ports=frozenset({"done"}),
+        )
+
+    node = _node("batch", 0, type_id="volume.batch_read")
+    node["config"] = {"items": ["a", "b"]}
+    graph = {
+        "nodes": [node, _node("step", 1, parent="batch")],
+        "edges": [_edge("batch", "step", "each")],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(
+        graph,
+        "batch",
+        _catalog({"volume.batch_read": batch, "fake": batch}),
+        _RESOLVER,
+        hooks,
+    )
+    assert outcome.status == "succeeded"
+    assert hooks.order == ["batch", "step", "step"]
+    assert hooks.outputs["batch"]["iterations"] == [
+        {"step": {"saw": "a", "id": "step"}},
+        {"step": {"saw": "b", "id": "step"}},
+    ]
+
+
+def test_a_container_that_does_not_accumulate_skips_the_16_mib_cap(monkeypatch) -> None:
+    from backend.channel.graph import CONTAINER_TYPES, ContainerType
+    from backend.channel.variables import value_size
+
+    monkeypatch.setitem(
+        CONTAINER_TYPES,
+        "volume.batch_read",
+        ContainerType(accumulate=False),
+    )
+    blob = "x" * 30
+    one_round = [{"step": {"blob": blob}}]
+    monkeypatch.setattr(
+        "backend.channel.engine.ITERATION_VOLUME_MAX_BYTES",
+        value_size(one_round),
+    )
+
+    def batch(node: dict, hooks: EngineHooks) -> NodeResult:
+        del hooks
+        if node["type"] == "volume.batch_read":
+            items = list(node["config"].get("items") or [])
+            iterations = [{"current": item} for item in items]
+            return NodeResult(
+                status="succeeded",
+                output={"count": len(items)},
+                iterations=iterations,
+                ports=frozenset({"done"}),
+            )
+        return NodeResult(status="succeeded", output={"blob": blob})
+
+    node = _node("batch", 0, type_id="volume.batch_read")
+    node["config"] = {"items": ["a", "b"]}
+    graph = {
+        "nodes": [node, _node("step", 1, parent="batch"), _node("after", 2)],
+        "edges": [
+            _edge("batch", "step", "each"),
+            _edge("batch", "after", "done"),
+        ],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(
+        graph,
+        "batch",
+        _catalog({"volume.batch_read": batch, "fake": batch}),
+        _RESOLVER,
+        hooks,
+    )
+    assert outcome.status == "succeeded"
+    assert outcome.error_code is None
+    assert hooks.order == ["batch", "step", "step", "after"]
+    assert "iterations" not in hooks.outputs["batch"]
+    assert hooks.outputs["batch"]["count"] == 2
+
+
 def test_for_fails_when_iteration_output_exceeds_16_mib(monkeypatch) -> None:
     from backend.channel.engine import ITERATION_VOLUME_MAX_BYTES
     from backend.channel.variables import value_size
@@ -513,6 +668,59 @@ def test_engine_runs_volume_for_without_rejecting_the_each_schema() -> None:
     ]
     assert hooks.outputs["walk"]["count"] == 2
     assert hooks.outputs["walk"]["current"] == "b"
+
+
+def test_body_execution_names_the_direct_container_and_round() -> None:
+    walk = _node("walk", 0, type_id="volume.for")
+    walk["config"] = {"items": ["a", "b"]}
+    graph = {
+        "nodes": [walk, _node("step", 1, parent="walk"), _node("after", 2)],
+        "edges": [
+            _edge("walk", "step", "each"),
+            _edge("walk", "after", "done"),
+        ],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(graph, "walk", _catalog({"volume.for": _walk, "fake": _walk}), _RESOLVER, hooks)
+    assert outcome.status == "succeeded"
+    assert hooks.starts == [
+        ("walk", None, None),
+        ("step", 1, 0),
+        ("step", 1, 1),
+        ("after", None, None),
+    ]
+
+
+def test_nested_for_body_names_the_inner_container() -> None:
+    outer = _node("outer", 0, type_id="volume.for")
+    outer["config"] = {"items": [1, 2]}
+    inner = _node("inner", 1, type_id="volume.for", parent="outer")
+    inner["config"] = {"items": ["x"]}
+    graph = {
+        "nodes": [outer, inner, _node("leaf", 2, parent="inner")],
+        "edges": [
+            _edge("outer", "inner", "each"),
+            _edge("inner", "leaf", "each"),
+        ],
+        "settings": {},
+    }
+    hooks = FakeHooks()
+    outcome = execute(
+        graph,
+        "outer",
+        _catalog({"volume.for": _walk, "fake": _walk}),
+        _RESOLVER,
+        hooks,
+    )
+    assert outcome.status == "succeeded"
+    assert hooks.starts == [
+        ("outer", None, None),
+        ("inner", 1, 0),
+        ("leaf", 2, 0),
+        ("inner", 1, 1),
+        ("leaf", 4, 0),
+    ]
 
 
 def test_cancel_inside_a_for_body() -> None:

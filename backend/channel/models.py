@@ -115,6 +115,8 @@ class ChannelNodeExecutionRow(Base):
     )
     node_id: Mapped[str] = mapped_column(String(64), nullable=False)
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    container_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    round: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
