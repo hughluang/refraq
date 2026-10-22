@@ -842,3 +842,668 @@ def test_write_rows_upsert_is_idempotent_and_channel_run_writes(data_client) -> 
     assert written["qty"] == 9
     assert written["note"] == "from-run"
 
+
+def _publish_entity(attrs: list[AttributeRecord]) -> str:
+    from backend.entity.access.views import rebuild_entity_views
+    from backend.entity.ids import new_entity_id, new_version_id
+    from backend.entity.lifecycle import PUBLISHED
+    from backend.entity.records import BusinessEntityRecord, EntityVersionRecord
+    from backend.entity.store import get_entity_store
+    from backend.entity.table_port import PostgresEntityTablePort
+    from backend.tests.entity_access_oracle import prepare_legacy_entity
+
+    stem = f"mat_{uuid.uuid4().hex[:10]}"
+    version_id = new_version_id()
+    physical, _ = compose_physical(stem, 1, version_id)
+    now = datetime.now(timezone.utc)
+    entity = BusinessEntityRecord(
+        id=new_entity_id(),
+        table_name=stem,
+        name="Typed",
+        description="Typed values",
+        deprecated_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    version = EntityVersionRecord(
+        id=version_id,
+        entity_id=entity.id,
+        version=1,
+        attributes=list(attrs),
+        materialized_attributes=[attribute_to_dict(item) for item in attrs],
+        publish_status=PUBLISHED,
+        latest_reconcile_job_id=None,
+        created_at=now,
+        updated_at=now,
+    )
+    get_entity_store().create_entity(entity, version)
+    port = PostgresEntityTablePort()
+    port.create_physical_table("entity_data", physical, attrs)
+    port.swap_stem_view("entity_data", stem, physical=physical, expected_target=None)
+    prepare_legacy_entity(entity.id)
+    rebuild_entity_views(entity.id)
+    return entity.id
+
+
+_TYPED_ROW = {
+    "code": "A",
+    "payload": {"n": 1, "ok": True},
+    "when": "2020-01-02",
+    "at": "13:05:00",
+    "moment": "2020-01-02T13:05:00Z",
+    "amount": "1.50",
+}
+
+
+def test_equal_json_date_time_timestamp_and_decimal_count_as_unchanged(data_client) -> None:
+    from backend.admin.user_store import get_user_store
+    from backend.entity.rows import read_rows, write_rows
+
+    entity_id = _publish_entity(
+        [
+            AttributeRecord(
+                name="code",
+                type="string",
+                required=True,
+                unique=True,
+                business_key=True,
+                max_length=32,
+            ),
+            AttributeRecord(name="payload", type="json"),
+            AttributeRecord(name="when", type="date"),
+            AttributeRecord(name="at", type="time"),
+            AttributeRecord(name="moment", type="timestamp"),
+            AttributeRecord(name="amount", type="decimal", precision=10, scale=2),
+        ]
+    )
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+    created = write_rows(
+        entity_id,
+        mode="upsert",
+        match_key="code",
+        rows=[dict(_TYPED_ROW)],
+        user=admin,
+        statement_timeout_ms=5000,
+    )
+    assert created.inserted == 1
+    again = write_rows(
+        entity_id,
+        mode="upsert",
+        match_key="code",
+        rows=[dict(_TYPED_ROW)],
+        user=admin,
+        statement_timeout_ms=5000,
+    )
+    assert (again.inserted, again.updated, again.unchanged, again.deleted, again.unmatched) == (
+        0,
+        0,
+        1,
+        0,
+        0,
+    )
+    rows, _total = read_rows(entity_id, filters=[], user=admin, limit=10)
+    stored = next(row for row in rows if row["code"] == "A")
+    assert stored["payload"] == {"n": 1, "ok": True}
+    assert stored["when"] == "2020-01-02"
+    assert stored["at"] == "13:05:00"
+    assert stored["moment"] == "2020-01-02T13:05:00Z"
+    assert stored["amount"] == "1.50"
+
+
+def test_chunk_iterator_matches_the_same_rows_as_a_list(data_client) -> None:
+    _client, _stem, _physical, entity_id = data_client
+    from backend.admin.user_store import get_user_store
+    from backend.entity.rows import read_rows, write_rows
+
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+    rows = [
+        {"sku": "C1", "qty": 1, "note": "a"},
+        {"sku": "C2", "qty": 2, "note": "b"},
+    ]
+    listed = write_rows(
+        entity_id,
+        mode="upsert",
+        match_key="sku",
+        rows=rows,
+        user=admin,
+        statement_timeout_ms=5000,
+    )
+    assert (listed.inserted, listed.updated, listed.unchanged, listed.deleted, listed.unmatched) == (
+        2,
+        0,
+        0,
+        0,
+        0,
+    )
+    chunked = write_rows(
+        entity_id,
+        mode="upsert",
+        match_key="sku",
+        rows=iter([rows[:1], rows[1:]]),
+        user=admin,
+        statement_timeout_ms=5000,
+    )
+    assert (chunked.inserted, chunked.updated, chunked.unchanged, chunked.deleted, chunked.unmatched) == (
+        0,
+        0,
+        2,
+        0,
+        0,
+    )
+    changed = write_rows(
+        entity_id,
+        mode="update",
+        match_key="sku",
+        rows=iter([[{"sku": "C1", "qty": 9}], [{"sku": "GONE", "qty": 1}]]),
+        user=admin,
+        statement_timeout_ms=5000,
+    )
+    assert (changed.inserted, changed.updated, changed.unchanged, changed.deleted, changed.unmatched) == (
+        0,
+        1,
+        0,
+        0,
+        1,
+    )
+    stored, _total = read_rows(entity_id, filters=[], user=admin, limit=20)
+    kept = next(row for row in stored if row["sku"] == "C1")
+    assert kept["qty"] == 9
+    assert kept["note"] == "a"
+    removed = write_rows(
+        entity_id,
+        mode="delete",
+        match_key="sku",
+        rows=[{"sku": "C2"}, {"sku": "MISSING"}],
+        user=admin,
+        statement_timeout_ms=5000,
+    )
+    assert (removed.deleted, removed.unmatched) == (1, 1)
+    empty = write_rows(
+        entity_id,
+        mode="upsert",
+        match_key="sku",
+        rows=[],
+        user=admin,
+        statement_timeout_ms=5000,
+    )
+    assert (empty.inserted, empty.updated, empty.unchanged, empty.deleted, empty.unmatched) == (
+        0,
+        0,
+        0,
+        0,
+        0,
+    )
+
+
+def test_bad_row_in_the_last_chunk_leaves_the_target_unchanged(data_client) -> None:
+    _client, _stem, _physical, entity_id = data_client
+    from backend.admin.user_store import get_user_store
+    from backend.entity.errors import EntityRowWriteFailed
+    from backend.entity.rows import read_rows, write_rows
+
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+
+    def chunks():
+        yield [{"sku": "GOOD", "qty": 1, "note": "keep"}]
+        yield [{"sku": "BAD", "qty": "nope", "note": "drop"}]
+
+    with pytest.raises(EntityRowWriteFailed) as raised:
+        write_rows(
+            entity_id,
+            mode="upsert",
+            match_key="sku",
+            rows=chunks(),
+            user=admin,
+            statement_timeout_ms=5000,
+        )
+    assert raised.value.reason == "invalid"
+    assert raised.value.row_index == 1
+    stored, _total = read_rows(entity_id, filters=[], user=admin, limit=20)
+    assert [row["sku"] for row in stored] == []
+
+
+def test_duplicate_match_key_reports_the_smallest_index_and_rolls_back(data_client) -> None:
+    _client, _stem, _physical, entity_id = data_client
+    from backend.admin.user_store import get_user_store
+    from backend.entity.errors import EntityRowWriteFailed
+    from backend.entity.rows import read_rows, write_rows
+
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+
+    def chunks():
+        yield [{"sku": "DUP", "qty": 1, "note": "a"}, {"sku": "OTHER", "qty": 2, "note": "b"}]
+        yield [{"sku": "DUP", "qty": 3, "note": "c"}]
+
+    with pytest.raises(EntityRowWriteFailed) as raised:
+        write_rows(
+            entity_id,
+            mode="upsert",
+            match_key="sku",
+            rows=chunks(),
+            user=admin,
+            statement_timeout_ms=5000,
+        )
+    assert raised.value.reason == "duplicate_key"
+    assert raised.value.row_index == 0
+    stored, _total = read_rows(entity_id, filters=[], user=admin, limit=20)
+    assert stored == []
+
+
+def test_create_of_an_existing_key_reports_that_row_and_rolls_back(data_client) -> None:
+    _client, _stem, _physical, entity_id = data_client
+    from backend.admin.user_store import get_user_store
+    from backend.entity.errors import EntityRowWriteFailed
+    from backend.entity.rows import read_rows, write_rows
+
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+    write_rows(
+        entity_id,
+        mode="create",
+        match_key="sku",
+        rows=[{"sku": "OLD", "qty": 1, "note": "stay"}],
+        user=admin,
+        statement_timeout_ms=5000,
+    )
+    with pytest.raises(EntityRowWriteFailed) as raised:
+        write_rows(
+            entity_id,
+            mode="create",
+            match_key="sku",
+            rows=[
+                {"sku": "NEW", "qty": 2, "note": "no"},
+                {"sku": "OLD", "qty": 3, "note": "no"},
+            ],
+            user=admin,
+            statement_timeout_ms=5000,
+        )
+    assert raised.value.reason == "key_exists"
+    assert raised.value.row_index == 1
+    stored, _total = read_rows(entity_id, filters=[], user=admin, limit=20)
+    assert [row["sku"] for row in stored] == ["OLD"]
+    assert stored[0]["note"] == "stay"
+
+
+def test_null_unique_match_key_does_not_match_another_null(data_client) -> None:
+    from typing import Literal
+
+    from backend.admin.user_store import get_user_store
+    from backend.entity.errors import EntityRowWriteFailed
+    from backend.entity.rows import read_rows, write_rows
+
+    entity_id = _publish_entity(
+        [
+            AttributeRecord(
+                name="code",
+                type="string",
+                required=True,
+                unique=True,
+                business_key=True,
+                max_length=32,
+            ),
+            AttributeRecord(
+                name="tag",
+                type="string",
+                unique=True,
+                max_length=32,
+            ),
+        ]
+    )
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+
+    def write(
+        mode: Literal["upsert", "create", "update", "delete"],
+        rows: list[dict[str, object]],
+    ):
+        return write_rows(
+            entity_id,
+            mode=mode,
+            match_key="tag",
+            rows=rows,
+            user=admin,
+            statement_timeout_ms=5000,
+        )
+
+    first = write("create", [{"code": "A", "tag": None}])
+    second = write("create", [{"code": "B", "tag": None}])
+    assert first.inserted == 1
+    assert second.inserted == 1
+    with pytest.raises(EntityRowWriteFailed) as raised:
+        write("create", [{"code": "D", "tag": None}, {"code": "E", "tag": None}])
+    assert raised.value.reason == "duplicate_key"
+    assert raised.value.row_index == 0
+    updated = write("update", [{"code": "Z", "tag": None}])
+    assert (updated.updated, updated.unchanged, updated.unmatched) == (0, 0, 1)
+    removed = write("delete", [{"tag": None}])
+    assert (removed.deleted, removed.unmatched) == (0, 1)
+    third = write("upsert", [{"code": "C", "tag": None}])
+    assert (third.inserted, third.updated, third.unchanged, third.unmatched) == (
+        1,
+        0,
+        0,
+        0,
+    )
+    stored, _total = read_rows(entity_id, filters=[], user=admin, limit=10)
+    assert sorted(row["code"] for row in stored) == ["A", "B", "C"]
+
+
+def test_business_key_change_reports_that_row_and_rolls_back(data_client) -> None:
+    from backend.admin.user_store import get_user_store
+    from backend.entity.errors import EntityRowWriteFailed
+    from backend.entity.rows import read_rows, write_rows
+
+    entity_id = _publish_entity(
+        [
+            AttributeRecord(
+                name="code",
+                type="string",
+                required=True,
+                unique=True,
+                max_length=32,
+            ),
+            AttributeRecord(
+                name="sku",
+                type="string",
+                business_key=True,
+                max_length=32,
+            ),
+            AttributeRecord(name="note", type="text"),
+        ]
+    )
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+    write_rows(
+        entity_id,
+        mode="upsert",
+        match_key="code",
+        rows=[{"code": "1", "sku": "A", "note": "n"}],
+        user=admin,
+        statement_timeout_ms=5000,
+    )
+    with pytest.raises(EntityRowWriteFailed) as raised:
+        write_rows(
+            entity_id,
+            mode="upsert",
+            match_key="code",
+            rows=[{"code": "1", "sku": "B", "note": "n"}],
+            user=admin,
+            statement_timeout_ms=5000,
+        )
+    assert raised.value.reason == "business_key"
+    assert raised.value.row_index == 0
+    assert raised.value.attribute == "sku"
+    stored, _total = read_rows(entity_id, filters=[], user=admin, limit=10)
+    assert stored[0]["sku"] == "A"
+
+
+def test_cancel_between_chunks_leaves_the_target_unchanged(data_client) -> None:
+    _client, _stem, _physical, entity_id = data_client
+    from backend.admin.user_store import get_user_store
+    from backend.entity.rows import read_rows, write_rows
+
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+
+    def chunks():
+        yield [{"sku": "HOLD", "qty": 1, "note": "a"}]
+        raise RuntimeError("cancelled")
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        write_rows(
+            entity_id,
+            mode="upsert",
+            match_key="sku",
+            rows=chunks(),
+            user=admin,
+            statement_timeout_ms=5000,
+        )
+    stored, _total = read_rows(entity_id, filters=[], user=admin, limit=20)
+    assert stored == []
+
+
+def test_lock_timeout_mid_write_leaves_the_row_unchanged(data_client) -> None:
+    _client, _stem, physical, entity_id = data_client
+    from sqlalchemy import text
+
+    from backend.admin.user_store import get_user_store
+    from backend.entity.entity_db import get_entity_engine
+    from backend.entity.rows import read_rows, write_rows
+
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+    write_rows(
+        entity_id,
+        mode="upsert",
+        match_key="sku",
+        rows=[{"sku": "LOCK", "qty": 1, "note": "n"}],
+        user=admin,
+        statement_timeout_ms=5000,
+    )
+    held = get_entity_engine().connect()
+    transaction = held.begin()
+    held.execute(
+        text(f'SELECT "row_id" FROM "entity_data"."{physical}" WHERE "sku" = :sku FOR UPDATE'),
+        {"sku": "LOCK"},
+    )
+    try:
+        with pytest.raises(Exception):
+            write_rows(
+                entity_id,
+                mode="update",
+                match_key="sku",
+                rows=[{"sku": "LOCK", "qty": 8, "note": "n"}],
+                user=admin,
+                pulse=lambda: 400,
+            )
+    finally:
+        transaction.rollback()
+        held.close()
+    stored, _total = read_rows(entity_id, filters=[], user=admin, limit=20)
+    assert next(row["qty"] for row in stored if row["sku"] == "LOCK") == 1
+
+
+def _writer(entity_id: str, *, account: str, columns: list[dict[str, str]], row_rule):
+    from backend.admin.roles import create_role
+    from backend.admin.role_store import get_role_store
+    from backend.admin.security import hash_password
+    from backend.admin.user_store import get_user_store
+    from backend.entity.access.service import create_grant, create_profile
+    from backend.entity.access.views import rebuild_entity_views
+
+    role = create_role(
+        get_role_store(),
+        key=account,
+        name=account,
+        permissions=["console:access", "entity:data_read", "entity:data_write"],
+    )
+    user = get_user_store().create_user(
+        account=account,
+        display_name=account,
+        password_hash=hash_password("secret"),
+        role_id=role.id,
+        status="active",
+    )
+    profile = create_profile(
+        entity_id,
+        key=account,
+        name=account,
+        description=None,
+        columns=columns,
+        actor_user_id=user.id,
+        actor_token_id=None,
+    )
+    create_grant(
+        entity_id,
+        subject={"type": "user", "id": user.id},
+        profile_id=profile["profile"]["id"],
+        row_rule=row_rule,
+        actions=["read", "write"],
+        status="active",
+        valid_until=None,
+        actor_user_id=user.id,
+        actor_token_id=None,
+    )
+    rebuild_entity_views(entity_id)
+    return user
+
+
+def test_column_outside_the_clear_grant_names_the_row_and_rolls_back(data_client) -> None:
+    _client, _stem, _physical, entity_id = data_client
+    from backend.admin.user_store import get_user_store
+    from backend.entity.access.plan import load_head
+    from backend.entity.access.service import put_ladder
+    from backend.entity.errors import EntityRowWriteFailed
+    from backend.entity.rows import read_rows, write_rows
+
+    ids = {attr.name: attr.attribute_id for attr in load_head(entity_id).attributes}
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+    put_ladder(
+        entity_id,
+        ids["note"],
+        [
+            {"key": "clear", "mode": "clear"},
+            {"key": "last4", "mode": {"type": "partial", "keep_first": 0, "keep_last": 4}},
+        ],
+        actor_user_id=admin.id,
+        actor_token_id=None,
+    )
+    writer = _writer(
+        entity_id,
+        account="narrow",
+        columns=[
+            {"attribute_id": ids["sku"], "level": "clear"},
+            {"attribute_id": ids["qty"], "level": "clear"},
+            {"attribute_id": ids["flag"], "level": "clear"},
+            {"attribute_id": ids["note"], "level": "last4"},
+        ],
+        row_rule=None,
+    )
+
+    def chunks():
+        yield [{"sku": "ALLOW", "qty": 1}]
+        yield [{"sku": "DENY", "qty": 2, "note": "secret"}]
+
+    with pytest.raises(EntityRowWriteFailed) as raised:
+        write_rows(
+            entity_id,
+            mode="upsert",
+            match_key="sku",
+            rows=chunks(),
+            user=writer,
+            statement_timeout_ms=5000,
+        )
+    assert raised.value.reason == "column"
+    assert raised.value.row_index == 1
+    assert raised.value.attribute == "note"
+    stored, _total = read_rows(entity_id, filters=[], user=admin, limit=20)
+    assert stored == []
+
+
+def test_failing_row_rule_names_the_row_and_rolls_back(data_client) -> None:
+    _client, _stem, _physical, entity_id = data_client
+    from backend.admin.user_store import get_user_store
+    from backend.entity.access.plan import load_head
+    from backend.entity.errors import EntityRowWriteFailed
+    from backend.entity.rows import read_rows, write_rows
+
+    ids = {attr.name: attr.attribute_id for attr in load_head(entity_id).attributes}
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+    writer = _writer(
+        entity_id,
+        account="ruled",
+        columns=[
+            {"attribute_id": ids["sku"], "level": "clear"},
+            {"attribute_id": ids["qty"], "level": "clear"},
+            {"attribute_id": ids["flag"], "level": "clear"},
+            {"attribute_id": ids["note"], "level": "clear"},
+        ],
+        row_rule={"lte": {"attr": ids["qty"], "value": 5}},
+    )
+    with pytest.raises(EntityRowWriteFailed) as raised:
+        write_rows(
+            entity_id,
+            mode="upsert",
+            match_key="sku",
+            rows=[
+                {"sku": "OK", "qty": 1, "note": "a"},
+                {"sku": "NO", "qty": 9, "note": "b"},
+            ],
+            user=writer,
+            statement_timeout_ms=5000,
+        )
+    assert raised.value.reason == "row_rule"
+    assert raised.value.row_index == 1
+    stored, _total = read_rows(entity_id, filters=[], user=admin, limit=20)
+    assert stored == []
+
+
+def test_one_grant_must_accept_every_written_row(data_client) -> None:
+    """Two grants that each accept a different row do not authorize the write."""
+    _client, _stem, _physical, entity_id = data_client
+    from backend.admin.user_store import get_user_store
+    from backend.entity.access.plan import load_head
+    from backend.entity.access.service import create_grant, create_profile
+    from backend.entity.access.views import rebuild_entity_views
+    from backend.entity.errors import EntityRowWriteFailed
+    from backend.entity.rows import read_rows, write_rows
+
+    ids = {attr.name: attr.attribute_id for attr in load_head(entity_id).attributes}
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+    columns = [
+        {"attribute_id": ids["sku"], "level": "clear"},
+        {"attribute_id": ids["qty"], "level": "clear"},
+        {"attribute_id": ids["flag"], "level": "clear"},
+        {"attribute_id": ids["note"], "level": "clear"},
+    ]
+    writer = _writer(
+        entity_id,
+        account="split_low",
+        columns=columns,
+        row_rule={"lte": {"attr": ids["qty"], "value": 5}},
+    )
+    high = create_profile(
+        entity_id,
+        key="split_high",
+        name="split_high",
+        description=None,
+        columns=columns,
+        actor_user_id=writer.id,
+        actor_token_id=None,
+    )
+    create_grant(
+        entity_id,
+        subject={"type": "user", "id": writer.id},
+        profile_id=high["profile"]["id"],
+        row_rule={"gte": {"attr": ids["qty"], "value": 5}},
+        actions=["read", "write"],
+        status="active",
+        valid_until=None,
+        actor_user_id=writer.id,
+        actor_token_id=None,
+    )
+    rebuild_entity_views(entity_id)
+    with pytest.raises(EntityRowWriteFailed) as raised:
+        write_rows(
+            entity_id,
+            mode="upsert",
+            match_key="sku",
+            rows=[
+                {"sku": "LOW", "qty": 1, "note": "a"},
+                {"sku": "HIGH", "qty": 9, "note": "b"},
+            ],
+            user=writer,
+            statement_timeout_ms=5000,
+        )
+    assert raised.value.reason == "row_rule"
+    assert raised.value.row_index == 0
+    stored, _total = read_rows(entity_id, filters=[], user=admin, limit=20)
+    assert stored == []
+

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Mapping
 
+from backend.channel.item_limit import ITEM_LIMIT
 from backend.channel.node_support import render_field
 from backend.channel.nodes.spec import (
     ERROR_OUTPUT,
@@ -25,7 +27,7 @@ from backend.entity.rows import head_target, write_rows
 
 __all__ = ["NODE_TYPE"]
 
-STATEMENT_TIMEOUT_MS = 30_000
+_DEFAULT_TIMEOUT_SEC = 300
 
 _COUNT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -85,6 +87,12 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     source, error = render_field(hooks, config.get("source"), LIST_OF_OBJECTS)
     if error is not None:
         return error
+    if isinstance(source, list) and len(source) > ITEM_LIMIT:
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_ITEM_LIMIT_EXCEEDED",
+            error_message="Use Materialize or Dataset Query, then Batch Read.",
+        )
     mode = config["mode"]
     projected, error = _project(source, config.get("mapping") or [])
     if error is not None:
@@ -96,8 +104,18 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             match_key=config.get("match_key"),
             rows=projected,
             user=hooks.user,
-            statement_timeout_ms=STATEMENT_TIMEOUT_MS,
+            pulse=_pulse(
+                hooks, config.get("statement_timeout_sec", _DEFAULT_TIMEOUT_SEC)
+            ),
         )
+    except _WriteStopped as exc:
+        if exc.kind == "timeout":
+            return NodeResult(
+                status="failed",
+                error_code="CHANNEL_NODE_FAILED",
+                error_message="Write exceeded the statement timeout",
+            )
+        raise
     except EntityRowWriteFailed as exc:
         return NodeResult(
             status="failed",
@@ -185,6 +203,26 @@ def _check(config: Mapping[str, Any], resolver: ReferenceResolver) -> list[Probl
             ),
         )
     ]
+
+
+class _WriteStopped(Exception):
+    def __init__(self, kind: str) -> None:
+        super().__init__(kind)
+        self.kind = kind
+
+
+def _pulse(hooks: EngineHooks, timeout_sec: int):
+    deadline = time.monotonic() + timeout_sec
+
+    def pulse() -> int:
+        if hooks.cancelled() or hooks.superseded():
+            raise _WriteStopped("cancelled")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _WriteStopped("timeout")
+        return max(1, int(remaining * 1000))
+
+    return pulse
 
 
 def _resolved_head(target: Any) -> ResolvedEntity:
@@ -286,6 +324,17 @@ NODE_TYPE = NodeType(
                 "description": (
                     "fail stops the item; skip leaves it unchanged when the "
                     "published head no longer matches this configuration."
+                ),
+            },
+            "statement_timeout_sec": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3600,
+                "default": _DEFAULT_TIMEOUT_SEC,
+                "title": "Statement timeout",
+                "description": (
+                    "Seconds for the whole write. Each statement uses the "
+                    "remaining time. Default 300."
                 ),
             },
         },

@@ -7,6 +7,7 @@ presents written rows through its read view.
 
 from __future__ import annotations
 
+import uuid
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -21,7 +22,7 @@ from backend.entity.data.capabilities import ROW_WRITE_LIMIT
 from backend.entity.data.filters import CompiledFilter
 from backend.entity.data.head import HeadTarget
 from backend.entity.data.values import decode_row
-from backend.entity.ddl import ident
+from backend.entity.ddl import ENTITY_DATA_SCHEMA, ident, qualified_table
 from backend.entity.entity_db import get_entity_engine, get_entity_reader_engine
 from backend.entity.errors import (
     EntityNotServing,
@@ -32,6 +33,9 @@ from backend.entity.errors import (
 )
 
 __all__ = [
+    "copy_write_stage",
+    "create_write_stage",
+    "drop_write_stage",
     "delete_ids",
     "entity_connection",
     "entity_read_connection",
@@ -43,7 +47,9 @@ __all__ = [
     "select_by_column",
     "select_ids",
     "select_matching",
+    "set_write_timeouts",
     "update_ids",
+    "write_staged_counts",
 ]
 
 
@@ -171,6 +177,245 @@ def update_ids(
     )
     result = conn.execute(text(sql), params)
     return int(result.rowcount or 0)
+
+
+def set_write_timeouts(conn: Connection, remaining_ms: int) -> None:
+    """Bound statement, lock, and idle-in-transaction waits to the remaining budget.
+
+    ``idle_in_transaction_session_timeout`` is at least that budget so a gap
+    spent encoding the next chunk is not cut by the connection default.
+    """
+    budget = str(max(1, int(remaining_ms)))
+    conn.execute(text("SELECT set_config('statement_timeout', :ms, true)"), {"ms": budget})
+    conn.execute(text("SELECT set_config('lock_timeout', :ms, true)"), {"ms": budget})
+    conn.execute(
+        text("SELECT set_config('idle_in_transaction_session_timeout', :ms, true)"),
+        {"ms": budget},
+    )
+
+
+def create_write_stage(conn: Connection, columns: list[tuple[str, str]]) -> str:
+    """Stage table in ``entity_data``, visible only until this transaction ends.
+
+    The entity owner is not granted ``TEMP``, so this is an ordinary table
+    created inside the write transaction. ``drop_write_stage`` removes it
+    before commit; a rollback removes the create with the rest of the write.
+    """
+    defs = ['"_ord" bigint NOT NULL', '"_present" text[] NOT NULL']
+    for name, type_sql in columns:
+        defs.append(f"{ident(name)} {type_sql}")
+    qualified = qualified_table(ENTITY_DATA_SCHEMA, f"wstage_{uuid.uuid4().hex[:16]}")
+    conn.execute(text(f"CREATE TABLE {qualified} ({', '.join(defs)})"))
+    return qualified
+
+
+def drop_write_stage(conn: Connection, table: str) -> None:
+    conn.execute(text(f"DROP TABLE {table}"))
+
+
+def copy_write_stage(
+    conn: Connection,
+    table: str,
+    columns: list[str],
+    rows: list[tuple[Any, ...]],
+) -> None:
+    """Copy one chunk. ``columns`` follow ``_ord`` and ``_present``."""
+    if not rows:
+        return
+    names = ", ".join(ident(name) for name in ["_ord", "_present", *columns])
+    statement = f"COPY {table} ({names}) FROM STDIN"
+    raw = conn.connection.driver_connection
+    with raw.cursor() as cursor:
+        with cursor.copy(statement) as copy:
+            for row in rows:
+                copy.write_row(row)
+
+
+def write_staged_counts(
+    conn: Connection,
+    *,
+    target: str,
+    stage: str,
+    mode: str,
+    key: str,
+    columns: list[str],
+) -> tuple[int, int, int, int, int]:
+    """Set-wise insert, update, or delete. Counts come from ``RETURNING`` old/new.
+
+    A companion read of the target in the same statement sees the pre-write
+    snapshot, so unchanged and unmatched are the staged rows ``RETURNING`` did
+    not classify as changed. Locks are taken by this statement.
+    """
+    sql = _staged_sql(target, stage, mode, key, columns)
+    row = conn.execute(text(sql)).one()
+    return tuple(int(value) for value in row)  # type: ignore[return-value]
+
+
+def _staged_sql(target: str, stage: str, mode: str, key: str, columns: list[str]) -> str:
+    if mode == "delete":
+        return _delete_sql(target, stage, key)
+    if mode == "update":
+        return _update_sql(target, stage, key, columns)
+    if mode == "create":
+        return _create_sql(target, stage, columns)
+    return _upsert_sql(target, stage, key, columns)
+
+
+def _stage_expr(name: str) -> str:
+    return (
+        f"CASE WHEN {_sql_lit(name)} = ANY(s.{ident('_present')}) "
+        f"THEN s.{ident(name)} ELSE NULL END"
+    )
+
+
+def _sql_lit(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _create_sql(target: str, stage: str, columns: list[str]) -> str:
+    col_sql = ", ".join(ident(name) for name in columns)
+    select_sql = ", ".join(_stage_expr(name) for name in columns)
+    return f"""
+WITH written AS (
+    INSERT INTO {target} ({col_sql})
+    SELECT {select_sql}
+    FROM {stage} AS s
+    RETURNING (old.{ident('row_id')} IS NULL) AS inserted
+)
+SELECT
+    (SELECT count(*) FROM written WHERE inserted)::int,
+    0,
+    0,
+    0,
+    0
+"""
+
+
+def _upsert_sql(target: str, stage: str, key: str, columns: list[str]) -> str:
+    others = [name for name in columns if name != key]
+    col_sql = ", ".join(ident(name) for name in columns)
+    select_sql = ", ".join(_stage_expr(name) for name in columns)
+    if others:
+        assigns = ", ".join(_conflict_assign(stage, key, name) for name in others)
+        guard = _conflict_guard(stage, key, others)
+    else:
+        assigns = f"{ident(key)} = excluded.{ident(key)}"
+        guard = "FALSE"
+    return f"""
+WITH written AS (
+    INSERT INTO {target} AS t ({col_sql})
+    SELECT {select_sql}
+    FROM {stage} AS s
+    ON CONFLICT ({ident(key)}) DO UPDATE SET {assigns}
+    WHERE {guard}
+    RETURNING (old.{ident('row_id')} IS NULL) AS inserted
+),
+matched AS (
+    SELECT 1
+    FROM {stage} AS s
+    JOIN {target} AS t ON t.{ident(key)} = s.{ident(key)}
+)
+SELECT
+    (SELECT count(*) FROM written WHERE inserted)::int,
+    (SELECT count(*) FROM written WHERE NOT inserted)::int,
+    (
+        (SELECT count(*) FROM matched)
+        - (SELECT count(*) FROM written WHERE NOT inserted)
+    )::int,
+    0,
+    0
+"""
+
+
+def _conflict_assign(stage: str, key: str, name: str) -> str:
+    return (
+        f"{ident(name)} = (SELECT CASE WHEN {_sql_lit(name)} = ANY(g.{ident('_present')}) "
+        f"THEN g.{ident(name)} ELSE t.{ident(name)} END "
+        f"FROM {stage} AS g "
+        f"WHERE g.{ident(key)} = excluded.{ident(key)})"
+    )
+
+
+def _conflict_guard(stage: str, key: str, others: list[str]) -> str:
+    terms = " OR ".join(
+        f"({_sql_lit(name)} = ANY(g.{ident('_present')}) "
+        f"AND t.{ident(name)} IS DISTINCT FROM g.{ident(name)})"
+        for name in others
+    )
+    return (
+        f"(SELECT {terms} FROM {stage} AS g "
+        f"WHERE g.{ident(key)} = excluded.{ident(key)})"
+    )
+
+
+def _update_sql(target: str, stage: str, key: str, columns: list[str]) -> str:
+    others = [name for name in columns if name != key]
+    matched = (
+        f"SELECT 1 FROM {stage} AS s "
+        f"JOIN {target} AS t ON t.{ident(key)} = s.{ident(key)}"
+    )
+    if not others:
+        return f"""
+SELECT
+    0,
+    0,
+    (SELECT count(*) FROM ({matched}) AS matched)::int,
+    0,
+    ((SELECT count(*) FROM {stage}) - (SELECT count(*) FROM ({matched}) AS matched))::int
+"""
+    assigns = ", ".join(
+        f"{ident(name)} = CASE WHEN {_sql_lit(name)} = ANY(s.{ident('_present')}) "
+        f"THEN s.{ident(name)} ELSE t.{ident(name)} END"
+        for name in others
+    )
+    guard = " OR ".join(
+        f"({_sql_lit(name)} = ANY(s.{ident('_present')}) "
+        f"AND t.{ident(name)} IS DISTINCT FROM s.{ident(name)})"
+        for name in others
+    )
+    return f"""
+WITH written AS (
+    UPDATE {target} AS t
+    SET {assigns}
+    FROM {stage} AS s
+    WHERE t.{ident(key)} = s.{ident(key)}
+      AND ({guard})
+    RETURNING (old.{ident('row_id')} IS NOT NULL) AS updated
+),
+matched AS (
+    {matched}
+)
+SELECT
+    0,
+    (SELECT count(*) FROM written)::int,
+    ((SELECT count(*) FROM matched) - (SELECT count(*) FROM written))::int,
+    0,
+    ((SELECT count(*) FROM {stage}) - (SELECT count(*) FROM matched))::int
+"""
+
+
+def _delete_sql(target: str, stage: str, key: str) -> str:
+    matched = (
+        f"SELECT 1 FROM {stage} AS s "
+        f"JOIN {target} AS t ON t.{ident(key)} = s.{ident(key)}"
+    )
+    return f"""
+WITH written AS (
+    DELETE FROM {target} AS t
+    USING {stage} AS s
+    WHERE t.{ident(key)} = s.{ident(key)}
+    RETURNING old.{ident('row_id')}
+),
+matched AS (
+    {matched}
+)
+SELECT
+    0,
+    0,
+    0,
+    (SELECT count(*) FROM written)::int,
+    ((SELECT count(*) FROM {stage}) - (SELECT count(*) FROM matched))::int
+"""
 
 
 def delete_ids(conn: Connection, target: HeadTarget, row_ids: list[int]) -> int:

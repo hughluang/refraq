@@ -78,6 +78,47 @@ def test_empty_mapping_writes_source_as_is(monkeypatch) -> None:
     assert seen["rows"] == [{"sku": "a"}]
 
 
+def test_list_over_the_item_limit_fails_before_write(monkeypatch) -> None:
+    seen: dict = {}
+    monkeypatch.setattr("backend.channel.nodes.write.entity.ITEM_LIMIT", 1)
+    result = _run(
+        monkeypatch,
+        '[{"sku": "a"}, {"sku": "b"}]',
+        [],
+        seen,
+    )
+    assert result.status == "failed"
+    assert result.error_code == "CHANNEL_ITEM_LIMIT_EXCEEDED"
+    assert result.error_message == "Use Materialize or Dataset Query, then Batch Read."
+    assert "rows" not in seen
+
+
+def test_statement_timeout_sec_defaults_between_one_and_3600() -> None:
+    from jsonschema import Draft202012Validator
+
+    spec = next(item for item in list_node_types() if item.type_id == "write.entity")
+    prop = spec.config_schema["properties"]["statement_timeout_sec"]
+    assert prop["type"] == "integer"
+    assert prop["minimum"] == 1
+    assert prop["maximum"] == 3600
+    assert prop["default"] == 300
+    assert prop["title"] == "Statement timeout"
+    assert "statement_timeout_sec" not in spec.config_schema["required"]
+    config = {
+        "entity_id": "ent_sku",
+        "mode": "upsert",
+        "match_key": "sku",
+        "source": "[]",
+        "mapping": [],
+        "on_incompatible_head": "fail",
+    }
+    validator = Draft202012Validator(spec.config_schema)
+    assert list(validator.iter_errors(config)) == []
+    assert list(validator.iter_errors({**config, "statement_timeout_sec": 300})) == []
+    assert list(validator.iter_errors({**config, "statement_timeout_sec": 0}))
+    assert list(validator.iter_errors({**config, "statement_timeout_sec": 3601}))
+
+
 def test_missing_mapped_key_names_object_and_key(monkeypatch) -> None:
     seen: dict = {}
     result = _run(
