@@ -327,6 +327,8 @@ const NODE_DRAG_THRESHOLD = 4;
 const NUDGE_STEP = 8;
 const NUDGE_SHIFT_STEP = 40;
 const NUDGE_COALESCE_MS = 500;
+/** How long an output add control stays after the pointer leaves the node. */
+const PORT_ADD_HIDE_MS = 200;
 const ARROW_DELTA: Record<string, { x: number; y: number }> = {
   ArrowUp: { x: 0, y: -1 },
   ArrowDown: { x: 0, y: 1 },
@@ -2930,6 +2932,31 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   const spec = catalog.find((item) => item.type === data.nodeType);
   const { deleteElements } = useReactFlow();
   const [hovered, setHovered] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const hideTimer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (hideTimer.current != null) window.clearTimeout(hideTimer.current);
+    },
+    [],
+  );
+  const showAdd = () => {
+    if (hideTimer.current != null) {
+      window.clearTimeout(hideTimer.current);
+      hideTimer.current = null;
+    }
+    setHovered(true);
+  };
+  const scheduleHideAdd = (event: { relatedTarget: EventTarget | null }) => {
+    const next = event.relatedTarget;
+    const root = rootRef.current;
+    if (root != null && next instanceof Node && root.contains(next)) return;
+    if (hideTimer.current != null) window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => {
+      hideTimer.current = null;
+      setHovered(false);
+    }, PORT_ADD_HIDE_MS);
+  };
   const inputs = spec ? spec.inputs : data.trigger ? [] : [{ port: "main", description: "" }];
   const outputs = spec ? spec.outputs : [{ port: "main", description: "" }];
   const frame = data.nodeType === FOR_NODE_TYPE;
@@ -2984,10 +3011,11 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   const TypeIcon = nodeTypeIcon(data.nodeType, family);
   return (
     <div
+      ref={rootRef}
       className={className}
       style={frame || depth <= 1 ? undefined : { minHeight: 24 + depth * 28 }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onMouseEnter={showAdd}
+      onMouseLeave={scheduleHideAdd}
     >
       {editing ? (
         <NodeToolbar className="channel-node-toolbar" offset={8}>
@@ -3062,6 +3090,8 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
         addable={editing && mutable && (hovered || Boolean(selected))}
         busyOutputs={busyOutputs}
         nodeId={id}
+        onAddEnter={showAdd}
+        onAddLeave={scheduleHideAdd}
         onAdd={(port, point) =>
           openPickerAt(point, { kind: "afterPort", sourceId: id, sourceHandle: port })
         }
@@ -3154,6 +3184,8 @@ function PortHandles({
   busyOutputs,
   nodeId,
   onAdd,
+  onAddEnter,
+  onAddLeave,
 }: {
   ports: readonly PortPlacement[];
   nodeName: string;
@@ -3162,6 +3194,8 @@ function PortHandles({
   busyOutputs?: ReadonlySet<string>;
   nodeId?: string;
   onAdd?: (port: string, point: { x: number; y: number }) => void;
+  onAddEnter?: () => void;
+  onAddLeave?: (event: { relatedTarget: EventTarget | null }) => void;
 }) {
   const t = useTranslate();
   return (
@@ -3188,13 +3222,19 @@ function PortHandles({
             {showAdd ? (
               <button
                 type="button"
-                className="channel-flow-port-add nodrag nopan"
+                className={
+                  port.inset
+                    ? "channel-flow-port-add nodrag nopan"
+                    : "channel-flow-port-add channel-flow-port-add--outside nodrag nopan"
+                }
                 style={
                   port.inset
                     ? { top: port.top, left: EACH_INSET + 16 }
                     : { top: port.top, left: "calc(100% + 16px)" }
                 }
                 aria-label={t("channels.canvas.addFromPort", { port: name })}
+                onMouseEnter={onAddEnter}
+                onMouseLeave={onAddLeave}
                 onPointerDown={(event) => event.stopPropagation()}
                 onMouseDown={(event) => event.stopPropagation()}
                 onClick={(event) => {

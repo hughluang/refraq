@@ -501,6 +501,17 @@
   cursor: pointer;
 }
 
+/* Right handle extends ~5px past the node; this button starts at 16px.
+   Fill only that gap, and extend 8px above and below the 16px control. */
+.channel-flow-port-add--outside::before {
+  content: "";
+  position: absolute;
+  top: -8px;
+  left: -11px;
+  width: 11px;
+  height: 32px;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .channel-flow-node {
     transition:

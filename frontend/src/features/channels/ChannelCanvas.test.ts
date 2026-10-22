@@ -1836,6 +1836,14 @@ describe("channel ports", () => {
     expect(insetHandle).toMatch(/transform:\s*translate\(-50%, -50%\)/);
     expect(screen.getByText("Each").className).toContain("channel-flow-port--inset");
     expect(screen.getByText("Done").className).toContain("channel-flow-port--right");
+
+    const flow = frame.querySelector(".channel-flow-node");
+    if (!(flow instanceof HTMLElement)) throw new Error("missing frame node");
+    fireEvent.mouseEnter(flow);
+    const eachAdd = screen.getByRole("button", { name: "Add the next step from Each" });
+    const doneAdd = screen.getByRole("button", { name: "Add the next step from Done" });
+    expect(eachAdd.classList.contains("channel-flow-port-add--outside")).toBe(false);
+    expect(doneAdd.classList.contains("channel-flow-port-add--outside")).toBe(true);
   });
 
   it("keeps a non-main port when an edge is created, including through undo", async () => {
@@ -3137,7 +3145,7 @@ describe("node picker", () => {
     expect(screen.getByRole("button", { name: "Add the next step from False" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Add the next step from True" })).toBeNull();
     fireEvent.mouseLeave(card);
-    expect(screen.queryByRole("button", { name: "Add the next step from False" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Add the next step from False" })).toBeTruthy();
 
     fireEvent.click(card);
     fireEvent.click(screen.getByRole("button", { name: "Add the next step from False" }));
@@ -3156,6 +3164,61 @@ describe("node picker", () => {
     );
     expect(document.querySelector(".channel-node-config")).toBeNull();
     expect(document.querySelectorAll(".react-flow__node.selected")).toHaveLength(1);
+  });
+
+  it("keeps the output add control while the pointer moves onto it", async () => {
+    await renderCanvas(
+      [],
+      {
+        ...EMPTY_GRAPH,
+        nodes: [placed("read", "read.sql", "Read", 40)],
+      },
+      { catalog: [READ_SPEC] },
+    );
+    const card = document.querySelector(".channel-flow-node");
+    if (!(card instanceof HTMLElement)) throw new Error("missing node");
+    fireEvent.mouseEnter(card);
+    const add = screen.getByRole("button", { name: "Add the next step from Main" });
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.mouseLeave(add, { relatedTarget: card });
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      expect(screen.getByRole("button", { name: "Add the next step from Main" })).toBeTruthy();
+
+      fireEvent.mouseLeave(card, { relatedTarget: document.body });
+      act(() => {
+        vi.advanceTimersByTime(149);
+      });
+      expect(screen.getByRole("button", { name: "Add the next step from Main" })).toBeTruthy();
+      fireEvent.mouseEnter(add);
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      expect(screen.getByRole("button", { name: "Add the next step from Main" })).toBeTruthy();
+
+      fireEvent.mouseLeave(card, { relatedTarget: document.body });
+      act(() => {
+        vi.advanceTimersByTime(149);
+      });
+      expect(screen.getByRole("button", { name: "Add the next step from Main" })).toBeTruthy();
+      act(() => {
+        vi.advanceTimersByTime(51);
+      });
+      expect(screen.queryByRole("button", { name: "Add the next step from Main" })).toBeNull();
+
+      fireEvent.click(card);
+      expect(screen.getByRole("button", { name: "Add the next step from Main" })).toBeTruthy();
+      fireEvent.mouseLeave(card, { relatedTarget: document.body });
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      expect(screen.getByRole("button", { name: "Add the next step from Main" })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("inserts a node into an edge and undoes both new edges in one step", async () => {
