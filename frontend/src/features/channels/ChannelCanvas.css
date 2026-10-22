@@ -391,6 +391,13 @@
     0 0 0 4px var(--mantine-primary-color-filled);
 }
 
+/* Inset source stays centered on EACH_INSET. Overrides `.react-flow__handle-right`. */
+.channel-flow-node .react-flow__handle.channel-flow-handle--inset {
+  left: 20px;
+  right: auto;
+  transform: translate(-50%, -50%);
+}
+
 .channel-flow-port {
   position: absolute;
   z-index: 1;

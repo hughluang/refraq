@@ -21,12 +21,13 @@ export type HandleSide = "left" | "right";
 
 export type PortPlacement = {
   port: string;
+  /** Side edges leave or enter from. Also the drawn side unless `inset`. */
   position: HandleSide;
   /** Percentage from the top. */
   top: string;
   /** Shown when this side has several handles, or the port is not `main`. */
   labelled: boolean;
-  /** Inside the frame, on the left. For `each`. */
+  /** Drawn inside the left edge of the frame regardless of `position`. For `each`. */
   inset: boolean;
 };
 
@@ -50,7 +51,7 @@ export function layoutNodePorts(
     outputs: [
       ...place(
         visible.filter((port) => port.port === EACH_PORT),
-        "left",
+        "right",
         true,
       ),
       ...place(

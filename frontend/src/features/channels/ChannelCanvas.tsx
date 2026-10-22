@@ -137,9 +137,11 @@ import {
   PlusIcon,
 } from "@/components/icons";
 import {
+  absolutePosition,
   edgesAfterReparent,
   frameLinkAllowed,
   placementFromPort,
+  placementOnEdge,
   reparentDrop,
 } from "@/features/channels/frameLink";
 import { problemIdentity, type ProblemGraph } from "@/features/channels/problemLabel";
@@ -172,6 +174,8 @@ function isNoteNode(node: CanvasNode): node is NoteCanvasNode {
   return node.type === "note";
 }
 
+const PORT_PLACE_GAP = 280;
+
 function linkMembers(nodes: readonly CanvasNode[]) {
   return nodes.flatMap((node) =>
     isChannelNode(node)
@@ -185,6 +189,20 @@ function linkMembers(nodes: readonly CanvasNode[]) {
         ]
       : [],
   );
+}
+
+function portPlacePosition(nodes: readonly CanvasNode[], id: string) {
+  const at = absolutePosition(linkMembers(nodes), id);
+  if (!at) return null;
+  return { x: at.x + PORT_PLACE_GAP, y: at.y };
+}
+
+function edgePlacePosition(nodes: readonly CanvasNode[], sourceId: string, targetId: string) {
+  const members = linkMembers(nodes);
+  const sourceAt = absolutePosition(members, sourceId);
+  const targetAt = absolutePosition(members, targetId);
+  if (!sourceAt || !targetAt) return null;
+  return { x: (sourceAt.x + targetAt.x) / 2, y: (sourceAt.y + targetAt.y) / 2 };
 }
 
 function noteCanvasNode(note: FlowNoteShape, selected: boolean): NoteCanvasNode {
@@ -461,7 +479,11 @@ function ChannelCanvasBody({
   const [picker, setPicker] = useState<PickerState | null>(null);
   const [highlight, setHighlight] = useState<ProblemHighlight | null>(null);
   const [problemsDismissed, setProblemsDismissed] = useState(0);
-  const [connectNote, setConnectNote] = useState<{ x: number; y: number } | null>(null);
+  const [connectNote, setConnectNote] = useState<{
+    x: number;
+    y: number;
+    message?: "addRejected";
+  } | null>(null);
   const [skipNote, setSkipNote] = useState("");
   const [contextMenu, setContextMenu] = useState<CanvasMenuState | null>(null);
   const [canUndo, setCanUndo] = useState(false);
@@ -801,9 +823,32 @@ function ChannelCanvasBody({
       nodesRef.current.flatMap((node) => (isChannelNode(node) ? [node.data.ref] : [])),
     );
     const link = options?.link;
-    const placement = link
-      ? placementFromPort(linkMembers(nodesRef.current), link.sourceId, link.sourceHandle, position)
-      : { position };
+    const continueTo = options?.continueTo;
+    const members = linkMembers(nodesRef.current);
+    const rejectAdd = () => {
+      const anchor = picker?.anchor;
+      setPicker(null);
+      if (!anchor) return;
+      setConnectNote({ x: anchor.x + 12, y: anchor.y + 12, message: "addRejected" });
+    };
+    let placement: { parentId?: string; position: { x: number; y: number } };
+    if (link && continueTo) {
+      const onEdge = placementOnEdge(
+        members,
+        link.sourceId,
+        continueTo.targetId,
+        link.sourceHandle,
+      );
+      if (!onEdge) {
+        rejectAdd();
+        return;
+      }
+      placement = onEdge;
+    } else if (link) {
+      placement = placementFromPort(members, link.sourceId, link.sourceHandle, position);
+    } else {
+      placement = { position };
+    }
     const created: ChannelNode = {
       id,
       type: "channel",
@@ -837,7 +882,10 @@ function ChannelCanvasBody({
         };
         return accepts(connection);
       });
-      if (!input) return;
+      if (!input) {
+        rejectAdd();
+        return;
+      }
       nextEdges = channelEdges(
         addEdge(
           {
@@ -851,7 +899,6 @@ function ChannelCanvasBody({
         ),
       );
     }
-    const continueTo = options?.continueTo;
     if (continueTo) {
       const output = spec.outputs.find((port) =>
         accepts({
@@ -861,7 +908,10 @@ function ChannelCanvasBody({
           targetHandle: continueTo.targetHandle,
         }),
       );
-      if (!output) return;
+      if (!output) {
+        rejectAdd();
+        return;
+      }
       nextEdges = channelEdges(
         addEdge(
           {
@@ -885,7 +935,12 @@ function ChannelCanvasBody({
     setPicker(null);
     emit(nextNodes, nextEdges);
     commitNow();
-    ensureVisible(position);
+    const origin = placement.parentId ? absolutePosition(members, placement.parentId) : null;
+    ensureVisible(
+      origin
+        ? { x: origin.x + placement.position.x, y: origin.y + placement.position.y }
+        : placement.position,
+    );
   };
 
   const ensureVisible = (position: { x: number; y: number }) => {
@@ -986,8 +1041,8 @@ function ChannelCanvasBody({
       return;
     }
     if (intent.kind === "afterPort") {
-      const source = nodesRef.current.find((node) => node.id === intent.sourceId);
-      if (!source) return;
+      const position = portPlacePosition(nodesRef.current, intent.sourceId);
+      if (!position) return;
       showPicker({
         fromAdd: false,
         anchor,
@@ -996,7 +1051,7 @@ function ChannelCanvasBody({
           mode: "after-port",
           sourceId: intent.sourceId,
           sourceHandle: intent.sourceHandle,
-          position: { x: source.position.x + 280, y: source.position.y },
+          position,
           besideSource: true,
         },
         ghost: null,
@@ -1006,15 +1061,9 @@ function ChannelCanvasBody({
     }
     const edge = edgesRef.current.find((item) => item.id === intent.edgeId);
     if (!edge) return;
-    const source = nodesRef.current.find((node) => node.id === edge.source);
-    const target = nodesRef.current.find((node) => node.id === edge.target);
     const position =
-      source && target
-        ? {
-            x: (source.position.x + target.position.x) / 2,
-            y: (source.position.y + target.position.y) / 2,
-          }
-        : screenToFlowPosition(screenPoint);
+      edgePlacePosition(nodesRef.current, edge.source, edge.target) ??
+      screenToFlowPosition(screenPoint);
     showPicker({
       fromAdd: false,
       anchor,
@@ -1467,11 +1516,10 @@ function ChannelCanvasBody({
     if (!picker) return;
     const place = picker.place;
     if (place.mode === "after-port") {
-      const source = nodesRef.current.find((node) => node.id === place.sourceId);
-      const position =
-        place.besideSource && source
-          ? { x: source.position.x + 280, y: source.position.y }
-          : place.position;
+      const beside = place.besideSource
+        ? portPlacePosition(nodesRef.current, place.sourceId)
+        : null;
+      const position = beside ?? place.position;
       placeNode(spec, position, {
         link: { sourceId: place.sourceId, sourceHandle: place.sourceHandle },
       });
@@ -1480,16 +1528,7 @@ function ChannelCanvasBody({
     if (place.mode === "insert-edge") {
       const edge = edgesRef.current.find((item) => item.id === place.edgeId);
       if (!edge) return;
-      const source = nodesRef.current.find((node) => node.id === edge.source);
-      const target = nodesRef.current.find((node) => node.id === edge.target);
-      const position =
-        source && target
-          ? {
-              x: (source.position.x + target.position.x) / 2,
-              y: (source.position.y + target.position.y) / 2,
-            }
-          : place.position;
-      placeNode(spec, position, {
+      placeNode(spec, place.position, {
         removeEdgeId: edge.id,
         link: { sourceId: edge.source, sourceHandle: edge.sourceHandle || "main" },
         continueTo: { targetId: edge.target, targetHandle: edge.targetHandle || "main" },
@@ -1497,11 +1536,8 @@ function ChannelCanvasBody({
       return;
     }
     if (place.mode === "beside") {
-      const source = nodesRef.current.find((node) => node.id === place.sourceId);
       const handle = firstOutputHandle(place.sourceId, spec);
-      const position = source
-        ? { x: source.position.x + 280, y: source.position.y }
-        : openPosition();
+      const position = portPlacePosition(nodesRef.current, place.sourceId) ?? openPosition();
       placeNode(
         spec,
         position,
@@ -1999,7 +2035,11 @@ function ChannelCanvasBody({
               c="dimmed"
               aria-live="polite"
             >
-              {t("channels.canvas.connectNone")}
+              {t(
+                connectNote.message === "addRejected"
+                  ? "channels.canvas.addRejected"
+                  : "channels.canvas.connectNone",
+              )}
             </Text>
           ) : null}
           {skipNote ? (
@@ -3136,7 +3176,8 @@ function PortHandles({
               type={kind}
               position={flowPosition(port.position)}
               id={port.port}
-              style={port.inset ? { top: port.top, left: EACH_INSET } : { top: port.top }}
+              className={port.inset ? "channel-flow-handle--inset" : undefined}
+              style={{ top: port.top }}
               aria-label={t("channels.canvas.handle", {
                 node: nodeName,
                 port: name,

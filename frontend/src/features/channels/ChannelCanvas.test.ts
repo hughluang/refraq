@@ -8,6 +8,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { EACH_INSET } from "@/features/channels/portLayout";
 import {
   EMPTY_GRAPH,
   type ChannelRunDetail,
@@ -35,6 +36,7 @@ const LABELS: Record<string, string> = {
   "channels.canvas.shortcuts.editNote": "Edit a note",
   "channels.canvas.empty": "Add a trigger to start this channel.",
   "channels.canvas.connectNone": "This output cannot connect to another node.",
+  "channels.canvas.addRejected": "This node cannot be added here.",
   "channels.canvas.nextStep": "Next step",
   "channels.canvas.permissionRequired": "Requires {{permission}}",
   "channels.node.permissionReadOnly":
@@ -1796,7 +1798,7 @@ describe("channel ports", () => {
     expect((await port("Check True output")).getAttribute("data-handleid")).toBe("true");
   });
 
-  it("draws For as a frame with each inside the left and done on the right", async () => {
+  it("draws For as a frame with each inset on the left facing right, and done on the right", async () => {
     await renderCanvas([], {
       ...EMPTY_GRAPH,
       nodes: [placed("walk", "volume.for", "Walk", 40)],
@@ -1814,13 +1816,26 @@ describe("channel ports", () => {
     expect(screen.queryByRole("button", { name: "Walk Loop input" })).toBeNull();
 
     const each = await port("Walk Each output");
-    expect(each.getAttribute("data-handlepos")).toBe("left");
-    expect(each.style.left).toBe("20px");
+    expect(each.getAttribute("data-handlepos")).toBe("right");
+    expect(each.className).toContain("channel-flow-handle--inset");
+    expect(each.style.left).toBe("");
+    expect(each.style.right).toBe("");
+    expect(each.style.transform).toBe("");
     const done = await port("Walk Done output");
     expect(done.getAttribute("data-handlepos")).toBe("right");
+    expect(done.className).not.toContain("channel-flow-handle--inset");
     expect(done.style.left).toBe("");
-    expect(screen.getByText("Each")).toBeTruthy();
-    expect(screen.getByText("Done")).toBeTruthy();
+    expect(done.style.transform).toBe("");
+    const css = readFileSync(resolve(__dirname, "ChannelCanvas.css"), "utf8");
+    const insetHandle =
+      css.match(
+        /\.channel-flow-node \.react-flow__handle\.channel-flow-handle--inset \{([\s\S]*?)\n\}/,
+      )?.[1] ?? "";
+    expect(insetHandle).toContain(`left: ${EACH_INSET}px`);
+    expect(insetHandle).toMatch(/right:\s*auto/);
+    expect(insetHandle).toMatch(/transform:\s*translate\(-50%, -50%\)/);
+    expect(screen.getByText("Each").className).toContain("channel-flow-port--inset");
+    expect(screen.getByText("Done").className).toContain("channel-flow-port--right");
   });
 
   it("keeps a non-main port when an edge is created, including through undo", async () => {
@@ -4149,6 +4164,148 @@ describe("canvas motion", () => {
     );
     expect(motion).toMatch(/stroke-width var\(--refraq-motion-fast\) var\(--refraq-ease-standard\)/);
     expect(motion).toMatch(/box-shadow var\(--refraq-motion-fast\) var\(--refraq-ease-standard\)/);
+  });
+});
+
+describe("adding inside a frame", () => {
+  beforeEach(stubDomApis);
+  afterEach(cleanup);
+
+  const sql = { ...READ_SPEC, label: "SQL", summary: "Query rows" };
+
+  it("parents a node added from a child output to that frame", async () => {
+    const onChange = vi.fn();
+    await renderCanvas(
+      [],
+      {
+        ...EMPTY_GRAPH,
+        nodes: [
+          { ...placed("walk", "volume.for", "Walk", 0), position: { x: 100, y: 40 } },
+          { ...placed("step", "read.sql", "Step", 0), position: { x: 40, y: 80 }, parent: "walk" },
+        ],
+      },
+      { catalog: [FOR_SPEC, sql], onChange },
+    );
+    const card = document.querySelector(".react-flow__node[data-id='step'] .channel-flow-node");
+    if (!(card instanceof HTMLElement)) throw new Error("missing step");
+    fireEvent.click(card);
+    fireEvent.click(screen.getByRole("button", { name: "Add the next step from Main" }));
+    fireEvent.click(screen.getByRole("option", { name: /SQL/ }));
+
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    const created = saved.nodes.find((item) => item.id !== "walk" && item.id !== "step");
+    expect(created).toMatchObject({ parent: "walk", position: { x: 320, y: 80 } });
+    expect(saved.edges).toEqual([
+      expect.objectContaining({
+        source: { node_id: "step", port: "main" },
+        target: { node_id: created?.id, port: "main" },
+      }),
+    ]);
+  });
+
+  it("places a nested done card in the outer frame", async () => {
+    const onChange = vi.fn();
+    await renderCanvas(
+      [],
+      {
+        ...EMPTY_GRAPH,
+        nodes: [
+          { ...placed("outer", "volume.for", "Outer", 0), position: { x: 100, y: 80 } },
+          {
+            ...placed("inner", "volume.for", "Inner", 0),
+            position: { x: 40, y: 48 },
+            parent: "outer",
+          },
+        ],
+      },
+      { catalog: [FOR_SPEC, sql], onChange },
+    );
+    const card = document.querySelector(".react-flow__node[data-id='inner'] .channel-flow-node");
+    if (!(card instanceof HTMLElement)) throw new Error("missing inner");
+    fireEvent.click(card);
+    fireEvent.click(screen.getByRole("button", { name: "Add the next step from Done" }));
+    fireEvent.click(screen.getByRole("option", { name: /SQL/ }));
+
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    const created = saved.nodes.find((item) => item.id !== "outer" && item.id !== "inner");
+    expect(created).toMatchObject({ parent: "outer", position: { x: 432, y: 48 } });
+    expect(saved.edges).toEqual([
+      expect.objectContaining({
+        source: { node_id: "inner", port: "done" },
+        target: { node_id: created?.id, port: "main" },
+      }),
+    ]);
+  });
+
+  it("inserts on an each edge inside the frame", async () => {
+    const onChange = vi.fn();
+    await renderCanvas(
+      [],
+      {
+        ...EMPTY_GRAPH,
+        nodes: [
+          { ...placed("walk", "volume.for", "Walk", 0), position: { x: 100, y: 40 } },
+          { ...placed("step", "read.sql", "Step", 0), position: { x: 80, y: 60 }, parent: "walk" },
+        ],
+        edges: [
+          {
+            id: "each",
+            source: { node_id: "walk", port: "each" },
+            target: { node_id: "step", port: "main" },
+          },
+        ],
+      },
+      { catalog: [FOR_SPEC, sql], onChange },
+    );
+    const edge = await screen.findByRole("group", { name: "Each to Main" });
+    const path = edge.querySelector(".react-flow__edge-path");
+    if (path) fireEvent.mouseOver(path);
+    fireEvent.click(edge);
+    fireEvent.click(screen.getByRole("button", { name: "Insert node" }));
+    fireEvent.click(screen.getByRole("option", { name: /SQL/ }));
+
+    const saved = onChange.mock.calls.at(-1)?.[0] as Graph;
+    const created = saved.nodes.find((item) => item.id !== "walk" && item.id !== "step");
+    expect(created).toMatchObject({ parent: "walk", position: { x: 40, y: 30 } });
+    expect(saved.edges.map((item) => [item.source.node_id, item.source.port, item.target.node_id])).toEqual([
+      ["walk", "each", created?.id],
+      [created?.id, "main", "step"],
+    ]);
+  });
+
+  it("closes the picker and explains when the new node would cross the frame", async () => {
+    const onChange = vi.fn();
+    await renderCanvas(
+      [],
+      {
+        ...EMPTY_GRAPH,
+        nodes: [
+          { ...placed("walk", "volume.for", "Walk", 0), position: { x: 40, y: 40 } },
+          { ...placed("step", "read.sql", "Step", 0), position: { x: 48, y: 48 }, parent: "walk" },
+          { ...placed("out", "read.sql", "Out", 0), position: { x: 600, y: 40 } },
+        ],
+        edges: [
+          {
+            id: "leak",
+            source: { node_id: "step", port: "main" },
+            target: { node_id: "out", port: "main" },
+          },
+        ],
+      },
+      { catalog: [FOR_SPEC, sql], onChange },
+    );
+    const edge = await screen.findByRole("group", { name: "Main to Main" });
+    const path = edge.querySelector(".react-flow__edge-path");
+    if (path) fireEvent.mouseOver(path);
+    fireEvent.click(edge);
+    fireEvent.click(screen.getByRole("button", { name: "Insert node" }));
+    fireEvent.click(screen.getByRole("option", { name: /SQL/ }));
+
+    expect(screen.queryByRole("textbox", { name: "Search nodes" })).toBeNull();
+    const note = screen.getByText("This node cannot be added here.");
+    expect(note.getAttribute("aria-live")).toBe("polite");
+    expect(onChange).not.toHaveBeenCalled();
+    expect(document.querySelectorAll(".react-flow__node")).toHaveLength(3);
   });
 });
 

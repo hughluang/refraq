@@ -1549,6 +1549,7 @@
   "channels.canvas.add": "Add",
   "channels.canvas.empty": "Add a trigger to start this channel.",
   "channels.canvas.connectNone": "This output cannot connect to another node.",
+  "channels.canvas.addRejected": "This node cannot be added here.",
   "channels.canvas.permissionRequired": "Requires {{permission}}",
   "channels.canvas.palette": "Nodes",
   "channels.canvas.problemsSummary": "{{errors}} errors, {{warnings}} warnings",

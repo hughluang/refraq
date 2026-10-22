@@ -127,7 +127,19 @@ export function ancestorIds(
   return seen;
 }
 
-/** Position and parent for a node created from a port. `absolute` is in flow space. */
+/** Top-left in flow space, including nested frame origins. */
+export function absolutePosition(members: readonly LinkMember[], id: string): Point | null {
+  const byId = index(members);
+  const node = byId.get(id);
+  if (!node) return null;
+  return absoluteOf(node, byId);
+}
+
+/**
+ * Position and parent for a node created from a port. `absolute` is in flow space.
+ * `each` parents the card to that For. Every other port inherits the source parent.
+ * `done` is pushed clear of its For, then expressed in the parent frame.
+ */
 export function placementFromPort(
   members: readonly LinkMember[],
   sourceId: string,
@@ -136,11 +148,10 @@ export function placementFromPort(
 ): { parentId?: string; position: Point } {
   const byId = index(members);
   const source = byId.get(sourceId);
-  const position = { x: absolute.x, y: absolute.y };
-  if (!source || source.nodeType !== FOR_NODE_TYPE) return { position };
-  const origin = absoluteOf(source, byId);
-  const box = frameBox(source.id, members);
-  if (sourceHandle === "each") {
+  if (!source) return { position: { x: absolute.x, y: absolute.y } };
+  if (source.nodeType === FOR_NODE_TYPE && sourceHandle === "each") {
+    const origin = absoluteOf(source, byId);
+    const box = frameBox(source.id, members);
     const relative = { x: absolute.x - origin.x, y: absolute.y - origin.y };
     const inside =
       relative.x >= 0 &&
@@ -152,11 +163,51 @@ export function placementFromPort(
       position: inside ? relative : { x: FRAME_PAD, y: FRAME_PAD },
     };
   }
-  if (sourceHandle !== "done") return { position };
-  const card = { x: absolute.x, y: absolute.y, width: CARD_WIDTH, height: CARD_HEIGHT };
-  const rect = { x: origin.x, y: origin.y, width: box.width, height: box.height };
-  if (!overlaps(card, rect)) return { position };
-  return { position: { x: origin.x + box.width + DONE_OUTSIDE_GAP, y: origin.y } };
+  let flow = { x: absolute.x, y: absolute.y };
+  if (source.nodeType === FOR_NODE_TYPE && sourceHandle === "done") {
+    const origin = absoluteOf(source, byId);
+    const box = frameBox(source.id, members);
+    const card = { x: absolute.x, y: absolute.y, width: CARD_WIDTH, height: CARD_HEIGHT };
+    const rect = { x: origin.x, y: origin.y, width: box.width, height: box.height };
+    if (overlaps(card, rect)) {
+      flow = { x: origin.x + box.width + DONE_OUTSIDE_GAP, y: origin.y };
+    }
+  }
+  return relativeToParent(source, flow, byId);
+}
+
+/** Parent and position for a node inserted on an edge. The midpoint is in flow space. */
+export function placementOnEdge(
+  members: readonly LinkMember[],
+  sourceId: string,
+  targetId: string,
+  sourceHandle: string | null | undefined,
+): { parentId?: string; position: Point } | null {
+  const byId = index(members);
+  const source = byId.get(sourceId);
+  const target = byId.get(targetId);
+  if (!source || !target) return null;
+  const sourceAt = absoluteOf(source, byId);
+  const targetAt = absoluteOf(target, byId);
+  return placementFromPort(members, sourceId, sourceHandle, {
+    x: (sourceAt.x + targetAt.x) / 2,
+    y: (sourceAt.y + targetAt.y) / 2,
+  });
+}
+
+function relativeToParent(
+  source: LinkMember,
+  flow: Point,
+  byId: ReadonlyMap<string, LinkMember>,
+): { parentId?: string; position: Point } {
+  const parentId = none(source.parentId);
+  const parent = parentId ? byId.get(parentId) : undefined;
+  if (!parent) return { position: flow };
+  const origin = absoluteOf(parent, byId);
+  return {
+    parentId: parent.id,
+    position: { x: flow.x - origin.x, y: flow.y - origin.y },
+  };
 }
 
 function index(members: readonly LinkMember[]): Map<string, LinkMember> {

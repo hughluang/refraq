@@ -1549,6 +1549,7 @@
   "channels.canvas.add": "添加",
   "channels.canvas.empty": "从添加一个触发节点开始。",
   "channels.canvas.connectNone": "这个输出口不能再连到其他节点。",
+  "channels.canvas.addRejected": "这里不能添加这个节点。",
   "channels.canvas.permissionRequired": "需要权限 {{permission}}",
   "channels.canvas.palette": "节点",
   "channels.canvas.problemsSummary": "{{errors}} 个错误，{{warnings}} 个警告",

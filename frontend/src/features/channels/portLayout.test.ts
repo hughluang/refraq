@@ -36,7 +36,7 @@ describe("layoutNodePorts", () => {
     expect(laid.outputs.map((port) => port.position)).toEqual(["right"]);
   });
 
-  it("places For each inside the left of the frame and done on the right", () => {
+  it("places For each inset on the left of the frame facing right, and done on the right", () => {
     const laid = layoutNodePorts(
       [{ port: "main" }, { port: "loop" }],
       [{ port: "each" }, { port: "done" }],
@@ -46,7 +46,7 @@ describe("layoutNodePorts", () => {
       ["main", "left", false, false],
     ]);
     expect(laid.outputs.map((port) => [port.port, port.position, port.inset, port.labelled])).toEqual([
-      ["each", "left", true, true],
+      ["each", "right", true, true],
       ["done", "right", false, true],
     ]);
   });
