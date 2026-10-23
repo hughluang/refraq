@@ -34,7 +34,7 @@ describe("familyTint", () => {
     expect(familyTint("transform")).toBe("gray");
     expect(familyTint("volume")).toBe("gray");
     expect(familyTint("state")).toBe("gray");
-    expect(familyTint("write")).toBe("grape");
+    expect(familyTint("write")).toBe("teal");
     expect(familyTint("action")).toBe("grape");
   });
 

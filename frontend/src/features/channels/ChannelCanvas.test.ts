@@ -95,7 +95,7 @@ const LABELS: Record<string, string> = {
   "channels.canvas.family.volume": "Volume",
   "channels.canvas.family.state": "State",
   "channels.canvas.family.write": "Write",
-  "channels.canvas.family.action": "Action",
+  "channels.canvas.family.action": "Outbound",
   "channels.canvas.shortcuts.addNode": "Add a node",
   "channels.canvas.problemsSummary": "{{errors}} errors, {{warnings}} warnings",
   "channels.node.run": "Run node",
@@ -2838,7 +2838,7 @@ describe("channel node anatomy", () => {
     expect(tile("start")?.classList.contains("channel-flow-node__icon--orange")).toBe(true);
     expect(tile("start")?.querySelector("svg")).not.toBeNull();
     expect(tile("load")?.classList.contains("channel-flow-node__icon--blue")).toBe(true);
-    expect(tile("save")?.classList.contains("channel-flow-node__icon--grape")).toBe(true);
+    expect(tile("save")?.classList.contains("channel-flow-node__icon--teal")).toBe(true);
     expect(tile("odd")?.classList.contains("channel-flow-node__icon--gray")).toBe(true);
     const name = card("load")?.querySelector(".channel-flow-node__name");
     expect(name?.textContent).toBe("Load customers");

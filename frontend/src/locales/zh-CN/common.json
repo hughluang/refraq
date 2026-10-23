@@ -1601,7 +1601,7 @@
   "channels.canvas.family.volume": "批量",
   "channels.canvas.family.state": "状态",
   "channels.canvas.family.write": "写入",
-  "channels.canvas.family.action": "动作",
+  "channels.canvas.family.action": "外发",
   "channels.canvas.handle": "{{node}} {{port}} {{side}}",
   "channels.canvas.input": "输入",
   "channels.canvas.output": "输出",

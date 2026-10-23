@@ -24,7 +24,7 @@ import {
   WebhookIcon,
 } from "@/components/icons";
 
-export type FamilyTint = "orange" | "blue" | "gray" | "grape";
+export type FamilyTint = "orange" | "blue" | "gray" | "teal" | "grape";
 
 export type NodeIcon = typeof BoxIcon;
 
@@ -34,7 +34,7 @@ const FAMILY_TINT: Record<string, FamilyTint> = {
   transform: "gray",
   volume: "gray",
   state: "gray",
-  write: "grape",
+  write: "teal",
   action: "grape",
 };
 

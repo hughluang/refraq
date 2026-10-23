@@ -1601,7 +1601,7 @@
   "channels.canvas.family.volume": "Volume",
   "channels.canvas.family.state": "State",
   "channels.canvas.family.write": "Write",
-  "channels.canvas.family.action": "Action",
+  "channels.canvas.family.action": "Outbound",
   "channels.canvas.handle": "{{node}} {{port}} {{side}}",
   "channels.canvas.input": "input",
   "channels.canvas.output": "output",
