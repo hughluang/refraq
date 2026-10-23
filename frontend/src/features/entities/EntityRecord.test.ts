@@ -73,6 +73,10 @@ vi.mock("@refinedev/core", () => ({
   CanAccess: ({ children }: { children: ReactNode }) => children,
 }));
 
+vi.mock("@/features/branding/BrandingProvider", () => ({
+  useBranding: () => ({ brandName: "Refraq" }),
+}));
+
 vi.mock("next/link", () => ({
   default: ({ href, children }: { href: string; children: ReactNode }) =>
     createElement("a", { href }, children),

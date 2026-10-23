@@ -87,24 +87,42 @@ export type ChannelRun = {
   error_message: string | null;
 };
 
+export type NodeStatusName = "running" | "succeeded" | "failed" | "skipped";
+
+export type NodeSummary = {
+  node_id: string;
+  execution_count: number;
+  status_counts: Partial<Record<NodeStatusName, number>>;
+};
+
 export type NodeExecution = {
   seq: number;
   node_id: string;
+  container_seq: number | null;
+  round: number | null;
   status: string;
   started_at: Instant | null;
   finished_at: Instant | null;
   output_bytes: number;
   output_preview: unknown;
   output_truncated: boolean;
+  preview_only: boolean;
+  preview_totals: Record<string, number>;
   error_code: string | null;
   error_message: string | null;
   error_detail: Record<string, unknown> | null;
 };
 
+export type DatasetRowsPage = {
+  items: Record<string, unknown>[];
+  limit: number;
+  next_after_ord: number | null;
+};
+
 export type ChannelRunDetail = {
   run: ChannelRun;
   graph: Graph | null;
-  node_executions: NodeExecution[];
+  node_summaries: NodeSummary[];
 };
 
 export type ExecutionOutputPage =

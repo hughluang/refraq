@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { frameBox, layoutNodePorts, parentsFirst } from "@/features/channels/portLayout";
+import { frameBox, isContainerNode, layoutNodePorts, parentsFirst } from "@/features/channels/portLayout";
 
 describe("layoutNodePorts", () => {
   it("keeps a single main handle unlabelled on its side", () => {
@@ -52,6 +52,15 @@ describe("layoutNodePorts", () => {
   });
 });
 
+describe("container node types", () => {
+  it("includes For and Batch Read and leaves other volume nodes out", () => {
+    expect(isContainerNode("volume.for")).toBe(true);
+    expect(isContainerNode("volume.batch_read")).toBe(true);
+    expect(isContainerNode("volume.dataset_query")).toBe(false);
+    expect(isContainerNode("volume.materialize")).toBe(false);
+  });
+});
+
 describe("frameBox", () => {
   const frame = (id: string, parentId?: string, position = { x: 0, y: 0 }) => ({
     id,
@@ -75,6 +84,18 @@ describe("frameBox", () => {
     expect(
       frameBox("walk", [frame("walk"), card("step", "walk", { x: 80, y: 100 })]),
     ).toEqual({ width: 336, height: 204 });
+  });
+
+  it("sizes a nested Batch Read as a frame inside an outer frame", () => {
+    const nodes = [
+      frame("outer"),
+      { ...frame("batch", "outer", { x: 40, y: 48 }), nodeType: "volume.batch_read" },
+      card("step", "batch", { x: 80, y: 40 }),
+    ];
+    // 80 + 208 + 48 = 336, 40 + 56 + 48 = 144 -> min height 180
+    expect(frameBox("batch", nodes)).toEqual({ width: 336, height: 180 });
+    // 40 + 336 + 48 = 424, 48 + 180 + 48 = 276
+    expect(frameBox("outer", nodes)).toEqual({ width: 424, height: 276 });
   });
 
   it("sizes an outer frame from the inner frame, not from the card inside it", () => {

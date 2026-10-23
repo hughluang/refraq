@@ -192,9 +192,9 @@ export function TemplateField({
 
   const preview = templatePreview(value, schema);
   const rule = templateRule(schema);
-  const badge = typeBadge(valueSchema);
   const scanned = scanTemplate(value);
   const t = useTranslate();
+  const badge = datasetBadge(t, typeBadge(valueSchema));
   const tone = label
     ? invalid
       ? "error"
@@ -272,6 +272,12 @@ export function TemplateField({
       ) : null}
     </div>
   );
+}
+
+function datasetBadge(t: (key: string) => string, badge: string): string {
+  if (badge === "dataset") return t("channels.config.datasetReference");
+  if (badge === "list | dataset") return t("channels.config.datasetOrList");
+  return badge;
 }
 
 function templateNotes(

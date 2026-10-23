@@ -52,6 +52,11 @@ export function attributeValueSchema(attributeType: string): SchemaObject {
 export function typeBadge(schema: TemplateValueSchema | null): string {
   if (schema == null) return "unknown";
   if ("from" in schema) return "attribute";
+  if (schema["x-refraq-dataset-reference"] === true) {
+    const names = typeNames(schema);
+    if (names.includes("array")) return "list | dataset";
+    return "dataset";
+  }
   const names = typeNames(schema);
   if (names.length === 0) return "unknown";
   if (schema.type === "array") return "list";

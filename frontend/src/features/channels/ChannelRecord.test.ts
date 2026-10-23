@@ -132,7 +132,7 @@ function runningDetail(): ChannelRunDetail {
       error_message: null,
     },
     graph: EMPTY_GRAPH,
-    node_executions: [],
+    node_summaries: [],
   };
 }
 

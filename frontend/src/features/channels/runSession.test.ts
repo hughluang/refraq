@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 
+import { latestExecutionQuery } from "@/features/channels/datasetView";
 import {
   ancestorIds,
   executionCountByNode,
   executionScope,
   phaseByNode,
 } from "@/features/channels/runSession";
-import { EMPTY_GRAPH, type ChannelRunDetail, type Graph } from "@/features/channels/types";
+import {
+  EMPTY_GRAPH,
+  type ChannelRunDetail,
+  type Graph,
+  type NodeSummary,
+} from "@/features/channels/types";
 
 function graph(): Graph {
   return {
@@ -58,11 +64,11 @@ function graph(): Graph {
   };
 }
 
-function detail(status: string, executions: ChannelRunDetail["node_executions"]): ChannelRunDetail {
+function detail(status: string, summaries: readonly NodeSummary[]): ChannelRunDetail {
   return {
-    run: { status, stop_at_node_id: null },
+    run: { status, stop_at_node_id: null, job_id: "job_1" },
     graph: graph(),
-    node_executions: executions,
+    node_summaries: [...summaries],
   } as unknown as ChannelRunDetail;
 }
 
@@ -70,9 +76,9 @@ describe("phaseByNode", () => {
   it("marks an unexecuted node dead once the run has finished", () => {
     const phases = phaseByNode(
       detail("succeeded", [
-        { seq: 1, node_id: "trigger", status: "succeeded" },
-        { seq: 2, node_id: "body", status: "succeeded" },
-      ] as ChannelRunDetail["node_executions"]),
+        { node_id: "trigger", execution_count: 1, status_counts: { succeeded: 1 } },
+        { node_id: "body", execution_count: 1, status_counts: { succeeded: 1 } },
+      ]),
       graph(),
     );
     expect(phases.get("body")).toBe("succeeded");
@@ -84,22 +90,21 @@ describe("phaseByNode", () => {
     expect(phases.get("after")).toBe("waiting");
   });
 
-  it("uses the latest execution when a node ran more than once", () => {
-    const phases = phaseByNode(
-      detail("succeeded", [
-        { seq: 2, node_id: "body", status: "succeeded" },
-        { seq: 4, node_id: "body", status: "failed" },
-        { seq: 3, node_id: "body", status: "succeeded" },
-      ] as ChannelRunDetail["node_executions"]),
-      graph(),
-    );
+  it("uses the latest execution status when a node ran more than once", () => {
+    const summary: NodeSummary = {
+      node_id: "body",
+      execution_count: 3,
+      status_counts: { succeeded: 2, failed: 1 },
+    };
+    const phases = phaseByNode(detail("succeeded", [summary]), graph(), new Map([["body", "failed"]]));
     expect(phases.get("body")).toBe("failed");
-    expect(executionCountByNode(detail("succeeded", []).node_executions).get("body")).toBeUndefined();
+    expect(latestExecutionQuery(summary)).toEqual({ node_id: "body", limit: 1, offset: 2 });
+    expect(phaseByNode(detail("succeeded", [summary]), graph()).get("body")).toBe("waiting");
+    expect(executionCountByNode([]).get("body")).toBeUndefined();
     expect(
       executionCountByNode([
-        { node_id: "body" },
-        { node_id: "body" },
-        { node_id: "trigger" },
+        { node_id: "body", execution_count: 2, status_counts: { succeeded: 2 } },
+        { node_id: "trigger", execution_count: 1, status_counts: { succeeded: 1 } },
       ]).get("body"),
     ).toBe(2);
   });

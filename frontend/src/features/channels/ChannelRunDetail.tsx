@@ -6,19 +6,16 @@ import { useEffect, useState } from "react";
 
 import { LiveStatusAnnouncer } from "@/components/display/LiveStatusAnnouncer";
 import { StaleNotice } from "@/components/display/StaleNotice";
-import { StatusBadge } from "@/components/display/StatusBadge";
-import { presentJobStatus, presentNodeStatus } from "@/components/display/statusTone";
+import { presentJobStatus } from "@/components/display/statusTone";
 import { HeaderActions } from "@/components/layout/HeaderActions";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ConsoleLink } from "@/components/navigation/ConsoleLink";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
 import { getRun, listNodeTypes, rerunRun } from "@/features/channels/api";
+import { RunExecutionBrowser } from "@/features/channels/RunExecutionBrowser";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
-import { RecordReference } from "@/components/display/RecordReference";
 import { formatFailedNode, formatRunSubject, nodeDisplayName } from "@/features/channels/formatRunSubject";
 import { formatRunError } from "@/features/channels/problemLabel";
-import { RunErrorText } from "@/features/channels/RunErrorText";
-import { RunExecutionOutput } from "@/features/channels/RunExecutionOutput";
 import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
 import { isTerminalRun } from "@/features/channels/runSession";
 import type { NodeTypeSpec } from "@/features/channels/types";
@@ -173,28 +170,7 @@ export function ChannelRunDetail({
           onChange={() => undefined}
         />
       </div>
-      {detail.node_executions.map((item) => {
-        const label = nodeDisplayName(graph.nodes, item.node_id);
-        const named = label != null && label !== item.node_id;
-        return (
-        <Stack key={item.seq} gap={4}>
-          <Text size="sm">
-            {named && label ? (
-              <RecordReference name={label} recordKey={item.node_id} />
-            ) : (
-              item.node_id
-            )}{" "}
-            <StatusBadge
-              size="xs"
-              tone={presentNodeStatus(item.status).tone}
-              labelKey={presentNodeStatus(item.status).labelKey}
-            />{" "}
-            <RunErrorText code={item.error_code} message={item.error_message} />
-          </Text>
-          <RunExecutionOutput channelId={channelId} jobId={jobId} item={item} />
-        </Stack>
-        );
-      })}
+      <RunExecutionBrowser channelId={channelId} jobId={jobId} graph={graph} />
     </Stack>
     </PageChrome>
   );

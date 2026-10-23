@@ -3,9 +3,9 @@
 import {
   CARD_HEIGHT,
   CARD_WIDTH,
-  FOR_NODE_TYPE,
   FRAME_PAD,
   frameBox,
+  isContainerNode,
 } from "@/features/channels/portLayout";
 
 /** Gap kept between a For frame and a node created from `done` when the drop overlaps the frame. */
@@ -53,7 +53,7 @@ export function frameLinkAllowed(
   const target = byId.get(connection.target);
   if (!source || !target) return false;
   if (crossesFrame(source.parentId, target.parentId, source.id)) return false;
-  if (source.nodeType !== FOR_NODE_TYPE) return true;
+  if (!isContainerNode(source.nodeType)) return true;
   const targetParent = none(target.parentId);
   if (connection.sourceHandle === "each") return targetParent === source.id;
   return targetParent !== source.id;
@@ -72,7 +72,7 @@ export type FrozenFrame = {
 export function freezeFrames(members: readonly LinkMember[]): FrozenFrame[] {
   const byId = index(members);
   return members.flatMap((node) => {
-    if (node.nodeType !== FOR_NODE_TYPE) return [];
+    if (!isContainerNode(node.nodeType)) return [];
     const origin = absoluteOf(node, byId);
     const box = frameBox(node.id, members);
     return [{ id: node.id, x: origin.x, y: origin.y, width: box.width, height: box.height }];
@@ -168,7 +168,7 @@ export function placementFromPort(
   const byId = index(members);
   const source = byId.get(sourceId);
   if (!source) return { position: { x: absolute.x, y: absolute.y } };
-  if (source.nodeType === FOR_NODE_TYPE && sourceHandle === "each") {
+  if (isContainerNode(source.nodeType) && sourceHandle === "each") {
     const origin = absoluteOf(source, byId);
     const box = frameBox(source.id, members);
     const relative = { x: absolute.x - origin.x, y: absolute.y - origin.y };
@@ -183,7 +183,7 @@ export function placementFromPort(
     };
   }
   let flow = { x: absolute.x, y: absolute.y };
-  if (source.nodeType === FOR_NODE_TYPE && sourceHandle === "done") {
+  if (isContainerNode(source.nodeType) && sourceHandle === "done") {
     const origin = absoluteOf(source, byId);
     const box = frameBox(source.id, members);
     const card = { x: absolute.x, y: absolute.y, width: CARD_WIDTH, height: CARD_HEIGHT };
@@ -261,7 +261,7 @@ function centerOf(
 ): Point {
   const origin = absoluteOf(node, byId);
   const box =
-    node.nodeType === FOR_NODE_TYPE
+    isContainerNode(node.nodeType)
       ? frameBox(node.id, members)
       : { width: CARD_WIDTH, height: CARD_HEIGHT };
   return { x: origin.x + box.width / 2, y: origin.y + box.height / 2 };

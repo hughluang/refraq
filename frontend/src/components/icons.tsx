@@ -33,6 +33,7 @@ import {
   IconCut,
   IconLoader,
   IconDatabase,
+  IconDatabaseSearch,
   IconDeviceDesktop,
   IconDotsVertical,
   IconFilter,
@@ -45,6 +46,7 @@ import {
   IconKeyboard,
   IconLanguage,
   IconLayoutDashboard,
+  IconLayoutRows,
   IconList,
   IconListCheck,
   IconMoon,
@@ -65,6 +67,7 @@ import {
   IconSun,
   IconTable,
   IconTableImport,
+  IconTablePlus,
   IconUserCircle,
   IconUsers,
   IconUsersGroup,
@@ -138,6 +141,8 @@ export const CutIcon = withDefaults(IconCut);
 export const DuplicateIcon = withDefaults(IconCopyPlus);
 export const PasteIcon = withDefaults(IconClipboard);
 export const DatabaseIcon = withDefaults(IconDatabase);
+export const DatabaseSearchIcon = withDefaults(IconDatabaseSearch);
+export const LayoutRowsIcon = withDefaults(IconLayoutRows);
 export const FilterIcon = withDefaults(IconFilter);
 export const FormsIcon = withDefaults(IconForms);
 export const HandFingerIcon = withDefaults(IconHandFinger);
@@ -148,6 +153,7 @@ export const RepeatIcon = withDefaults(IconRepeat);
 export const SendIcon = withDefaults(IconSend);
 export const SplitIcon = withDefaults(IconArrowsSplit2);
 export const TableImportIcon = withDefaults(IconTableImport);
+export const TablePlusIcon = withDefaults(IconTablePlus);
 export const VariableIcon = withDefaults(IconVariable);
 export const WebhookIcon = withDefaults(IconWebhook);
 

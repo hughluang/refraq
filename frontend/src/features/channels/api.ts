@@ -8,7 +8,9 @@ import type {
   ChannelRunDetail,
   ChannelVersion,
   Confirmation,
+  DatasetRowsPage,
   ExecutionOutputPage,
+  NodeExecution,
   ExpressionContext,
   Graph,
   GraphProblem,
@@ -168,6 +170,38 @@ export function listRuns(
 
 export function getRun(id: string, jobId: string, init?: { signal?: AbortSignal }) {
   return apiClient<ChannelRunDetail>(`/channels/${id}/runs/${jobId}`, init);
+}
+
+export function listExecutions(
+  id: string,
+  jobId: string,
+  params?: {
+    node_id?: string;
+    container_seq?: number;
+    round?: number;
+    status?: string;
+    limit?: number;
+    offset?: number;
+  },
+  init?: { signal?: AbortSignal },
+) {
+  return apiClient<OffsetPage<NodeExecution>>(
+    `/channels/${id}/runs/${jobId}/executions${querySuffix(params)}`,
+    init,
+  );
+}
+
+export function listDatasetRows(
+  id: string,
+  jobId: string,
+  datasetId: string,
+  params?: { after_ord?: number; limit?: number },
+  init?: { signal?: AbortSignal },
+) {
+  return apiClient<DatasetRowsPage>(
+    `/channels/${id}/runs/${jobId}/datasets/${datasetId}/rows${querySuffix(params)}`,
+    init,
+  );
 }
 
 export function getExecutionOutput(

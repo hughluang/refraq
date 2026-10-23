@@ -79,4 +79,39 @@ describe("channel node type locales", () => {
       expect(zhMessages[key]).toBeTruthy();
     }
   });
+
+  it("keeps dataset node fields, reference labels, and dataset problem copy in both languages", () => {
+    const keys = [
+      "channelNodeTypes.volume.dataset_query.label",
+      "channelNodeTypes.volume.dataset_query.summary",
+      "channelNodeTypes.volume.materialize.label",
+      "channelNodeTypes.volume.materialize.summary",
+      "channelNodeTypes.volume.batch_read.label",
+      "channelNodeTypes.volume.batch_read.summary",
+      "channels.config.fields.volume.dataset_query.source",
+      "channels.config.fields.volume.dataset_query.sql",
+      "channels.config.fields.volume.dataset_query.statement_timeout_sec",
+      "channels.config.fields.volume.materialize.items",
+      "channels.config.fields.volume.batch_read.dataset",
+      "channels.config.fields.volume.batch_read.batch_size",
+      "channels.config.fields.write.entity.statement_timeout_sec",
+      "channels.config.datasetReference",
+      "channels.config.datasetOrList",
+      "problems.CHANNEL_DATASET_UNAVAILABLE",
+      "problems.CHANNEL_DATASET_QUOTA_EXCEEDED",
+      "channels.run.dataset.reason.expired",
+      "channels.run.dataset.reason.lost",
+      "channels.run.dataset.reason.not_found",
+      "channels.run.dataset.reason.foreign_run",
+      "channels.run.previewOnly",
+    ];
+    const enMessages = en as Record<string, string>;
+    const zhMessages = zh as Record<string, string>;
+    for (const key of keys) {
+      expect(enMessages[key], key).toBeTruthy();
+      expect(zhMessages[key], key).toBeTruthy();
+      expect(enMessages[key]).not.toBe(key);
+    }
+    expect(enMessages["channels.config.fields.volume.batch_read.dataset"]).not.toBe("dataset");
+  });
 });

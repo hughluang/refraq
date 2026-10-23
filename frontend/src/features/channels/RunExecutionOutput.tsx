@@ -5,6 +5,8 @@ import { useTranslate } from "@refinedev/core";
 import { useState } from "react";
 
 import { getExecutionOutput } from "@/features/channels/api";
+import { DatasetCard } from "@/features/channels/DatasetRows";
+import { datasetReferencesIn } from "@/features/channels/datasetView";
 import { RunErrorText } from "@/features/channels/RunErrorText";
 import type { ExecutionOutputPage, NodeExecution } from "@/features/channels/types";
 import { problemMessage } from "@/lib/problem";
@@ -24,6 +26,8 @@ export function RunExecutionOutput({
   const [fullOutput, setFullOutput] = useState<unknown>(undefined);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const previewOnly = item.preview_only === true;
+  const totals = item.preview_totals ?? {};
 
   if (item.status === "failed" || item.error_message) {
     return (
@@ -34,10 +38,31 @@ export function RunExecutionOutput({
   }
 
   const output = fullOutput === undefined ? item.output_preview : fullOutput;
+  const references = datasetReferencesIn(output);
+  const showFull =
+    item.output_truncated && fullOutput === undefined && !previewOnly && references.length === 0;
   return (
     <Stack gap={4}>
-      <Code block>{JSON.stringify(output, null, 2)}</Code>
-      {item.output_truncated && fullOutput === undefined ? (
+      {previewOnly ? (
+        <Stack gap={2}>
+          <Text size="xs">{t("channels.run.previewOnly")}</Text>
+          {Object.entries(totals).map(([path, count]) => (
+            <Text key={path} size="xs" c="dimmed">
+              {t("channels.run.previewTotal", { path, count })}
+            </Text>
+          ))}
+        </Stack>
+      ) : null}
+      {references.map((dataset) => (
+        <DatasetCard
+          key={dataset.dataset_id}
+          channelId={channelId}
+          jobId={jobId}
+          dataset={dataset}
+        />
+      ))}
+      {references.length === 0 ? <Code block>{JSON.stringify(output, null, 2)}</Code> : null}
+      {showFull ? (
         <Button
           size="compact-xs"
           variant="default"

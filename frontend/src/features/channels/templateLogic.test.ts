@@ -6,11 +6,24 @@ import {
   templateCompletions,
   templatePreview,
   templateRule,
+  typeBadge,
   upstreamOutputs,
 } from "@/features/channels/templateLogic";
 import type { SelfScope } from "@/features/channels/templateScope";
 
 const LIST = { type: "array", items: { type: "object" } } as const;
+
+describe("typeBadge", () => {
+  it("names a dataset reference instead of an anonymous object", () => {
+    expect(
+      typeBadge({ type: "object", "x-refraq-dataset-reference": true }),
+    ).toBe("dataset");
+    expect(
+      typeBadge({ type: ["array", "object"], "x-refraq-dataset-reference": true }),
+    ).toBe("list | dataset");
+    expect(typeBadge({ type: "object" })).toBe("object");
+  });
+});
 
 describe("templatePreview", () => {
   it("accepts static JSON for a list without braces", () => {

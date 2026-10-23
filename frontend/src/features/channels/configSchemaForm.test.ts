@@ -198,6 +198,35 @@ describe("fieldsFromSchema", () => {
     });
   });
 
+  it("keeps a dataset reference template from collapsing to an anonymous string", () => {
+    const fields = fieldsFromSchema({
+      type: "object",
+      properties: {
+        dataset: {
+          type: "string",
+          "x-refraq-template": {
+            type: "object",
+            "x-refraq-dataset-reference": true,
+            required: ["dataset_id", "columns", "count"],
+          },
+        },
+        source: {
+          type: "string",
+          "x-refraq-template": {
+            type: ["array", "object"],
+            "x-refraq-dataset-reference": true,
+          },
+        },
+      },
+    });
+    expect(fields[0]).toMatchObject({ kind: "template", key: "dataset" });
+    expect(fields[0]?.kind === "template" ? fields[0].valueSchema : null).toMatchObject({
+      "x-refraq-dataset-reference": true,
+    });
+    expect(fields[1]).toMatchObject({ kind: "template" });
+    expect(fields.map((field) => field.kind)).not.toContain("string");
+  });
+
   it("maps a json ref to an object field", () => {
     const schema: SchemaObject = {
       type: "object",

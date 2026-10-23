@@ -8,12 +8,14 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { listExecutions } from "@/features/channels/api";
 import { CANVAS_PLUS_PATH } from "@/features/channels/CanvasPlusIcon";
 import { EACH_INSET } from "@/features/channels/portLayout";
 import {
   EMPTY_GRAPH,
   type ChannelRunDetail,
   type Graph,
+  type NodeExecution,
   type GraphProblem,
   type NodeTypeSpec,
 } from "@/features/channels/types";
@@ -32,6 +34,9 @@ const sessionPermissions = vi.hoisted(() => ({ current: [] as string[] }));
 
 vi.mock("@/features/channels/api", () => ({
   getExecutionOutput: vi.fn(),
+  listExecutions: vi.fn(() => Promise.resolve({ items: [], total: 0, limit: 50, offset: 0 })),
+  listDatasetRows: vi.fn(),
+  previewTemplate: vi.fn(),
 }));
 
 const LABELS: Record<string, string> = {
@@ -744,7 +749,7 @@ describe("ChannelCanvas controls", () => {
         error_message: null,
       },
       graph: nodeGraph,
-      node_executions: [],
+      node_summaries: [],
     };
     const onRun = vi.fn();
     await renderCanvas([], nodeGraph, { sessionRun, onRun });
@@ -816,30 +821,34 @@ describe("ChannelCanvas controls", () => {
         error_message: null,
       },
       graph: nodeGraph,
-      node_executions: [
+      node_summaries: [
+        { node_id: "nd_1", execution_count: 1, status_counts: { succeeded: 1 } },
+      ],
+    };
+    vi.mocked(listExecutions).mockResolvedValue({
+      items: [
         {
           seq: 1,
           node_id: "nd_1",
           status: "succeeded",
-          started_at: now,
-          finished_at: now,
-          output_bytes: 12,
           output_preview: { rows: ["hidden"] },
           output_truncated: false,
-          error_code: null,
-          error_message: null,
-          error_detail: null,
-        },
+          preview_only: false,
+          preview_totals: {},
+        } as NodeExecution,
       ],
-    };
-    await renderCanvas([], nodeGraph, { sessionRun });
+      total: 1,
+      limit: 50,
+      offset: 0,
+    });
+    await renderCanvas([], nodeGraph, { sessionRun, channelId: "chn_1" });
     const node = document.querySelector(".react-flow__node");
     if (!(node instanceof HTMLElement)) throw new Error("missing node");
     openSettings(node);
     const header = document.querySelector(".channel-node-config__header");
     if (!(header instanceof HTMLElement)) throw new Error("missing header");
     expect(within(header).getByText("Succeeded")).toBeTruthy();
-    expect(screen.getByText(/hidden/)).toBeTruthy();
+    expect(await screen.findByText(/hidden/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Show input and output" })).toBeNull();
   });
 
@@ -1778,6 +1787,14 @@ const FOR_SPEC = catalogSpec(
     { port: "done", description: "", loop_back: false },
   ],
 );
+const BATCH_SPEC = catalogSpec(
+  "volume.batch_read",
+  [{ port: "main", description: "" }],
+  [
+    { port: "each", description: "", loop_back: true },
+    { port: "done", description: "", loop_back: false },
+  ],
+);
 const READ_SPEC = catalogSpec("read.sql", [{ port: "main", description: "" }], [
   { port: "main", description: "", loop_back: false },
 ]);
@@ -1856,6 +1873,24 @@ describe("channel ports", () => {
     expect(canvasPlus(eachAdd).querySelector("path")?.getAttribute("d")).toBe(CANVAS_PLUS_PATH);
     expect(canvasPlus(doneAdd).getAttribute("viewBox")).toBe("0 0 14 14");
     expect(canvasPlus(doneAdd).querySelector("path")?.getAttribute("d")).toBe(CANVAS_PLUS_PATH);
+  });
+
+  it("draws Batch Read with the same frame, each, and done placement as For", async () => {
+    await renderCanvas([], {
+      ...EMPTY_GRAPH,
+      nodes: [placed("batch", "volume.batch_read", "Batches", 40)],
+    }, { catalog: [BATCH_SPEC] });
+
+    const frame = document.querySelector('.react-flow__node[data-id="batch"]');
+    if (!(frame instanceof HTMLElement)) throw new Error("missing frame");
+    expect(frame.querySelector(".channel-flow-node--frame")).not.toBeNull();
+    expect(frame.style.width).toBe("320px");
+    expect(frame.style.height).toBe("180px");
+    const each = await port("Batches Each output");
+    expect(each.className).toContain("channel-flow-handle--inset");
+    const done = await port("Batches Done output");
+    expect(done.className).not.toContain("channel-flow-handle--inset");
+    expect(done.getAttribute("data-handlepos")).toBe("right");
   });
 
   it("keeps a non-main port when an edge is created, including through undo", async () => {
@@ -2416,43 +2451,9 @@ describe("channel ports", () => {
         error_message: null,
       },
       graph: ran,
-      node_executions: [
-        {
-          seq: 1,
-          node_id: "trigger",
-          status: "succeeded",
-          started_at: now,
-          finished_at: now,
-          output_bytes: 2,
-          output_preview: {},
-          error_code: null,
-          error_message: null,
-          error_detail: null,
-        },
-        {
-          seq: 2,
-          node_id: "body",
-          status: "succeeded",
-          started_at: now,
-          finished_at: now,
-          output_bytes: 2,
-          output_preview: { current: 0 },
-          error_code: null,
-          error_message: null,
-          error_detail: null,
-        },
-        {
-          seq: 3,
-          node_id: "body",
-          status: "succeeded",
-          started_at: now,
-          finished_at: now,
-          output_bytes: 2,
-          output_preview: { current: 1 },
-          error_code: null,
-          error_message: null,
-          error_detail: null,
-        },
+      node_summaries: [
+        { node_id: "trigger", execution_count: 1, status_counts: { succeeded: 1 } },
+        { node_id: "body", execution_count: 2, status_counts: { succeeded: 2 } },
       ],
     };
     await renderCanvas([], ran, {
@@ -2514,19 +2515,8 @@ describe("channel ports", () => {
           error_message: null,
         },
         graph,
-        node_executions: [
-          {
-            seq: 1,
-            node_id: "trigger",
-            status: "running",
-            started_at: now,
-            finished_at: null,
-            output_bytes: 0,
-            output_preview: null,
-            error_code: null,
-            error_message: null,
-            error_detail: null,
-          },
+        node_summaries: [
+          { node_id: "trigger", execution_count: 1, status_counts: { running: 1 } },
         ],
       },
     });
@@ -2582,19 +2572,8 @@ describe("channel ports", () => {
           error_message: null,
         },
         graph,
-        node_executions: [
-          {
-            seq: 1,
-            node_id: "trigger",
-            status: "succeeded",
-            started_at: now,
-            finished_at: now,
-            output_bytes: 0,
-            output_preview: null,
-            error_code: null,
-            error_message: null,
-            error_detail: null,
-          },
+        node_summaries: [
+          { node_id: "trigger", execution_count: 1, status_counts: { succeeded: 1 } },
         ],
       },
     });
@@ -2639,19 +2618,8 @@ describe("channel ports", () => {
           error_message: "nope",
         },
         graph,
-        node_executions: [
-          {
-            seq: 1,
-            node_id: "trigger",
-            status: "failed",
-            started_at: now,
-            finished_at: now,
-            output_bytes: 0,
-            output_preview: null,
-            error_code: "boom",
-            error_message: "nope",
-            error_detail: null,
-          },
+        node_summaries: [
+          { node_id: "trigger", execution_count: 1, status_counts: { failed: 1 } },
         ],
       },
     });
@@ -2696,19 +2664,8 @@ describe("channel ports", () => {
           error_message: null,
         },
         graph,
-        node_executions: [
-          {
-            seq: 1,
-            node_id: "trigger",
-            status: "running",
-            started_at: now,
-            finished_at: null,
-            output_bytes: 0,
-            output_preview: null,
-            error_code: null,
-            error_message: null,
-            error_detail: null,
-          },
+        node_summaries: [
+          { node_id: "trigger", execution_count: 1, status_counts: { running: 1 } },
         ],
       },
     });
@@ -2720,6 +2677,125 @@ describe("channel ports", () => {
     expect(card?.classList.contains("channel-flow-node--selected")).toBe(true);
     expect(card?.classList.contains("channel-flow-node--running")).toBe(true);
     expect(card?.classList.contains("channel-flow-node--problem")).toBe(false);
+  });
+
+  it("asks for the latest execution only when statuses are mixed", async () => {
+    vi.mocked(listExecutions).mockClear();
+    vi.mocked(listExecutions).mockResolvedValue({
+      items: [
+        {
+          seq: 3,
+          node_id: "trigger",
+          status: "failed",
+          output_preview: null,
+          output_truncated: false,
+          preview_only: false,
+          preview_totals: {},
+        } as NodeExecution,
+      ],
+      total: 3,
+      limit: 1,
+      offset: 2,
+    });
+    const graph: Graph = {
+      ...EMPTY_GRAPH,
+      nodes: [placed("trigger", "trigger.manual", "Start", 20)],
+    };
+    await renderCanvas([], graph, {
+      catalog: [catalogSpec("trigger.manual", [], [{ port: "main", description: "" }], true)],
+      appearance: "browse",
+      mutable: false,
+      channelId: "chn_1",
+      sessionRun: runDetail(graph, "failed", [
+        { seq: 1, node_id: "trigger", status: "succeeded" },
+        { seq: 2, node_id: "trigger", status: "succeeded" },
+        { seq: 3, node_id: "trigger", status: "failed" },
+      ]),
+    });
+    await waitFor(() => {
+      expect(listExecutions).toHaveBeenCalledWith("chn_1", "job_1", {
+        node_id: "trigger",
+        limit: 1,
+        offset: 2,
+      });
+    });
+    expect(listExecutions).not.toHaveBeenCalledWith(
+      "chn_1",
+      "job_1",
+      expect.objectContaining({ limit: 50 }),
+    );
+    const node = document.querySelector(".react-flow__node[data-id='trigger']");
+    expect(phaseLabel(node)).toBe("Failed");
+  });
+
+  it("keeps one node's latest phase when another execution request fails", async () => {
+    vi.mocked(listExecutions).mockClear();
+    vi.mocked(listExecutions).mockImplementation(async (_id, _jobId, params) => {
+      if (params?.node_id === "body") throw new Error("down");
+      return {
+        items: [
+          {
+            seq: 2,
+            node_id: "start",
+            status: "failed",
+            output_preview: null,
+            output_truncated: false,
+            preview_only: false,
+            preview_totals: {},
+          } as NodeExecution,
+        ],
+        total: 2,
+        limit: 1,
+        offset: 1,
+      };
+    });
+    const graph: Graph = {
+      ...EMPTY_GRAPH,
+      nodes: [
+        placed("start", "trigger.manual", "Start", 20),
+        placed("body", "read.sql", "Body", 280),
+      ],
+      edges: [
+        {
+          id: "e1",
+          source: { node_id: "start", port: "main" },
+          target: { node_id: "body", port: "main" },
+        },
+      ],
+    };
+    try {
+      await renderCanvas([], graph, {
+        catalog: [
+          catalogSpec("trigger.manual", [], [{ port: "main", description: "" }], true),
+          READ_SPEC,
+        ],
+        appearance: "browse",
+        mutable: false,
+        channelId: "chn_1",
+        sessionRun: runDetail(graph, "failed", [
+          { seq: 1, node_id: "start", status: "succeeded" },
+          { seq: 2, node_id: "start", status: "failed" },
+          { seq: 3, node_id: "body", status: "succeeded" },
+          { seq: 4, node_id: "body", status: "failed" },
+        ]),
+      });
+      await waitFor(() => {
+        expect(phaseLabel(document.querySelector(".react-flow__node[data-id='start']"))).toBe(
+          "Failed",
+        );
+      });
+      expect(phaseLabel(document.querySelector(".react-flow__node[data-id='body']"))).toBe(
+        "Waiting",
+      );
+    } finally {
+      vi.mocked(listExecutions).mockReset();
+      vi.mocked(listExecutions).mockResolvedValue({
+        items: [],
+        total: 0,
+        limit: 50,
+        offset: 0,
+      });
+    }
   });
 
   it("does not show a phase when the node has not run", async () => {
@@ -3003,6 +3079,24 @@ describe("channel edges", () => {
   });
 });
 
+function summarizeExecutions(
+  executions: { node_id: string; status: string }[],
+): ChannelRunDetail["node_summaries"] {
+  const summaries = new Map<string, ChannelRunDetail["node_summaries"][number]>();
+  for (const item of executions) {
+    const current = summaries.get(item.node_id) ?? {
+      node_id: item.node_id,
+      execution_count: 0,
+      status_counts: {},
+    };
+    current.execution_count += 1;
+    const name = item.status as keyof typeof current.status_counts;
+    current.status_counts[name] = (current.status_counts[name] ?? 0) + 1;
+    summaries.set(item.node_id, current);
+  }
+  return [...summaries.values()];
+}
+
 function runDetail(
   graph: Graph,
   status: string,
@@ -3033,19 +3127,7 @@ function runDetail(
       error_message: null,
     },
     graph,
-    node_executions: executions.map((item) => ({
-      seq: item.seq,
-      node_id: item.node_id,
-      status: item.status,
-      started_at: now,
-      finished_at: item.status === "running" ? null : now,
-      output_bytes: 0,
-      output_preview: null,
-      output_truncated: false,
-      error_code: null,
-      error_message: null,
-      error_detail: null,
-    })),
+    node_summaries: summarizeExecutions(executions),
   };
 }
 

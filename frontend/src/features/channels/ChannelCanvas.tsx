@@ -95,10 +95,13 @@ import {
 import { NodeConfigPanel } from "@/features/channels/NodeConfigPanel";
 import { familyTint, nodeTypeIcon } from "@/features/channels/nodeVisual";
 import { MOTION_MS } from "@/theme/tokens";
+import { listExecutions } from "@/features/channels/api";
+import { latestExecutionQuery } from "@/features/channels/datasetView";
 import { ResultRegion, UpstreamRegion } from "@/features/channels/NodeRunRegions";
 import {
   executionCountByNode,
   phaseByNode,
+  recordedKey,
   samplesByNode,
   type NodeRunPhase,
 } from "@/features/channels/runSession";
@@ -107,8 +110,8 @@ import { canAuthorNodeType } from "@/features/channels/nodePermission";
 import { nodeTypeLabel } from "@/features/channels/nodeTypeCopy";
 import {
   EACH_INSET,
-  FOR_NODE_TYPE,
   frameBox,
+  isContainerNode,
   layoutNodePorts,
   parentsFirst,
   type HandleSide,
@@ -154,6 +157,7 @@ import type {
   ExpressionContext,
   Graph,
   GraphProblem,
+  NodeExecution,
   NodeTypeSpec,
   RefinedPort,
 } from "@/features/channels/types";
@@ -240,7 +244,7 @@ function flowNoteOf(node: NoteCanvasNode): FlowNoteShape {
 
 function presentNodes(nodes: CanvasNode[], members: readonly LinkMember[]): CanvasNode[] {
   return parentsFirst(nodes).map((node) => {
-    if (!isChannelNode(node) || node.data.nodeType !== FOR_NODE_TYPE) return node;
+    if (!isChannelNode(node) || !isContainerNode(node.data.nodeType)) return node;
     const box = frameBox(node.id, members);
     return {
       ...node,
@@ -1390,13 +1394,43 @@ function ChannelCanvasBody({
     outputSchemas.set(`${port.node_id}:${port.port}`, port.schema);
     if (port.port === "main") outputSchemas.set(port.node_id, port.schema);
   }
-  const samples = useMemo(
-    () => (sessionRun ? samplesByNode(sessionRun.node_executions) : new Map<string, unknown>()),
-    [sessionRun],
-  );
+  const summaryKey = sessionRun ? recordedKey(sessionRun) : "";
+  const [latestExecutions, setLatestExecutions] = useState<NodeExecution[]>([]);
+  useEffect(() => {
+    if (!sessionRun || !channelId) {
+      setLatestExecutions([]);
+      return;
+    }
+    const queries = sessionRun.node_summaries.flatMap((summary) => {
+      const query = latestExecutionQuery(summary);
+      return query ? [query] : [];
+    });
+    if (queries.length === 0) {
+      setLatestExecutions([]);
+      return;
+    }
+    let cancelled = false;
+    void Promise.allSettled(
+      queries.map((query) => listExecutions(channelId, sessionRun.run.job_id, query)),
+    ).then((results) => {
+      if (cancelled) return;
+      setLatestExecutions(
+        results.flatMap((result) => (result.status === "fulfilled" ? result.value.items : [])),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionRun, channelId, summaryKey]);
+  const samples = useMemo(() => samplesByNode(latestExecutions), [latestExecutions]);
+  const latestStatus = useMemo(() => {
+    const statuses = new Map<string, string>();
+    for (const item of latestExecutions) statuses.set(item.node_id, item.status);
+    return statuses;
+  }, [latestExecutions]);
   const phases = useMemo(
-    () => (sessionRun ? phaseByNode(sessionRun, sessionRun.graph ?? graph) : new Map()),
-    [sessionRun, graph],
+    () => (sessionRun ? phaseByNode(sessionRun, sessionRun.graph ?? graph, latestStatus) : new Map()),
+    [sessionRun, graph, latestStatus],
   );
   useEffect(() => {
     setDrawingIds((current) => {
@@ -1436,7 +1470,7 @@ function ChannelCanvasBody({
   const counts = useMemo(
     () =>
       sessionRun
-        ? executionCountByNode(sessionRun.node_executions)
+        ? executionCountByNode(sessionRun.node_summaries)
         : new Map<string, number>(),
     [sessionRun],
   );
@@ -2968,7 +3002,7 @@ function ChannelFlowNode({ id, data, selected }: NodeProps<ChannelNode>) {
   };
   const inputs = spec ? spec.inputs : data.trigger ? [] : [{ port: "main", description: "" }];
   const outputs = spec ? spec.outputs : [{ port: "main", description: "" }];
-  const frame = data.nodeType === FOR_NODE_TYPE;
+  const frame = isContainerNode(data.nodeType);
   const laid = layoutNodePorts(inputs, outputs, { frame });
   const errorAnchor = outputs.some((port) => port.port === "error");
   const run = useContext(CanvasRunContext);

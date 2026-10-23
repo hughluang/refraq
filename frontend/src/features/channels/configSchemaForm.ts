@@ -12,6 +12,7 @@ export type SchemaObject = {
   minimum?: number;
   maximum?: number;
   contentMediaType?: string;
+  "x-refraq-dataset-reference"?: boolean;
   allOf?: { if?: SchemaObject; then?: SchemaObject }[];
   "x-refraq-ref"?: string;
   "x-refraq-template"?: SchemaObject | { from: "entity_attribute" };

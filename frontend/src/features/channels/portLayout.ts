@@ -1,6 +1,11 @@
-/** Canvas placement for catalog ports and For frames. */
+/** Canvas placement for catalog ports and container frames. */
 
-export const FOR_NODE_TYPE = "volume.for";
+/** Node types that own a frame. Membership is the set, not a For-only compare. */
+export const CONTAINER_NODE_TYPES = new Set(["volume.for", "volume.batch_read"]);
+
+export function isContainerNode(nodeType: string): boolean {
+  return CONTAINER_NODE_TYPES.has(nodeType);
+}
 
 /** Card size used to grow a frame. Matches the channel node card. */
 export const CARD_WIDTH = 208;
@@ -100,7 +105,7 @@ function measureFrame(
     if (child.parentId !== id) continue;
     hasChild = true;
     const size =
-      child.nodeType === FOR_NODE_TYPE
+      isContainerNode(child.nodeType)
         ? measureFrame(child.id, nodes, seen)
         : { width: CARD_WIDTH, height: CARD_HEIGHT };
     right = Math.max(right, child.position.x + size.width);
