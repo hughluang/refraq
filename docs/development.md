@@ -76,7 +76,7 @@ This document records the stable development conventions for contributors workin
 
 ### Release and site install
 
-- A version is a git tag `v*` (for example `v0.1.0`). Tagging is the only image publish trigger. Ordinary commits do not build images.
+- Numbering: `docs/conventions-versions.md`. A version is a git tag `vX.Y.Z` as that document defines. Tagging is the only image publish trigger. Ordinary commits do not build images.
 - GitHub Actions builds **linux/amd64** images and pushes `ghcr.io/hughluang/refraq-api:<version>` and `ghcr.io/hughluang/refraq-web:<version>` (tag without the `v`). After both image manifests exist, the same tag creates a GitHub Release that attaches a stamped `docker-compose.yaml` (image tags written in) and `.env.example`. Other architectures are not published. A tag on GHCR is not by itself an installable version.
 - The Release body is the curated notes from `.github/release-notes/<tag>.md` (shape: `.github/release-notes/TEMPLATE.md`), then a standard upgrade footer, then GitHub's automatic change list. A missing notes file does not block the Release. Adding that file before tagging is the release author's step.
 - `deploy/compose.yaml` is a template. Do not start a site from `deploy/`.
@@ -102,7 +102,7 @@ This document records the stable development conventions for contributors workin
 6. `docs/api-contracts-sources.md`, `docs/api-contracts-jobs.md`, `docs/api-contracts-schedules.md`, `docs/api-contracts-metadata.md`
 7. `docs/api-contracts-tokens.md`, `docs/api-contracts-account.md`, `docs/api-contracts-audit.md`, `docs/api-contracts-metadata-mcp.md`
 8. `docs/adr/0004-redis-queue-for-ingestion.md`, `docs/adr/0005-app-encrypted-connection-secrets.md`, `docs/adr/0006-celery-platform-async-runtime.md`, `docs/adr/0007-source-owns-catalog-identity.md`, `docs/adr/0008-job-generic-input.md`, `docs/adr/0010-source-owns-access.md`, `docs/adr/0011-encrypted-access-blob-and-connector-spec.md`, `docs/adr/0021-catalog-scope-in-access.md`, `docs/adr/0022-unified-time-contract.md`, `docs/adr/0023-api-problem-details.md`, `docs/adr/0024-normalized-type-mapping.md`, `docs/adr/0027-running-time-limit-on-schedule.md`
-9. `docs/backend-layout.md`, `docs/architecture.md`, `docs/modules.md`, `docs/env.md`, `docs/conventions-time.md`, `docs/conventions-errors.md`, `docs/conventions-pagination.md`
+9. `docs/backend-layout.md`, `docs/architecture.md`, `docs/modules.md`, `docs/env.md`, `docs/conventions-versions.md`, `docs/conventions-time.md`, `docs/conventions-errors.md`, `docs/conventions-pagination.md`
 
 Treat `docs/product-core/*` as **long-horizon** reference only (files are marked superseded for near-term sequencing).
 
