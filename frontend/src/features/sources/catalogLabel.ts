@@ -11,6 +11,10 @@ export function objectTypeLabel(t: Translate, objectType: string): string {
   return labeled(t, "catalog.objectTypes", objectType);
 }
 
+export function objectCategoryLabel(t: Translate, category: string): string {
+  return labeled(t, "catalog.objectCategories", category);
+}
+
 export function semanticSourceLabel(t: Translate, source: string): string {
   return labeled(t, "catalog.semanticSources", source);
 }
