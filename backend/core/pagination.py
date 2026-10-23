@@ -38,7 +38,6 @@ CATALOG_SEARCH = PageBounds(default_limit=20, max_limit=100)
 JOIN_LIST = PageBounds(default_limit=50, max_limit=200)
 SOURCE_LIST = PageBounds(default_limit=100, max_limit=500)
 SOURCE_SEARCH = PageBounds(default_limit=50, max_limit=200)
-BUSINESS_DOMAIN_LIST = PageBounds(default_limit=100, max_limit=500)
 SEMANTICS_CHANGE_LIST = PageBounds(default_limit=50, max_limit=200)
 ENTITY_LIST = PageBounds(default_limit=50, max_limit=200)
 

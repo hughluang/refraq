@@ -47,7 +47,7 @@ The side nav carries only module structural navigation and **renders exactly the
 | --- | --- | --- |
 | Workbench | `workbench` | Home (`dashboard`) |
 | Administration | `admin` | Users, Roles, User Groups (`user-groups`), Subject Attributes (`subject-attributes`), Identity Providers (`identity-providers`) |
-| Metadata | `metadata` | Sources (`sources`), Catalog (`catalog`), Business Domains (`business-domains`), Type Mappings (`type-mappings`) |
+| Metadata | `metadata` | Sources (`sources`), Catalog (`catalog`), Type Mappings (`type-mappings`) |
 | Entity | `entity` | Entities (`entities`) |
 | Operations | `operations` | Jobs (`jobs`), Schedules (`schedules`) |
 | Platform settings | `settings` | System parameters (`settings`), Site branding (`branding`), Model Services (`model-services`), Webhooks (`webhooks`), Email Accounts (`email-accounts`) |
@@ -109,7 +109,7 @@ flowchart TB
 
 ### 3.5 Command Palette, Home, and Color Scheme
 
-The command palette opens from the header trigger and from Ctrl+K or Cmd+K, including while focus is in a field. It lists this **User**'s recent record visits in this browser (the latest eight), permitted **Console Navigation** modules, create actions for modules that have a create route and create permission, and records from the list endpoints the actor may list: Users, Roles, Sources, Entities, Dictionaries, Channels, Business Domains, and User Groups, five each. Record search waits 250 ms and labels each hit by its module. A failed module is omitted. A response for an older query is ignored. The palette also toggles the color scheme, toggles navigation width, changes the UI language through the account locale, and opens **Account Center**. It lists the keyboard shortcuts.
+The command palette opens from the header trigger and from Ctrl+K or Cmd+K, including while focus is in a field. It lists this **User**'s recent record visits in this browser (the latest eight), permitted **Console Navigation** modules, create actions for modules that have a create route and create permission, and records from the list endpoints the actor may list: Users, Roles, Sources, Entities, Dictionaries, Channels, and User Groups, five each. Record search waits 250 ms and labels each hit by its module. A failed module is omitted. A response for an older query is ignored. The palette also toggles the color scheme, toggles navigation width, changes the UI language through the account locale, and opens **Account Center**. It lists the keyboard shortcuts.
 
 Management Console home shows those recent records and the permitted navigation groups as entry points, each with an icon and a label. A User with no recent visits sees the entry points only. Recent visits are stored per User id in this browser and cleared at sign-out.
 
@@ -153,7 +153,7 @@ Console rules:
 - Session TTL changes affect **only sessions created after** the write.
 - Secrets and initial admin credentials are never exposed.
 - Permissions: `settings:read` (view / nav), `settings:write` (write / reset); seeded `operator` does not include them.
-- The page presents System Parameters only; reference data with its own lifecycle (**Type Mapping**, Business Domains) stays in its own module.
+- The page presents System Parameters only; reference data with its own lifecycle (**Type Mapping**) stays in its own module.
 
 ## 6. Anti-Patterns
 

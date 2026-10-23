@@ -277,12 +277,6 @@ class MemoryCatalogStore:
             ]
             return sorted(items, key=list_object_sort_key)
 
-    def count_objects_for_domain(self, domain_id: str) -> int:
-        with self._lock:
-            return sum(
-                1 for o in self._objects.values() if o.business_domain_id == domain_id
-            )
-
     @contextmanager
     def catalog_write(self, source_id: str) -> Iterator[_MemoryStructureWrite]:
         """Catalog write unit (zero merge/origin rules).
@@ -394,7 +388,6 @@ class MemoryCatalogStore:
         object_category: Any = UNSET,
         grain_description: Any = UNSET,
         business_primary_key: Any = UNSET,
-        business_domain_id: Any = UNSET,
         evidence_summary: Any = UNSET,
         open_questions: Any = UNSET,
         semantic_source: Any = UNSET,
@@ -415,7 +408,6 @@ class MemoryCatalogStore:
                 "object_category": object_category,
                 "grain_description": grain_description,
                 "business_primary_key": business_primary_key,
-                "business_domain_id": business_domain_id,
                 "evidence_summary": evidence_summary,
                 "open_questions": open_questions,
                 "semantic_source": semantic_source,

@@ -35,7 +35,6 @@ EXPECTED_ICONS = {
     "tokens": "key",
     "sources": "database",
     "catalog": "table",
-    "business-domains": "category",
     "type-mappings": "arrows-exchange",
     "entities": "box",
     "dictionaries": "book",
@@ -205,24 +204,6 @@ EXPECTED_IDENTITIES = {
             "delete": None,
             "show": "metadata:read",
             "sample": "catalog:sample",
-        },
-    },
-    "business-domains": {
-        "label_key": "businessDomains.title",
-        "routes": {
-            "list": "/console/business-domains",
-            "create": "/console/business-domains",
-            "edit": "/console/business-domains",
-            "show": None,
-            "aliases": [],
-        },
-        "actions": {
-            "list": "metadata:read",
-            "create": "metadata:write",
-            "edit": "metadata:write",
-            "delete": "metadata:write",
-            "show": None,
-            "sample": None,
         },
     },
     "type-mappings": {

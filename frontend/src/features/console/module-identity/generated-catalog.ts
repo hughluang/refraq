@@ -189,26 +189,6 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
     }
   },
   {
-    "id": "business-domains",
-    "label_key": "businessDomains.title",
-    "icon": "category",
-    "routes": {
-      "list": "/console/business-domains",
-      "create": "/console/business-domains",
-      "edit": "/console/business-domains",
-      "show": null,
-      "aliases": []
-    },
-    "actions": {
-      "list": "metadata:read",
-      "create": "metadata:write",
-      "edit": "metadata:write",
-      "delete": "metadata:write",
-      "show": null,
-      "sample": null
-    }
-  },
-  {
     "id": "type-mappings",
     "label_key": "typeMappings.title",
     "icon": "arrows-exchange",

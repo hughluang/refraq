@@ -53,7 +53,6 @@ const harness = vi.hoisted(() => {
     entities: vi.fn(async () => [] as { id: string; name: string; key: string }[]),
     dictionaries: vi.fn(async () => [] as { id: string; name: string; key: string }[]),
     groups: vi.fn(async () => [] as { id: string; name: string; key: string }[]),
-    domains: vi.fn(async () => [] as { id: string; name: string; key: string }[]),
     channels: vi.fn(async () => ({ items: [], total: 0, limit: 5, offset: 0 })),
     pending: [] as {
       query: string;
@@ -99,7 +98,6 @@ vi.mock("@/components/form/recordPickerAdapters", () => ({
   entityRecordAdapter: () => ({ search: harness.entities }),
   dictionaryRecordAdapter: () => ({ search: harness.dictionaries }),
   userGroupRecordAdapter: () => ({ search: harness.groups }),
-  businessDomainRecordAdapter: () => ({ search: harness.domains }),
 }));
 
 vi.mock("@/features/channels/api", () => ({
@@ -211,7 +209,6 @@ describe("command palette", () => {
       harness.entities,
       harness.dictionaries,
       harness.groups,
-      harness.domains,
     ]) {
       search.mockReset();
       search.mockResolvedValue([]);

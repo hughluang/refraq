@@ -20,17 +20,6 @@ from backend.core.db import Base
 from backend.core.time import UtcDateTime
 
 
-class BusinessDomainRow(Base):
-    __tablename__ = "business_domains"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    code: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(256), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
-
-
 class TypeMappingRow(Base):
     __tablename__ = "type_mappings"
     __table_args__ = (
@@ -101,12 +90,6 @@ class CatalogObjectRow(Base):
     object_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     grain_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     business_primary_key_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    business_domain_id: Mapped[str | None] = mapped_column(
-        String(64),
-        ForeignKey("business_domains.id", ondelete="RESTRICT"),
-        nullable=True,
-        index=True,
-    )
     evidence_summary_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     open_questions_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     semantic_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -120,7 +103,6 @@ class CatalogObjectRow(Base):
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
     source: Mapped[SourceRow] = relationship(back_populates="catalog_objects")
-    business_domain: Mapped[BusinessDomainRow | None] = relationship()
     columns: Mapped[list[CatalogColumnRow]] = relationship(
         back_populates="object",
         cascade="all, delete-orphan",

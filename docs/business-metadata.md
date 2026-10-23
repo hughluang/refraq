@@ -221,7 +221,6 @@ Initial modules (ids stable):
 | --- | --- | --- |
 | `sources` | Source registration, reachability, structure Jobs, and **Structure Diff** browse (`/console/sources/:id/structure-diffs`) | `sources:read` |
 | `catalog` | Browse Catalog Objects / columns; object detail at `/console/catalog/:id` (`show` → `metadata:read`) for full semantics, structure facts, Catalog Sample, joins, and DDL | `metadata:read` |
-| `business-domains` | Global Business Domain registry (immutable `code`); create/edit/delete → `metadata:write` | `metadata:read` |
 | `type-mappings` | Global **Type Mapping** list; PATCH non-seed target only (no create/delete) → `metadata:write` | `metadata:read` |
 
 The catalog object detail page is the Console semantics maintenance surface: it exposes the admitted object/column semantics model (§10, ADR 0015), structure facts (PK/FK/indexes/comments), **Catalog Sample** when the actor has `catalog:sample`, and join graph / path exploration. List remains the Source-scoped browse entry; deep links use the `show` route so readers with only `metadata:read` can open detail without needing `metadata:write`.
@@ -347,7 +346,6 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
 | `object_category` | `transaction_fact` \| `master_data` \| `dimension` \| `reference` \| `event` |
 | `grain_description` | Prefer “one row means …” |
 | `business_primary_key` | List of column names; names must exist on the object (`SEMANTIC_COLUMN_UNKNOWN`) |
-| `business_domain` | Nested `{ id, code, name }` on read; write via `business_domain_code` referencing a Business Domain entity (ADR 0017); unknown code → `BUSINESS_DOMAIN_UNKNOWN` |
 | `evidence_summary` | List of short evidence phrases |
 | `open_questions` | List of unresolved questions (persisted; never audit-only) |
 | `semantic_source` | Provenance of the last write: `mcp` \| `user_input` |
@@ -370,11 +368,7 @@ rows carrying only `code → label` → `reference`.
 time and status meaning live on the relevant columns via `business_description` (and optional
 free-text `semantic_type` / `enum_catalog` — closed vocabulary deferred, ADR 0016), object
 relationships in join edges, and write certainty in `evidence_summary` / `open_questions` /
-`business_semantics_ready`.
-
-**Business Domain** (ADR 0017) is a global flat entity: immutable `code`, mutable `name`, optional
-`description`. Catalog objects reference it by FK (`ON DELETE RESTRICT`). Console Module
-`business-domains` reuses `metadata:read` / `metadata:write`.
+`business_semantics_ready`. Business Domain is removed (ADR 0064).
 
 ### 10.2 Column semantics
 
@@ -402,9 +396,6 @@ is no elected primary axis at object level.
 - Incomplete understanding stays incomplete — record `open_questions`, do not invent meaning.
 - Column-name references in semantics payloads (`business_primary_key`) must resolve to columns on
   the object; unknown names are rejected with `SEMANTIC_COLUMN_UNKNOWN`.
-- `business_domain_code` on object semantics writes must resolve to an existing Business Domain
-  when non-empty; unknown codes are rejected with `BUSINESS_DOMAIN_UNKNOWN`. A present null/blank
-  clears the object’s Business Domain link.
 - Adding a semantics field requires passing the ADR 0015 admission criteria — carrier ownership,
   objective unique answer, falsifiability, structure paying for itself, and layer ownership.
   Object-level fields that elect one "primary" column out of several of the same kind, and free

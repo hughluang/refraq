@@ -31,7 +31,7 @@ _MAINTENANCE_DATABASE_URL = os.getenv(
 _CATALOG_TABLES = (
     "sources, catalog_objects, catalog_columns, catalog_foreign_keys,"
     " catalog_indexes, catalog_joins, catalog_join_changes, structure_diffs,"
-    " business_domains, catalog_embeddings"
+    " catalog_embeddings"
 )
 
 
@@ -47,7 +47,6 @@ def _postgres_available() -> bool:
 
 
 def _reset_metadata_singletons() -> None:
-    from backend.metadata.business_domains.store import reset_business_domain_store
     from backend.metadata.catalog.store import reset_catalog_store
     from backend.metadata.sources.store import reset_source_store
     from backend.metadata.structure_diffs.store import reset_structure_diff_store
@@ -55,7 +54,6 @@ def _reset_metadata_singletons() -> None:
     reset_source_store()
     reset_catalog_store()
     reset_structure_diff_store()
-    reset_business_domain_store()
 
 
 @pytest.fixture(params=["memory", "sql"])
@@ -146,7 +144,6 @@ def _object(name: str, *, ready: bool, business_name: str | None, columns: list[
         object_category=None,
         grain_description=None,
         business_primary_key=None,
-        business_domain_id=None,
         evidence_summary=None,
         open_questions=None,
         semantic_source=None,
@@ -461,26 +458,6 @@ def test_join_lifecycle_and_change_log_agree(catalog_store) -> None:
     assert catalog_store.get_join(join.id) is None
 
 
-def _seed_domain() -> str:
-    from backend.metadata.business_domains.store import (
-        BusinessDomainRecord,
-        get_business_domain_store,
-        new_business_domain_id,
-    )
-
-    now = utc_now()
-    record = BusinessDomainRecord(
-        id=new_business_domain_id(),
-        code="sales",
-        name="Sales",
-        description=None,
-        created_at=now,
-        updated_at=now,
-    )
-    get_business_domain_store().create(record)
-    return record.id
-
-
 def test_semantics_patch_agrees(catalog_store) -> None:
     _seed_catalog()
     orders = catalog_store.get_object_by_locator(
@@ -508,28 +485,6 @@ def test_semantics_patch_agrees(catalog_store) -> None:
     assert patched_column is not None
     assert patched_column.business_name == "Order id"
     assert patched_column.column_semantics == {"role": "pk"}
-
-
-def test_business_domain_ref_count_agrees(catalog_store) -> None:
-    """Domain reference counting follows catalog_objects.business_domain_id.
-
-    SQL always counted the FK column. Memory used to keep a sidecar map that
-    only `patch_object_semantics` wrote, so `delete_objects_for_source` left a
-    stale count of 1. Both adapters now read the catalog objects themselves.
-    """
-    _seed_catalog()
-    domain_id = _seed_domain()
-    orders = catalog_store.get_object_by_locator(
-        f"obj/postgresql/{SOURCE_KEY}/public/table/orders"
-    )
-    assert orders is not None
-
-    catalog_store.patch_object_semantics(orders.id, business_domain_id=domain_id)
-    assert catalog_store.count_objects_for_domain(domain_id) == 1
-
-    catalog_store.delete_objects_for_source(SOURCE_ID)
-    assert catalog_store.list_objects(SOURCE_ID)[1] == 0
-    assert catalog_store.count_objects_for_domain(domain_id) == 0
 
 
 def _empty_diff():
@@ -760,7 +715,6 @@ def test_persist_stores_full_routine_identity_name(catalog_store) -> None:
             object_category=None,
             grain_description=None,
             business_primary_key=None,
-            business_domain_id=None,
             evidence_summary=None,
             open_questions=None,
             semantic_source=None,

@@ -6,20 +6,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from backend.metadata.business_domains.store import get_business_domain_store
 from backend.metadata.catalog.store import (
     CatalogColumnRecord,
     CatalogJoinRecord,
     CatalogObjectRecord,
     get_catalog_store,
 )
-
-
-@dataclass(frozen=True)
-class DomainRefView:
-    id: str
-    code: str
-    name: str
 
 
 @dataclass(frozen=True)
@@ -75,7 +67,6 @@ class ObjectView:
     object_category: str | None
     grain_description: str | None
     business_primary_key: list[str] | None
-    business_domain: DomainRefView | None
     evidence_summary: list[str] | None
     open_questions: list[str] | None
     semantic_source: str | None
@@ -140,16 +131,6 @@ class JoinPathLookup:
     direct_joins: list[JoinView]
     reason: str | None
     rank_mode: str | None = None
-
-
-def domain_ref_view(domain_id: str | None) -> DomainRefView | None:
-    if not domain_id:
-        return None
-
-    record = get_business_domain_store().get(domain_id)
-    if record is None:
-        return None
-    return DomainRefView(id=record.id, code=record.code, name=record.name)
 
 
 def column_view(record: CatalogColumnRecord) -> ColumnView:
@@ -217,7 +198,6 @@ def object_view(
         object_category=record.object_category,
         grain_description=record.grain_description,
         business_primary_key=record.business_primary_key,
-        business_domain=domain_ref_view(record.business_domain_id),
         evidence_summary=record.evidence_summary,
         open_questions=record.open_questions,
         semantic_source=record.semantic_source,

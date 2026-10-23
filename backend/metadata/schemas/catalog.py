@@ -10,7 +10,6 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 __all__ = [
-    "BusinessDomainRef",
     "CatalogColumnOut",
     "CatalogColumnResponse",
     "CatalogColumnSearchResponse",
@@ -57,12 +56,6 @@ class EnumCatalogEntry(BaseModel):
     code: str
     label: str
     description: str | None = None
-
-
-class BusinessDomainRef(BaseModel):
-    id: str
-    code: str
-    name: str
 
 
 class CatalogColumnOut(BaseModel):
@@ -114,7 +107,6 @@ class CatalogObjectOut(BaseModel):
     object_category: ObjectCategory | str | None = None
     grain_description: str | None = None
     business_primary_key: list[str] | None = None
-    business_domain: BusinessDomainRef | None = None
     evidence_summary: list[str] | None = None
     open_questions: list[str] | None = None
     semantic_source: SemanticSource | str | None = None
@@ -167,7 +159,6 @@ class ObjectSemanticsPatchRequest(BaseModel):
     object_category: ObjectCategory | None = None
     grain_description: str | None = None
     business_primary_key: list[str] | None = None
-    business_domain_code: str | None = None
     evidence_summary: list[str] | None = None
     open_questions: list[str] | None = None
 

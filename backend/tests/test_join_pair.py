@@ -282,7 +282,6 @@ def _seed_pair_for_delete() -> tuple[str, str]:
                 object_category=None,
                 grain_description=None,
                 business_primary_key=None,
-                business_domain_id=None,
                 evidence_summary=None,
                 open_questions=None,
                 semantic_source=None,

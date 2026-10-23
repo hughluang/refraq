@@ -101,8 +101,6 @@ class CatalogReadStore(Protocol):
 
     def list_present_for_source(self, source_id: str) -> list[CatalogObjectRecord]: ...
 
-    def count_objects_for_domain(self, domain_id: str) -> int: ...
-
 
 class CatalogSemanticsStore(Protocol):
     def patch_object_semantics(
@@ -114,7 +112,6 @@ class CatalogSemanticsStore(Protocol):
         object_category: Any = UNSET,
         grain_description: Any = UNSET,
         business_primary_key: Any = UNSET,
-        business_domain_id: Any = UNSET,
         evidence_summary: Any = UNSET,
         open_questions: Any = UNSET,
         semantic_source: Any = UNSET,

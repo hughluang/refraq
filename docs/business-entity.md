@@ -229,7 +229,7 @@ It is refused while a **Data Channel** references any version, rejected with `EN
 
 ## 7. Management Console
 
-Business Entity management mounts as Console module `entities` under nav group `entity`. **Dictionary** management mounts as Console module `dictionaries` in that same group. Neither is mounted under the `metadata` nav group, which covers Sources, catalog browsing, Business Domains, and Type Mappings.
+Business Entity management mounts as Console module `entities` under nav group `entity`. **Dictionary** management mounts as Console module `dictionaries` in that same group. Neither is mounted under the `metadata` nav group, which covers Sources, catalog browsing, and Type Mappings.
 
 The Console presents definitions, versions with stored publish status, and attributes. Entity status and version publish status are different facts. Each fact appears once on a screen.
 

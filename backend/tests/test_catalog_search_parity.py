@@ -23,7 +23,7 @@ _MAINTENANCE_DATABASE_URL = os.getenv(
 _CATALOG_TABLES = (
     "sources, catalog_objects, catalog_columns, catalog_foreign_keys,"
     " catalog_indexes, catalog_joins, catalog_join_changes, structure_diffs,"
-    " business_domains, catalog_embeddings"
+    " catalog_embeddings"
 )
 
 SOURCE_ID = "src_parity"
@@ -100,7 +100,6 @@ def _obj(
         object_category=None,
         grain_description=None,
         business_primary_key=None,
-        business_domain_id=None,
         evidence_summary=None,
         open_questions=None,
         semantic_source=None,
@@ -235,7 +234,6 @@ def _search_all(store, objects: list[CatalogObjectRecord]):
 def _activate(monkeypatch: pytest.MonkeyPatch, backend: str) -> None:
     from backend.core.config import reset_settings_cache
     from backend.core.db import reset_db_singletons
-    from backend.metadata.business_domains.store import reset_business_domain_store
     from backend.metadata.catalog.store import reset_catalog_store
     from backend.metadata.sources.store import reset_source_store
     from backend.metadata.structure_diffs.store import reset_structure_diff_store
@@ -262,7 +260,6 @@ def _activate(monkeypatch: pytest.MonkeyPatch, backend: str) -> None:
     reset_source_store()
     reset_catalog_store()
     reset_structure_diff_store()
-    reset_business_domain_store()
 
 
 def test_memory_search_matches_python_spec(monkeypatch: pytest.MonkeyPatch) -> None:

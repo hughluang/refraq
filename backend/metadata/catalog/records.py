@@ -80,7 +80,6 @@ class CatalogObjectRecord:
     object_category: str | None
     grain_description: str | None
     business_primary_key: list[str] | None
-    business_domain_id: str | None
     evidence_summary: list[str] | None
     open_questions: list[str] | None
     semantic_source: str | None

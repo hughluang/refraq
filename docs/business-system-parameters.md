@@ -178,7 +178,7 @@ Admission was reopened to let more in, so the original six were re-tested rather
 - One route, `/console/settings`, one panel rendered from the catalog payload. No second-level Settings navigation and no per-key page.
 - Each parameter shows its value control bounded by the declared range, its `source`, who changed it and when, its apply note, and a per-key reset. When a registered key sets `operator_action_required`, the panel distinguishes it; none of the current keys do.
 - Permissions stay `settings:read` and `settings:write`.
-- Platform Settings presents System Parameters only. Reference data with its own lifecycle (**Type Mapping**, Business Domains) stays in its own module and does not migrate onto this page.
+- Platform Settings presents System Parameters only. Reference data with its own lifecycle (**Type Mapping**) stays in its own module and does not migrate onto this page.
 
 ## 9. Growth Triggers
 

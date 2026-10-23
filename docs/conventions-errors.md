@@ -4,7 +4,7 @@ Authoritative HTTP failure envelope, Problem Code identity, and request correlat
 Hard trade-offs: [`docs/adr/0023-api-problem-details.md`](adr/0023-api-problem-details.md).
 Domain terms: root `CONTEXT.md`, [`docs/glossary.md`](glossary.md).
 
-**Problem Code** in this document is the machine identity of a failure (`AUTH_UNAUTHENTICATED`). It is not a **Business Domain** `code`.
+**Problem Code** in this document is the machine identity of a failure (`AUTH_UNAUTHENTICATED`). It is not a resource identifier.
 
 ## 1. Identity layers (do not mix)
 

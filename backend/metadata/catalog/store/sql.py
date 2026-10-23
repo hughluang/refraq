@@ -454,16 +454,6 @@ class SqlCatalogStore:
             )
             return [_row_to_object(r) for r in rows]
 
-    def count_objects_for_domain(self, domain_id: str) -> int:
-        with session_scope() as session:
-            return int(
-                session.execute(
-                    select(func.count())
-                    .select_from(CatalogObjectRow)
-                    .where(CatalogObjectRow.business_domain_id == domain_id)
-                ).scalar_one()
-            )
-
     @contextmanager
     def catalog_write(self, source_id: str) -> Iterator[_SqlStructureWrite]:
         """Catalog write unit: load baseline, persist plan and Structure Diff.
@@ -553,7 +543,6 @@ class SqlCatalogStore:
         object_category: Any = UNSET,
         grain_description: Any = UNSET,
         business_primary_key: Any = UNSET,
-        business_domain_id: Any = UNSET,
         evidence_summary: Any = UNSET,
         open_questions: Any = UNSET,
         semantic_source: Any = UNSET,
@@ -584,9 +573,6 @@ class SqlCatalogStore:
                 changed = True
             if business_primary_key is not UNSET:
                 row.business_primary_key_json = _dumps_json(business_primary_key)
-                changed = True
-            if business_domain_id is not UNSET:
-                row.business_domain_id = business_domain_id
                 changed = True
             if evidence_summary is not UNSET:
                 row.evidence_summary_json = _dumps_json(evidence_summary)
@@ -1146,7 +1132,6 @@ def _sql_persist_object(
             object_category=obj.object_category,
             grain_description=obj.grain_description,
             business_primary_key_json=_dumps_json(obj.business_primary_key),
-            business_domain_id=obj.business_domain_id,
             evidence_summary_json=_dumps_json(obj.evidence_summary),
             open_questions_json=_dumps_json(obj.open_questions),
             semantic_source=obj.semantic_source,
@@ -1420,7 +1405,6 @@ def _row_to_object(
         object_category=row.object_category,
         grain_description=row.grain_description,
         business_primary_key=_loads_json(row.business_primary_key_json),
-        business_domain_id=row.business_domain_id,
         evidence_summary=_loads_json(row.evidence_summary_json),
         open_questions=_loads_json(row.open_questions_json),
         semantic_source=row.semantic_source,

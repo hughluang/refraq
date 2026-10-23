@@ -182,7 +182,6 @@ def _table(
         object_category=None,
         grain_description=None,
         business_primary_key=None,
-        business_domain_id=None,
         evidence_summary=None,
         open_questions=None,
         semantic_source=None,
@@ -317,13 +316,6 @@ def test_illegal_semantics_and_field_kind_not_writable(client: TestClient) -> No
     )
     assert unknown_pk.status_code == 400
     assert unknown_pk.json()["code"] == "SEMANTIC_COLUMN_UNKNOWN"
-
-    unknown_domain = client.patch(
-        f"/objects/{obj.id}/semantics",
-        json={"business_domain_code": "missing-domain"},
-    )
-    assert unknown_domain.status_code == 400
-    assert unknown_domain.json()["code"] == "BUSINESS_DOMAIN_UNKNOWN"
 
     ignored = client.patch(
         f"/columns/{col.id}/semantics",

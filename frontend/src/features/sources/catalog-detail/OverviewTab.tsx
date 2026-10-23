@@ -21,13 +21,10 @@ import {
   type SaveFailure,
 } from "@/components/form/FormErrorSummary";
 import { useConsoleForm } from "@/components/form/useConsoleForm";
-import { RecordPicker } from "@/components/form/RecordPicker";
-import { businessDomainRecordAdapter } from "@/components/form/recordPickerAdapters";
 import { SelectField } from "@/components/form/SelectField";
 import { TagsField } from "@/components/form/TagsField";
 import { TextareaField } from "@/components/form/TextareaField";
 import { TextField } from "@/components/form/TextField";
-import { getBusinessDomain } from "@/features/business-domains/api";
 import { patchObjectSemantics } from "@/features/sources/api/semantics";
 import { useSemanticsSave } from "@/features/sources/catalog-detail/useSemanticsSave";
 import type {
@@ -48,7 +45,6 @@ type OverviewFormValues = {
   business_description: string;
   object_category: string | null;
   grain_description: string;
-  business_domain_id: string | null;
   business_primary_key: string[];
   evidence_summary: string[];
   open_questions: string[];
@@ -66,7 +62,6 @@ function formFromObject(obj: CatalogObject): OverviewFormValues {
     business_description: obj.business_description ?? "",
     object_category: obj.object_category ? String(obj.object_category) : null,
     grain_description: obj.grain_description ?? "",
-    business_domain_id: obj.business_domain?.id ?? null,
     business_primary_key: obj.business_primary_key ?? [],
     evidence_summary: obj.evidence_summary ?? [],
     open_questions: obj.open_questions ?? [],
@@ -101,16 +96,12 @@ export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
 
   const save = async (values: OverviewFormValues) => {
     const saved = await saveSemantics(async () => {
-      const business_domain_code = values.business_domain_id
-        ? (await getBusinessDomain(values.business_domain_id)).domain.code
-        : null;
       return patchObjectSemantics(object.id, {
         business_name: values.business_name,
         business_description: values.business_description,
         object_category:
           (values.object_category as ObjectCategory | null) || null,
         grain_description: values.grain_description || null,
-        business_domain_code,
         business_primary_key: values.business_primary_key,
         evidence_summary: values.evidence_summary,
         open_questions: values.open_questions,
@@ -152,24 +143,6 @@ export function OverviewTab({ object, writable, onSaved }: OverviewTabProps) {
           editable={writable}
           minRows={2}
           {...form.fieldProps("grain_description")}
-        />
-        <RecordPicker
-          label={t("catalog.semantics.domain")}
-          editable={writable}
-          clearable
-          adapter={businessDomainRecordAdapter()}
-          known={
-            object.business_domain
-              ? [
-                  {
-                    id: object.business_domain.id,
-                    name: object.business_domain.name,
-                    key: object.business_domain.code,
-                  },
-                ]
-              : undefined
-          }
-          {...form.fieldProps("business_domain_id")}
         />
         <MultiSelectField
           label={t("catalog.semantics.businessPrimaryKey")}

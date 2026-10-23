@@ -37,7 +37,6 @@ from backend.admin.federation.pending_store import reset_pending_store
 from backend.admin.federation.provider_store import reset_provider_store
 from backend.admin.federation.protocols.oidc.jwks import reset_jwks_cache
 from backend.jobs.store import reset_job_store
-from backend.metadata.business_domains.store import reset_business_domain_store
 from backend.metadata.catalog.store import reset_catalog_store
 from backend.metadata.source_job_runner import reset_kind_execution_locks_for_tests
 from backend.metadata.sources.store import reset_source_store
@@ -95,7 +94,6 @@ def _reset_foundation_singletons() -> None:
     reset_source_store()
     reset_catalog_store()
     reset_structure_diff_store()
-    reset_business_domain_store()
     reset_type_mapping_store()
     reset_schedule_store()
     reset_entity_store()
@@ -132,7 +130,6 @@ def _reset_foundation_singletons() -> None:
     reset_source_store()
     reset_catalog_store()
     reset_structure_diff_store()
-    reset_business_domain_store()
     reset_type_mapping_store()
     reset_schedule_store()
     reset_entity_store()

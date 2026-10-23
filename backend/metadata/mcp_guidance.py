@@ -47,7 +47,7 @@ If a path is missing but SQL/DDL or run_sql shows a real link, write it with ups
 ENRICH_SEMANTICS_BODY = """\
 Goal: fill admitted object and column semantics and write them back.
 
-Admitted object fields: business_name, business_description, object_category, grain_description, business_primary_key, business_domain_code, evidence_summary, open_questions.
+Admitted object fields: business_name, business_description, object_category, grain_description, business_primary_key, evidence_summary, open_questions.
 Admitted column fields: business_name, business_description, column_semantics (semantic_type, value_pattern, unit), enum_catalog.
 
 Do not send time_semantics, status_semantics, relation_summary, confidence, or model_routing_hint. Last write wins. MCP cannot clear a field (omit it). Record open_questions when evidence is weak.
@@ -99,14 +99,6 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Batch column semantics under one object locator. "
         "Each item needs column_name plus at least one field. "
         "Response includes skipped_columns. Requires metadata:write."
-    ),
-    "list_business_domains": (
-        "List Business Domains (code, name). "
-        "Use before set_object_semantics.business_domain_code. Requires metadata:read."
-    ),
-    "create_business_domain": (
-        "Create a Business Domain (immutable code, mutable name). "
-        "Delete is Console HTTP only. Requires metadata:write."
     ),
     "list_semantics_changes": (
         "Page Semantics Change events for an object locator (old/new values). "

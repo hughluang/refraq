@@ -73,11 +73,6 @@ function useRecordModuleIds() {
     queryOptions: accessQuery,
   });
   const channels = useCan({ resource: "channels", action: "list", queryOptions: accessQuery });
-  const domains = useCan({
-    resource: "business-domains",
-    action: "list",
-    queryOptions: accessQuery,
-  });
   const groups = useCan({
     resource: "user-groups",
     action: "list",
@@ -89,7 +84,6 @@ function useRecordModuleIds() {
   const entitiesCan = entities.data?.can === true;
   const dictionariesCan = dictionaries.data?.can === true;
   const channelsCan = channels.data?.can === true;
-  const domainsCan = domains.data?.can === true;
   const groupsCan = groups.data?.can === true;
   return useMemo(() => {
     const allowed: Record<string, boolean> = {
@@ -99,7 +93,6 @@ function useRecordModuleIds() {
       entities: entitiesCan,
       dictionaries: dictionariesCan,
       channels: channelsCan,
-      "business-domains": domainsCan,
       "user-groups": groupsCan,
     };
     return PALETTE_RECORD_MODULES.filter((id) => allowed[id]);
@@ -110,7 +103,6 @@ function useRecordModuleIds() {
     entitiesCan,
     dictionariesCan,
     channelsCan,
-    domainsCan,
     groupsCan,
   ]);
 }

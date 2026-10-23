@@ -179,25 +179,6 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
       }
     },
     {
-      "id": "business-domains",
-      "label_key": "businessDomains.title",
-      "icon": "category",
-      "routes": {
-        "list": "/console/business-domains",
-        "create": "/console/business-domains",
-        "edit": "/console/business-domains",
-        "show": null,
-        "aliases": []
-      },
-      "actions": {
-        "list": "metadata:read",
-        "create": "metadata:write",
-        "edit": "metadata:write",
-        "delete": "metadata:write",
-        "show": null
-      }
-    },
-    {
       "id": "settings",
       "label_key": "settings.title",
       "icon": "settings",
@@ -235,7 +216,6 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
 | `account` | `workbench` (identity only; **not** in navigation) | `user-circle` | `null` | `console:access` | show `/console/account` → `console:access`; see `docs/business-account.md` |
 | `sources` | `metadata` | `database` | `/console/sources` | `sources:read` | create/edit/delete → `sources:write`; show `/console/sources/:id/structure-diffs` → `metadata:read`; alias show `/console/sources/:id/structure-diffs/:diffId` |
 | `catalog` | `metadata` | `table` | `/console/catalog` | `metadata:read` | edit → `metadata:write`; show → `metadata:read`; sample → `catalog:sample` (no route); show route `/console/catalog/:id` |
-| `business-domains` | `metadata` | `category` | `/console/business-domains` | `metadata:read` | create/edit/delete → `metadata:write` |
 | `type-mappings` | `metadata` | `arrows-exchange` | `/console/type-mappings` | `metadata:read` | edit → `metadata:write` (no create/delete) |
 | `entities` | `entity` | `box` | `/console/entities` | `entity:read` | create/edit/delete → `entity:write`; create `/console/entities/new`; edit `/console/entities/:id/edit`; show `/console/entities/:id` → `entity:read` |
 | `dictionaries` | `entity` | `book` | `/console/dictionaries` | `entity:read` | create/edit/delete → `entity:write`; create `/console/dictionaries/new`; edit `/console/dictionaries/:id/edit`; show `/console/dictionaries/:id` → `entity:read` |

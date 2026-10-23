@@ -1,5 +1,4 @@
 import {
-  businessDomainRecordAdapter,
   dictionaryRecordAdapter,
   entityRecordAdapter,
   roleRecordAdapter,
@@ -20,7 +19,6 @@ export const PALETTE_RECORD_MODULES = [
   "entities",
   "dictionaries",
   "channels",
-  "business-domains",
   "user-groups",
 ] as const;
 
@@ -57,8 +55,6 @@ const SEARCHERS: Record<string, Searcher> = {
     dictionaryRecordAdapter().search(query, signal).then(fromNames),
   "user-groups": (query, signal) =>
     userGroupRecordAdapter().search(query, signal).then(fromNames),
-  "business-domains": (query, signal) =>
-    businessDomainRecordAdapter().search(query, signal).then(fromNames),
   channels: async (query) => {
     const trimmed = query.trim();
     const page = await listChannels({

@@ -124,7 +124,6 @@ def _seed_object(
         object_category=None,
         grain_description=None,
         business_primary_key=None,
-        business_domain_id=None,
         evidence_summary=None,
         open_questions=None,
         semantic_source=None,
@@ -173,7 +172,6 @@ def _seed_object(
         object_category=None,
         grain_description=None,
         business_primary_key=None,
-        business_domain_id=None,
         evidence_summary=None,
         open_questions=None,
         semantic_source=None,
@@ -773,21 +771,15 @@ def test_patch_columns_semantics_batch_http(client: TestClient) -> None:
     assert line["column_semantics"]["semantic_type"] == "id"
 
 
-def test_http_clears_grain_category_domain_and_blank_name(client: TestClient) -> None:
+def test_http_clears_grain_category_and_blank_name(client: TestClient) -> None:
     source = _make_source(client)
     obj = _seed_object(source["id"])
-    domain = client.post(
-        "/business-domains",
-        json={"code": "mes", "name": "MES"},
-    )
-    assert domain.status_code == 201, domain.text
 
     filled = client.patch(
         f"/objects/{obj.id}/semantics",
         json={
             "grain_description": "one row is one WO",
             "object_category": "transaction_fact",
-            "business_domain_code": "mes",
             "business_name": "Work Order",
             "business_description": "Orders",
         },
@@ -796,14 +788,12 @@ def test_http_clears_grain_category_domain_and_blank_name(client: TestClient) ->
     body = filled.json()["object"]
     assert body["grain_description"] == "one row is one WO"
     assert body["object_category"] == "transaction_fact"
-    assert body["business_domain"]["code"] == "mes"
 
     cleared = client.patch(
         f"/objects/{obj.id}/semantics",
         json={
             "grain_description": None,
             "object_category": None,
-            "business_domain_code": None,
             "business_name": "  ",
         },
     )
@@ -811,7 +801,6 @@ def test_http_clears_grain_category_domain_and_blank_name(client: TestClient) ->
     body = cleared.json()["object"]
     assert body["grain_description"] is None
     assert body["object_category"] is None
-    assert body["business_domain"] is None
     assert body["business_name"] is None
     assert body["business_description"] == "Orders"
     assert body["business_semantics_ready"] is False

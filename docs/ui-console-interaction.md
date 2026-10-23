@@ -100,7 +100,7 @@ These shortcuts apply only while focus is inside the channel canvas (a `.channel
 
 Right-click opens a menu at the pointer on a node, a multi-selection, an edge, or empty canvas. Each item shows its shortcut. Delete uses the danger color. While browsing, the menu keeps settings, copy, and fit view. A run lock hides items that change the graph.
 
-The palette sections are Recent, Go to, Create, Records, and Actions. Recent is the latest eight record visits for this User in this browser. Go to lists permitted **Console Navigation** modules. Create lists modules that have a create route and create permission. Records searches the list endpoints for Users, Roles, Sources, Entities, Dictionaries, Channels, Business Domains, and User Groups when the actor may list that module, five results each, after a 250 ms pause. A failed module is omitted. A response for an older query is ignored. Actions toggle the color scheme, toggle navigation width, change language, and open **Account Center**. The palette footer lists the shortcuts with key hints.
+The palette sections are Recent, Go to, Create, Records, and Actions. Recent is the latest eight record visits for this User in this browser. Go to lists permitted **Console Navigation** modules. Create lists modules that have a create route and create permission. Records searches the list endpoints for Users, Roles, Sources, Entities, Dictionaries, Channels, and User Groups when the actor may list that module, five results each, after a 250 ms pause. A failed module is omitted. A response for an older query is ignored. Actions toggle the color scheme, toggle navigation width, change language, and open **Account Center**. The palette footer lists the shortcuts with key hints.
 
 ## 8. Motion
 

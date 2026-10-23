@@ -1,8 +1,3 @@
-import {
-  getBusinessDomain,
-  listBusinessDomains,
-} from "@/features/business-domains/api";
-import type { BusinessDomain } from "@/features/business-domains/types";
 import { listDictionaries, getDictionary } from "@/features/dictionaries/api";
 import type { Dictionary } from "@/features/dictionaries/types";
 import { getEntity, listEntities } from "@/features/entities/api";
@@ -105,10 +100,6 @@ function dictionaryOption(dictionary: DictionarySummary): RecordOption {
   };
 }
 
-function domainOption(domain: BusinessDomain): RecordOption {
-  return { id: domain.id, name: domain.name, key: domain.code };
-}
-
 const userCache = new Map<string, RecordOption>();
 const roleCache = new Map<string, RecordOption>();
 const sourceCache = new Map<string, RecordOption>();
@@ -116,7 +107,6 @@ const groupCache = new Map<string, RecordOption>();
 const entityCache = new Map<string, RecordOption>();
 const dictionaryCache = new Map<string, RecordOption>();
 const dictionaryRecords = new Map<string, DictionarySummary>();
-const domainCache = new Map<string, RecordOption>();
 
 const userAdapters = new Map<string, RecordPickerAdapter>();
 const entityAdapters = new Map<string, RecordPickerAdapter>();
@@ -312,35 +302,6 @@ const dictionaryAdapter: RecordPickerAdapter = {
         const loaded = await getDictionary(id, { signal: inner });
         rememberDictionary(loaded.dictionary);
         return dictionaryOption(loaded.dictionary);
-      },
-      signal,
-    );
-  },
-};
-
-export function businessDomainRecordAdapter(): RecordPickerAdapter {
-  return domainAdapter;
-}
-
-const domainAdapter: RecordPickerAdapter = {
-  async search(q, signal) {
-    const page = await listBusinessDomains({
-      q: trimmed(q),
-      limit: RECORD_PICKER_LIMIT,
-      offset: 0,
-      signal,
-    });
-    const options = page.items.map(domainOption);
-    for (const option of options) domainCache.set(option.id, option);
-    return options;
-  },
-  resolve(ids, signal) {
-    return mapCached(
-      ids,
-      domainCache,
-      async (id, inner) => {
-        const loaded = await getBusinessDomain(id, { signal: inner });
-        return domainOption(loaded.domain);
       },
       signal,
     );

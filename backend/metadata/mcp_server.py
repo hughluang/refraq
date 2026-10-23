@@ -30,7 +30,6 @@ from backend.metadata.mcp_guidance import (
 from backend.core.admission import await_admitted
 from backend.core.errors import AppError
 from backend.core.pagination import (
-    BUSINESS_DOMAIN_LIST,
     CATALOG_OBJECT_LIST,
     CATALOG_SEARCH,
     JOIN_LIST,
@@ -39,7 +38,6 @@ from backend.core.pagination import (
 )
 from backend.core.time import format_instant
 from backend.worker.parameters import assemble_system_parameters
-from backend.metadata.business_domains import service as domain_service
 from backend.metadata.catalog import join_writes as catalog_joins
 from backend.metadata.catalog import refs as catalog_refs
 from backend.metadata.catalog import semantics as catalog_semantics
@@ -306,7 +304,6 @@ def set_object_semantics(
     object_category: str | None = None,
     grain_description: str | None = None,
     business_primary_key: list[str] | None = None,
-    business_domain_code: str | None = None,
     evidence_summary: list[str] | None = None,
     open_questions: list[str] | None = None,
 ) -> str:
@@ -322,7 +319,6 @@ def set_object_semantics(
                 "object_category": object_category,
                 "grain_description": grain_description,
                 "business_primary_key": business_primary_key,
-                "business_domain_code": business_domain_code,
                 "evidence_summary": evidence_summary,
                 "open_questions": open_questions,
             }
@@ -370,76 +366,6 @@ def set_column_semantics(
             semantic_source="mcp",
         )
         return _dumps(result)
-    except Exception as exc:  # noqa: BLE001
-        return _err(exc)
-
-@mcp.tool(description=TOOL_DESCRIPTIONS["list_business_domains"])
-def list_business_domains(
-    query_text: str | None = None,
-    limit: int | None = None,
-    offset: int | None = None,
-) -> str:
-    """List Business Domains (metadata:read)."""
-    try:
-        user, _token_id = current_actor()
-        _require(user, "metadata:read")
-
-        lim = BUSINESS_DOMAIN_LIST.clamp(limit)
-        off = max(0, int(offset or 0))
-        items, total = domain_service.list_domains(
-            q=query_text, limit=lim, offset=off
-        )
-        return _dumps(
-            {
-                "items": [
-                    {
-                        "id": d.id,
-                        "code": d.code,
-                        "name": d.name,
-                        "description": d.description,
-                        "created_at": d.created_at,
-                        "updated_at": d.updated_at,
-                    }
-                    for d in items
-                ],
-                "total": total,
-                "limit": lim,
-                "offset": off,
-            }
-        )
-    except Exception as exc:  # noqa: BLE001
-        return _err(exc)
-
-@mcp.tool(description=TOOL_DESCRIPTIONS["create_business_domain"])
-def create_business_domain(
-    code: str,
-    name: str,
-    description: str | None = None,
-) -> str:
-    """Create a Business Domain (metadata:write)."""
-    try:
-        user, token_id = current_actor()
-        _require(user, "metadata:write")
-
-        record = domain_service.create_domain(
-            code=code,
-            name=name,
-            description=description,
-            actor_user_id=user.id,
-            actor_token_id=token_id,
-        )
-        return _dumps(
-            {
-                "domain": {
-                    "id": record.id,
-                    "code": record.code,
-                    "name": record.name,
-                    "description": record.description,
-                    "created_at": record.created_at,
-                    "updated_at": record.updated_at,
-                }
-            }
-        )
     except Exception as exc:  # noqa: BLE001
         return _err(exc)
 

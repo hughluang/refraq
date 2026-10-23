@@ -10,7 +10,6 @@ export const ModuleId = {
   tokens: "tokens",
   sources: "sources",
   catalog: "catalog",
-  businessDomains: "business-domains",
   typeMappings: "type-mappings",
   entities: "entities",
   dictionaries: "dictionaries",

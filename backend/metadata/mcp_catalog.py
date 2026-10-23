@@ -32,8 +32,6 @@ MCP_TOOLS: tuple[McpToolSpec, ...] = (
     _tool("get_object_ddl", "metadata:read"),
     _tool("set_object_semantics", "metadata:write"),
     _tool("set_column_semantics", "metadata:write"),
-    _tool("list_business_domains", "metadata:read"),
-    _tool("create_business_domain", "metadata:write"),
     _tool("list_semantics_changes", "metadata:read"),
     _tool("search_objects", "metadata:read"),
     _tool("search_columns", "metadata:read"),

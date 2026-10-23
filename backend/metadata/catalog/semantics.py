@@ -6,7 +6,6 @@ from typing import Any
 
 from backend.admin.audit import persist_audit_event
 from backend.core.time import utc_now
-from backend.metadata.business_domains.service import require_domain_by_code
 from backend.metadata.catalog.refs import require_column
 from backend.metadata.catalog.semantics_changes import semantics_change_for_field
 from backend.metadata.catalog.store import (
@@ -24,7 +23,6 @@ _OBJECT_SEMANTIC_FIELDS = (
     "object_category",
     "grain_description",
     "business_primary_key",
-    "business_domain_id",
     "evidence_summary",
     "open_questions",
 )
@@ -110,16 +108,7 @@ def patch_object_semantics(
     semantic_source: str = "user_input",
 ) -> CatalogObjectRecord:
     existing = require_object(object_id)
-    # Resolve business_domain_code → business_domain_id before field extraction.
-    resolved = dict(data)
-    if "business_domain_code" in resolved:
-        code = _normalize_semantic_value(resolved["business_domain_code"])
-        if code is None:
-            resolved["business_domain_id"] = None
-        else:
-            domain = require_domain_by_code(str(code))
-            resolved["business_domain_id"] = domain.id
-    kwargs = _build_semantic_kwargs(data=resolved, fields=_OBJECT_SEMANTIC_FIELDS)
+    kwargs = _build_semantic_kwargs(data=data, fields=_OBJECT_SEMANTIC_FIELDS)
     if not kwargs:
         return existing
     applied = {key: value for key, value in kwargs.items() if getattr(existing, key) != value}

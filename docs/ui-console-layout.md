@@ -50,7 +50,7 @@ Paged **Offset Page** tables render through `ListTable`. `ListTable` owns one vi
 
 `usePagedList` owns fetch generation, reset-to-page-1, and `listPresentationOf` (`frontend/src/lib/list-state.ts`). When `page` and `onPageChange` are set, reset-to-page-1 notifies that callback and the page value is the URL page. HTTP Console lists call `useConsolePagedList`, which binds Refine notification through `onError`. Pages keep writing their own header and body cells; `ListTable` is not a column DSL. Feature mutation errors stay in the feature.
 
-**Offset Page callers** (must use `ListTable`): Catalog Browse, Users, Users pending federated identities (Users tab subtable), Roles, Identity Providers, Sources, Jobs, Schedules, Business Domains, Type Mappings, User PAT (Account Center), Source-scoped schedules, Structure Diff list, catalog Joins tab, catalog Columns tab (in-memory Offset Page adapter over the object payload; not an HTTP Offset Page), schedule-jobs modal.
+**Offset Page callers** (must use `ListTable`): Catalog Browse, Users, Users pending federated identities (Users tab subtable), Roles, Identity Providers, Sources, Jobs, Schedules, Type Mappings, User PAT (Account Center), Source-scoped schedules, Structure Diff list, catalog Joins tab, catalog Columns tab (in-memory Offset Page adapter over the object payload; not an HTTP Offset Page), schedule-jobs modal.
 
 **Not Offset Page collection lists** (do not migrate to `ListTable`): Catalog Sample (row peek), Structure Diff detail (static tables), the attribute editor, the entity version attribute snapshot, dictionary entry fields, the MCP tool catalog, and the access preview sample.
 

@@ -227,7 +227,6 @@ def test_assign_normalized_types_resolves_distinct_canonicals() -> None:
             object_category=None,
             grain_description=None,
             business_primary_key=None,
-            business_domain_id=None,
             evidence_summary=None,
             open_questions=None,
             semantic_source=None,

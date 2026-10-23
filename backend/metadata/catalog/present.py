@@ -45,7 +45,6 @@ def present_object(view: ObjectView, *, profile: ObjectPresentProfile) -> dict[s
         "object_category": view.object_category,
         "grain_description": view.grain_description,
         "business_primary_key": view.business_primary_key,
-        "business_domain": asdict(view.business_domain) if view.business_domain else None,
         "evidence_summary": view.evidence_summary,
         "open_questions": view.open_questions,
         "semantic_source": view.semantic_source,

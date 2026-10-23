@@ -347,16 +347,10 @@ Avoid treating it as a second identity or requiring agents to use opaque surroga
 
 ### Object Semantics
 
-Business meaning fields on a Catalog Object (name, description, category, grain, business primary key, Business Domain reference, evidence, open questions, and readiness).
+Business meaning fields on a Catalog Object (name, description, category, grain, business primary key, evidence, open questions, and readiness).
 Every field must pass the ADR 0015 admission criteria; time/status semantics, relation summary, and confidence were removed by that ADR.
 Avoid inventing meaning without evidence; persist open questions instead.
 Avoid electing one "primary" column out of several of the same kind at object level — that is a use-time choice, not a source fact.
-
-### Business Domain
-
-A global flat registry entity with immutable `code` and mutable `name` that Catalog Objects reference (ADR 0017).
-Console Module `business-domains` reuses `metadata:read` / `metadata:write`.
-Avoid free-text domain labels on objects; avoid hierarchical domain trees in this phase.
 
 ### Semantic Type
 
@@ -442,7 +436,7 @@ Permission: `query:run`. Distinct from Catalog Sample.
 
 ### Metadata Nav Group
 
-The Console Navigation group with stable id `metadata` for Sources, catalog browsing, Business Domains, and Type Mappings.
+The Console Navigation group with stable id `metadata` for Sources, catalog browsing, and Type Mappings.
 Avoid mounting these modules under Administration or a Data products group.
 Avoid mounting **Job** or **Scheduled Task** modules here — those belong to the **Operations Nav Group**.
 

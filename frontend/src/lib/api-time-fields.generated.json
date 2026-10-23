@@ -1,6 +1,5 @@
 {
   "DELETE /branding/assets/{kind}": [],
-  "DELETE /business-domains/{domain_id}": [],
   "DELETE /channel-variables/{name}": [],
   "DELETE /channels/{channel_id}": [],
   "DELETE /dictionaries/{dictionary_id}": [],
@@ -33,14 +32,6 @@
   "GET /auth/sso/{provider_id}/start": [],
   "GET /branding": [],
   "GET /branding/assets/{kind}": [],
-  "GET /business-domains": [
-    "items[].created_at",
-    "items[].updated_at"
-  ],
-  "GET /business-domains/{domain_id}": [
-    "domain.created_at",
-    "domain.updated_at"
-  ],
   "GET /catalog/columns/search": [],
   "GET /catalog/objects/search": [
     "items[].collected_at",
@@ -325,10 +316,6 @@
     "webhook.updated_at"
   ],
   "PATCH /account/profile": [],
-  "PATCH /business-domains/{domain_id}": [
-    "domain.created_at",
-    "domain.updated_at"
-  ],
   "PATCH /channels/{channel_id}": [
     "channel.created_at",
     "channel.draft_updated_at",
@@ -432,10 +419,6 @@
   "POST /auth/logout": [],
   "POST /branding/assets/{kind}": [],
   "POST /branding/reset": [],
-  "POST /business-domains": [
-    "domain.created_at",
-    "domain.updated_at"
-  ],
   "POST /channels": [
     "channel.created_at",
     "channel.draft_updated_at",

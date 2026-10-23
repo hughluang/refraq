@@ -37,12 +37,6 @@ export type ObjectCategory =
   | "reference"
   | "event";
 
-export type BusinessDomainRef = {
-  id: string;
-  code: string;
-  name: string;
-};
-
 export type ColumnSemantics = {
   semantic_type?: string | null;
   value_pattern?: string | null;
@@ -61,7 +55,6 @@ export type ObjectSemanticsPatch = {
   object_category?: ObjectCategory | null;
   grain_description?: string | null;
   business_primary_key?: string[] | null;
-  business_domain_code?: string | null;
   evidence_summary?: string[] | null;
   open_questions?: string[] | null;
 };
@@ -87,7 +80,6 @@ export type CatalogObject = {
   object_category?: ObjectCategory | string | null;
   grain_description?: string | null;
   business_primary_key?: string[] | null;
-  business_domain?: BusinessDomainRef | null;
   evidence_summary?: string[] | null;
   open_questions?: string[] | null;
   semantic_source?: string | null;
