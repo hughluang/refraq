@@ -20,17 +20,25 @@ from backend.core.config import (
 )
 from backend.core.db import ObservedQueuePool
 from backend.core.runtime import get_runtime_capacity
+from backend.entity.ddl import ENTITY_SCHEMAS
 
 __all__ = [
     "get_entity_engine",
     "get_entity_reader_engine",
     "open_entity_pool_when_persistent",
+    "require_entity_schemas",
     "require_unprivileged_role",
     "reset_entity_engine",
 ]
 
 _LOCK_TIMEOUT_MS = 5000
 _IDLE_IN_TRANSACTION_MS = 60_000
+_BOOTSTRAP_COMMAND = "python -m backend.entity.bootstrap"
+_SCHEMA_PRESENCE_SQL = text(
+    "SELECT nspname FROM pg_namespace WHERE nspname IN ("
+    + ", ".join(f"'{name}'" for name in ENTITY_SCHEMAS)
+    + ")"
+)
 
 
 def open_entity_pool_when_persistent() -> None:
@@ -38,7 +46,9 @@ def open_entity_pool_when_persistent() -> None:
 
     The worker opens the owner pool; the API also opens the reader pool. Every
     runtime entity connection must name a database other than the metadata
-    database and log in as a role that is not a superuser.
+    database and log in as a role that is not a superuser. The owner connection
+    must already have every schema the entity bootstrap creates. This check
+    does not create schemas and does not read the admin URL.
     """
     settings = get_settings()
     if settings.store_backend != "persistent":
@@ -47,6 +57,7 @@ def open_entity_pool_when_persistent() -> None:
     require_distinct_entity_database(owner_url, settings.database_url)
     with get_entity_engine().connect() as conn:
         require_unprivileged_role(conn, "ENTITY_DATABASE_URL")
+        require_entity_schemas(conn)
     if get_runtime_capacity().role != "api":
         return
     reader_url = require_entity_reader_database_url(
@@ -69,6 +80,22 @@ def require_unprivileged_role(
         raise ValueError(f"{setting} must not log in as a superuser")
     if reader and bool(row[1]):
         raise ValueError(f"{setting} must not log in as a BYPASSRLS role")
+
+
+def require_entity_schemas(conn: Connection) -> None:
+    """Refuse startup when a schema created by entity bootstrap is absent.
+
+    Checked on the owner connection. The reader URL names the same database.
+    """
+    present = {str(row[0]) for row in conn.execute(_SCHEMA_PRESENCE_SQL)}
+    missing = [name for name in ENTITY_SCHEMAS if name not in present]
+    if not missing:
+        return
+    listed = ", ".join(missing)
+    noun = "schema" if len(missing) == 1 else "schemas"
+    raise ValueError(
+        f"ENTITY_DATABASE_URL is missing {noun} {listed}; run {_BOOTSTRAP_COMMAND}"
+    )
 
 
 @lru_cache

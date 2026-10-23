@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 
 from backend.core.config import (
     require_distinct_entity_database,
     require_entity_reader_database_url,
 )
-from backend.entity.entity_db import require_unprivileged_role
+from backend.entity.ddl import ENTITY_SCHEMAS
+from backend.entity.entity_db import require_entity_schemas, require_unprivileged_role
 
 
 def test_entity_database_must_differ_from_metadata() -> None:
@@ -60,3 +63,29 @@ def test_reader_role_must_not_bypass_rls() -> None:
     require_unprivileged_role(
         _Role(False, False), "ENTITY_READER_DATABASE_URL", reader=True
     )
+
+
+class _Schemas:
+    def __init__(self, names: tuple[str, ...]) -> None:
+        self._names = names
+
+    def execute(self, _sql: object) -> "_Schemas":
+        return self
+
+    def __iter__(self) -> Iterator[tuple[str]]:
+        return iter((name,) for name in self._names)
+
+
+def test_entity_schemas_pass_when_all_four_are_present() -> None:
+    require_entity_schemas(_Schemas(ENTITY_SCHEMAS))
+
+
+def test_missing_channel_dataset_names_the_bootstrap_command() -> None:
+    present = tuple(name for name in ENTITY_SCHEMAS if name != "channel_dataset")
+    with pytest.raises(ValueError, match="channel_dataset") as raised:
+        require_entity_schemas(_Schemas(present))
+    message = str(raised.value)
+    assert "python -m backend.entity.bootstrap" in message
+    assert "entity_data" not in message
+    assert "entity_access" not in message
+    assert "acl" not in message

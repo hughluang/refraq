@@ -16,6 +16,19 @@ export function problemIdentity(problem: GraphProblem): string {
   return [problem.code, problem.node_id ?? "", problem.edge_id ?? "", path, problem.detail].join("|");
 }
 
+const LOOP_BODY_CODE = "CHANNEL_LOOP_BODY_INVALID";
+
+/** Backend `detail` strings for one problem code. Each has its own sentence. */
+const LOOP_BODY_DETAIL_KEYS: Record<string, string> = {
+  "parent does not name a container": "problems.CHANNEL_LOOP_BODY_INVALID.parent",
+  "parent chain contains a cycle": "problems.CHANNEL_LOOP_BODY_INVALID.cycle",
+  "Edge crosses a container frame": "problems.CHANNEL_LOOP_BODY_INVALID.cross",
+  "A container frame is entered only from each": "problems.CHANNEL_LOOP_BODY_INVALID.entry",
+  "each connects only to a direct child of this container": "problems.CHANNEL_LOOP_BODY_INVALID.each",
+  "A Dataset Query or Materialize cannot run inside a container":
+    "problems.CHANNEL_LOOP_BODY_INVALID.dataset",
+};
+
 export function formatGraphProblem(
   t: Translate,
   problem: GraphProblem,
@@ -23,17 +36,28 @@ export function formatGraphProblem(
   options?: { nodeName?: boolean },
 ): string {
   const key = `problems.${problem.code}`;
-  const translated = t(key);
-  const text = translated === key ? problem.detail : translated;
+  const text = problemSentence(t, problem, key);
   const path = problem.path;
   const located =
     path.length === 0
       ? text
-      : translated === key
+      : text === problem.detail
         ? `${path.join(".")}: ${text}`
         : `${text}: ${path.join(".")} — ${problem.detail}`;
   const place = problemPlace(t, problem, graph, options?.nodeName !== false);
   return place ? `${located} (${place})` : located;
+}
+
+function problemSentence(t: Translate, problem: GraphProblem, codeKey: string): string {
+  if (problem.code === LOOP_BODY_CODE) {
+    const detailKey = LOOP_BODY_DETAIL_KEYS[problem.detail];
+    if (detailKey) {
+      const specific = t(detailKey);
+      if (specific !== detailKey) return specific;
+    }
+  }
+  const translated = t(codeKey);
+  return translated === codeKey ? problem.detail : translated;
 }
 
 function problemPlace(

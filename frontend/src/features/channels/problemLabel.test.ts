@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import en from "@/locales/en-US/common.json";
+import zh from "@/locales/zh-CN/common.json";
 import {
   fieldMessages,
   formatGraphProblem,
@@ -171,5 +173,88 @@ describe("problemIdentity", () => {
       problem(["statement_timeout_sec"], "None is not of type 'integer'"),
     );
     expect(left).not.toBe(right);
+  });
+});
+
+const LOOP_BODY_REASONS = [
+  ["parent does not name a container", "problems.CHANNEL_LOOP_BODY_INVALID.parent"],
+  ["parent chain contains a cycle", "problems.CHANNEL_LOOP_BODY_INVALID.cycle"],
+  ["Edge crosses a container frame", "problems.CHANNEL_LOOP_BODY_INVALID.cross"],
+  ["A container frame is entered only from each", "problems.CHANNEL_LOOP_BODY_INVALID.entry"],
+  [
+    "each connects only to a direct child of this container",
+    "problems.CHANNEL_LOOP_BODY_INVALID.each",
+  ],
+  [
+    "A Dataset Query or Materialize cannot run inside a container",
+    "problems.CHANNEL_LOOP_BODY_INVALID.dataset",
+  ],
+] as const;
+
+function catalogTranslate(catalog: Record<string, string>) {
+  return (key: string, options?: Record<string, unknown>) => {
+    const raw = catalog[key];
+    if (raw == null) return key;
+    if (!options) return raw;
+    return raw.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options[name] ?? ""));
+  };
+}
+
+function loopBody(detail: string, edgeId: string | null = null): GraphProblem {
+  return {
+    code: "CHANNEL_LOOP_BODY_INVALID",
+    node_id: "nd_read",
+    edge_id: edgeId,
+    path: [],
+    detail,
+  };
+}
+
+describe("frame-rule sentences", () => {
+  it.each([
+    ["zh-CN", zh],
+    ["en-US", en],
+  ] as const)("%s names each frame reason and keeps the node", (locale, catalog) => {
+    const messages = catalog as Record<string, string>;
+    const translate = catalogTranslate(messages);
+    const fallback = messages["problems.CHANNEL_LOOP_BODY_INVALID"];
+    expect(fallback).not.toContain("For");
+    expect(fallback).not.toBe("");
+
+    for (const [detail, key] of LOOP_BODY_REASONS) {
+      const sentence = messages[key];
+      expect(sentence, `${locale} ${key}`).toBeTruthy();
+      expect(formatGraphProblem(translate, loopBody(detail), graph)).toBe(
+        `${sentence} (Read suppliers)`,
+      );
+    }
+
+    expect(formatGraphProblem(translate, loopBody("a new frame rule"), graph)).toBe(
+      `${fallback} (Read suppliers)`,
+    );
+  });
+
+  it("says a dataset producer cannot sit in the frame", () => {
+    const zhMessages = zh as Record<string, string>;
+    const enMessages = en as Record<string, string>;
+    const dataset = "A Dataset Query or Materialize cannot run inside a container";
+    const zhSentence = "\u6570\u636e\u96c6\u67e5\u8be2\u548c\u7269\u5316\u4e0d\u80fd\u653e\u8fdb\u6846";
+    expect(zhMessages["problems.CHANNEL_LOOP_BODY_INVALID.dataset"]).toBe(zhSentence);
+    expect(zhSentence).not.toContain("For");
+    expect(formatGraphProblem(catalogTranslate(zhMessages), loopBody(dataset), graph)).toBe(
+      `${zhSentence} (Read suppliers)`,
+    );
+    expect(formatGraphProblem(catalogTranslate(enMessages), loopBody(dataset), graph)).toBe(
+      "A Dataset Query or a Materialize cannot sit inside a frame (Read suppliers)",
+    );
+  });
+
+  it("keeps an edge place on a frame reason and does not append the English detail", () => {
+    const translate = catalogTranslate(zh as Record<string, string>);
+    expect(
+      formatGraphProblem(translate, loopBody("Edge crosses a container frame", "ed_1"), graph, {
+        nodeName: false,
+      }),
+    ).toBe("\u8fde\u7ebf\u7a7f\u8fc7\u4e86\u6846 (Read suppliers → Write orders)");
   });
 });

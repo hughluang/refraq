@@ -16,7 +16,12 @@ from sqlglot import exp, parse
 from sqlglot.errors import SqlglotError
 
 from backend.entity.data.sql import set_write_timeouts
-from backend.entity.ddl import ENTITY_DATA_SCHEMA, ident, qualified_table
+from backend.entity.ddl import (
+    CHANNEL_DATASET_SCHEMA,
+    ENTITY_DATA_SCHEMA,
+    ident,
+    qualified_table,
+)
 from backend.entity.entity_db import get_entity_engine
 
 __all__ = [
@@ -35,7 +40,6 @@ __all__ = [
     "read_keyset_page",
 ]
 
-CHANNEL_DATASET_SCHEMA = "channel_dataset"
 ORD_COLUMN = "_ord"
 _IDENT_MAX_BYTES = 63
 _RELATION_RE = re.compile(r'^"channel_dataset"\."(ds_[A-Za-z_][A-Za-z0-9_]*)"$')

@@ -41,12 +41,13 @@ This document records the stable development conventions for contributors workin
 
 - Install dependencies: `python -m pip install -r backend/requirements.txt`
 - Copy env: `cp backend/.env.example backend/.env` (and point URLs at Compose)
-- Foundation Upgrade (schema + System Role identity ensure, no serve): `python -m backend.core.upgrade`
+- Foundation Upgrade (metadata schema + System Role identity ensure, no serve): `python -m backend.core.upgrade`. It does not apply entity-database bootstrap.
+- After entity bootstrap statements change, re-run `python -m backend.entity.bootstrap` before a persistent API or worker starts. The command is idempotent.
 - Official start (upgrade then serve): `python -m backend.core.entry`
 - MCP HTTP (same env as API; local bind `127.0.0.1:8001`): `python -m backend.metadata.mcp_http`
 - Dev reload after schema is current: `uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000`
   - Direct `uvicorn` runs **Site Bootstrap** only (empty stores). It does not run schema migrate or System Role identity ensure, and it does not start or reload Celery.
-  - After schema changes, run `python -m backend.core.upgrade` (or use `entry`), then restart worker and Beat (`docs/env.md` §8). Super Admin effective permissions follow the Permission catalog by identity; adding a catalog key does not require Upgrade for Super Admin authz.
+  - After metadata schema changes, run `python -m backend.core.upgrade` (or use `entry`), then restart worker and Beat (`docs/env.md` §8). Super Admin effective permissions follow the Permission catalog by identity; adding a catalog key does not require Upgrade for Super Admin authz.
 - Run API tests (memory Store Backend via conftest): `pytest backend/tests -q`
 - After an Instant field is added, removed, or its response shape changes, regenerate the Console decode map: `python scripts/export_time_fields.py` (writes `frontend/src/lib/api-time-fields.generated.json`). `backend/tests/test_time_contract.py` fails when the file is stale.
 - Catalog store dual-adapter contract: `pytest backend/tests/test_catalog_store_conformance.py -q` (Memory always; SQL param runs when Compose Postgres is up, otherwise skips). Run this file when changing `backend/metadata/catalog/store/`.

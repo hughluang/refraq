@@ -90,7 +90,7 @@ Withdrawn names that must not appear as product Permission keys: `entity:consume
 
 ### 3.4 Entity Database
 
-Persistent API opens process-local entity owner and reader pools separate from the metadata pool (`docs/env.md`). Reads run on the reader connection against the caller's **Profile View** with the signed access context set for the transaction; writes run on the owner connection in one transaction with the attribution check. The Metadata MCP process and Beat do not open those pools. `schema` uses only the metadata engine and the compiled policy. Memory store mode: `schema` succeeds; row verbs that need the entity database return `503 PLATFORM_CAPACITY_EXCEEDED`. Missing `ENTITY_DATABASE_URL` or `ENTITY_READER_DATABASE_URL` on persistent API fails fast at startup. `/readyz` does not probe the entity database.
+Persistent API opens process-local entity owner and reader pools separate from the metadata pool (`docs/env.md`). Reads run on the reader connection against the caller's **Profile View** with the signed access context set for the transaction; writes run on the owner connection in one transaction with the attribution check. The Metadata MCP process and Beat do not open those pools. `schema` uses only the metadata engine and the compiled policy. Memory store mode: `schema` succeeds; row verbs that need the entity database return `503 PLATFORM_CAPACITY_EXCEEDED`. Missing `ENTITY_DATABASE_URL` or `ENTITY_READER_DATABASE_URL` on persistent API fails fast at startup. A persistent API or worker also fails fast when `entity_data`, `entity_access`, `acl`, or `channel_dataset` is absent on the entity database. Startup does not create those schemas. `/readyz` does not probe the entity database.
 
 ## 4. Verb Table
 

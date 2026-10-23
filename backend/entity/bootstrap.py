@@ -20,10 +20,10 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, make_url
 
 from backend.core.config import Settings
-from backend.entity.datasets import CHANNEL_DATASET_SCHEMA
 from backend.entity.ddl import (
     ACL_OWNER_ROLE,
     ACL_SCHEMA,
+    CHANNEL_DATASET_SCHEMA,
     ENTITY_ACCESS_SCHEMA,
     ENTITY_DATA_SCHEMA,
     ENTITY_OWNER_ROLE,

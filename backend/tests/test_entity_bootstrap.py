@@ -17,7 +17,9 @@ from backend.entity.bootstrap import (
 from backend.entity.ddl import (
     ACL_OWNER_ROLE,
     ENTITY_OWNER_ROLE,
+    ENTITY_SCHEMAS,
     READER_ROLE,
+    ident,
 )
 
 
@@ -53,9 +55,8 @@ def test_role_statements_create_then_alter_and_quote_passwords() -> None:
 
 def test_schema_statements_hide_entity_data_from_the_reader() -> None:
     sql = "\n".join(schema_statements())
-    assert "CREATE SCHEMA IF NOT EXISTS \"entity_data\"" in sql
-    assert "CREATE SCHEMA IF NOT EXISTS \"entity_access\"" in sql
-    assert "CREATE SCHEMA IF NOT EXISTS \"acl\"" in sql
+    for name in ENTITY_SCHEMAS:
+        assert f"CREATE SCHEMA IF NOT EXISTS {ident(name)}" in sql
     assert f'REVOKE ALL ON SCHEMA "entity_data" FROM "{READER_ROLE}"' in sql
     assert f'GRANT USAGE ON SCHEMA "entity_access" TO "{READER_ROLE}"' in sql
     assert "refraq_channel_reader" not in sql
