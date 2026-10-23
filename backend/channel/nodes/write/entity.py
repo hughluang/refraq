@@ -25,10 +25,9 @@ from backend.channel.nodes.spec import (
 from backend.channel.values import LIST_OF_OBJECTS
 from backend.channel.write_compatibility import write_reasons
 from backend.core.time import utc_now
-from backend.entity import rows as entity_rows
 from backend.entity.datasets import iter_dataset_chunks
 from backend.entity.errors import EntityRowWriteFailed
-from backend.entity.rows import head_target, write_rows
+from backend.entity.rows import WRITE_CHUNK_SIZE, head_target, write_rows
 
 __all__ = ["NODE_TYPE"]
 
@@ -223,7 +222,7 @@ def _projected_dataset(
 ) -> Iterator[list[tuple[int, dict[str, Any]]]]:
     chunks = iter_dataset_chunks(
         relation,
-        chunk_size=entity_rows.WRITE_CHUNK_SIZE,
+        chunk_size=WRITE_CHUNK_SIZE,
         timeout_ms=timeout_ms,
     )
     try:
