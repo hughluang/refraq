@@ -1363,3 +1363,239 @@ def test_catalog_type_check_does_not_run_when_schema_fails() -> None:
     assert [item.path for item in problems if item.code == "CHANNEL_NODE_CONFIG_INVALID"] == [
         ("name",)
     ]
+
+
+_CODE = {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}
+_TYPED_ROWS = {
+    "main": {
+        "type": "object",
+        "properties": {"rows": {"type": "array", "items": _CODE}},
+    }
+}
+
+
+def _refine(type_id: str):
+    return next(item.refine for item in list_node_types() if item.type_id == type_id)
+
+
+def test_set_fields_types_each_field_and_keeps_unknown_keys() -> None:
+    refined = _refine("transform.set_fields")(
+        {
+            "fields": [
+                {"name": "n", "value": "1"},
+                {"name": "code", "value": "{{ self.read.output.rows[0].code }}"},
+                {"name": "expr", "value": "{{ 1 + 1 }}"},
+            ]
+        },
+        {"read": _TYPED_ROWS},
+        None,
+    )
+    properties = refined["main"]["properties"]
+    assert properties["n"] == {"type": "integer"}
+    assert properties["code"] == {"type": "string"}
+    assert properties["expr"] == {}
+    assert refined["main"]["required"] == ["n", "code", "expr"]
+    assert refined["main"]["type"] == "object"
+
+
+def test_filter_and_deduplicate_inherit_the_list_element() -> None:
+    upstream = {"read": _TYPED_ROWS}
+    filtered = _refine("transform.filter")(
+        {"items": "{{ self.read.output.rows }}", "conditions": []},
+        upstream,
+        None,
+    )
+    deduped = _refine("transform.deduplicate")(
+        {"items": "{{ self.read.output.rows }}", "keys": ["code"]},
+        upstream,
+        None,
+    )
+    assert filtered["main"]["properties"]["rows"]["items"] == _CODE
+    assert deduped["main"]["properties"]["rows"]["items"] == _CODE
+    assert filtered["main"]["properties"]["dropped"] == {"type": "integer"}
+    assert deduped["main"]["properties"]["removed"] == {"type": "integer"}
+    untouched = _refine("transform.filter")(
+        {"items": "{{ 1 + 1 }}", "conditions": []},
+        {},
+        None,
+    )
+    assert untouched["main"]["properties"]["rows"]["items"] == {"type": "object"}
+
+
+def test_merge_unions_object_elements_and_skips_an_unresolved_input() -> None:
+    left = {
+        "main": {
+            "type": "object",
+            "properties": {
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"code": {"type": "string"}, "n": {"type": "integer"}},
+                    },
+                }
+            },
+        }
+    }
+    right = {
+        "main": {
+            "type": "object",
+            "properties": {
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"code": {"type": "integer"}, "p": {"type": "integer"}},
+                    },
+                }
+            },
+        }
+    }
+    refined = _refine("transform.merge")(
+        {
+            "mode": "append",
+            "inputs": [
+                "{{ self.left.output.rows }}",
+                "{{ 1 + 1 }}",
+                "{{ self.right.output.rows }}",
+            ],
+        },
+        {"left": left, "right": right},
+        None,
+    )
+    assert refined["main"]["properties"]["rows"]["items"] == {
+        "type": "object",
+        "properties": {
+            "code": {},
+            "n": {"type": "integer"},
+            "p": {"type": "integer"},
+        },
+    }
+    blocked = _refine("transform.merge")(
+        {
+            "mode": "append",
+            "inputs": [
+                "{{ self.left.output.rows }}",
+                "{{ self.nums.output.rows }}",
+            ],
+        },
+        {
+            "left": left,
+            "nums": {
+                "main": {
+                    "type": "object",
+                    "properties": {"rows": {"type": "array", "items": {"type": "string"}}},
+                }
+            },
+        },
+        None,
+    )
+    assert blocked["main"]["properties"]["rows"]["items"] == {"type": "object"}
+
+
+def test_for_current_uses_the_element_schema() -> None:
+    from backend.channel.template import output_matches
+
+    refined = _refine("volume.for")(
+        {"items": "{{ self.read.output.rows }}"},
+        {"read": _TYPED_ROWS},
+        None,
+    )
+    assert refined["each"]["properties"]["current"] == _CODE
+    assert output_matches(
+        {"current": None, "index": None, "count": 0, "iterations": []},
+        refined["done"],
+    )
+    assert output_matches(
+        {"current": {"code": "a"}, "index": 0, "count": 1, "iterations": []},
+        refined["done"],
+    )
+    plain = _refine("volume.for")({"items": "{{ 1 + 1 }}"}, {}, None)
+    assert "object" in plain["each"]["properties"]["current"]["type"]
+
+
+def test_batch_read_rows_use_dataset_columns_when_they_are_known() -> None:
+    from backend.channel.dataset_ref import DATASET_REFERENCE_SCHEMA
+
+    plain = _refine("volume.batch_read")(
+        {"dataset": "{{ self.query.output.dataset }}"},
+        {
+            "query": {
+                "main": {
+                    "type": "object",
+                    "properties": {"dataset": DATASET_REFERENCE_SCHEMA},
+                }
+            }
+        },
+        None,
+    )
+    assert plain["each"]["properties"]["rows"]["items"] == {"type": "object"}
+    columns = {
+        "type": "object",
+        "x-refraq-dataset-reference": True,
+        "properties": {
+            "columns": {
+                "const": [
+                    {"name": "sku", "type": "string"},
+                    {"name": "qty", "type": "integer"},
+                ]
+            }
+        },
+    }
+    refined = _refine("volume.batch_read")(
+        {"dataset": "{{ self.query.output.dataset }}"},
+        {"query": {"main": {"type": "object", "properties": {"dataset": columns}}}},
+        None,
+    )
+    assert refined["each"]["properties"]["rows"]["items"] == {
+        "type": "object",
+        "properties": {
+            "sku": {"type": ["string", "null"]},
+            "qty": {"type": ["integer", "null"]},
+        },
+    }
+    assert "rows" not in refined["done"]["properties"]
+    static = _refine("volume.batch_read")(
+        {
+            "dataset": (
+                '{"dataset_id":"ds_1","columns":[{"name":"sku","type":"text"}],"count":2}'
+            )
+        },
+        {},
+        None,
+    )
+    assert static["each"]["properties"]["rows"]["items"]["properties"]["sku"] == {
+        "type": ["string", "null"]
+    }
+
+
+def test_refine_ports_resolves_a_node_name_to_its_ref() -> None:
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node(
+                "nd_fields",
+                "transform.set_fields",
+                "Fields",
+                {
+                    "fields": [
+                        {
+                            "name": "who",
+                            "value": '{{ self.nodes["Run"].output.triggered_by }}',
+                        },
+                        {"name": "expr", "value": "{{ 1 + 1 }}"},
+                    ]
+                },
+            ),
+        ],
+        [_edge("ed_1", "nd_trigger", "nd_fields")],
+    )
+    ports = refine_ports(graph, FakeResolver())
+    schema = next(
+        port.schema
+        for port in ports
+        if port.node_id == "nd_fields" and port.port == "main" and port.direction == "output"
+    )
+    assert schema["properties"]["who"]["properties"]["id"] == {"type": "string"}
+    assert schema["properties"]["expr"] == {}
+    assert schema["required"] == ["who", "expr"]

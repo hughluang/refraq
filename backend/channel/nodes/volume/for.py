@@ -15,6 +15,8 @@ from backend.channel.nodes.spec import (
     PortSpec,
     object_schema,
 )
+from backend.channel.template import schema_at_path
+from backend.channel.values import array_item_schema
 
 __all__ = ["NODE_TYPE"]
 _ARRAY = {"type": "array"}
@@ -50,8 +52,30 @@ def _refine(
     upstream: Mapping[str, Any],
     resolver: Any,
 ) -> dict[str, Any]:
-    del config, upstream, resolver
-    return {"each": _STEP, "done": _DONE}
+    del resolver
+    text = config.get("items")
+    item = array_item_schema(schema_at_path(text, upstream)) if isinstance(text, str) else None
+    if item is None:
+        return {"each": _STEP, "done": _DONE}
+    return {
+        "each": _with_current(_STEP, item),
+        "done": _with_current(_DONE, _nullable(item)),
+    }
+
+
+def _with_current(base: Mapping[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    properties = dict(base["properties"])
+    properties["current"] = current
+    return {**base, "properties": properties}
+
+
+def _nullable(schema: Mapping[str, Any]) -> dict[str, Any]:
+    kind = schema.get("type")
+    if isinstance(kind, str) and kind != "null":
+        return {**schema, "type": [kind, "null"]}
+    if isinstance(kind, list) and "null" not in kind:
+        return {**schema, "type": [*kind, "null"]}
+    return dict(schema)
 
 
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
@@ -118,7 +142,7 @@ NODE_TYPE = NodeType(
         },
         ["items"],
     ),
-    output_view=OutputView(kind="container", metrics=("count",)),
+    output_view=OutputView(kind="container", metrics=("count",), item="current"),
     execute=_execute,
     refine=_refine,
 )

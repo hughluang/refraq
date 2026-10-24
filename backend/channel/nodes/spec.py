@@ -144,6 +144,7 @@ class OutputView:
     metrics: tuple[str, ...] = ()
     rows: str | None = None
     dataset: str | None = None
+    item: str | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in _OUTPUT_VIEW_KINDS:
@@ -155,17 +156,23 @@ class OutputView:
         if self.kind == "rows":
             if not isinstance(self.rows, str) or self.rows == "":
                 raise ValueError("rows output view requires a rows key")
-            if self.dataset is not None:
-                raise ValueError("rows output view rejects a dataset key")
+            if self.dataset is not None or self.item is not None:
+                raise ValueError("rows output view rejects dataset and item keys")
             return
         if self.kind == "dataset":
             if not isinstance(self.dataset, str) or self.dataset == "":
                 raise ValueError("dataset output view requires a dataset key")
-            if self.rows is not None:
-                raise ValueError("dataset output view rejects a rows key")
+            if self.rows is not None or self.item is not None:
+                raise ValueError("dataset output view rejects rows and item keys")
             return
-        if self.rows is not None or self.dataset is not None:
-            raise ValueError("output view rows and dataset belong to their own kinds")
+        if self.kind == "container":
+            if not isinstance(self.item, str) or self.item == "":
+                raise ValueError("container output view requires an item key")
+            if self.rows is not None or self.dataset is not None:
+                raise ValueError("container output view rejects rows and dataset keys")
+            return
+        if self.rows is not None or self.dataset is not None or self.item is not None:
+            raise ValueError("output view rows, dataset, and item belong to their own kinds")
 
 
 @dataclass(frozen=True, slots=True)

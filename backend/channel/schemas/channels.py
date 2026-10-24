@@ -369,6 +369,7 @@ class OutputViewOut(BaseModel):
     metrics: list[str]
     rows: str | None = None
     dataset: str | None = None
+    item: str | None = None
 
     @model_serializer(mode="wrap")
     def _omit_empty_keys(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
@@ -377,6 +378,8 @@ class OutputViewOut(BaseModel):
             document.pop("rows", None)
         if document.get("dataset") is None:
             document.pop("dataset", None)
+        if document.get("item") is None:
+            document.pop("item", None)
         return document
 
 

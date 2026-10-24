@@ -9,8 +9,10 @@ import pytest
 from backend.channel.template import (
     TemplateSyntaxError,
     TemplateTypeError,
+    output_matches,
     parse,
     render,
+    schema_at_path,
     static_check,
 )
 from backend.channel.values import LIST_OF_OBJECTS
@@ -100,6 +102,103 @@ def test_context_reads_are_collected_apart_from_refs() -> None:
 
 def test_string_target_serializes_objects() -> None:
     assert render('{{ {"n": 1} }}', _eval, STRING) == '{"n": 1}'
+
+
+_ROWS = {
+    "type": "object",
+    "properties": {
+        "rows": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string"},
+                    "qty": {"type": "integer"},
+                },
+            },
+        },
+        "count": {"type": "integer"},
+    },
+}
+
+
+def test_static_path_reads_attributes_and_constant_indexes() -> None:
+    upstream = {"read": {"main": _ROWS}}
+    assert schema_at_path("{{ self.read.output.rows[0].code }}", upstream) == {"type": "string"}
+    assert schema_at_path('{{ self.read.output["rows"][0]["qty"] }}', upstream) == {
+        "type": "integer"
+    }
+    assert schema_at_path("{{ self.read.output.rows[0] }}", upstream) == _ROWS["properties"]["rows"][
+        "items"
+    ]
+    assert schema_at_path("{{ self.read.output }}", upstream) == _ROWS
+    named = schema_at_path(
+        '{{ self.nodes["Read suppliers"].output.count }}',
+        upstream,
+        {"Read suppliers": "read"},
+    )
+    assert named == {"type": "integer"}
+
+
+def test_static_path_that_is_not_a_pure_chain_has_no_schema() -> None:
+    upstream = {"read": {"main": _ROWS}}
+    assert schema_at_path("{{ self.read.output.missing }}", upstream) is None
+    assert schema_at_path("{{ self.read.output.rows[index] }}", upstream) is None
+    assert schema_at_path("{{ self.read.output.rows + [] }}", upstream) is None
+    assert schema_at_path("{{ self.channel.id }}", upstream) is None
+    assert schema_at_path("{{ self.nodes[name].output }}", upstream, {"name": "read"}) is None
+    assert schema_at_path('prefix {{ self.read.output.rows }}', upstream) is None
+    assert schema_at_path("not a template", upstream) is None
+    assert schema_at_path("{{ self.other.output.rows }}", upstream) is None
+    assert (
+        schema_at_path('{{ self.nodes["Read suppliers"].output }}', upstream, {}) is None
+    )
+
+
+def test_static_path_reads_the_stored_output_unless_inside_the_frame() -> None:
+    step = {
+        "type": "object",
+        "properties": {
+            "current": {"type": "string"},
+            "rows": {"type": "array", "items": {"type": "object"}},
+        },
+    }
+    stored = {
+        "type": "object",
+        "properties": {
+            "current": {"type": ["string", "null"]},
+            "iterations": {"type": "array"},
+        },
+    }
+    upstream = {"loop": {"each": step, "done": stored}}
+    assert schema_at_path("{{ self.loop.output.current }}", upstream) == {
+        "type": ["string", "null"]
+    }
+    assert schema_at_path("{{ self.loop.output.iterations }}", upstream) == {"type": "array"}
+    assert schema_at_path("{{ self.loop.output.rows }}", upstream) is None
+
+    assert schema_at_path(
+        "{{ self.loop.output.rows[0] }}", upstream, inside=frozenset({"loop"})
+    ) == {"type": "object"}
+    assert (
+        schema_at_path("{{ self.loop.output.iterations }}", upstream, inside=frozenset({"loop"}))
+        is None
+    )
+
+
+def test_schema_without_a_type_matches_any_json_value() -> None:
+    assert output_matches("x", {})
+    assert output_matches(None, {})
+    assert output_matches([1], {})
+    declared = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"label": {"type": "string"}, "expr": {}},
+        "required": ["label", "expr"],
+    }
+    assert output_matches({"label": "ok", "expr": "1 + 1"}, declared)
+    assert output_matches({"label": "ok", "expr": {"n": 1}}, declared)
+    assert output_matches({"sku": "BT"}, {"type": "object"})
 
 
 def test_datetime_in_a_concatenation_is_iso() -> None:

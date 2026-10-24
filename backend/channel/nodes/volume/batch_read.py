@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator, Mapping
 from typing import Any
 
@@ -21,6 +22,8 @@ from backend.channel.nodes.spec import (
     object_schema,
 )
 from backend.channel.sql_read import _db_message, _jsonable
+from backend.channel.template import schema_at_path
+from backend.channel.values import dataset_row_schema
 from backend.core.time import utc_now
 from backend.entity.datasets import ORD_COLUMN, any_row_exists, read_keyset_page
 
@@ -55,8 +58,28 @@ def _refine(
     upstream: Mapping[str, Any],
     resolver: Any,
 ) -> dict[str, Any]:
-    del config, upstream, resolver
-    return {"each": _ROUND, "done": _DONE}
+    del resolver
+    row = _row_schema(config.get("dataset"), upstream)
+    if row is None:
+        return {"each": _ROUND, "done": _DONE}
+    properties = dict(_ROUND["properties"])
+    properties["rows"] = {"type": "array", "items": row}
+    return {"each": {**_ROUND, "properties": properties}, "done": _DONE}
+
+
+def _row_schema(text: Any, upstream: Mapping[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(text, str):
+        return None
+    if "{{" not in text:
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            value = None
+        if isinstance(value, dict):
+            row = dataset_row_schema({"const": value})
+            if row is not None:
+                return row
+    return dataset_row_schema(schema_at_path(text, upstream))
 
 
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
@@ -213,7 +236,7 @@ NODE_TYPE = NodeType(
         ["dataset"],
     ),
     output_view=OutputView(
-        kind="container", metrics=("count", "total", "batch_size")
+        kind="container", metrics=("count", "total", "batch_size"), item="rows"
     ),
     execute=_execute,
     refine=_refine,

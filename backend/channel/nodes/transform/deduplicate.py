@@ -15,7 +15,8 @@ from backend.channel.nodes.spec import (
     OutputView,
     object_schema,
 )
-from backend.channel.values import LIST_OF_OBJECTS
+from backend.channel.template import schema_at_path
+from backend.channel.values import LIST_OF_OBJECTS, array_item_schema
 
 __all__ = ["NODE_TYPE"]
 
@@ -36,8 +37,14 @@ def _refine(
     upstream: Mapping[str, Any],
     resolver: Any,
 ) -> dict[str, Any]:
-    del config, upstream, resolver
-    return {"main": _ROWS}
+    del resolver
+    text = config.get("items")
+    item = array_item_schema(schema_at_path(text, upstream)) if isinstance(text, str) else None
+    if item is None:
+        return {"main": _ROWS}
+    properties = dict(_ROWS["properties"])
+    properties["rows"] = {"type": "array", "items": item}
+    return {"main": {**_ROWS, "properties": properties}}
 
 
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:

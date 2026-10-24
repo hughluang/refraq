@@ -15,7 +15,8 @@ from backend.channel.nodes.spec import (
     OutputView,
     object_schema,
 )
-from backend.channel.values import LIST_OF_OBJECTS
+from backend.channel.template import schema_at_path
+from backend.channel.values import LIST_OF_OBJECTS, array_item_schema
 
 __all__ = ["NODE_TYPE"]
 
@@ -87,8 +88,53 @@ def _refine(
     upstream: Mapping[str, Any],
     resolver: Any,
 ) -> dict[str, Any]:
-    del config, upstream, resolver
-    return {"main": _ROWS}
+    del resolver
+    inputs = config.get("inputs")
+    if not isinstance(inputs, list):
+        return {"main": _ROWS}
+    elements: list[dict[str, Any]] = []
+    for text in inputs:
+        if not isinstance(text, str):
+            continue
+        item = array_item_schema(schema_at_path(text, upstream))
+        if item is None:
+            continue
+        if not _is_object(item):
+            return {"main": _ROWS}
+        elements.append(item)
+    properties = _union(elements)
+    if not properties:
+        return {"main": _ROWS}
+    copied = dict(_ROWS["properties"])
+    copied["rows"] = {
+        "type": "array",
+        "items": {"type": "object", "properties": properties},
+    }
+    return {"main": {**_ROWS, "properties": copied}}
+
+
+def _is_object(schema: Mapping[str, Any]) -> bool:
+    kind = schema.get("type")
+    if kind == "object":
+        return True
+    return isinstance(kind, list) and "object" in kind
+
+
+def _union(elements: list[dict[str, Any]]) -> dict[str, Any]:
+    properties: dict[str, Any] = {}
+    for element in elements:
+        declared = element.get("properties")
+        if not isinstance(declared, dict):
+            continue
+        for key, sub in declared.items():
+            if not isinstance(sub, dict):
+                continue
+            current = properties.get(key)
+            if current is None:
+                properties[key] = sub
+            elif current != sub:
+                properties[key] = {}
+    return properties
 
 
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:

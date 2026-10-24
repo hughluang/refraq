@@ -1605,6 +1605,137 @@ def test_batch_read_stores_a_preview_of_a_successful_body_and_the_full_failed_bo
     assert failed["batch"].error_detail == {"index": 0}
 
 
+def test_dynamic_set_fields_and_downstream_code_still_succeed() -> None:
+    from backend.channel.nodes import list_node_types
+
+    types = [
+        item
+        for item in list_node_types()
+        if item.type_id in {"trigger.manual", "transform.set_fields", "transform.code"}
+    ]
+    graph = {
+        "nodes": [
+            {
+                "id": "nd_start",
+                "type": "trigger.manual",
+                "name": "Start",
+                "ref": "start",
+                "position": {"x": 0, "y": 0},
+                "config": {},
+                "on_error": "stop",
+                "retry": None,
+            },
+            {
+                "id": "nd_fields",
+                "type": "transform.set_fields",
+                "name": "Fields",
+                "ref": "fields",
+                "position": {"x": 0, "y": 1},
+                "config": {
+                    "fields": [
+                        {"name": "label", "value": '"ok"'},
+                        {"name": "expr", "value": "{{ 1 + 1 }}"},
+                    ]
+                },
+                "on_error": "stop",
+                "retry": None,
+            },
+            {
+                "id": "nd_code",
+                "type": "transform.code",
+                "name": "Code",
+                "ref": "code",
+                "position": {"x": 0, "y": 2},
+                "config": {"code": "return {'ok': True}"},
+                "on_error": "stop",
+                "retry": None,
+            },
+        ],
+        "edges": [_edge("nd_start", "nd_fields"), _edge("nd_fields", "nd_code")],
+        "settings": {},
+    }
+    hooks = FakeHooks(run_code=lambda source, timeout: {"ok": True})
+    outcome = execute(graph, "nd_start", types, _RESOLVER, hooks)
+    assert outcome.status == "succeeded", outcome.error_message
+    assert hooks.order == ["nd_start", "nd_fields", "nd_code"]
+    assert hooks.outputs["nd_fields"] == {"label": "ok", "expr": "1 + 1"}
+    assert hooks.outputs["nd_code"] == {"ok": True}
+
+
+def test_empty_for_still_succeeds_when_current_is_typed() -> None:
+    from backend.channel.nodes import list_node_types
+
+    rows = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["rows"],
+        "properties": {
+            "rows": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["code"],
+                    "properties": {"code": {"type": "string"}},
+                },
+            }
+        },
+    }
+
+    def source_refine(config: dict, upstream: dict, resolver: object) -> dict:
+        del config, upstream, resolver
+        return {"main": rows}
+
+    def source_run(node: dict, hooks: EngineHooks) -> NodeResult:
+        del node, hooks
+        return NodeResult(status="succeeded", output={"rows": []})
+
+    source = NodeType(
+        type_id="test.source",
+        family="test",
+        label="Source",
+        summary="Publishes an empty typed list.",
+        description="Test source. Its refine names the row fields.",
+        trigger=True,
+        inputs=(),
+        outputs=(PortSpec("main", "Rows."),),
+        config_schema={"type": "object"},
+        execute=source_run,
+        refine=source_refine,
+        output_view=OutputView(kind="rows", rows="rows"),
+    )
+    loop = next(item for item in list_node_types() if item.type_id == "volume.for")
+    fields = next(item for item in list_node_types() if item.type_id == "transform.set_fields")
+    tail = _node("tail", 2, type_id="transform.set_fields")
+    tail["config"] = {
+        "fields": [{"name": "current", "value": "{{ self.walk.output.current }}"}]
+    }
+    graph = {
+        "nodes": [
+            _node("src", 0, type_id="test.source"),
+            {
+                **_node("walk", 1, type_id="volume.for"),
+                "config": {"items": "{{ self.src.output.rows }}"},
+            },
+            tail,
+        ],
+        "edges": [_edge("src", "walk"), _edge("walk", "tail", "done")],
+        "settings": {},
+    }
+
+    def evaluate(expression: str) -> object:
+        if expression == "self.src.output.rows":
+            return []
+        if expression == "self.walk.output.current":
+            return None
+        raise AssertionError(expression)
+
+    hooks = FakeHooks(evaluate=evaluate)
+    outcome = execute(graph, "src", [source, loop, fields], _RESOLVER, hooks)
+    assert outcome.status == "succeeded", outcome.error_message
+    assert hooks.outputs["tail"] == {"current": None}
+
+
 class _PreviewSandbox:
     def put_output(self, *, ref: str, name: str, output: object) -> None:
         del ref, name, output

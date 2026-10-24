@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import ast
+import copy
 import json
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any, Callable, Literal, Mapping
+
+from backend.channel.values import array_item_schema
 
 __all__ = [
     "Template",
@@ -16,6 +19,7 @@ __all__ = [
     "output_matches",
     "parse",
     "render",
+    "schema_at_path",
     "static_check",
     "value_matches",
 ]
@@ -73,6 +77,45 @@ def parse(text: str) -> Template:
         node_names=frozenset(names),
         contexts=frozenset(contexts),
     )
+
+
+def schema_at_path(
+    text: str,
+    upstream: Mapping[str, Any],
+    names: Mapping[str, str] | None = None,
+    *,
+    inside: set[str] | frozenset[str] | None = None,
+) -> dict[str, Any] | None:
+    """Schema at one pure attribute path, or None when the path cannot be typed.
+
+    The text must be exactly one ``{{ }}``. The expression may only be
+    attributes and constant subscripts, rooted at ``self.<ref>.output`` or
+    ``self.nodes["name"].output``. ``names`` maps a node name to its ref.
+    An integer subscript selects that array's ``items`` schema. ``upstream``
+    is keyed by ref and each value is that node's port schemas. ``.output``
+    is ``main`` when that port has a schema, otherwise the stored ``done``
+    schema, then the round step ``each``. A ref in ``inside``, or on
+    ``upstream.inside``, is read as the round step instead.
+    """
+    try:
+        template = parse(text)
+    except TemplateSyntaxError:
+        return None
+    if template.whole_expression is None:
+        return None
+    steps = _path_steps(template.whole_expression)
+    if not steps:
+        return None
+    if names is None:
+        attached = getattr(upstream, "names", None)
+        names = attached if isinstance(attached, Mapping) else {}
+    if inside is None:
+        attached_inside = getattr(upstream, "inside", ())
+        inside = attached_inside if isinstance(attached_inside, (set, frozenset)) else frozenset()
+    found = _schema_from_steps(steps, upstream, names, inside)
+    if not isinstance(found, dict):
+        return None
+    return copy.deepcopy(found)
 
 
 def static_check(
@@ -238,6 +281,115 @@ def _names(body: str) -> tuple[set[str], set[str], set[str]]:
     return refs, names, contexts
 
 
+def _path_steps(expression: str) -> list[tuple[str, Any]] | None:
+    node: ast.AST = ast.parse(expression, mode="eval").body
+    steps: list[tuple[str, Any]] = []
+    while True:
+        if isinstance(node, ast.Attribute):
+            steps.append(("attr", node.attr))
+            node = node.value
+            continue
+        if isinstance(node, ast.Subscript):
+            key = _subscript_key(node.slice)
+            if key is None:
+                return None
+            steps.append(("key", key))
+            node = node.value
+            continue
+        if isinstance(node, ast.Name) and node.id == "self":
+            break
+        return None
+    steps.reverse()
+    return steps
+
+
+def _subscript_key(node: ast.expr) -> str | int | None:
+    if isinstance(node, ast.Constant):
+        return _const_key(node.value)
+    if (
+        isinstance(node, ast.UnaryOp)
+        and isinstance(node.op, ast.USub)
+        and isinstance(node.operand, ast.Constant)
+    ):
+        key = _const_key(node.operand.value)
+        if isinstance(key, int):
+            return -key
+    return None
+
+
+def _const_key(value: object) -> str | int | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def _schema_from_steps(
+    steps: list[tuple[str, Any]],
+    upstream: Mapping[str, Any],
+    names: Mapping[str, str],
+    inside: set[str] | frozenset[str],
+) -> dict[str, Any] | None:
+    if steps[0][0] != "attr":
+        return None
+    first = steps[0][1]
+    index = 1
+    if first == "nodes":
+        if len(steps) < 2 or steps[1][0] != "key" or not isinstance(steps[1][1], str):
+            return None
+        ref = names.get(steps[1][1])
+        if not isinstance(ref, str):
+            return None
+        index = 2
+    elif first in _RESERVED_ATTRS:
+        return None
+    else:
+        ref = first
+    if index >= len(steps) or steps[index] != ("attr", "output"):
+        return None
+    produced = upstream.get(ref) if isinstance(upstream, Mapping) else None
+    schema = _output_schema(produced, step=ref in inside)
+    if schema is None:
+        return None
+    for kind, key in steps[index + 1 :]:
+        schema = _walk_schema(schema, kind, key)
+        if schema is None:
+            return None
+    return schema
+
+
+def _output_schema(produced: Any, *, step: bool) -> dict[str, Any] | None:
+    if not isinstance(produced, Mapping):
+        return None
+    ports = ("each", "main", "done", "true") if step else ("main", "done", "each", "true")
+    for port in ports:
+        schema = produced.get(port)
+        if isinstance(schema, dict):
+            return schema
+    return None
+
+
+def _walk_schema(schema: Any, kind: str, key: Any) -> dict[str, Any] | None:
+    if not isinstance(schema, dict):
+        return None
+    if kind == "attr" or isinstance(key, str):
+        return _property_schema(schema, key if isinstance(key, str) else "")
+    return array_item_schema(schema)
+
+
+def _property_schema(schema: Mapping[str, Any], name: str) -> dict[str, Any] | None:
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        found = properties.get(name)
+        if isinstance(found, dict):
+            return found
+    additional = schema.get("additionalProperties")
+    if isinstance(additional, dict):
+        return additional
+    return None
+
+
 def _joined_text(template: Template) -> str:
     return "".join(
         segment.text for segment in template.segments if segment.kind == "text"
@@ -308,7 +460,9 @@ def _matches(value: Any, schema: Mapping[str, Any], *, widen: bool) -> bool:
         return False
     names = _type_names(schema)
     if not names:
-        return False
+        # A schema that states no type, including {}, matches any JSON value.
+        # An enum without a type still matches nothing.
+        return "enum" not in schema
     return any(_matches_type(value, name, schema, widen=widen) for name in names)
 
 

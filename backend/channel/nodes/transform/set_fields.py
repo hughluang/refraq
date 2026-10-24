@@ -15,6 +15,7 @@ from backend.channel.nodes.spec import (
     OutputView,
     object_schema,
 )
+from backend.channel.template import schema_at_path
 
 __all__ = ["NODE_TYPE"]
 
@@ -57,12 +58,23 @@ def _static_schema(text: Any) -> dict[str, Any] | None:
     return _json_schema(value)
 
 
+def _field_schema(value: Any, upstream: Mapping[str, Any]) -> dict[str, Any]:
+    static = _static_schema(value)
+    if static is not None:
+        return static
+    if isinstance(value, str):
+        found = schema_at_path(value, upstream)
+        if isinstance(found, dict):
+            return found
+    return {}
+
+
 def _refine(
     config: Mapping[str, Any],
     upstream: Mapping[str, Any],
     resolver: Any,
 ) -> dict[str, Any]:
-    del upstream, resolver
+    del resolver
     fields = config.get("fields")
     if not isinstance(fields, list):
         return {"main": None}
@@ -71,10 +83,7 @@ def _refine(
     for field in fields:
         if not isinstance(field, dict) or not isinstance(field.get("name"), str):
             return {"main": None}
-        schema = _static_schema(field.get("value"))
-        if schema is None:
-            return {"main": None}
-        properties[field["name"]] = schema
+        properties[field["name"]] = _field_schema(field.get("value"), upstream)
         required.append(field["name"])
     return {
         "main": {

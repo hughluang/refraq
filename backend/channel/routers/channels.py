@@ -154,6 +154,7 @@ def _node_type_out(spec: NodeType) -> NodeTypeOut:
             metrics=list(spec.output_view.metrics),
             rows=spec.output_view.rows,
             dataset=spec.output_view.dataset,
+            item=spec.output_view.item,
         ),
         config_schema=spec.config_schema,
         permission=spec.permission,

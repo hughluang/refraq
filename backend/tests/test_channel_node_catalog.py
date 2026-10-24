@@ -40,12 +40,12 @@ _OUTPUT_VIEWS = {
     "transform.merge": OutputView(kind="rows", rows="rows", metrics=("count",)),
     "transform.set_fields": OutputView(kind="record"),
     "volume.batch_read": OutputView(
-        kind="container", metrics=("count", "total", "batch_size")
+        kind="container", metrics=("count", "total", "batch_size"), item="rows"
     ),
     "volume.dataset_query": OutputView(
         kind="dataset", dataset="dataset", metrics=("count",)
     ),
-    "volume.for": OutputView(kind="container", metrics=("count",)),
+    "volume.for": OutputView(kind="container", metrics=("count",), item="current"),
     "volume.materialize": OutputView(
         kind="dataset", dataset="dataset", metrics=("count",)
     ),
@@ -177,7 +177,7 @@ def test_output_view_accepts_only_the_key_its_kind_names() -> None:
     OutputView(kind="record")
     OutputView(kind="value")
     OutputView(kind="counts", metrics=("inserted",))
-    OutputView(kind="container", metrics=("count",))
+    OutputView(kind="container", item="current", metrics=("count",))
     OutputView(kind="rows", rows="rows", metrics=("count", "rowcount"))
     OutputView(kind="dataset", dataset="dataset", metrics=("count",))
     with pytest.raises(ValueError):
@@ -200,6 +200,16 @@ def test_output_view_accepts_only_the_key_its_kind_names() -> None:
         OutputView(kind="counts", rows="rows", metrics=("inserted",))
     with pytest.raises(ValueError):
         OutputView(kind="nope")
+    with pytest.raises(ValueError):
+        OutputView(kind="container", metrics=("count",))
+    with pytest.raises(ValueError):
+        OutputView(kind="container", item="")
+    with pytest.raises(ValueError):
+        OutputView(kind="record", item="current")
+    with pytest.raises(ValueError):
+        OutputView(kind="rows", rows="rows", item="current")
+    with pytest.raises(ValueError):
+        OutputView(kind="container", item="current", rows="rows")
 
 
 def test_a_node_type_requires_an_output_view() -> None:
@@ -223,6 +233,15 @@ def test_every_registered_type_declares_its_output_view() -> None:
     assert {item.type_id for item in types} == set(_OUTPUT_VIEWS)
     for node in types:
         assert node.output_view == _OUTPUT_VIEWS[node.type_id]
+
+
+def test_container_item_is_a_property_of_the_each_schema() -> None:
+    for node in list_node_types():
+        if node.output_view.kind != "container":
+            continue
+        refined = node.refine(_default_config(node.config_schema), {}, None)
+        each = refined["each"]
+        assert node.output_view.item in each["properties"], node.type_id
 
 
 def test_output_view_keys_appear_in_the_refined_main_schema() -> None:
@@ -283,6 +302,8 @@ def _published_view(view: OutputView) -> dict[str, Any]:
         document["rows"] = view.rows
     if view.dataset is not None:
         document["dataset"] = view.dataset
+    if view.item is not None:
+        document["item"] = view.item
     return document
 
 

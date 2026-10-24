@@ -950,6 +950,60 @@ def _has_container_ancestor(
         current = parent
 
 
+class _Upstream(dict[str, Any]):
+    """Ancestor port schemas keyed by ref, plus name and frame hints."""
+
+    def __init__(
+        self,
+        schemas: Mapping[str, Any],
+        names: Mapping[str, str],
+        inside: set[str] | frozenset[str],
+    ) -> None:
+        super().__init__(schemas)
+        self.names = dict(names)
+        self.inside = frozenset(inside)
+
+
+def _containing_refs(node_id: str, by_id: Mapping[str, Mapping[str, Any]]) -> frozenset[str]:
+    """Refs of container ancestors whose frame holds ``node_id``."""
+    refs: set[str] = set()
+    seen: set[str] = set()
+    current = node_id
+    while current not in seen and current in by_id:
+        seen.add(current)
+        parent = _parent_ref(by_id[current])
+        if parent is None or parent not in by_id:
+            break
+        parent_node = by_id[parent]
+        if _is_container(parent_node.get("type")):
+            ref = parent_node.get("ref")
+            if isinstance(ref, str):
+                refs.add(ref)
+        current = parent
+    return frozenset(refs)
+
+
+def _name_to_ref(ancestors: set[str], by_id: Mapping[str, Mapping[str, Any]]) -> dict[str, str]:
+    names: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    for ancestor_id in ancestors:
+        ancestor = by_id.get(ancestor_id)
+        if ancestor is None:
+            continue
+        name = ancestor.get("name")
+        ref = ancestor.get("ref")
+        if not isinstance(name, str) or not isinstance(ref, str):
+            continue
+        previous = names.get(name)
+        if previous is not None and previous != ref:
+            ambiguous.add(name)
+        else:
+            names[name] = ref
+    for name in ambiguous:
+        names.pop(name, None)
+    return names
+
+
 def refine_ports(
     graph: Mapping[str, Any],
     resolver: ReferenceResolver,
@@ -972,14 +1026,19 @@ def refine_ports(
             and spec.refine is not None
             and isinstance(node.get("config"), dict)
         ):
-            upstream = {}
-            for anc in ancestors.get(node_id, ()):
+            found = ancestors.get(node_id, set())
+            upstream: dict[str, Any] = {}
+            for anc in found:
                 if anc not in by_id:
                     continue
                 ref = by_id[anc].get("ref")
                 if isinstance(ref, str):
                     upstream[ref] = outputs.get(anc, {})
-            produced = spec.refine(node["config"], upstream, resolver)
+            produced = spec.refine(
+                node["config"],
+                _Upstream(upstream, _name_to_ref(found, by_id), _containing_refs(node_id, by_id)),
+                resolver,
+            )
         outputs[node_id] = produced if isinstance(produced, dict) else {}
     refined: list[RefinedPort] = []
     for node in nodes:
