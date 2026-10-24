@@ -25,7 +25,7 @@ from backend.channel.run_store import (
 )
 from backend.channel.runs import rerun_failed, start_run
 from backend.channel.schemas.channels import GraphIn
-from backend.channel.template_preview import preview_template
+from backend.channel.template_preview import node_sample, preview_template
 from backend.core.pagination import PageParams, page_params
 from backend.core.time import Instant, format_instant, utc_now
 from backend.entity.datasets import any_row_exists, read_keyset_page
@@ -42,12 +42,28 @@ class StartRunRequest(BaseModel):
     stop_at_node_id: str | None = None
 
 
+class ScopeLevelIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    container_node_id: str = Field(min_length=1, max_length=64)
+    round: int = Field(ge=0)
+
+
 class TemplatePreviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     graph: GraphIn
     node_id: str = Field(min_length=1, max_length=64)
     path: list[str | int] = Field(min_length=1)
+    scope: list[ScopeLevelIn] | None = None
+
+
+class NodeSampleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    graph: GraphIn
+    node_id: str = Field(min_length=1, max_length=64)
+    scope: list[ScopeLevelIn] | None = None
 
 
 class ChannelRunOut(BaseModel):
@@ -342,6 +358,24 @@ def http_preview_template(
         graph=body.graph.model_dump(mode="json"),
         node_id=body.node_id,
         path=body.path,
+        scope=_scope_arg(body.scope),
+    )
+
+
+@router.post("/channels/{channel_id}/runs/{job_id}/node-sample")
+def http_node_sample(
+    channel_id: str,
+    job_id: str,
+    body: NodeSampleRequest,
+    _actor: UserRecord = Depends(require_permission("channel:write")),
+) -> dict[str, Any]:
+    """Read a Node Sample. The request executes no node and writes nothing."""
+    return node_sample(
+        channel_id=channel_id,
+        job_id=job_id,
+        graph=body.graph.model_dump(mode="json"),
+        node_id=body.node_id,
+        scope=_scope_arg(body.scope),
     )
 
 
@@ -394,6 +428,12 @@ def _is_container(run: Any, record: NodeExecutionRecord) -> bool:
         if isinstance(node, dict) and str(node.get("id")) == record.node_id:
             return str(node.get("type")) in CONTAINER_TYPES
     return False
+
+
+def _scope_arg(scope: list[ScopeLevelIn] | None) -> list[dict[str, Any]] | None:
+    if scope is None:
+        return None
+    return [item.model_dump() for item in scope]
 
 
 def _owned(channel_id: str, job_id: str) -> Any:

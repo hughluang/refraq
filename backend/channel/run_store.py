@@ -337,6 +337,13 @@ class MemoryRunStore:
         matched.sort(key=lambda item: item.round)
         return matched[offset : offset + limit], len(matched)
 
+    def get_round(
+        self, job_id: str, container_seq: int, round_index: int
+    ) -> ContainerRoundRecord | None:
+        """The recorded step for one container execution and round, if any."""
+        with self._lock:
+            return self._rounds.get((job_id, container_seq, round_index))
+
     def round_status_counts(
         self, job_id: str, container_seq: int
     ) -> dict[int, dict[str, int]]:
@@ -611,6 +618,20 @@ class SqlRunStore:
                 .offset(offset)
             ).all()
             return [_round_record(row) for row in rows], total
+
+    def get_round(
+        self, job_id: str, container_seq: int, round_index: int
+    ) -> ContainerRoundRecord | None:
+        """The recorded step for one container execution and round, if any."""
+        with session_scope() as session:
+            row = session.scalar(
+                select(ChannelContainerRoundRow).where(
+                    ChannelContainerRoundRow.job_id == job_id,
+                    ChannelContainerRoundRow.container_seq == container_seq,
+                    ChannelContainerRoundRow.round == round_index,
+                )
+            )
+            return None if row is None else _round_record(row)
 
     def round_status_counts(
         self, job_id: str, container_seq: int

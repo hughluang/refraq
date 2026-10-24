@@ -357,11 +357,23 @@ def test_template_preview_reads_the_recorded_run(channel_client: TestClient) -> 
         json={"graph": graph, "node_id": "nd_keep", "path": ["value"]},
     )
     assert preview.status_code == 200, preview.text
-    assert preview.json() == {
-        "state": "ok",
-        "value": [run["job_id"], "root"],
-        "truncated": False,
-    }
+    body = preview.json()
+    assert body["state"] == "ok"
+    assert body["value"] == [run["job_id"], "root"]
+    assert body["truncated"] is False
+    assert body["scope"] == []
+    listed = channel_client.get(
+        f"/channels/{channel_id}/runs/{run['job_id']}/executions",
+        params={"node_id": "nd_trigger"},
+    )
+    assert listed.status_code == 200, listed.text
+    assert body["bindings"] == [
+        {
+            "node_id": "nd_trigger",
+            "seq": listed.json()["items"][-1]["seq"],
+            "source": "execution",
+        }
+    ]
 
 
 def test_global_variable_writes_are_atomic(channel_client: TestClient) -> None:
