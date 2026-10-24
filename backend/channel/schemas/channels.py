@@ -364,6 +364,22 @@ class PortOut(BaseModel):
     loop_back: bool = False
 
 
+class OutputViewOut(BaseModel):
+    kind: Literal["record", "rows", "dataset", "counts", "container", "value"]
+    metrics: list[str]
+    rows: str | None = None
+    dataset: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_keys(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        document = handler(self)
+        if document.get("rows") is None:
+            document.pop("rows", None)
+        if document.get("dataset") is None:
+            document.pop("dataset", None)
+        return document
+
+
 class NodeTypeOut(BaseModel):
     type: str
     family: str
@@ -373,6 +389,7 @@ class NodeTypeOut(BaseModel):
     trigger: bool
     inputs: list[PortOut]
     outputs: list[PortOut]
+    output_view: OutputViewOut
     config_schema: dict[str, Any]
     permission: str | None
     type_version: int

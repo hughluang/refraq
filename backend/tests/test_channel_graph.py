@@ -7,6 +7,7 @@ from backend.channel.schemas.channels import NodeIn
 from backend.channel.nodes import list_node_types
 from backend.channel.nodes.spec import (
     NodeType,
+    OutputView,
     PortSpec,
     Problem,
     ResolvedAttribute,
@@ -212,6 +213,7 @@ def test_cycle_not_through_loop() -> None:
 def test_cycle_through_a_loop_back_port_is_illegal() -> None:
     loop = NodeType(
         execute=_idle,
+        output_view=OutputView(kind="record"),
         type_id="volume.loop",
         family="volume",
         label="Loop",
@@ -536,6 +538,7 @@ def test_template_problem_names_each_property() -> None:
 def test_template_problem_path_includes_a_list_index() -> None:
     nested = NodeType(
         execute=_idle,
+        output_view=OutputView(kind="record"),
         type_id="test.nested",
         family="trigger",
         label="Nested",
@@ -582,6 +585,7 @@ def test_template_problem_path_includes_a_list_index() -> None:
 def test_incompatible_coarse_port_types() -> None:
     items = NodeType(
         execute=_idle,
+        output_view=OutputView(kind="record"),
         type_id="test.items",
         family="trigger",
         label="Items",
@@ -677,6 +681,7 @@ def test_refine_upstream_names_only_ancestors_with_ref() -> None:
 
     sink = NodeType(
         execute=_idle,
+        output_view=OutputView(kind="record"),
         type_id="test.sink",
         family="test",
         label="Sink",
@@ -1151,6 +1156,7 @@ def _container_type(type_id: str) -> NodeType:
         ),
         config_schema={"type": "object", "additionalProperties": True},
         execute=_idle,
+        output_view=OutputView(kind="record"),
     )
 
 
@@ -1310,6 +1316,7 @@ def test_source_query_source_must_resolve() -> None:
 def _flagged(*, required: list[str], check) -> NodeType:
     return NodeType(
         execute=_idle,
+        output_view=OutputView(kind="record"),
         check=check,
         type_id="test.flagged",
         family="test",

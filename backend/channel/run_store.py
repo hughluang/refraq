@@ -7,11 +7,15 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Mapping
 
 from sqlalchemy import func, select, text
 
-from backend.channel.models import ChannelNodeExecutionRow, ChannelRunRow
+from backend.channel.models import (
+    ChannelContainerRoundRow,
+    ChannelNodeExecutionRow,
+    ChannelRunRow,
+)
 from backend.core.config import get_settings
 from backend.core.db import session_scope
 from backend.core.time import utc_now
@@ -19,6 +23,7 @@ from backend.jobs.store import TERMINAL, get_job_store
 
 __all__ = [
     "ChannelRunRecord",
+    "ContainerRoundRecord",
     "NodeExecutionRecord",
     "NodeExecutionSummary",
     "get_run_store",
@@ -64,6 +69,8 @@ class NodeExecutionRecord:
     round: int | None = None
     preview_only: bool = False
     preview_totals: dict[str, int] = field(default_factory=dict)
+    input: Any = None
+    input_totals: dict[str, int] | None = None
 
 
 @dataclass
@@ -71,6 +78,15 @@ class NodeExecutionSummary:
     node_id: str
     execution_count: int
     status_counts: dict[str, int]
+
+
+@dataclass
+class ContainerRoundRecord:
+    job_id: str
+    container_seq: int
+    round: int
+    step: Any
+    step_totals: dict[str, int]
 
 
 def _execution_matches(
@@ -172,6 +188,7 @@ class MemoryRunStore:
     def __init__(self) -> None:
         self._runs: dict[str, ChannelRunRecord] = {}
         self._execs: dict[str, NodeExecutionRecord] = {}
+        self._rounds: dict[tuple[str, int, int], ContainerRoundRecord] = {}
         self._lock = threading.Lock()
 
     def insert_run(self, record: ChannelRunRecord) -> None:
@@ -284,6 +301,60 @@ class MemoryRunStore:
                 return item
         return None
 
+    def insert_round(
+        self,
+        job_id: str,
+        *,
+        container_seq: int,
+        round: int,
+        step: Any,
+        step_totals: Mapping[str, int],
+    ) -> None:
+        record = ContainerRoundRecord(
+            job_id=job_id,
+            container_seq=container_seq,
+            round=round,
+            step=step,
+            step_totals={str(key): int(value) for key, value in step_totals.items()},
+        )
+        with self._lock:
+            self._rounds[(job_id, container_seq, round)] = record
+
+    def query_rounds(
+        self,
+        job_id: str,
+        container_seq: int,
+        *,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[ContainerRoundRecord], int]:
+        with self._lock:
+            matched = [
+                item
+                for item in self._rounds.values()
+                if item.job_id == job_id and item.container_seq == container_seq
+            ]
+        matched.sort(key=lambda item: item.round)
+        return matched[offset : offset + limit], len(matched)
+
+    def round_status_counts(
+        self, job_id: str, container_seq: int
+    ) -> dict[int, dict[str, int]]:
+        """Counts of direct child executions grouped by round and status."""
+        with self._lock:
+            items = [
+                item
+                for item in self._execs.values()
+                if item.job_id == job_id
+                and item.container_seq == container_seq
+                and item.round is not None
+            ]
+        counts: dict[int, dict[str, int]] = {}
+        for item in items:
+            bucket = counts.setdefault(item.round, {})
+            bucket[item.status] = bucket.get(item.status, 0) + 1
+        return counts
+
     def job_ids_due(self, cutoff: datetime) -> list[str]:
         """Job ids of runs created before ``cutoff`` whose Job is terminal.
 
@@ -313,9 +384,15 @@ class MemoryRunStore:
             ]
             for job_id in doomed:
                 del self._runs[job_id]
-            drop = [key for key, item in self._execs.items() if item.job_id in set(doomed)]
+            doomed_ids = set(doomed)
+            drop = [key for key, item in self._execs.items() if item.job_id in doomed_ids]
             for key in drop:
                 del self._execs[key]
+            drop_rounds = [
+                key for key, item in self._rounds.items() if item.job_id in doomed_ids
+            ]
+            for key in drop_rounds:
+                del self._rounds[key]
             return len(doomed)
 
 
@@ -414,6 +491,8 @@ class SqlRunStore:
             row.error_code = record.error_code
             row.error_message = record.error_message
             row.error_detail = record.error_detail
+            row.input = record.input
+            row.input_totals = record.input_totals
 
     def list_executions(self, job_id: str) -> list[NodeExecutionRecord]:
         with session_scope() as session:
@@ -484,6 +563,80 @@ class SqlRunStore:
                 )
             )
             return None if row is None else _exec_record(row)
+
+    def insert_round(
+        self,
+        job_id: str,
+        *,
+        container_seq: int,
+        round: int,
+        step: Any,
+        step_totals: Mapping[str, int],
+    ) -> None:
+        with session_scope() as session:
+            session.add(
+                ChannelContainerRoundRow(
+                    job_id=job_id,
+                    container_seq=container_seq,
+                    round=round,
+                    step=step,
+                    step_totals={str(key): int(value) for key, value in step_totals.items()},
+                )
+            )
+
+    def query_rounds(
+        self,
+        job_id: str,
+        container_seq: int,
+        *,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[ContainerRoundRecord], int]:
+        clauses = (
+            ChannelContainerRoundRow.job_id == job_id,
+            ChannelContainerRoundRow.container_seq == container_seq,
+        )
+        with session_scope() as session:
+            total = int(
+                session.scalar(
+                    select(func.count()).select_from(ChannelContainerRoundRow).where(*clauses)
+                )
+                or 0
+            )
+            rows = session.scalars(
+                select(ChannelContainerRoundRow)
+                .where(*clauses)
+                .order_by(ChannelContainerRoundRow.round)
+                .limit(limit)
+                .offset(offset)
+            ).all()
+            return [_round_record(row) for row in rows], total
+
+    def round_status_counts(
+        self, job_id: str, container_seq: int
+    ) -> dict[int, dict[str, int]]:
+        """Counts of direct child executions grouped by round and status."""
+        with session_scope() as session:
+            rows = session.execute(
+                select(
+                    ChannelNodeExecutionRow.round,
+                    ChannelNodeExecutionRow.status,
+                    func.count(),
+                )
+                .where(
+                    ChannelNodeExecutionRow.job_id == job_id,
+                    ChannelNodeExecutionRow.container_seq == container_seq,
+                    ChannelNodeExecutionRow.round.is_not(None),
+                )
+                .group_by(
+                    ChannelNodeExecutionRow.round,
+                    ChannelNodeExecutionRow.status,
+                )
+            ).all()
+        counts: dict[int, dict[str, int]] = {}
+        for round_index, status, count in rows:
+            counts.setdefault(int(round_index), {})[str(status)] = int(count)
+        return counts
 
     def job_ids_due(self, cutoff: datetime) -> list[str]:
         """Job ids of runs created before ``cutoff`` whose Job is terminal.
@@ -588,6 +741,8 @@ def _exec_row(record: NodeExecutionRecord) -> ChannelNodeExecutionRow:
         error_detail=record.error_detail,
         container_seq=record.container_seq,
         round=record.round,
+        input=record.input,
+        input_totals=record.input_totals,
     )
 
 
@@ -610,7 +765,25 @@ def _exec_record(row: ChannelNodeExecutionRow) -> NodeExecutionRecord:
         round=row.round,
         preview_only=preview_only,
         preview_totals=preview_totals,
+        input=row.input,
+        input_totals=_int_map(row.input_totals),
     )
+
+
+def _round_record(row: ChannelContainerRoundRow) -> ContainerRoundRecord:
+    return ContainerRoundRecord(
+        job_id=row.job_id,
+        container_seq=row.container_seq,
+        round=row.round,
+        step=row.step,
+        step_totals=_int_map(row.step_totals) or {},
+    )
+
+
+def _int_map(raw: Any) -> dict[str, int] | None:
+    if raw is None:
+        return None
+    return {str(key): int(value) for key, value in raw.items()}
 
 
 _PREVIEW_MARK = "$refraq_preview"
@@ -674,9 +847,20 @@ def output_preview(output: Any, *, cap: int = PREVIEW_LIST_CAP) -> Any:
 
 
 def output_preview_with_truncated(
-    output: Any, *, cap: int = PREVIEW_LIST_CAP
+    output: Any,
+    *,
+    cap: int = PREVIEW_LIST_CAP,
+    totals: Mapping[str, int] | None = None,
 ) -> tuple[Any, bool]:
-    return _cut(output, cap)
+    """Cut lists for a response and report a cut from this pass or from storage.
+
+    ``totals`` holds original lengths recorded when the value was stored
+    already clipped. A length above ``cap`` means that store-time cut happened.
+    """
+    preview, truncated = _cut(output, cap)
+    if not truncated and totals:
+        truncated = any(int(length) > cap for length in totals.values())
+    return preview, truncated
 
 
 def _cut(value: Any, cap: int) -> tuple[Any, bool]:

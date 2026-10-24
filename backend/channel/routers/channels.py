@@ -27,6 +27,7 @@ from backend.channel.schemas.channels import (
     LatestVersionOut,
     NodeTypeListResponse,
     NodeTypeOut,
+    OutputViewOut,
     RefinedPortOut,
     PortOut,
     ProblemOut,
@@ -148,6 +149,12 @@ def _node_type_out(spec: NodeType) -> NodeTypeOut:
             )
             for port in spec.outputs
         ],
+        output_view=OutputViewOut(
+            kind=spec.output_view.kind,
+            metrics=list(spec.output_view.metrics),
+            rows=spec.output_view.rows,
+            dataset=spec.output_view.dataset,
+        ),
         config_schema=spec.config_schema,
         permission=spec.permission,
         type_version=spec.type_version,

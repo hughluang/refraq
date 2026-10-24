@@ -17,6 +17,7 @@ from backend.channel.nodes.spec import (
     EngineHooks,
     NodeResult,
     NodeType,
+    OutputView,
     Problem,
     ReferenceResolver,
     object_schema,
@@ -42,7 +43,7 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
         )
     rendered: dict[str, str] = {}
     for key in ("to", "subject", "body"):
-        value, failure = render_field(hooks, config.get(key), _TEXT)
+        value, failure = render_field(hooks, config.get(key), _TEXT, path=key)
         if failure is not None:
             return failure
         rendered[key] = value
@@ -132,6 +133,7 @@ NODE_TYPE = NodeType(
         },
         ["email_account_id", "to", "subject", "body"],
     ),
+    output_view=OutputView(kind="record"),
     execute=_execute,
     check=_check,
 )

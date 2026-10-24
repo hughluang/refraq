@@ -6,7 +6,15 @@ from typing import Any, Mapping
 
 from backend.channel.item_limit import ITEM_LIMIT, LIST_ITEM_LIMIT_MESSAGE
 from backend.channel.node_support import render_field
-from backend.channel.nodes.spec import MAIN_INPUT, MAIN_OUTPUT, EngineHooks, NodeResult, NodeType, object_schema
+from backend.channel.nodes.spec import (
+    MAIN_INPUT,
+    MAIN_OUTPUT,
+    EngineHooks,
+    NodeResult,
+    NodeType,
+    OutputView,
+    object_schema,
+)
 from backend.channel.values import LIST_OF_OBJECTS
 
 __all__ = ["NODE_TYPE"]
@@ -122,7 +130,7 @@ class _RowCompare(Exception):
 
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
-    items, error = render_field(hooks, config.get("items"), LIST_OF_OBJECTS)
+    items, error = render_field(hooks, config.get("items"), LIST_OF_OBJECTS, path="items")
     if error is not None:
         return error
     if len(items) > ITEM_LIMIT:
@@ -134,11 +142,16 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     combinator = str(config.get("combinator") or "all")
     conditions = list(config.get("conditions") or [])
     prepared: list[tuple[str, str, Any]] = []
-    for condition in conditions:
+    for index, condition in enumerate(conditions):
         operator = str(condition["operator"])
         value = None
         if operator not in {"is_null", "is_not_null"}:
-            value, error = render_field(hooks, condition.get("value"), _ANY)
+            value, error = render_field(
+                hooks,
+                condition.get("value"),
+                _ANY,
+                path=f"conditions.{index}.value",
+            )
             if error is not None:
                 return error
         prepared.append((str(condition["key"]), operator, value))
@@ -263,6 +276,7 @@ NODE_TYPE = NodeType(
         },
         ["items", "conditions"],
     ),
+    output_view=OutputView(kind="rows", rows="rows", metrics=("count", "dropped")),
     execute=_execute,
     refine=_refine,
 )

@@ -14,11 +14,49 @@ from typing import Any
 import pytest
 
 from backend.channel.nodes import list_node_types
-from backend.channel.nodes.spec import NodeType, PortSpec
+from backend.channel.nodes.spec import NodeType, OutputView, PortSpec
 
 _PORT_NAME = re.compile(r"^[a-z][a-z0-9]*(_[a-z0-9]+)*$")
 _SUMMARY_MAX = 160
 _NODES_ROOT = Path(__file__).resolve().parents[1] / "channel" / "nodes"
+
+# Literals from the output-view contract, not derived from the node modules.
+_OUTPUT_VIEWS = {
+    "trigger.error": OutputView(kind="record"),
+    "trigger.manual": OutputView(kind="record"),
+    "trigger.scheduled": OutputView(kind="record"),
+    "read.source_query": OutputView(
+        kind="rows", rows="rows", metrics=("count", "truncated")
+    ),
+    "read.sql": OutputView(kind="rows", rows="rows", metrics=("count", "rowcount")),
+    "transform.code": OutputView(kind="value"),
+    "transform.deduplicate": OutputView(
+        kind="rows", rows="rows", metrics=("count", "removed")
+    ),
+    "transform.filter": OutputView(
+        kind="rows", rows="rows", metrics=("count", "dropped")
+    ),
+    "transform.if": OutputView(kind="record"),
+    "transform.merge": OutputView(kind="rows", rows="rows", metrics=("count",)),
+    "transform.set_fields": OutputView(kind="record"),
+    "volume.batch_read": OutputView(
+        kind="container", metrics=("count", "total", "batch_size")
+    ),
+    "volume.dataset_query": OutputView(
+        kind="dataset", dataset="dataset", metrics=("count",)
+    ),
+    "volume.for": OutputView(kind="container", metrics=("count",)),
+    "volume.materialize": OutputView(
+        kind="dataset", dataset="dataset", metrics=("count",)
+    ),
+    "state.variable": OutputView(kind="record"),
+    "write.entity": OutputView(
+        kind="counts",
+        metrics=("inserted", "updated", "unchanged", "deleted", "unmatched"),
+    ),
+    "action.email": OutputView(kind="record"),
+    "action.webhook": OutputView(kind="record"),
+}
 
 
 def test_every_type_states_its_function_and_ports() -> None:
@@ -63,6 +101,7 @@ def test_a_node_type_requires_execute() -> None:
             inputs=(),
             outputs=(PortSpec("main", "Output."),),
             config_schema={"type": "object"},
+            output_view=OutputView(kind="value"),
         )
 
 
@@ -132,6 +171,142 @@ def test_dataset_query_and_materialize_are_registered() -> None:
     assert materialize.config_schema["properties"]["items"]["x-refraq-template"]["type"] == "array"
     assert [port.port for port in query.outputs] == ["main", "error"]
     assert [port.port for port in materialize.outputs] == ["main", "error"]
+
+
+def test_output_view_accepts_only_the_key_its_kind_names() -> None:
+    OutputView(kind="record")
+    OutputView(kind="value")
+    OutputView(kind="counts", metrics=("inserted",))
+    OutputView(kind="container", metrics=("count",))
+    OutputView(kind="rows", rows="rows", metrics=("count", "rowcount"))
+    OutputView(kind="dataset", dataset="dataset", metrics=("count",))
+    with pytest.raises(ValueError):
+        OutputView(kind="rows")
+    with pytest.raises(ValueError):
+        OutputView(kind="rows", rows="")
+    with pytest.raises(ValueError):
+        OutputView(kind="dataset")
+    with pytest.raises(ValueError):
+        OutputView(kind="dataset", dataset="")
+    with pytest.raises(ValueError):
+        OutputView(kind="record", rows="rows")
+    with pytest.raises(ValueError):
+        OutputView(kind="record", dataset="dataset")
+    with pytest.raises(ValueError):
+        OutputView(kind="rows", rows="rows", dataset="dataset")
+    with pytest.raises(ValueError):
+        OutputView(kind="dataset", dataset="dataset", rows="rows")
+    with pytest.raises(ValueError):
+        OutputView(kind="counts", rows="rows", metrics=("inserted",))
+    with pytest.raises(ValueError):
+        OutputView(kind="nope")
+
+
+def test_a_node_type_requires_an_output_view() -> None:
+    with pytest.raises(TypeError):
+        NodeType(
+            type_id="test.bare",
+            family="test",
+            label="Bare",
+            summary="Has no output view.",
+            description="Test type. Constructing it without an output view fails.",
+            trigger=False,
+            inputs=(),
+            outputs=(PortSpec("main", "Output."),),
+            config_schema={"type": "object"},
+            execute=lambda node, hooks: None,
+        )
+
+
+def test_every_registered_type_declares_its_output_view() -> None:
+    types = list_node_types()
+    assert {item.type_id for item in types} == set(_OUTPUT_VIEWS)
+    for node in types:
+        assert node.output_view == _OUTPUT_VIEWS[node.type_id]
+
+
+def test_output_view_keys_appear_in_the_refined_main_schema() -> None:
+    for node in list_node_types():
+        if node.refine is None:
+            continue
+        properties = _main_properties(
+            node.refine(_default_config(node.config_schema), {}, None)
+        )
+        if properties is None:
+            continue
+        view = node.output_view
+        keys = [key for key in (view.rows, view.dataset) if key is not None]
+        keys.extend(view.metrics)
+        missing = [key for key in keys if key not in properties]
+        assert missing == [], node.type_id
+
+
+def test_get_channel_node_types_publishes_output_view() -> None:
+    import os
+
+    os.environ.setdefault("REFRAQ_SECRETS_MASTER_KEY", "test-secrets-master-key")
+    from fastapi.testclient import TestClient
+
+    from backend.admin.role_store import get_role_store
+    from backend.admin.roles import seed_roles
+    from backend.admin.security import hash_password
+    from backend.admin.user_store import get_user_store
+    from backend.main import app
+
+    roles = get_role_store()
+    seed_roles(roles)
+    admin = roles.get_by_key("super_admin")
+    assert admin is not None
+    get_user_store().create_user(
+        account="admin",
+        display_name="Admin",
+        password_hash=hash_password("secret"),
+        role_id=admin.id,
+        status="active",
+    )
+    with TestClient(app) as client:
+        logged = client.post(
+            "/auth/login", json={"account": "admin", "password": "secret"}
+        )
+        assert logged.status_code == 200, logged.text
+        catalog = client.get("/channel-node-types")
+    assert catalog.status_code == 200, catalog.text
+    items = catalog.json()["items"]
+    assert {item["type"] for item in items} == set(_OUTPUT_VIEWS)
+    for item in items:
+        assert item["output_view"] == _published_view(_OUTPUT_VIEWS[item["type"]])
+
+
+def _published_view(view: OutputView) -> dict[str, Any]:
+    document: dict[str, Any] = {"kind": view.kind, "metrics": list(view.metrics)}
+    if view.rows is not None:
+        document["rows"] = view.rows
+    if view.dataset is not None:
+        document["dataset"] = view.dataset
+    return document
+
+
+def _default_config(schema: dict[str, Any]) -> dict[str, Any]:
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return {}
+    return {
+        name: prop["default"]
+        for name, prop in properties.items()
+        if isinstance(prop, dict) and "default" in prop
+    }
+
+
+def _main_properties(refined: Any) -> dict[str, Any] | None:
+    if not isinstance(refined, dict):
+        return None
+    main = refined.get("main")
+    if not isinstance(main, dict):
+        return None
+    properties = main.get("properties")
+    if not isinstance(properties, dict):
+        return None
+    return properties
 
 
 def _sentence_count(text: str) -> int:

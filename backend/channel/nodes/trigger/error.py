@@ -9,6 +9,7 @@ from backend.channel.nodes.spec import (
     EngineHooks,
     NodeResult,
     NodeType,
+    OutputView,
     object_schema,
 )
 from backend.jobs.store import get_job_store
@@ -97,6 +98,7 @@ NODE_TYPE = NodeType(
     inputs=(),
     outputs=(MAIN_OUTPUT,),
     config_schema=object_schema({}, []),
+    output_view=OutputView(kind="record"),
     execute=_execute,
     refine=_refine,
 )

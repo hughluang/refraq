@@ -11,6 +11,7 @@ from backend.channel.nodes.spec import (
     EngineHooks,
     NodeResult,
     NodeType,
+    OutputView,
     object_schema,
 )
 from backend.channel.values import LIST_OF_OBJECTS
@@ -42,7 +43,9 @@ def _refine(
 
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
-    statement, error = render_field(hooks, config.get("sql"), {"type": "string"})
+    statement, error = render_field(
+        hooks, config.get("sql"), {"type": "string"}, path="sql"
+    )
     if error is not None:
         return error
     row_cap = config.get("row_cap", 100)
@@ -126,6 +129,9 @@ NODE_TYPE = NodeType(
             },
         },
         ["source_id", "sql"],
+    ),
+    output_view=OutputView(
+        kind="rows", rows="rows", metrics=("count", "truncated")
     ),
     execute=_execute,
     permission="channel:source_query",

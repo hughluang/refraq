@@ -125,6 +125,22 @@ class ChannelNodeExecutionRow(Base):
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_detail: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    input: Mapped[Any] = mapped_column(JSONB, nullable=True)
+    input_totals: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+
+class ChannelContainerRoundRow(Base):
+    """One container round: the step the body read, clipped for storage."""
+
+    __tablename__ = "channel_container_rounds"
+
+    job_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("channel_runs.job_id", ondelete="CASCADE"), primary_key=True
+    )
+    container_seq: Mapped[int] = mapped_column(Integer, primary_key=True)
+    round: Mapped[int] = mapped_column(Integer, primary_key=True)
+    step: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    step_totals: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
 
 
 class ChannelDatasetRow(Base):

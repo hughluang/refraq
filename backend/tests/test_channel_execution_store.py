@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from typing import Any
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -47,7 +48,7 @@ def test_success_under_batch_read_stores_a_preview_and_keeps_the_runtime_output(
     from backend.channel.channel_run import _RunHooks
     from backend.channel.engine import execute
     from backend.channel.graph import CONTAINER_TYPES, ContainerType
-    from backend.channel.nodes.spec import NodeResult, NodeType, PortSpec
+    from backend.channel.nodes.spec import NodeResult, NodeType, OutputView, PortSpec
     from backend.channel.run_store import ChannelRunRecord, get_run_store, output_size
     from backend.channel.sandbox import SandboxSession
     from backend.core.time import utc_now
@@ -94,6 +95,7 @@ def test_success_under_batch_read_stores_a_preview_and_keeps_the_runtime_output(
             ),
             config_schema={"type": "object"},
             execute=run,
+            output_view=OutputView(kind="record"),
         )
 
     batch = _graph_node("batch", "volume.batch_read", 0)
@@ -304,11 +306,396 @@ def test_note_killed_run_keeps_the_full_output() -> None:
     assert (stored.container_seq, stored.round) == (2, 0)
 
 
+def test_render_field_keeps_the_last_value_on_one_path() -> None:
+    from backend.channel.node_support import (
+        InputCapture,
+        bind_execution_input,
+        render_field,
+        reset_execution_input,
+    )
+    from backend.tests.channel_hooks_fake import FakeHooks
+
+    calls = {"n": 0}
+
+    def evaluate(expression: str) -> int:
+        del expression
+        calls["n"] += 1
+        return calls["n"]
+
+    capture = InputCapture()
+    token = bind_execution_input(capture)
+    try:
+        first, first_error = render_field(
+            FakeHooks(evaluate=evaluate), "{{ n }}", {"type": "string"}, path="sql"
+        )
+        second, second_error = render_field(
+            FakeHooks(evaluate=evaluate), "{{ n }}", {"type": "string"}, path="sql"
+        )
+    finally:
+        reset_execution_input(token)
+    assert first_error is None and second_error is None
+    assert (first, second) == ("1", "2")
+    assert capture.fields == {"sql": {"value": "2"}}
+
+
+def test_identical_template_text_records_each_filter_condition_path() -> None:
+    from backend.channel.nodes.transform.filter import NODE_TYPE
+    from backend.channel.node_support import (
+        InputCapture,
+        bind_execution_input,
+        reset_execution_input,
+    )
+    from backend.tests.channel_hooks_fake import FakeHooks
+
+    text = "{{ n }}"
+    config = {
+        "items": "{{ rows }}",
+        "combinator": "all",
+        "conditions": [
+            {"key": "n", "operator": "eq", "value": text},
+            {"key": "n", "operator": "ne", "value": text},
+        ],
+    }
+    calls = {"n": 0}
+
+    def evaluate(expression: str) -> Any:
+        if expression == "rows":
+            return [{"n": 1}]
+        calls["n"] += 1
+        return calls["n"]
+
+    capture = InputCapture()
+    token = bind_execution_input(capture)
+    try:
+        NODE_TYPE.execute({"id": "nd_filter", "config": config}, FakeHooks(evaluate=evaluate))
+    finally:
+        reset_execution_input(token)
+    assert capture.fields["conditions.0.value"] == {"value": 1}
+    assert capture.fields["conditions.1.value"] == {"value": 2}
+    assert capture.fields["items"]["value"] == [{"n": 1}]
+
+
+def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from backend.channel.nodes import list_node_types
+    from backend.channel.node_support import (
+        InputCapture,
+        bind_execution_input,
+        reset_execution_input,
+    )
+    from backend.tests.channel_hooks_fake import FakeHooks
+
+    monkeypatch.setattr(
+        "backend.channel.nodes.read.sql.run_channel_sql",
+        lambda *args, **kwargs: {"rows": [], "count": 0, "rowcount": 0},
+    )
+    monkeypatch.setattr(
+        "backend.channel.nodes.read.source_query.run_controlled_query",
+        lambda **kwargs: SimpleNamespace(columns=["n"], rows=[[1]], truncated=False),
+    )
+    monkeypatch.setattr(
+        "backend.channel.nodes.write.entity.head_target",
+        lambda entity_id: SimpleNamespace(attributes=()),
+    )
+    monkeypatch.setattr(
+        "backend.channel.nodes.write.entity.write_reasons",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        "backend.channel.nodes.action.email.get_email_account_store",
+        lambda: SimpleNamespace(get=lambda account_id: object()),
+    )
+    monkeypatch.setattr(
+        "backend.channel.nodes.action.email.prepare_message",
+        lambda *args, **kwargs: ["a@b.c"],
+    )
+    monkeypatch.setattr(
+        "backend.channel.nodes.action.email.deliver",
+        lambda *args, **kwargs: SimpleNamespace(ok=True),
+    )
+    monkeypatch.setattr(
+        "backend.channel.nodes.action.webhook.get_webhook_store",
+        lambda: SimpleNamespace(get=lambda webhook_id: object()),
+    )
+    monkeypatch.setattr(
+        "backend.channel.nodes.action.webhook.deliver",
+        lambda *args, **kwargs: SimpleNamespace(ok=True, status_code=200),
+    )
+    monkeypatch.setattr(
+        "backend.channel.nodes.state.variable.get_variable_store",
+        lambda: SimpleNamespace(
+            apply=lambda **kwargs: SimpleNamespace(
+                name="alpha",
+                found=False,
+                value=None,
+                applied=True,
+                expires_at=None,
+            )
+        ),
+    )
+    rows = "{{ rows }}"
+    same = "{{ n }}"
+    samples = {
+        "trigger.error": {},
+        "trigger.manual": {},
+        "trigger.scheduled": {},
+        "read.sql": {"source": {"kind": "entity"}, "sql": "{{ sql }}"},
+        "read.source_query": {"source_id": "src_1", "sql": "{{ sql }}"},
+        "transform.set_fields": {
+            "fields": [
+                {"name": "a", "value": same},
+                {"name": "b", "value": same},
+            ]
+        },
+        "transform.code": {"code": "1"},
+        "transform.if": {"condition": "{{ flag }}"},
+        "transform.filter": {
+            "items": rows,
+            "conditions": [
+                {"key": "n", "operator": "eq", "value": same},
+                {"key": "n", "operator": "ne", "value": same},
+            ],
+        },
+        "transform.merge": {"mode": "append", "inputs": [rows, rows]},
+        "transform.deduplicate": {"items": rows, "keys": ["n"]},
+        "volume.for": {"items": "{{ items }}"},
+        "volume.batch_read": {"dataset": "{{ dataset }}"},
+        "volume.dataset_query": {"source": {"kind": "other"}, "sql": "{{ sql }}"},
+        "volume.materialize": {"items": "{{ empty }}"},
+        "state.variable": {
+            "operation": "compare_and_set",
+            "name": "{{ name }}",
+            "value": "{{ value }}",
+            "expected": "{{ expected }}",
+        },
+        "write.entity": {
+            "entity_id": "ent_1",
+            "mode": "create",
+            "source": "{{ source }}",
+        },
+        "action.email": {
+            "email_account_id": "acct",
+            "to": "{{ text }}",
+            "subject": "{{ text }}",
+            "body": "{{ text }}",
+        },
+        "action.webhook": {"webhook_id": "hook", "body": "{{ body }}"},
+    }
+    expected = {
+        "trigger.error": set(),
+        "trigger.manual": set(),
+        "trigger.scheduled": set(),
+        "read.sql": {"sql"},
+        "read.source_query": {"sql"},
+        "transform.set_fields": {"fields.0.value", "fields.1.value"},
+        "transform.code": set(),
+        "transform.if": {"condition"},
+        "transform.filter": {"items", "conditions.0.value", "conditions.1.value"},
+        "transform.merge": {"inputs.0", "inputs.1"},
+        "transform.deduplicate": {"items"},
+        "volume.for": {"items"},
+        "volume.batch_read": {"dataset"},
+        "volume.dataset_query": {"sql"},
+        "volume.materialize": {"items"},
+        "state.variable": {"name", "value", "expected"},
+        "write.entity": {"source"},
+        "action.email": {"to", "subject", "body"},
+        "action.webhook": {"body"},
+    }
+    values = {
+        "rows": [{"n": 1}],
+        "empty": [],
+        "n": 1,
+        "sql": "select 1",
+        "flag": True,
+        "items": [1],
+        "dataset": {
+            "dataset_id": "ds_1",
+            "columns": [{"name": "n", "type": "integer"}],
+            "count": 1,
+        },
+        "name": "alpha",
+        "value": {"ok": True},
+        "expected": {"ok": False},
+        "source": [{"n": 1}],
+        "text": "hello",
+        "body": "{}",
+    }
+
+    def evaluate(expression: str) -> Any:
+        return values[expression]
+
+    types = list_node_types()
+    assert {item.type_id for item in types} == set(samples)
+    hooks = FakeHooks(evaluate=evaluate, run_code=lambda source, timeout: 1)
+    for spec in types:
+        config = samples[spec.type_id]
+        capture = InputCapture()
+        token = bind_execution_input(capture)
+        try:
+            spec.execute({"id": spec.type_id, "config": config}, hooks)
+        finally:
+            reset_execution_input(token)
+        assert set(capture.fields) == expected[spec.type_id]
+        for path in capture.fields:
+            assert _config_at(config, path) is not None
+
+
+def _config_at(config: Any, path: str) -> Any:
+    current = config
+    for segment in path.split("."):
+        if isinstance(current, list):
+            current = current[int(segment)]
+        else:
+            current = current[segment]
+    return current
+
+
+def test_batch_round_stores_clipped_rows_and_the_body_reads_every_row(monkeypatch) -> None:
+    from datetime import datetime, timezone
+
+    import backend.channel.nodes.volume.batch_read as batch_read
+    from backend.admin.user_store import UserRecord
+    from backend.channel.channel_run import _RunHooks
+    from backend.channel.dataset_registry import DatasetRecord, MemoryDatasetStore
+    from backend.channel.engine import execute
+    from backend.channel.nodes.spec import NodeResult, NodeType, OutputView, PortSpec
+    from backend.channel.run_store import ChannelRunRecord, get_run_store
+    from backend.channel.sandbox import SandboxSession
+    from backend.core.time import utc_now
+
+    job_id = f"job_{uuid.uuid4().hex[:12]}"
+    store = MemoryDatasetStore()
+    store.save(
+        DatasetRecord(
+            id="dset",
+            job_id=job_id,
+            node_id="load",
+            seq=1,
+            relation='"channel_dataset"."ds_dset"',
+            columns=[{"name": "n", "type": "bigint", "normalized_type": "integer"}],
+            row_count=120,
+            size_bytes=1,
+            status="ready",
+            created_at=datetime(2026, 10, 22, tzinfo=timezone.utc),
+        )
+    )
+
+    def page(relation: str, *, after_ord: int, limit: int) -> list[dict]:
+        del relation
+        assert after_ord == 0
+        assert limit == 1000
+        return [{"_ord": index + 1, "n": index} for index in range(120)]
+
+    monkeypatch.setattr(batch_read, "get_dataset_store", lambda: store)
+    monkeypatch.setattr(batch_read, "read_keyset_page", page)
+    monkeypatch.setattr(batch_read, "any_row_exists", lambda relation: True)
+
+    seen: list[int] = []
+
+    def step(node: dict, hooks: Any) -> NodeResult:
+        if node["id"] == "step":
+            seen.append(hooks.evaluate("len(self.batch.output.rows)"))
+        return NodeResult(status="succeeded", output={"ok": True})
+
+    batch = _graph_node("batch", "volume.batch_read", 0)
+    batch["config"] = {
+        "dataset": (
+            '{"dataset_id":"dset","columns":[{"name":"n","type":"integer"}],"count":120}'
+        ),
+        "batch_size": 1000,
+    }
+    body = _graph_node("step", "fake", 1, parent="batch")
+    graph = {
+        "nodes": [batch, body],
+        "edges": [_graph_edge("batch", "step", "each")],
+        "settings": {},
+    }
+    get_run_store().insert_run(
+        ChannelRunRecord(
+            job_id=job_id,
+            channel_id="chn_rounds",
+            target="draft",
+            version=None,
+            draft_revision=1,
+            graph=graph,
+            trigger_node_id="batch",
+            ignore_checkpoints=False,
+            outcome=None,
+            failed_node_id=None,
+            skipped_node_ids=[],
+            created_at=utc_now(),
+        )
+    )
+    user = UserRecord(
+        id="usr_system",
+        account="system",
+        display_name="System",
+        password_hash=None,
+        role_id=None,
+        status="active",
+        identity_source="system",
+    )
+    kind = NodeType(
+        type_id="fake",
+        family="test",
+        label="fake",
+        summary="Test node.",
+        description="Test node.",
+        trigger=False,
+        inputs=(PortSpec("main", "Input.", coarse_type="object"),),
+        outputs=(PortSpec("main", "Output.", coarse_type="object"),),
+        config_schema={"type": "object"},
+        execute=step,
+        output_view=OutputView(kind="record"),
+    )
+    with SandboxSession() as sandbox:
+        sandbox.set_context(channel={}, run={}, platform={})
+        hooks = _RunHooks(
+            sandbox,
+            run_id=job_id,
+            actor={"id": "usr_system", "name": "System"},
+            started_at="2026-10-22T00:00:00Z",
+            user=user,
+            schedule={"schedule_id": None, "name": "", "scheduled_for": "2026-10-22T00:00:00Z"},
+            target="draft",
+            channel_id="chn_rounds",
+            run_version=None,
+        )
+        outcome = execute(graph, "batch", [batch_read.NODE_TYPE, kind], _resolver(), hooks)
+    assert outcome.status == "succeeded"
+    assert seen == [120]
+    executions = {
+        item.node_id: item for item in get_run_store().list_executions(job_id)
+    }
+    rounds, total = get_run_store().query_rounds(
+        job_id, executions["batch"].seq, limit=50, offset=0
+    )
+    assert total == 1
+    assert len(rounds) == 1
+    recorded = rounds[0]
+    assert recorded.round == 0
+    assert recorded.step["index"] == 0
+    assert recorded.step["count"] == 1
+    assert recorded.step["total"] == 120
+    assert [row["n"] for row in recorded.step["rows"]] == list(range(100))
+    assert recorded.step_totals == {"rows": 120}
+    assert get_run_store().round_status_counts(job_id, executions["batch"].seq) == {
+        0: {"succeeded": 1}
+    }
+    page_rows, page_total = get_run_store().query_rounds(
+        job_id, executions["batch"].seq, limit=1, offset=1
+    )
+    assert page_total == 1
+    assert page_rows == []
+
+
 def _run_preview_graph(run, *, step_retry: dict | None) -> str:
     from backend.admin.user_store import UserRecord
     from backend.channel.channel_run import _RunHooks
     from backend.channel.engine import execute
-    from backend.channel.nodes.spec import NodeType, PortSpec
+    from backend.channel.nodes.spec import NodeType, OutputView, PortSpec
     from backend.channel.run_store import ChannelRunRecord, get_run_store
     from backend.core.time import utc_now
 
@@ -355,6 +742,7 @@ def _run_preview_graph(run, *, step_retry: dict | None) -> str:
             ),
             config_schema={"type": "object"},
             execute=run,
+            output_view=OutputView(kind="record"),
         )
 
     user = UserRecord(
@@ -519,6 +907,8 @@ def test_sql_store_writes_the_columns_and_one_past_the_highest_seq(monkeypatch) 
         preview.output_bytes = 99
         preview.preview_only = True
         preview.preview_totals = {"rows": 150}
+        preview.input = {"sql": {"value": "select 1"}}
+        preview.input_totals = {"nums": 101}
         store.finish_execution(preview)
         with session_scope() as session:
             raw = session.get(ChannelNodeExecutionRow, preview.id)
@@ -526,6 +916,8 @@ def test_sql_store_writes_the_columns_and_one_past_the_highest_seq(monkeypatch) 
             assert set(raw.output) == {"$refraq_preview", "$refraq_value"}
             assert raw.output["$refraq_value"] == {"rows": [0, 1, 2]}
             assert raw.output["$refraq_preview"]["preview_totals"] == {"rows": 150}
+            assert raw.input == {"sql": {"value": "select 1"}}
+            assert raw.input_totals == {"nums": 101}
         loaded = store.get_execution(job_id, preview.seq)
         assert loaded is not None
         assert loaded.preview_only is True
@@ -533,6 +925,40 @@ def test_sql_store_writes_the_columns_and_one_past_the_highest_seq(monkeypatch) 
         assert loaded.output == {"rows": [0, 1, 2]}
         assert loaded.output_bytes == 99
         assert (loaded.container_seq, loaded.round) == (4, 1)
+        assert loaded.input == {"sql": {"value": "select 1"}}
+        assert loaded.input_totals == {"nums": 101}
+        unfinished = store.get_execution(job_id, fourth.seq)
+        assert unfinished is not None
+        assert unfinished.input is None
+        assert unfinished.input_totals is None
+        store.insert_round(
+            job_id,
+            container_seq=1,
+            round=0,
+            step={"rows": [0], "index": 0, "count": 2, "total": 150},
+            step_totals={"rows": 150},
+        )
+        store.insert_round(
+            job_id,
+            container_seq=1,
+            round=1,
+            step={"rows": [1], "index": 1, "count": 2, "total": 150},
+            step_totals={"rows": 150},
+        )
+        paged, round_total = store.query_rounds(job_id, 1, limit=1, offset=1)
+        assert round_total == 2
+        assert len(paged) == 1
+        assert paged[0].round == 1
+        assert paged[0].step == {"rows": [1], "index": 1, "count": 2, "total": 150}
+        assert paged[0].step_totals == {"rows": 150}
+        failed_child = store.start_execution(job_id, "nd_child", container_seq=1, round=1)
+        failed_child.status = "failed"
+        failed_child.finished_at = now
+        store.finish_execution(failed_child)
+        counts = store.round_status_counts(job_id, 1)
+        assert counts[1] == {"running": 1, "failed": 1}
+        assert 0 not in counts
+        assert store.round_status_counts(job_id, 4) == {1: {"succeeded": 1}}
     finally:
         reset_db_singletons()
         with session_scope() as session:

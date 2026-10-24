@@ -12,6 +12,7 @@ from backend.channel.nodes.spec import (
     EngineHooks,
     NodeResult,
     NodeType,
+    OutputView,
     Problem,
     ReferenceResolver,
     object_schema,
@@ -34,7 +35,7 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             error_code="CHANNEL_NODE_FAILED",
             error_message="Webhook was not found",
         )
-    rendered, failure = render_field(hooks, config.get("body"), _BODY)
+    rendered, failure = render_field(hooks, config.get("body"), _BODY, path="body")
     if failure is not None:
         return failure
     try:
@@ -114,6 +115,7 @@ NODE_TYPE = NodeType(
         },
         ["webhook_id", "body"],
     ),
+    output_view=OutputView(kind="record"),
     execute=_execute,
     check=_check,
 )

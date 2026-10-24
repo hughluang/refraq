@@ -12,6 +12,11 @@ from typing import Any, Literal
 from backend.admin.user_store import UserRecord, ensure_system_user, get_user_store
 from backend.channel.context import channel_context, platform_context, run_context
 from backend.channel.engine import RunOutcome, execute
+from backend.channel.node_support import (
+    InputCapture,
+    bind_execution_input,
+    reset_execution_input,
+)
 from backend.channel.nodes import list_node_types
 from backend.channel.nodes.spec import EngineHooks, NodeResult
 from backend.channel.references import ChannelReferenceResolver
@@ -371,6 +376,7 @@ class _RunHooks:
         self._target = target
         self._run_version = run_version
         self._pinned = pinned
+        self._inputs: dict[int, InputCapture] = {}
 
     def evaluate(self, expression: str) -> Any:
         return self._sandbox.evaluate(expression)
@@ -417,9 +423,28 @@ class _RunHooks:
         )
         return record.seq
 
+    def open_input(self, seq: int) -> Any:
+        capture = InputCapture()
+        self._inputs[seq] = capture
+        return bind_execution_input(capture)
+
+    def close_input(self, token: Any) -> None:
+        reset_execution_input(token)
+
+    def on_round(self, seq: int, index: int, step: Any) -> None:
+        clipped, totals = _preview_copy(step)
+        get_run_store().insert_round(
+            self.run_id,
+            container_seq=seq,
+            round=index,
+            step=clipped,
+            step_totals=totals,
+        )
+
     def on_finish(self, seq: int, node: Mapping[str, Any], result: NodeResult) -> None:
         store = get_run_store()
         record = store.get_execution(self.run_id, seq)
+        captured = self._inputs.pop(seq, None)
         if record is None:
             return
         record.status = result.status
@@ -436,6 +461,8 @@ class _RunHooks:
         ):
             record.output, record.preview_totals = _preview_copy(result.output)
             record.preview_only = True
+        if captured is not None:
+            record.input, record.input_totals = _clip_captured(captured.fields)
         store.finish_execution(record)
 
 
@@ -476,6 +503,21 @@ def _batch_read_ancestor(run: ChannelRunRecord | None, node_id: str) -> bool:
             return True
         current = parent
     return False
+
+
+def _clip_captured(fields: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, int]]:
+    """Clip lists inside captured field values with the output preview clipper."""
+    stored: dict[str, Any] = {}
+    totals: dict[str, int] = {}
+    for path, entry in fields.items():
+        if "value" not in entry:
+            stored[path] = entry
+            continue
+        clipped, subtotals = _preview_copy(entry["value"])
+        stored[path] = {"value": clipped}
+        for sub, length in subtotals.items():
+            totals[path if sub == "" else f"{path}.{sub}"] = int(length)
+    return stored, totals
 
 
 def _preview_copy(output: Any, *, cap: int = PREVIEW_LIST_CAP) -> tuple[Any, dict[str, int]]:

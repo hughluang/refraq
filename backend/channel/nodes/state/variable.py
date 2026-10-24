@@ -5,7 +5,14 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from backend.channel.node_support import render_field
-from backend.channel.nodes.spec import MAIN_INPUT, MAIN_OUTPUT, EngineHooks, NodeResult, NodeType
+from backend.channel.nodes.spec import (
+    MAIN_INPUT,
+    MAIN_OUTPUT,
+    EngineHooks,
+    NodeResult,
+    NodeType,
+    OutputView,
+)
 from backend.channel.variables import VALUE_MAX_BYTES, get_variable_store, valid_name, value_size
 from backend.core.time import format_instant
 
@@ -39,7 +46,9 @@ def _refine(
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
     operation = str(config.get("operation") or "")
-    rendered, error = render_field(hooks, config.get("name"), {"type": "string"})
+    rendered, error = render_field(
+        hooks, config.get("name"), {"type": "string"}, path="name"
+    )
     if error is not None:
         return error
     name = str(rendered)
@@ -53,7 +62,7 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     expected = None
     writes = operation in {"set", "set_if_absent", "compare_and_set"}
     if writes:
-        value, error = render_field(hooks, config.get("value"), _JSON)
+        value, error = render_field(hooks, config.get("value"), _JSON, path="value")
         if error is not None:
             return error
         if value_size(value) > VALUE_MAX_BYTES:
@@ -63,7 +72,9 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
                 error_message="Variable value exceeds 64 KiB",
             )
     if operation == "compare_and_set":
-        expected, error = render_field(hooks, config.get("expected"), _JSON)
+        expected, error = render_field(
+            hooks, config.get("expected"), _JSON, path="expected"
+        )
         if error is not None:
             return error
     ttl_sec = config.get("ttl_sec") if writes else None
@@ -136,6 +147,7 @@ NODE_TYPE = NodeType(
         },
         "required": ["operation", "name"],
     },
+    output_view=OutputView(kind="record"),
     execute=_execute,
     refine=_refine,
 )

@@ -274,6 +274,7 @@ class _Run:
                 self.produced.pop(body_id, None)
             self.hooks.on_output(node, step)
             self.produced[node_id] = step
+            _record_round(self.hooks, seq, index, step)
             self._arm(node_id, body)
             self.ran_stack.append(set())
             self._frames.append((seq, index))
@@ -419,18 +420,22 @@ class _Run:
             container_seq, round_index = self._frames[-1]
         seq = self.hooks.on_start(node, container_seq=container_seq, round=round_index)
         spec = self.by_type.get(str(node["type"]))
-        if spec is None:
-            result = NodeResult(
-                status="failed",
-                error_code="CHANNEL_NODE_FAILED",
-                error_message=f"No executor for {node['type']}",
-            )
-        else:
-            result = spec.execute(node, self.hooks)
-            result = _apply_output_check(node_id, spec, result, self.schemas)
-        if result.status == "skipped" and result.output is None:
-            result.output = {"skipped": True, "reason": result.error_message}
-        return seq, result
+        token = _open_input(self.hooks, seq)
+        try:
+            if spec is None:
+                result = NodeResult(
+                    status="failed",
+                    error_code="CHANNEL_NODE_FAILED",
+                    error_message=f"No executor for {node['type']}",
+                )
+            else:
+                result = spec.execute(node, self.hooks)
+                result = _apply_output_check(node_id, spec, result, self.schemas)
+            if result.status == "skipped" and result.output is None:
+                result.output = {"skipped": True, "reason": result.error_message}
+            return seq, result
+        finally:
+            _close_input(self.hooks, token)
 
     def _failure(self, node_id: str, result: NodeResult) -> RunOutcome | None:
         if result.status != "failed":
@@ -452,6 +457,25 @@ class _Run:
 
     def _position(self, node_id: str) -> tuple[float, float]:
         return _position(self.nodes[node_id])
+
+
+def _open_input(hooks: EngineHooks, seq: int) -> Any:
+    opener = getattr(hooks, "open_input", None)
+    if not callable(opener):
+        return None
+    return opener(seq)
+
+
+def _close_input(hooks: EngineHooks, token: Any) -> None:
+    closer = getattr(hooks, "close_input", None)
+    if callable(closer):
+        closer(token)
+
+
+def _record_round(hooks: EngineHooks, seq: int, index: int, step: Any) -> None:
+    recorder = getattr(hooks, "on_round", None)
+    if callable(recorder):
+        recorder(seq, index, step)
 
 
 def _iteration_steps(iterations: Any) -> Any:

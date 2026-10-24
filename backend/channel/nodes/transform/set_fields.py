@@ -6,7 +6,15 @@ import json
 from typing import Any, Mapping
 
 from backend.channel.node_support import render_field
-from backend.channel.nodes.spec import MAIN_INPUT, MAIN_OUTPUT, EngineHooks, NodeResult, NodeType, object_schema
+from backend.channel.nodes.spec import (
+    MAIN_INPUT,
+    MAIN_OUTPUT,
+    EngineHooks,
+    NodeResult,
+    NodeType,
+    OutputView,
+    object_schema,
+)
 
 __all__ = ["NODE_TYPE"]
 
@@ -80,8 +88,10 @@ def _refine(
 
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     output: dict[str, Any] = {}
-    for field in node["config"]["fields"]:
-        value, error = render_field(hooks, field.get("value"), _ANY)
+    for index, field in enumerate(node["config"]["fields"]):
+        value, error = render_field(
+            hooks, field.get("value"), _ANY, path=f"fields.{index}.value"
+        )
         if error is not None:
             return error
         output[str(field["name"])] = value
@@ -132,6 +142,7 @@ NODE_TYPE = NodeType(
         },
         ["fields"],
     ),
+    output_view=OutputView(kind="record"),
     execute=_execute,
     refine=_refine,
 )

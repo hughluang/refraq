@@ -9,6 +9,7 @@ from backend.channel.nodes.spec import (
     EngineHooks,
     NodeResult,
     NodeType,
+    OutputView,
     Problem,
     ReferenceResolver,
 )
@@ -107,6 +108,7 @@ NODE_TYPE = NodeType(
         },
         "required": [],
     },
+    output_view=OutputView(kind="record"),
     execute=_execute,
     refine=_refine,
     check=_check,

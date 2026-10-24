@@ -16,6 +16,7 @@ from backend.channel.nodes.spec import (
     EngineHooks,
     NodeResult,
     NodeType,
+    OutputView,
     Problem,
     ReferenceResolver,
     ResolvedAttribute,
@@ -99,7 +100,7 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
             error_message="Write mapping is incompatible with the current head",
             error_detail={"reasons": reasons},
         )
-    source, error = render_field(hooks, config.get("source"), _SOURCE_SCHEMA)
+    source, error = render_field(hooks, config.get("source"), _SOURCE_SCHEMA, path="source")
     if error is not None:
         return error
     timeout_sec = config.get("statement_timeout_sec", _DEFAULT_TIMEOUT_SEC)
@@ -450,6 +451,10 @@ NODE_TYPE = NodeType(
             },
         },
         ["entity_id", "mode", "match_key", "source", "mapping", "on_incompatible_head"],
+    ),
+    output_view=OutputView(
+        kind="counts",
+        metrics=("inserted", "updated", "unchanged", "deleted", "unmatched"),
     ),
     execute=_execute,
     refine=_refine,

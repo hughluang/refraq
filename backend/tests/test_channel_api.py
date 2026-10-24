@@ -891,11 +891,323 @@ def test_execution_list_filters_pages_and_requires_read(client: TestClient) -> N
         assert plain.get(f"/channels/{channel_id}/runs/{job_id}").status_code == 403
         assert plain.get(f"/channels/{channel_id}/runs/{job_id}/executions").status_code == 403
         assert plain.get(rows).status_code == 403
+        assert (
+            plain.get(f"/channels/{channel_id}/runs/{job_id}/executions/1/rounds").status_code
+            == 403
+        )
     with TestClient(app) as allowed:
         _login(allowed, "reader", "secret")
         assert allowed.get(f"/channels/{channel_id}/runs/{job_id}").status_code == 200
         assert allowed.get(f"/channels/{channel_id}/runs/{job_id}/executions").status_code == 200
+        assert_problem(
+            allowed.get(f"/channels/{channel_id}/runs/{job_id}/executions/1/rounds"),
+            status=422,
+            code="REQUEST_INVALID",
+            detail="Execution is not a container",
+        )
     assert running.status == "running"
+
+
+def _api_node(
+    node_id: str,
+    type_id: str,
+    name: str,
+    config: dict,
+    y: int,
+    *,
+    parent: str | None = None,
+) -> dict:
+    node = {
+        "id": node_id,
+        "ref": node_id.removeprefix("nd_"),
+        "type": type_id,
+        "name": name,
+        "position": {"x": 0, "y": y},
+        "config": config,
+        "on_error": "stop",
+        "retry": None,
+    }
+    if parent is not None:
+        node["parent"] = parent
+    return node
+
+
+def _api_edge(edge_id: str, source: str, target: str, *, source_port: str = "main") -> dict:
+    return {
+        "id": edge_id,
+        "source": {"node_id": source, "port": source_port},
+        "target": {"node_id": target, "port": "main"},
+    }
+
+
+def _settings() -> dict:
+    return {"run_timeout_sec": None, "error_channel_id": None}
+
+
+def _run_draft(client: TestClient, channel_id: str, graph: dict) -> str:
+    from backend.channel.channel_run import set_dispatcher
+    from backend.channel.tasks import run_job
+
+    _save_draft(client, channel_id, graph)
+    previous = set_dispatcher(run_job)
+    try:
+        started = client.post(f"/channels/{channel_id}/runs", json={"target": "draft"})
+    finally:
+        set_dispatcher(previous)
+    assert started.status_code == 202, started.text
+    return started.json()["run"]["job_id"]
+
+
+def test_execution_list_includes_rendered_input(client: TestClient, monkeypatch) -> None:
+    import json
+
+    monkeypatch.setattr(
+        "backend.channel.nodes.read.sql.run_channel_sql",
+        lambda statement, **kwargs: {"rows": [{"n": 1}], "count": 1, "rowcount": 1},
+    )
+    created = client.post("/channels", json={"name": "Rendered input", "description": None})
+    assert created.status_code == 201, created.text
+    channel_id = created.json()["channel"]["id"]
+    numbers = list(range(101))
+    graph = {
+        "nodes": [
+            _api_node("nd_trigger", "trigger.manual", "Run", {}, 0),
+            _api_node(
+                "nd_sql",
+                "read.sql",
+                "SQL",
+                {"source": {"kind": "entity"}, "sql": "select {{ 1 }}"},
+                1,
+            ),
+            _api_node(
+                "nd_fields",
+                "transform.set_fields",
+                "Fields",
+                {
+                    "fields": [
+                        {"name": "total", "value": "{{ 2 + 3 }}"},
+                        {"name": "label", "value": '"ok"'},
+                        {"name": "nums", "value": json.dumps(numbers)},
+                        {"name": "box", "value": json.dumps({"nums": numbers})},
+                    ]
+                },
+                2,
+            ),
+        ],
+        "edges": [
+            _api_edge("ed_sql", "nd_trigger", "nd_sql"),
+            _api_edge("ed_fields", "nd_sql", "nd_fields"),
+        ],
+        "settings": _settings(),
+    }
+    job_id = _run_draft(client, channel_id, graph)
+    listed = client.get(f"/channels/{channel_id}/runs/{job_id}/executions")
+    assert listed.status_code == 200, listed.text
+    by_node = {item["node_id"]: item for item in listed.json()["items"]}
+    assert by_node["nd_trigger"]["input_preview"] == {}
+    assert by_node["nd_trigger"]["input_truncated"] is False
+    assert by_node["nd_trigger"]["input_totals"] == {}
+    assert by_node["nd_sql"]["input_preview"] == {"sql": {"value": "select 1"}}
+    assert by_node["nd_sql"]["input_truncated"] is False
+    assert by_node["nd_sql"]["input_totals"] == {}
+    fields = by_node["nd_fields"]
+    assert fields["input_preview"]["fields.0.value"] == {"value": 5}
+    assert fields["input_preview"]["fields.1.value"] == {"value": "ok"}
+    assert fields["input_preview"]["fields.2.value"]["value"] == list(range(100))
+    assert fields["input_preview"]["fields.3.value"]["value"]["nums"] == list(range(100))
+    assert fields["input_truncated"] is True
+    assert fields["input_totals"] == {"fields.2.value": 101, "fields.3.value.nums": 101}
+    assert fields["preview_only"] is False
+    stored = get_run_store().get_execution(job_id, fields["seq"])
+    assert stored is not None
+    assert len(stored.input["fields.2.value"]["value"]) == 100
+    assert len(stored.output["nums"]) == 101
+    assert len(stored.output["box"]["nums"]) == 101
+
+
+def test_execution_records_a_render_error(client: TestClient) -> None:
+    created = client.post("/channels", json={"name": "Render error", "description": None})
+    assert created.status_code == 201, created.text
+    channel_id = created.json()["channel"]["id"]
+    graph = {
+        "nodes": [
+            _api_node("nd_trigger", "trigger.manual", "Run", {}, 0),
+            _api_node("nd_gate", "transform.if", "Gate", {"condition": "{{ 1 }}"}, 1),
+        ],
+        "edges": [_api_edge("ed_gate", "nd_trigger", "nd_gate")],
+        "settings": _settings(),
+    }
+    job_id = _run_draft(client, channel_id, graph)
+    listed = client.get(f"/channels/{channel_id}/runs/{job_id}/executions")
+    assert listed.status_code == 200, listed.text
+    gate = next(item for item in listed.json()["items"] if item["node_id"] == "nd_gate")
+    assert gate["status"] == "failed"
+    assert gate["error_code"] == "CHANNEL_VALUE_TYPE_MISMATCH"
+    assert gate["input_preview"] == {
+        "condition": {
+            "error": {
+                "code": "CHANNEL_VALUE_TYPE_MISMATCH",
+                "message": "Value does not match the declared type",
+            }
+        }
+    }
+    assert gate["input_truncated"] is False
+    assert gate["input_totals"] == {}
+
+
+def test_container_rounds_page_and_reject_a_non_container(client: TestClient) -> None:
+    created = client.post("/channels", json={"name": "Rounds", "description": None})
+    assert created.status_code == 201, created.text
+    channel_id = created.json()["channel"]["id"]
+    graph = {
+        "nodes": [
+            _api_node("nd_trigger", "trigger.manual", "Run", {}, 0),
+            _api_node("nd_walk", "volume.for", "Walk", {"items": "[1, 2, 3]"}, 1),
+            _api_node(
+                "nd_step",
+                "transform.set_fields",
+                "Step",
+                {"fields": [{"name": "n", "value": "1"}]},
+                2,
+                parent="nd_walk",
+            ),
+            _api_node(
+                "nd_tail",
+                "transform.set_fields",
+                "Tail",
+                {"fields": [{"name": "n", "value": "2"}]},
+                3,
+                parent="nd_walk",
+            ),
+            _api_node(
+                "nd_after",
+                "transform.set_fields",
+                "After",
+                {"fields": [{"name": "n", "value": "3"}]},
+                4,
+            ),
+        ],
+        "edges": [
+            _api_edge("ed_in", "nd_trigger", "nd_walk"),
+            _api_edge("ed_each", "nd_walk", "nd_step", source_port="each"),
+            _api_edge("ed_tail", "nd_step", "nd_tail"),
+            _api_edge("ed_done", "nd_walk", "nd_after", source_port="done"),
+        ],
+        "settings": _settings(),
+    }
+    job_id = _run_draft(client, channel_id, graph)
+    listed = client.get(f"/channels/{channel_id}/runs/{job_id}/executions")
+    assert listed.status_code == 200, listed.text
+    by_node = {item["node_id"]: item for item in listed.json()["items"]}
+    walk_seq = by_node["nd_walk"]["seq"]
+    rounds = client.get(f"/channels/{channel_id}/runs/{job_id}/executions/{walk_seq}/rounds")
+    assert rounds.status_code == 200, rounds.text
+    body = rounds.json()
+    assert body["total"] == 3
+    assert body["limit"] == 50
+    assert body["offset"] == 0
+    assert body["items"] == [
+        {
+            "round": index,
+            "step_preview": {"current": index + 1, "index": index, "count": 3},
+            "step_truncated": False,
+            "step_totals": {},
+            "status_counts": {"succeeded": 2},
+        }
+        for index in range(3)
+    ]
+    assert by_node["nd_walk"]["input_preview"] == {"items": {"value": [1, 2, 3]}}
+    assert by_node["nd_walk"]["input_totals"] == {"items": 3}
+    second = client.get(
+        f"/channels/{channel_id}/runs/{job_id}/executions/{walk_seq}/rounds",
+        params={"limit": 1, "offset": 1},
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["total"] == 3
+    assert second.json()["limit"] == 1
+    assert second.json()["offset"] == 1
+    assert second.json()["items"] == [
+        {
+            "round": 1,
+            "step_preview": {"current": 2, "index": 1, "count": 3},
+            "step_truncated": False,
+            "step_totals": {},
+            "status_counts": {"succeeded": 2},
+        }
+    ]
+    past = client.get(
+        f"/channels/{channel_id}/runs/{job_id}/executions/{walk_seq}/rounds",
+        params={"offset": 3},
+    )
+    assert past.json()["items"] == []
+    assert past.json()["total"] == 3
+    assert past.json()["limit"] == 50
+    assert past.json()["offset"] == 3
+    empty_graph = {
+        "nodes": [
+            _api_node("nd_trigger", "trigger.manual", "Run", {}, 0),
+            _api_node("nd_walk", "volume.for", "Walk", {"items": "[1]"}, 1),
+            _api_node(
+                "nd_after",
+                "transform.set_fields",
+                "After",
+                {"fields": [{"name": "n", "value": "1"}]},
+                2,
+            ),
+        ],
+        "edges": [
+            _api_edge("ed_in", "nd_trigger", "nd_walk"),
+            _api_edge("ed_done", "nd_walk", "nd_after", source_port="done"),
+        ],
+        "settings": _settings(),
+    }
+    empty_job = _run_draft(client, channel_id, empty_graph)
+    empty_listed = client.get(f"/channels/{channel_id}/runs/{empty_job}/executions")
+    assert empty_listed.status_code == 200, empty_listed.text
+    empty_walk = next(
+        item for item in empty_listed.json()["items"] if item["node_id"] == "nd_walk"
+    )
+    empty_rounds = client.get(
+        f"/channels/{channel_id}/runs/{empty_job}/executions/{empty_walk['seq']}/rounds"
+    )
+    assert empty_rounds.status_code == 200, empty_rounds.text
+    assert empty_rounds.json()["total"] == 1
+    assert empty_rounds.json()["items"][0]["status_counts"] == {}
+    assert empty_rounds.json()["items"][0]["round"] == 0
+    assert_problem(
+        client.get(
+            f"/channels/{channel_id}/runs/{job_id}/executions/{walk_seq}/rounds",
+            params={"limit": 201},
+        ),
+        status=422,
+        code="REQUEST_INVALID",
+    )
+    assert_problem(
+        client.get(
+            f"/channels/{channel_id}/runs/{job_id}/executions/{by_node['nd_trigger']['seq']}/rounds"
+        ),
+        status=422,
+        code="REQUEST_INVALID",
+        detail="Execution is not a container",
+    )
+    assert_problem(
+        client.get(
+            f"/channels/{channel_id}/runs/{job_id}/executions/{by_node['nd_step']['seq']}/rounds"
+        ),
+        status=422,
+        code="REQUEST_INVALID",
+        detail="Execution is not a container",
+    )
+    assert_problem(
+        client.get(f"/channels/{channel_id}/runs/{job_id}/executions/99/rounds"),
+        status=404,
+        code="CHANNEL_RUN_NOT_FOUND",
+    )
+    assert_problem(
+        client.get(f"/channels/{channel_id}/runs/job_missing/executions/1/rounds"),
+        status=404,
+        code="CHANNEL_RUN_NOT_FOUND",
+    )
 
 
 def test_rerun_pins_a_failed_published_version(client: TestClient) -> None:

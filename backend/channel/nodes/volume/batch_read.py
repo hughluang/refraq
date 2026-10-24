@@ -16,6 +16,7 @@ from backend.channel.nodes.spec import (
     EngineHooks,
     NodeResult,
     NodeType,
+    OutputView,
     PortSpec,
     object_schema,
 )
@@ -60,7 +61,9 @@ def _refine(
 
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
-    dataset, error = render_field(hooks, config.get("dataset"), DATASET_REFERENCE_SCHEMA)
+    dataset, error = render_field(
+        hooks, config.get("dataset"), DATASET_REFERENCE_SCHEMA, path="dataset"
+    )
     if error is not None:
         return error
     batch_size = _batch_size(config.get("batch_size", _DEFAULT_BATCH_SIZE))
@@ -208,6 +211,9 @@ NODE_TYPE = NodeType(
             },
         },
         ["dataset"],
+    ),
+    output_view=OutputView(
+        kind="container", metrics=("count", "total", "batch_size")
     ),
     execute=_execute,
     refine=_refine,

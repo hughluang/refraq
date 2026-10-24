@@ -7,7 +7,7 @@ from collections.abc import Callable
 import pytest
 
 from backend.channel.engine import execute
-from backend.channel.nodes.spec import EngineHooks, NodeResult, NodeType, PortSpec
+from backend.channel.nodes.spec import EngineHooks, NodeResult, NodeType, OutputView, PortSpec
 from backend.tests.channel_hooks_fake import FakeHooks
 
 
@@ -46,6 +46,7 @@ def _type(
         outputs=(PortSpec("main", "Output."),),
         config_schema={"type": "object"},
         execute=run,
+        output_view=OutputView(kind="record"),
         refine=refine,
     )
 
@@ -876,6 +877,7 @@ def _error_type(run: Callable[..., NodeResult]) -> NodeType:
         outputs=(PortSpec("main", "Output."), PortSpec("error", "Error.")),
         config_schema={"type": "object"},
         execute=run,
+        output_view=OutputView(kind="record"),
     )
 
 

@@ -5,7 +5,15 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from backend.channel.node_support import render_field
-from backend.channel.nodes.spec import MAIN_INPUT, EngineHooks, NodeResult, NodeType, PortSpec, object_schema
+from backend.channel.nodes.spec import (
+    MAIN_INPUT,
+    EngineHooks,
+    NodeResult,
+    NodeType,
+    OutputView,
+    PortSpec,
+    object_schema,
+)
 
 __all__ = ["NODE_TYPE"]
 
@@ -28,7 +36,9 @@ def _refine(
 
 
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
-    value, error = render_field(hooks, node["config"].get("condition"), _BOOL)
+    value, error = render_field(
+        hooks, node["config"].get("condition"), _BOOL, path="condition"
+    )
     if error is not None:
         return error
     live = "true" if value else "false"
@@ -67,6 +77,7 @@ NODE_TYPE = NodeType(
         },
         ["condition"],
     ),
+    output_view=OutputView(kind="record"),
     execute=_execute,
     refine=_refine,
 )

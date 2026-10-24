@@ -30,6 +30,7 @@ from backend.channel.nodes.spec import (
     EngineHooks,
     NodeResult,
     NodeType,
+    OutputView,
     Problem,
     ReferenceResolver,
 )
@@ -76,7 +77,9 @@ def _refine(
 
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
-    statement, error = render_field(hooks, config.get("sql"), {"type": "string"})
+    statement, error = render_field(
+        hooks, config.get("sql"), {"type": "string"}, path="sql"
+    )
     if error is not None:
         return error
     source = config["source"]
@@ -404,6 +407,7 @@ NODE_TYPE = NodeType(
         },
         "required": ["source", "sql"],
     },
+    output_view=OutputView(kind="dataset", dataset="dataset", metrics=("count",)),
     execute=_execute,
     refine=_refine,
     check=_check,

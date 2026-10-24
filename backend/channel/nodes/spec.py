@@ -20,6 +20,7 @@ __all__ = [
     "MAIN_OUTPUT",
     "NodeResult",
     "NodeType",
+    "OutputView",
     "PortSpec",
     "Problem",
     "ReferenceResolver",
@@ -132,6 +133,40 @@ class ReferenceResolver(Protocol):
 
 Check = Callable[[Mapping[str, Any], ReferenceResolver], list[Problem]]
 
+_OUTPUT_VIEW_KINDS = frozenset(
+    {"record", "rows", "dataset", "counts", "container", "value"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class OutputView:
+    kind: str
+    metrics: tuple[str, ...] = ()
+    rows: str | None = None
+    dataset: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind not in _OUTPUT_VIEW_KINDS:
+            raise ValueError(f"unknown output view kind: {self.kind}")
+        if not isinstance(self.metrics, tuple) or any(
+            not isinstance(name, str) or name == "" for name in self.metrics
+        ):
+            raise ValueError("output view metrics must be a tuple of names")
+        if self.kind == "rows":
+            if not isinstance(self.rows, str) or self.rows == "":
+                raise ValueError("rows output view requires a rows key")
+            if self.dataset is not None:
+                raise ValueError("rows output view rejects a dataset key")
+            return
+        if self.kind == "dataset":
+            if not isinstance(self.dataset, str) or self.dataset == "":
+                raise ValueError("dataset output view requires a dataset key")
+            if self.rows is not None:
+                raise ValueError("dataset output view rejects a rows key")
+            return
+        if self.rows is not None or self.dataset is not None:
+            raise ValueError("output view rows and dataset belong to their own kinds")
+
 
 @dataclass(frozen=True, slots=True)
 class NodeType:
@@ -145,10 +180,15 @@ class NodeType:
     outputs: tuple[PortSpec, ...]
     config_schema: dict[str, Any]
     execute: Execute
+    output_view: OutputView
     permission: str | None = None
     type_version: int = 1
     refine: Refine | None = None
     check: Check | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.output_view, OutputView):
+            raise TypeError("output_view is required")
 
 
 MAIN_INPUT = PortSpec(

@@ -24,6 +24,7 @@ from backend.channel.nodes.spec import (
     EngineHooks,
     NodeResult,
     NodeType,
+    OutputView,
 )
 from backend.channel.run_store import get_run_store
 from backend.channel.values import LIST_OF_OBJECTS
@@ -58,7 +59,9 @@ def _refine(
 
 
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
-    items, error = render_field(hooks, node["config"].get("items"), LIST_OF_OBJECTS)
+    items, error = render_field(
+        hooks, node["config"].get("items"), LIST_OF_OBJECTS, path="items"
+    )
     if error is not None:
         return error
     if len(items) > ITEM_LIMIT:
@@ -238,6 +241,7 @@ NODE_TYPE = NodeType(
         },
         "required": ["items"],
     },
+    output_view=OutputView(kind="dataset", dataset="dataset", metrics=("count",)),
     execute=_execute,
     refine=_refine,
 )

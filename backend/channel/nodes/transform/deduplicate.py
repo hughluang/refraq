@@ -6,7 +6,15 @@ from typing import Any, Mapping
 
 from backend.channel.item_limit import ITEM_LIMIT, LIST_ITEM_LIMIT_MESSAGE
 from backend.channel.node_support import canonical_json, render_field
-from backend.channel.nodes.spec import MAIN_INPUT, MAIN_OUTPUT, EngineHooks, NodeResult, NodeType, object_schema
+from backend.channel.nodes.spec import (
+    MAIN_INPUT,
+    MAIN_OUTPUT,
+    EngineHooks,
+    NodeResult,
+    NodeType,
+    OutputView,
+    object_schema,
+)
 from backend.channel.values import LIST_OF_OBJECTS
 
 __all__ = ["NODE_TYPE"]
@@ -34,7 +42,7 @@ def _refine(
 
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
-    items, error = render_field(hooks, config.get("items"), LIST_OF_OBJECTS)
+    items, error = render_field(hooks, config.get("items"), LIST_OF_OBJECTS, path="items")
     if error is not None:
         return error
     if len(items) > ITEM_LIMIT:
@@ -97,6 +105,7 @@ NODE_TYPE = NodeType(
         },
         ["items", "keys"],
     ),
+    output_view=OutputView(kind="rows", rows="rows", metrics=("count", "removed")),
     execute=_execute,
     refine=_refine,
 )

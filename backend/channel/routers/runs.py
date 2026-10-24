@@ -10,8 +10,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
 from backend.channel.dataset_registry import get_dataset_store
-from backend.channel.errors import ChannelDatasetUnavailable, ChannelRunNotFound
+from backend.channel.errors import (
+    ChannelDatasetUnavailable,
+    ChannelRequestInvalid,
+    ChannelRunNotFound,
+)
+from backend.channel.graph import CONTAINER_TYPES
 from backend.channel.run_store import (
+    ContainerRoundRecord,
     NodeExecutionRecord,
     get_run_store,
     output_page,
@@ -71,6 +77,9 @@ class NodeExecutionOut(BaseModel):
 
     started_at: Instant | None = None
     finished_at: Instant | None = None
+    input_preview: Any = None
+    input_truncated: bool = False
+    input_totals: dict[str, int] | None = None
 
 
 class NodeSummaryOut(BaseModel):
@@ -92,6 +101,25 @@ class ExecutionListResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     items: list[NodeExecutionOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class ContainerRoundOut(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    round: int
+    step_preview: Any = None
+    step_truncated: bool = False
+    step_totals: dict[str, int] = Field(default_factory=dict)
+    status_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class ContainerRoundListResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    items: list[ContainerRoundOut]
     total: int
     limit: int
     offset: int
@@ -242,6 +270,35 @@ def http_execution_output(
     return output_page(record.output, path, limit=limit, offset=offset)
 
 
+@router.get(
+    "/channels/{channel_id}/runs/{job_id}/executions/{seq}/rounds",
+    response_model=ContainerRoundListResponse,
+)
+def http_execution_rounds(
+    channel_id: str,
+    job_id: str,
+    seq: int,
+    _actor: UserRecord = Depends(require_permission("channel:read")),
+    page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
+) -> dict[str, Any]:
+    run = _owned(channel_id, job_id)
+    record = get_run_store().get_execution(job_id, seq)
+    if record is None:
+        raise ChannelRunNotFound()
+    if not _is_container(run, record):
+        raise ChannelRequestInvalid("Execution is not a container")
+    items, total = get_run_store().query_rounds(
+        job_id, seq, limit=page.limit, offset=page.offset
+    )
+    counts = get_run_store().round_status_counts(job_id, seq)
+    return {
+        "items": [_round_body(item, counts.get(item.round, {})) for item in items],
+        "total": total,
+        "limit": page.limit,
+        "offset": page.offset,
+    }
+
+
 @router.get("/channels/{channel_id}/runs/{job_id}/datasets/{dataset_id}/rows")
 def http_dataset_rows(
     channel_id: str,
@@ -290,6 +347,9 @@ def http_preview_template(
 
 def _execution_body(item: NodeExecutionRecord) -> dict[str, Any]:
     preview, truncated = output_preview_with_truncated(item.output)
+    input_preview, input_truncated = output_preview_with_truncated(
+        item.input, totals=item.input_totals
+    )
     return {
         "seq": item.seq,
         "node_id": item.node_id,
@@ -301,12 +361,39 @@ def _execution_body(item: NodeExecutionRecord) -> dict[str, Any]:
         "output_bytes": item.output_bytes,
         "output_preview": preview,
         "output_truncated": truncated,
+        "input_preview": input_preview,
+        "input_truncated": input_truncated,
+        "input_totals": item.input_totals,
         "preview_only": item.preview_only,
         "preview_totals": item.preview_totals,
         "error_code": item.error_code,
         "error_message": item.error_message,
         "error_detail": item.error_detail,
     }
+
+
+def _round_body(
+    item: ContainerRoundRecord, status_counts: dict[str, int]
+) -> dict[str, Any]:
+    preview, truncated = output_preview_with_truncated(item.step, totals=item.step_totals)
+    return {
+        "round": item.round,
+        "step_preview": preview,
+        "step_truncated": truncated,
+        "step_totals": item.step_totals,
+        "status_counts": status_counts,
+    }
+
+
+def _is_container(run: Any, record: NodeExecutionRecord) -> bool:
+    graph = run.graph if isinstance(getattr(run, "graph", None), dict) else None
+    nodes = graph.get("nodes") if graph is not None else None
+    if not isinstance(nodes, list):
+        return False
+    for node in nodes:
+        if isinstance(node, dict) and str(node.get("id")) == record.node_id:
+            return str(node.get("type")) in CONTAINER_TYPES
+    return False
 
 
 def _owned(channel_id: str, job_id: str) -> Any:
