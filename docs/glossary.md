@@ -570,7 +570,7 @@ Avoid **Entity Version**, a mutable published graph, and an unattended trigger r
 
 ### Channel Run
 
-One run of a **Data Channel**: exactly one **Job** of kind `channel_run`, executed in one worker child process, entered at the trigger node that minted it. An on-demand run may name a stop node and then execute only that node's ancestor closure, including the node. There is no separate testing action and no pinned output. Every node the run reaches performs its normal effects. User cancel kills the worker child process. Runs may target a frozen draft or the published version and may overlap; there is no execution lock. A run ends `succeeded` (outcome `completed` or `skipped`), `failed`, or `cancelled`; a newer published version cancels runs still executing an older published version and does not cancel a `draft` run or a run pinned to a version. A rerun of a failed published run is a new Job pinned to that version. The run stores the graph it executed, the **Expression Context** it evaluated with, and each node execution's output.
+One run of a **Data Channel**: exactly one **Job** of kind `channel_run`, executed in one worker child process, entered at the trigger node that minted it. An on-demand run may name a stop node and then execute only that node's ancestor closure, including the node. There is no separate testing action and no pinned output. Every node the run reaches performs its normal effects. User cancel kills the worker child process. Runs may target a frozen draft or the published version and may overlap; there is no execution lock. A run ends `succeeded` (outcome `completed` or `skipped`), `failed`, or `cancelled`; a newer published version cancels runs still executing an older published version and does not cancel a `draft` run or a run pinned to a version. A rerun of a failed published run is a new Job pinned to that version. The run stores the graph it executed, the **Expression Context** it evaluated with, each node execution's output and **Execution Input**, and each **Container Round**.
 Avoid Ingestion Job, sync job, a Scheduled Task, in-place retry, and **Kind execution lock** or `JOB_ALREADY_ACTIVE` for this kind. Avoid "execution" for the whole run; one node's step inside a run is a node execution. Avoid a dry-run interpretation: every node the run reaches performs its normal effects. Avoid a separate testing action and a pinned output that skips execution.
 
 ### Channel Note
@@ -603,15 +603,35 @@ Avoid `item` as an implicit current row, credentials in the context, and naming 
 A **Data Channel** configuration value stored as text. `{{ }}` marks a calculation. Text with no calculation is static data, and the field's declared value type is what that text must become.
 Avoid requiring `{{ }}` around static JSON, and a separate literal mode.
 
+### Output View
+
+How a **Data Channel** node type says its stored success output is shown. `kind` is `record`, `rows`, `dataset`, `counts`, `container`, or `value`. `rows` or `dataset` names the payload key when the kind uses one. When `kind` is `container`, `item` names the round-step key that holds that round's data. `metrics` lists the top-level measure keys, in display order. The `error` output `{code, message, detail}` has no Output View. Rules: `docs/business-data-channel.md`.
+Avoid a per-type rendering exception, a JSON dump of every output, and treating a metric key as a row of data.
+
+### Execution Input
+
+The template values one node execution evaluated, keyed by configuration path. A path is dot-separated, and a list index is a numeric segment. Each stored list keeps its first 100 elements, and the original length of each list is kept by path, including a list that was not shortened. An execution may have no Execution Input.
+Avoid reading an ancestor's stored output as this node's input, and storing a rendered list without the 100-element cap.
+
+### Container Round
+
+The step a **For** or a Batch Read body reads at the start of one round: `{current, index, count}` for a For, and `{rows, index, count, total}` for a Batch Read. `rows` keeps its first 100 elements. The round is addressed by the run, the container execution, and the zero-based round index. It is not the container's stored output.
+Avoid reading `iterations`, or `{count, total, batch_size}`, as the value the body saw in that round.
+
+### Node Sample
+
+The one server-defined reading of a recorded **Channel Run** for one node and one scope of **Container Round**s: the upstream values that node read, and the output it produced. Ancestors come from the submitted graph. A container in the scope contributes that round's step. The node settings panel, **Template Preview**, and completion all use this reading. It executes no node, reads no **Source**, and writes nothing.
+Avoid a dry-run, a sample computed in the browser, a separate choice of execution for completion or preview, and reading a container's stored output as the step its body read.
+
 ### Template Preview
 
-The value one **Template Field** takes against a recorded **Channel Run**: the run's recorded **Expression Context** and the recorded outputs of the upstream nodes the template names, evaluated in the run sandbox and converted to the declared value type as at run time. It executes no node and writes nothing. A named node with no recorded output is reported missing, not failed.
-Avoid a dry run, a sample value computed in the browser, and previewing against a node's refined schema.
+The value one **Template Field** takes against a recorded **Channel Run** for one scope of container rounds, using the **Node Sample** binding: the run's recorded **Expression Context** and those bound upstream values, evaluated in the run sandbox and converted to the declared value type as at run time. It executes no node, reads no **Source**, and writes nothing. A named node for which the binding has no value is reported missing, not failed.
+Avoid a dry run, a sample value computed in the browser, previewing against a refined schema, and a binding rule of its own.
 
 ### Coarse Port Type
 
-The broad type of a **Data Channel** port: `object`, `items`, or `unknown`. Two known types that differ cannot be connected. A refined schema, when the node can derive one, states the value's shape; `unknown` means that shape is not derived yet.
-Avoid an untyped port, and an empty schema that accepts every value.
+The broad type of a **Data Channel** port: `object`, `items`, or `unknown`. Two known types that differ cannot be connected. A refined schema, when the node can derive one, states the value's shape; `unknown` means that shape is not derived yet. A property schema `{}` is a known key whose value is unconstrained, and it is not an unknown port.
+Avoid an untyped port, and an empty schema in place of an unknown port.
 
 ### System Identity
 

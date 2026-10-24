@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document defines the HTTP contract for **Data Channel** definitions and runs: the node type catalog, channel create, read, edit, and delete, draft save, validate, publish with its confirmation list, **Channel Version** reads, the activation switch, on-demand runs, the run list, run detail, the execution list, one execution's stored output, and dataset-row reads. Paths address a channel by opaque `id`.
+This document defines the HTTP contract for **Data Channel** definitions and runs: the node type catalog, channel create, read, edit, and delete, draft save, validate, publish with its confirmation list, **Channel Version** reads, the activation switch, on-demand runs, the run list, run detail, the execution list, one execution's stored output, container rounds of a container execution, a **Node Sample** of one node against a run, **Template Preview**, and dataset-row reads. Paths address a channel by opaque `id`.
 
 **Source Mirror**s are not defined here. **Webhook** HTTP is `docs/api-contracts-webhooks.md`. **Email Account** HTTP is `docs/api-contracts-email-accounts.md`. Global Variable HTTP is `docs/api-contracts-global-variables.md`.
 
@@ -445,11 +445,16 @@ Sections are empty lists, or `false`, when there is nothing to show.
   ],
   "config_schema": { "type": "object" },
   "permission": null,
-  "type_version": 1
+  "type_version": 1,
+  "output_view": {
+    "kind": "counts",
+    "metrics": ["inserted", "updated", "unchanged", "deleted", "unmatched"]
+  }
 }
 ```
 
 - `family` is `trigger`, `read`, `transform`, `volume`, `state`, `write`, or `action`.
+- `output_view` is the type's **Output View** (`docs/business-data-channel.md` §4.2). `kind` is `record`, `rows`, `dataset`, `counts`, `container`, or `value`. `rows` is present when `kind` is `rows` and names the list key. `dataset` is present when `kind` is `dataset` and names the **Dataset Reference** key. `item` is present when `kind` is `container` and names the round-step key that holds the round's data: `current` for `volume.for`, `rows` for `volume.batch_read`; it is a property of the type's `each` output schema. `metrics` is the display order of top-level measure keys, and is `[]` when the output has none. Every catalog type declares an `output_view`. When the type's `main` output schema is known, every key in `rows`, `dataset`, and `metrics` is a property of that schema. A type with no `main` output still declares `output_view`; the same key rule applies to the stored success output in `docs/business-data-channel.md` §4.3. The `error` port is not part of the view.
 - `label`, `summary`, and `description` are English. `summary` is one sentence. `description` states the type's function and its place in a workflow.
 - `trigger` is `true` for trigger types; they declare no inputs.
 - Each port is `{ "port", "description", "coarse_type", "loop_back" }`. `port` is lower snake case. `coarse_type` is `object`, `items`, or `unknown`. `loop_back` is false on every port. `main` is the primary input or output port. It orders execution. An expression reads an upstream output by name; the port does not deliver items or a dataset reference from the previous node. `error` is an output that carries items the node failed when `on_error` is `error_output`.
@@ -516,8 +521,10 @@ On `succeeded` only:
 | `GET` | `/channels/{id}/runs/{job_id}` | `channel:read` | Read one run with its graph and node summaries |
 | `GET` | `/channels/{id}/runs/{job_id}/executions` | `channel:read` | List node executions (**Offset Page**) |
 | `GET` | `/channels/{id}/runs/{job_id}/executions/{seq}/output` | `channel:read` | Page one node execution's stored output |
+| `GET` | `/channels/{id}/runs/{job_id}/executions/{seq}/rounds` | `channel:read` | List container rounds of one execution (**Offset Page**) |
 | `GET` | `/channels/{id}/runs/{job_id}/datasets/{dataset_id}/rows` | `channel:read` | Page dataset rows by `_ord` |
 | `POST` | `/channels/{id}/runs/{job_id}/template-preview` | `channel:write` | Evaluate one template field against a run record |
+| `POST` | `/channels/{id}/runs/{job_id}/node-sample` | `channel:write` | Read one node's sample against a run record |
 
 ### 5.1 `GET /channel-node-types`
 
@@ -668,34 +675,57 @@ When the value at `path` is a list, `200` is an **Offset Page** of its elements.
 {
   "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null } },
   "node_id": "nd_write",
-  "path": ["source"]
+  "path": ["source"],
+  "scope": [{ "container_node_id": "nd_for", "round": 0 }]
 }
 ```
 
-Evaluates the **Template Field** at `path` in node `node_id` of `graph` against run `job_id` of this channel (**Template Preview**, `docs/business-data-channel.md` §4.1). `graph` is the same shape as a draft save (§3.2), usually the graph on screen; the run may have executed an earlier graph. `path` is the configuration path, as in a problem entry (§3.4). The request executes no node and writes nothing. It does not record an audit event.
+Evaluates the **Template Field** at `path` in node `node_id` of `graph` against run `job_id` of this channel (**Template Preview**, `docs/business-data-channel.md` §4.1). `graph` is the same shape as a draft save (§3.2), usually the graph on screen; the run may have executed an earlier graph. `path` is the configuration path, as in a problem entry (§3.4). `scope` is optional and has the same shape as a **Node Sample** scope (§5.19). Omit it to use that sample's default scope. The request executes no node and writes nothing. It does not record an audit event.
 
 - Template validation (§5.7) applies to that field of `graph`. A field with a validation error is `failed` with that problem's `code`, and its `detail` as `message`.
-- Each upstream node the template names by `ref` or name in `graph` reads the output of its latest `succeeded` or `skipped` execution in the run, matched by node id. A preview-only execution supplies the stored preview (§5.17). `self.channel`, `self.run`, and `self.platform` are the values the run recorded at start.
+- Upstream values are the Node Sample binding for `graph`, `node_id`, and `scope` (§5.19). A preview-only execution supplies the stored preview (§5.17). `self.channel`, `self.run`, and `self.platform` are the values the run recorded at start.
 - Evaluation uses the run sandbox and the run's conversion to the declared value type. An expression failure is `failed` with `CHANNEL_NODE_FAILED`. A result that does not match the declared value type is `failed` with `CHANNEL_VALUE_TYPE_MISMATCH`. A sandbox that cannot start is `failed` with `CHANNEL_SANDBOX_FAILED`. `message` is the error the node would record.
 
 `200` is one of:
 
 ```json
-{ "state": "ok", "value": [{ "code": "S-01" }], "truncated": false }
+{
+  "state": "ok",
+  "value": [{ "code": "S-01" }],
+  "truncated": false,
+  "scope": [
+    { "container_node_id": "nd_for", "container_seq": 2, "round": 0, "rounds_total": 3 }
+  ],
+  "bindings": [{ "node_id": "nd_read", "seq": 4, "source": "execution" }]
+}
 ```
 
 ```json
-{ "state": "failed", "code": "CHANNEL_VALUE_TYPE_MISMATCH", "message": "Value does not match the declared type" }
+{
+  "state": "failed",
+  "code": "CHANNEL_VALUE_TYPE_MISMATCH",
+  "message": "Value does not match the declared type",
+  "scope": [],
+  "bindings": []
+}
 ```
 
 ```json
-{ "state": "missing", "node_ids": ["nd_read"], "context": false }
+{
+  "state": "missing",
+  "node_ids": ["nd_read"],
+  "context": false,
+  "scope": [],
+  "bindings": [{ "node_id": "nd_read", "source": "execution" }]
+}
 ```
 
-- `value` is the result with each list cut to its first 100 elements. `truncated` is true when a list was cut.
-- `node_ids` lists, in graph order, the named upstream nodes with no such execution in the run: not reached, failed, or still running. `context` is true when the template reads `self.channel`, `self.run`, or `self.platform` and the run has no recorded context, such as a run that has not started.
-- `failed` and `missing` are `200` result documents, not Problem Details failures.
-- `node_id` and `path` that do not name a template field of `graph` are `422 REQUEST_INVALID`. A `graph` that fails the save shape is `422`. Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`.
+- `value` is the result with each list cut to its first 100 elements. `truncated` is true when a list was cut (§5.17).
+- `scope` is the scope the binding used, including a default filled in by the server, in the Node Sample shape (§5.19).
+- `bindings` lists each upstream value the binding selected, in the same order as a Node Sample `upstream` array. `source` is `execution` or `round_step`. `seq` is present when `source` is `execution` and an execution was selected, and omitted otherwise.
+- `node_ids` lists, in graph order, the named upstream nodes for which the binding has no value. `context` is true when the template reads `self.channel`, `self.run`, or `self.platform` and the run has no recorded context, such as a run that has not started.
+- `failed` and `missing` are `200` result documents, not Problem Details failures. Every `200` includes `scope` and `bindings`.
+- `node_id` and `path` that do not name a template field of `graph` are `422 REQUEST_INVALID`. A `scope` the Node Sample endpoint would reject is `422 REQUEST_INVALID`. A `graph` that fails the save shape is `422`. Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`.
 
 ### 5.16 `POST /channels/{id}/runs/{job_id}/rerun`
 
@@ -719,6 +749,11 @@ Query: `node_id` (optional), `container_seq` (optional integer), `round` (option
   "output_truncated": false,
   "preview_only": true,
   "preview_totals": { "rows": 1000000 },
+  "input_preview": {
+    "source": { "value": [{ "code": "S-01" }] }
+  },
+  "input_truncated": false,
+  "input_totals": { "source": 1 },
   "error_code": null,
   "error_message": null,
   "error_detail": null
@@ -728,7 +763,10 @@ Query: `node_id` (optional), `container_seq` (optional integer), `round` (option
 - `container_seq` and `round` are null when the execution is not inside a **For** or a Batch Read. Otherwise `container_seq` is the `seq` of the direct container's execution, and `round` is the zero-based round index.
 - `output_preview` is the stored output with each list cut to its first 100 elements. `output_truncated` is true when this response cut a list.
 - `preview_only` is true when the execution succeeded and a Batch Read is in its container-ancestor chain. The stored output then keeps the first 100 elements of each list. `preview_totals` maps each such list's dot path to the runtime length. `preview_only` false stores `preview_totals` as `{}`, and a failed execution stores its full output.
+- `input_preview` is the execution's **Execution Input** (`docs/business-data-channel.md` §6.9) with each list cut to its first 100 elements. Each entry is `{ "value": … }` or `{ "error": { "code", "message" } }`, keyed by configuration path. `input_truncated` and `input_totals` follow the list rule below. When the execution recorded no input, `input_preview` and `input_totals` are `null` and `input_truncated` is false.
 - A **Template Preview** reads this stored output, so a preview-only execution supplies the preview.
+
+A list shown by `output_preview`, `input_preview`, a Template Preview `value`, a **Node Sample**, or a container-round `step_preview` keeps at most the first 100 elements of every list. On a Node Sample, on `input_truncated` / `input_totals`, and on `step_truncated` / `step_totals`, `truncated` is true when any list in that value is shorter than its original length, whether the record stored the short list or this response shortened it. `input_totals` and `step_totals` map every list's dot path to that original length, including a list that was not shortened. A dot path uses numeric segments for indexes. `output_truncated` on this list stays the cut this response applied, and `preview_totals` stays the length recorded when a preview-only output was stored. A Node Sample that returns an execution output folds those two sources into its own `truncated` and `totals`.
 
 ### 5.18 `GET /channels/{id}/runs/{job_id}/datasets/{dataset_id}/rows`
 
@@ -750,6 +788,95 @@ Items are the rows with `_ord` greater than `after_ord`, ordered by `_ord` ascen
 
 The registry row must belong to `job_id` and be readable. Otherwise `404` `CHANNEL_DATASET_UNAVAILABLE`. The problem carries `reason`: `not_found`, `expired`, `lost`, or `foreign_run`. `lost` means the registry row count is greater than 0 and the table has no row; the check does not count the table. `foreign_run` means the dataset is registered to a different Job than the path. Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`. `detail` stays English occurrence text. Reading rows does not consult the capacity ceiling.
 
+### 5.19 `POST /channels/{id}/runs/{job_id}/node-sample`
+
+```json
+{
+  "graph": { "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null } },
+  "node_id": "nd_write",
+  "scope": [{ "container_node_id": "nd_for", "round": 0 }]
+}
+```
+
+Reads a **Node Sample** of node `node_id` in `graph` against run `job_id` of this channel (`docs/business-data-channel.md` §4.1). `graph` is the same shape as a draft save (§3.2). `scope` is optional. Each entry is `{ "container_node_id", "round" }`, from the outermost frame inward, and `round` counts from 0. The request is read-only: it executes no node, reads no Source, and writes nothing. It does not record an audit event. Requires `channel:write`.
+
+Binding, evaluated on the server for this endpoint and for Template Preview (§5.15):
+
+1. Ancestors are the ancestor walk of `graph` (`docs/business-data-channel.md` §4.1). Executions match by node id.
+2. An omitted `scope` is resolved. When the node has an execution, the scope is the round chain of its latest execution. Otherwise each For or Batch Read that contains the node uses that container's last recorded round. The response returns the resolved scope. Each level adds `container_seq` (the container execution's `seq`, or `null` when that frame has no recorded round) and `rounds_total` (how many rounds that container execution recorded, or 0).
+3. An ancestor that is a container in the scope contributes that round's **Container Round** step (`source` `round_step`): `{current, index, count}` for a For, `{rows, index, count, total}` for a Batch Read. It does not contribute the container's stored output. An ancestor whose parent is a container in the scope contributes its latest `succeeded` or `skipped` execution with that `container_seq` and `round` (`source` `execution`). Any other ancestor contributes its latest `succeeded` or `skipped` execution in the run (`source` `execution`).
+4. The node itself contributes its latest execution inside the scope, of any status.
+
+A selected `succeeded` execution has `state` `ok`. A selected `skipped` execution has `state` `ok`, `value` set to the stored output, and `error` set when that execution recorded an error. When the slot has no `succeeded` or `skipped` execution and has a `failed` execution, `state` is `failed`, `value` is the stored output when there is one, and `error` is that execution's error. When the slot has no execution, `state` is `not_recorded`. A round step that was recorded has `state` `ok`. A round that was not recorded has `state` `not_recorded` and `source` `round_step`. Ancestors that the node's templates name statically (`self.<ref>` or `self.nodes["<name>"]`) come first. The rest follow the graph's topological order.
+
+`200`:
+
+```json
+{
+  "scope": [
+    { "container_node_id": "nd_for", "container_seq": 2, "round": 0, "rounds_total": 3 }
+  ],
+  "config_changed": false,
+  "upstream": [
+    {
+      "node_id": "nd_read",
+      "ref": "read_suppliers",
+      "name": "Read suppliers",
+      "type_id": "read.sql",
+      "referenced": true,
+      "state": "ok",
+      "source": "execution",
+      "seq": 4,
+      "value": { "rows": [], "count": 1, "rowcount": 1 },
+      "truncated": false,
+      "totals": {},
+      "error": null
+    }
+  ],
+  "node": {
+    "state": "ok",
+    "seq": 5,
+    "status": "succeeded",
+    "output": { "inserted": 1, "updated": 0, "unchanged": 0, "deleted": 0, "unmatched": 0 },
+    "output_truncated": false,
+    "totals": {},
+    "input": { "source": { "value": [{ "code": "S-01" }] } },
+    "input_totals": { "source": 1 },
+    "error": null
+  }
+}
+```
+
+- `config_changed` is true when the submitted node's `config` differs from that node in the graph the run executed, or when the snapshot has no node with that id.
+- `referenced` is true when the node's templates statically name that ancestor.
+- Upstream `state` is `ok`, `not_recorded`, or `failed`. `source` is `execution` or `round_step`. `seq` is null when no execution was selected. `value` is null when `state` is `not_recorded`. `truncated` and `totals` follow §5.17. `error` is null when the selected record has no error.
+- Node `state` is `ok` for a `succeeded` execution, `running`, `failed`, or `skipped` for those statuses, and `not_recorded` when the scope contains no execution of the node. `status` is the execution status, or null. `output` is the stored output, or null. A `failed` or `skipped` execution keeps that stored output and sets `error` to `{ "code", "message" }` when the execution recorded an error. `input` is the Execution Input object, or null when none was recorded. `input_totals` is the input length map, or null when no input was recorded.
+- List values follow §5.17. A preview-only execution supplies its stored preview.
+- Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`. `node_id` that is not a node of `graph` is `422 REQUEST_INVALID`. A present `scope` that is not the outer-to-inner list of For and Batch Read frames containing the node, or a `round` that is not an integer greater than or equal to 0, is `422 REQUEST_INVALID`. A round with no recorded step is not that error: the sample returns `not_recorded`. A `graph` that fails the save shape is `422`.
+
+### 5.20 `GET /channels/{id}/runs/{job_id}/executions/{seq}/rounds`
+
+Query: `limit` (default 50, max 200), `offset` (default 0). Requires `channel:read`. `200` is an **Offset Page** of the execution's **Container Round**s, ordered by `round` ascending.
+
+```json
+{
+  "items": [
+    {
+      "round": 0,
+      "step_preview": { "current": { "code": "S-01" }, "index": 0, "count": 2 },
+      "step_truncated": false,
+      "step_totals": {},
+      "status_counts": { "succeeded": 2 }
+    }
+  ],
+  "total": 2,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+`step_preview` is the recorded step with each list cut to its first 100 elements. `step_truncated` and `step_totals` follow §5.17. A For step is `{current, index, count}`. A Batch Read step is `{rows, index, count, total}`. `status_counts` counts the executions of the container's direct children in that round (`container_seq` equal to `seq` and the same `round`) by status; it is `{}` for a round with no child execution. Unknown `job_id` for this channel, or an unknown `seq`, is `404 CHANNEL_RUN_NOT_FOUND`. A `seq` that exists and is not a For or Batch Read execution is `422 REQUEST_INVALID`.
+
 ## 6. Errors
 
 ### 6.1 HTTP Problem Codes
@@ -764,7 +891,7 @@ The registry row must belong to `job_id` and be readable. Otherwise `404` `CHANN
 | `CHANNEL_TRIGGER_INVALID` | 422 | The graph does not have exactly one trigger node |
 | `CHANNEL_RUN_NOT_FOUND` | 404 | No run with this Job id on the channel |
 | `CHANNEL_DATASET_UNAVAILABLE` | 404 | The dataset row endpoint cannot read the dataset. `reason` is `not_found`, `expired`, `lost`, or `foreign_run`. `reason` is a domain extension on this code |
-| `REQUEST_INVALID` | 422 | Unknown fields, malformed identifiers, out-of-range fields, a Template Preview `node_id` and `path` that name no template field, or a body that contains `pinned` |
+| `REQUEST_INVALID` | 422 | Unknown fields, malformed identifiers, out-of-range fields, a Template Preview `node_id` and `path` that name no template field, a Node Sample `node_id` that is not in `graph`, a Node Sample or Template Preview `scope` that is not that node's outer-to-inner container chain, a rounds `seq` that is not a container execution, or a body that contains `pinned` |
 | `CHANNEL_RUN_NOT_RERUNNABLE` | 422 | Rerun of a run that is not `failed` or whose `target` is not `published` |
 
 ### 6.2 Validation Problem Codes
