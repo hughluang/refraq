@@ -182,6 +182,86 @@ export type NodeTypePort = {
   loop_back?: boolean;
 };
 
+/** How a node type's stored success output is shown. */
+export type OutputViewKind = "record" | "rows" | "dataset" | "counts" | "container" | "value";
+
+export type OutputView = {
+  kind: OutputViewKind;
+  /** List key when `kind` is `rows`. */
+  rows?: string;
+  /** Dataset Reference key when `kind` is `dataset`. */
+  dataset?: string;
+  /** Round-step key that holds the round's data when `kind` is `container`. */
+  item?: string;
+  /** Top-level measure keys, in display order. */
+  metrics: string[];
+};
+
+/** One frame of a Node Sample scope, as the server returns it. */
+export type NodeSampleScopeLevel = {
+  container_node_id: string;
+  container_seq: number | null;
+  round: number;
+  rounds_total: number;
+};
+
+/** One frame sent to Node Sample. `round` counts from 0. */
+export type NodeSampleScopeInput = {
+  container_node_id: string;
+  round: number;
+};
+
+export type SampleError = {
+  code: string;
+  message: string;
+};
+
+export type NodeSampleUpstream = {
+  node_id: string;
+  ref: string;
+  name: string;
+  type_id: string;
+  referenced: boolean;
+  state: "ok" | "not_recorded" | "failed";
+  source: "execution" | "round_step";
+  seq: number | null;
+  value: unknown;
+  truncated: boolean;
+  totals: Record<string, number>;
+  error: SampleError | null;
+  /** True when this execution stored only a preview. Round steps are false. */
+  preview_only: boolean;
+};
+
+export type NodeSampleNode = {
+  state: "ok" | "not_recorded" | "running" | "failed" | "skipped";
+  seq: number | null;
+  status: string | null;
+  output: unknown;
+  output_truncated: boolean;
+  totals: Record<string, number>;
+  input: Record<string, unknown> | null;
+  input_totals: Record<string, number> | null;
+  error: SampleError | null;
+  /** True when this execution stored only a preview. */
+  preview_only: boolean;
+};
+
+export type NodeSample = {
+  scope: NodeSampleScopeLevel[];
+  config_changed: boolean;
+  upstream: NodeSampleUpstream[];
+  node: NodeSampleNode;
+};
+
+export type ContainerRound = {
+  round: number;
+  step_preview: unknown;
+  step_truncated: boolean;
+  step_totals: Record<string, number>;
+  status_counts: Record<string, number>;
+};
+
 export type NodeTypeSpec = {
   type: string;
   family: string;
@@ -194,6 +274,7 @@ export type NodeTypeSpec = {
   config_schema: Record<string, unknown>;
   permission: string | null;
   type_version?: number;
+  output_view?: OutputView;
 };
 
 export const EMPTY_GRAPH: Graph = {

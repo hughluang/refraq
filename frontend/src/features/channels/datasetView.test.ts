@@ -5,7 +5,9 @@ import {
   datasetReferencesIn,
   datasetRowLimit,
   latestExecutionQuery,
+  listItemProperties,
   readBatchOutput,
+  rowColumnKeys,
   rowsInsideWindow,
   soleStatus,
 } from "@/features/channels/datasetView";
@@ -57,6 +59,23 @@ describe("latest execution query", () => {
     ).toBeNull();
     expect(soleStatus({ succeeded: 2 })).toBe("succeeded");
     expect(soleStatus({ succeeded: 2, failed: 1 })).toBeNull();
+  });
+});
+
+describe("row columns", () => {
+  it("lists schema properties first, then keys in the order they are first seen", () => {
+    expect(
+      rowColumnKeys(
+        ["code", "name"],
+        [{ name: "A", extra: 1 }, { code: "S", later: true }],
+      ),
+    ).toEqual(["code", "name", "extra", "later"]);
+    expect(
+      listItemProperties(
+        { properties: { rows: { items: { properties: { code: {}, name: {} } } } } },
+        "rows",
+      ),
+    ).toEqual(["code", "name"]);
   });
 });
 

@@ -44,6 +44,7 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
+  useCallback,
   useMemo,
   useRef,
   useState,
@@ -97,14 +98,23 @@ import { familyTint, nodeTypeIcon } from "@/features/channels/nodeVisual";
 import { MOTION_MS } from "@/theme/tokens";
 import { listExecutions } from "@/features/channels/api";
 import { latestExecutionQuery } from "@/features/channels/datasetView";
-import { ResultRegion, UpstreamRegion } from "@/features/channels/NodeRunRegions";
+import {
+  ResultRegion,
+  SampleBar,
+  UpstreamRegion,
+  useNodeSample,
+  type RunNodeInfo,
+} from "@/features/channels/NodeRunRegions";
+import type { OutputPick } from "@/features/channels/RunExecutionOutput";
 import {
   executionCountByNode,
   phaseByNode,
   recordedKey,
   samplesByNode,
+  scopeRequest,
   type NodeRunPhase,
 } from "@/features/channels/runSession";
+import type { NodeSampleScopeLevel } from "@/features/channels/types";
 import type { ChannelTemplatePreview } from "@/features/channels/TemplateRunPreview";
 import { canAuthorNodeType } from "@/features/channels/nodePermission";
 import { nodeTypeLabel } from "@/features/channels/nodeTypeCopy";
@@ -1474,6 +1484,96 @@ function ChannelCanvasBody({
         : new Map<string, number>(),
     [sessionRun],
   );
+  const [pinnedRounds, setPinnedRounds] = useState<Record<string, number>>({});
+  const [adoptedRounds, setAdoptedRounds] = useState<Record<string, number>>({});
+  const [roundTotals, setRoundTotals] = useState<Record<string, number>>({});
+  const resolvedScope = useRef<NodeSampleScopeLevel[]>([]);
+  const sampleScope = useMemo(
+    () =>
+      selected
+        ? scopeRequest(graph.nodes, selected.id, pinnedRounds, resolvedScope.current)
+        : undefined,
+    [graph.nodes, pinnedRounds, selected],
+  );
+  const sampleState = useNodeSample({
+    channelId: channelId ?? "",
+    jobId: sessionRun?.run.job_id ?? null,
+    nodeId: selected?.id ?? null,
+    graph,
+    scope: sampleScope,
+    recordedKey: summaryKey,
+    enabled: Boolean(channelId && sessionRun && selected),
+  });
+  useEffect(() => {
+    const next = sampleState.sample;
+    if (!next) return;
+    resolvedScope.current = next.scope;
+    setAdoptedRounds((current) => {
+      let changed = false;
+      const adopted = { ...current };
+      for (const level of next.scope) {
+        if (pinnedRounds[level.container_node_id] != null) continue;
+        if (adopted[level.container_node_id] !== level.round) {
+          adopted[level.container_node_id] = level.round;
+          changed = true;
+        }
+      }
+      return changed ? adopted : current;
+    });
+    setRoundTotals((current) => {
+      let changed = false;
+      const totals = { ...current };
+      for (const level of next.scope) {
+        if (totals[level.container_node_id] == null) {
+          totals[level.container_node_id] = level.rounds_total;
+          changed = true;
+        }
+      }
+      return changed ? totals : current;
+    });
+  }, [pinnedRounds, sampleState.sample]);
+  const roundOf = useCallback(
+    (containerId: string) =>
+      pinnedRounds[containerId] ??
+      adoptedRounds[containerId] ??
+      sampleState.sample?.scope.find((level) => level.container_node_id === containerId)?.round ??
+      0,
+    [adoptedRounds, pinnedRounds, sampleState.sample],
+  );
+  const totalOf = useCallback(
+    (containerId: string) =>
+      roundTotals[containerId] ??
+      sampleState.sample?.scope.find((level) => level.container_node_id === containerId)
+        ?.rounds_total ??
+      0,
+    [roundTotals, sampleState.sample],
+  );
+  const setRound = useCallback((containerId: string, round: number) => {
+    setPinnedRounds((current) =>
+      current[containerId] === round ? current : { ...current, [containerId]: round },
+    );
+  }, []);
+  const rememberRounds = useCallback((containerId: string, total: number) => {
+    setRoundTotals((current) =>
+      current[containerId] === total ? current : { ...current, [containerId]: total },
+    );
+  }, []);
+  const onPick = useCallback<OutputPick>((path) => {
+    void path;
+  }, []);
+  const runNodes: RunNodeInfo[] = nodes.flatMap((node) =>
+    isChannelNode(node)
+      ? [
+          {
+            id: node.id,
+            name: node.data.name,
+            ref: node.data.ref,
+            type: node.data.nodeType,
+            parent: node.parentId,
+          },
+        ]
+      : [],
+  );
   const overlayKey = selected?.id ?? null;
   const pickerKey = picker?.key ?? null;
   useEffect(() => {
@@ -2260,24 +2360,56 @@ function ChannelCanvasBody({
                   }}
                   templatePreview={templatePreview}
                   phase={phases.get(selected.id) ?? null}
+                  sampleBar={
+                    sessionRun ? (
+                      <SampleBar
+                        run={sessionRun.run}
+                        nodeId={selected.id}
+                        nodes={runNodes}
+                        sample={sampleState.sample}
+                        loading={sampleState.loading}
+                        channelId={channelId ?? ""}
+                        jobId={sessionRun.run.job_id}
+                        roundOf={roundOf}
+                        totalOf={totalOf}
+                        onRound={setRound}
+                      />
+                    ) : null
+                  }
                   upstream={
                     <UpstreamRegion
                       channelId={channelId ?? ""}
-                      nodeId={selected.id}
-                      nodes={nodes.flatMap((node) =>
-                        isChannelNode(node)
-                          ? [{ id: node.id, name: node.data.name, ref: node.data.ref }]
-                          : [],
-                      )}
+                      jobId={sessionRun?.run.job_id ?? null}
                       hasUpstream={edges.some((edge) => edge.target === selected.id)}
                       detail={sessionRun}
+                      sample={sampleState.sample}
+                      loading={sampleState.loading}
+                      failure={sampleState.failure}
+                      catalog={catalog}
+                      ports={ports}
+                      roundOf={roundOf}
+                      onOpenNode={openNodeConfig}
+                      onPick={onPick}
                     />
                   }
                   result={
                     <ResultRegion
                       channelId={channelId ?? ""}
+                      jobId={sessionRun?.run.job_id ?? null}
                       nodeId={selected.id}
+                      nodeType={selected.data.nodeType}
+                      nodes={runNodes}
                       detail={sessionRun}
+                      sample={sampleState.sample}
+                      loading={sampleState.loading}
+                      failure={sampleState.failure}
+                      catalog={catalog}
+                      ports={ports}
+                      graph={graph}
+                      selectedRound={roundOf(selected.id)}
+                      onRound={setRound}
+                      onRoundsTotal={rememberRounds}
+                      onPick={onPick}
                     />
                   }
                   onClose={beginClose}

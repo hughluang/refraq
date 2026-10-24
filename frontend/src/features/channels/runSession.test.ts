@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest";
 import { latestExecutionQuery } from "@/features/channels/datasetView";
 import {
   ancestorIds,
+  containerChain,
   executionCountByNode,
   executionScope,
   phaseByNode,
+  roundControlIds,
+  scopeRequest,
 } from "@/features/channels/runSession";
 import {
   EMPTY_GRAPH,
@@ -107,6 +110,33 @@ describe("phaseByNode", () => {
         { node_id: "trigger", execution_count: 1, status_counts: { succeeded: 1 } },
       ]).get("body"),
     ).toBe(2);
+  });
+});
+
+describe("sample scope", () => {
+  const nodes = [
+    { id: "outer", type: "volume.for" },
+    { id: "inner", type: "volume.batch_read", parent: "outer" },
+    { id: "body", type: "write.entity", parent: "inner" },
+    { id: "after", type: "transform.set_fields" },
+  ];
+
+  it("walks containing frames from the outside in and omits the node itself", () => {
+    expect(containerChain(nodes, "body")).toEqual(["outer", "inner"]);
+    expect(containerChain(nodes, "inner")).toEqual(["outer"]);
+    expect(containerChain(nodes, "after")).toEqual([]);
+    expect(roundControlIds(nodes, "body")).toEqual(["outer", "inner"]);
+    expect(roundControlIds(nodes, "inner")).toEqual(["outer", "inner"]);
+    expect(roundControlIds(nodes, "after")).toEqual([]);
+  });
+
+  it("omits scope until a round is pinned, then sends the whole chain", () => {
+    expect(scopeRequest(nodes, "body", {}, [])).toBeUndefined();
+    expect(scopeRequest(nodes, "body", { inner: 2 }, [{ container_node_id: "outer", round: 1 }])).toEqual([
+      { container_node_id: "outer", round: 1 },
+      { container_node_id: "inner", round: 2 },
+    ]);
+    expect(scopeRequest(nodes, "after", { inner: 1 }, [])).toBeUndefined();
   });
 });
 

@@ -66,6 +66,9 @@ export function DatasetRowTable({
   afterOrd,
   endOrd,
   columns,
+  hideOrd = false,
+  onHeaderPick,
+  onCellPick,
 }: {
   channelId: string;
   jobId: string;
@@ -73,6 +76,10 @@ export function DatasetRowTable({
   afterOrd: number;
   endOrd: number;
   columns: readonly DatasetColumn[];
+  /** Output View hides the storage ordinal. Batch windows keep it. */
+  hideOrd?: boolean;
+  onHeaderPick?: (column: string) => void;
+  onCellPick?: (column: string, rowIndex: number) => void;
 }) {
   const t = useTranslate();
   const span = Math.max(0, endOrd - afterOrd);
@@ -134,26 +141,47 @@ export function DatasetRowTable({
     pageSize,
     total: span,
   };
+  const headColumns = hideOrd ? columns.length : columns.length + 1;
   return (
     <ListTable
       embedded
       list={list}
-      columnCount={columns.length + 1}
+      columnCount={headColumns}
       minWidth={360}
       head={
         <Table.Tr>
-          <Table.Th>_ord</Table.Th>
+          {hideOrd ? null : <Table.Th>_ord</Table.Th>}
           {columns.map((column) => (
-            <Table.Th key={column.name}>{column.name}</Table.Th>
+            <Table.Th key={column.name}>
+              {onHeaderPick ? (
+                <button type="button" className="channel-view-pick" onClick={() => onHeaderPick(column.name)}>
+                  {column.name}
+                </button>
+              ) : (
+                column.name
+              )}
+            </Table.Th>
           ))}
         </Table.Tr>
       }
     >
-      {rows.map((row) => (
+      {rows.map((row, rowIndex) => (
         <Table.Tr key={String(row._ord)}>
-          <Table.Td>{String(row._ord)}</Table.Td>
+          {hideOrd ? null : <Table.Td>{String(row._ord)}</Table.Td>}
           {columns.map((column) => (
-            <Table.Td key={column.name}>{cellText(row[column.name])}</Table.Td>
+            <Table.Td key={column.name}>
+              {onCellPick ? (
+                <button
+                  type="button"
+                  className="channel-view-pick"
+                  onClick={() => onCellPick(column.name, rowIndex)}
+                >
+                  {cellText(row[column.name])}
+                </button>
+              ) : (
+                cellText(row[column.name])
+              )}
+            </Table.Td>
           ))}
         </Table.Tr>
       ))}

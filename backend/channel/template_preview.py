@@ -48,6 +48,7 @@ class _Slot:
     ref: str
     name: str
     type_id: str
+    preview_only: bool
 
 
 @dataclass
@@ -505,6 +506,7 @@ def _round_slot(
             totals={},
             error=None,
             referenced=referenced,
+            preview_only=False,
         )
     return _filled_slot(
         node,
@@ -515,6 +517,7 @@ def _round_slot(
         totals=dict(found.step_totals or {}),
         error=None,
         referenced=referenced,
+        preview_only=False,
     )
 
 
@@ -538,6 +541,7 @@ def _execution_slot(
             totals={},
             error=None,
             referenced=referenced,
+            preview_only=False,
         )
     record, state = _preferred(
         store,
@@ -557,6 +561,7 @@ def _execution_slot(
             totals={},
             error=None,
             referenced=referenced,
+            preview_only=False,
         )
     return _filled_slot(
         node,
@@ -567,6 +572,7 @@ def _execution_slot(
         totals=dict(record.preview_totals or {}),
         error=_error(record),
         referenced=referenced,
+        preview_only=bool(record.preview_only),
     )
 
 
@@ -580,6 +586,7 @@ def _filled_slot(
     totals: dict[str, int],
     error: dict[str, Any] | None,
     referenced: bool,
+    preview_only: bool,
 ) -> _Slot:
     return _Slot(
         node_id=str(node["id"]),
@@ -593,6 +600,7 @@ def _filled_slot(
         ref=str(node.get("ref")),
         name=str(node.get("name")),
         type_id=str(node.get("type")),
+        preview_only=preview_only,
     )
 
 
@@ -611,6 +619,7 @@ def _present_upstream(slot: _Slot) -> dict[str, Any]:
         "truncated": truncated,
         "totals": totals,
         "error": slot.error,
+        "preview_only": slot.preview_only,
     }
 
 
@@ -626,6 +635,7 @@ def _present_node(record: NodeExecutionRecord | None) -> dict[str, Any]:
             "input": None,
             "input_totals": None,
             "error": None,
+            "preview_only": False,
         }
     output, truncated, totals = _clip(record.output, record.preview_totals)
     if record.input is None:
@@ -646,6 +656,7 @@ def _present_node(record: NodeExecutionRecord | None) -> dict[str, Any]:
         "input": shown_input,
         "input_totals": input_totals,
         "error": _error(record),
+        "preview_only": bool(record.preview_only),
     }
 
 

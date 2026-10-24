@@ -11,6 +11,9 @@ import type {
   DatasetRowsPage,
   ExecutionOutputPage,
   NodeExecution,
+  NodeSample,
+  NodeSampleScopeInput,
+  ContainerRound,
   ExpressionContext,
   Graph,
   GraphProblem,
@@ -201,6 +204,29 @@ export function listDatasetRows(
   return apiClient<DatasetRowsPage>(
     `/channels/${id}/runs/${jobId}/datasets/${datasetId}/rows${querySuffix(params)}`,
     init,
+  );
+}
+
+export function nodeSample(
+  id: string,
+  jobId: string,
+  body: { graph: Graph; node_id: string; scope?: readonly NodeSampleScopeInput[] },
+) {
+  return apiClient<NodeSample>(`/channels/${id}/runs/${jobId}/node-sample`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function listRounds(
+  id: string,
+  jobId: string,
+  seq: number,
+  params?: { limit?: number; offset?: number },
+) {
+  return apiClient<OffsetPage<ContainerRound>>(
+    `/channels/${id}/runs/${jobId}/executions/${seq}/rounds${querySuffix(params)}`,
   );
 }
 

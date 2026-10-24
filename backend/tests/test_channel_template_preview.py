@@ -833,6 +833,7 @@ def test_node_sample_folds_preview_totals_with_the_response_clip(client: TestCli
     assert empty_body["node"]["output"] == {"rows": [], "count": 1, "rowcount": 1}
     assert empty_body["node"]["totals"] == {}
     assert empty_body["node"]["output_truncated"] is False
+    assert empty_body["node"]["preview_only"] is False
     long_body = _sample(client, channel_id, job_id, graph, "nd_long").json()
     assert len(long_body["node"]["output"]["rows"]) == 100
     assert long_body["node"]["output"]["rows"][0] == 0
@@ -844,6 +845,7 @@ def test_node_sample_folds_preview_totals_with_the_response_clip(client: TestCli
     assert wide_body["output"]["tags"] == ["a", "b"]
     assert wide_body["output_truncated"] is True
     assert wide_body["totals"] == {"rows": 1000000, "tags": 2}
+    assert wide_body["preview_only"] is True
     assert wide_body["input_totals"] == {"source": 1000000, "note": 2}
     assert len(wide_body["input"]["source"]["value"]) == 100
     assert wide_body["input"]["note"]["value"] == ["a", "b"]

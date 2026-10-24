@@ -1,7 +1,10 @@
 import { soleStatus } from "@/features/channels/datasetView";
 import { ancestorIds as frameAncestorIds } from "@/features/channels/frameLink";
-import type { Graph, GraphEdge } from "@/features/channels/types";
+import { isContainerNode } from "@/features/channels/portLayout";
+import type { Graph, GraphEdge, NodeSampleScopeInput } from "@/features/channels/types";
 import type { ChannelRunDetail, NodeExecution, NodeSummary } from "@/features/channels/types";
+
+type ChainNode = { id: string; type: string; parent?: string | null };
 
 export type NodeRunPhase = "waiting" | "running" | "succeeded" | "failed" | "dead";
 
@@ -95,6 +98,47 @@ function countKey(counts: NodeSummary["status_counts"]): string {
   return (["running", "succeeded", "failed", "skipped"] as const)
     .map((name) => `${name}:${counts[name] ?? 0}`)
     .join(",");
+}
+
+/** Outer-to-inner For and Batch Read frames that contain `nodeId`. The node itself is not included. */
+export function containerChain(nodes: readonly ChainNode[], nodeId: string): string[] {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const chain: string[] = [];
+  let parentId = byId.get(nodeId)?.parent;
+  while (parentId) {
+    const parent = byId.get(parentId);
+    if (!parent) break;
+    if (isContainerNode(parent.type)) chain.push(parent.id);
+    parentId = parent.parent;
+  }
+  return chain.reverse();
+}
+
+/** Round controls for a node: each container it sits in, plus itself when it is a container. */
+export function roundControlIds(nodes: readonly ChainNode[], nodeId: string): string[] {
+  const chain = containerChain(nodes, nodeId);
+  const self = nodes.find((node) => node.id === nodeId);
+  if (self && isContainerNode(self.type)) return [...chain, self.id];
+  return chain;
+}
+
+/**
+ * Scope sent to Node Sample. Omitted until the user pins a round, so the server
+ * fills the default chain. A pin sends the whole outer-to-inner chain.
+ */
+export function scopeRequest(
+  nodes: readonly ChainNode[],
+  nodeId: string,
+  pinned: Readonly<Record<string, number>>,
+  resolved: readonly { container_node_id: string; round: number }[],
+): NodeSampleScopeInput[] | undefined {
+  const chain = containerChain(nodes, nodeId);
+  if (chain.length === 0) return undefined;
+  if (!chain.some((id) => pinned[id] != null)) return undefined;
+  return chain.map((id) => ({
+    container_node_id: id,
+    round: pinned[id] ?? resolved.find((level) => level.container_node_id === id)?.round ?? 0,
+  }));
 }
 
 export function samplesByNode(executions: readonly NodeExecution[]): Map<string, unknown> {

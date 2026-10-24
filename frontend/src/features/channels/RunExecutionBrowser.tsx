@@ -12,7 +12,7 @@ import { BatchRoundRows } from "@/features/channels/BatchRoundRows";
 import { nodeDisplayName } from "@/features/channels/formatRunSubject";
 import { RunErrorText } from "@/features/channels/RunErrorText";
 import { RunExecutionOutput } from "@/features/channels/RunExecutionOutput";
-import type { Graph, NodeExecution } from "@/features/channels/types";
+import type { Graph, NodeExecution, NodeTypeSpec } from "@/features/channels/types";
 import { listPresentationOf } from "@/lib/list-state";
 import { pageToOffset } from "@/lib/pagination";
 import { problemMessage } from "@/lib/problem";
@@ -23,10 +23,12 @@ export function RunExecutionBrowser({
   channelId,
   jobId,
   graph,
+  catalog = [],
 }: {
   channelId: string;
   jobId: string;
   graph: Graph;
+  catalog?: readonly NodeTypeSpec[];
 }) {
   const t = useTranslate();
   const [page, setPage] = useState(1);
@@ -126,7 +128,18 @@ export function RunExecutionBrowser({
       </ListTable>
       {current ? (
         <Stack gap={4}>
-          <RunExecutionOutput channelId={channelId} jobId={jobId} item={current} />
+          <RunExecutionOutput
+            channelId={channelId}
+            jobId={jobId}
+            item={current}
+            graph={graph}
+            view={
+              catalog.find(
+                (spec) =>
+                  spec.type === graph.nodes.find((node) => node.id === current.node_id)?.type,
+              )?.output_view ?? null
+            }
+          />
           <BatchRoundRows
             channelId={channelId}
             jobId={jobId}

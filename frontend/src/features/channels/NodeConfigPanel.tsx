@@ -67,6 +67,8 @@ type Props = {
   templatePreview?: ChannelTemplatePreview | null;
   /** Canvas run phase. Null hides the header badge. */
   phase?: string | null;
+  /** Shared sample bar above the three columns. */
+  sampleBar?: ReactNode;
   upstream: ReactNode;
   result: ReactNode;
   onClose: () => void;
@@ -95,6 +97,7 @@ export function NodeConfigPanel({
   scope,
   templatePreview = null,
   phase = null,
+  sampleBar = null,
   upstream,
   result,
   onClose,
@@ -235,6 +238,7 @@ export function NodeConfigPanel({
           </div>
         </Stack>
       </div>
+      {sampleBar}
       <div className="channel-node-detail">
         {upstream}
         <NodeRegion title={t("channels.node.config")}>

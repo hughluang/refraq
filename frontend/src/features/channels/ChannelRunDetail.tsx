@@ -170,7 +170,7 @@ export function ChannelRunDetail({
           onChange={() => undefined}
         />
       </div>
-      <RunExecutionBrowser channelId={channelId} jobId={jobId} graph={graph} />
+      <RunExecutionBrowser channelId={channelId} jobId={jobId} graph={graph} catalog={catalog} />
     </Stack>
     </PageChrome>
   );

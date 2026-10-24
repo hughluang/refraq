@@ -1,3 +1,4 @@
+import type { SchemaObject } from "@/features/channels/configSchemaForm";
 import type { Graph, NodeExecution, NodeSummary } from "@/features/channels/types";
 
 export type DatasetColumn = { name: string; type: string };
@@ -109,6 +110,39 @@ export function batchReadRound(
   const parent = graph.nodes.find((item) => item.id === parentId);
   if (!parent || parent.type !== "volume.batch_read") return null;
   return { parentId, index: execution.round, containerSeq: execution.container_seq };
+}
+
+/**
+ * Column order for a rows table: schema element properties first, then keys
+ * observed on the rows, each key once, in the order it is first seen.
+ */
+export function rowColumnKeys(
+  schemaProperties: readonly string[],
+  rows: readonly unknown[],
+): string[] {
+  const columns: string[] = [];
+  const seen = new Set<string>();
+  const add = (key: string) => {
+    if (seen.has(key)) return;
+    seen.add(key);
+    columns.push(key);
+  };
+  for (const key of schemaProperties) add(key);
+  for (const row of rows) {
+    if (typeof row !== "object" || row === null || Array.isArray(row)) continue;
+    for (const key of Object.keys(row)) add(key);
+  }
+  return columns;
+}
+
+/** Property names of a list element's object schema, in declaration order. */
+export function listItemProperties(
+  schema: SchemaObject | null | undefined,
+  listKey: string,
+): string[] {
+  const items = schema?.properties?.[listKey]?.items;
+  if (!items || Array.isArray(items)) return [];
+  return Object.keys(items.properties ?? {});
 }
 
 export function readBatchOutput(value: unknown): { batchSize: number; total: number } | null {

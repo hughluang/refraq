@@ -8,7 +8,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { listExecutions } from "@/features/channels/api";
+import { listExecutions, nodeSample } from "@/features/channels/api";
 import { CANVAS_PLUS_PATH } from "@/features/channels/CanvasPlusIcon";
 import { EACH_INSET } from "@/features/channels/portLayout";
 import {
@@ -36,7 +36,26 @@ vi.mock("@/features/channels/api", () => ({
   getExecutionOutput: vi.fn(),
   listExecutions: vi.fn(() => Promise.resolve({ items: [], total: 0, limit: 50, offset: 0 })),
   listDatasetRows: vi.fn(),
+  listRounds: vi.fn(() => Promise.resolve({ items: [], total: 0, limit: 50, offset: 0 })),
   previewTemplate: vi.fn(),
+  nodeSample: vi.fn(() =>
+    Promise.resolve({
+      scope: [],
+      config_changed: false,
+      upstream: [],
+      node: {
+        state: "not_recorded",
+        seq: null,
+        status: null,
+        output: null,
+        output_truncated: false,
+        totals: {},
+        input: null,
+        input_totals: null,
+        error: null,
+      },
+    }),
+  ),
 }));
 
 const LABELS: Record<string, string> = {
@@ -383,6 +402,24 @@ describe("ChannelCanvas controls", () => {
 
   afterEach(() => {
     cleanup();
+    vi.mocked(nodeSample).mockImplementation(() =>
+      Promise.resolve({
+        scope: [],
+        config_changed: false,
+        upstream: [],
+        node: {
+          state: "not_recorded",
+          seq: null,
+          status: null,
+          output: null,
+          output_truncated: false,
+          totals: {},
+          input: null,
+          input_totals: null,
+          error: null,
+        },
+      }),
+    );
   });
 
   it("puts authoring, zoom, minimap, and shortcut help on the bottom toolbar", async () => {
@@ -825,6 +862,22 @@ describe("ChannelCanvas controls", () => {
         { node_id: "nd_1", execution_count: 1, status_counts: { succeeded: 1 } },
       ],
     };
+    vi.mocked(nodeSample).mockResolvedValue({
+      scope: [],
+      config_changed: false,
+      upstream: [],
+      node: {
+        state: "ok",
+        seq: 1,
+        status: "succeeded",
+        output: { note: "hidden" },
+        output_truncated: false,
+        totals: {},
+        input: null,
+        input_totals: null,
+        error: null,
+      },
+    });
     vi.mocked(listExecutions).mockResolvedValue({
       items: [
         {

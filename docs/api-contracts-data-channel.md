@@ -830,6 +830,7 @@ A selected `succeeded` execution has `state` `ok`. A selected `skipped` executio
       "value": { "rows": [], "count": 1, "rowcount": 1 },
       "truncated": false,
       "totals": {},
+      "preview_only": false,
       "error": null
     }
   ],
@@ -840,6 +841,7 @@ A selected `succeeded` execution has `state` `ok`. A selected `skipped` executio
     "output": { "inserted": 1, "updated": 0, "unchanged": 0, "deleted": 0, "unmatched": 0 },
     "output_truncated": false,
     "totals": {},
+    "preview_only": false,
     "input": { "source": { "value": [{ "code": "S-01" }] } },
     "input_totals": { "source": 1 },
     "error": null
@@ -851,7 +853,7 @@ A selected `succeeded` execution has `state` `ok`. A selected `skipped` executio
 - `referenced` is true when the node's templates statically name that ancestor.
 - Upstream `state` is `ok`, `not_recorded`, or `failed`. `source` is `execution` or `round_step`. `seq` is null when no execution was selected. `value` is null when `state` is `not_recorded`. `truncated` and `totals` follow §5.17. `error` is null when the selected record has no error.
 - Node `state` is `ok` for a `succeeded` execution, `running`, `failed`, or `skipped` for those statuses, and `not_recorded` when the scope contains no execution of the node. `status` is the execution status, or null. `output` is the stored output, or null. A `failed` or `skipped` execution keeps that stored output and sets `error` to `{ "code", "message" }` when the execution recorded an error. `input` is the Execution Input object, or null when none was recorded. `input_totals` is the input length map, or null when no input was recorded.
-- List values follow §5.17. A preview-only execution supplies its stored preview.
+- List values follow §5.17. A preview-only execution supplies its stored preview. `preview_only` is true when that execution stored a preview. A round step, and a slot with no execution, are false. The settings panel does not page a rows view when `preview_only` is true.
 - Unknown `job_id` for this channel is `404 CHANNEL_RUN_NOT_FOUND`. `node_id` that is not a node of `graph` is `422 REQUEST_INVALID`. A present `scope` that is not the outer-to-inner list of For and Batch Read frames containing the node, or a `round` that is not an integer greater than or equal to 0, is `422 REQUEST_INVALID`. A round with no recorded step is not that error: the sample returns `not_recorded`. A `graph` that fails the save shape is `422`.
 
 ### 5.20 `GET /channels/{id}/runs/{job_id}/executions/{seq}/rounds`
