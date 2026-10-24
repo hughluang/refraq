@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 
 import { JobReference } from "@/components/display/JobReference";
 import { presentJobStatus, toneVariable } from "@/components/display/statusTone";
+import { formatJobError } from "@/features/jobs/formatJobError";
 import { JobDetailModal } from "@/features/jobs/JobDetailModal";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
 import { barHeightRatio, buildRunSlots } from "@/features/schedules/runStrip";
@@ -62,6 +63,9 @@ export function ScheduleRunStrip({ jobs, kind, onOpenJobs }: Props) {
           }
           const presentation = presentJobStatus(job.status);
           const live = LIVE_JOB.has(job.status);
+          const errorLine = job.error_code
+            ? formatJobError(t, job.error_code, null)
+            : null;
           return (
             <Tooltip
               key={job.id}
@@ -85,9 +89,10 @@ export function ScheduleRunStrip({ jobs, kind, onOpenJobs }: Props) {
                   <Text size="xs">
                     {t("jobs.fields.duration")}: {ms === null ? "—" : formatDurationMs(ms)}
                   </Text>
-                  {job.error_code ? (
+                  {errorLine ? (
                     <Text size="xs">
-                      {t("jobs.fields.error")}: {job.error_code}
+                      {t("jobs.fields.error")}:{" "}
+                      {errorLine.catalogued ? errorLine.text : job.error_code}
                     </Text>
                   ) : null}
                 </Stack>

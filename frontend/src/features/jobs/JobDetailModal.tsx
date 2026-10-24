@@ -16,10 +16,12 @@ import { jobKindLabelKey } from "@/components/display/JobReference";
 import { LiveStatusAnnouncer } from "@/components/display/LiveStatusAnnouncer";
 import { StaleNotice } from "@/components/display/StaleNotice";
 import { presentJobStatus } from "@/components/display/statusTone";
+import { ProblemDetails } from "@/components/feedback/ProblemDetails";
 import { isSessionExpiredError } from "@/lib/api";
 
 import { getJob, getJobLogs } from "@/features/jobs/api";
 import { JobCancelButton } from "@/features/jobs/JobCancelButton";
+import { formatJobError } from "@/features/jobs/formatJobError";
 import { formatJobTrigger } from "@/features/jobs/formatJobTrigger";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
 import { useFormatInstant } from "@/hooks/useFormatInstant";
@@ -62,6 +64,9 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
   }, [logBody]);
 
   const canCancel = job && (job.status === "queued" || job.status === "running");
+  const errorLine = job?.error_code
+    ? formatJobError(t, job.error_code, job.error_message)
+    : null;
 
   return (
     <Modal
@@ -137,10 +142,25 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
               </Text>
             ) : null}
           </Group>
-          {job.error_code ? (
-            <Text size="sm" c="red">
-              {job.error_code}: {job.error_message ?? ""}
-            </Text>
+          {errorLine ? (
+            <Stack gap={4}>
+              <Text size="sm" c="red">
+                {errorLine.text}
+              </Text>
+              {errorLine.catalogued && errorLine.occurrence ? (
+                <ProblemDetails
+                  detail={errorLine.occurrence}
+                  requestId={null}
+                  labels={{
+                    summary: t("form.error.details"),
+                    requestId: t("common.requestId"),
+                    copy: t("form.error.copy"),
+                    copied: t("common.copy.success"),
+                    copyFailed: t("common.copy.failed"),
+                  }}
+                />
+              ) : null}
+            </Stack>
           ) : null}
 
           <Stack gap="xs">

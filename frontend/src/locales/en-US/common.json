@@ -1403,6 +1403,7 @@
   "problems.CHANNEL_NODE_FAILED": "A node failed",
   "problems.CHANNEL_SANDBOX_FAILED": "The expression could not continue",
   "problems.JOB_WORKER_LOST": "The worker running this job was lost",
+  "problems.JOB_ALREADY_ACTIVE": "Another job is already running this work",
   "problems.EMAIL_ACCOUNT_IN_USE": "This Email Account is still referenced by a Data Channel.",
   "problems.EMAIL_ACCOUNT_NOT_FOUND": "Email Account was not found",
   "problems.WEBHOOK_IN_USE": "This Webhook is still referenced by a Data Channel.",
