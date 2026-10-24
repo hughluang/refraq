@@ -129,6 +129,7 @@ services:
   # Run exactly one Beat replica (Postgres Scheduled Task SSOT; do not scale).
   beat:
     image: ghcr.io/hughluang/refraq-api:__REFRAQ_RELEASE_TAG__
+    restart: unless-stopped
     command: ["celery", "-A", "backend.worker.app", "beat"]
     environment:
       REFRAQ_ENV: prod

@@ -34,10 +34,12 @@ from backend.metadata.structure_diffs.store import StructureDiffRecord
 
 
 class StructureWrite(Protocol):
-    """Locked catalog write unit: load baseline, persist plan and Structure Diff.
+    """Catalog persist unit: persist a plan and Structure Diff in one commit.
 
-    ``load_baseline`` does not commit. Successful exit of ``catalog_write``
-    commits catalog rows and the Structure Diff together.
+    A refresh loads its baseline with ``CatalogStructureStore.read_baseline``
+    and merges outside this unit. ``load_baseline`` does not commit. Successful
+    exit of ``catalog_write`` commits catalog rows and the Structure Diff
+    together.
     """
 
     def load_baseline(
@@ -222,6 +224,10 @@ class CatalogJoinStore(Protocol):
 
 
 class CatalogStructureStore(Protocol):
+    def read_baseline(
+        self, source_id: str
+    ) -> tuple[list[CatalogObjectRecord], list[CatalogJoinRecord]]: ...
+
     def catalog_write(
         self, source_id: str
     ) -> AbstractContextManager[StructureWrite]: ...

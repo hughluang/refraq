@@ -260,10 +260,12 @@ User PAT management is **not** in this group; see `docs/business-user-tokens.md`
   scope (`access.schema` / `access.owner`; resolved at runtime) that are missing from the collect are marked `is_present=false`
   (tombstone). Out-of-scope objects are not bulk-absent when the filter shrinks. Same tombstone rules
   apply to columns, foreign keys, and indexes under present objects.
-- **Structure Diff (detect, do not act):** a successful structure refresh commits
-  **Current catalog** and a **Structure Diff** computed from that same baseline
-  (same identity and `schema_scope` as merge; do not reverse-engineer the touched-object
-  plan) in one write. The Diff belongs to the Source and is associated with the Job. The Job runner
+- **Structure Diff (detect, do not act):** a successful structure refresh loads a
+  baseline and ends that read before the merge, then commits **Current catalog** and a
+  **Structure Diff** computed from that same baseline (same identity and `schema_scope`
+  as merge; do not reverse-engineer the touched-object plan) in one write. The one write
+  is that commit. The merge does not hold the catalog transaction. The Diff belongs to
+  the Source and is associated with the Job. The Job runner
   then writes **Job result**
   `{ "schema": "structure.diff.v1", "class", "counts", "structure_diff_id" }`. Do not change Job
   status, pause a **Scheduled Task**, or block the next structure Job when `class=breaking`.

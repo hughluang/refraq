@@ -35,6 +35,7 @@ def create_celery_app() -> Celery:
         broker_url=celery_broker_url(settings),
         result_backend=None,
         task_ignore_result=True,
+        task_acks_late=True,
         task_track_started=False,
         imports=(
             "backend.metadata.tasks",

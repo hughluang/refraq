@@ -58,6 +58,8 @@ def test_celery_enable_utc() -> None:
 
     assert celery_app.conf.enable_utc is True
     assert str(celery_app.conf.timezone) in {"UTC", "utc"}
+    assert celery_app.conf.task_acks_late is True
+    assert celery_app.conf.result_backend is None
 
 
 @pytest.mark.parametrize(

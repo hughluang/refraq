@@ -25,6 +25,14 @@ from stamp_site_compose import (  # noqa: E402
 )
 
 
+def test_template_restarts_beat_only() -> None:
+    text = TEMPLATE.read_text(encoding="utf-8")
+    beat = text.split("\n  beat:\n", 1)[1].split("\n  mcp:\n", 1)[0]
+    assert "restart: unless-stopped" in beat
+    worker = text.split("\n  worker:\n", 1)[1].split("\n  beat:\n", 1)[0]
+    assert "restart:" not in worker
+
+
 def test_template_is_not_a_live_site_pin() -> None:
     text = TEMPLATE.read_text(encoding="utf-8")
     assert "REFRAQ_VERSION" not in text

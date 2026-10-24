@@ -1,4 +1,4 @@
-"""Source structure refresh: one write unit for catalog and Structure Diff."""
+"""Source structure refresh: merge outside the catalog transaction, then one commit."""
 
 from __future__ import annotations
 
@@ -39,24 +39,25 @@ def apply_structure_snapshot(
 
     Identity (engine / kind / key) is taken from ``source``. Identity match,
     FK/index merge, Join Origin, and Object Semantics survival live in
-    ``structure_merge``. This module loads one baseline under a catalog write
-    unit, builds the plan, and persists the delta and Structure Diff in that
-    same unit. Catalog embeddings are refreshed by the site catalog_embed Job.
+    ``structure_merge``. The baseline read ends before that merge. The catalog
+    write unit then persists the delta and Structure Diff in one commit.
+    Catalog embeddings are refreshed by the site catalog_embed Job.
     """
-    with get_catalog_store().catalog_write(source.id) as write:
-        existing_objects, existing_joins = write.load_baseline()
-        plan = build_structure_refresh_plan(
-            source_id=source.id,
-            job_id=job_id,
-            existing_objects=existing_objects,
-            existing_joins=existing_joins,
-            incoming=collected,
-            schema_scope=schema_scope,
-            engine=source.engine,
-            kind=source.kind,
-            source_key=source.key,
-            now=utc_now(),
-        )
+    store = get_catalog_store()
+    existing_objects, existing_joins = store.read_baseline(source.id)
+    plan = build_structure_refresh_plan(
+        source_id=source.id,
+        job_id=job_id,
+        existing_objects=existing_objects,
+        existing_joins=existing_joins,
+        incoming=collected,
+        schema_scope=schema_scope,
+        engine=source.engine,
+        kind=source.kind,
+        source_key=source.key,
+        now=utc_now(),
+    )
+    with store.catalog_write(source.id) as write:
         write.persist_plan(plan)
         record = StructureDiffRecord(
             id=new_structure_diff_id(),

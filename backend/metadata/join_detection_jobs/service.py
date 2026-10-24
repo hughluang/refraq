@@ -141,12 +141,12 @@ def _detect_joins(job_id: str, source: SourceRecord) -> dict[str, str]:
         return stopped
 
     try:
+        _existing_objects, existing_joins = store.read_baseline(source_id)
+        plan = build_join_detection_plan(
+            existing_joins=existing_joins,
+            resolved=resolved,
+        )
         with store.catalog_write(source_id) as write:
-            _existing_objects, existing_joins = write.load_baseline()
-            plan = build_join_detection_plan(
-                existing_joins=existing_joins,
-                resolved=resolved,
-            )
             joins_upserted = write.persist_join_detection_plan(plan)
     except Exception as exc:  # noqa: BLE001
         stopped = stopped_result(job_id)

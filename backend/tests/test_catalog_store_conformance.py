@@ -546,9 +546,14 @@ def test_persist_plan_writes_objects_stamps_and_inserts_missing_joins(
         collected_at=now,
         diff=_empty_diff(),
     )
+    baseline, _joins = catalog_store.read_baseline(SOURCE_ID)
+    assert any(o.id == orders.id for o in baseline)
+    copied = next(o for o in baseline if o.id == orders.id)
+    copied.business_name = "mutated-outside-store"
+    reread = catalog_store.get_object(orders.id)
+    assert reread is not None
+    assert reread.business_name != "mutated-outside-store"
     with catalog_store.catalog_write(SOURCE_ID) as write:
-        baseline, _joins = write.load_baseline()
-        assert any(o.id == orders.id for o in baseline)
         write.persist_plan(plan)
 
     stamped = catalog_store.get_object(orders.id)

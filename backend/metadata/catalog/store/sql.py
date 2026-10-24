@@ -454,14 +454,26 @@ class SqlCatalogStore:
             )
             return [_row_to_object(r) for r in rows]
 
+    def read_baseline(
+        self, source_id: str
+    ) -> tuple[list[CatalogObjectRecord], list[CatalogJoinRecord]]:
+        """Load one source baseline and end the read session before return."""
+        session = get_session_factory()()
+        try:
+            return _SqlStructureWrite(session, source_id).load_baseline()
+        finally:
+            session.rollback()
+            session.close()
+
     @contextmanager
     def catalog_write(self, source_id: str) -> Iterator[_SqlStructureWrite]:
-        """Catalog write unit: load baseline, persist plan and Structure Diff.
+        """Catalog write unit: persist a plan and Structure Diff in one commit.
 
         Same-kind runner serialization is the **Kind execution lock** (ADR 0032),
         not this write unit. Automatic join inserts use ON CONFLICT DO NOTHING.
-        ``load_baseline`` does not commit. Successful exit commits once
-        (catalog plan + Diff rows on the same session).
+        A refresh loads its baseline with ``read_baseline`` and merges outside
+        this unit. Successful exit commits once (catalog plan + Diff rows on
+        the same session).
         """
         session = get_session_factory()()
         write = _SqlStructureWrite(session, source_id)

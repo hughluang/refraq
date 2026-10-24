@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from backend.core.time import utc_now
+import copy
 import threading
 from contextlib import contextmanager
 from dataclasses import replace
@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Iterator
 
 from backend.core.pagination import apply_offset_page
+from backend.core.time import utc_now
 from backend.metadata.catalog.embedding import cosine_similarity
 from backend.metadata.catalog.identity import (
     _recompute_column_locator,
@@ -277,13 +278,23 @@ class MemoryCatalogStore:
             ]
             return sorted(items, key=list_object_sort_key)
 
+    def read_baseline(
+        self, source_id: str
+    ) -> tuple[list[CatalogObjectRecord], list[CatalogJoinRecord]]:
+        """Copy one source baseline and release the process lock before return."""
+        with self._lock:
+            objects, joins = _MemoryStructureWrite(self, source_id).load_baseline()
+            return copy.deepcopy(objects), copy.deepcopy(joins)
+
     @contextmanager
     def catalog_write(self, source_id: str) -> Iterator[_MemoryStructureWrite]:
-        """Catalog write unit (zero merge/origin rules).
+        """Catalog persist unit (zero merge/origin rules).
 
         Same-kind runner serialization is the Kind execution lock (ADR 0032).
-        This in-process lock keeps one persist atomic in memory tests, including
-        Structure Diff rows written through the same unit.
+        This in-process lock covers the yield, which is the persist. A refresh
+        loads its baseline with ``read_baseline`` and merges outside the lock.
+        The backup keeps one persist atomic in memory tests, including Structure
+        Diff rows written through the same unit.
         """
         diff_store = get_structure_diff_store()
         with self._lock:

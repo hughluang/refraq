@@ -64,6 +64,29 @@ def test_cancel_kills_the_child_and_keeps_cancelled() -> None:
     assert stored.error_code is None
 
 
+def test_persistent_redelivery_skips_child_when_not_queued(monkeypatch) -> None:
+    from backend.core.config import get_settings
+    from backend.jobs import supervise as supervise_mod
+
+    signing = get_settings().model_copy(update={"store_backend": "persistent"})
+    monkeypatch.setattr(supervise_mod, "get_settings", lambda: signing)
+    spawned: list[str] = []
+
+    def _refuse_spawn(job_id: str, target: str) -> subprocess.Popen[bytes]:
+        spawned.append(job_id)
+        raise AssertionError("job_child must not start")
+
+    monkeypatch.setattr(supervise_mod, "_spawn", _refuse_spawn)
+    job = create_queued_job(kind="structure", input={"source_id": "s1"})
+    assert claim_queued(job.id, claimed_by="worker@test") is not None
+    result = supervise_mod.supervise(job.id, "backend.tests.test_job_supervise:_adopt_probe")
+    assert result == {"status": "running"}
+    assert spawned == []
+    stored = get_job_store().get(job.id)
+    assert stored is not None
+    assert stored.status == "running"
+
+
 def test_running_timeout_does_not_kill_the_child() -> None:
     job = create_queued_job(kind="structure", input={"source_id": "s1"})
     assert claim_queued(job.id, claimed_by="worker@test") is not None
