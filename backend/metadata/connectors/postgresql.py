@@ -13,6 +13,7 @@ from backend.metadata.connectors.base import (
     CollectProgress,
     ChunkIterator,
     ConnectorError,
+    QueryColumn,
     QueryResult,
     SourceEndpoint,
     StreamColumn,
@@ -96,7 +97,12 @@ class PostgresqlConnector:
                 timeout_ms = max(1, int(timeout_sec) * 1000)
                 conn.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
                 result = conn.execute(text(sql))
-                return fetch_query_result(result, max_rows=max_rows)
+                raw = conn.connection.driver_connection
+                cursor = getattr(result, "cursor", None)
+                info = (
+                    _postgresql_query_columns(raw, cursor) if cursor is not None else None
+                )
+                return fetch_query_result(result, max_rows=max_rows, column_info=info)
         except Exception as exc:  # noqa: BLE001
             raise query_endpoint_error(exc) from exc
         finally:
@@ -261,6 +267,18 @@ def _set_postgresql_timeout(raw: object, deadline: float) -> None:
     timeout_ms = remaining_millis(deadline)
     with raw.cursor() as cursor:  # type: ignore[attr-defined]
         cursor.execute(f"SET LOCAL statement_timeout = {timeout_ms}")
+
+
+def _postgresql_query_columns(raw: object, cursor: object) -> list[QueryColumn]:
+    """Reuse format_type. PostgreSQL does not report nullable on the cursor."""
+    return [
+        QueryColumn(
+            name=column.name,
+            native_type=column.native_type or None,
+            nullable=None,
+        )
+        for column in _postgresql_columns(raw, cursor)
+    ]
 
 
 def _postgresql_columns(raw: object, cursor: object) -> list[StreamColumn]:

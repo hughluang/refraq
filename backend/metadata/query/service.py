@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -10,6 +11,8 @@ from typing import Any, Mapping
 
 from backend.admin.audit import persist_audit_event
 from backend.core.errors import AppError
+from backend.core.time import encode_temporal_cell
+from backend.metadata.catalog.normalized_type import canonicalize_native_type
 from backend.metadata.parameters import query_max_rows, query_timeout_sec
 from backend.metadata.catalog.service import get_object
 from backend.metadata.connectors.base import ConnectorError, QueryResult
@@ -29,17 +32,22 @@ from backend.metadata.query.compile_sample import (
     compile_sample_sql,
 )
 from backend.metadata.query.guards import assert_readonly_single_statement
+from backend.metadata.source_statements import _temporal_kind
 from backend.metadata.sources.access import decrypt_access_blob
 from backend.metadata.sources.service import require_source
 
 DEFAULT_MAX_ROWS = 100
 DEFAULT_SAMPLE_LIMIT = 50
 _SQL_SUMMARY_MAX = 200
+_FIRST_PRECISION = re.compile(r"\((\d+)")
+_SECOND_PRECISION = re.compile(r"second\s*\(\s*(\d+)", re.IGNORECASE)
+_INTERVAL_TYPE_PRECISION = re.compile(r"^interval\s*\(\s*(\d+)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
 class QueryOutcome:
     columns: list[str]
+    declarations: list[dict[str, Any]]
     rows: list[list[Any]]
     truncated: bool
     duration_ms: int
@@ -48,6 +56,7 @@ class QueryOutcome:
 @dataclass(frozen=True)
 class SampleOutcome:
     columns: list[str]
+    declarations: list[dict[str, Any]]
     rows: list[list[Any]]
     truncated: bool
     duration_ms: int
@@ -221,6 +230,61 @@ def _execute_readonly_audited(
         raise QueryFailed(str(exc)) from exc
 
 
+def _fractional_precision(native_type: str, kind: str) -> int | None:
+    if kind in {"interval", "interval_fixed"}:
+        second = _SECOND_PRECISION.search(native_type)
+        if second is not None:
+            return int(second.group(1))
+        # day(2) and year(2) are field widths, not fractional seconds.
+        own = _INTERVAL_TYPE_PRECISION.match(native_type.strip())
+        if own is not None:
+            return int(own.group(1))
+        return None
+    groups = _FIRST_PRECISION.findall(native_type)
+    if not groups:
+        return None
+    return int(groups[0])
+
+
+def _classify_temporal(engine: str, native_type: str | None) -> tuple[str | None, int | None]:
+    if native_type is None or not str(native_type).strip():
+        return None, None
+    raw = str(native_type).strip()
+    kind = _temporal_kind(engine, canonicalize_native_type(raw))
+    if kind is None or kind in {"date", "interval_calendar"}:
+        return kind, None
+    return kind, _fractional_precision(raw, kind)
+
+
+def _present_query(
+    result: QueryResult, engine: str
+) -> tuple[list[dict[str, Any]], list[list[Any]]]:
+    """Declarations aligned with column names, cells encoded from those declarations."""
+    infos = result.column_info or []
+    declarations: list[dict[str, Any]] = []
+    for index, name in enumerate(result.columns):
+        info = infos[index] if index < len(infos) else None
+        native = info.native_type if info is not None else None
+        nullable = info.nullable if info is not None and isinstance(info.nullable, bool) else None
+        kind, precision = _classify_temporal(engine, native)
+        declarations.append(
+            {
+                "name": name,
+                "temporal_kind": kind,
+                "precision": precision,
+                "nullable": nullable,
+            }
+        )
+    rows: list[list[Any]] = []
+    for row in result.rows:
+        encoded: list[Any] = []
+        for index, value in enumerate(row):
+            kind = declarations[index]["temporal_kind"] if index < len(declarations) else None
+            encoded.append(encode_temporal_cell(value, kind))
+        rows.append(encoded)
+    return declarations, rows
+
+
 def run_controlled_query(
     *,
     source_id: str,
@@ -264,9 +328,12 @@ def run_controlled_query(
         run=run,
     )
     duration_ms = int((time.perf_counter() - started) * 1000)
+    engine = require_source(source_id).engine or ""
+    declarations, rows = _present_query(result, engine)
     return QueryOutcome(
         columns=result.columns,
-        rows=result.rows,
+        declarations=declarations,
+        rows=rows,
         truncated=result.truncated,
         duration_ms=duration_ms,
     )
@@ -291,9 +358,10 @@ def run_catalog_sample(
     started = time.perf_counter()
     compiled_sql = ""
     success_resource_id = object_id
+    source_engine = ""
 
     def run() -> QueryResult:
-        nonlocal compiled_sql, success_resource_id
+        nonlocal compiled_sql, success_resource_id, source_engine
         if effective_offset < 0:
             raise SampleFilterInvalid(f"offset must be >= 0, got {effective_offset}")
         if effective_limit < 1:
@@ -317,6 +385,7 @@ def run_catalog_sample(
         source = require_source(obj.source_id)
         if not source.engine:
             raise SourceEngineUnsupported()
+        source_engine = source.engine
 
         known = {c.name for c in obj.columns if c.is_present}
         compiled_sql = compile_sample_sql(
@@ -357,9 +426,11 @@ def run_catalog_sample(
     )
     duration_ms = int((time.perf_counter() - started) * 1000)
     has_more = len(result.rows) == effective_limit
+    declarations, rows = _present_query(result, source_engine)
     return SampleOutcome(
         columns=result.columns,
-        rows=result.rows,
+        declarations=declarations,
+        rows=rows,
         truncated=result.truncated,
         duration_ms=duration_ms,
         offset=effective_offset,

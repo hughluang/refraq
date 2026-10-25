@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 __all__ = [
+    "ColumnDeclaration",
     "QueryRequest",
     "QueryResponse",
     "SampleFilterIn",
@@ -24,8 +25,29 @@ class QueryRequest(BaseModel):
     max_rows: int | None = Field(default=None, ge=1)
 
 
+TemporalKind = Literal[
+    "date",
+    "time",
+    "time_with_offset",
+    "local_datetime",
+    "timestamp_with_time_zone",
+    "timestamp_with_local_time_zone",
+    "interval",
+    "interval_calendar",
+    "interval_fixed",
+]
+
+
+class ColumnDeclaration(BaseModel):
+    name: str
+    temporal_kind: TemporalKind | None = None
+    precision: int | None = None
+    nullable: bool | None = None
+
+
 class QueryResponse(BaseModel):
     columns: list[str]
+    declarations: list[ColumnDeclaration]
     rows: list[list[Any]]
     truncated: bool
     duration_ms: int
@@ -53,6 +75,7 @@ class SampleRequest(BaseModel):
 
 class SampleResponse(BaseModel):
     columns: list[str]
+    declarations: list[ColumnDeclaration]
     rows: list[list[Any]]
     truncated: bool
     duration_ms: int

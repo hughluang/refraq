@@ -14,6 +14,7 @@ from backend.metadata.connectors.base import (
     CollectProgress,
     ChunkIterator,
     ConnectorError,
+    QueryColumn,
     QueryResult,
     SourceEndpoint,
     StreamColumn,
@@ -70,7 +71,9 @@ class OracleConnector:
         try:
             with eng.connect() as conn:
                 result = conn.execute(text(sql))
-                return fetch_query_result(result, max_rows=max_rows)
+                cursor = getattr(result, "cursor", None)
+                info = _oracle_query_columns(cursor) if cursor is not None else None
+                return fetch_query_result(result, max_rows=max_rows, column_info=info)
         except Exception as exc:  # noqa: BLE001
             raise query_endpoint_error(exc) from exc
         finally:
@@ -253,6 +256,33 @@ def _oracle_native(dbtype: object, precision: object, scale: object) -> str:
     if isinstance(scale, bool) or not isinstance(scale, int) or scale < 0:
         return f"{base}({precision})"
     return f"{base}({precision},{scale})"
+
+
+def _described_type_name(type_code: object) -> str | None:
+    if isinstance(type_code, str) and type_code.strip():
+        return type_code.strip()
+    name = getattr(type_code, "name", None)
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return None
+
+
+def _oracle_query_columns(cursor: object) -> list[QueryColumn]:
+    """Copy Oracle type names already on the cursor. Do not infer Python classes."""
+    described = getattr(cursor, "description", None) or []
+    columns: list[QueryColumn] = []
+    for item in described:
+        type_code = item[1] if len(item) > 1 else None
+        native = None
+        if _described_type_name(type_code) is not None:
+            precision = item[4] if len(item) > 4 else None
+            scale = item[5] if len(item) > 5 else None
+            native = _oracle_native(type_code, precision, scale)
+        nullable = item[6] if len(item) > 6 and isinstance(item[6], bool) else None
+        columns.append(
+            QueryColumn(name=str(item[0]), native_type=native, nullable=nullable)
+        )
+    return columns
 
 
 def _oracle_columns(cursor: object) -> list[StreamColumn]:

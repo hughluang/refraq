@@ -5,8 +5,9 @@ See docs/conventions-time.md and docs/adr/0022-unified-time-contract.md.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Annotated, Protocol, runtime_checkable
+import re
+from datetime import date, datetime, time, timedelta, timezone
+from typing import Annotated, Any, Protocol, runtime_checkable
 from zoneinfo import ZoneInfo
 
 from pydantic import AfterValidator, AwareDatetime, PlainSerializer, WithJsonSchema
@@ -14,6 +15,15 @@ from sqlalchemy import DateTime
 from sqlalchemy.types import TypeDecorator
 
 UTC = timezone.utc
+
+_FRACTION_ZEROS = re.compile(r"(\.\d*?)0+(?=(?:[+-]\d{2}:\d{2})?$)")
+
+
+def _strip_fraction_zeros(text: str) -> str:
+    stripped = _FRACTION_ZEROS.sub(r"\1", text)
+    if stripped.endswith("."):
+        return stripped[:-1]
+    return stripped.replace(".+", "+").replace(".-", "-")
 
 
 class NaiveDateTimeError(TypeError):
@@ -38,6 +48,75 @@ def format_instant(value: datetime, *, timespec: str = "seconds") -> str:
     if text.endswith("-00:00"):
         return f"{text[:-6]}Z"
     return text
+
+
+def _encode_elapsed(value: timedelta) -> str:
+    """ISO-8601 duration of a timedelta. Months are already gone."""
+    if value < timedelta(0):
+        return f"-{_encode_elapsed(-value)}"
+    days = value.days
+    hours, remainder = divmod(value.seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    fraction = ""
+    if value.microseconds:
+        fraction = "." + f"{value.microseconds:06d}".rstrip("0")
+    clock = ""
+    if hours:
+        clock += f"{hours}H"
+    if minutes:
+        clock += f"{minutes}M"
+    if seconds or fraction or not clock:
+        clock += f"{seconds}{fraction}S"
+    if days and clock == "0S":
+        return f"P{days}D"
+    if days:
+        return f"P{days}DT{clock}"
+    return f"PT{clock}"
+
+
+def encode_temporal_cell(value: Any, temporal_kind: str | None) -> Any:
+    """Encode one query cell from its column declaration.
+
+    Platform Instant formatting is not used. A missing declaration leaves
+    strings unchanged.
+    """
+    if value is None:
+        return None
+    if temporal_kind == "date":
+        if isinstance(value, datetime):
+            return value.replace(tzinfo=None).date().isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+    if temporal_kind == "time":
+        clock = value.time() if isinstance(value, datetime) else value
+        if isinstance(clock, time):
+            return _strip_fraction_zeros(clock.replace(tzinfo=None).isoformat())
+    if temporal_kind == "time_with_offset":
+        clock = value.timetz() if isinstance(value, datetime) else value
+        if isinstance(clock, time):
+            return _strip_fraction_zeros(clock.isoformat())
+    if (
+        temporal_kind in {"local_datetime", "timestamp_with_local_time_zone"}
+        and isinstance(value, datetime)
+    ):
+        return _strip_fraction_zeros(value.replace(tzinfo=None).isoformat())
+    if temporal_kind == "timestamp_with_time_zone" and isinstance(value, datetime):
+        return _strip_fraction_zeros(value.isoformat())
+    if temporal_kind in {"interval", "interval_fixed", "interval_calendar"} and isinstance(
+        value, timedelta
+    ):
+        return _encode_elapsed(value)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, datetime):
+        return _strip_fraction_zeros(value.isoformat())
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, time):
+        return _strip_fraction_zeros(value.isoformat())
+    if isinstance(value, timedelta):
+        return _encode_elapsed(value)
+    return value
 
 
 def parse_instant(value: str) -> datetime:

@@ -32,6 +32,7 @@ async def run_query(
     outcome = await await_admitted(user.id, _run)
     return QueryResponse(
         columns=outcome.columns,
+        declarations=outcome.declarations,
         rows=outcome.rows,
         truncated=outcome.truncated,
         duration_ms=outcome.duration_ms,

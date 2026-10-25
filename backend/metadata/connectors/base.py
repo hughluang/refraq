@@ -68,11 +68,25 @@ class CollectedStructure:
     objects: list[CollectedObject] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class QueryColumn:
+    """Type facts copied from the cursor for one query column.
+
+    ``native_type`` is empty when the cursor did not carry a type name.
+    ``nullable`` stays unknown unless the cursor reported a boolean.
+    """
+
+    name: str
+    native_type: str | None = None
+    nullable: bool | None = None
+
+
 @dataclass
 class QueryResult:
     columns: list[str]
     rows: list[list[Any]]
     truncated: bool
+    column_info: list[QueryColumn] | None = None
 
 
 @dataclass
@@ -294,8 +308,17 @@ def query_endpoint_error(exc: BaseException) -> ConnectorError:
     return ConnectorError(code, str(exc))
 
 
-def fetch_query_result(result: Any, *, max_rows: int) -> QueryResult:
-    """Consume a SQLAlchemy Result with max_rows cap and truncated flag."""
+def fetch_query_result(
+    result: Any,
+    *,
+    max_rows: int,
+    column_info: list[QueryColumn] | None = None,
+) -> QueryResult:
+    """Consume a SQLAlchemy Result with max_rows cap and truncated flag.
+
+    ``column_info`` is the cursor type facts for this result. Cells stay as the
+    driver returned them; statement streaming still reads those raw values.
+    """
     columns = list(result.keys())
     rows: list[list[Any]] = []
     truncated = False
@@ -304,7 +327,12 @@ def fetch_query_result(result: Any, *, max_rows: int) -> QueryResult:
             truncated = True
             break
         rows.append([value for value in row])
-    return QueryResult(columns=columns, rows=rows, truncated=truncated)
+    return QueryResult(
+        columns=columns,
+        rows=rows,
+        truncated=truncated,
+        column_info=column_info,
+    )
 
 
 def statement_rowcount(result: Any) -> int | None:

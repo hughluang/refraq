@@ -246,6 +246,7 @@ async def run_object_sample(
     outcome = await await_admitted(user.id, _run)
     return SampleResponse(
         columns=outcome.columns,
+        declarations=outcome.declarations,
         rows=outcome.rows,
         truncated=outcome.truncated,
         duration_ms=outcome.duration_ms,

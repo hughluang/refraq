@@ -14,6 +14,7 @@ from sqlalchemy import create_engine, text
 from backend.metadata.connectors.base import (
     CollectedStructure,
     CollectProgress,
+    QueryColumn,
     QueryResult,
     SourceEndpoint,
     ChunkIterator,
@@ -74,7 +75,9 @@ class MssqlConnector:
         try:
             with eng.connect() as conn:
                 result = conn.execute(text(sql))
-                return fetch_query_result(result, max_rows=max_rows)
+                cursor = getattr(result, "cursor", None)
+                info = _mssql_query_columns(cursor) if cursor is not None else None
+                return fetch_query_result(result, max_rows=max_rows, column_info=info)
         except Exception as exc:  # noqa: BLE001
             raise query_endpoint_error(exc) from exc
         finally:
@@ -208,6 +211,26 @@ class MssqlConnector:
             # pymssql: query timeout in seconds (not LOCK_TIMEOUT).
             connect_args["timeout"] = max(1, int(timeout_sec))
         return create_engine(url, pool_pre_ping=True, connect_args=connect_args)
+
+
+def _mssql_query_columns(cursor: object) -> list[QueryColumn]:
+    """Copy a type name only when the cursor description already has one.
+
+    pymssql fills type_code with a DB-API integer, not a type name. That integer
+    is not a temporal declaration.
+    """
+    described = getattr(cursor, "description", None) or []
+    columns: list[QueryColumn] = []
+    for item in described:
+        type_code = item[1] if len(item) > 1 else None
+        native = None
+        if isinstance(type_code, str) and type_code.strip():
+            native = type_code.strip()
+        nullable = item[6] if len(item) > 6 and isinstance(item[6], bool) else None
+        columns.append(
+            QueryColumn(name=str(item[0]), native_type=native, nullable=nullable)
+        )
+    return columns
 
 
 def _open_mssql_stream(raw: object, sql: str) -> tuple[list[StreamColumn], object]:

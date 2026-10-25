@@ -763,6 +763,7 @@ async def run_sql(
         return _dumps(
             {
                 "columns": outcome.columns,
+                "declarations": outcome.declarations,
                 "rows": outcome.rows,
                 "truncated": outcome.truncated,
                 "duration_ms": outcome.duration_ms,
