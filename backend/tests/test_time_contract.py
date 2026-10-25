@@ -64,9 +64,34 @@ def test_format_and_parse_instant_roundtrip() -> None:
     assert parse_instant("2026-08-12T10:00:00+08:00") == instant
 
 
+def test_format_instant_truncates_fractional_seconds_toward_zero() -> None:
+    instant = datetime(2026, 8, 12, 2, 0, 5, 900000, tzinfo=timezone.utc)
+    assert format_instant(instant) == "2026-08-12T02:00:05Z"
+
+
 def test_parse_instant_rejects_naive_string() -> None:
     with pytest.raises(ValueError):
         parse_instant("2026-08-12T10:00:00")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "2026-08-12T02:00:05.9",
+        "2026-08-12T02:00:05",
+        "2026-08-12T24:00:00Z",
+        "2016-12-31T23:59:60Z",
+    ],
+)
+def test_parse_instant_rejects_offsetless_naive_24h_and_leap_seconds(text: str) -> None:
+    with pytest.raises(ValueError):
+        parse_instant(text)
+
+
+def test_parse_instant_keeps_fractional_offset_as_aware_utc() -> None:
+    parsed = parse_instant("2026-08-12T10:00:05.9+08:00")
+    assert parsed == datetime(2026, 8, 12, 2, 0, 5, 900000, tzinfo=timezone.utc)
+    assert parsed.utcoffset() == timedelta(0)
 
 
 class _InstantModel(BaseModel):
@@ -184,6 +209,50 @@ def _declares_date_time(node: Any, defs: dict[str, Any], seen: set[str] | None =
     return False
 
 
+def _annotation_is_datetime(annotation: Any) -> bool:
+    if annotation is datetime:
+        return True
+    if get_origin(annotation) is None:
+        return False
+    return any(_annotation_is_datetime(arg) for arg in get_args(annotation))
+
+
+def datetime_fields_missing_instant(model: type[BaseModel]) -> list[str]:
+    """Datetime response fields the marked-only Instant walk does not visit."""
+    missing: list[str] = []
+    for name, field in model.model_fields.items():
+        if field.exclude or _field_is_instant(field):
+            continue
+        if _annotation_is_datetime(field.annotation):
+            missing.append(name)
+    return missing
+
+
+def test_positive_checks_and_count_floor_miss_unmarked_datetime_response() -> None:
+    from backend.main import app
+
+    class UnmarkedResponse(BaseModel):
+        occurred_at: datetime
+
+    app.openapi()
+    positive = [
+        name
+        for name, field in UnmarkedResponse.model_fields.items()
+        if _field_is_instant(field) and not field.exclude
+    ]
+    marked = sum(
+        1
+        for model in _iter_models()
+        for field in model.model_fields.values()
+        if _field_is_instant(field) and not field.exclude
+    )
+    schema = UnmarkedResponse.model_json_schema(mode="serialization")
+    assert positive == []
+    assert marked >= 67
+    assert schema["properties"]["occurred_at"]["format"] == "date-time"
+    assert datetime_fields_missing_instant(UnmarkedResponse) == ["occurred_at"]
+
+
 def test_instant_fields_declare_date_time() -> None:
     from backend.main import app
 
@@ -210,8 +279,8 @@ def test_instant_fields_declare_date_time() -> None:
             if not _declares_date_time(published_prop, components):
                 missing.append(f"openapi {model.__name__}.{name}")
     assert missing == [], missing
-    # Every Instant field on a loaded model, not only those FastAPI names
-    # exactly after the class. 67 is the field count this contract started from.
+    # Already-marked fields only. A count floor does not notice an unmarked
+    # datetime response field; that gap is test_positive_checks_and_count_floor_miss_unmarked_datetime_response.
     assert local_checked >= 67, local_checked
     assert published_checked > 0
 
