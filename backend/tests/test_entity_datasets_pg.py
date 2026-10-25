@@ -173,7 +173,15 @@ def test_dataset_reference_schema_names_id_columns_and_count() -> None:
     )
     assert value == {
         "dataset_id": "dabc",
-        "columns": [{"name": "n", "type": "integer"}],
+        "columns": [
+            {
+                "name": "n",
+                "type": "integer",
+                "temporal_kind": None,
+                "precision": None,
+                "nullable": None,
+            }
+        ],
         "count": 2,
     }
     Draft202012Validator(DATASET_REFERENCE_SCHEMA).validate(value)
@@ -350,8 +358,20 @@ def test_ctas_round_trip_stores_rows_without_rls(
         dataset_id=record.id, columns=record.columns, count=record.row_count
     )
     assert reference["columns"] == [
-        {"name": "n", "type": "integer"},
-        {"name": "label", "type": "string"},
+        {
+            "name": "n",
+            "type": "integer",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
+        {
+            "name": "label",
+            "type": "string",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
     ]
     assert "relation" not in reference
     page = registry.read_page(record.id, after_ord=0, limit=10)
@@ -514,10 +534,34 @@ def test_chunked_copy_round_trip_uses_normalized_types(
         dataset_id=record.id, columns=record.columns, count=record.row_count
     )
     assert reference["columns"] == [
-        {"name": "n", "type": "integer"},
-        {"name": "label", "type": "string"},
-        {"name": "amount", "type": "decimal"},
-        {"name": "seen", "type": "timestamp"},
+        {
+            "name": "n",
+            "type": "integer",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
+        {
+            "name": "label",
+            "type": "string",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
+        {
+            "name": "amount",
+            "type": "decimal",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
+        {
+            "name": "seen",
+            "type": "timestamp",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
     ]
     first = registry.read_page(record.id, after_ord=0, limit=2)
     assert [row["_ord"] for row in first] == [1, 2]

@@ -246,9 +246,27 @@ def test_dataset_query_loads_entity_data_and_pages_arrival_order(
     assert "relation" not in probe["dataset"]
     assert probe["count"] == probe["dataset"]["count"] == 1
     assert probe["dataset"]["columns"] == [
-        {"name": "code", "type": "string"},
-        {"name": "path", "type": "string"},
-        {"name": "timeout", "type": "string"},
+        {
+            "name": "code",
+            "type": "string",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
+        {
+            "name": "path",
+            "type": "string",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
+        {
+            "name": "timeout",
+            "type": "string",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
     ]
     stored = _record(probe["dataset"]["dataset_id"])
     assert stored is not None
@@ -276,8 +294,20 @@ def test_dataset_query_loads_entity_data_and_pages_arrival_order(
     dataset = ordered.output["dataset"]
     Draft202012Validator(DATASET_REFERENCE_SCHEMA).validate(dataset)
     assert dataset["columns"] == [
-        {"name": "n", "type": "integer"},
-        {"name": "label", "type": "string"},
+        {
+            "name": "n",
+            "type": "integer",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
+        {
+            "name": "label",
+            "type": "string",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
     ]
     assert ordered.output["count"] == 3
     first = _page(dataset["dataset_id"], after_ord=0, limit=2)
@@ -415,15 +445,69 @@ def test_materialize_infers_types_and_copies_chunks(
     Draft202012Validator(DATASET_REFERENCE_SCHEMA).validate(dataset)
     assert result.output["count"] == dataset["count"] == 2
     assert dataset["columns"] == [
-        {"name": "flag", "type": "boolean"},
-        {"name": "n", "type": "integer"},
-        {"name": "qty", "type": "number"},
-        {"name": "name", "type": "string"},
-        {"name": "big", "type": "decimal"},
-        {"name": "payload", "type": "json"},
-        {"name": "tags", "type": "json"},
-        {"name": "mixed", "type": "json"},
-        {"name": "blank", "type": "string"},
+        {
+            "name": "flag",
+            "type": "boolean",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
+        {
+            "name": "n",
+            "type": "integer",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
+        {
+            "name": "qty",
+            "type": "number",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
+        {
+            "name": "name",
+            "type": "string",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
+        {
+            "name": "big",
+            "type": "decimal",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
+        {
+            "name": "payload",
+            "type": "json",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
+        {
+            "name": "tags",
+            "type": "json",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
+        {
+            "name": "mixed",
+            "type": "json",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
+        {
+            "name": "blank",
+            "type": "string",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
     ]
     stored = _record(dataset["dataset_id"])
     assert stored is not None

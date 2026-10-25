@@ -181,10 +181,34 @@ def test_dataset_query_streams_a_source_without_loading_every_row(
     assert calls == [materialize._CHUNK_ROWS]
     assert result.output["count"] == 1001
     assert result.output["dataset"]["columns"] == [
-        {"name": "n", "type": "integer"},
-        {"name": "qty", "type": "decimal"},
-        {"name": "ts", "type": "timestamp"},
-        {"name": "tag", "type": "unknown"},
+        {
+            "name": "n",
+            "type": "integer",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
+        {
+            "name": "qty",
+            "type": "decimal",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
+        {
+            "name": "ts",
+            "type": "timestamp",
+            "temporal_kind": "timestamp_with_time_zone",
+            "precision": None,
+            "nullable": None,
+        },
+        {
+            "name": "tag",
+            "type": "unknown",
+            "temporal_kind": None,
+            "precision": None,
+            "nullable": None,
+        },
     ]
     stored = get_dataset_store().get(result.output["dataset"]["dataset_id"])
     assert stored is not None

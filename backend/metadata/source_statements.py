@@ -34,6 +34,21 @@ __all__ = [
 _STREAM_ENGINES = frozenset({"postgresql", "oracle", "mssql"})
 _TRAILING_ARGS = re.compile(r"\(([^()]*)\)\s*$")
 _ZONE_NAMES = frozenset({"timestamptz", "timetz", "datetimeoffset"})
+_FRACTIONAL_PRECISION = re.compile(
+    r"^(?:timestamp|timestamptz|datetime2|datetimeoffset|time|timetz)\s*\((\d+)(?:,\s*0)?\)",
+    re.IGNORECASE,
+)
+_SECOND_PRECISION = re.compile(r"second\s*\((\d+)\)", re.IGNORECASE)
+_OFFSET_KINDS = frozenset({"timestamp_with_time_zone", "time_with_offset"})
+_LOCAL_DATETIME_NAMES = frozenset(
+    {
+        "timestamp",
+        "timestamp without time zone",
+        "datetime",
+        "datetime2",
+        "smalldatetime",
+    }
+)
 
 
 class SourceStatementRejected(Exception):
@@ -70,6 +85,8 @@ class SourceStreamColumn:
     precision: int | None = None
     scale: int | None = None
     with_time_zone: bool = False
+    temporal_kind: str | None = None
+    nullable: bool | None = None
 
 
 @dataclass
@@ -113,7 +130,12 @@ def stream_source_statement(
     )
     try:
         columns = [
-            _resolved_column(engine, column.name, column.native_type)
+            _resolved_column(
+                engine,
+                column.name,
+                column.native_type,
+                nullable=_column_nullable(column),
+            )
             for column in streamed.columns
         ]
     except Exception:  # noqa: BLE001 — release the open stream, then keep the original error
@@ -122,16 +144,92 @@ def stream_source_statement(
     return SourceStream(columns=columns, chunks=streamed.chunks)
 
 
-def _resolved_column(engine: str, name: str, native_type: str) -> SourceStreamColumn:
+def _resolved_column(
+    engine: str,
+    name: str,
+    native_type: str,
+    *,
+    nullable: bool | None,
+) -> SourceStreamColumn:
     normalized = resolve_normalized_type(engine=engine, data_type=native_type)
     precision, scale, with_time_zone = _type_facts(native_type, normalized)
+    temporal_kind, fractional = _temporal_declaration(engine, native_type)
+    if temporal_kind is not None:
+        precision = fractional
+        scale = None
+        with_time_zone = temporal_kind in _OFFSET_KINDS
     return SourceStreamColumn(
         name=name,
         normalized_type=normalized,
         precision=precision,
         scale=scale,
         with_time_zone=with_time_zone,
+        temporal_kind=temporal_kind,
+        nullable=nullable,
     )
+
+
+def _column_nullable(column: object) -> bool | None:
+    """Use a nullable fact only when the driver supplied a boolean."""
+    if not hasattr(column, "nullable"):
+        return None
+    value = getattr(column, "nullable")
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def _temporal_declaration(engine: str, native_type: str) -> tuple[str | None, int | None]:
+    folded = canonicalize_native_type(native_type)
+    kind = _temporal_kind(engine, folded)
+    if kind is None:
+        return None, None
+    return kind, _fractional_precision(native_type, kind)
+
+
+def _temporal_kind(engine: str, folded: str) -> str | None:
+    if folded == "timestamp with local time zone":
+        return "timestamp_with_local_time_zone"
+    if folded in {"timestamp with time zone", "timestamptz", "datetimeoffset"}:
+        return "timestamp_with_time_zone"
+    if folded in {"time with time zone", "timetz"}:
+        return "time_with_offset"
+    if folded == "interval year to month":
+        return "interval_calendar"
+    if folded == "interval day to second":
+        return "interval_fixed"
+    if folded == "interval":
+        return "interval"
+    if folded in {"time", "time without time zone"}:
+        return "time"
+    if engine == "oracle" and folded == "date":
+        return "local_datetime"
+    if folded == "date":
+        return "date"
+    if engine == "mssql" and folded == "timestamp":
+        return None
+    if folded in _LOCAL_DATETIME_NAMES:
+        return "local_datetime"
+    return None
+
+
+def _fractional_precision(native_type: str, kind: str) -> int | None:
+    text = str(native_type).strip()
+    if kind == "interval_fixed":
+        match = _SECOND_PRECISION.search(text)
+    elif kind in {
+        "local_datetime",
+        "timestamp_with_time_zone",
+        "timestamp_with_local_time_zone",
+        "time",
+        "time_with_offset",
+    }:
+        match = _FRACTIONAL_PRECISION.search(text)
+    else:
+        return None
+    if match is None:
+        return None
+    return int(match.group(1))
 
 
 def _type_facts(native_type: str, normalized: str) -> tuple[int | None, int | None, bool]:

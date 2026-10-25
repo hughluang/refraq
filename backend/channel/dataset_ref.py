@@ -23,6 +23,23 @@ DATASET_REFERENCE_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "name": {"type": "string"},
                     "type": {"type": "string"},
+                    "temporal_kind": {
+                        "type": ["string", "null"],
+                        "enum": [
+                            "date",
+                            "time",
+                            "time_with_offset",
+                            "local_datetime",
+                            "timestamp_with_time_zone",
+                            "timestamp_with_local_time_zone",
+                            "interval",
+                            "interval_calendar",
+                            "interval_fixed",
+                            None,
+                        ],
+                    },
+                    "precision": {"type": ["integer", "null"], "minimum": 0},
+                    "nullable": {"type": ["boolean", "null"]},
                 },
             },
         },
@@ -39,14 +56,25 @@ def dataset_reference(
 ) -> dict[str, Any]:
     """``{dataset_id, columns, count}``.
 
-    Each column keeps ``name`` and ``type``. ``type`` is the Normalized Type
-    stored as ``normalized_type`` on the registry row, not the physical
-    PostgreSQL type.
+    Each column keeps ``name`` and ``type``, plus the temporal declaration.
+    ``type`` is the Normalized Type stored as ``normalized_type`` on the
+    registry row, not the physical PostgreSQL type. ``precision`` is the
+    fractional precision already declared for a temporal column.
     """
     return {
         "dataset_id": dataset_id,
-        "columns": [
-            {"name": column["name"], "type": column["normalized_type"]} for column in columns
-        ],
+        "columns": [_reference_column(column) for column in columns],
         "count": count,
+    }
+
+
+def _reference_column(column: Mapping[str, Any]) -> dict[str, Any]:
+    kind = column.get("temporal_kind")
+    precision = column.get("precision") if kind else None
+    return {
+        "name": column["name"],
+        "type": column["normalized_type"],
+        "temporal_kind": kind,
+        "precision": precision,
+        "nullable": column.get("nullable"),
     }

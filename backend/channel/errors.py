@@ -21,6 +21,7 @@ __all__ = [
     "ChannelVersionNotFound",
     "EmailAccountInUse",
     "EmailAccountNotFound",
+    "TemporalTargetIncompatible",
     "WebhookInUse",
     "WebhookNotFound",
     "WebhookUrlRejected",
@@ -187,4 +188,34 @@ class ChannelRequestInvalid(AppError):
 
     def _default_message(self) -> str:
         return "Request validation failed"
+
+
+class TemporalTargetIncompatible(AppError):
+    """The target cannot store a temporal declaration. Raised before SQL."""
+
+    code = "TEMPORAL_TARGET_INCOMPATIBLE"
+    http_status = 422
+
+    def __init__(
+        self,
+        *,
+        declaration: Any,
+        value: Any,
+        target_limit: Any,
+        message: str | None = None,
+    ) -> None:
+        self.declaration = declaration
+        self.value = value
+        self.target_limit = target_limit
+        super().__init__(message)
+
+    def extra_members(self) -> dict[str, Any]:
+        return {
+            "declaration": self.declaration,
+            "value": self.value,
+            "target_limit": self.target_limit,
+        }
+
+    def _default_message(self) -> str:
+        return "Temporal declaration cannot be stored"
 

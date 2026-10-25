@@ -13,13 +13,14 @@ import copy
 import logging
 import threading
 import uuid
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select, update
 
+from backend.channel.errors import TemporalTargetIncompatible
 from backend.channel.models import ChannelDatasetRow
 from backend.channel.parameters import (
     channel_dataset_max_total_gb,
@@ -36,11 +37,14 @@ from backend.entity.datasets import (
     copy_chunks,
     create_table_from_query,
     drop_relation,
+    format_type_declaration,
     list_dataset_relations,
     normalized_type_of,
     physical_relation,
     postgres_type,
     read_keyset_page,
+    temporal_target_conflict,
+    temporal_value_conflict,
 )
 from backend.jobs.store import TERMINAL, get_job_store
 
@@ -87,6 +91,8 @@ class DatasetColumnSpec:
     precision: int | None = None
     scale: int | None = None
     with_time_zone: bool = False
+    temporal_kind: str | None = None
+    nullable: bool | None = None
 
 
 class DatasetQuotaExceeded(Exception):
@@ -299,8 +305,7 @@ class DatasetRegistry:
         try:
             row_count, size = create_table_from_query(record.relation, query)
             columns = [
-                {**column, "normalized_type": normalized_type_of(column["type"])}
-                for column in column_types(record.relation)
+                _declared_format_column(column) for column in column_types(record.relation)
             ]
         except Exception:
             self._drop_failed(record)
@@ -316,6 +321,7 @@ class DatasetRegistry:
         columns: Sequence[DatasetColumnSpec],
         chunks: Iterable[Sequence[Sequence[Any]]],
     ) -> DatasetRecord:
+        _reject_temporal_target(columns)
         record = self._begin(job_id=job_id, node_id=node_id, seq=seq)
 
         def on_chunk(size: int) -> None:
@@ -328,7 +334,7 @@ class DatasetRegistry:
             row_count, size = copy_chunks(
                 record.relation,
                 [_pg_column(column) for column in columns],
-                chunks,
+                _reject_temporal_values(columns, chunks),
                 on_chunk_size=on_chunk,
             )
             stored_columns = _with_normalized_types(column_types(record.relation), columns)
@@ -398,12 +404,63 @@ class DatasetRegistry:
         return record
 
 
+def _declared_format_column(column: dict[str, str]) -> dict[str, Any]:
+    kind, precision = format_type_declaration(column["type"])
+    return {
+        **column,
+        "normalized_type": normalized_type_of(column["type"]),
+        "temporal_kind": kind,
+        "precision": precision,
+        "nullable": None,
+    }
+
+
+def _reject_temporal_values(
+    columns: Sequence[DatasetColumnSpec],
+    chunks: Iterable[Sequence[Sequence[Any]]],
+) -> Iterator[Sequence[Sequence[Any]]]:
+    specs = list(columns)
+    for chunk in chunks:
+        for row in chunk:
+            if isinstance(row, (str, bytes)) or not isinstance(row, Sequence):
+                continue
+            for spec, cell in zip(specs, row):
+                conflict = temporal_value_conflict(
+                    temporal_kind=spec.temporal_kind,
+                    precision=spec.precision,
+                    value=cell,
+                )
+                if conflict is None:
+                    continue
+                raise TemporalTargetIncompatible(
+                    declaration=conflict["declaration"],
+                    value=conflict["value"],
+                    target_limit=conflict["target_limit"],
+                )
+        yield chunk
+
+
+def _reject_temporal_target(columns: Sequence[DatasetColumnSpec]) -> None:
+    for column in columns:
+        conflict = temporal_target_conflict(
+            temporal_kind=column.temporal_kind,
+            precision=column.precision,
+        )
+        if conflict is not None:
+            raise TemporalTargetIncompatible(
+                declaration=conflict["declaration"],
+                value=conflict["value"],
+                target_limit=conflict["target_limit"],
+            )
+
+
 def _pg_column(column: DatasetColumnSpec) -> tuple[str, str]:
     return column.name, postgres_type(
         column.normalized_type,
         precision=column.precision,
         scale=column.scale,
         with_time_zone=column.with_time_zone,
+        temporal_kind=column.temporal_kind,
     )
 
 
@@ -507,8 +564,17 @@ def reset_dataset_store() -> None:
 def _with_normalized_types(
     columns: list[dict[str, str]], specs: Sequence[DatasetColumnSpec]
 ) -> list[dict[str, Any]]:
-    by_name = {spec.name: spec.normalized_type for spec in specs}
+    by_name = {spec.name: spec for spec in specs}
     stored: list[dict[str, Any]] = []
     for column in columns:
-        stored.append({**column, "normalized_type": by_name[column["name"]]})
+        spec = by_name[column["name"]]
+        stored.append(
+            {
+                **column,
+                "normalized_type": spec.normalized_type,
+                "temporal_kind": spec.temporal_kind,
+                "precision": spec.precision if spec.temporal_kind else None,
+                "nullable": spec.nullable,
+            }
+        )
     return stored

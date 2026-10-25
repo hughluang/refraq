@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import text
@@ -32,12 +33,15 @@ __all__ = [
     "copy_chunks",
     "create_table_from_query",
     "drop_relation",
+    "format_type_declaration",
     "iter_dataset_chunks",
     "list_dataset_relations",
     "normalized_type_of",
     "physical_relation",
     "postgres_type",
     "read_keyset_page",
+    "temporal_target_conflict",
+    "temporal_value_conflict",
 ]
 
 ORD_COLUMN = "_ord"
@@ -69,8 +73,8 @@ _TEMPORAL_PHYSICAL_RE = re.compile(
 _PHYSICAL_TYPE_RE = re.compile(
     r"^(?:text|bigint|double precision|boolean|date|interval|bytea|jsonb|"
     r"numeric(?:\(\d+(?:,\d+)?\))?|"
-    r"timestamp (?:with|without) time zone|"
-    r"time (?:with|without) time zone)$"
+    r"timestamp(?:\([0-6]\))? (?:with|without) time zone|"
+    r"time(?:\([0-6]\))? (?:with|without) time zone)$"
 )
 
 _BASE_TYPES = {
@@ -345,6 +349,46 @@ def _relation_size(conn: Any, relation: str) -> int:
     return int(value)
 
 
+_FORMAT_PRECISION = re.compile(r"\((\d+)\)")
+_FORMAT_KINDS = {
+    "date": "date",
+    "timestamp without time zone": "local_datetime",
+    "timestamp with time zone": "timestamp_with_time_zone",
+    "time without time zone": "time",
+    "time with time zone": "time_with_offset",
+    "interval": "interval",
+    "interval year to month": "interval_calendar",
+    "interval day to second": "interval_fixed",
+}
+_PRECISION_KINDS = frozenset(
+    {
+        "local_datetime",
+        "timestamp_with_time_zone",
+        "time",
+        "time_with_offset",
+        "interval_fixed",
+    }
+)
+
+
+def format_type_declaration(physical_type: str) -> tuple[str | None, int | None]:
+    """Temporal kind and fractional precision of a PostgreSQL ``format_type`` string.
+
+    The string is the type after materialization. It is not an Oracle declaration,
+    so TIMESTAMP WITH LOCAL TIME ZONE is not recognized here.
+    """
+    text = " ".join(str(physical_type).strip().lower().split())
+    match = _FORMAT_PRECISION.search(text)
+    precision = int(match.group(1)) if match is not None else None
+    base = " ".join(_FORMAT_PRECISION.sub("", text).split())
+    kind = _FORMAT_KINDS.get(base)
+    if kind is None:
+        return None, None
+    if kind not in _PRECISION_KINDS:
+        return kind, None
+    return kind, precision
+
+
 def normalized_type_of(physical_type: str) -> str:
     """Fold a ``format_type`` string back to a Normalized Type.
 
@@ -366,28 +410,140 @@ def normalized_type_of(physical_type: str) -> str:
     return "unknown"
 
 
+_LTZ_TARGET_LIMIT = (
+    "PostgreSQL has no type that preserves TIMESTAMP WITH LOCAL TIME ZONE"
+)
+_POSTGRES_FRACTIONAL_LIMIT = 6
+
+
+def temporal_target_conflict(
+    *,
+    temporal_kind: str | None,
+    precision: int | None,
+) -> dict[str, Any] | None:
+    """Return Problem Details members when PostgreSQL cannot store the declaration."""
+    if temporal_kind is None:
+        return None
+    declaration = {"temporal_kind": temporal_kind, "precision": precision}
+    if temporal_kind == "timestamp_with_local_time_zone":
+        return {
+            "declaration": declaration,
+            "value": None,
+            "target_limit": _LTZ_TARGET_LIMIT,
+        }
+    if (
+        precision is not None
+        and isinstance(precision, int)
+        and not isinstance(precision, bool)
+        and precision > _POSTGRES_FRACTIONAL_LIMIT
+    ):
+        return {
+            "declaration": declaration,
+            "value": None,
+            "target_limit": _POSTGRES_FRACTIONAL_LIMIT,
+        }
+    return None
+
+
+_FRACTION_DIGITS = re.compile(r"\.(\d+)")
+
+
+def temporal_value_conflict(
+    *,
+    temporal_kind: str | None,
+    precision: int | None,
+    value: Any,
+) -> dict[str, Any] | None:
+    """Return a conflict when a cell has more fractional digits than declared.
+
+    Trailing zeros do not count. An unknown precision, or a value this function
+    cannot read, is not a conflict.
+    """
+    if temporal_kind is None or value is None:
+        return None
+    if isinstance(precision, bool) or not isinstance(precision, int):
+        return None
+    text = _fraction_text(value)
+    if text is None:
+        return None
+    digits = _fraction_digits(value, text).rstrip("0")
+    if len(digits) <= precision:
+        return None
+    return {
+        "declaration": {"temporal_kind": temporal_kind, "precision": precision},
+        "value": text,
+        "target_limit": precision,
+    }
+
+
+def _fraction_text(value: Any) -> str | None:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def _fraction_digits(value: Any, text: str) -> str:
+    if isinstance(value, datetime):
+        return f"{value.microsecond:06d}"
+    match = _FRACTION_DIGITS.search(text)
+    if match is None:
+        return ""
+    return match.group(1)
+
+
 def postgres_type(
     normalized_type: str,
     *,
     precision: int | None = None,
     scale: int | None = None,
     with_time_zone: bool = False,
+    temporal_kind: str | None = None,
 ) -> str:
-    """PostgreSQL type for one Normalized Type, refined by precision, scale, and time zone."""
+    """PostgreSQL type for one Normalized Type, refined by precision, scale, and time zone.
+
+    Fractional precision 0–6 is a typmod. ``timestamp_with_local_time_zone`` has
+    no PostgreSQL type; callers reject that declaration before SQL.
+    """
+    if temporal_kind == "timestamp_with_local_time_zone":
+        raise ValueError("postgresql cannot preserve timestamp with local time zone")
     if normalized_type == "decimal":
         return _numeric(precision, scale)
-    if normalized_type == "timestamp":
-        if with_time_zone:
-            return "timestamp with time zone"
-        return "timestamp without time zone"
-    if normalized_type == "time":
-        if with_time_zone:
-            return "time with time zone"
-        return "time without time zone"
+    if normalized_type == "timestamp" or temporal_kind in {
+        "local_datetime",
+        "timestamp_with_time_zone",
+    }:
+        zoned = _zoned(temporal_kind, with_time_zone, zoned_kind="timestamp_with_time_zone")
+        base = "timestamp with time zone" if zoned else "timestamp without time zone"
+        return _temporal_typmod(base, precision)
+    if normalized_type == "time" or temporal_kind in {"time", "time_with_offset"}:
+        zoned = _zoned(temporal_kind, with_time_zone, zoned_kind="time_with_offset")
+        base = "time with time zone" if zoned else "time without time zone"
+        return _temporal_typmod(base, precision)
     physical = _BASE_TYPES.get(normalized_type)
     if physical is None:
         raise ValueError(f"unknown normalized type: {normalized_type!r}")
     return physical
+
+
+def _zoned(temporal_kind: str | None, with_time_zone: bool, *, zoned_kind: str) -> bool:
+    if temporal_kind == zoned_kind:
+        return True
+    if temporal_kind is None:
+        return with_time_zone
+    return False
+
+
+def _temporal_typmod(base: str, precision: int | None) -> str:
+    if precision is None:
+        return base
+    if isinstance(precision, bool) or not isinstance(precision, int):
+        raise ValueError("temporal precision must be an integer")
+    if precision < 0 or precision > _POSTGRES_FRACTIONAL_LIMIT:
+        raise ValueError("temporal precision is out of range")
+    name, _, rest = base.partition(" ")
+    return f"{name}({precision}) {rest}"
 
 
 def _numeric(precision: int | None, scale: int | None) -> str:

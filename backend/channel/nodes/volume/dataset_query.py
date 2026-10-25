@@ -22,6 +22,7 @@ from backend.channel.dataset_registry import (
     DatasetRegistry,
     get_dataset_store,
 )
+from backend.channel.errors import TemporalTargetIncompatible
 from backend.channel.node_support import render_field
 from backend.channel.nodes.spec import (
     ERROR_OUTPUT,
@@ -154,6 +155,8 @@ def _execute_source(
                     precision=column.precision,
                     scale=column.scale,
                     with_time_zone=column.with_time_zone,
+                    temporal_kind=column.temporal_kind,
+                    nullable=column.nullable,
                 )
                 for column in stream.columns
             ],
@@ -171,6 +174,13 @@ def _execute_source(
         )
     except DatasetQuotaExceeded:
         return _quota_failed()
+    except TemporalTargetIncompatible as exc:
+        return NodeResult(
+            status="failed",
+            error_code=exc.code,
+            error_message=exc.message,
+            error_detail=exc.extra_members(),
+        )
     except DBAPIError as exc:
         return _node_failed(_db_message(exc))
     except Exception as exc:  # noqa: BLE001
