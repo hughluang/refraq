@@ -87,5 +87,7 @@ export function wallToInstant(
   const second = guess - zoneOffsetMs(first, zone);
   const resolved =
     wallAsUtcMs(wallPartsAt(second, zone)) === guess ? second : first;
-  return new Date(resolved).toISOString();
+  // Wall arithmetic stays on whole seconds, so `toISOString` ends in `.000Z`.
+  const text = new Date(resolved).toISOString();
+  return `${text.slice(0, -5)}Z`;
 }

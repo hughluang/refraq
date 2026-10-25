@@ -1,4 +1,4 @@
-import type { Instant } from "@/lib/instant";
+import { Instant } from "@/lib/instant";
 
 /** IANA zone the browser uses when Display Timezone is unset. Null when it cannot be read. */
 export function browserTimeZone(): string | null {
@@ -46,6 +46,24 @@ export function resolveDisplayZone(
   return "UTC";
 }
 
+/** Received text is not a platform Instant. Display catches this locally. */
+export class UnreadableInstantError extends Error {
+  constructor(value: string) {
+    super(`invalid Instant: ${value}`);
+    this.name = "UnreadableInstantError";
+  }
+}
+
+function dateFromReceivedInstant(value: string): Date {
+  let instant: Instant;
+  try {
+    instant = Instant.parse(value);
+  } catch {
+    throw new UnreadableInstantError(value);
+  }
+  return new Date(instant.epochMs());
+}
+
 export type FormatInstantOptions = {
   /** IANA zone; null/undefined = browser default. */
   timeZone?: string | null;
@@ -54,15 +72,22 @@ export type FormatInstantOptions = {
   locale?: string;
 };
 
-/** Human-friendly instant for list/detail UI. */
+/**
+ * Human-friendly instant for list/detail UI.
+ * A string is the received platform Instant text. It is parsed once and formatted;
+ * it is not rewritten with `Date#toISOString` (that would turn seconds into `.000Z`).
+ */
 export function formatInstant(
-  value: Instant | null | undefined,
+  value: Instant | string | null | undefined,
   options?: FormatInstantOptions,
 ): string {
   if (!value) {
     return "—";
   }
-  const date = new Date(value.epochMs());
+  const date =
+    typeof value === "string"
+      ? dateFromReceivedInstant(value)
+      : new Date(value.epochMs());
   const locale = options?.locale;
   const named = options?.timeZone?.trim() ?? "";
   const aliases = options?.aliases ?? [];

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  UnreadableInstantError,
   browserTimeZone,
   displayZoneId,
   formatDurationMs,
@@ -20,6 +21,25 @@ describe("formatInstant", () => {
   it("formats a valid ISO instant via browser default", () => {
     const value = "2026-08-11T14:20:38.676492Z";
     expect(formatInstant(Instant.parse(value))).toBe(new Date(value).toLocaleString());
+  });
+
+  it("formats a received second-precision instant in the given zone", () => {
+    expect(
+      formatInstant("2026-10-11T06:00:29Z", { timeZone: "UTC", locale: "en-US" }),
+    ).toBe("10/11/2026, 6:00:29 AM");
+    expect(
+      formatInstant("2026-10-11T06:00:29Z", { timeZone: "Asia/Shanghai", locale: "en-US" }),
+    ).toBe("10/11/2026, 2:00:29 PM");
+  });
+
+  it("rejects a string that is not a platform Instant", () => {
+    let caught: unknown;
+    try {
+      formatInstant("2026-10-11T06:00:29", { timeZone: "UTC", locale: "en-US" });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(UnreadableInstantError);
   });
 
   it("formats with an explicit IANA timeZone", () => {

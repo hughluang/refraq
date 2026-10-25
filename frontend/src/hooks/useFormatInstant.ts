@@ -32,12 +32,12 @@ export function useEntryZone(): string {
   return resolveDisplayZone(displayTimezone, aliases);
 }
 
-/** Format Instants with the current User's Display Timezone (null → browser). */
+/** Format an Instant or received Instant text with the User's Display Timezone (null → browser). */
 export function useFormatInstant() {
   const { displayTimezone, locale, aliases } = useDisplayTimeZone();
 
   return useCallback(
-    (value: Instant | null | undefined) =>
+    (value: Instant | string | null | undefined) =>
       formatInstant(value, {
         timeZone: displayTimezone,
         aliases,
