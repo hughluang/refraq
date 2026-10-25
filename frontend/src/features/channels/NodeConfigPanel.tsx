@@ -2,7 +2,7 @@
 
 import { ActionIcon, Button, CloseButton, Group, Stack, Text } from "@mantine/core";
 import { usePermissions, useTranslate } from "@refinedev/core";
-import { useEffect, useRef, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, type ReactNode } from "react";
 
 import { StatusBadge } from "@/components/display/StatusBadge";
 import { presentNodeStatus } from "@/components/display/statusTone";
@@ -38,15 +38,19 @@ import {
   type ProblemGraph,
 } from "@/features/channels/problemLabel";
 import type { GraphProblem } from "@/features/channels/types";
-import { TemplateField } from "@/features/channels/TemplateField";
+import { TemplateField, type TemplateCaret } from "@/features/channels/TemplateField";
 import {
   bindTemplatePreview,
   type ChannelTemplatePreview,
-  type TemplatePreviewSource,
 } from "@/features/channels/TemplateRunPreview";
-import { attributeValueSchema } from "@/features/channels/templateLogic";
+import {
+  attributeValueSchema,
+  fieldWasEdited,
+  recordedField,
+  templateBaseline,
+} from "@/features/channels/templateLogic";
 import type { SelfScope } from "@/features/channels/templateScope";
-import type { NodeTypeSpec } from "@/features/channels/types";
+import type { NodeSampleScopeInput, NodeTypeSpec } from "@/features/channels/types";
 import { useEntityHeadAttributes } from "@/features/channels/useEntityHeadAttributes";
 import type { EntityAttribute } from "@/features/entities/types";
 import { TargetEntityField } from "@/features/entities/TargetEntityField";
@@ -65,6 +69,16 @@ type Props = {
   scope: SelfScope;
   /** Null hides the template previews. */
   templatePreview?: ChannelTemplatePreview | null;
+  /** Execution Input from the current sample. `null` means none was recorded. Omit while the sample has not loaded. */
+  recordedInput?: Record<string, unknown> | null;
+  /** Config the run executed. `null` means there is no snapshot to compare. */
+  baselineConfig?: Record<string, unknown> | null;
+  /** Scope the panel is showing. Omitted until a round is pinned. */
+  sampleScope?: readonly NodeSampleScopeInput[];
+  /** Display time of the run, already formatted. */
+  runTime?: string | null;
+  /** Last focused template field, including nested fields. */
+  onTemplateCaret?: (caret: TemplateCaret | null) => void;
   /** Canvas run phase. Null hides the header badge. */
   phase?: string | null;
   /** Shared sample bar above the three columns. */
@@ -77,6 +91,50 @@ type Props = {
 };
 
 const EMPTY_GRAPH: ProblemGraph = { nodes: [], edges: [] };
+
+type FieldRuntime = {
+  recordedInput: Record<string, unknown> | null | undefined;
+  baselineConfig: Record<string, unknown> | null;
+  sampleScope: readonly NodeSampleScopeInput[] | undefined;
+  runTime: string | null;
+  nodeId: string;
+  nodeName: (id: string) => string;
+  templatePreview: ChannelTemplatePreview | null;
+  reportCaret: (caret: TemplateCaret) => void;
+  dropCaret: (key: string) => void;
+};
+
+const FieldRuntimeContext = createContext<FieldRuntime | null>(null);
+
+function useTemplateBinding(path: readonly (string | number)[], value: unknown) {
+  const runtime = useContext(FieldRuntimeContext);
+  const current = typeof value === "string" ? value : "";
+  const recorded =
+    runtime == null || runtime.recordedInput === undefined
+      ? undefined
+      : recordedField(runtime.recordedInput, path);
+  const baseline =
+    runtime == null || runtime.baselineConfig == null
+      ? null
+      : templateBaseline(runtime.baselineConfig, path);
+  return {
+    recorded,
+    edited: fieldWasEdited(current, baseline),
+    runPreview: runtime?.templatePreview
+      ? bindTemplatePreview(
+          runtime.templatePreview,
+          runtime.nodeId,
+          path,
+          runtime.nodeName,
+          runtime.sampleScope,
+          runtime.runTime,
+        )
+      : null,
+    caretKey: path.map(String).join("."),
+    onCaret: runtime?.reportCaret,
+    onCaretGone: runtime?.dropCaret,
+  };
+}
 
 type HeadState = {
   attributes: readonly EntityAttribute[];
@@ -96,6 +154,11 @@ export function NodeConfigPanel({
   graph = EMPTY_GRAPH,
   scope,
   templatePreview = null,
+  recordedInput,
+  baselineConfig = null,
+  sampleScope,
+  runTime = null,
+  onTemplateCaret,
   phase = null,
   sampleBar = null,
   upstream,
@@ -147,6 +210,33 @@ export function NodeConfigPanel({
   const headerNotes = notesFor(headerProblems);
   const nodeName = (id: string) =>
     graph.nodes.find((node) => node.id === id)?.name.trim() || id;
+  const activeCaret = useRef<string | null>(null);
+  const reportCaret = useCallback(
+    (caret: TemplateCaret) => {
+      activeCaret.current = caret.key;
+      onTemplateCaret?.(caret);
+    },
+    [onTemplateCaret],
+  );
+  const dropCaret = useCallback(
+    (key: string) => {
+      if (activeCaret.current !== key) return;
+      activeCaret.current = null;
+      onTemplateCaret?.(null);
+    },
+    [onTemplateCaret],
+  );
+  const fieldRuntime: FieldRuntime = {
+    recordedInput,
+    baselineConfig,
+    sampleScope,
+    runTime,
+    nodeId,
+    nodeName,
+    templatePreview,
+    reportCaret,
+    dropCaret,
+  };
 
   const update = (patch: Partial<FlowNodeData>) => {
     onChange(nodeId, { ...data, ...patch });
@@ -179,6 +269,7 @@ export function NodeConfigPanel({
     );
 
   return (
+    <FieldRuntimeContext.Provider value={fieldRuntime}>
     <FieldDisclosureContext.Provider value="quiet">
       <div className="channel-node-config__header">
         <Stack gap="xs">
@@ -277,11 +368,6 @@ export function NodeConfigPanel({
               config={data.config}
               scope={data.config}
               templateScope={scope}
-              runPreview={
-                templatePreview
-                  ? bindTemplatePreview(templatePreview, nodeId, [field.key], nodeName)
-                  : null
-              }
               messages={fieldMessages(t, problems, field.key, graph)}
               openSignal={signalFor(problems, field.key, revealKey)}
               onChange={(value) => setConfig(field.key, value)}
@@ -348,6 +434,7 @@ export function NodeConfigPanel({
         {result}
       </div>
     </FieldDisclosureContext.Provider>
+    </FieldRuntimeContext.Provider>
   );
 }
 
@@ -363,7 +450,7 @@ function ConfigField({
   config,
   scope,
   templateScope,
-  runPreview = null,
+  configPath = [field.key],
   messages = [],
   openSignal = null,
   onChange,
@@ -379,12 +466,13 @@ function ConfigField({
   config: Record<string, unknown>;
   scope: Record<string, unknown>;
   templateScope: SelfScope;
-  runPreview?: TemplatePreviewSource | null;
+  configPath?: readonly (string | number)[];
   messages?: readonly FieldMessage[];
   openSignal?: string | null;
   onChange: (value: unknown) => void;
 }) {
   const t = useTranslate();
+  const binding = useTemplateBinding(configPath, value);
   const caption = fieldCaption(t, nodeType, field.key);
   const labelProps = labeled ? { label: caption } : { "aria-label": caption };
   const notes = toNotes(messages);
@@ -596,7 +684,12 @@ function ConfigField({
         scope={templateScope}
         messages={messages}
         openSignal={openSignal}
-        runPreview={runPreview}
+        runPreview={binding.runPreview}
+        recorded={binding.recorded}
+        edited={binding.edited}
+        caretKey={binding.caretKey}
+        onCaret={binding.onCaret}
+        onCaretGone={binding.onCaretGone}
         onChange={onChange}
       />
     );
@@ -734,6 +827,7 @@ function ObjectListEditor({
               head={head}
               config={config}
               templateScope={templateScope}
+              configPath={[field.key, index]}
               onChange={onChange}
             />
           ))}
@@ -827,26 +921,68 @@ function TemplateListEditor({
         onAdd={() => onChange([...items, ""])}
       />
       {items.map((item, index) => (
-        <Group key={`${field.key}-${index}`} gap="xs" wrap="nowrap" align="flex-start">
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <TemplateField
-              ariaLabel={t("channels.config.listItem", { label, n: index + 1 })}
-              description={field.itemDescription}
-              valueSchema={field.valueSchema}
-              value={item}
-              editable={editable}
-              scope={templateScope}
-              onChange={(next) => {
-                const copy = [...items];
-                copy[index] = next;
-                onChange(copy);
-              }}
-            />
-          </div>
-          {editable ? <RemoveItem onClick={() => onChange(items.filter((_, itemIndex) => itemIndex !== index))} /> : null}
-        </Group>
+        <TemplateListItem
+          key={`${field.key}-${index}`}
+          field={field}
+          label={label}
+          item={item}
+          index={index}
+          items={items}
+          editable={editable}
+          templateScope={templateScope}
+          onChange={onChange}
+        />
       ))}
     </Stack>
+  );
+}
+
+function TemplateListItem({
+  field,
+  label,
+  item,
+  index,
+  items,
+  editable,
+  templateScope,
+  onChange,
+}: {
+  field: Extract<FieldSpec, { kind: "templateList" }>;
+  label: string;
+  item: string;
+  index: number;
+  items: string[];
+  editable: boolean;
+  templateScope: SelfScope;
+  onChange: (value: unknown) => void;
+}) {
+  const t = useTranslate();
+  const binding = useTemplateBinding([field.key, index], item);
+  return (
+    <Group gap="xs" wrap="nowrap" align="flex-start">
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <TemplateField
+          ariaLabel={t("channels.config.listItem", { label, n: index + 1 })}
+          description={field.itemDescription}
+          valueSchema={field.valueSchema}
+          value={item}
+          editable={editable}
+          scope={templateScope}
+          runPreview={binding.runPreview}
+          recorded={binding.recorded}
+          edited={binding.edited}
+          caretKey={binding.caretKey}
+          onCaret={binding.onCaret}
+          onCaretGone={binding.onCaretGone}
+          onChange={(next) => {
+            const copy = [...items];
+            copy[index] = next;
+            onChange(copy);
+          }}
+        />
+      </div>
+      {editable ? <RemoveItem onClick={() => onChange(items.filter((_, itemIndex) => itemIndex !== index))} /> : null}
+    </Group>
   );
 }
 
@@ -910,6 +1046,7 @@ function ListRow({
   head,
   config,
   templateScope,
+  configPath,
   onChange,
 }: {
   field: Extract<FieldSpec, { kind: "objectList" }>;
@@ -923,6 +1060,7 @@ function ListRow({
   head: HeadState;
   config: Record<string, unknown>;
   templateScope: SelfScope;
+  configPath: readonly (string | number)[];
   onChange: (value: unknown) => void;
 }) {
   const t = useTranslate();
@@ -960,6 +1098,7 @@ function ListRow({
               config={config}
               scope={row}
               templateScope={templateScope}
+              configPath={[...configPath, child.key]}
               onChange={(next) => replace(child.key, next)}
             />
           ) : null}

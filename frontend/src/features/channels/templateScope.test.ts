@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { SchemaObject } from "@/features/channels/configSchemaForm";
-import { child, children, parseAccess } from "@/features/channels/templateScope";
+import { child, children, outputPath, parseAccess } from "@/features/channels/templateScope";
 
 const CLOSED: SchemaObject = {
   type: "object",
@@ -68,5 +68,32 @@ describe("parseAccess", () => {
     });
     const closed = '{{ self.nodes["Run"]';
     expect(parseAccess(closed, closed.length)).toBeNull();
+  });
+
+  it("reads a list index that reaches the cursor", () => {
+    const indexed = "{{ self.read.output.rows[0].";
+    expect(parseAccess(indexed, indexed.length)).toEqual({
+      start: 3,
+      segments: [
+        { kind: "attr", name: "read" },
+        { kind: "attr", name: "output" },
+        { kind: "attr", name: "rows" },
+        { kind: "index", index: 0 },
+      ],
+      filter: "",
+    });
+    const partial = "{{ self.read.output.rows[0";
+    expect(parseAccess(partial, partial.length)).toBeNull();
+  });
+});
+
+describe("outputPath", () => {
+  it("starts at the node output and spells identifiers, keys, and indexes", () => {
+    expect(outputPath("walk", ["current", "code"])).toBe("self.walk.output.current.code");
+    expect(outputPath("batch", ["rows"])).toBe("self.batch.output.rows");
+    expect(outputPath("read", ["rows", 0, "code"])).toBe("self.read.output.rows[0].code");
+    expect(outputPath("read", ["rows", 0, "a b"])).toBe('self.read.output.rows[0]["a b"]');
+    expect(outputPath("read", ['say "hi"'])).toBe('self.read.output["say \\"hi\\""]');
+    expect(outputPath("read", [])).toBe("self.read.output");
   });
 });

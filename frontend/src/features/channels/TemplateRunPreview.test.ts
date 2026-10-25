@@ -24,6 +24,9 @@ const LABELS: Record<string, string> = {
   "channels.template.preview.truncated": "Only the beginning",
   "channels.template.preview.empty": "Empty string",
   "channels.template.preview.unavailable": "Unavailable",
+  "channels.template.preview.roundOf": "round {{n}} of {{name}}",
+  "channels.template.preview.fromScope": "Value from {{rounds}}, run started {{time}}",
+  "channels.template.preview.fromRun": "Value from the run started {{time}}",
   "problems.CHANNEL_VALUE_TYPE_MISMATCH": "Type mismatch",
   "problems.REQUEST_INVALID": "Request invalid",
 };
@@ -219,5 +222,38 @@ describe("template run preview", () => {
     await bound.run?.evaluate();
     expect(evaluate).toHaveBeenCalledWith("nd_keep", ["value"]);
     expect(bindTemplatePreview({ run: null }, "nd_keep", ["value"], (id) => id).run).toBeNull();
+  });
+
+  it("sends the panel scope and names the round and run", async () => {
+    const evaluate = vi.fn().mockResolvedValue({
+      state: "ok",
+      value: 6,
+      truncated: false,
+      scope: [{ container_node_id: "nd_loop", container_seq: 4, round: 2, rounds_total: 5 }],
+      bindings: [{ node_id: "nd_read", seq: 4, source: "execution" }],
+    });
+    const scope = [{ container_node_id: "nd_loop", round: 2 }];
+    const bound = bindTemplatePreview(
+      { run: { key: "run-1", evaluate } },
+      "nd_keep",
+      ["value"],
+      (id) => (id === "nd_loop" ? "Walk" : id),
+      scope,
+      "Jan 2",
+    );
+    expect(bound.run?.key).toContain("nd_loop");
+    await bound.run?.evaluate();
+    expect(evaluate).toHaveBeenCalledWith("nd_keep", ["value"], scope);
+
+    render(
+      preview({
+        target: "field",
+        run: bound.run,
+        nodeName: (id) => (id === "nd_loop" ? "Walk" : id),
+        runTime: "Jan 2",
+      }),
+    );
+    await elapse();
+    expect(screen.getByText("Value from round 3 of Walk, run started Jan 2")).toBeTruthy();
   });
 });

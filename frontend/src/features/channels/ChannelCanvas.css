@@ -825,6 +825,13 @@
   outline: 1px solid var(--mantine-primary-color-filled);
 }
 
+.channel-upstream-picks {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-inline-size: 0;
+}
+
 .channel-upstream-entry + .channel-upstream-entry {
   margin-top: var(--mantine-spacing-xs);
 }

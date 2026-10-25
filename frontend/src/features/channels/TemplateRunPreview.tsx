@@ -5,7 +5,11 @@ import { useTranslate } from "@refinedev/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { formatRunError } from "@/features/channels/problemLabel";
-import type { TemplatePreviewResult } from "@/features/channels/types";
+import type {
+  NodeSampleScopeInput,
+  NodeSampleScopeLevel,
+  TemplatePreviewResult,
+} from "@/features/channels/types";
 import { problemMessage } from "@/lib/problem";
 
 /** Quiet time after an edit before the field is evaluated again. */
@@ -19,7 +23,11 @@ export type ChannelTemplatePreview = {
   run: {
     /** Changes whenever the run records more. */
     key: string;
-    evaluate: (nodeId: string, path: PreviewPath) => Promise<TemplatePreviewResult>;
+    evaluate: (
+      nodeId: string,
+      path: PreviewPath,
+      scope?: readonly NodeSampleScopeInput[],
+    ) => Promise<TemplatePreviewResult>;
   } | null;
 };
 
@@ -31,6 +39,8 @@ export type TemplatePreviewSource = {
   target: string;
   run: FieldRun | null;
   nodeName: (nodeId: string) => string;
+  /** Display time of the run this preview reads. Null when the run has not started. */
+  runTime?: string | null;
 };
 
 export function bindTemplatePreview(
@@ -38,12 +48,24 @@ export function bindTemplatePreview(
   nodeId: string,
   path: PreviewPath,
   nodeName: (nodeId: string) => string,
+  sampleScope?: readonly NodeSampleScopeInput[],
+  runTime?: string | null,
 ): TemplatePreviewSource {
   const { run } = preview;
+  const scopeKey = JSON.stringify(sampleScope ?? null);
   return {
     target: JSON.stringify([nodeId, path]),
-    run: run ? { key: run.key, evaluate: () => run.evaluate(nodeId, path) } : null,
+    run: run
+      ? {
+          key: sampleScope === undefined ? run.key : `${run.key}|${scopeKey}`,
+          evaluate: () =>
+            sampleScope === undefined
+              ? run.evaluate(nodeId, path)
+              : run.evaluate(nodeId, path, sampleScope),
+        }
+      : null,
     nodeName,
+    runTime: runTime ?? null,
   };
 }
 
@@ -80,6 +102,7 @@ export function TemplateRunPreview({
       scopeKey={scopeKey}
       raw={raw}
       nodeName={source.nodeName}
+      runTime={source.runTime ?? null}
     />
   );
 }
@@ -90,12 +113,14 @@ function RecordedPreview({
   scopeKey,
   raw,
   nodeName,
+  runTime,
 }: {
   run: FieldRun;
   text: string;
   scopeKey: string;
   raw: boolean;
   nodeName: (nodeId: string) => string;
+  runTime: string | null;
 }) {
   const t = useTranslate();
   const key = JSON.stringify([run.key, scopeKey, text]);
@@ -140,7 +165,9 @@ function RecordedPreview({
       </Text>
     );
   } else {
-    body = <PreviewResult result={shown.result} raw={raw} nodeName={nodeName} />;
+    body = (
+      <PreviewResult result={shown.result} raw={raw} nodeName={nodeName} runTime={runTime} />
+    );
   }
   return <PreviewFrame pending={shown?.key !== key}>{body}</PreviewFrame>;
 }
@@ -164,26 +191,32 @@ function PreviewResult({
   result,
   raw,
   nodeName,
+  runTime,
 }: {
   result: TemplatePreviewResult;
   raw: boolean;
   nodeName: (nodeId: string) => string;
+  runTime: string | null;
 }) {
   const t = useTranslate();
+  const source = provenanceText(t, result.scope ?? [], nodeName, runTime);
   if (result.state === "failed") {
     const error =
       result.code === "CHANNEL_NODE_FAILED"
         ? { label: t("channels.template.preview.failed"), detail: result.message }
         : formatRunError(t, result.code, result.message);
     return (
-      <Text size="xs" c="red">
-        {error.label}
-        {error.detail ? (
-          <Text span size="xs" c="dimmed" ml={6}>
-            {error.detail}
-          </Text>
-        ) : null}
-      </Text>
+      <>
+        <Text size="xs" c="red">
+          {error.label}
+          {error.detail ? (
+            <Text span size="xs" c="dimmed" ml={6}>
+              {error.detail}
+            </Text>
+          ) : null}
+        </Text>
+        <Provenance text={source} />
+      </>
     );
   }
   if (result.state === "missing") {
@@ -201,6 +234,7 @@ function PreviewResult({
             {t("channels.template.preview.missingContext")}
           </Text>
         ) : null}
+        <Provenance text={source} />
       </>
     );
   }
@@ -221,8 +255,38 @@ function PreviewResult({
           {t("channels.template.preview.truncated")}
         </Text>
       ) : null}
+      <Provenance text={source} />
     </>
   );
+}
+
+function Provenance({ text }: { text: string | null }) {
+  if (!text) return null;
+  return (
+    <Text size="xs" c="dimmed">
+      {text}
+    </Text>
+  );
+}
+
+function provenanceText(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  scope: readonly NodeSampleScopeLevel[],
+  nodeName: (nodeId: string) => string,
+  runTime: string | null,
+): string | null {
+  const rounds = scope
+    .map((level) =>
+      t("channels.template.preview.roundOf", {
+        n: level.round + 1,
+        name: nodeName(level.container_node_id),
+      }),
+    )
+    .join(", ");
+  if (rounds && runTime) return t("channels.template.preview.fromScope", { rounds, time: runTime });
+  if (rounds) return t("channels.template.preview.fromScopeUntimed", { rounds });
+  if (runTime) return t("channels.template.preview.fromRun", { time: runTime });
+  return null;
 }
 
 function valueText(value: unknown, raw: boolean): string {

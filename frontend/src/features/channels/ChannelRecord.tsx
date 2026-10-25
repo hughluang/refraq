@@ -550,11 +550,12 @@ function ChannelExisting({
         run: sessionRun
           ? {
               key: recordedKey(sessionRun),
-              evaluate: (nodeId, path) =>
+              evaluate: (nodeId, path, scope) =>
                 previewTemplate(channelId, sessionRun.run.job_id, {
                   graph,
                   node_id: nodeId,
                   path,
+                  ...(scope ? { scope } : {}),
                 }),
             }
           : null,

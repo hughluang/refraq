@@ -114,4 +114,23 @@ describe("channel node type locales", () => {
     }
     expect(enMessages["channels.config.fields.volume.batch_read.dataset"]).not.toBe("dataset");
   });
+
+  it("keeps template insert and recorded-value copy in both languages", () => {
+    const keys = [
+      "channels.template.focusRequired",
+      "channels.template.recorded.title",
+      "channels.template.recorded.absent",
+      "channels.template.preview.roundOf",
+      "channels.template.preview.fromScope",
+      "channels.template.preview.fromScopeUntimed",
+      "channels.template.preview.fromRun",
+    ];
+    const enMessages = en as Record<string, string>;
+    const zhMessages = zh as Record<string, string>;
+    for (const key of keys) {
+      expect(enMessages[key], key).toBeTruthy();
+      expect(zhMessages[key], key).toBeTruthy();
+      expect(enMessages[key]).not.toBe(zhMessages[key]);
+    }
+  });
 });

@@ -129,11 +129,35 @@ export type ExecutionOutputPage =
   | { value: unknown }
   | { items: unknown[]; total: number; limit: number; offset: number };
 
+export type TemplatePreviewBinding = {
+  node_id: string;
+  seq?: number;
+  source: "execution" | "round_step";
+};
+
 /** One template field evaluated against a recorded run. */
 export type TemplatePreviewResult =
-  | { state: "ok"; value: unknown; truncated: boolean }
-  | { state: "failed"; code: string; message: string }
-  | { state: "missing"; node_ids: string[]; context: boolean };
+  | {
+      state: "ok";
+      value: unknown;
+      truncated: boolean;
+      scope?: NodeSampleScopeLevel[];
+      bindings?: TemplatePreviewBinding[];
+    }
+  | {
+      state: "failed";
+      code: string;
+      message: string;
+      scope?: NodeSampleScopeLevel[];
+      bindings?: TemplatePreviewBinding[];
+    }
+  | {
+      state: "missing";
+      node_ids: string[];
+      context: boolean;
+      scope?: NodeSampleScopeLevel[];
+      bindings?: TemplatePreviewBinding[];
+    };
 
 export type ChannelVersion = {
   channel_id: string;

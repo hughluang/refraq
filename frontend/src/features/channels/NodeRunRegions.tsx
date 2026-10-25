@@ -2,12 +2,12 @@
 
 import { Button, Group, Stack, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { listRounds, nodeSample } from "@/features/channels/api";
 import { listItemProperties, readBatchOutput } from "@/features/channels/datasetView";
 import { NodeRegion } from "@/features/channels/NodeRegion";
-import { RunExecutionOutput, type OutputPick } from "@/features/channels/RunExecutionOutput";
+import { RunExecutionOutput, type OutputPick, type PathSegment } from "@/features/channels/RunExecutionOutput";
 import { roundControlIds } from "@/features/channels/runSession";
 import type {
   ChannelRun,
@@ -307,6 +307,8 @@ export function UpstreamRegion({
   roundOf,
   onOpenNode,
   onPick,
+  onInsert,
+  insertReady = false,
 }: {
   channelId: string;
   jobId: string | null;
@@ -320,6 +322,10 @@ export function UpstreamRegion({
   roundOf: (containerId: string) => number;
   onOpenNode?: (nodeId: string) => void;
   onPick?: OutputPick;
+  /** Inserts a path into the template field that last had focus. */
+  onInsert?: (ref: string, path: PathSegment[]) => void;
+  /** False until a template field has been focused. */
+  insertReady?: boolean;
 }) {
   const t = useTranslate();
   const errorText = failure == null ? null : problemMessage(t, failure, t("channels.run.outputFailed"));
@@ -329,6 +335,11 @@ export function UpstreamRegion({
       {errorText && sample ? (
         <Text size="xs" c="red" role="alert">
           {errorText}
+        </Text>
+      ) : null}
+      {onInsert && !insertReady ? (
+        <Text size="xs" c="dimmed">
+          {t("channels.template.focusRequired")}
         </Text>
       ) : null}
       {sentence || !sample ? (
@@ -345,9 +356,47 @@ export function UpstreamRegion({
           roundOf={roundOf}
           onOpenNode={onOpenNode}
           onPick={onPick}
+          onInsert={onInsert}
+          insertReady={insertReady}
         />
       )}
     </NodeRegion>
+  );
+}
+
+function InsertPicks({ ready, children }: { ready: boolean; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    const apply = () => {
+      for (const button of root.querySelectorAll<HTMLButtonElement>("button.channel-view-pick")) {
+        // The batch row expander only toggles rows. It does not insert a path.
+        const disabled = button.hasAttribute("aria-expanded") ? false : !ready;
+        if (button.disabled !== disabled) button.disabled = disabled;
+      }
+    };
+    apply();
+    // Round rows, the next page, and an expanded batch arrive after this commit.
+    const observer = new MutationObserver(apply);
+    observer.observe(root, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["class", "aria-expanded", "disabled"],
+    });
+    return () => observer.disconnect();
+  }, [ready]);
+  return (
+    <div
+      ref={ref}
+      className="channel-upstream-picks"
+      onMouseDown={(event) => {
+        if (ready) event.preventDefault();
+      }}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -380,6 +429,8 @@ function UpstreamList({
   roundOf,
   onOpenNode,
   onPick,
+  onInsert,
+  insertReady,
 }: {
   channelId: string;
   jobId: string;
@@ -389,6 +440,8 @@ function UpstreamList({
   roundOf: (containerId: string) => number;
   onOpenNode?: (nodeId: string) => void;
   onPick?: OutputPick;
+  onInsert?: (ref: string, path: PathSegment[]) => void;
+  insertReady: boolean;
 }) {
   const t = useTranslate();
   const referenced = sample.upstream.filter((item) => item.referenced);
@@ -406,6 +459,8 @@ function UpstreamList({
           round={roundOf(entry.node_id)}
           onOpenNode={onOpenNode}
           onPick={onPick}
+          onInsert={onInsert}
+          insertReady={insertReady}
         />
       ))}
       {others.length > 0 ? (
@@ -423,6 +478,8 @@ function UpstreamList({
                 round={roundOf(entry.node_id)}
                 onOpenNode={onOpenNode}
                 onPick={onPick}
+                onInsert={onInsert}
+                insertReady={insertReady}
               />
             ))}
           </Stack>
@@ -441,6 +498,8 @@ function UpstreamEntry({
   round,
   onOpenNode,
   onPick,
+  onInsert,
+  insertReady = false,
 }: {
   channelId: string;
   jobId: string;
@@ -450,10 +509,33 @@ function UpstreamEntry({
   round: number;
   onOpenNode?: (nodeId: string) => void;
   onPick?: OutputPick;
+  onInsert?: (ref: string, path: PathSegment[]) => void;
+  insertReady?: boolean;
 }) {
   const t = useTranslate();
   const view = viewFor(catalog, entry.type_id);
   const level = entry.source === "round_step";
+  const ref = entry.ref;
+  const pick =
+    onInsert && ref && insertReady ? (path: PathSegment[]) => onInsert(ref, path) : onPick;
+  const output =
+    entry.state !== "not_recorded" && entry.value != null ? (
+      <RunExecutionOutput
+        channelId={channelId}
+        jobId={jobId}
+        value={entry.value}
+        view={view}
+        truncated={entry.truncated}
+        totals={entry.totals}
+        seq={entry.seq}
+        previewOnly={entry.preview_only}
+        onPick={pick}
+        rowProperties={rowProperties(ports, entry.node_id, view)}
+        stepItem={level ? (view?.item ?? null) : null}
+        iterations={isForIterations(entry)}
+        metricsOnly={isBatchDone(entry)}
+      />
+    ) : null;
   return (
     <Stack gap={4} className="channel-upstream-entry">
       <Group gap={6} wrap="nowrap">
@@ -486,23 +568,11 @@ function UpstreamEntry({
           {entry.error.message || entry.error.code}
         </Text>
       ) : null}
-      {entry.state !== "not_recorded" && entry.value != null ? (
-        <RunExecutionOutput
-          channelId={channelId}
-          jobId={jobId}
-          value={entry.value}
-          view={view}
-          truncated={entry.truncated}
-          totals={entry.totals}
-          seq={entry.seq}
-          previewOnly={entry.preview_only}
-          onPick={onPick}
-          rowProperties={rowProperties(ports, entry.node_id, view)}
-          stepItem={level ? (view?.item ?? null) : null}
-          iterations={isForIterations(entry)}
-          metricsOnly={isBatchDone(entry)}
-        />
-      ) : null}
+      {onInsert && output ? (
+        <InsertPicks ready={Boolean(ref) && insertReady}>{output}</InsertPicks>
+      ) : (
+        output
+      )}
     </Stack>
   );
 }

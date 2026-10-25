@@ -92,6 +92,68 @@ export function resolvedText(value: unknown): string {
   return `${text.slice(0, RESOLVED_LIMIT - 1)}…`;
 }
 
+/** Insert `path` at a caret. Outside `{{ }}` the field gains a calculation; inside, only the path. */
+export function templateInsertion(text: string, cursor: number, path: string): string {
+  return templatePosition(text, cursor).kind === "outside" ? `{{ ${path} }}` : path;
+}
+
+export type RecordedField =
+  | { state: "value"; value: unknown }
+  | { state: "error"; code: string; message: string }
+  | { state: "absent" };
+
+/** Execution Input entry for a configuration path. `null` input means nothing was recorded. */
+export function recordedField(
+  input: Record<string, unknown> | null,
+  path: readonly (string | number)[],
+): RecordedField {
+  if (input == null) return { state: "absent" };
+  const entry = input[path.map(String).join(".")];
+  if (!isRecord(entry)) return { state: "absent" };
+  const error = entry.error;
+  if (isRecord(error)) {
+    return {
+      state: "error",
+      code: typeof error.code === "string" ? error.code : "",
+      message: typeof error.message === "string" ? error.message : "",
+    };
+  }
+  if ("value" in entry) return { state: "value", value: entry.value };
+  return { state: "absent" };
+}
+
+/** Template text stored on the run snapshot. A missing field is an empty string. */
+export function templateBaseline(config: Record<string, unknown>, path: readonly (string | number)[]): string {
+  let current: unknown = config;
+  for (const segment of path) {
+    if (typeof segment === "number") {
+      if (!Array.isArray(current) || segment < 0 || segment >= current.length) return "";
+      current = current[segment];
+      continue;
+    }
+    if (!isRecord(current) || !(segment in current)) return "";
+    current = current[segment];
+  }
+  return typeof current === "string" ? current : "";
+}
+
+/** `null` baseline means this panel has no run snapshot to compare. */
+export function fieldWasEdited(current: string, baseline: string | null): boolean {
+  return baseline != null && current !== baseline;
+}
+
+/** Upstream values completion may drill. A node with no recorded value is omitted. */
+export function completionSamples(
+  upstream: readonly { node_id: string; state: string; value: unknown }[],
+): Map<string, unknown> {
+  const samples = new Map<string, unknown>();
+  for (const entry of upstream) {
+    if (entry.state === "not_recorded") continue;
+    samples.set(entry.node_id, entry.value);
+  }
+  return samples;
+}
+
 export function templateCompletions(
   text: string,
   cursor: number,
@@ -185,6 +247,10 @@ function schemaAt(
 function applyMember(text: string, cursor: number, access: AccessChain, member: string): string {
   const written = text.slice(access.start, cursor);
   return written.slice(0, written.length - access.filter.length) + member;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
 function typeNames(schema: SchemaObject): string[] {

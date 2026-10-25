@@ -15,7 +15,7 @@ import {
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
-import { Button, Group, Text } from "@mantine/core";
+import { Button, Code, Group, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useEffect, useId, useRef } from "react";
 
@@ -28,16 +28,24 @@ import {
   type TemplatePreviewSource,
 } from "@/features/channels/TemplateRunPreview";
 import { scanTemplate } from "@/features/channels/templateScan";
+import { formatRunError } from "@/features/channels/problemLabel";
 import {
   resolvedText,
   templateCompletions,
   templatePreview,
   templateRule,
   typeBadge,
+  type RecordedField,
   type TemplatePreview,
   type TemplateValueSchema,
 } from "@/features/channels/templateLogic";
 import type { SelfScope } from "@/features/channels/templateScope";
+
+export type TemplateCaret = {
+  key: string;
+  read: () => { text: string; head: number; from: number; to: number };
+  write: (from: number, to: number, text: string) => void;
+};
 
 type Props = {
   label?: string;
@@ -51,6 +59,14 @@ type Props = {
   openSignal?: string | null;
   /** Evaluates the field against a recorded run; `null` hides the preview. */
   runPreview?: TemplatePreviewSource | null;
+  /** Execution Input for this field. Omitted until a sample has loaded. */
+  recorded?: RecordedField;
+  /** True after the text differs from the run snapshot. */
+  edited?: boolean;
+  /** Stable identity for the last focused template field. */
+  caretKey?: string;
+  onCaret?: (caret: TemplateCaret) => void;
+  onCaretGone?: (key: string) => void;
   onChange: (value: string) => void;
 };
 
@@ -104,6 +120,11 @@ export function TemplateField({
   messages = [],
   openSignal = null,
   runPreview = null,
+  recorded,
+  edited = false,
+  caretKey = "",
+  onCaret,
+  onCaretGone,
   onChange,
 }: Props) {
   const schema: SchemaObject | null =
@@ -118,10 +139,18 @@ export function TemplateField({
   const valueRef = useRef(value);
   const onChangeRef = useRef(onChange);
   const scopeRef = useRef(scope);
+  const caretKeyRef = useRef(caretKey);
+  const onCaretRef = useRef(onCaret);
+  const onCaretGoneRef = useRef(onCaretGone);
+  const editableRef = useRef(editable);
   const syncing = useRef(false);
   valueRef.current = value;
   onChangeRef.current = onChange;
   scopeRef.current = scope;
+  caretKeyRef.current = caretKey;
+  onCaretRef.current = onCaret;
+  onCaretGoneRef.current = onCaretGone;
+  editableRef.current = editable;
   const invalid = messages.some((message) => message.severity !== "warning");
 
   useEffect(() => {
@@ -142,6 +171,29 @@ export function TemplateField({
         options: found.options.map((option) => ({ label: option, apply: option })),
       };
     };
+    const reportCaret = (view: EditorView) => {
+      if (!editableRef.current || !onCaretRef.current) return;
+      onCaretRef.current({
+        key: caretKeyRef.current,
+        read: () => {
+          const range = view.state.selection.main;
+          return {
+            text: view.state.doc.toString(),
+            head: range.head,
+            from: range.from,
+            to: range.to,
+          };
+        },
+        write: (from, to, text) => {
+          if (!editableRef.current) return;
+          view.dispatch({
+            changes: { from, to, insert: text },
+            selection: EditorSelection.cursor(from + text.length),
+          });
+          view.focus();
+        },
+      });
+    };
     const view = new EditorView({
       parent,
       state: EditorState.create({
@@ -156,16 +208,30 @@ export function TemplateField({
           editableSlot.of(EditorView.editable.of(true)),
           ariaSlot.of(EditorView.contentAttributes.of({ id: fieldId })),
           EditorView.updateListener.of((update) => {
-            if (!update.docChanged || syncing.current) return;
-            onChangeRef.current(update.state.doc.toString());
+            if (update.docChanged && !syncing.current) {
+              onChangeRef.current(update.state.doc.toString());
+            }
+            if (
+              update.view.hasFocus &&
+              (update.focusChanged || update.selectionSet || update.docChanged)
+            ) {
+              reportCaret(update.view);
+            }
+          }),
+          EditorView.domEventHandlers({
+            focus: (_event, view) => {
+              reportCaret(view);
+            },
           }),
         ],
       }),
     });
     slots.current = { view, editable: editableSlot, aria: ariaSlot };
     return () => {
+      const key = caretKeyRef.current;
       view.destroy();
       slots.current = null;
+      onCaretGoneRef.current?.(key);
     };
   }, [fieldId]);
 
@@ -192,7 +258,7 @@ export function TemplateField({
 
   const preview = templatePreview(value, schema);
   const rule = templateRule(schema);
-  const scanned = scanTemplate(value);
+  const showPreview = edited && runPreview != null;
   const t = useTranslate();
   const badge = datasetBadge(t, typeBadge(valueSchema));
   const tone = label
@@ -241,7 +307,7 @@ export function TemplateField({
             />
           ) : null}
         </Group>
-        {editable && label ? (
+        {editable ? (
           <Button type="button" size="compact-xs" variant="subtle" onClick={insertCalculation}>
             {t("channels.template.insert")}
           </Button>
@@ -252,13 +318,15 @@ export function TemplateField({
         className="channel-template-field__editor"
         data-severity={tone}
       />
-      {label && runPreview && scanned.ok && scanned.hasExpression ? (
+      {showPreview && runPreview ? (
         <TemplateRunPreview
           source={runPreview}
           text={value}
           scopeKey={JSON.stringify(scope.nodes.map((node) => [node.ref, node.name]))}
           raw={rule === "text"}
         />
+      ) : recorded ? (
+        <RecordedValue recorded={recorded} raw={rule === "text"} />
       ) : null}
       {label && !description && rule === "text" ? (
         <Text size="xs" c="dimmed">
@@ -270,6 +338,50 @@ export function TemplateField({
           {t("channels.template.ruleJson")}
         </Text>
       ) : null}
+    </div>
+  );
+}
+
+function RecordedValue({ recorded, raw }: { recorded: RecordedField; raw: boolean }) {
+  const t = useTranslate();
+  let body;
+  if (recorded.state === "absent") {
+    body = (
+      <Text size="xs" c="dimmed">
+        {t("channels.template.recorded.absent")}
+      </Text>
+    );
+  } else if (recorded.state === "error") {
+    const error = formatRunError(t, recorded.code, recorded.message);
+    body = (
+      <Text size="xs" c="red">
+        {error.label}
+        {error.detail ? (
+          <Text span size="xs" c="dimmed" ml={6}>
+            {error.detail}
+          </Text>
+        ) : null}
+      </Text>
+    );
+  } else {
+    const text = raw && typeof recorded.value === "string" ? recorded.value : JSON.stringify(recorded.value, null, 2);
+    body =
+      text === "" ? (
+        <Text size="xs" c="dimmed" fs="italic">
+          {t("channels.template.preview.empty")}
+        </Text>
+      ) : (
+        <Code block className="channel-template-field__recorded">
+          {text}
+        </Code>
+      );
+  }
+  return (
+    <div className="channel-template-field__preview">
+      <Text size="xs" fw={500} c="dimmed">
+        {t("channels.template.recorded.title")}
+      </Text>
+      {body}
     </div>
   );
 }

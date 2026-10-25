@@ -39,6 +39,7 @@ const LABELS: Record<string, string> = {
   "channels.run.skipped": "Skipped",
   "channels.run.otherUpstream": "Other available upstream",
   "channels.run.roundBadge": "Round {{n}}",
+  "channels.template.focusRequired": "Focus a template field to insert a path.",
   "channels.run.target.draft": "Draft run",
   "channels.run.target.published": "Published run",
   "channels.run.startedAt": "Started {{time}}",
@@ -57,6 +58,7 @@ const LABELS: Record<string, string> = {
   "channels.view.metric.total": "Total",
   "channels.view.metric.batch_size": "Batch size",
   "channels.run.showingRows": "Showing {{shown}} / {{total}}",
+  "channels.run.batchRowCount": "{{count}} rows",
   "channels.view.metric.count": "Count",
   "channels.view.metric.index": "Index",
   "channels.view.nested": "Nested",
@@ -369,6 +371,130 @@ describe("node run regions", () => {
     if (!(read instanceof HTMLElement)) throw new Error("missing read entry");
     fireEvent.click(within(read).getByRole("button", { name: "S-01" }));
     expect(onPick).toHaveBeenCalledWith(["rows", 0, "code"]);
+  });
+
+  it("inserts an upstream path only after a template field has focus", () => {
+    const onInsert = vi.fn();
+    const props = {
+      channelId: "chn_1",
+      jobId: "job_1",
+      hasUpstream: true,
+      detail: detail("succeeded"),
+      loading: false,
+      failure: null,
+      catalog,
+      ports: [],
+      roundOf: () => 0,
+      onInsert,
+      sample: sample({ upstream: [upstream()] }),
+    };
+    mount(createElement(UpstreamRegion, { ...props, insertReady: false }));
+    expect(screen.getByText("Focus a template field to insert a path.")).toBeTruthy();
+    const idle = screen.getByRole("button", { name: "S-01" });
+    expect((idle as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(idle);
+    expect(onInsert).not.toHaveBeenCalled();
+
+    cleanup();
+    mount(createElement(UpstreamRegion, { ...props, insertReady: true }));
+    expect(screen.queryByText("Focus a template field to insert a path.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "S-01" }));
+    expect(onInsert).toHaveBeenCalledWith("read", ["rows", 0, "code"]);
+  });
+
+  it("keeps picks disabled when the upstream node has no ref", () => {
+    const onInsert = vi.fn();
+    mount(
+      createElement(UpstreamRegion, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        hasUpstream: true,
+        detail: detail("succeeded"),
+        loading: false,
+        failure: null,
+        catalog,
+        ports: [],
+        roundOf: () => 0,
+        onInsert,
+        insertReady: true,
+        sample: sample({ upstream: [upstream({ ref: "" })] }),
+      }),
+    );
+    const cell = screen.getByRole("button", { name: "S-01" });
+    expect((cell as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(cell);
+    expect(onInsert).not.toHaveBeenCalled();
+  });
+
+  it("leaves the batch row expander enabled while insert picks stay disabled", async () => {
+    const batch = catalog.find((item) => item.type === "volume.batch_read");
+    if (!batch) throw new Error("missing batch type");
+    vi.mocked(listRounds).mockResolvedValue({
+      items: [
+        {
+          round: 1,
+          step_preview: { rows: [{ code: "S-01" }], index: 1, count: 3, total: 2500 },
+          step_truncated: false,
+          step_totals: { rows: 1000 },
+          status_counts: { succeeded: 1 },
+        },
+      ],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    });
+    const props = {
+      channelId: "chn_1",
+      jobId: "job_1",
+      hasUpstream: true,
+      detail: detail("succeeded"),
+      loading: false,
+      failure: null,
+      // Execution volume.batch_read is metrics only, so it never mounts this round table.
+      catalog: [{ ...batch, type: "volume.batch_rounds" }],
+      ports: [],
+      roundOf: () => 0,
+      onInsert: vi.fn(),
+      sample: sample({
+        upstream: [
+          upstream({
+            node_id: "batch",
+            ref: "batches",
+            name: "Batches",
+            type_id: "volume.batch_rounds",
+            source: "execution",
+            seq: 4,
+            value: { count: 3, total: 2500, batch_size: 1000 },
+            totals: {},
+          }),
+        ],
+      }),
+    };
+    const view = (ready: boolean) =>
+      createElement(
+        MantineProvider,
+        { env: "test" },
+        createElement(UpstreamRegion, { ...props, insertReady: ready }),
+      );
+    const { rerender } = render(view(false));
+    const expander = await screen.findByRole("button", { name: "1000 rows" });
+    expect((expander as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "_ord" }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(expander);
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "S-01" }) as HTMLButtonElement).disabled).toBe(true);
+    });
+    expect((screen.getByRole("button", { name: "1000 rows" }) as HTMLButtonElement).disabled).toBe(false);
+
+    rerender(view(true));
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "S-01" }) as HTMLButtonElement).disabled).toBe(false);
+    });
+    expect((screen.getByRole("button", { name: "_ord" }) as HTMLButtonElement).disabled).toBe(false);
+    vi.mocked(listRounds).mockImplementation(() =>
+      Promise.resolve({ items: [], total: 0, limit: 50, offset: 0 }),
+    );
   });
 
   it("names an upstream that was not recorded or failed, and keeps an error on an ok value", () => {

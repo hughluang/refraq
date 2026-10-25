@@ -77,6 +77,14 @@ const LABELS: Record<string, string> = {
   "channels.config.options.op.eq": "Equals",
   "channels.config.options.on_incompatible_head.fail": "Fail",
   "channels.template.insert": "Insert calculation",
+  "channels.template.recorded.title": "Recorded value",
+  "channels.template.recorded.absent": "This run did not record a value for this field.",
+  "channels.template.preview.title": "Preview",
+  "channels.template.preview.pending": "Calculating",
+  "channels.template.preview.fromScope": "Value from {{rounds}}, run started {{time}}",
+  "channels.template.preview.fromRun": "Value from the run started {{time}}",
+  "channels.template.preview.roundOf": "round {{n}} of {{name}}",
+  "channels.template.preview.empty": "Empty string",
   "channels.template.resultString":
     "The result type is string. Quotes inside an expression are not part of the result.",
   "channels.template.ruleText": "The whole text is the value. Quotes are not needed.",
@@ -248,6 +256,13 @@ function renderPanel(
   editable = true,
   revealKey: string | null = null,
   templatePreview: ChannelTemplatePreview | null = null,
+  sample: {
+    recordedInput?: Record<string, unknown> | null;
+    baselineConfig?: Record<string, unknown> | null;
+    sampleScope?: { container_node_id: string; round: number }[];
+    runTime?: string | null;
+    onTemplateCaret?: (caret: { write: (from: number, to: number, text: string) => void } | null) => void;
+  } = {},
 ) {
   return import("@/features/channels/NodeConfigPanel").then(({ NodeConfigPanel }) => {
     render(
@@ -265,6 +280,11 @@ function renderPanel(
           revealKey,
           scope: { nodes: [], context: { channel: null, run: null, platform: null } },
           templatePreview,
+          recordedInput: sample.recordedInput,
+          baselineConfig: sample.baselineConfig,
+          sampleScope: sample.sampleScope,
+          runTime: sample.runTime,
+          onTemplateCaret: sample.onTemplateCaret,
           upstream: null,
           result: null,
           onClose: vi.fn(),
@@ -712,30 +732,70 @@ describe("NodeConfigPanel display mode", () => {
     );
   });
 
-  it("previews a calculated template field against the latest run", async () => {
+  it("shows the recorded input until the template differs from the run snapshot", async () => {
     const schema: SchemaObject = {
       type: "object",
       properties: {
         sql: { type: "string", "x-refraq-template": { type: "string" } },
       },
     };
-    const evaluate = vi.fn().mockResolvedValue({ state: "ok", value: "select 6", truncated: false });
+    const scope = [{ container_node_id: "loop", round: 1 }];
+    const evaluate = vi.fn().mockResolvedValue({
+      state: "ok",
+      value: "select 9",
+      truncated: false,
+      scope: [{ container_node_id: "loop", container_seq: 2, round: 1, rounds_total: 4 }],
+      bindings: [],
+    });
+    const sample = {
+      recordedInput: { sql: { value: "select 6" } },
+      baselineConfig: { sql: "select {{ 6 }}" },
+      sampleScope: scope,
+      runTime: "Jan 2",
+    };
     await renderPanel(schema, node({ sql: "select {{ 6 }}" }, "read.sql"), vi.fn(), [], true, null, {
       run: { key: "run-1", evaluate },
-    });
+    }, sample);
 
-    await waitFor(() => {
-      expect(document.querySelector(".channel-template-field__value")?.textContent).toBe("select 6");
-    });
-    expect(evaluate).toHaveBeenCalledWith("n1", ["sql"]);
+    expect(screen.getByText("Recorded value")).toBeTruthy();
+    expect(document.querySelector(".channel-template-field__recorded")?.textContent).toBe("select 6");
+    expect(evaluate).not.toHaveBeenCalled();
 
     cleanup();
-    evaluate.mockClear();
-    await renderPanel(schema, node({ sql: "select 1" }, "read.sql"), vi.fn(), [], true, null, {
+    await renderPanel(schema, node({ sql: "select {{ 9 }}" }, "read.sql"), vi.fn(), [], true, null, {
       run: { key: "run-1", evaluate },
+    }, sample);
+    await waitFor(() => {
+      expect(evaluate).toHaveBeenCalledWith("n1", ["sql"], scope);
     });
-    expect(document.querySelector(".channel-template-field__preview")).toBeNull();
-    expect(evaluate).not.toHaveBeenCalled();
+    expect(document.querySelector(".channel-template-field__value")?.textContent).toBe("select 9");
+    expect(screen.getByText("Value from round 2 of loop, run started Jan 2")).toBeTruthy();
+    expect(screen.queryByText("Recorded value")).toBeNull();
+  });
+
+  it("keeps the recorded value when the field cannot be previewed", async () => {
+    const schema: SchemaObject = {
+      type: "object",
+      properties: {
+        sql: { type: "string", "x-refraq-template": { type: "string" } },
+      },
+    };
+    await renderPanel(
+      schema,
+      node({ sql: "select {{ 9 }}" }, "read.sql"),
+      vi.fn(),
+      [],
+      false,
+      null,
+      null,
+      {
+        recordedInput: { sql: { value: "select 6" } },
+        baselineConfig: { sql: "select {{ 6 }}" },
+      },
+    );
+    expect(document.querySelector(".channel-template-field__recorded")?.textContent).toBe("select 6");
+    expect(screen.queryByText("Preview")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Insert calculation" })).toBeNull();
   });
 
   it("shows an unclosed expression before a problem is attached", async () => {
@@ -945,6 +1005,38 @@ describe("reshape node configuration", () => {
     );
     expect(screen.queryByRole("textbox", { name: "Value" })).toBeNull();
     expect(screen.getByRole("textbox", { name: "Field" })).toBeTruthy();
+  });
+
+  it("gives a nested template the same insert control and recorded value", async () => {
+    await renderPanel(
+      FILTER_SCHEMA,
+      node(
+        {
+          items: "{{ self.read.output.rows }}",
+          combinator: "all",
+          conditions: [{ key: "code", operator: "eq", value: '"A"' }],
+        },
+        "transform.filter",
+      ),
+      vi.fn(),
+      [],
+      true,
+      null,
+      null,
+      {
+        recordedInput: {
+          items: { value: [{ code: "S" }] },
+          "conditions.0.value": { error: { code: "CHANNEL_NODE_FAILED", message: "bad value" } },
+        },
+        baselineConfig: {
+          items: "{{ self.read.output.rows }}",
+          conditions: [{ key: "code", operator: "eq", value: '"A"' }],
+        },
+      },
+    );
+    expect(screen.getAllByRole("button", { name: "Insert calculation" }).length).toBeGreaterThan(1);
+    expect(screen.getByText("bad value")).toBeTruthy();
+    expect(screen.getByText((text) => text.includes('"code"') && text.includes("S"))).toBeTruthy();
   });
 
   it("edits merge inputs and shows the key only for a key join", async () => {

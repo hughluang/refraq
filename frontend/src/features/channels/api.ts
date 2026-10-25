@@ -244,7 +244,12 @@ export function getExecutionOutput(
 export function previewTemplate(
   id: string,
   jobId: string,
-  body: { graph: Graph; node_id: string; path: readonly (string | number)[] },
+  body: {
+    graph: Graph;
+    node_id: string;
+    path: readonly (string | number)[];
+    scope?: readonly NodeSampleScopeInput[];
+  },
 ) {
   return apiClient<TemplatePreviewResult>(`/channels/${id}/runs/${jobId}/template-preview`, {
     method: "POST",

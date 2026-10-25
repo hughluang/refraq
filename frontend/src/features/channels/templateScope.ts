@@ -14,7 +14,10 @@ export type SelfScope = {
   context: Record<ContextName, SchemaObject | null>;
 };
 
-export type AccessSegment = { kind: "attr"; name: string } | { kind: "key"; name: string };
+export type AccessSegment =
+  | { kind: "attr"; name: string }
+  | { kind: "key"; name: string }
+  | { kind: "index"; index: number };
 
 export type AccessChain = {
   start: number;
@@ -105,10 +108,29 @@ function drill(
 ): string[] {
   if (rest.length === 0) return children(schema, sample);
   const segment = rest[0];
-  if (!segment || segment.kind !== "attr") return [];
+  if (!segment) return [];
+  if (segment.kind === "index") {
+    const next = elementAt(schema, sample, segment.index);
+    if (!next) return [];
+    return drill(next.schema, next.sample, rest.slice(1));
+  }
+  if (segment.kind !== "attr") return [];
   const next = child(schema, sample, segment.name);
   if (!next) return [];
   return drill(next.schema, next.sample, rest.slice(1));
+}
+
+/** Path inserted from an upstream pick. The root is that node's output, including a round step. */
+export function outputPath(ref: string, segments: readonly (string | number)[]): string {
+  let path = `self.${ref}.output`;
+  for (const segment of segments) path += pathSegment(segment);
+  return path;
+}
+
+function pathSegment(segment: string | number): string {
+  if (typeof segment === "number") return `[${segment}]`;
+  if (IDENT.test(segment)) return `.${segment}`;
+  return `[${JSON.stringify(segment)}]`;
 }
 
 function parseFromSelf(
@@ -132,9 +154,15 @@ function parseFromSelf(
     }
     if (char === "[") {
       const key = readKey(before, index);
-      if (!key) return null;
-      segments.push({ kind: "key", name: key.name });
-      index = key.end;
+      if (key) {
+        segments.push({ kind: "key", name: key.name });
+        index = key.end;
+        continue;
+      }
+      const listIndex = readIndex(before, index);
+      if (!listIndex) return null;
+      segments.push({ kind: "index", index: listIndex.index });
+      index = listIndex.end;
       continue;
     }
     return null;
@@ -145,6 +173,18 @@ function parseFromSelf(
 function readIdent(text: string, start: number): string | null {
   const match = IDENT_PREFIX.exec(text.slice(start));
   return match ? match[0] : null;
+}
+
+function readIndex(text: string, bracket: number): { index: number; end: number } | null {
+  let cursor = bracket + 1;
+  if (!isDigit(text[cursor] ?? "")) return null;
+  let digits = "";
+  while (cursor < text.length && isDigit(text[cursor] ?? "")) {
+    digits += text[cursor];
+    cursor += 1;
+  }
+  if (text[cursor] !== "]") return null;
+  return { index: Number(digits), end: cursor + 1 };
 }
 
 function readKey(text: string, bracket: number): { name: string; end: number } | null {
@@ -166,6 +206,24 @@ function readKey(text: string, bracket: number): { name: string; end: number } |
     index += 1;
   }
   return null;
+}
+
+function elementAt(
+  schema: SchemaObject | null | undefined,
+  sample: unknown,
+  index: number,
+): { schema: SchemaObject | null; sample: unknown } | null {
+  const sampleArray = Array.isArray(sample) ? sample : null;
+  const schemaArray = isArraySchema(schema) || schema?.items != null;
+  if (!schemaArray && sampleArray == null) return null;
+  if (schema && !schemaArray && schema.properties != null && schema.additionalProperties === false) {
+    return null;
+  }
+  const items = schemaArray ? (schema?.items ?? null) : null;
+  const element =
+    sampleArray && index >= 0 && index < sampleArray.length ? sampleArray[index] : undefined;
+  if (items == null && element === undefined) return null;
+  return { schema: items, sample: element };
 }
 
 function isArraySchema(schema: SchemaObject | null | undefined): boolean {
@@ -190,6 +248,10 @@ function isIdent(key: string): boolean {
 
 function isIdentChar(char: string): boolean {
   return /[A-Za-z0-9_]/.test(char);
+}
+
+function isDigit(char: string): boolean {
+  return char >= "0" && char <= "9";
 }
 
 function isContextName(name: string): name is ContextName {

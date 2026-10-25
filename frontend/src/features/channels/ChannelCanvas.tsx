@@ -105,12 +105,11 @@ import {
   useNodeSample,
   type RunNodeInfo,
 } from "@/features/channels/NodeRunRegions";
-import type { OutputPick } from "@/features/channels/RunExecutionOutput";
+import type { PathSegment } from "@/features/channels/RunExecutionOutput";
 import {
   executionCountByNode,
   phaseByNode,
   recordedKey,
-  samplesByNode,
   scopeRequest,
   type NodeRunPhase,
 } from "@/features/channels/runSession";
@@ -161,7 +160,10 @@ import {
   type LinkMember,
 } from "@/features/channels/frameLink";
 import { problemIdentity, type ProblemGraph } from "@/features/channels/problemLabel";
-import { upstreamOutputs } from "@/features/channels/templateLogic";
+import { completionSamples, templateInsertion, upstreamOutputs } from "@/features/channels/templateLogic";
+import { outputPath } from "@/features/channels/templateScope";
+import type { TemplateCaret } from "@/features/channels/TemplateField";
+import { useFormatInstant } from "@/hooks/useFormatInstant";
 import type {
   ChannelRunDetail,
   ExpressionContext,
@@ -462,6 +464,7 @@ function ChannelCanvasBody({
   focusNodeId = null,
 }: Props) {
   const t = useTranslate();
+  const formatInstant = useFormatInstant();
   const colorScheme = useComputedColorScheme("light", { getInitialValueInEffect: false });
   const { data: heldPermissions } = usePermissions<string[]>({});
   const { screenToFlowPosition, flowToScreenPosition, setCenter, getInternalNode, fitView } =
@@ -1432,7 +1435,6 @@ function ChannelCanvasBody({
       cancelled = true;
     };
   }, [sessionRun, channelId, summaryKey]);
-  const samples = useMemo(() => samplesByNode(latestExecutions), [latestExecutions]);
   const latestStatus = useMemo(() => {
     const statuses = new Map<string, string>();
     for (const item of latestExecutions) statuses.set(item.node_id, item.status);
@@ -1558,9 +1560,22 @@ function ChannelCanvasBody({
       current[containerId] === total ? current : { ...current, [containerId]: total },
     );
   }, []);
-  const onPick = useCallback<OutputPick>((path) => {
-    void path;
+  const caretRef = useRef<TemplateCaret | null>(null);
+  const [insertReady, setInsertReady] = useState(false);
+  const onTemplateCaret = useCallback((caret: TemplateCaret | null) => {
+    caretRef.current = caret;
+    setInsertReady(caret != null);
   }, []);
+  const onInsert = useCallback((ref: string, path: PathSegment[]) => {
+    const caret = caretRef.current;
+    if (!caret) return;
+    const place = caret.read();
+    caret.write(place.from, place.to, templateInsertion(place.text, place.head, outputPath(ref, path)));
+  }, []);
+  const completion = useMemo(
+    () => completionSamples(sampleState.sample?.upstream ?? []),
+    [sampleState.sample],
+  );
   const runNodes: RunNodeInfo[] = nodes.flatMap((node) =>
     isChannelNode(node)
       ? [
@@ -2350,7 +2365,7 @@ function ChannelCanvasBody({
                         targetPort: edge.targetHandle ?? undefined,
                       })),
                       outputSchemas,
-                      samples,
+                      completion,
                     ),
                     context: {
                       channel: context?.channel ?? null,
@@ -2359,6 +2374,17 @@ function ChannelCanvasBody({
                     },
                   }}
                   templatePreview={templatePreview}
+                  recordedInput={sampleState.sample ? sampleState.sample.node.input : undefined}
+                  baselineConfig={
+                    sessionRun?.graph
+                      ? (sessionRun.graph.nodes.find((node) => node.id === selected.id)?.config ?? {})
+                      : null
+                  }
+                  sampleScope={sampleScope}
+                  runTime={
+                    sessionRun?.run.started_at ? formatInstant(sessionRun.run.started_at) : null
+                  }
+                  onTemplateCaret={mutable ? onTemplateCaret : undefined}
                   phase={phases.get(selected.id) ?? null}
                   sampleBar={
                     sessionRun ? (
@@ -2389,7 +2415,8 @@ function ChannelCanvasBody({
                       ports={ports}
                       roundOf={roundOf}
                       onOpenNode={openNodeConfig}
-                      onPick={onPick}
+                      onInsert={mutable ? onInsert : undefined}
+                      insertReady={insertReady}
                     />
                   }
                   result={
@@ -2409,7 +2436,6 @@ function ChannelCanvasBody({
                       selectedRound={roundOf(selected.id)}
                       onRound={setRound}
                       onRoundsTotal={rememberRounds}
-                      onPick={onPick}
                     />
                   }
                   onClose={beginClose}

@@ -2,7 +2,7 @@ import { soleStatus } from "@/features/channels/datasetView";
 import { ancestorIds as frameAncestorIds } from "@/features/channels/frameLink";
 import { isContainerNode } from "@/features/channels/portLayout";
 import type { Graph, GraphEdge, NodeSampleScopeInput } from "@/features/channels/types";
-import type { ChannelRunDetail, NodeExecution, NodeSummary } from "@/features/channels/types";
+import type { ChannelRunDetail, NodeSummary } from "@/features/channels/types";
 
 type ChainNode = { id: string; type: string; parent?: string | null };
 
@@ -139,14 +139,4 @@ export function scopeRequest(
     container_node_id: id,
     round: pinned[id] ?? resolved.find((level) => level.container_node_id === id)?.round ?? 0,
   }));
-}
-
-export function samplesByNode(executions: readonly NodeExecution[]): Map<string, unknown> {
-  const samples = new Map<string, unknown>();
-  const ordered = [...executions].sort((left, right) => left.seq - right.seq);
-  for (const item of ordered) {
-    if (item.output_preview == null) continue;
-    samples.set(item.node_id, item.output_preview);
-  }
-  return samples;
 }

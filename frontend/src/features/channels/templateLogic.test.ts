@@ -2,8 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import type { SchemaObject } from "@/features/channels/configSchemaForm";
 import {
+  completionSamples,
+  fieldWasEdited,
+  recordedField,
   resolvedText,
+  templateBaseline,
   templateCompletions,
+  templateInsertion,
   templatePreview,
   templateRule,
   typeBadge,
@@ -314,5 +319,141 @@ describe("upstreamOutputs", () => {
     const doneOptions = templateCompletions(doneText, doneText.length, false, scopeOf(after))?.options;
     expect(doneOptions).toContain("self.walk.output.iterations");
     expect(doneOptions).not.toContain("self.walk.output.results");
+  });
+});
+
+describe("templateInsertion", () => {
+  const path = "self.walk.output.current.code";
+
+  it("wraps a path outside an expression and inserts the bare path inside", () => {
+    expect(templateInsertion("select ", 7, path)).toBe(`{{ ${path} }}`);
+    const open = "{{ self.walk.output.";
+    expect(templateInsertion(open, open.length, path)).toBe(path);
+    const between = "id = {{ self.read.output. }} and 1";
+    const cursor = between.indexOf("}}");
+    expect(templateInsertion(between, cursor, path)).toBe(path);
+  });
+});
+
+describe("recorded field", () => {
+  it("reads a value or an error at a configuration path", () => {
+    expect(recordedField(null, ["sql"])).toEqual({ state: "absent" });
+    expect(recordedField({ sql: { value: "select 1" } }, ["sql"])).toEqual({
+      state: "value",
+      value: "select 1",
+    });
+    expect(
+      recordedField(
+        { "fields.0.value": { error: { code: "CHANNEL_NODE_FAILED", message: "bad" } } },
+        ["fields", 0, "value"],
+      ),
+    ).toEqual({ state: "error", code: "CHANNEL_NODE_FAILED", message: "bad" });
+    expect(recordedField({ sql: { value: null } }, ["name"])).toEqual({ state: "absent" });
+    expect(recordedField({ sql: { value: null } }, ["sql"])).toEqual({ state: "value", value: null });
+  });
+
+  it("compares a field with the run snapshot and ignores a missing run", () => {
+    expect(templateBaseline({ sql: "select 1" }, ["sql"])).toBe("select 1");
+    expect(templateBaseline({ fields: [{ value: "{{ 1 }}" }] }, ["fields", 0, "value"])).toBe(
+      "{{ 1 }}",
+    );
+    expect(templateBaseline({ sql: "select 1" }, ["missing"])).toBe("");
+    expect(templateBaseline({ fields: [] }, ["fields", 0, "value"])).toBe("");
+    expect(fieldWasEdited("select 1", "select 1")).toBe(false);
+    expect(fieldWasEdited("select 2", "select 1")).toBe(true);
+    expect(fieldWasEdited("select 1", null)).toBe(false);
+  });
+});
+
+describe("array element completion", () => {
+  const rowsSchema: SchemaObject = {
+    type: "object",
+    properties: {
+      rows: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { code: { type: "string" }, name: { type: "string" } },
+        },
+      },
+    },
+  };
+
+  it("offers element properties and observed keys after an index", () => {
+    const open = scopeOf([
+      {
+        ref: "read",
+        name: "Read",
+        schema: rowsSchema,
+        sample: { rows: [{ code: "S", extra: 1, "not ident": true }] },
+      },
+    ]);
+    const text = "{{ self.read.output.rows[0].";
+    expect(templateCompletions(text, text.length, false, open)?.options).toEqual([
+      "self.read.output.rows[0].code",
+      "self.read.output.rows[0].name",
+      "self.read.output.rows[0].extra",
+    ]);
+    const dotted = "{{ self.read.output.rows.";
+    expect(templateCompletions(dotted, dotted.length, false, open)).toBeNull();
+  });
+
+  it("stays on a closed element schema and still offers schema keys for a missing element", () => {
+    const closed = scopeOf([
+      {
+        ref: "read",
+        name: "Read",
+        schema: {
+          type: "object",
+          properties: {
+            rows: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: { code: { type: "string" }, name: { type: "string" } },
+              },
+            },
+          },
+        },
+        sample: { rows: [{ code: "S", extra: 1 }] },
+      },
+    ]);
+    const text = "{{ self.read.output.rows[0].";
+    expect(templateCompletions(text, text.length, false, closed)?.options).toEqual([
+      "self.read.output.rows[0].code",
+      "self.read.output.rows[0].name",
+    ]);
+    const empty = scopeOf([
+      {
+        ref: "read",
+        name: "Read",
+        schema: rowsSchema,
+        sample: { rows: [] },
+      },
+    ]);
+    expect(templateCompletions(text, text.length, false, empty)?.options).toEqual([
+      "self.read.output.rows[0].code",
+      "self.read.output.rows[0].name",
+    ]);
+    const observed = scopeOf([
+      { ref: "read", name: "Read", schema: null, sample: { rows: [{ qty: 2 }] } },
+    ]);
+    expect(templateCompletions(text, text.length, false, observed)?.options).toEqual([
+      "self.read.output.rows[0].qty",
+    ]);
+  });
+});
+
+describe("completionSamples", () => {
+  it("keeps upstream values from this scope and skips a node that was not recorded", () => {
+    const samples = completionSamples([
+      { node_id: "read", state: "ok", value: { rows: [{ code: "S" }] } },
+      { node_id: "miss", state: "not_recorded", value: null },
+      { node_id: "bad", state: "failed", value: { rows: [] } },
+    ]);
+    expect(samples.get("read")).toEqual({ rows: [{ code: "S" }] });
+    expect(samples.has("miss")).toBe(false);
+    expect(samples.get("bad")).toEqual({ rows: [] });
   });
 });
