@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import math
 import re
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from backend.core.time import format_instant, parse_instant
 from backend.entity.errors import EntityRowInvalid
 from psycopg.types.json import Jsonb
 
@@ -108,20 +109,16 @@ def encode_timestamp(attr: Any, raw: Any, **_unused: Any) -> datetime:
         raise EntityRowInvalid(
             f"Attribute '{attr.name}' must be an RFC 3339 timestamp"
         )
-    text = raw.strip()
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
     try:
-        parsed = datetime.fromisoformat(text)
+        return parse_instant(raw)
     except ValueError as exc:
+        if str(exc).startswith("Instant requires an offset"):
+            raise EntityRowInvalid(
+                f"Attribute '{attr.name}' timestamp must include an offset"
+            ) from exc
         raise EntityRowInvalid(
             f"Attribute '{attr.name}' must be an RFC 3339 timestamp"
         ) from exc
-    if parsed.tzinfo is None:
-        raise EntityRowInvalid(
-            f"Attribute '{attr.name}' timestamp must include an offset"
-        )
-    return parsed.astimezone(timezone.utc)
 
 
 def encode_time(attr: Any, raw: Any, **_unused: Any) -> time:
@@ -207,7 +204,7 @@ def decode_date(_attr: Any, value: Any) -> str:
 
 def decode_timestamp(_attr: Any, value: Any) -> str:
     if isinstance(value, datetime):
-        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        return format_instant(value)
     return str(value)
 
 

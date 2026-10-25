@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
+from backend.core.time import ensure_aware_utc, parse_instant
 from backend.entity.access.facts import AttrFact, SubjectAttrFact
 from backend.entity.attribute_type import resolve
 from backend.entity.errors import EntityRowInvalid
@@ -650,6 +651,16 @@ def _as_comparable(value: Any, attr: AttrFact) -> Any:
         return Decimal(str(value))
     if kind == "number" and not isinstance(value, bool):
         return float(value)
+    if kind == "timestamp":
+        return _timestamp_instant(value)
+    return value
+
+
+def _timestamp_instant(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return ensure_aware_utc(value)
+    if isinstance(value, str):
+        return parse_instant(value)
     return value
 
 

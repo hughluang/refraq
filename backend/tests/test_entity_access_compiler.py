@@ -729,3 +729,32 @@ def test_not_over_a_null_leaf_matches_the_python_evaluator() -> None:
     sql = rule_sql(rule, attrs, alias="t", acl=False)
     assert sql == "(NOT COALESCE((t.\"region\" = 'TEST'), false))"
     assert eval_rule(rule, {"region": None}, attrs, subject_id=None, subject_values={}, now=NOW)
+
+
+def test_in_process_timestamp_rule_matches_the_same_instant() -> None:
+    moment = AttrFact("att_moment", "moment", "timestamp")
+    attrs = {"att_moment": moment}
+    same = {"eq": {"attr": "att_moment", "value": "2020-01-02T11:04:05+08:00"}}
+    assert eval_rule(
+        same,
+        {"moment": "2020-01-02T03:04:05Z"},
+        attrs,
+        subject_id="user_1",
+        subject_values={},
+        now=NOW,
+    )
+    assert not eval_rule(
+        same,
+        {"moment": "2020-01-02T03:04:06Z"},
+        attrs,
+        subject_id="user_1",
+        subject_values={},
+        now=NOW,
+    )
+    sql = rule_sql(
+        {"eq": {"attr": "att_moment", "value": "2020-01-02T03:04:05.9Z"}},
+        attrs,
+        alias="t",
+        acl=False,
+    )
+    assert sql == '(t."moment" = \'2020-01-02T03:04:05.900000+00:00\')'

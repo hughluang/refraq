@@ -8,9 +8,16 @@ from decimal import Decimal
 import pytest
 from psycopg.types.json import Jsonb
 
+from backend.core.time import NaiveDateTimeError
 from backend.entity.attribute_type import resolve
+from backend.entity.data.head import HeadTarget
+from backend.entity.data.values import encode_inbound, encode_inbound_map
 from backend.entity.errors import EntityAttributeInvalid, EntityRowInvalid
-from backend.entity.records import AttributeRecord
+from backend.entity.records import (
+    AttributeRecord,
+    BusinessEntityRecord,
+    EntityVersionRecord,
+)
 
 
 def _attr(attribute_type: str, **kwargs) -> AttributeRecord:
@@ -158,6 +165,81 @@ def test_encode_and_decode_follow_the_row_rules() -> None:
     assert resolve("timestamp").decode(_attr("timestamp"), stamped) == "2026-10-02T03:04:00Z"
     assert resolve("integer").decode(_attr("integer"), 7) == 7
     assert resolve("json").decode(_attr("json"), {"a": 1}) == {"a": 1}
+
+
+def test_timestamp_decode_rejects_a_naive_datetime() -> None:
+    naive = datetime(2020, 1, 2, 3, 4, 5)  # noqa: DTZ001
+    with pytest.raises(NaiveDateTimeError):
+        resolve("timestamp").decode(_attr("timestamp"), naive)
+
+
+def test_timestamp_decode_keeps_a_non_datetime_as_text() -> None:
+    assert resolve("timestamp").decode(_attr("timestamp"), 5) == "5"
+
+
+def _timestamp_target(*attributes: AttributeRecord) -> HeadTarget:
+    now = datetime(2020, 1, 2, tzinfo=timezone.utc)
+    entity = BusinessEntityRecord(
+        id="ent_moment",
+        table_name="moments",
+        name="Moments",
+        description="",
+        deprecated_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    head = EntityVersionRecord(
+        id="ver_moment",
+        entity_id=entity.id,
+        version=1,
+        attributes=list(attributes),
+        materialized_attributes=[],
+        publish_status="published",
+        latest_reconcile_job_id=None,
+        created_at=now,
+        updated_at=now,
+    )
+    return HeadTarget(
+        entity=entity,
+        head=head,
+        attributes=attributes,
+        physical_table="moments__v1",
+        qualified_table='entity_data."moments__v1"',
+        writable=True,
+    )
+
+
+def test_timestamp_blank_is_not_null_and_differs_from_a_missing_field() -> None:
+    moment = AttributeRecord(name="moment", type="timestamp", required=True)
+    code = AttributeRecord(name="code", type="string", max_length=8)
+    target = _timestamp_target(code, moment)
+    assert encode_inbound(moment, None, target) is None
+    assert encode_inbound_map({"code": "A", "moment": None}, target, partial=True) == {
+        "code": "A",
+        "moment": None,
+    }
+    with pytest.raises(EntityRowInvalid, match="RFC 3339") as blank:
+        encode_inbound_map({"code": "A", "moment": ""}, target, partial=False)
+    with pytest.raises(EntityRowInvalid, match="offset") as bare:
+        encode_inbound_map(
+            {"code": "A", "moment": "2020-01-02T03:04:05"}, target, partial=False
+        )
+    with pytest.raises(EntityRowInvalid, match="is required") as missing:
+        encode_inbound_map({"code": "A"}, target, partial=False)
+    assert blank.value.message != bare.value.message
+    assert blank.value.message != missing.value.message
+
+
+def test_timestamp_accepts_lowercase_z_as_utc() -> None:
+    parsed = resolve("timestamp").encode(_attr("timestamp"), "2020-01-02T03:04:05z")
+    assert parsed == datetime(2020, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+def test_timestamp_fractional_instant_decodes_to_whole_seconds() -> None:
+    attr = _attr("timestamp")
+    parsed = resolve("timestamp").encode(attr, "2020-01-02T03:04:05.9Z")
+    assert parsed == datetime(2020, 1, 2, 3, 4, 5, 900_000, tzinfo=timezone.utc)
+    assert resolve("timestamp").decode(attr, parsed) == "2020-01-02T03:04:05Z"
 
 
 def test_config_changes_classify_width_decimal_codes_and_target() -> None:
