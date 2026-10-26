@@ -228,6 +228,7 @@
   "catalog.sample.filterColumnPlaceholder": "不筛选",
   "catalog.sample.filterOp": "条件",
   "catalog.sample.filterValue": "值",
+  "catalog.sample.precision": "小数位超过该列声明的精度。",
   "catalog.sample.orderColumn": "排序列",
   "catalog.sample.orderColumnPlaceholder": "不指定顺序",
   "catalog.sample.orderDirection": "方向",

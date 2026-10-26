@@ -118,6 +118,24 @@ describe("EntityDataBrowser", () => {
     vi.clearAllMocks();
   });
 
+  it("shows a dynamic time cell as the response string", async () => {
+    const seenAt = "2024-01-02T01:02:03.123456+08:00";
+    vi.mocked(loadDataSchema).mockResolvedValue({
+      ...schema,
+      attributes: [{ name: "seen_at", type: "string" }],
+    });
+    vi.mocked(queryDataRows).mockResolvedValue({
+      items: [{ row_id: 1, seen_at: seenAt }],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    });
+    renderBrowser();
+
+    expect(await screen.findByText(seenAt)).toBeTruthy();
+    expect(queryDataRows).toHaveBeenCalledWith("material", { limit: 50, offset: 0 });
+  });
+
   it("loads the full view when the tab is visible", async () => {
     renderBrowser();
 

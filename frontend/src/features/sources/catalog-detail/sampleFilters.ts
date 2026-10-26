@@ -1,4 +1,4 @@
-import type { SampleRequestBody } from "@/features/sources/types";
+import type { ColumnDeclaration, SampleRequestBody } from "@/features/sources/types";
 
 export type SampleFilterOp = "eq" | "neq" | "contains" | "is_null";
 
@@ -54,20 +54,40 @@ export function formatSampleCell(cell: unknown): string {
   return String(cell);
 }
 
+function fractionalDigitCount(value: string): number {
+  const match = /\.(\d+)/.exec(value);
+  if (!match) return 0;
+  return match[1].replace(/0+$/, "").length;
+}
+
 export function buildSampleRequest(
   filter: SampleFilter,
   orderColumn: string | null,
   orderDirection: SampleOrderBy["direction"],
   offset: number,
   limit: number,
-): SampleRequestBody {
+  declarations: readonly ColumnDeclaration[] = [],
+): SampleRequestBody | null {
+  const value = filter.op === "is_null" ? "" : filter.value;
+  const declaration =
+    filter.column == null
+      ? undefined
+      : declarations.find((item) => item.name === filter.column);
+  if (
+    filter.op !== "is_null" &&
+    declaration?.temporal_kind != null &&
+    declaration.precision != null &&
+    fractionalDigitCount(value) > declaration.precision
+  ) {
+    return null;
+  }
   const filters =
     filter.column != null
       ? [
           {
             column: filter.column,
             op: filter.op,
-            value: filter.op === "is_null" ? "" : filter.value,
+            value,
           },
         ]
       : [];

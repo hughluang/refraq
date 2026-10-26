@@ -83,6 +83,11 @@ describe("formatSampleCell", () => {
     expect(formatSampleCell(true)).toBe("true");
     expect(formatSampleCell("hi")).toBe("hi");
   });
+
+  it("shows a fractional timestamp as the response string", () => {
+    const text = "2024-01-02T01:02:03.123456+08:00";
+    expect(formatSampleCell(text)).toBe(text);
+  });
 });
 
 describe("buildSampleRequest", () => {
@@ -116,6 +121,78 @@ describe("buildSampleRequest", () => {
     ).toEqual({
       filters: [{ column: "status", op: "is_null", value: "" }],
       order_by: [{ column: "id", direction: "desc" }],
+      offset: 0,
+      limit: 20,
+      include_sql: false,
+    });
+  });
+
+  it("does not submit a filter that exceeds the column's fractional precision", () => {
+    expect(
+      buildSampleRequest(
+        { column: "seen_at", op: "eq", value: "01:02:03.1234" },
+        "seen_at",
+        "asc",
+        0,
+        20,
+        [
+          {
+            name: "seen_at",
+            temporal_kind: "time",
+            precision: 3,
+            nullable: true,
+          },
+        ],
+      ),
+    ).toBeNull();
+  });
+
+  it("submits the original text when trailing zeros fit the declared precision", () => {
+    expect(
+      buildSampleRequest(
+        { column: "seen_at", op: "eq", value: "01:02:03.123000" },
+        "id",
+        "desc",
+        0,
+        20,
+        [
+          {
+            name: "seen_at",
+            temporal_kind: "time",
+            precision: 3,
+            nullable: false,
+          },
+        ],
+      ),
+    ).toEqual({
+      filters: [{ column: "seen_at", op: "eq", value: "01:02:03.123000" }],
+      order_by: [{ column: "id", direction: "desc" }],
+      offset: 0,
+      limit: 20,
+      include_sql: false,
+    });
+  });
+
+  it("submits a string without temporal_kind unchanged and without a timezone", () => {
+    expect(
+      buildSampleRequest(
+        { column: "note", op: "eq", value: "2024-01-02T01:02:03.1234" },
+        null,
+        "asc",
+        0,
+        20,
+        [
+          {
+            name: "note",
+            temporal_kind: null,
+            precision: 3,
+            nullable: true,
+          },
+        ],
+      ),
+    ).toEqual({
+      filters: [{ column: "note", op: "eq", value: "2024-01-02T01:02:03.1234" }],
+      order_by: [],
       offset: 0,
       limit: 20,
       include_sql: false,

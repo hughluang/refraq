@@ -228,6 +228,7 @@
   "catalog.sample.filterColumnPlaceholder": "No filter",
   "catalog.sample.filterOp": "Operator",
   "catalog.sample.filterValue": "Value",
+  "catalog.sample.precision": "Fractional digits exceed this column's declared precision.",
   "catalog.sample.orderColumn": "Order by",
   "catalog.sample.orderColumnPlaceholder": "Unspecified order",
   "catalog.sample.orderDirection": "Direction",

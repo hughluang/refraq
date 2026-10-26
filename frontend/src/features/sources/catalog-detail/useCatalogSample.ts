@@ -84,16 +84,22 @@ export function useCatalogSample(object: CatalogObject) {
     }
     setRunning(true);
     try {
-      const data = await runObjectSample(
-        object.id,
-        buildSampleRequest(
-          filter,
-          orderColumn,
-          orderDirection,
-          nextOffset,
-          limit,
-        ),
+      const body = buildSampleRequest(
+        filter,
+        orderColumn,
+        orderDirection,
+        nextOffset,
+        limit,
+        result?.declarations ?? [],
       );
+      if (body == null) {
+        open?.({
+          type: "error",
+          message: t("catalog.sample.precision"),
+        });
+        return;
+      }
+      const data = await runObjectSample(object.id, body);
       setOffset(nextOffset);
       setResult(data);
       setApplied({

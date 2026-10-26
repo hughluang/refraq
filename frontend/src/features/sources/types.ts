@@ -168,8 +168,16 @@ export type JoinPathResult = {
   rank_mode?: "vector" | "lexical" | null;
 };
 
+export type ColumnDeclaration = {
+  name: string;
+  temporal_kind: string | null;
+  precision: number | null;
+  nullable: boolean | null;
+};
+
 export type QueryResult = {
   columns: string[];
+  declarations: ColumnDeclaration[];
   rows: unknown[][];
   truncated: boolean;
   duration_ms: number;
@@ -177,6 +185,7 @@ export type QueryResult = {
 
 export type SampleResult = {
   columns: string[];
+  declarations: ColumnDeclaration[];
   rows: unknown[][];
   truncated: boolean;
   duration_ms: number;
