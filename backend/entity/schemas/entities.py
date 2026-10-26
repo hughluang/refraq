@@ -144,6 +144,11 @@ class CurrentVersionOut(BaseModel):
     alignment: AlignmentOut
 
 
+class EntityTagOut(BaseModel):
+    id: str
+    name: str
+
+
 class BusinessEntityOut(BaseModel):
     id: str
     table_name: str
@@ -156,6 +161,8 @@ class BusinessEntityOut(BaseModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
+    tags: list[EntityTagOut]
+    tag_revision: int
     created_at: Instant
     updated_at: Instant
 
@@ -205,6 +212,28 @@ class EntityVersionResponse(BaseModel):
     version: EntityVersionOut
 
 
+class EntityTagAssignmentIn(BaseModel):
+    """Tags submitted with Entity create. Omitted means an empty set."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tag_ids: list[str] = Field(default_factory=list)
+    names: list[str] = Field(default_factory=list)
+
+
+class EntityTagsReplaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    base_revision: int
+    tag_ids: list[str]
+    names: list[str]
+
+
+class EntityTagsReplaceResponse(BaseModel):
+    tags: list[EntityTagOut]
+    tag_revision: int
+
+
 class EntityCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -212,6 +241,7 @@ class EntityCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=256)
     description: str = Field(min_length=1)
     attributes: list[AttributeIn]
+    tags: EntityTagAssignmentIn | None = None
 
 
 class EntityPatchRequest(BaseModel):

@@ -5,15 +5,19 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from functools import lru_cache
+from typing import Protocol, TypeVar
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from backend.core.config import get_settings
 from backend.core.db import session_scope
-from backend.tags.errors import TagNameConflict, TagNotFound
-from backend.tags.models import TagRow
+from backend.tags.errors import TagInUse, TagNameConflict, TagNotFound
+from backend.tags.models import TagAssignmentRow, TagRow, TagSubjectRevisionRow
 from backend.tags.records import TagRecord
+
+_T = TypeVar("_T")
 
 __all__ = [
     "MemoryTagStore",
@@ -42,7 +46,19 @@ class MemoryTagStore:
     def __init__(self) -> None:
         self._rows: dict[str, TagRecord] = {}
         self._by_key: dict[str, str] = {}
+        self._assignments: dict[tuple[str, str], set[str]] = {}
+        self._revisions: dict[tuple[str, str], int] = {}
         self._lock = threading.Lock()
+
+    def run(
+        self,
+        fn: Callable[[TagUnit], _T],
+        *,
+        session: Session | None = None,
+    ) -> _T:
+        del session
+        with self._lock:
+            return fn(_MemoryUnit(self))
 
     def list_tags(
         self,
@@ -94,6 +110,9 @@ class MemoryTagStore:
 
     def delete(self, tag_id: str) -> TagRecord | None:
         with self._lock:
+            entity_count, channel_count = _memory_counts(self, tag_id)
+            if entity_count or channel_count:
+                raise TagInUse(entity_count, channel_count)
             current = self._rows.pop(tag_id, None)
             if current is None:
                 return None
@@ -102,6 +121,17 @@ class MemoryTagStore:
 
 
 class SqlTagStore:
+    def run(
+        self,
+        fn: Callable[[TagUnit], _T],
+        *,
+        session: Session | None = None,
+    ) -> _T:
+        if session is not None:
+            return fn(_SqlUnit(session))
+        with session_scope() as owned:
+            return fn(_SqlUnit(owned))
+
     def list_tags(
         self,
         *,
@@ -170,9 +200,12 @@ class SqlTagStore:
 
     def delete(self, tag_id: str) -> TagRecord | None:
         with session_scope() as session:
-            row = session.get(TagRow, tag_id)
+            row = session.get(TagRow, tag_id, with_for_update=True)
             if row is None:
                 return None
+            entity_count, channel_count = _sql_counts(session, tag_id)
+            if entity_count or channel_count:
+                raise TagInUse(entity_count, channel_count)
             record = _record(row)
             session.delete(row)
             session.flush()
@@ -213,6 +246,214 @@ def _is_name_dup(exc: BaseException) -> bool:
         return False
     diag = getattr(orig, "diag", None)
     return getattr(diag, "constraint_name", None) == _NAME_UNIQUE
+
+
+class TagUnit(Protocol):
+    def lock_subject(self, kind: str, subject_id: str) -> None: ...
+
+    def get_tag(self, tag_id: str, *, lock: bool) -> TagRecord | None: ...
+
+    def get_by_key(self, name_key: str) -> TagRecord | None: ...
+
+    def insert_tag(self, record: TagRecord) -> TagRecord: ...
+
+    def read_assignment(self, kind: str, subject_id: str) -> tuple[set[str], int]: ...
+
+    def write_assignment(
+        self, kind: str, subject_id: str, tag_ids: set[str], revision: int
+    ) -> None: ...
+
+    def clear_assignment(self, kind: str, subject_id: str) -> None: ...
+
+    def count_kinds(self, tag_id: str) -> tuple[int, int]: ...
+
+    def subjects_with_any(self, kind: str, tag_ids: set[str]) -> list[str]: ...
+
+
+def _memory_counts(store: MemoryTagStore, tag_id: str) -> tuple[int, int]:
+    entity_count = 0
+    channel_count = 0
+    for (kind, _subject), ids in store._assignments.items():
+        if tag_id not in ids:
+            continue
+        if kind == "entity":
+            entity_count += 1
+        elif kind == "channel":
+            channel_count += 1
+    return entity_count, channel_count
+
+
+def _sql_counts(session: Session, tag_id: str) -> tuple[int, int]:
+    rows = session.execute(
+        select(
+            TagAssignmentRow.subject_kind,
+            func.count(func.distinct(TagAssignmentRow.subject_id)),
+        )
+        .where(TagAssignmentRow.tag_id == tag_id)
+        .group_by(TagAssignmentRow.subject_kind)
+    ).all()
+    counts = {kind: int(total) for kind, total in rows}
+    return counts.get("entity", 0), counts.get("channel", 0)
+
+
+class _MemoryUnit:
+    def __init__(self, store: MemoryTagStore) -> None:
+        self._store = store
+
+    def lock_subject(self, kind: str, subject_id: str) -> None:
+        del kind, subject_id
+
+    def get_tag(self, tag_id: str, *, lock: bool) -> TagRecord | None:
+        del lock
+        return self._store._rows.get(tag_id)
+
+    def get_by_key(self, name_key: str) -> TagRecord | None:
+        tag_id = self._store._by_key.get(name_key)
+        if tag_id is None:
+            return None
+        return self._store._rows.get(tag_id)
+
+    def insert_tag(self, record: TagRecord) -> TagRecord:
+        if record.name_key in self._store._by_key:
+            raise TagNameConflict()
+        self._store._rows[record.id] = record
+        self._store._by_key[record.name_key] = record.id
+        return record
+
+    def read_assignment(self, kind: str, subject_id: str) -> tuple[set[str], int]:
+        key = (kind, subject_id)
+        ids = set(self._store._assignments.get(key, set()))
+        return ids, self._store._revisions.get(key, 1)
+
+    def write_assignment(
+        self, kind: str, subject_id: str, tag_ids: set[str], revision: int
+    ) -> None:
+        key = (kind, subject_id)
+        self._store._assignments[key] = set(tag_ids)
+        self._store._revisions[key] = revision
+
+    def clear_assignment(self, kind: str, subject_id: str) -> None:
+        key = (kind, subject_id)
+        self._store._assignments.pop(key, None)
+        self._store._revisions.pop(key, None)
+
+    def count_kinds(self, tag_id: str) -> tuple[int, int]:
+        return _memory_counts(self._store, tag_id)
+
+    def subjects_with_any(self, kind: str, tag_ids: set[str]) -> list[str]:
+        found: list[str] = []
+        for (subject_kind, subject_id), ids in self._store._assignments.items():
+            if subject_kind == kind and ids & tag_ids:
+                found.append(subject_id)
+        found.sort()
+        return found
+
+
+class _SqlUnit:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def lock_subject(self, kind: str, subject_id: str) -> None:
+        self._session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"tag-subject:{kind}:{subject_id}"},
+        )
+
+    def get_tag(self, tag_id: str, *, lock: bool) -> TagRecord | None:
+        row = self._session.get(TagRow, tag_id, with_for_update=lock)
+        return _record(row) if row else None
+
+    def get_by_key(self, name_key: str) -> TagRecord | None:
+        row = self._session.execute(
+            select(TagRow).where(TagRow.name_key == name_key)
+        ).scalar_one_or_none()
+        return _record(row) if row else None
+
+    def insert_tag(self, record: TagRecord) -> TagRecord:
+        nested = self._session.begin_nested()
+        self._session.add(_row(record))
+        try:
+            self._session.flush()
+        except IntegrityError as exc:
+            nested.rollback()
+            if _is_name_dup(exc):
+                raise TagNameConflict() from exc
+            raise
+        else:
+            nested.commit()
+        return record
+
+    def read_assignment(self, kind: str, subject_id: str) -> tuple[set[str], int]:
+        revision_row = self._session.get(TagSubjectRevisionRow, (kind, subject_id))
+        rows = self._session.execute(
+            select(TagAssignmentRow).where(
+                TagAssignmentRow.subject_kind == kind,
+                TagAssignmentRow.subject_id == subject_id,
+            )
+        ).scalars().all()
+        revision = revision_row.revision if revision_row is not None else 1
+        return {row.tag_id for row in rows}, revision
+
+    def write_assignment(
+        self, kind: str, subject_id: str, tag_ids: set[str], revision: int
+    ) -> None:
+        rows = self._session.execute(
+            select(TagAssignmentRow).where(
+                TagAssignmentRow.subject_kind == kind,
+                TagAssignmentRow.subject_id == subject_id,
+            )
+        ).scalars().all()
+        present = {row.tag_id for row in rows}
+        for row in rows:
+            if row.tag_id not in tag_ids:
+                self._session.delete(row)
+        for tag_id in tag_ids:
+            if tag_id not in present:
+                self._session.add(
+                    TagAssignmentRow(
+                        subject_kind=kind,
+                        subject_id=subject_id,
+                        tag_id=tag_id,
+                    )
+                )
+        revision_row = self._session.get(TagSubjectRevisionRow, (kind, subject_id))
+        if revision_row is None:
+            self._session.add(
+                TagSubjectRevisionRow(
+                    subject_kind=kind,
+                    subject_id=subject_id,
+                    revision=revision,
+                )
+            )
+        else:
+            revision_row.revision = revision
+        self._session.flush()
+
+    def clear_assignment(self, kind: str, subject_id: str) -> None:
+        self._session.execute(
+            delete(TagAssignmentRow).where(
+                TagAssignmentRow.subject_kind == kind,
+                TagAssignmentRow.subject_id == subject_id,
+            )
+        )
+        revision_row = self._session.get(TagSubjectRevisionRow, (kind, subject_id))
+        if revision_row is not None:
+            self._session.delete(revision_row)
+        self._session.flush()
+
+    def count_kinds(self, tag_id: str) -> tuple[int, int]:
+        return _sql_counts(self._session, tag_id)
+
+    def subjects_with_any(self, kind: str, tag_ids: set[str]) -> list[str]:
+        rows = self._session.execute(
+            select(TagAssignmentRow.subject_id)
+            .where(
+                TagAssignmentRow.subject_kind == kind,
+                TagAssignmentRow.tag_id.in_(tag_ids),
+            )
+            .distinct()
+        ).scalars().all()
+        return sorted(rows)
 
 
 _memory_singleton: MemoryTagStore | None = None

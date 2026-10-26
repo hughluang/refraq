@@ -186,11 +186,15 @@ A config key that belongs to another type, an unknown config key, or a top-level
     }
   },
   "created_at": "2026-09-10T04:00:00Z",
-  "updated_at": "2026-09-10T04:00:00Z"
+  "updated_at": "2026-09-10T04:00:00Z",
+  "tags": [],
+  "tag_revision": 1
 }
 ```
 
 `deprecated_at` is an **Instant** after Deprecate, otherwise `null`. `ever_published` is `true` when any version is or has been `published`, or when `deprecated_at` is set.
+
+`tags` is `{ "id", "name" }[]`, ordered by comparison form, then id. `tag_revision` starts at 1 and increases by 1 only when the set changes. List items, detail, and the create response include both. Comparison form is not a response field.
 
 List items use this shape. Entity detail (`GET /entities/{id}`) adds `inbound_references` and no other top-level fields. Callers load versions and attributes from the nested endpoints. List items omit `inbound_references`.
 
@@ -300,7 +304,9 @@ Response: `{ "items": […], "total": N, "limit": L, "offset": O }`. Items use t
 }
 ```
 
-Required: `table_name`, `name`, `description`, `attributes`. Any other field is `422 REQUEST_INVALID`.
+Required: `table_name`, `name`, `description`, `attributes`. Optional: `tags`, an object `{ "tag_ids": [], "names": [] }`. Both arrays default to empty. Any other field is `422 REQUEST_INVALID`.
+
+An omitted `tags`, or both arrays empty, leaves the new Entity with no Tags and `tag_revision` 1. `tag_ids` names existing Tags. `names` creates Tags in the same request. A rejected name or a set of more than ten leaves neither the Entity nor a new Tag. A name that folds onto an existing Tag attaches it and does not return `TAG_NAME_CONFLICT`. Two overlapping creates of one new name yield one Tag. The losing caller attaches that Tag. Neither response is `500`.
 
 `table_name` is `[a-z][a-z0-9_]*`, at most **63** characters, and must not match a physical table name (one or more characters, `__v`, digits, `__`, and 16 lowercase hexadecimal digits). That pattern is reserved for a version's physical table. A `table_name` outside those constraints is `ENTITY_TABLE_NAME_INVALID`. A `table_name` already registered is `ENTITY_TABLE_NAME_DUP`. `table_name` cannot change after create.
 
@@ -314,7 +320,7 @@ Success `200`: `{ "entity": { … } }`. Missing id is `404 ENTITY_NOT_FOUND`.
 
 ### 4.4 `PATCH /entities/{id}`
 
-Accepted fields: `name`, `description`, `attributes`. Omitted fields stay unchanged. `table_name` and `code` are rejected if present (`422 REQUEST_INVALID`).
+Accepted fields: `name`, `description`, `attributes`. Omitted fields stay unchanged. `table_name`, `code`, and `tags` are rejected if present (`422 REQUEST_INVALID`). A rejected `tags` field leaves the Tag set and `tag_revision` unchanged.
 
 `attributes`, when present, is the full replacement set for the current unpublished version. Storage stays on that version; this is not an Entity-level shape field. Version-scoped clients may still `PATCH` §5.4.
 
@@ -324,13 +330,33 @@ An applied change writes one definition-save **Management Audit Event**. Identit
 
 Success `200`: `{ "entity": { … } }`.
 
+### 4.4a `PUT /entities/{id}/tags`
+
+Purpose: replace the Entity's Tags. This is not a definition save.
+
+- Permission: `entity:write`. A caller without it receives `403 AUTH_FORBIDDEN` before the id is resolved. `tag:write` is not required, including when `names` creates a Tag.
+
+```json
+{ "base_revision": 1, "tag_ids": [], "names": [] }
+```
+
+`tag_ids` and `names` default to empty. Both empty clears the set. The cap counts the resulting set: an id already held, or a repeated id, counts once. More than ten is `422 TAG_LIMIT_EXCEEDED` and writes nothing. The extension `subjects` is `[{ "kind": "entity", "id": "<entity id>" }]`.
+
+`base_revision` must equal the stored revision. A stale revision is `409 TAG_ASSIGNMENT_CONFLICT` and leaves the newer set. The same set at the current revision is `200` and does not increment the revision.
+
+Success `200`: `{ "tags": [{ "id", "name" }], "tag_revision": N }`. Tags are ordered by comparison form, then id.
+
+Error order: unknown or invisible Entity `404 ENTITY_NOT_FOUND`; deprecated `422 ENTITY_DEPRECATED`; stale revision `409 TAG_ASSIGNMENT_CONFLICT`; an unknown `tag_ids` entry `404 TAG_NOT_FOUND`; an invalid name `422 TAG_NAME_INVALID`; more than ten `422 TAG_LIMIT_EXCEEDED`. A folded name attaches the existing Tag and does not change its stored display name.
+
+The call does not change the Entity or version `updated_at`. A committed set change writes one audit event, resource type `entity`, action `tags.replace`, detail `{ "tag_ids": [ ... ] }` in response order. Each inline create also writes a Tag create event. An unchanged set writes neither.
+
 ### 4.5 `DELETE /entities/{id}`
 
 Deleting a definition removes definition rows only. It never drops an Entity Table.
 
 Delete is refused while any version is `publishing` (`422 ENTITY_PUBLISHING`), including when an older version is already `published`. It is refused when the Entity has ever been published and no version is `publishing` (`409 ENTITY_ALREADY_PUBLISHED`). It is also refused when a current version, including this entity's own, has an **Entity Reference** whose target is this entity (`409 ENTITY_REFERENCED`). A historical version does not count. A never-published Entity has no table.
 
-Success `204` with an empty body.
+Success `204` with an empty body. That successful delete also removes the Entity's Tag assignments. A refused delete does not.
 
 ### 4.6 `POST /entities/{id}/classify`
 
@@ -565,7 +591,7 @@ Job-terminal codes (successful GET of a failed Job; not Problem Details on the e
 
 ## 8. Management Audit
 
-Persist a **Management Audit Event** for: Business Entity create, definition save, version open, publish enqueue, deprecate, definition delete, and table-drop enqueue; and for Dictionary create, update, and delete. Each event records actor, Instant, resource, action, and result.
+Persist a **Management Audit Event** for: Business Entity create, definition save, version open, publish enqueue, deprecate, definition delete, and table-drop enqueue; and for Dictionary create, update, and delete. Tag replacement is §4.4a. Opening a version, publishing, deprecating, and dropping a table do not change Tags or `tag_revision`. Each event records actor, Instant, resource, action, and result.
 
 ## 9. Non-Goals
 

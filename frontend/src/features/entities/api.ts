@@ -7,6 +7,7 @@ import type {
   EntityCreate,
   EntityJobEnqueue,
   EntityPatch,
+  EntityTag,
   EntityVersion,
   ShapeWrite,
 } from "./types";
@@ -71,6 +72,20 @@ export function patchEntity(id: string, body: EntityPatch) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+export function replaceEntityTags(
+  id: string,
+  body: { base_revision: number; tag_ids: string[]; names: string[] },
+) {
+  return apiClient<{ tags: EntityTag[]; tag_revision: number }>(
+    `/entities/${id}/tags`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
 }
 
 export function deleteEntity(id: string) {

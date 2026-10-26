@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from backend.core.errors import AppError
 
 __all__ = [
+    "TagAssignmentConflict",
     "TagDescriptionInvalid",
+    "TagInUse",
+    "TagLimitExceeded",
     "TagNameConflict",
     "TagNameInvalid",
     "TagNotFound",
@@ -42,3 +47,49 @@ class TagDescriptionInvalid(AppError):
 
     def _default_message(self) -> str:
         return "Tag description is not valid"
+
+
+class TagInUse(AppError):
+    """Delete refused while any subject still carries the Tag."""
+
+    code = "TAG_IN_USE"
+    http_status = 409
+
+    def __init__(self, entity_count: int, channel_count: int) -> None:
+        super().__init__()
+        self.entity_count = entity_count
+        self.channel_count = channel_count
+
+    def extra_members(self) -> dict[str, Any]:
+        return {
+            "entity_count": self.entity_count,
+            "channel_count": self.channel_count,
+        }
+
+    def _default_message(self) -> str:
+        return "Tag is still assigned"
+
+
+class TagLimitExceeded(AppError):
+    """The resulting set would pass ten Tags."""
+
+    code = "TAG_LIMIT_EXCEEDED"
+    http_status = 422
+
+    def __init__(self, subjects: list[dict[str, str]]) -> None:
+        super().__init__()
+        self.subjects = subjects
+
+    def extra_members(self) -> dict[str, Any]:
+        return {"subjects": self.subjects}
+
+    def _default_message(self) -> str:
+        return "A record can carry at most ten Tags"
+
+
+class TagAssignmentConflict(AppError):
+    code = "TAG_ASSIGNMENT_CONFLICT"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "Tag revision does not match the stored revision"

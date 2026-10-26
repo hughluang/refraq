@@ -16,6 +16,7 @@ from backend.entity.records import (
 )
 from backend.entity.reference_binding import business_key_attr
 from backend.entity.store import EntityStore, get_entity_store
+from backend.tags.api import read_assignment
 
 __all__ = [
     "entity_out",
@@ -153,10 +154,19 @@ def entity_out(
         "current_version": current_payload,
         "created_at": entity.created_at,
         "updated_at": entity.updated_at,
+        **_tag_fields(entity.id),
     }
     if inbound_references is not None:
         payload["inbound_references"] = inbound_references
     return payload
+
+
+def _tag_fields(entity_id: str) -> dict[str, Any]:
+    assignment = read_assignment("entity", entity_id)
+    return {
+        "tags": [{"id": tag.id, "name": tag.name} for tag in assignment.tags],
+        "tag_revision": assignment.tag_revision,
+    }
 
 
 def version_out(

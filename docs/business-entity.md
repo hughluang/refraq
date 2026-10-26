@@ -106,6 +106,16 @@ Changing which attribute is the Business Key, clearing it, or changing the marke
 
 Publish of a version that declares a `reference` resolves each target's current version, which may be unpublished. `self` resolves to this version after `self` is bound. That current version must declare a Business Key; otherwise publish is `ENTITY_ATTRIBUTE_INVALID` and is not enqueued. Acceptance freezes, for each reference attribute, the target attribute name, its type, and `max_length` when the type is `string`. Execution copies that freeze into the version's reference snapshot and uses it for the column type (§4.4). A target Business Key that no longer matches the freeze fails the Job with `ENTITY_ATTRIBUTE_INVALID`: the version returns to `unpublished` and no table is created. The snapshot remains after the table is dropped. Row writes encode the reference by the snapshot, not by a later edit of the target. A stored value may not name a live row. A version published before reference snapshots existed stores an empty snapshot. While that version declares a reference and no successor publish has written the snapshot, the Entity Data API refuses that head with `ENTITY_NOT_SERVING`.
 
+### 2.7 Tags
+
+Tags belong to the Business Entity. They are not part of an Entity Version and they are not part of an Entity Table. A new Entity, and every Entity that existed before assignments, has no Tags and `tag_revision` 1.
+
+An operator with `entity:write` may replace the set from create, from edit, and from show. The set holds at most ten Tag ids. Show and edit save that set with their own action. That action does not write the definition, does not change the Entity or version `updated_at`, and does not mark the definition form dirty. Create sends the set on the create body. `PATCH` does not accept Tags.
+
+Assignment is allowed while the current version is `unpublished`, `publishing`, or `published`. A deprecated Entity refuses it (`ENTITY_DEPRECATED`). Opening a version, publishing, dropping a table, and deprecating leave the set and `tag_revision` unchanged. Deprecate does not remove Tags.
+
+Deleting a never-published Entity removes its assignments in that same successful delete. A refused delete leaves them. An inline name on create or replace requires `entity:write` and does not require `tag:write`. A name that folds onto an existing Tag attaches that Tag and does not change its stored display name.
+
 ## 3. Entity Version, Save, And Publish
 
 ### 3.1 A Version Is One Published Shape
@@ -118,7 +128,7 @@ A read-only classifier still reports `breaking` / `non_breaking` / `unchanged` f
 
 ### 3.2 Save Writes Definition Only
 
-Save writes metadata only. `PATCH` Entity identity may include the current unpublished version's `attributes` on the same request. `PATCH` a version's attributes remains valid. Save does not create or alter a table, does not change publish status, and does not enqueue a Job.
+Save writes metadata only. `PATCH` Entity identity may include the current unpublished version's `attributes` on the same request. `PATCH` a version's attributes remains valid. A `tags` field on `PATCH` is `REQUEST_INVALID` and leaves the Tag set and `tag_revision` unchanged. Save does not create or alter a table, does not change publish status, and does not enqueue a Job.
 
 Save is refused when the Entity is deprecated (`ENTITY_DEPRECATED`), when any version of it is `publishing` (`ENTITY_PUBLISHING`), when the target version is not the current version (`ENTITY_VERSION_SUPERSEDED`), or when the current version is not `unpublished` (`ENTITY_NOT_UNPUBLISHED`).
 
@@ -128,11 +138,11 @@ Publish targets the current `unpublished` version. It refuses an empty attribute
 
 The first publish of an Entity, and any publish whose shape is not `unchanged` relative to the latest published shape, applies the attribute write rules. A reference without `target_entity_id`, or a reference whose target current version has no **Business Key**, is `ENTITY_ATTRIBUTE_INVALID` and is not enqueued. Acceptance freezes each reference's target Business Key as in §2.6. An `unchanged` successor of an already published shape is enqueued as stored and still freezes those keys from the targets' current versions. Publish does not rewrite that stored shape. While an **Inbound Reference** exists, a publish that changes this entity's Business Key is `ENTITY_REFERENCED` (§2.6).
 
-Publish sets the version to `publishing` and enqueues a **Job** (`entity_reconcile`) that creates this version's **Entity Table** (including `row_id`) under the physical name in §4.3, replaces the stem view so it selects that table, and then stores `published`. The previous physical table is not renamed. While `publishing`, every write is refused: save, publish, open version, identity patch, delete, and deprecate (`ENTITY_PUBLISHING`).
+Publish sets the version to `publishing` and enqueues a **Job** (`entity_reconcile`) that creates this version's **Entity Table** (including `row_id`) under the physical name in §4.3, replaces the stem view so it selects that table, and then stores `published`. The previous physical table is not renamed. While `publishing`, definition writes are refused: save, publish, open version, identity patch, delete, and deprecate (`ENTITY_PUBLISHING`). Tag assignment is not one of those writes (§2.7).
 
 No transaction spans the metadata database and the entity database. Publish makes that visible as the `publishing` status rather than hiding it behind compensation.
 
-- Job success: status becomes `published`. The stored attribute-set snapshot records the created shape. Display identity and this version's attributes are frozen. The only authoring act left on this Entity is **Open new version**, or **Deprecate** the Entity.
+- Job success: status becomes `published`. The stored attribute-set snapshot records the created shape. Display identity and this version's attributes are frozen. The definition authoring acts left on this Entity are **Open new version** and **Deprecate**. Tag assignment remains available until Deprecate (§2.7). Publish itself does not change the Tag set or `tag_revision`.
 - Job failure: status returns to `unpublished`. The failure path drops the new physical table when it is still empty. A new table that already has rows is left in place, and a later publish of the same version hits `ENTITY_TABLE_NAME_CONFLICT`. If this attempt already replaced the stem view, the failure path puts that view back. When putting the view back fails, the Job summary includes that failure and the new physical table is left in place. The definition is unchanged. The author may save and publish again.
 
 Enqueue is idempotent: an in-flight Job for that version is returned rather than duplicated. Execution takes a per-Entity lock shared with table drop (`entity_table:{entity_id}`), and reuses `JOB_ALREADY_ACTIVE`.
@@ -208,7 +218,7 @@ A version is **superseded** when a newer version exists. Supersession is a deriv
 
 Deleting a definition never drops a table. Deleting a never-published Business Entity removes definition rows only.
 
-Delete is permitted only when the Entity has never been published (`ENTITY_ALREADY_PUBLISHED` otherwise) and no current version, including this entity's own, has an **Entity Reference** whose target is this entity (`ENTITY_REFERENCED` otherwise). A historical version does not count. A never-published Entity has no table; delete removes definition rows only.
+Delete is permitted only when the Entity has never been published (`ENTITY_ALREADY_PUBLISHED` otherwise) and no current version, including this entity's own, has an **Entity Reference** whose target is this entity (`ENTITY_REFERENCED` otherwise). A historical version does not count. A never-published Entity has no table; delete removes definition rows and that Entity's Tag assignments. A refused delete leaves the assignments. Opening a version and dropping a table do not change them.
 
 Dropping an **Entity Table** is a separate destructive act behind its own **Permission** (§6). It runs as a **Job** (`entity_table_drop`). While the Entity is not deprecated, drop is permitted only on a published version that is not the metadata head (the latest published version that still has a table). The head may be dropped only after the Entity is deprecated, and that drop also drops the stem view in the same entity-database transaction. Drop of the table still in service — the metadata head while the Entity is not deprecated — is `ENTITY_TABLE_IN_SERVICE`. Opening a newer unpublished version does not move the head, so the prior version remains undeletable until a successor publish stores `published`, or the Entity is deprecated. Drop is refused while the table holds rows, rejected with `ENTITY_TABLE_NOT_EMPTY`, and emptiness is checked in the same transaction as the drop. Because refraq owns the entity database, emptiness is a fact it reads rather than a policy it assumes. Emptying a table is the operator's act in the entity database, not a product path.
 
@@ -219,7 +229,7 @@ It is refused while a **Data Channel** references any version, rejected with `EN
 | Permission | Grants |
 | --- | --- |
 | `entity:read` | Read Business Entity definitions, versions, and attributes, and read **Dictionaries**. Which Entities and attributes a holder sees follows `docs/business-entity-access.md` §12 |
-| `entity:write` | Create and save unpublished definitions, publish, open versions, deprecate, and delete a never-published definition; create, update, and delete **Dictionaries** |
+| `entity:write` | Create and save unpublished definitions, publish, open versions, deprecate, delete a never-published definition, and replace the Entity's Tags, including an inline Tag name; create, update, and delete **Dictionaries**. Inline Tag creation does not require `tag:write` |
 | `entity:drop_table` | Enqueue an **Entity Table** drop (§5) |
 | `entity:access_manage` | Manage presentation ladders, **Access Profile**s, **Access Grant**s, and **Access Restriction**s (`docs/business-entity-access.md`) |
 | `entity:data_read` | Master switch for **Entity Data API** schema, get, and query (`docs/api-contracts-entity-data.md`); data is reached only through an effective **Access Grant** |
@@ -252,6 +262,7 @@ Page actions:
 - Publishing: no write actions.
 - Deprecated: no authoring actions; table drop remains for holders of `entity:drop_table`.
 - Delete appears only when the Entity has never been published.
+- Tags are a separate control. On create they submit with the create body. On show and edit they save by themselves and do not dirty the definition form, so Publish and Open new version stay available. A deprecated Entity, and any mode without `entity:write`, shows that control in display mode.
 
 The record also carries an access control tab and a data page; their rules are `docs/business-entity-access.md` §19. The version tab shows physical table names only to `entity:write` holders.
 
@@ -259,7 +270,7 @@ Where a **Data Channel** module mounts is out of scope for this document.
 
 ## 8. Management Audit
 
-Persist a **Management Audit Event** for: Business Entity create, definition save, version open, publish enqueue, deprecate, definition delete, and table drop enqueue; and for **Dictionary** create, update, and delete. Each event records actor, **Instant**, resource, action, and result. Access policy changes and the Entity Access Log follow `docs/business-entity-access.md` §16.
+Persist a **Management Audit Event** for: Business Entity create, definition save, version open, publish enqueue, deprecate, definition delete, and table drop enqueue; and for **Dictionary** create, update, and delete. A committed Tag-set change writes one event with resource type `entity`, action `tags.replace`, and the resulting Tag ids. An inline Tag create also writes the Tag create event. A replacement that does not change the set writes neither. A Tag change does not write a definition-save event. Each event records actor, **Instant**, resource, action, and result. Access policy changes and the Entity Access Log follow `docs/business-entity-access.md` §16.
 
 ## 9. Non-Goals
 

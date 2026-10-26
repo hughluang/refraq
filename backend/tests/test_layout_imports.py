@@ -100,7 +100,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "channel.schedule_projection",
         }
     ),
-    "tags": frozenset(),
+    "tags": frozenset({"tags.api"}),
     "worker": frozenset(
         {
             "worker.parameters",
@@ -290,6 +290,18 @@ def test_layout_imports(path: Path) -> None:
                     f"{importer} must not import {imported} "
                     "(tags may import core and published admin only)"
                 )
+
+        # tags.api is the only published leaf, and only Entity and Channel may import it.
+        if target_pkg == "tags":
+            allowed = importer_pkg in {"entity", "channel"} and _is_published_import(
+                "tags", imported
+            )
+            if not allowed and not _allowlisted(importer, imported):
+                raise AssertionError(
+                    f"{importer} must not import {imported} "
+                    "(only entity and channel may import tags.api)"
+                )
+            continue
 
         # Cross-package into another tiered package: published only.
         if target_pkg in PUBLISHED:

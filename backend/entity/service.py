@@ -54,6 +54,11 @@ from backend.entity.records import (
     attribute_to_dict,
 )
 from backend.entity.store import get_entity_store
+from backend.tags.api import (
+    KIND_ENTITY,
+    clear_assignment,
+    replace_assignment,
+)
 from backend.entity.table_name import physical_table_name, table_present
 from backend.entity.validate import (
     bind_reference_self,
@@ -76,6 +81,7 @@ __all__ = [
     "open_version",
     "patch_entity",
     "patch_version",
+    "replace_entity_tags",
     "require_entity",
     "require_version",
 ]
@@ -306,6 +312,8 @@ def create_entity(
     attributes: list[AttributeRecord],
     actor_user_id: str | None,
     actor_token_id: str | None,
+    tag_ids: list[str] | None = None,
+    names: list[str] | None = None,
 ) -> dict[str, Any]:
     cleaned_table_name = require_table_name(table_name)
     cleaned_name = _require_text(name, "name")
@@ -325,6 +333,21 @@ def create_entity(
         updated_at=now,
     )
 
+    requested_tag_ids = list(tag_ids or [])
+    requested_names = list(names or [])
+
+    def _bind(session: Any) -> None:
+        replace_assignment(
+            kind=KIND_ENTITY,
+            subject_id=entity.id,
+            base_revision=1,
+            tag_ids=requested_tag_ids,
+            names=requested_names,
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+            session=session,
+        )
+
     def _insert(version_id: str) -> EntityVersionRecord:
         version = EntityVersionRecord(
             id=version_id,
@@ -337,7 +360,9 @@ def create_entity(
             created_at=now,
             updated_at=now,
         )
-        _saved_entity, saved_version = get_entity_store().create_entity(entity, version)
+        _saved_entity, saved_version = get_entity_store().create_entity(
+            entity, version, after=_bind
+        )
         return saved_version
 
     version = _with_fresh_version_id(_insert)
@@ -613,6 +638,40 @@ def deprecate_entity(
     return _project_entity(saved, current, include_inbound=True)
 
 
+def replace_entity_tags(
+    *,
+    entity_id: str,
+    base_revision: int,
+    tag_ids: list[str],
+    names: list[str],
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+    user: UserRecord,
+) -> dict[str, Any]:
+    """Replace Tags on one Entity. Does not write the Entity or its version."""
+
+    with get_entity_store().lock_entity(entity_id) as (session, entity):
+        if entity is None:
+            raise EntityNotFound()
+        _require_visible(user, entity.id)
+        if is_deprecated(entity):
+            raise EntityDeprecated()
+        assignment = replace_assignment(
+            kind=KIND_ENTITY,
+            subject_id=entity.id,
+            base_revision=base_revision,
+            tag_ids=tag_ids,
+            names=names,
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+            session=session,
+        )
+    return {
+        "tags": [{"id": tag.id, "name": tag.name} for tag in assignment.tags],
+        "tag_revision": assignment.tag_revision,
+    }
+
+
 def delete_entity(
     *,
     entity_id: str,
@@ -623,7 +682,13 @@ def delete_entity(
     _assert_never_published(entity_id)
     if inbound_references_for(get_entity_store(), entity.id):
         raise EntityReferenced()
-    get_entity_store().delete_entity(entity_id)
+
+    def _clear(session: Any) -> None:
+        clear_assignment(kind=KIND_ENTITY, subject_id=entity_id, session=session)
+
+    deleted = get_entity_store().delete_entity(entity_id, after=_clear)
+    if not deleted:
+        raise EntityNotFound()
     persist_audit_event(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,

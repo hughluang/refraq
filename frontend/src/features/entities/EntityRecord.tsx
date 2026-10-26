@@ -43,6 +43,7 @@ import { EntityOverviewTab } from "@/features/entities/EntityOverviewTab";
 import { EntityTabs } from "@/features/entities/EntityTabs";
 import { EntityVersionsTab } from "@/features/entities/EntityVersionsTab";
 import { EntityStatusBadge } from "@/features/entities/EntityStatusBadge";
+import { EntityTagsControl } from "@/features/entities/EntityTagsControl";
 import {
   createEntity,
   deleteEntity,
@@ -76,6 +77,7 @@ import { canAuthor, isPublishing } from "@/features/entities/publishStatus";
 import type {
   BusinessEntity,
   EntityRecordFormValues,
+  EntityTag,
   EntityVersion,
 } from "@/features/entities/types";
 import { JobDetailModal } from "@/features/jobs/JobDetailModal";
@@ -88,6 +90,8 @@ export type { EntityRecordMode };
 type Props =
   | { mode: "create" }
   | { mode: "show" | "edit"; entityId: string };
+
+const EMPTY_TAGS: EntityTag[] = [];
 
 export function EntityRecord(props: Props) {
   const mode = props.mode;
@@ -140,6 +144,10 @@ export function EntityRecord(props: Props) {
   const [attributeReveal, setAttributeReveal] = useState<AttributeReveal | null>(
     null,
   );
+  const [tagDraft, setTagDraft] = useState<{ tag_ids: string[]; names: string[] }>({
+    tag_ids: [],
+    names: [],
+  });
 
   const attributeFieldMessage = (
     values: EntityRecordFormValues,
@@ -282,6 +290,7 @@ export function EntityRecord(props: Props) {
           name: values.name.trim(),
           description: values.description.trim(),
           attributes: attributesFromDrafts(values.attributes),
+          tags: tagDraft,
         });
         form.markSaved();
         suppressLeaveGuard();
@@ -616,6 +625,28 @@ export function EntityRecord(props: Props) {
                     }
               }
               editable={fieldsWritable}
+            />
+            <EntityTagsControl
+              mode={mode}
+              entityId={entityId}
+              tags={entity?.tags ?? EMPTY_TAGS}
+              tagRevision={entity?.tag_revision ?? 1}
+              editable={
+                Boolean(canWrite?.can) &&
+                (mode === "create" || (entity != null && !entity.deprecated_at))
+              }
+              onDraftChange={mode === "create" ? setTagDraft : undefined}
+              onSaved={(next) => {
+                setEntity((current) =>
+                  current
+                    ? {
+                        ...current,
+                        tags: next.tags,
+                        tag_revision: next.tag_revision,
+                      }
+                    : current,
+                );
+              }}
             />
           </Stack>
         }

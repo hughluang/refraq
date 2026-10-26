@@ -15,6 +15,7 @@ from backend.admin.permissions import permissions_include
 from backend.admin.role_store import RoleStore, get_role_store
 from backend.admin.user_store import UserRecord
 from backend.core.pagination import PageParams, page_params
+from backend.tags.api import count_subjects
 from backend.tags.records import TagRecord
 from backend.tags.schemas.tags import (
     TagCreateRequest,
@@ -54,14 +55,15 @@ def _summary(record: TagRecord) -> TagOut:
 
 
 def _detail(record: TagRecord) -> TagDetail:
+    entity_count, channel_count = count_subjects(record.id)
     return TagDetail(
         id=record.id,
         name=record.name,
         description=record.description,
         created_at=record.created_at,
         updated_at=record.updated_at,
-        entity_count=0,
-        channel_count=0,
+        entity_count=entity_count,
+        channel_count=channel_count,
     )
 
 

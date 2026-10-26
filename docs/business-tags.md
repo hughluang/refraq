@@ -48,7 +48,7 @@ Routes are `/console/tags`, `/console/tags/new`, `/console/tags/:id`, and `/cons
 
 The list is newest first (`created_at` descending, then `id` descending) and can be searched by the stored display name. Show and edit record a recent visit the same way other record modules do. The command palette lists at most five Tags, and only for a caller who may open the module.
 
-Detail reports `entity_count` and `channel_count`. The list omits those counts. Attaching a Tag is out of scope for this document, so a Tag that nothing carries reports 0 and 0. Deleting that Tag succeeds.
+Detail reports `entity_count` and `channel_count`. Those counts are global: how many Business Entities and how many Data Channels carry the Tag. The list omits them. A Tag that nothing carries reports 0 and 0, and deleting it succeeds. Deleting a Tag that any record still carries is refused. The refusal reports both counts. Naming those records is out of scope for this document.
 
 The browser blocks a name that is empty after trim. It does not copy the nickname profile or the length caps. The server remains authoritative.
 
@@ -64,12 +64,12 @@ A management audit event is written for a committed Tag create, update, or delet
 
 ## 7. Non-Goals
 
-1. Attaching Tags to a Business Entity or a Data Channel, including inline create and a delete refusal while a Tag is in use.
-2. List filters, bulk add, and bulk remove.
-3. Usage lists that name records.
-4. Saved Filters.
-5. Seeding `tag:read` or `tag:write` onto the operator role.
-6. MCP tools, Entity Data API fields, and Channel run-context fields.
+1. List filters, bulk add, and bulk remove.
+2. Usage lists that name records.
+3. Saved Filters.
+4. Seeding `tag:read` or `tag:write` onto the operator role.
+5. MCP tools, Entity Data API fields, and Channel run-context fields.
+6. Channel assignment pages. Entity assignment is `docs/business-entity.md` §2.7.
 
 ## 8. References
 

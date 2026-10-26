@@ -59,10 +59,14 @@ Page-level actions render only in `PageChrome` `actions` through `HeaderActions`
 
 The filled primary is Save when the definition form is on screen (create and edit). On edit, Save is that filled primary. On show, Publish is the filled primary when it is shown. Open version and edit are `light`. Delete and deprecate are `light` red. A channel header Run is `variant="light"` in the lifecycle cluster, present only on edit, and is not a second filled primary.
 
+### 3.3 Tag control
+
+A Tag control is not a definition field. On create it submits with the create body. On show and edit it may save with its own button. That save must not dirty the definition form and must not submit with the definition save. Show of a deprecated record, and any mode without write permission, renders the control in display mode. This allowance is only the Tag control. Show does not gain a general in-place edit.
+
 ## 4. Forbidden
 
 1. A second layout for show versus edit (or create).
-2. In-place field writes on show.
+2. In-place field writes on show. The Tag control in §3.3 is the one exception, and it is not a definition field.
 3. Treating write permission as edit intent on show.
 4. Staying on the edit URL when authoring is refused.
 5. Splitting definition save across pages or buttons so identity and body are authored on different layouts.

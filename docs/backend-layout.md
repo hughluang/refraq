@@ -174,7 +174,7 @@ No module is created empty. `channel.errors`, `channel.routers`, `channel.tasks`
 
 ### `tags` published modules
 
-`tags` is the **Tag** product domain (`docs/business-tags.md`). It owns the platform Tag vocabulary and the Tag collection HTTP. It publishes no module. Composition (`main`) mounts `backend.tags.routers`. Alembic imports `backend.tags.models`. No other package imports `tags`. `tags` imports `core` and published `admin` only. It does not import `entity` or `channel`.
+`tags` is the **Tag** product domain (`docs/business-tags.md`). It owns the platform Tag vocabulary, Tag assignments, and the Tag collection HTTP. It publishes `tags.api` for resolve-or-create, replace, add, remove, clear, listing subject ids by Tag id, and counting subjects by kind. Composition (`main`) mounts `backend.tags.routers`. Alembic imports `backend.tags.models`. `entity` and `channel` may import `tags.api` only. `admin` must not import `tags`. `tags` imports `core` and published `admin` only. It does not import `entity` or `channel`.
 
 ### `worker` published modules
 
@@ -275,7 +275,7 @@ Enforcement: `backend/tests/test_no_inline_imports.py`. Rationale: ADR 0020.
 Forward rules:
 
 1. `core` depends on no platform kernel / primitive / product-domain business package (upgrade may import **published** `admin`, `worker.api`, `worker.parameters`, and `metadata.type_mappings.seeds` only for orchestration). Entity access seed is an Alembic data migration, not a Foundation Upgrade call.
-2. **Product domain ↔ product domain:** no direct imports. Collaborate via shared-kernel protocols or composition binding—extend this contract with an explicit edge when needed. `entity` does not import `metadata`. `metadata` must not import `entity`. The one explicit edge is `channel` → published `metadata` and published `entity` (§3 `channel`); `metadata` and `entity` must not import `channel`. `tags` does not import `entity` or `channel`, and they do not import `tags`.
+2. **Product domain ↔ product domain:** no direct imports. Collaborate via shared-kernel protocols or composition binding—extend this contract with an explicit edge when needed. `entity` does not import `metadata`. `metadata` must not import `entity`. The one explicit edge is `channel` → published `metadata` and published `entity` (§3 `channel`); `metadata` and `entity` must not import `channel`. A second explicit edge is `entity` and `channel` → published `tags.api` only. `tags` does not import `entity` or `channel`. `admin` does not import `tags`.
 3. **Product domain → platform kernel / primitive:** published API only (Conformist).
 4. Platform primitive → platform kernel: default none; if needed, add an explicit whitelist edge via published API.
 5. Drivers (router/MCP) → own-package domain logic → published APIs / `core`. Domain and HTTP **must not** import `worker.app`. Delivery goes through `jobs` published API (or an agreed async published surface). Tasks use `@shared_task` (or equivalent); `worker` assembles.
@@ -290,8 +290,8 @@ Concrete edges:
 | `admin` | `core`; own stores/schemas/routers / `system_parameters` / `parameters` / `model_services` / `subjects`. Must not import `entity` or `tags` |
 | `jobs` | `core`; own store/schemas/routers / `parameters`; published `admin` (audit, System Parameter resolver); process entry `job_child` may import `worker.parameters` |
 | `metadata` | `core`; published `admin`; published `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; process entries `mcp_http` / `mcp_server` may import `worker.parameters`; own modules. Must not import `entity` or `channel` |
-| `entity` | `core`; published `admin` (including `admin.subjects`); published `jobs`; own modules. Must not import `channel` |
-| `channel` | `core`; published `admin`; published `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules` / `worker.due`; published `metadata` and `entity` modules listed for Data Channel use; own modules |
+| `entity` | `core`; published `admin` (including `admin.subjects`); published `jobs`; published `tags.api`; own modules. Must not import `channel` |
+| `channel` | `core`; published `admin`; published `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules` / `worker.due`; published `metadata` and `entity` modules listed for Data Channel use; published `tags.api`; own modules |
 | `tags` | `core`; published `admin`. Must not import `entity` or `channel` |
 | `worker` | `core`; published `admin` / `jobs` / `metadata` / `entity` / `channel` for assembly and system tasks |
 | `alembic` | `core` Base + every package `models` module |

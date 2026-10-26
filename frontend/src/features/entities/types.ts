@@ -96,6 +96,11 @@ export type CurrentVersionSummary = {
   alignment: Alignment;
 };
 
+export type EntityTag = {
+  id: string;
+  name: string;
+};
+
 export type BusinessEntity = {
   id: string;
   table_name: string;
@@ -105,6 +110,8 @@ export type BusinessEntity = {
   ever_published: boolean;
   current_version: CurrentVersionSummary | null;
   inbound_references?: InboundReference[];
+  tags: EntityTag[];
+  tag_revision: number;
   created_at: string;
   updated_at: string;
 };
@@ -127,6 +134,7 @@ export type EntityCreate = {
   name: string;
   description: string;
   attributes: EntityAttribute[];
+  tags?: { tag_ids: string[]; names: string[] };
 };
 
 export type EntityPatch = {

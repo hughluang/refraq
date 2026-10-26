@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from functools import lru_cache
 from typing import Any, Protocol
 
@@ -58,6 +60,8 @@ class EntityStore(Protocol):
         self,
         entity: BusinessEntityRecord,
         version: EntityVersionRecord,
+        *,
+        after: Callable[[Session | None], None] | None = None,
     ) -> tuple[BusinessEntityRecord, EntityVersionRecord]: ...
 
     def save_entity(self, entity: BusinessEntityRecord) -> BusinessEntityRecord: ...
@@ -68,7 +72,12 @@ class EntityStore(Protocol):
         version: EntityVersionRecord,
     ) -> tuple[BusinessEntityRecord, EntityVersionRecord]: ...
 
-    def delete_entity(self, entity_id: str) -> bool: ...
+    def delete_entity(
+        self,
+        entity_id: str,
+        *,
+        after: Callable[[Session | None], None] | None = None,
+    ) -> bool: ...
 
     def list_versions(
         self, entity_id: str, *, limit: int, offset: int
@@ -144,6 +153,8 @@ class MemoryEntityStore:
         self,
         entity: BusinessEntityRecord,
         version: EntityVersionRecord,
+        *,
+        after: Callable[[Session | None], None] | None = None,
     ) -> tuple[BusinessEntityRecord, EntityVersionRecord]:
         with self._lock:
             if entity.table_name in self._by_table_name:
@@ -153,7 +164,23 @@ class MemoryEntityStore:
             self._entities[entity.id] = entity
             self._by_table_name[entity.table_name] = entity.id
             self._versions[version.id] = version
+            if after is not None:
+                try:
+                    after(None)
+                except Exception:
+                    self._entities.pop(entity.id, None)
+                    if self._by_table_name.get(entity.table_name) == entity.id:
+                        del self._by_table_name[entity.table_name]
+                    self._versions.pop(version.id, None)
+                    raise
             return entity, version
+
+    @contextmanager
+    def lock_entity(
+        self, entity_id: str
+    ) -> Iterator[tuple[Session | None, BusinessEntityRecord | None]]:
+        with self._lock:
+            yield None, self._entities.get(entity_id)
 
     def save_entity(self, entity: BusinessEntityRecord) -> BusinessEntityRecord:
         with self._lock:
@@ -177,7 +204,12 @@ class MemoryEntityStore:
             self._versions[version.id] = version
             return entity, version
 
-    def delete_entity(self, entity_id: str) -> bool:
+    def delete_entity(
+        self,
+        entity_id: str,
+        *,
+        after: Callable[[Session | None], None] | None = None,
+    ) -> bool:
         with self._lock:
             existing = self._entities.pop(entity_id, None)
             if existing is None:
@@ -189,8 +221,17 @@ class MemoryEntityStore:
                 for version_id, version in self._versions.items()
                 if version.entity_id == entity_id
             ]
-            for version_id in version_ids:
-                del self._versions[version_id]
+            saved_versions = {
+                version_id: self._versions.pop(version_id) for version_id in version_ids
+            }
+            if after is not None:
+                try:
+                    after(None)
+                except Exception:
+                    self._entities[entity_id] = existing
+                    self._by_table_name[existing.table_name] = entity_id
+                    self._versions.update(saved_versions)
+                    raise
             return True
 
     def list_versions(
@@ -321,13 +362,25 @@ class SqlEntityStore:
         self,
         entity: BusinessEntityRecord,
         version: EntityVersionRecord,
+        *,
+        after: Callable[[Session | None], None] | None = None,
     ) -> tuple[BusinessEntityRecord, EntityVersionRecord]:
         with session_scope() as session:
             _flush_entity_rows(
                 session,
                 (_entity_to_row(entity), _version_to_row(version)),
             )
+            if after is not None:
+                after(session)
             return entity, version
+
+    @contextmanager
+    def lock_entity(
+        self, entity_id: str
+    ) -> Iterator[tuple[Session | None, BusinessEntityRecord | None]]:
+        with session_scope() as session:
+            row = session.get(BusinessEntityRow, entity_id, with_for_update=True)
+            yield session, _entity_from_row(row) if row is not None else None
 
     def save_entity(self, entity: BusinessEntityRecord) -> BusinessEntityRecord:
         with session_scope() as session:
@@ -355,12 +408,19 @@ class SqlEntityStore:
             session.flush()
             return _entity_from_row(entity_row), _version_from_row(version_row)
 
-    def delete_entity(self, entity_id: str) -> bool:
+    def delete_entity(
+        self,
+        entity_id: str,
+        *,
+        after: Callable[[Session | None], None] | None = None,
+    ) -> bool:
         with session_scope() as session:
-            row = session.get(BusinessEntityRow, entity_id)
+            row = session.get(BusinessEntityRow, entity_id, with_for_update=True)
             if row is None:
                 return False
             session.delete(row)
+            if after is not None:
+                after(session)
             session.flush()
             return True
 

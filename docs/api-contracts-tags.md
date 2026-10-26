@@ -31,7 +31,7 @@ Create, read, and patch return `{ "tag": <detail> }`. Detail is the list item pl
 
 `id` is `tag_` plus 12 lowercase hex characters. Any other string is an unknown id, not a validation error.
 
-`entity_count` and `channel_count` count records that carry the Tag. Attaching a Tag is out of scope for this document, so both are `0`. The list omits the counts.
+`entity_count` and `channel_count` count records that carry the Tag, across the platform. The list omits the counts. A Tag that nothing carries reports 0 and 0.
 
 Unknown JSON fields are `422` `REQUEST_INVALID`.
 
@@ -43,7 +43,7 @@ A raw name longer than 256 code points is `422` `TAG_NAME_INVALID` and is not pa
 
 `ＦＩＮＡＮＣＥ` stores `FINANCE`. `finance  team` stores `finance team`. `Straße` and `STRASSE` are two Tags.
 
-A create or rename whose comparison form belongs to another Tag is `409` `TAG_NAME_CONFLICT`. The stored display name is unchanged. A rename to another spelling of the same Tag's own comparison form is `200` and updates `name`.
+A create or rename whose comparison form belongs to another Tag is `409` `TAG_NAME_CONFLICT`. The stored display name is unchanged. A rename to another spelling of the same Tag's own comparison form is `200` and updates `name`. An assignment that resolves a folded name attaches the existing Tag. That attach does not rename it and is not `TAG_NAME_CONFLICT`. Module create of that other spelling remains `409`.
 
 Two creates of one comparison form that overlap yield one `201` and the rest `409`. Neither is `500`.
 
@@ -148,15 +148,16 @@ Purpose: delete one Tag that nothing carries.
 
 Empty body. A second delete of the same id is `404` `TAG_NOT_FOUND` and writes no further audit event. The successful delete writes one event with action `delete` and detail `{ "name": "<stored display name>" }`.
 
-A refusal while a record carries the Tag is out of scope for this document.
+### Response: `409`
+
+`TAG_IN_USE` while any assignment remains. Extensions are `entity_count` and `channel_count`, the same global counts as detail. The Tag stays.
 
 ## 9. Non-Goals
 
-1. Attaching a Tag to a Business Entity or a Data Channel.
-2. `tag_id` on Entity or Channel lists, bulk add, and bulk remove.
-3. A usage list of record names.
-4. Saved Filters.
-5. A published `tags.api` assignment surface.
+1. `tag_id` on Entity or Channel lists, bulk add, and bulk remove.
+2. A usage list of record names.
+3. Saved Filters.
+4. Assignment HTTP on a Channel. Entity assignment is `docs/api-contracts-entity.md` §4.4a. The published operations live on `backend.tags.api`.
 
 ## 10. References
 

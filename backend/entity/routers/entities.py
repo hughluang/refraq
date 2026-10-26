@@ -23,6 +23,8 @@ from backend.entity.schemas.entities import (
     EntityCreateRequest,
     EntityJobEnqueueResponse,
     EntityPatchRequest,
+    EntityTagsReplaceRequest,
+    EntityTagsReplaceResponse,
     EntityVersionListResponse,
     EntityVersionOut,
     EntityVersionResponse,
@@ -40,6 +42,7 @@ from backend.entity.service import (
     open_version,
     patch_entity,
     patch_version,
+    replace_entity_tags,
 )
 from backend.jobs.api import get_schedule_name_store, present_jobs
 from backend.jobs.store import JobRecord
@@ -109,6 +112,7 @@ def http_create_entity(
 ) -> BusinessEntityResponse:
     attrs = _attrs(body.attributes)
     assert attrs is not None
+    tags = body.tags
     payload = create_entity(
         table_name=body.table_name,
         name=body.name,
@@ -116,6 +120,8 @@ def http_create_entity(
         attributes=attrs,
         actor_user_id=user.id,
         actor_token_id=actor_token_id,
+        tag_ids=list(tags.tag_ids) if tags is not None else [],
+        names=list(tags.names) if tags is not None else [],
     )
     return BusinessEntityResponse(entity=BusinessEntityOut.model_validate(payload))
 
@@ -128,6 +134,28 @@ def http_get_entity(
     return BusinessEntityResponse(
         entity=BusinessEntityOut.model_validate(get_entity(entity_id, user=user))
     )
+
+
+@router.put(
+    "/entities/{entity_id}/tags",
+    response_model=EntityTagsReplaceResponse,
+)
+def http_replace_entity_tags(
+    entity_id: str,
+    body: EntityTagsReplaceRequest,
+    user: UserRecord = Depends(require_permission("entity:write")),
+    actor_token_id: str | None = Depends(get_actor_token_id),
+) -> EntityTagsReplaceResponse:
+    payload = replace_entity_tags(
+        entity_id=entity_id,
+        base_revision=body.base_revision,
+        tag_ids=list(body.tag_ids),
+        names=list(body.names),
+        actor_user_id=user.id,
+        actor_token_id=actor_token_id,
+        user=user,
+    )
+    return EntityTagsReplaceResponse.model_validate(payload)
 
 
 @router.patch("/entities/{entity_id}", response_model=BusinessEntityResponse)
