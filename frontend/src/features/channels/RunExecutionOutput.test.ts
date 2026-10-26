@@ -46,6 +46,7 @@ vi.mock("@refinedev/core", () => ({
         "channels.editor.status.succeeded": "Succeeded",
         "channels.editor.status.failed": "Failed",
         "problems.CHANNEL_NODE_FAILED": "Node failed",
+        "problems.CHANNEL_VALUE_TYPE_MISMATCH": "Type mismatch",
       })[key] ?? key;
     if (!options) return template;
     return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options[name] ?? ""));
@@ -83,6 +84,20 @@ afterEach(() => {
 
 function mount(node: ReturnType<typeof createElement>) {
   render(createElement(MantineProvider, { env: "test" }, node));
+}
+
+function roundCell(round: number, column: number): HTMLElement {
+  const cell = document.querySelector(`[data-round='${round}']`)?.querySelectorAll("td")[column];
+  if (!cell) throw new Error(`missing cell ${round}:${column}`);
+  return cell;
+}
+
+function untilCell(round: number): HTMLElement {
+  return roundCell(round, 2);
+}
+
+function statusCell(round: number): HTMLElement {
+  return roundCell(round, 3);
 }
 
 const rowsView: OutputView = { kind: "rows", rows: "rows", metrics: ["count"] };
@@ -453,6 +468,90 @@ it("shows an Until round's index in the value column", async () => {
   expect(screen.getByText("true")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "0" }));
   expect(onPick).toHaveBeenCalledWith(["index"]);
+});
+
+it("localizes an Until condition failure by problem code and leaves values as text", async () => {
+  vi.mocked(listRounds).mockResolvedValue({
+    items: [
+      {
+        round: 0,
+        step_preview: { index: 0, until: { value: false } },
+        step_truncated: false,
+        step_totals: {},
+        status_counts: { succeeded: 1 },
+      },
+      {
+        round: 1,
+        step_preview: { index: 1, until: { value: true } },
+        step_truncated: false,
+        step_totals: {},
+        status_counts: { succeeded: 1 },
+      },
+      {
+        round: 2,
+        step_preview: {
+          index: 2,
+          until: {
+            error: {
+              code: "CHANNEL_VALUE_TYPE_MISMATCH",
+              message: "Value does not match the declared type",
+            },
+          },
+        },
+        step_truncated: false,
+        step_totals: {},
+        status_counts: { succeeded: 1 },
+      },
+      {
+        round: 3,
+        step_preview: {
+          index: 3,
+          until: { error: { code: "CHANNEL_NODE_FAILED", message: "Code failed at line 1" } },
+        },
+        step_truncated: false,
+        step_totals: {},
+        status_counts: { succeeded: 1 },
+      },
+      {
+        round: 4,
+        step_preview: { index: 4 },
+        step_truncated: false,
+        step_totals: {},
+        status_counts: { failed: 1 },
+      },
+      {
+        round: 5,
+        step_preview: {
+          index: 5,
+          until: { error: { code: "CHANNEL_SANDBOX_FAILED", message: "Sandbox could not start" } },
+        },
+        step_truncated: false,
+        step_totals: {},
+        status_counts: { succeeded: 1 },
+      },
+    ],
+    total: 6,
+    limit: 50,
+    offset: 0,
+  });
+  mount(
+    createElement(RunExecutionOutput, {
+      channelId: "chn_1",
+      jobId: "job_1",
+      view: untilView,
+      value: { count: 1, index: 0, iterations: [] },
+      seq: 4,
+    }),
+  );
+  expect(await screen.findByText("false")).toBeTruthy();
+  expect(untilCell(0).textContent).toBe("false");
+  expect(untilCell(1).textContent).toBe("true");
+  expect(untilCell(2).textContent).toBe("Type mismatchValue does not match the declared type");
+  expect(screen.getByText("Value does not match the declared type").closest("td")).toBe(untilCell(2));
+  expect(untilCell(3).textContent).toBe("Node failedCode failed at line 1");
+  expect(untilCell(4).textContent).toBe("");
+  expect(untilCell(5).textContent).toBe("Sandbox could not start");
+  expect(statusCell(2).textContent).toBe("Succeeded 1");
 });
 
 it("shows a batch round's ordinal range and expands that batch through the row window", async () => {

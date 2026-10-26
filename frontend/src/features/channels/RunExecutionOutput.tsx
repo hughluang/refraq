@@ -760,7 +760,11 @@ function RoundTable({
                     </button>
                   </Table.Td>
                 )}
-                {itemKey === "index" ? <Table.Td>{conditionText(step?.until)}</Table.Td> : null}
+                {itemKey === "index" ? (
+                  <Table.Td>
+                    <ConditionCell entry={step?.until} />
+                  </Table.Td>
+                ) : null}
                 <Table.Td>{statusText(t, item.status_counts)}</Table.Td>
               </Table.Tr>
             );
@@ -942,8 +946,17 @@ function scalarText(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function conditionText(entry: unknown): string {
-  if (!isRecord(entry)) return "";
-  if (isRecord(entry.error)) return scalarText(entry.error.message);
+function ConditionCell({ entry }: { entry: unknown }) {
+  if (!isRecord(entry)) return null;
+  if (isRecord(entry.error)) {
+    return (
+      <Text size="xs" c="red">
+        <RunErrorText
+          code={typeof entry.error.code === "string" ? entry.error.code : null}
+          message={typeof entry.error.message === "string" ? entry.error.message : null}
+        />
+      </Text>
+    );
+  }
   return scalarText(entry.value);
 }
