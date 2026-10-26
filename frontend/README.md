@@ -38,7 +38,7 @@ A form field has two presentations, chosen inside the field component by `editab
 
 `DisplayField` (`src/components/display/DisplayField.tsx`) is for facts that are not form fields (timestamps, job ids). Record-form show uses the same field components as create and edit (`docs/ui-console-record-form.md`). The branch stays inside the field component.
 
-API timestamps are decoded to `Instant` in `apiClient`. Display them only via `<Instant>` or `useFormatInstant`. Use `epochMs()` / `toJSON()` for non-display logic. `date`, `time`, durations, and cron wall-clock fields stay strings and are not timezone-shifted (`docs/conventions-time.md`).
+API timestamps stay JSON strings; `apiClient` returns them unchanged. Format a platform Instant from that string. An unreadable value fails only at the display point (`docs/conventions-time.md`). `date`, `time`, durations, and cron wall-clock fields stay strings and are not timezone-shifted.
 
 ## Form frame
 

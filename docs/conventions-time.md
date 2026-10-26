@@ -36,11 +36,11 @@ Celery `timezone` / `enable_utc` is worker message time, **not** business Schedu
 - **Outbound:** one formatter from `backend.core.time` — HTTP, MCP, and Job log lines all emit UTC with `Z`.
 - Schema Instant fields use the shared Instant type from `core.time` (not bare `datetime`, and not bare `AwareDatetime` alone — that type only requires awareness, not UTC normalize / `Z` serialize).
 
-### 4.1 OpenAPI date-time and Console decoding
+### 4.1 OpenAPI date-time and Console display
 
 `format: date-time` on a field is the Instant contract, for requests and responses. A non-null value is an offset RFC 3339 timestamp and is guaranteed parseable. A nullable field has one empty value: `null`. Omitted keys are absent, not an empty string.
 
-The Management Console decodes those response paths in `apiClient` (`frontend/src/lib/instant.ts`) using `scripts/export_time_fields.py`. The page receives an `Instant`, not a string. Display it only through `<Instant>` or `useFormatInstant` (User locale and Display Timezone). `epochMs()` and `toJSON()` are the non-display exits. Do not treat an unparseable API value as empty: that is a contract failure. The Console shows it as problem `API_CONTRACT_INVALID` and keeps the response `X-Request-ID`.
+A success response keeps Instant values as JSON strings. `apiClient` (`frontend/src/lib/api.ts`) returns that JSON unchanged and remembers a non-empty `X-Request-ID` for an object body. Display formats the received string with the User locale and Display Timezone. An illegal platform Instant string fails only the display point that shows it, as problem `API_CONTRACT_INVALID`; other fields on the page stay. The run execution list passes that response's `X-Request-ID` into `<Instant>`, which shows the id only when one is passed. `showContractInstant` (`frontend/src/lib/datetime.ts`, directly or through `useShowInstant`) reports the same contract problem and does not attach a request id. `useFormatInstant` still raises `UnreadableInstantError`.
 
 `date` (`YYYY-MM-DD`), `time` (`HH:MM`), durations (`interval_seconds`, a leading `-P` interval), and cron wall-clock fields are not Instants. Do not shift them by a timezone.
 
