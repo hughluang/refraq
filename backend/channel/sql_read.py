@@ -7,18 +7,20 @@ from typing import Any, Mapping
 from pydantic_core import to_jsonable_python
 from sqlalchemy.exc import DBAPIError
 
+from backend.channel.item_limit import ITEM_LIMIT, SQL_ITEM_LIMIT_MESSAGE
+from backend.channel.values import TEMPORAL_KINDS
+from backend.core.time import encode_temporal_cell
 from backend.entity.statements import (
     EntityStatementLimit,
     EntityStatementRejected,
     execute_entity_statement,
 )
-from backend.channel.item_limit import ITEM_LIMIT, SQL_ITEM_LIMIT_MESSAGE
 from backend.metadata.source_statements import (
     SourceStatementRejected,
     execute_source_statement,
 )
 
-__all__ = ["ITEM_LIMIT", "SqlReadError", "run_channel_sql"]
+__all__ = ["ITEM_LIMIT", "SqlReadError", "jsonable_cell", "run_channel_sql"]
 
 
 class SqlReadError(Exception):
@@ -96,6 +98,13 @@ def _db_message(exc: DBAPIError) -> str:
     origin = exc.orig
     text_value = str(origin or exc).strip()
     return text_value or "SQL statement failed"
+
+
+def jsonable_cell(value: Any, temporal_kind: str | None = None) -> Any:
+    """Encode a declared temporal cell. Anything else stays on the opaque path."""
+    if isinstance(temporal_kind, str) and temporal_kind in TEMPORAL_KINDS:
+        return encode_temporal_cell(value, temporal_kind)
+    return _jsonable(value)
 
 
 def _jsonable(value: Any) -> Any:

@@ -7,10 +7,29 @@ from typing import Any
 
 __all__ = [
     "LIST_OF_OBJECTS",
+    "TEMPORAL_KINDS",
     "array_item_schema",
     "attribute_value_schema",
     "dataset_row_schema",
+    "temporal_declaration",
+    "temporal_kinds_by_name",
 ]
+
+# Closed set carried on dataset reference columns. Same names as the source
+# stream declaration. A lone with_time_zone flag is not a member.
+TEMPORAL_KINDS = frozenset(
+    {
+        "date",
+        "time",
+        "time_with_offset",
+        "local_datetime",
+        "timestamp_with_time_zone",
+        "timestamp_with_local_time_zone",
+        "interval",
+        "interval_calendar",
+        "interval_fixed",
+    }
+)
 
 LIST_OF_OBJECTS: dict[str, Any] = {
     "type": "array",
@@ -62,7 +81,7 @@ def dataset_row_schema(schema: Mapping[str, Any] | None) -> dict[str, Any] | Non
             or kind == ""
         ):
             return None
-        properties[name] = attribute_value_schema(kind)
+        properties[name] = _column_value_schema(column, kind)
     return {"type": "object", "properties": properties}
 
 
@@ -101,3 +120,55 @@ def attribute_value_schema(attribute_type: str) -> dict[str, Any]:
             types.append("null")
         return {"type": types}
     return {"type": [kind, "null"]}
+
+
+def temporal_kinds_by_name(columns: object) -> dict[str, str]:
+    """Column name to temporal kind, for columns that declare one."""
+    found: dict[str, str] = {}
+    if not isinstance(columns, list):
+        return found
+    for column in columns:
+        if not isinstance(column, Mapping):
+            continue
+        name = column.get("name")
+        declared = temporal_declaration(column)
+        if isinstance(name, str) and declared is not None:
+            found[name] = declared[0]
+    return found
+
+
+def temporal_declaration(
+    column: Mapping[str, Any],
+) -> tuple[str, int | None, bool | None] | None:
+    """Kind, fractional precision, and nullable when the column declares a kind.
+
+    ``with_time_zone`` alone does not choose a kind. An unknown kind is ignored.
+    """
+    kind = column.get("temporal_kind")
+    if not isinstance(kind, str) or kind not in TEMPORAL_KINDS:
+        return None
+    return kind, _precision(column.get("precision")), _nullable(column.get("nullable"))
+
+
+def _column_value_schema(column: Mapping[str, Any], attribute_type: str) -> dict[str, Any]:
+    schema = attribute_value_schema(attribute_type)
+    declared = temporal_declaration(column)
+    if declared is None:
+        return schema
+    kind, precision, nullable = declared
+    schema["temporal_kind"] = kind
+    schema["precision"] = precision
+    schema["nullable"] = nullable
+    return schema
+
+
+def _precision(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _nullable(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    return None

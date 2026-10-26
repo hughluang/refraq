@@ -21,9 +21,9 @@ from backend.channel.nodes.spec import (
     PortSpec,
     object_schema,
 )
-from backend.channel.sql_read import _db_message, _jsonable
+from backend.channel.sql_read import _db_message, jsonable_cell
 from backend.channel.template import schema_at_path
-from backend.channel.values import dataset_row_schema
+from backend.channel.values import dataset_row_schema, temporal_kinds_by_name
 from backend.core.time import utc_now
 from backend.entity.datasets import ORD_COLUMN, any_row_exists, read_keyset_page
 
@@ -103,7 +103,13 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     count = _batch_count(total, batch_size)
     rounds: Any = []
     if count:
-        rounds = _rounds(record.relation, total=total, batch_size=batch_size, count=count)
+        rounds = _rounds(
+            record.relation,
+            total=total,
+            batch_size=batch_size,
+            count=count,
+            columns=dataset.get("columns"),
+        )
     return NodeResult(
         status="succeeded",
         output={"count": count, "total": total, "batch_size": batch_size},
@@ -164,20 +170,24 @@ def _rounds(
     total: int,
     batch_size: int,
     count: int,
+    columns: Any,
 ) -> Iterator[dict[str, Any]]:
+    kinds = temporal_kinds_by_name(columns)
     for index in range(count):
         page = read_keyset_page(relation, after_ord=index * batch_size, limit=batch_size)
         yield {
-            "rows": [_json_row(row) for row in page],
+            "rows": [_json_row(row, kinds) for row in page],
             "index": index,
             "count": count,
             "total": total,
         }
 
 
-def _json_row(row: Mapping[str, Any]) -> dict[str, Any]:
+def _json_row(row: Mapping[str, Any], kinds: Mapping[str, str]) -> dict[str, Any]:
     return {
-        str(key): _jsonable(value) for key, value in row.items() if key != ORD_COLUMN
+        str(key): jsonable_cell(value, kinds.get(str(key)))
+        for key, value in row.items()
+        if key != ORD_COLUMN
     }
 
 

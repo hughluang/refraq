@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query
@@ -24,6 +25,8 @@ from backend.channel.run_store import (
     output_preview_with_truncated,
 )
 from backend.channel.runs import rerun_failed, start_run
+from backend.channel.sql_read import jsonable_cell
+from backend.channel.values import temporal_kinds_by_name
 from backend.channel.schemas.channels import GraphIn
 from backend.channel.template_preview import node_sample, preview_template
 from backend.core.pagination import PageParams, page_params
@@ -340,9 +343,20 @@ def http_dataset_rows(
     if record.row_count > 0 and not any_row_exists(record.relation):
         raise ChannelDatasetUnavailable("lost")
     fetched = read_keyset_page(record.relation, after_ord=after_ord, limit=limit + 1)
-    items = fetched[:limit]
+    kinds = temporal_kinds_by_name(record.columns)
+    items = [_present_dataset_row(row, kinds) for row in fetched[:limit]]
     next_after_ord = int(items[-1]["_ord"]) if len(fetched) > limit else None
     return {"items": items, "limit": limit, "next_after_ord": next_after_ord}
+
+
+def _present_dataset_row(row: Mapping[str, Any], kinds: Mapping[str, str]) -> dict[str, Any]:
+    """Encode declared temporal cells. Other cells stay as the driver returned them."""
+    presented: dict[str, Any] = {}
+    for key, value in row.items():
+        name = str(key)
+        kind = kinds.get(name)
+        presented[name] = value if kind is None else jsonable_cell(value, kind)
+    return presented
 
 
 @router.post("/channels/{channel_id}/runs/{job_id}/template-preview")
