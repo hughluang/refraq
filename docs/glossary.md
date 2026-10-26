@@ -583,10 +583,15 @@ Avoid treating it as a node, an edge, a port, or a configuration value an expres
 A **Data Channel** volume node that contains a **Loop Body**. A node is inside that For when its `parent` is the For's node id. A nested For's children belong to the inner For. The For runs the body once per element of a JSON array. Its ports are the input `main` and the outputs `each` and `done`. While a round runs, the body reads `{current, index, count}` from the For. The stored output is `{current, index, count, iterations}`. Each `iterations` object is keyed by the **Node Ref** of each body node that ran on that element, sorted by `ref`, and the value is that node's output. The For fails when the UTF-8 byte length of the compact JSON of `iterations` exceeds 16 MiB.
 Avoid a loop-back port, a `loop` input, a `results` field, a legal cycle through the For, and naming a body node from a node reached by `done`.
 
+### Until
+
+A **Data Channel** volume container. A node is inside that Until when its `parent` is the Until's node id. Configuration is the boolean template `until` and the required integer `max_iterations` from 1 to 100000, with no default. The Until runs its **Loop Body** once per round until `until` is true. Its ports are the input `main` and the outputs `each` and `done`. During a round the body reads `{previous, index}`. The stored output is `{index, count, iterations}` and has no `previous`. A **Container Round** records `{index}` only. The Until fails with `CHANNEL_UNTIL_MAX_ITERATIONS` when `max_iterations` rounds finish and `until` is still false, and with `CHANNEL_ITERATION_VOLUME_EXCEEDED` when the compact JSON of `iterations` exceeds 16 MiB.
+Avoid a loop-back port, a `loop` input, a back edge, a duration field, and a `previous` field on the stored output or the Container Round.
+
 ### Loop Body
 
-The direct child nodes of one **For**: every node whose `parent` is that For. Membership is that `parent`, not the set of nodes reachable from a port. An edge may enter the body only from that For's `each` output. `done` connects only to a node outside the body. An edge that crosses the frame is illegal in either direction. A body node's canvas position is relative to the For's frame. The frame's size is derived from those positions, with a margin and a minimum size, and is not stored.
-Avoid a return edge into the For, and storing null for a body node that did not run.
+The direct child nodes of one container (**For**, Batch Read, or **Until**): every node whose `parent` is that container. Membership is that `parent`, not the set of nodes reachable from a port. An edge may enter the body only from that container's `each` output. `done` connects only to a node outside the body. An edge that crosses the frame is illegal in either direction. A body node's canvas position is relative to the container's frame. The frame's size is derived from those positions, with a margin and a minimum size, and is not stored.
+Avoid a return edge into the container, and storing null for a body node that did not run.
 
 ### Node Ref
 
@@ -615,8 +620,8 @@ Avoid reading an ancestor's stored output as this node's input, and storing a re
 
 ### Container Round
 
-The step a **For** or a Batch Read body reads at the start of one round: `{current, index, count}` for a For, and `{rows, index, count, total}` for a Batch Read. `rows` keeps its first 100 elements. The round is addressed by the run, the container execution, and the zero-based round index. It is not the container's stored output.
-Avoid reading `iterations`, or `{count, total, batch_size}`, as the value the body saw in that round.
+The record a **For**, a Batch Read, or an **Until** writes at the start of one round. A For records `{current, index, count}`, the step the body reads. A Batch Read records `{rows, index, count, total}`, with `rows` kept to its first 100 elements and the original length recorded; the body reads the full page. An Until records `{index}` only. The Until body reads `{previous, index}` at run time, and that `previous` is not on the round record. The round is addressed by the run, the container execution, and the zero-based round index. It is not the container's stored output.
+Avoid reading `iterations`, `{count, total, batch_size}`, or an Until `previous` as this record.
 
 ### Node Sample
 
@@ -645,7 +650,7 @@ Avoid watermark, treating `last_run_at` or `scheduled_for` as a checkpoint, a pe
 
 ### Dataset Reference
 
-A claim check. The value `{dataset_id, columns, count}` names a run-scoped table in the entity database and has no `relation`. The registry row is the only fact source. **Data Channel** owns the registry and the lifecycle. `backend.entity.datasets` creates, reads, and drops the table and does not own the registry. Only Dataset Query and Materialize produce one. Batch Read and Write Entity consume one.
+A claim check. The value `{dataset_id, columns, count}` names a run-scoped table in the entity database and has no `relation`. The registry row is the only fact source. **Data Channel** owns the registry and the lifecycle. `backend.entity.datasets` creates, reads, and drops the table and does not own the registry. Only Dataset Query and Materialize produce one. Either producer may be a direct child of a container. One execution creates one dataset. Batch Read and Write Entity consume one.
 Avoid a `relation` on the value, rows traveling on an edge, a Read or SQL node producing one, temp table as a user concept, **Entity Table**, **Source Mirror**, an item list, and expiry with run-record retention as the only clock.
 
 ### Global Variable
