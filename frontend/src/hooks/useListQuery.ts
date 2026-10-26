@@ -28,6 +28,8 @@ export type ListQuery = {
   clear: () => void;
   /** Search or a filter differs from its default. Page is not a filter. */
   isFiltered: boolean;
+  /** `searchParams.toString()` from the first render, with no leading `?`. */
+  initialSearch: string;
 };
 
 const DEFAULT_SEARCH_KEY = "q";
@@ -205,6 +207,7 @@ export function useListQuery(options: UseListQueryOptions = {}): ListQuery {
 
   const searchParams = useSearchParams();
   const external = searchParams.toString();
+  const initialSearch = useRef(external).current;
   const [state, setState] = useState<QueryState>(() =>
     readState(searchParams, searchKey, filters, pageKey),
   );
@@ -299,5 +302,6 @@ export function useListQuery(options: UseListQueryOptions = {}): ListQuery {
     setPage,
     clear,
     isFiltered: filtered(state, searchKey !== null, filters),
+    initialSearch,
   };
 }

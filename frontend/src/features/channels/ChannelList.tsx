@@ -2,7 +2,6 @@
 
 import { Badge, Button, Checkbox, Group, MultiSelect, Select, Table, TextInput } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
-import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
@@ -122,8 +121,13 @@ export function ChannelList() {
     action: ModuleAction.edit,
   });
   const canEdit = Boolean(canWrite?.can);
-  const searchParams = useSearchParams();
-  const arrivedWithQuery = useRef(searchParams.toString() !== "").current;
+  const query = useListQuery({
+    filters: [
+      { key: "active", type: "select", defaultValue: "" },
+      { key: "tag_id", type: "multi", defaultValue: NO_TAG_IDS },
+    ],
+  });
+  const arrivedWithQuery = useRef(query.initialSearch !== "").current;
   const [gate, setGate] = useState<Gate>(arrivedWithQuery ? "ready" : "reading");
   const [attempt, setAttempt] = useState(0);
   const [gateError, setGateError] = useState<string | null>(null);
@@ -135,12 +139,6 @@ export function ChannelList() {
   const [nameError, setNameError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const pendingQuery = useRef<ChannelSavedQuery | null>(null);
-  const query = useListQuery({
-    filters: [
-      { key: "active", type: "select", defaultValue: "" },
-      { key: "tag_id", type: "multi", defaultValue: NO_TAG_IDS },
-    ],
-  });
   const queryRef = useRef(query);
   queryRef.current = query;
   const active = query.select("active");

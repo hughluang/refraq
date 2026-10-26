@@ -51,6 +51,7 @@ function queryOf(patch: Partial<ListQuery> = {}): ListQuery {
     setPage: vi.fn(),
     clear: vi.fn(),
     isFiltered: false,
+    initialSearch: "",
     ...patch,
   };
 }

@@ -118,6 +118,21 @@ describe("useListQuery", () => {
     expect(result.current.page).toBe(1);
   });
 
+  it("keeps the first-render search string after the address changes", async () => {
+    const { result, rerender } = open("q=alpha&status=deprecated");
+    expect(result.current.initialSearch).toBe("q=alpha&status=deprecated");
+
+    nav.params = new URLSearchParams("q=shared&page=2");
+    window.history.replaceState(null, "", "/console/entities?q=shared&page=2");
+    rerender();
+    await act(async () => {});
+    expect(result.current.search).toBe("shared");
+    expect(result.current.initialSearch).toBe("q=alpha&status=deprecated");
+
+    const { result: empty } = open("");
+    expect(empty.current.initialSearch).toBe("");
+  });
+
   it("restores a shared link when search params change", async () => {
     const { result, rerender } = open("");
     nav.params = new URLSearchParams("q=shared&page=2&status=deprecated");

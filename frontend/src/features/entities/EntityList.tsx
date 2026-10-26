@@ -2,7 +2,6 @@
 
 import { Badge, Button, Checkbox, Group, MultiSelect, Select, Table, Text, TextInput } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
-import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CreateListAction } from "@/components/access/CreateListAction";
@@ -118,19 +117,6 @@ export function EntityList() {
     action: ModuleAction.edit,
   });
   const canEdit = Boolean(canWrite?.can);
-  const searchParams = useSearchParams();
-  const arrivedWithQuery = useRef(searchParams.toString() !== "").current;
-  const [gate, setGate] = useState<Gate>(arrivedWithQuery ? "ready" : "reading");
-  const [attempt, setAttempt] = useState(0);
-  const [gateError, setGateError] = useState<string | null>(null);
-  const [gateRequestId, setGateRequestId] = useState<string | null>(null);
-  const [filters, setFilters] = useState<EntitySavedFilter[]>([]);
-  const [rememberedId, setRememberedId] = useState<string | null>(null);
-  const [appliedId, setAppliedId] = useState<string | null>(null);
-  const [nameDraft, setNameDraft] = useState("");
-  const [nameError, setNameError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const pendingQuery = useRef<EntitySavedQuery | null>(null);
   const query = useListQuery({
     filters: [
       {
@@ -145,6 +131,18 @@ export function EntityList() {
       },
     ],
   });
+  const arrivedWithQuery = useRef(query.initialSearch !== "").current;
+  const [gate, setGate] = useState<Gate>(arrivedWithQuery ? "ready" : "reading");
+  const [attempt, setAttempt] = useState(0);
+  const [gateError, setGateError] = useState<string | null>(null);
+  const [gateRequestId, setGateRequestId] = useState<string | null>(null);
+  const [filters, setFilters] = useState<EntitySavedFilter[]>([]);
+  const [rememberedId, setRememberedId] = useState<string | null>(null);
+  const [appliedId, setAppliedId] = useState<string | null>(null);
+  const [nameDraft, setNameDraft] = useState("");
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const pendingQuery = useRef<EntitySavedQuery | null>(null);
   const queryRef = useRef(query);
   queryRef.current = query;
   const statusQuery = query.multi("status");
