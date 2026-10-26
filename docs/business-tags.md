@@ -4,7 +4,7 @@
 
 This document defines the platform **Tag** vocabulary: one shared record for a word, the display-name rule, the Tag **Console Module**, authorization, and the audit of vocabulary changes.
 
-It does not define attaching a Tag to a **Business Entity** or a **Data Channel**, list filters, bulk edits, usage lists, or **Saved Filter**.
+It does not define attaching a Tag to a **Business Entity** or a **Data Channel**, list filters, bulk edits, or **Saved Filter**.
 
 Related boundaries:
 
@@ -48,7 +48,7 @@ Routes are `/console/tags`, `/console/tags/new`, `/console/tags/:id`, and `/cons
 
 The list is newest first (`created_at` descending, then `id` descending) and can be searched by the stored display name. Show and edit record a recent visit the same way other record modules do. The command palette lists at most five Tags, and only for a caller who may open the module.
 
-Detail reports `entity_count` and `channel_count`. Those counts are global: how many Business Entities and how many Data Channels carry the Tag. The list omits them. A Tag that nothing carries reports 0 and 0, and deleting it succeeds. Deleting a Tag that any record still carries is refused. The refusal reports both counts. Naming those records is out of scope for this document.
+Detail reports `entity_count` and `channel_count`. Those counts are global: how many Business Entities and how many Data Channels carry the Tag, including an Entity the caller cannot open. The Tag list omits the counts. A Tag that nothing carries reports 0 and 0, and deleting it succeeds. Deleting a Tag that any record still carries is refused. The refusal reports both counts, including records the caller cannot open. The show page then names the records the caller can open by reading the Entity list and the Channel list for that Tag, with no entity-status predicate and no activation predicate. A deprecated Entity and an inactive Channel stay on those lists when the caller can see them. A side the caller cannot list is omitted, and its count is still shown. Either list total can be smaller than the matching count. The list total is not the usage count.
 
 The browser blocks a name that is empty after trim. It does not copy the nickname profile or the length caps. The server remains authoritative.
 
@@ -65,7 +65,7 @@ A management audit event is written for a committed Tag create, update, or delet
 ## 7. Non-Goals
 
 1. List filters, bulk add, and bulk remove.
-2. Usage lists that name records.
+2. Embedding record names on Tag detail.
 3. Saved Filters.
 4. Seeding `tag:read` or `tag:write` onto the operator role.
 5. MCP tools, Entity Data API fields, and Channel run-context fields.

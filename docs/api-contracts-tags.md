@@ -4,7 +4,7 @@
 
 This document defines the Tag collection HTTP: list, create, read, rename, describe, and delete.
 
-It does not define attaching a Tag to a **Business Entity** or a **Data Channel**, list filters by Tag, bulk edits, usage lists, or **Saved Filter**.
+It does not define attaching a Tag to a **Business Entity** or a **Data Channel**, list filters by Tag, bulk edits, or **Saved Filter**. Tag detail does not embed record names.
 
 Related boundaries:
 
@@ -31,7 +31,7 @@ Create, read, and patch return `{ "tag": <detail> }`. Detail is the list item pl
 
 `id` is `tag_` plus 12 lowercase hex characters. Any other string is an unknown id, not a validation error.
 
-`entity_count` and `channel_count` count records that carry the Tag, across the platform. The list omits the counts. A Tag that nothing carries reports 0 and 0.
+`entity_count` and `channel_count` count records that carry the Tag, across the platform, including records the caller cannot open. The Tag list omits the counts. A Tag that nothing carries reports 0 and 0. Detail does not include the names. Those names are `GET /entities` with `tag_id` and without `status`, and `GET /channels` with `tag_id` and without `active`. Either list `total` can be smaller than the matching count, because Entity visibility drops records the caller cannot open. A caller who cannot list one side has no list for that side; the count on the Tag remains. The list `total` is not `entity_count` or `channel_count`.
 
 Unknown JSON fields are `422` `REQUEST_INVALID`.
 
@@ -150,12 +150,12 @@ Empty body. A second delete of the same id is `404` `TAG_NOT_FOUND` and writes n
 
 ### Response: `409`
 
-`TAG_IN_USE` while any assignment remains. Extensions are `entity_count` and `channel_count`, the same global counts as detail. The Tag stays.
+`TAG_IN_USE` while any assignment remains. Extensions are `entity_count` and `channel_count`, the same global counts as detail, including records absent from the caller's Entity or Channel list. The Tag stays.
 
 ## 9. Non-Goals
 
 1. `tag_id` on Entity or Channel lists, bulk add, and bulk remove.
-2. A usage list of record names.
+2. Record names embedded on Tag detail.
 3. Saved Filters.
 4. Assignment HTTP on a Channel. Entity assignment is `docs/api-contracts-entity.md` §4.4a. The published operations live on `backend.tags.api`.
 

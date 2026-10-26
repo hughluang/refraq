@@ -20,6 +20,7 @@ import { useConsoleNavigation } from "@/components/navigation/useConsoleNavigati
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { createTag, deleteTag, getTag, patchTag } from "@/features/tags/api";
 import { TagFormFields } from "@/features/tags/TagFormFields";
+import { TagUsage } from "@/features/tags/TagUsage";
 import {
   EMPTY_TAG_FORM,
   formFromTag,
@@ -301,7 +302,10 @@ function ExistingTagRecord({
       }
     >
       {mode === "show" ? (
-        body
+        <Stack>
+          {body}
+          <TagUsage tagId={tagId} />
+        </Stack>
       ) : (
         <form
           id={TAG_FORM_ID}
