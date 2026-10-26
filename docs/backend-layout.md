@@ -15,7 +15,7 @@ Every top-level package belongs to exactly one tier:
 | **Shared kernel** | Stable infrastructure and cross-package primitives with no product use-case rules | `core` (includes `core.time` as the sole Instant/Clock entry) | Multiple parties need it, and it does not express a business use case |
 | **Platform kernel** | Site-enabling capability; product domains may depend on its **published API** | `admin` (Management Foundation) | Independent model/lifecycle; real code; language is people/authz/session/audit, not a product domain |
 | **Platform primitive** | Mechanism reusable by domains; **owns mechanism-resource HTTP**; does **not** own domain use-case HTTP | `jobs` (Job lifecycle) | Model is mechanistic (kind + opaque input), not one domain's resource facade |
-| **Product domain** | Business-language boundary; vertically coherent | `metadata`, `entity`, `channel` (Data Channel; created with its first real code) | Distinct business language; real code; mixing into another package keeps causing friction |
+| **Product domain** | Business-language boundary; vertically coherent | `metadata`, `entity`, `channel` (Data Channel; created with its first real code), `tags` (Tag vocabulary) | Distinct business language; real code; mixing into another package keeps causing friction |
 | **Runtime** | Process/queue/scheduler assembly; owns **Scheduled Task** | `worker` | Needs its own process entry or Beat; do not invent another product domain for that |
 
 New packages: choose a tier first, then land real code. **No empty shell packages.**
@@ -53,6 +53,9 @@ backend/
   channel/                # product domain: Data Channel definition / versions / Channel Run / triggers / checkpoints
     models.py errors.py tasks.py parameters.py
     schemas/ routers/     # Data Channel use-case HTTP
+  tags/                   # product domain: Tag vocabulary
+    models.py errors.py names.py store.py service.py
+    schemas/ routers/     # Tag collection HTTP; no published module
   worker/                 # runtime: Celery app, Beat, Scheduled Task, system tasks, discovery
     models.py schedules.py scheduler.py …
     schemas/ routers/     # mechanism Scheduled Task HTTP (list/get/patch/delete); no Console pages
@@ -169,6 +172,10 @@ No module is created empty. `channel.errors`, `channel.routers`, `channel.tasks`
 
 `metadata` and `entity` publish those capabilities as named leaf modules in their own §3 tables when the consuming code lands. Neither imports `channel`; where they need channel facts (the Entity publish confirmation listing incompatible write nodes, the platform schedule list projecting `channel_run` rows) they define a port that composition binds to a `channel` adapter.
 
+### `tags` published modules
+
+`tags` is the **Tag** product domain (`docs/business-tags.md`). It owns the platform Tag vocabulary and the Tag collection HTTP. It publishes no module. Composition (`main`) mounts `backend.tags.routers`. Alembic imports `backend.tags.models`. No other package imports `tags`. `tags` imports `core` and published `admin` only. It does not import `entity` or `channel`.
+
 ### `worker` published modules
 
 | Module | Published for |
@@ -268,7 +275,7 @@ Enforcement: `backend/tests/test_no_inline_imports.py`. Rationale: ADR 0020.
 Forward rules:
 
 1. `core` depends on no platform kernel / primitive / product-domain business package (upgrade may import **published** `admin`, `worker.api`, `worker.parameters`, and `metadata.type_mappings.seeds` only for orchestration). Entity access seed is an Alembic data migration, not a Foundation Upgrade call.
-2. **Product domain ↔ product domain:** no direct imports. Collaborate via shared-kernel protocols or composition binding—extend this contract with an explicit edge when needed. `entity` does not import `metadata`. `metadata` must not import `entity`. The one explicit edge is `channel` → published `metadata` and published `entity` (§3 `channel`); `metadata` and `entity` must not import `channel`.
+2. **Product domain ↔ product domain:** no direct imports. Collaborate via shared-kernel protocols or composition binding—extend this contract with an explicit edge when needed. `entity` does not import `metadata`. `metadata` must not import `entity`. The one explicit edge is `channel` → published `metadata` and published `entity` (§3 `channel`); `metadata` and `entity` must not import `channel`. `tags` does not import `entity` or `channel`, and they do not import `tags`.
 3. **Product domain → platform kernel / primitive:** published API only (Conformist).
 4. Platform primitive → platform kernel: default none; if needed, add an explicit whitelist edge via published API.
 5. Drivers (router/MCP) → own-package domain logic → published APIs / `core`. Domain and HTTP **must not** import `worker.app`. Delivery goes through `jobs` published API (or an agreed async published surface). Tasks use `@shared_task` (or equivalent); `worker` assembles.
@@ -278,13 +285,14 @@ Concrete edges:
 
 | From | May import |
 |------|------------|
-| `main` (composition) | `core`, published `admin` / `jobs` / `metadata` / `entity` / `channel` / `worker` (including their `routers.*` for mount), Site Bootstrap helpers |
+| `main` (composition) | `core`, published `admin` / `jobs` / `metadata` / `entity` / `channel` / `worker` (including their `routers.*` for mount), `tags.routers` for mount, Site Bootstrap helpers |
 | `core` | stdlib, third parties, Alembic; `admin.roles` published symbols from `upgrade` only; `worker.api` / `worker.parameters` from `upgrade` only; `metadata.type_mappings.seeds` from `upgrade` only |
-| `admin` | `core`; own stores/schemas/routers / `system_parameters` / `parameters` / `model_services` / `subjects`. Must not import `entity` |
+| `admin` | `core`; own stores/schemas/routers / `system_parameters` / `parameters` / `model_services` / `subjects`. Must not import `entity` or `tags` |
 | `jobs` | `core`; own store/schemas/routers / `parameters`; published `admin` (audit, System Parameter resolver); process entry `job_child` may import `worker.parameters` |
 | `metadata` | `core`; published `admin`; published `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; process entries `mcp_http` / `mcp_server` may import `worker.parameters`; own modules. Must not import `entity` or `channel` |
 | `entity` | `core`; published `admin` (including `admin.subjects`); published `jobs`; own modules. Must not import `channel` |
 | `channel` | `core`; published `admin`; published `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules` / `worker.due`; published `metadata` and `entity` modules listed for Data Channel use; own modules |
+| `tags` | `core`; published `admin`. Must not import `entity` or `channel` |
 | `worker` | `core`; published `admin` / `jobs` / `metadata` / `entity` / `channel` for assembly and system tasks |
 | `alembic` | `core` Base + every package `models` module |
 | `tests` | any backend module (enforcement tests assert production edges) |

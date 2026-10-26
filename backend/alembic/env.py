@@ -15,6 +15,7 @@ import backend.metadata.models  # noqa: F401 — register Source/Catalog tables
 import backend.entity.models  # noqa: F401 — register Business Entity tables
 import backend.entity.access.models  # noqa: F401 — register Entity access policy tables
 import backend.channel.models  # noqa: F401 — register Data Channel tables
+import backend.tags.models  # noqa: F401 — register Tag tables
 import backend.worker.models  # noqa: F401 — register Scheduled Task tables
 
 config = context.config

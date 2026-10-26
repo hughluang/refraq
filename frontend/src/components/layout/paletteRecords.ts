@@ -7,6 +7,7 @@ import {
   userRecordAdapter,
 } from "@/components/form/recordPickerAdapters";
 import { listChannels } from "@/features/channels/api";
+import { listTags } from "@/features/tags/api";
 import type { ModuleIdentity } from "@/features/console/module-identity/types";
 
 export const PALETTE_RECORD_LIMIT = 5;
@@ -18,6 +19,7 @@ export const PALETTE_RECORD_MODULES = [
   "sources",
   "entities",
   "dictionaries",
+  "tags",
   "channels",
   "user-groups",
 ] as const;
@@ -53,6 +55,16 @@ const SEARCHERS: Record<string, Searcher> = {
     entityRecordAdapter().search(query, signal).then(fromNames),
   dictionaries: (query, signal) =>
     dictionaryRecordAdapter().search(query, signal).then(fromNames),
+  tags: async (query, signal) => {
+    const trimmed = query.trim();
+    const page = await listTags({
+      q: trimmed === "" ? undefined : trimmed,
+      limit: PALETTE_RECORD_LIMIT,
+      offset: 0,
+      signal,
+    });
+    return page.items.map((item) => ({ id: item.id, name: item.name }));
+  },
   "user-groups": (query, signal) =>
     userGroupRecordAdapter().search(query, signal).then(fromNames),
   channels: async (query) => {

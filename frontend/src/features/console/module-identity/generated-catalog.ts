@@ -249,6 +249,26 @@ export const GENERATED_MODULE_CATALOG: ModuleIdentity[] = [
     }
   },
   {
+    "id": "tags",
+    "label_key": "tags.title",
+    "icon": "tag",
+    "routes": {
+      "list": "/console/tags",
+      "create": "/console/tags/new",
+      "edit": "/console/tags/:id/edit",
+      "show": "/console/tags/:id",
+      "aliases": []
+    },
+    "actions": {
+      "list": "tag:read",
+      "create": "tag:write",
+      "edit": "tag:write",
+      "delete": "tag:write",
+      "show": "tag:read",
+      "sample": null
+    }
+  },
+  {
     "id": "channels",
     "label_key": "channels.title",
     "icon": "route",

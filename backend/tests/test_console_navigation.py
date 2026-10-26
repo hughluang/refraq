@@ -11,7 +11,7 @@ os.environ.setdefault("REFRAQ_SKIP_SEED", "1")
 
 from backend.admin.security import hash_password  # noqa: E402
 from backend.main import app  # noqa: E402
-from backend.admin.roles import seed_roles  # noqa: E402
+from backend.admin.roles import create_role, seed_roles  # noqa: E402
 from backend.admin.role_store import (  # noqa: E402
     MemoryRoleStore,
     reset_role_store,
@@ -89,6 +89,7 @@ def test_super_admin_sees_all_seed_modules(client: TestClient) -> None:
         "admin",
         "metadata",
         "entity",
+        "tags",
         "channel",
         "operations",
         "settings",
@@ -107,6 +108,7 @@ def test_super_admin_sees_all_seed_modules(client: TestClient) -> None:
         "type-mappings",
     ]
     assert [m["id"] for m in groups["entity"]["modules"]] == ["entities", "dictionaries"]
+    assert [m["id"] for m in groups["tags"]["modules"]] == ["tags"]
     assert [m["id"] for m in groups["channel"]["modules"]] == [
         "channels",
         "channel-variables",
@@ -118,6 +120,7 @@ def test_super_admin_sees_all_seed_modules(client: TestClient) -> None:
         "admin",
         "metadata",
         "entity",
+        "tags",
         "channel",
         "operations",
         "settings",
@@ -144,3 +147,33 @@ def test_operator_omits_admin_and_settings(client: TestClient) -> None:
     assert len(groups) == 1
     assert groups[0]["id"] == "workbench"
     assert [m["id"] for m in groups[0]["modules"]] == ["dashboard"]
+
+
+def test_without_tag_read_entity_is_followed_by_channel(
+    client: TestClient, store_bundle
+) -> None:
+    user_store, role_store, _sessions = store_bundle
+    role = create_role(
+        role_store,
+        key="record_reader",
+        name="Record reader",
+        permissions=["console:access", "entity:read", "channel:read"],
+    )
+    user_store.create_user(
+        account="reader",
+        display_name="Reader",
+        password_hash=hash_password("s3cret"),
+        role_id=role.id,
+    )
+    assert (
+        client.post(
+            "/auth/login", json={"account": "reader", "password": "s3cret"}
+        ).status_code
+        == 200
+    )
+    response = client.get("/console/navigation")
+    assert response.status_code == 200, response.text
+    ids = [group["id"] for group in response.json()["groups"]]
+    assert "tags" not in ids
+    assert ids.index("entity") < ids.index("channel")
+    assert ids[ids.index("entity") + 1] == "channel"

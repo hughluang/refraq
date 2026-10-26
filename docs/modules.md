@@ -6,7 +6,7 @@ This document defines what each module is responsible for, what it may depend on
 
 **Backend structure contract** (package tiers, published APIs, placement, dependency whitelist, enforcement): [`docs/backend-layout.md`](backend-layout.md). This file focuses on responsibilities and ownership; when they disagree on layout, `backend-layout.md` wins.
 
-The layout covers the **Management Console**, **Management Foundation**, the **metadata foundation**, the **entity** product domain, and the **Data Channel** product domain (`backend/channel/`). Do not pre-create empty packages or modules for Data Channel or Data Product catalog; `backend/channel/` is created with its first real code.
+The layout covers the **Management Console**, **Management Foundation**, the **metadata foundation**, the **entity** product domain, the **Data Channel** product domain (`backend/channel/`), and the **Tag** product domain (`backend/tags/`). Do not pre-create empty packages or modules for Data Channel or Data Product catalog; `backend/channel/` is created with its first real code.
 
 ## 2. Backend Modules
 
@@ -215,6 +215,23 @@ Must not contain:
 - Importing `worker.app`
 - MCP tools for Data Channel
 
+### `backend/tags/`
+
+Rules: `docs/business-tags.md`. HTTP: `docs/api-contracts-tags.md`.
+
+Responsibilities:
+
+- Platform **Tag** vocabulary: display name, comparison form, and optional description
+- Tag collection HTTP under `tags/routers/` and shapes under `tags/schemas/`
+- Management audit events for a committed create, update, or delete
+
+Must not contain:
+
+- Attaching a Tag to a Business Entity or a Data Channel
+- A published `tags.api` while no other package calls it
+- Importing `entity` or `channel`
+- Importing `worker.app`
+
 ### `backend/worker/`
 
 Responsibilities:
@@ -370,6 +387,7 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 - `metadata` → `core`; published `admin` / `jobs`; published `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules`; process entries `mcp_http` / `mcp_server` may import `worker.parameters`
 - `entity` → `core`; published `admin` (including `admin.subjects` and the System Parameter resolver) / `jobs`
 - `channel` → `core`; published `admin` / `jobs` / `worker.api` / `worker.errors` / `worker.schemas` / `worker.schedules` / `worker.due`; published `metadata` and `entity` modules listed for Data Channel use, including `entity.heads` and `entity.datasets` (`docs/backend-layout.md` §3)
+- `tags` → `core`; published `admin`. Must not import `entity` or `channel`
 - `worker` → `core`; published surfaces for assembly, including `entity.tasks` and `channel.tasks`
 - `main` → `core` + package routers / bootstrap via published surfaces
 - `alembic` → `core` Base + every package `models` module
@@ -395,6 +413,7 @@ See the whitelist in [`docs/backend-layout.md`](backend-layout.md) §7. Summary:
 - Do not subclass concrete `admin.errors` types from product domains or platform primitives (use `core.errors.AppError`)
 - Do not import `entity` from `metadata` domain modules. The coupling direction is `entity` → `metadata` (closed vocabularies only). `metadata` importing an entity job runner would close a package-level cycle.
 - Do not import `channel` from `metadata` or `entity`. The coupling direction is `channel` → published `metadata` / `entity`; reverse needs go through ports bound by composition.
+- Do not import `tags` from `admin`, `entity`, `channel`, or `metadata`. `tags` imports `core` and published `admin` only.
 
 ## 6. First-Slice Ownership
 

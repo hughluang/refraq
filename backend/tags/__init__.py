@@ -1,0 +1,1 @@
+"""Platform Tag vocabulary."""

@@ -78,6 +78,7 @@ from backend.entity.routers.data import router as entity_data_router
 from backend.entity.dictionaries.active_codes import DictionaryActiveCodes
 from backend.entity.routers.dictionaries import router as dictionaries_router
 from backend.entity.routers.entities import router as entities_router
+from backend.tags.routers.tags import router as tags_router
 from backend.channel.routers.channels import router as channels_router
 from backend.channel.routers.runs import router as channel_runs_router
 from backend.channel.routers.variables import router as channel_variables_router
@@ -244,6 +245,7 @@ app.include_router(entities_router)
 app.include_router(entity_access_router)
 app.include_router(entity_data_router)
 app.include_router(dictionaries_router)
+app.include_router(tags_router)
 app.include_router(channels_router)
 app.include_router(channel_runs_router)
 app.include_router(channel_variables_router)

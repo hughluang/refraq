@@ -20,6 +20,7 @@ PACKAGE_DIRS = {
     "metadata": BACKEND_ROOT / "metadata",
     "entity": BACKEND_ROOT / "entity",
     "channel": BACKEND_ROOT / "channel",
+    "tags": BACKEND_ROOT / "tags",
     "worker": BACKEND_ROOT / "worker",
 }
 
@@ -99,6 +100,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "channel.schedule_projection",
         }
     ),
+    "tags": frozenset(),
     "worker": frozenset(
         {
             "worker.parameters",
@@ -184,7 +186,7 @@ def test_layout_imports(path: Path) -> None:
 
     for imported in _imported_backend_modules(tree):
         if imported == "worker.app" or imported.startswith("worker.app."):
-            if importer_pkg in {"admin", "jobs", "metadata", "entity", "channel", "core"} or importer.startswith(
+            if importer_pkg in {"admin", "jobs", "metadata", "entity", "channel", "tags", "core"} or importer.startswith(
                 "routers."
             ):
                 if not _allowlisted(importer, imported):
@@ -206,6 +208,7 @@ def test_layout_imports(path: Path) -> None:
             "entity",
             "worker",
             "channel",
+            "tags",
         }:
             if not _allowlisted(importer, imported):
                 raise AssertionError(
@@ -245,7 +248,7 @@ def test_layout_imports(path: Path) -> None:
 
         # core must not import business packages (upgrade → published admin/worker/metadata seeds).
         if importer_pkg == "core":
-            if target_pkg in {"admin", "jobs", "metadata", "entity", "worker", "channel"}:
+            if target_pkg in {"admin", "jobs", "metadata", "entity", "worker", "channel", "tags"}:
                 if importer == "core.upgrade" and target_pkg in {"admin", "worker", "metadata"}:
                     if target_pkg == "worker":
                         if imported == "worker.api" or imported.startswith("worker.api."):
@@ -276,6 +279,17 @@ def test_layout_imports(path: Path) -> None:
                 f"{importer} must not import {imported} "
                 "(metadata and entity must not import channel)"
             )
+
+        if importer_pkg == "tags":
+            if target_pkg == "core":
+                continue
+            if target_pkg == "admin" and _is_published_import("admin", imported):
+                continue
+            if not _allowlisted(importer, imported):
+                raise AssertionError(
+                    f"{importer} must not import {imported} "
+                    "(tags may import core and published admin only)"
+                )
 
         # Cross-package into another tiered package: published only.
         if target_pkg in PUBLISHED:

@@ -277,6 +277,28 @@ CONSOLE_MODULE_CATALOG: tuple[ConsoleModuleSeed, ...] = (
         module_order=20,
     ),
     ConsoleModuleSeed(
+        id="tags",
+        group_id="tags",
+        group_label_key="layout.navGroup.tags",
+        label_key="tags.title",
+        icon="tag",
+        routes=ModuleRoutes(
+            list="/console/tags",
+            create="/console/tags/new",
+            edit="/console/tags/:id/edit",
+            show="/console/tags/:id",
+        ),
+        actions=ModuleActions(
+            list="tag:read",
+            create="tag:write",
+            edit="tag:write",
+            delete="tag:write",
+            show="tag:read",
+        ),
+        group_order=26,
+        module_order=25,
+    ),
+    ConsoleModuleSeed(
         id="channels",
         group_id="channel",
         group_label_key="layout.navGroup.channel",

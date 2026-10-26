@@ -72,6 +72,11 @@ function useRecordModuleIds() {
     action: "list",
     queryOptions: accessQuery,
   });
+  const tags = useCan({
+    resource: "tags",
+    action: "list",
+    queryOptions: accessQuery,
+  });
   const channels = useCan({ resource: "channels", action: "list", queryOptions: accessQuery });
   const groups = useCan({
     resource: "user-groups",
@@ -83,6 +88,7 @@ function useRecordModuleIds() {
   const sourcesCan = sources.data?.can === true;
   const entitiesCan = entities.data?.can === true;
   const dictionariesCan = dictionaries.data?.can === true;
+  const tagsCan = tags.data?.can === true;
   const channelsCan = channels.data?.can === true;
   const groupsCan = groups.data?.can === true;
   return useMemo(() => {
@@ -92,6 +98,7 @@ function useRecordModuleIds() {
       sources: sourcesCan,
       entities: entitiesCan,
       dictionaries: dictionariesCan,
+      tags: tagsCan,
       channels: channelsCan,
       "user-groups": groupsCan,
     };
@@ -102,6 +109,7 @@ function useRecordModuleIds() {
     sourcesCan,
     entitiesCan,
     dictionariesCan,
+    tagsCan,
     channelsCan,
     groupsCan,
   ]);

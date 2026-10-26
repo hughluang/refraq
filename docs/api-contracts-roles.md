@@ -85,6 +85,8 @@ Purpose: return the fixed Permission catalog for Role editing UIs.
     { "key": "channel:write", "description": "Create, edit, save drafts, validate, publish, delete Data Channels, change the activation switch, start on-demand runs, and cancel channel runs" },
     { "key": "channel:code_write", "description": "Add or edit a Data Channel Code node, and publish a draft that contains one" },
     { "key": "channel:source_query", "description": "Add or edit a Data Channel live Source query node, and publish a draft that contains one" },
+    { "key": "tag:read", "description": "List and view Tags" },
+    { "key": "tag:write", "description": "Create, rename, describe, and delete Tags" },
     { "key": "webhook:read", "description": "List and view Webhooks" },
     { "key": "webhook:write", "description": "Create, update, test, and delete Webhooks" },
     { "key": "email_account:read", "description": "List and view Email Accounts" },

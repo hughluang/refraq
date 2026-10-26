@@ -13,6 +13,7 @@ export const ModuleId = {
   typeMappings: "type-mappings",
   entities: "entities",
   dictionaries: "dictionaries",
+  tags: "tags",
   channels: "channels",
   channelVariables: "channel-variables",
   jobs: "jobs",

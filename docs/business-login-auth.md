@@ -182,6 +182,7 @@ Fixed Permission catalog (Foundation + metadata foundation extensions):
 - `entity:data_read` / `entity:data_write`
 - `channel:read` / `channel:write`
 - `channel:code_write` / `channel:source_query`
+- `tag:read` / `tag:write`
 - `webhook:read` / `webhook:write`
 - `email_account:read` / `email_account:write`
 
@@ -196,6 +197,7 @@ Rules:
 - An auto-provisioned provider default Role must not effectively contain `users:write`, `roles:write`, `identity_providers:write`, or `entity:access_manage`; the locked `super_admin` Role is therefore never valid as an auto-provisioning default.
 - Metadata permission meanings: `docs/business-metadata.md` §6; User PAT: `docs/business-user-tokens.md`
 - Data Channel permission meanings: `docs/business-data-channel.md` §11. `channel:code_write` and `channel:source_query` are not implied by `channel:write`. `webhook:read` and `webhook:write`, and `email_account:read` and `email_account:write`, are not implied by `channel:write` and are not seeded onto `operator`
+- Tag permission meanings: `docs/business-tags.md` §5. `tag:read` and `tag:write` are not implied by `entity:read`, `entity:write`, `channel:read`, or `channel:write`, and are not seeded onto `operator`
 - Session absolute lifetime and idle window used at login are the **effective** values of `admin_session_ttl_hours` (seeded 12) and `admin_session_idle_minutes` (seeded 30). There is no env fallback. Changing either parameter does not rewrite existing sessions — see `docs/business-system-parameters.md` and `docs/api-contracts-settings.md`
 
 ## 9. Route Protection Rule

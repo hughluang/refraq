@@ -468,6 +468,11 @@ Avoid **Normalized Type**, **Semantic Type**, a JSON Schema or OpenAPI format, `
 A shared, operator-authored set of codes that a `dictionary` **Attribute Type** references by id. Codes are strings with an optional label. Publish snapshots the active codes into that version's CHECK. The list is not altered into a published table.
 Avoid **Enum Catalog**, a database enum type, **Normalized Type**, an inline list on the attribute, declaring one on `string` or `integer`, and an integer code kind.
 
+### Tag
+
+A platform-scoped vocabulary record for one word. The name lives only on the Tag. The stored display name is the precis-i18n `NicknameCasePreserved` enforcement of the operator's input, and uniqueness is the `NicknameCaseMapped` enforcement of that same input. It is not a **Business Entity**, not a **Dictionary**, not a **User Group**, and not a Catalog Object category.
+Avoid a color, an owner, a folder, or a certificate on the Tag, copying the nickname profile into the browser or into SQL, and treating a Tag as a label stored on each record.
+
 ### Attribute Dictionary
 
 The binding from a `dictionary` attribute to one **Dictionary**. The attribute stores `dictionary_id` only. The codes live on the Dictionary, and a publish snapshot fixes the CHECK.

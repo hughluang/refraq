@@ -219,6 +219,7 @@ Purpose: return the full seeded Console Module Identity catalog (Foundation, met
 | `type-mappings` | `metadata` | `arrows-exchange` | `/console/type-mappings` | `metadata:read` | edit → `metadata:write` (no create/delete) |
 | `entities` | `entity` | `box` | `/console/entities` | `entity:read` | create/edit/delete → `entity:write`; create `/console/entities/new`; edit `/console/entities/:id/edit`; show `/console/entities/:id` → `entity:read` |
 | `dictionaries` | `entity` | `book` | `/console/dictionaries` | `entity:read` | create/edit/delete → `entity:write`; create `/console/dictionaries/new`; edit `/console/dictionaries/:id/edit`; show `/console/dictionaries/:id` → `entity:read` |
+| `tags` | `tags` | `tag` | `/console/tags` | `tag:read` | create/edit/delete → `tag:write`; create `/console/tags/new`; edit `/console/tags/:id/edit`; show `/console/tags/:id` → `tag:read` |
 | `channels` | `channel` | `route` | `/console/channels` | `channel:read` | create/edit/delete → `channel:write`; create `/console/channels/new`; edit `/console/channels/:id/edit`; show `/console/channels/:id` → `channel:read`; alias show `/console/channels/:id/runs/:jobId` |
 | `channel-variables` | `channel` | `variable` | `/console/channel-variables` | `channel:read` | delete → `channel:write` |
 | `jobs` | `operations` | `list-check` | `/console/jobs` | `jobs:run` | — |
