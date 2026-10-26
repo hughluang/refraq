@@ -43,13 +43,19 @@ def test_start_execution_assigns_one_past_the_highest_seq() -> None:
     assert other.seq == 1
 
 
-def test_success_under_batch_read_stores_a_preview_and_keeps_the_runtime_output(monkeypatch) -> None:
+def test_success_under_batch_read_stores_the_full_output(monkeypatch) -> None:
     from backend.admin.user_store import UserRecord
     from backend.channel.channel_run import _RunHooks
     from backend.channel.engine import execute
     from backend.channel.graph import CONTAINER_TYPES, ContainerType
     from backend.channel.nodes.spec import NodeResult, NodeType, OutputView, PortSpec
-    from backend.channel.run_store import ChannelRunRecord, get_run_store, output_size
+    from backend.channel.run_store import (
+        ChannelRunRecord,
+        get_run_store,
+        output_page,
+        output_preview_with_truncated,
+        output_size,
+    )
     from backend.channel.sandbox import SandboxSession
     from backend.core.time import utc_now
 
@@ -164,11 +170,10 @@ def test_success_under_batch_read_stores_a_preview_and_keeps_the_runtime_output(
     step_row = stored["step"]
     inner_row = stored["inner"]
     batch_row = stored["batch"]
-    assert step_row.preview_only is True
-    assert step_row.preview_totals == {"rows": 120, "tags": 2}
-    assert step_row.output["rows"] is not rows
-    assert len(step_row.output["rows"]) == 100
-    assert step_row.output["rows"] == list(range(100))
+    assert step_row.preview_only is False
+    assert step_row.preview_totals == {}
+    assert step_row.output["rows"] is rows
+    assert step_row.output["rows"] == list(range(120))
     assert step_row.output["tags"] == ["a", "b"]
     assert step_row.output_bytes == output_size({"rows": rows, "tags": tags})
     assert (step_row.container_seq, step_row.round) == (inner_row.seq, 0)
@@ -177,11 +182,26 @@ def test_success_under_batch_read_stores_a_preview_and_keeps_the_runtime_output(
     assert batch_row.preview_only is False
     assert batch_row.preview_totals == {}
     assert "iterations" not in batch_row.output
-    assert inner_row.preview_only is True
-    assert len(inner_row.output["iterations"][0]["step"]["rows"]) == 100
-    assert inner_row.preview_totals["iterations.0.step.rows"] == 120
-    assert inner_row.preview_totals["iterations"] == 1
+    assert inner_row.preview_only is False
+    assert inner_row.preview_totals == {}
+    assert inner_row.output["iterations"][0]["step"]["rows"] is rows
+    assert inner_row.output["iterations"][0]["step"]["rows"] == list(range(120))
     assert inner_row.output_bytes == output_size(full_inner)
+    listed, truncated = output_preview_with_truncated(step_row.output)
+    assert truncated is True
+    assert listed["rows"] == list(range(100))
+    assert listed["tags"] == ["a", "b"]
+    page = output_page(step_row.output, "rows", limit=50, offset=100)
+    assert page == {
+        "items": list(range(100, 120)),
+        "total": 120,
+        "limit": 50,
+        "offset": 100,
+    }
+    inner_listed, inner_truncated = output_preview_with_truncated(inner_row.output)
+    assert inner_truncated is True
+    assert len(inner_listed["iterations"][0]["step"]["rows"]) == 100
+    assert len(inner_row.output["iterations"][0]["step"]["rows"]) == 120
 
 
 def test_failed_execution_under_batch_read_stores_the_full_output(monkeypatch) -> None:
@@ -221,7 +241,7 @@ def test_failed_execution_under_batch_read_stores_the_full_output(monkeypatch) -
     assert len(rows) == 120
 
 
-def test_a_failed_retry_stores_the_full_output_and_the_success_stores_a_preview(monkeypatch) -> None:
+def test_a_failed_retry_and_the_following_success_store_the_full_output(monkeypatch) -> None:
     from backend.channel.graph import CONTAINER_TYPES, ContainerType
     from backend.channel.nodes.spec import NodeResult
     from backend.channel.run_store import get_run_store
@@ -263,10 +283,53 @@ def test_a_failed_retry_stores_the_full_output_and_the_success_stores_a_preview(
     assert steps[0].output["rows"] is held[0]
     assert len(steps[0].output["rows"]) == 120
     assert steps[1].status == "succeeded"
-    assert steps[1].preview_only is True
-    assert len(steps[1].output["rows"]) == 100
-    assert steps[1].output["rows"] is not held[1]
+    assert steps[1].preview_only is False
+    assert steps[1].preview_totals == {}
+    assert steps[1].output["rows"] is held[1]
+    assert len(steps[1].output["rows"]) == 120
     assert len(held[1]) == 120
+
+
+def test_success_under_batch_read_stores_a_clipped_input_and_the_full_output(
+    monkeypatch,
+) -> None:
+    import json
+
+    from backend.channel.graph import CONTAINER_TYPES, ContainerType
+    from backend.channel.node_support import render_field
+    from backend.channel.nodes.spec import NodeResult
+    from backend.channel.run_store import get_run_store
+
+    monkeypatch.setitem(
+        CONTAINER_TYPES,
+        "volume.batch_read",
+        ContainerType(accumulate=False),
+    )
+    numbers = list(range(120))
+
+    def run(node: dict, hooks: object) -> NodeResult:
+        if node["id"] == "batch":
+            return NodeResult(
+                status="succeeded",
+                output={"count": 1},
+                iterations=[{"current": 0}],
+                ports=frozenset({"done"}),
+            )
+        rendered, error = render_field(
+            hooks, json.dumps(numbers), {"type": "array"}, path="nums"
+        )
+        assert error is None
+        assert rendered == numbers
+        return NodeResult(status="succeeded", output={"rows": numbers})
+
+    job_id = _run_preview_graph(run, step_retry=None)
+    stored = {item.node_id: item for item in get_run_store().list_executions(job_id)}
+    step = stored["step"]
+    assert step.preview_only is False
+    assert step.output["rows"] is numbers
+    assert step.output["rows"] == list(range(120))
+    assert step.input["nums"]["value"] == list(range(100))
+    assert step.input_totals == {"nums": 120}
 
 
 def test_note_killed_run_keeps_the_full_output() -> None:
@@ -463,6 +526,7 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
         "volume.batch_read": {"dataset": "{{ dataset }}"},
         "volume.dataset_query": {"source": {"kind": "other"}, "sql": "{{ sql }}"},
         "volume.materialize": {"items": "{{ empty }}"},
+        "volume.until": {"until": "{{ flag }}", "max_iterations": 1},
         "state.variable": {
             "operation": "compare_and_set",
             "name": "{{ name }}",
@@ -498,6 +562,7 @@ def test_recorded_input_paths_exist_on_each_node_config(monkeypatch) -> None:
         "volume.batch_read": {"dataset"},
         "volume.dataset_query": {"sql"},
         "volume.materialize": {"items"},
+        "volume.until": set(),
         "state.variable": {"name", "value", "expected"},
         "write.entity": {"source"},
         "action.email": {"to", "subject", "body"},

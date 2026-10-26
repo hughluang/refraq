@@ -456,11 +456,6 @@ class _RunHooks:
         record.preview_only = False
         record.preview_totals = {}
         record.output = result.output
-        if result.status == "succeeded" and _batch_read_ancestor(
-            store.get_run(self.run_id), str(node["id"])
-        ):
-            record.output, record.preview_totals = _preview_copy(result.output)
-            record.preview_only = True
         if captured is not None:
             record.input, record.input_totals = _clip_captured(captured.fields)
         store.finish_execution(record)
@@ -475,34 +470,6 @@ def _sandbox_session(context: dict[str, Any]) -> Iterator[SandboxSession]:
             platform=context["platform"],
         )
         yield sandbox
-
-
-_BATCH_READ = "volume.batch_read"
-
-
-def _batch_read_ancestor(run: ChannelRunRecord | None, node_id: str) -> bool:
-    """True when a parent-chain ancestor, not the node itself, is a Batch Read."""
-    if run is None or not isinstance(run.graph, dict):
-        return False
-    nodes = {
-        str(node["id"]): node
-        for node in run.graph.get("nodes") or []
-        if isinstance(node, dict) and "id" in node
-    }
-    seen: set[str] = set()
-    current = nodes.get(node_id)
-    while isinstance(current, dict):
-        parent_id = current.get("parent")
-        if not isinstance(parent_id, str) or not parent_id or parent_id in seen:
-            return False
-        seen.add(parent_id)
-        parent = nodes.get(parent_id)
-        if not isinstance(parent, dict):
-            return False
-        if str(parent.get("type")) == _BATCH_READ:
-            return True
-        current = parent
-    return False
 
 
 def _clip_captured(fields: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, int]]:

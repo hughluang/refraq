@@ -1567,9 +1567,10 @@ def test_batch_read_stores_a_preview_of_a_successful_body_and_the_full_failed_bo
         assert outcome.status == "succeeded"
         assert sandbox.evaluate("len(self.step.output.rows)") == 120
     stored = {item.node_id: item for item in get_run_store().list_executions(success_id)}
-    assert stored["step"].preview_only is True
-    assert stored["step"].preview_totals == {"rows": 120, "tags": 2}
-    assert stored["step"].output["rows"] == list(range(100))
+    assert stored["step"].preview_only is False
+    assert stored["step"].preview_totals == {}
+    assert stored["step"].output["rows"] is rows
+    assert stored["step"].output["rows"] == list(range(120))
     assert stored["step"].output["tags"] == ["a", "b"]
     assert stored["step"].output_bytes == output_size({"rows": rows, "tags": tags})
     assert (stored["step"].container_seq, stored["step"].round) == (stored["batch"].seq, 0)
