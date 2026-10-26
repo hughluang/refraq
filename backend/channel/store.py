@@ -11,7 +11,7 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Any, Protocol
 
-from sqlalchemy import func, select
+from sqlalchemy import false, func, select
 from sqlalchemy.orm import Session
 
 from backend.channel.errors import ChannelDraftConflict, ChannelNotFound
@@ -81,6 +81,7 @@ class ChannelStore(Protocol):
         *,
         q: str | None,
         active: bool | None,
+        subject_ids: frozenset[str] | None = None,
         limit: int,
         offset: int,
     ) -> tuple[list[ChannelRecord], int]: ...
@@ -182,6 +183,7 @@ class MemoryChannelStore:
         *,
         q: str | None,
         active: bool | None,
+        subject_ids: frozenset[str] | None = None,
         limit: int,
         offset: int,
     ) -> tuple[list[ChannelRecord], int]:
@@ -193,6 +195,8 @@ class MemoryChannelStore:
             rows = [row for row in rows if folded in row.name.lower()]
         if active is not None:
             rows = [row for row in rows if row.active is active]
+        if subject_ids is not None:
+            rows = [row for row in rows if row.id in subject_ids]
         rows.sort(key=lambda row: (row.created_at, row.id), reverse=True)
         total = len(rows)
         page = rows[offset : offset + limit]
@@ -387,6 +391,7 @@ class SqlChannelStore:
         *,
         q: str | None,
         active: bool | None,
+        subject_ids: frozenset[str] | None = None,
         limit: int,
         offset: int,
     ) -> tuple[list[ChannelRecord], int]:
@@ -397,6 +402,10 @@ class SqlChannelStore:
                 stmt = stmt.where(ChannelRow.name.icontains(needle, autoescape=True))
             if active is not None:
                 stmt = stmt.where(ChannelRow.active.is_(active))
+            if subject_ids is not None:
+                stmt = stmt.where(
+                    false() if not subject_ids else ChannelRow.id.in_(subject_ids)
+                )
             total = int(
                 session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
             )

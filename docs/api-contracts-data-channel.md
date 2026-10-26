@@ -557,7 +557,11 @@ An omitted `tags`, or both arrays empty, leaves the new channel with no Tags and
 
 ### 5.3 `GET /channels`
 
-Query: `q` (optional case-insensitive substring of `name`; a blank or whitespace-only value is the same as omitting it; `%` and `_` match themselves), `active` (`true` | `false` | omitted), `limit` (default 50, max 200), `offset` (default 0). Ordered by `created_at DESC`, `id DESC`. `total` counts the filtered set.
+Query: `q` (optional case-insensitive substring of `name`; a blank or whitespace-only value is the same as omitting it; `%` and `_` match themselves), `active` (`true` | `false` | omitted), `tag_id` (repeatable), `limit` (default 50, max 200), `offset` (default 0). Ordered by `created_at DESC`, `id DESC`. `total` counts the filtered set.
+
+Repeat `tag_id` to keep channels that carry any listed Tag. The condition combines with `q` and `active`: a channel must match every condition that is present. Omit `tag_id` to apply no Tag predicate. An id that is not a live Tag matches no channel and does not fail the list; other ids in the same query still match. The predicate is applied with `q` and `active` before paging. `total` counts that filtered set. Omitted `active` does not hide inactive channels.
+
+The Console list omits `active` until the operator chooses active only or inactive only, and omits `tag_id` until a Tag is selected. Clearing the activation choice omits `active` again.
 
 `GET /channels/{id}` returns `200` `{ "channel": { … } }`.
 

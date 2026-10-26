@@ -24,12 +24,21 @@ import type {
 } from "@/features/channels/types";
 
 function querySuffix(
-  params?: Record<string, string | number | boolean | undefined>,
+  params?: Record<
+    string,
+    string | number | boolean | readonly string[] | undefined
+  >,
 ) {
   const qs = new URLSearchParams();
   if (params) {
     for (const [key, value] of Object.entries(params)) {
       if (value === undefined || value === "") continue;
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (item !== "") qs.append(key, item);
+        }
+        continue;
+      }
       qs.set(key, String(value));
     }
   }
@@ -44,6 +53,7 @@ export function listNodeTypes() {
 export function listChannels(params?: {
   q?: string;
   active?: boolean;
+  tag_id?: readonly string[];
   limit?: number;
   offset?: number;
 }) {

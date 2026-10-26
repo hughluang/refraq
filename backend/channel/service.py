@@ -36,7 +36,12 @@ from backend.channel.store import (
 from backend.channel.run_store import get_run_store
 from backend.core.time import format_instant, utc_now
 from backend.jobs.store import get_job_store
-from backend.tags.api import KIND_CHANNEL, clear_assignment, replace_assignment
+from backend.tags.api import (
+    KIND_CHANNEL,
+    clear_assignment,
+    list_subject_ids,
+    replace_assignment,
+)
 from backend.worker.api import withdraw_schedules_by_owner_ref
 
 __all__ = [
@@ -105,16 +110,29 @@ def create_channel(
     return saved
 
 
+def _tag_subject_ids(tag_ids: list[str] | None) -> frozenset[str] | None:
+    """None omits the Tag predicate. A present list matches channels carrying any live id."""
+
+    if tag_ids is None:
+        return None
+    return frozenset(list_subject_ids(kind=KIND_CHANNEL, tag_ids=tag_ids))
+
+
 def list_channels(
     *,
     q: str | None,
     active: bool | None,
+    tag_ids: list[str] | None = None,
     limit: int,
     offset: int,
 ) -> tuple[list[tuple[ChannelRecord, tuple[int, datetime] | None]], int]:
     needle = (q or "").strip() or None
     records, total = get_channel_store().list_channels(
-        q=needle, active=active, limit=limit, offset=offset
+        q=needle,
+        active=active,
+        subject_ids=_tag_subject_ids(tag_ids),
+        limit=limit,
+        offset=offset,
     )
     latest = get_channel_store().latest_versions([record.id for record in records])
     return [(record, latest.get(record.id)) for record in records], total

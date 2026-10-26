@@ -126,6 +126,8 @@ The draft-run lock still blocks the canvas, the name, the description, activatio
 
 Deactivation does not remove the assignments and does not change `tag_revision`. An inline name on create or replace requires `channel:write` and does not require `tag:write`. A name that folds onto an existing Tag attaches that Tag and does not change its stored display name.
 
+The Channel list shows each channel's Tags. Repeatable `tag_id` keeps channels that carry any of those Tags. That condition combines with the name query and `active`. Omitting `tag_id` applies no Tag condition. An id that is not a live Tag matches no channel and does not fail the list; other ids in the same request still match. The conditions are applied together, before paging. `total` counts that set. Omitted `active` does not hide inactive channels.
+
 ## 4. Items, Node Types, And Node Families
 
 ### 4.1 Node Outputs, Expressions, And Dataset References
@@ -504,6 +506,8 @@ Channel schedule rows are locked, so `jobs:run` only observes them.
 ## 12. Management Console
 
 The Data Channel editor is a record authoring surface (`docs/ui-console-record-form.md`): create, show, and edit share one layout, and node configuration panels follow the record-form conventions. The canvas edits the draft. The channel page shows the activation switch, the version list, and the run list. The Console names a problem by the node's display name, and by the two endpoint names when the problem names an edge. It validates the graph on screen and has no separate validate action. Where the module mounts in Console Navigation is outside this document.
+
+The channel list shows each row's Tags and filters by Tag and by activation. The Tag control searches the Tag vocabulary as the operator types and does not create a Tag. Each selected id is sent as `tag_id`. Choosing no Tag omits that parameter. The activation control opens unset, so the opening request does not send `active` and inactive channels stay visible. The operator can choose active only or inactive only, and can clear that choice so the request omits `active` again. An operator who can read Channels can search and select Tags without `tag:read`.
 
 An on-demand run starts only from the edit page. The header Run executes every node reachable from the trigger. A node's Run names that node as the stop node and executes only it and its ancestors (§4.1), and only errors in those nodes refuse the start. Both open the write confirmation, may perform every normal node effect, create a run record, and are observed and cancelled through the run and Job surfaces. There is no non-writing editor execution or execution row limit. The show page lists runs and can cancel an unfinished run; it does not start one.
 

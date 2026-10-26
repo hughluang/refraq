@@ -2051,5 +2051,9 @@
   "identityProviders.enable.outcome": "已启用",
   "entities.fields.tags": "标签",
   "entities.list.tagFilter": "标签",
-  "entities.list.tagNone": "没有匹配的标签"
+  "entities.list.tagNone": "没有匹配的标签",
+  "channels.fields.tags": "标签",
+  "channels.list.tagFilter": "标签",
+  "channels.list.tagNone": "没有匹配的标签",
+  "channels.list.activation": "启用状态"
 }

@@ -2051,5 +2051,9 @@
   "identityProviders.enable.outcome": "Enabled",
   "entities.fields.tags": "Tags",
   "entities.list.tagFilter": "Tags",
-  "entities.list.tagNone": "No matching tags"
+  "entities.list.tagNone": "No matching tags",
+  "channels.fields.tags": "Tags",
+  "channels.list.tagFilter": "Tags",
+  "channels.list.tagNone": "No matching tags",
+  "channels.list.activation": "Activation"
 }

@@ -206,12 +206,17 @@ def http_create_channel(
 def http_list_channels(
     q: str | None = Query(default=None),
     active: bool | None = Query(default=None),
+    tag_id: list[str] | None = Query(default=None),
     page: PageParams = Depends(page_params(CHANNEL_PAGE)),
     user: UserRecord = Depends(require_permission("channel:read")),
 ) -> ChannelListResponse:
     del user
     items, total = list_channels(
-        q=q, active=active, limit=page.limit, offset=page.offset
+        q=q,
+        active=active,
+        tag_ids=tag_id,
+        limit=page.limit,
+        offset=page.offset,
     )
     return ChannelListResponse(
         items=[_channel_out(record, latest) for record, latest in items],
