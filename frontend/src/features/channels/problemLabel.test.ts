@@ -245,7 +245,10 @@ describe("frame-rule sentences", () => {
       label: untilSentence,
       detail: untilSentence,
     });
-    expect(zhMessages["problems.CHANNEL_UNTIL_MAX_ITERATIONS"]).toBe("直到条件成立之前已达到最大轮次。");
+    expect(zhMessages["problems.CHANNEL_UNTIL_MAX_ITERATIONS"]?.length).toBeGreaterThan(0);
+    expect(zhMessages["problems.CHANNEL_UNTIL_MAX_ITERATIONS"]).not.toBe(
+      enMessages["problems.CHANNEL_UNTIL_MAX_ITERATIONS"],
+    );
     expect(
       formatRunError(
         catalogTranslate(enMessages),

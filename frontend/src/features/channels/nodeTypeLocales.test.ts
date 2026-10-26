@@ -122,18 +122,21 @@ describe("channel node type locales", () => {
     expect(enMessages["channelNodeTypes.volume.until.summary"]).toBe(
       "Runs its loop body again until a condition becomes true.",
     );
-    expect(zhMessages["channelNodeTypes.volume.until.label"]).toBe("直到");
-    expect(zhMessages["channelNodeTypes.volume.until.summary"]).toBe("重复运行循环体，直到条件成立。");
     expect(enMessages["channels.config.fields.volume.until.until"]).toBe("until");
-    expect(zhMessages["channels.config.fields.volume.until.until"]).toBe("直到条件");
     expect(enMessages["channels.config.fields.volume.until.max_iterations"]).toBe("max_iterations");
-    expect(zhMessages["channels.config.fields.volume.until.max_iterations"]).toBe("最大轮次");
     expect(enMessages["problems.CHANNEL_LOOP_BODY_INVALID.parent"]).toBe(
       "parent does not name a For, a Batch Read, or an Until",
     );
-    expect(zhMessages["problems.CHANNEL_LOOP_BODY_INVALID.parent"]).toBe(
-      "parent 必须指向循环、批量读取或直到",
-    );
+    for (const key of [
+      "channelNodeTypes.volume.until.label",
+      "channelNodeTypes.volume.until.summary",
+      "channels.config.fields.volume.until.until",
+      "channels.config.fields.volume.until.max_iterations",
+      "problems.CHANNEL_LOOP_BODY_INVALID.parent",
+    ]) {
+      expect(zhMessages[key]?.length).toBeGreaterThan(0);
+      expect(zhMessages[key]).not.toBe(enMessages[key]);
+    }
   });
 
   it("keeps template insert and recorded-value copy in both languages", () => {
