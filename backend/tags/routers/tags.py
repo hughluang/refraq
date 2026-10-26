@@ -17,6 +17,7 @@ from backend.admin.user_store import UserRecord
 from backend.core.pagination import PageParams, page_params
 from backend.tags.api import count_subjects
 from backend.tags.records import TagRecord
+from backend.tags.routers.saved_filters import router as saved_filters_router
 from backend.tags.schemas.tags import (
     TagCreateRequest,
     TagDetail,
@@ -29,6 +30,7 @@ from backend.tags.service import create_tag, delete_tag, get_tag, update_tag
 from backend.tags.store import get_tag_store
 
 router = APIRouter(tags=["tags"])
+router.include_router(saved_filters_router)
 
 _LIST_PAGE = page_params(default_limit=50, max_limit=200)
 _LIST_PERMISSIONS = ("tag:read", "entity:read", "channel:read")

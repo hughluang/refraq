@@ -5,6 +5,8 @@ import {
   entityListIsFiltered,
   entityListRequest,
   entityListShouldFetch,
+  entitySaveTarget,
+  entitySavedQuery,
 } from "@/features/entities/entityListFilter";
 
 describe("entity list status filter", () => {
@@ -76,5 +78,53 @@ describe("entity list status filter", () => {
         offset: 0,
       }),
     ).toBeNull();
+  });
+
+  it("stores the name query, statuses, and tag ids, and leaves offset out", () => {
+    const stored = entitySavedQuery({
+      q: "  Alpha ",
+      statuses: ["serving", "serving"],
+      tagIds: ["tag_ledger", "tag_ledger"],
+    });
+    expect(stored).toEqual({
+      q: "Alpha",
+      status: ["serving"],
+      tag_ids: ["tag_ledger"],
+    });
+    expect(Object.keys(stored)).not.toContain("offset");
+  });
+
+  it("saves into the applied filter, a matching filter, or a new one", () => {
+    const current = entitySavedQuery({
+      q: "Alpha",
+      statuses: ["serving"],
+      tagIds: ["tag_ledger"],
+    });
+    const other = entitySavedQuery({
+      q: "",
+      statuses: DEFAULT_ENTITY_LIST_STATUSES,
+      tagIds: [],
+    });
+    expect(
+      entitySaveTarget({
+        appliedId: "sf_applied0001",
+        stored: [{ id: "sf_match000001", query: other }],
+        current,
+      }),
+    ).toEqual({ kind: "update", id: "sf_applied0001" });
+    expect(
+      entitySaveTarget({
+        appliedId: null,
+        stored: [{ id: "sf_match000001", query: current }],
+        current,
+      }),
+    ).toEqual({ kind: "update", id: "sf_match000001" });
+    expect(
+      entitySaveTarget({
+        appliedId: null,
+        stored: [{ id: "sf_other000001", query: other }],
+        current,
+      }),
+    ).toEqual({ kind: "create" });
   });
 });

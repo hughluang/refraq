@@ -4,7 +4,7 @@
 
 This document defines the Tag collection HTTP: list, create, read, rename, describe, and delete.
 
-It does not define attaching a Tag to a **Business Entity** or a **Data Channel**, list filters by Tag, bulk edits, or **Saved Filter**. Tag detail does not embed record names.
+It does not define attaching a Tag to a **Business Entity** or a **Data Channel**, list filters by Tag, or bulk edits. Tag detail does not embed record names. **Saved Filter** HTTP is §9.
 
 Related boundaries:
 
@@ -152,14 +152,124 @@ Empty body. A second delete of the same id is `404` `TAG_NOT_FOUND` and writes n
 
 `TAG_IN_USE` while any assignment remains. Extensions are `entity_count` and `channel_count`, the same global counts as detail, including records absent from the caller's Entity or Channel list. The Tag stays.
 
-## 9. Non-Goals
+## 9. Saved Filters
+
+A Saved Filter is stored and returned. These routes do not run the query. `GET /entities` and `GET /channels` do not read it.
+
+`id` is `sf_` plus 12 lowercase hex characters. Any other string is an unknown id. Another User's id is `404` `SAVED_FILTER_NOT_FOUND`.
+
+`list` is `entities` or `channels`. It is set on create and is not a patch field. Sending it on patch is `422` `REQUEST_INVALID`.
+
+`name` uses the Tag name rule in §3. Failure is `422` `SAVED_FILTER_NAME_INVALID`. A comparison form already used by that User on that list is `409` `SAVED_FILTER_NAME_CONFLICT`. A rename to another spelling of the same filter's own comparison form is `200` and updates `name`. The comparison form is not a response field. The same name on the other list, or on another User, is a different filter.
+
+`query` for `entities` is `{ "q", "status", "tag_ids" }`. `q` is a string of at most 200 code points. `status` is an array of `not_serving`, `serving`, and `deprecated`. Duplicates collapse. An empty array is stored and is distinct from the opening default. `tag_ids` is an array of at most 50 strings after duplicates collapse. Each string is at most 32 code points. Ids are not checked against live Tags.
+
+`query` for `channels` is `{ "q", "active", "tag_ids" }`. `active` is `true`, `false`, or `null`. `null` means the activation predicate is omitted. `q` and `tag_ids` follow the Entity rules. Offset is not a stored key. Any other key is `422` `REQUEST_INVALID`.
+
+A User may store 20 filters on one list. The twenty-first create is `422` `SAVED_FILTER_LIMIT`. The stored 20 stay. An update does not count toward the cap. Two creates that overlap cannot leave 21.
+
+Permission for every route below is `entity:read` when `list` is `entities`, and `channel:read` when `list` is `channels`. The other permission is `403` `AUTH_FORBIDDEN`. Write permission is not required. Create, update, and delete write no management audit event.
+
+### `GET /saved-filters`
+
+Purpose: list the caller's filters for one list, ordered by comparison form, then id.
+
+Query: `list` (required), `limit` (default 50, max 50), `offset` (default 0). `limit` above 50 is `422` `REQUEST_INVALID`.
+
+### Response: `200`
+
+```json
+{
+  "items": [
+    {
+      "id": "sf_0123456789ab",
+      "list": "entities",
+      "name": "Open books",
+      "query": { "q": "ledger", "status": ["serving"], "tag_ids": ["tag_gone"] },
+      "created_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-01-01T00:00:00Z"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+`total` counts the caller's filters on that list.
+
+### `POST /saved-filters`
+
+Purpose: create one filter for the caller.
+
+### Request
+
+```json
+{
+  "list": "entities",
+  "name": "Open books",
+  "query": { "q": "ledger", "status": ["serving", "serving"], "tag_ids": ["tag_gone"] }
+}
+```
+
+### Response: `201`
+
+`{ "saved_filter": <item> }`. The stored `query` has duplicates collapsed. `created_at` equals `updated_at`.
+
+### `GET /saved-filters/default`
+
+Purpose: read the filter id remembered for one list.
+
+Query: `list` (required).
+
+### Response: `200`
+
+```json
+{ "list": "entities", "saved_filter_id": null }
+```
+
+`saved_filter_id` is `null` when nothing is remembered.
+
+### `PUT /saved-filters/default`
+
+Purpose: remember a filter, or clear that memory.
+
+### Request
+
+```json
+{ "list": "entities", "saved_filter_id": "sf_0123456789ab" }
+```
+
+`saved_filter_id` `null` clears the memory.
+
+### Response: `200`
+
+`{ "list", "saved_filter_id" }`. A filter from the other list is `422` `REQUEST_INVALID` and the previous memory stays. An unknown id, or another User's id, is `404` `SAVED_FILTER_NOT_FOUND`.
+
+### `PATCH /saved-filters/{id}`
+
+Purpose: change the name, the query, or both. Omitted fields stay. `list` cannot change.
+
+### Response: `200`
+
+`{ "saved_filter": <item> }`. `updated_at` changes when the name or the query changes. A patch that changes neither leaves `updated_at` as stored. An invalid query leaves the stored filter unchanged.
+
+### `DELETE /saved-filters/{id}`
+
+Purpose: remove one filter.
+
+### Response: `204`
+
+Empty body. If that filter was the remembered id for its list, the memory becomes empty. A second delete is `404` `SAVED_FILTER_NOT_FOUND`.
+
+## 10. Non-Goals
 
 1. `tag_id` on Entity or Channel lists, bulk add, and bulk remove.
 2. Record names embedded on Tag detail.
-3. Saved Filters.
-4. Assignment HTTP on a Channel. Entity assignment is `docs/api-contracts-entity.md` §4.4a. The published operations live on `backend.tags.api`.
+3. Assignment HTTP on a Channel. Entity assignment is `docs/api-contracts-entity.md` §4.4a. The published operations live on `backend.tags.api`.
+4. Making `GET /entities` or `GET /channels` read the remembered filter.
 
-## 10. References
+## 11. References
 
 - `docs/business-tags.md`
 - `docs/conventions-errors.md`

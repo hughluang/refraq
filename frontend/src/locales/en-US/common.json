@@ -2059,5 +2059,12 @@
   "channels.fields.tags": "Tags",
   "channels.list.tagFilter": "Tags",
   "channels.list.tagNone": "No matching tags",
-  "channels.list.activation": "Activation"
+  "channels.list.activation": "Activation",
+  "savedFilters.list": "Saved filters",
+  "savedFilters.placeholder": "Saved filter",
+  "savedFilters.name": "Filter name",
+  "savedFilters.save": "Save filter",
+  "savedFilters.clear": "Use the default view",
+  "savedFilters.saved": "Filter saved",
+  "savedFilters.nameRequired": "Name this filter"
 }

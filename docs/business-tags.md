@@ -4,7 +4,7 @@
 
 This document defines the platform **Tag** vocabulary: one shared record for a word, the display-name rule, the Tag **Console Module**, authorization, and the audit of vocabulary changes.
 
-It does not define attaching a Tag to a **Business Entity** or a **Data Channel**, list filters, bulk edits, or **Saved Filter**.
+It does not define attaching a Tag to a **Business Entity** or a **Data Channel**, list filters, or bulk edits. **Saved Filter** is §7.
 
 Related boundaries:
 
@@ -62,16 +62,30 @@ The module lists and shows with `tag:read` and creates, edits, and deletes with 
 
 A management audit event is written for a committed Tag create, update, or delete. The event uses resource type `tag`, action `create`, `update`, or `delete`, and result `success`. Detail carries the stored display name. A patch that changes nothing writes no event. A refused create, rename, description, or delete writes no event.
 
-## 7. Non-Goals
+## 7. Saved Filters
+
+A **Saved Filter** is a named list query belonging to one **User**. It is not a database view, not a **System Parameter**, and not an Account Center preference. It does not count as a Tag assignment.
+
+Each User keeps at most 20 Saved Filters on the Entity list and 20 on the Channel list. The twenty-first create on that list is refused. An update does not count toward the cap. Two creates that overlap cannot leave 21. The name uses the Tag display-name rule in §3. Uniqueness is the comparison form per User and list. A rename to another spelling of the same comparison form updates the stored name. The comparison form is not a response field. `list` is `entities` or `channels` and does not change.
+
+The server stores and returns the query. It does not execute it. An Entity query is the name query, the status selection, and the Tag ids. An empty status selection is stored and is distinct from the opening default (`not_serving` and `serving`). A Channel query is the name query, the activation choice (`true`, `false`, or absent), and the Tag ids. Tag ids are not checked against live Tags. A deleted Tag id stays in the filter. Offset is not stored. Unknown keys are rejected.
+
+Each User has one remembered filter id per list, which may be empty. Choosing a Saved Filter remembers it. The next visit that opens that list from navigation, with an empty address, applies that filter and starts at the first page. An address that already carries a query stays as it is and does not change the remembered filter. Deleting the remembered filter clears the memory. Clearing the memory returns the Entity list to `not_serving` and `serving`, and the Channel list to no activation condition. Editing the current controls does not change the stored filter until an explicit save. That save writes the current query into the filter this visit applied, the filter the operator chose, or the filter whose stored query equals the current controls. A visit that arrived with its own query and matches none of those creates a filter and remembers the new one.
+
+Permission is the list's read permission, `entity:read` or `channel:read`. Write permission is not required. A disabled User cannot authenticate; filters already stored stay. Create, update, and delete write no management audit event.
+
+Saved Filters are not shown in Account Center or Platform Settings. `GET /entities` and `GET /channels` do not read them.
+
+## 8. Non-Goals
 
 1. List filters, bulk add, and bulk remove.
 2. Embedding record names on Tag detail.
-3. Saved Filters.
-4. Seeding `tag:read` or `tag:write` onto the operator role.
-5. MCP tools, Entity Data API fields, and Channel run-context fields.
-6. Channel assignment pages. Entity assignment is `docs/business-entity.md` §2.7.
+3. Seeding `tag:read` or `tag:write` onto the operator role.
+4. MCP tools, Entity Data API fields, and Channel run-context fields.
+5. Channel assignment pages. Entity assignment is `docs/business-entity.md` §2.7.
+6. Organization-wide default views and shared filters.
 
-## 8. References
+## 9. References
 
 - `docs/api-contracts-tags.md`
 - `docs/glossary.md`

@@ -7,6 +7,11 @@ from typing import Any
 from backend.core.errors import AppError
 
 __all__ = [
+    "SavedFilterLimit",
+    "SavedFilterNameConflict",
+    "SavedFilterNameInvalid",
+    "SavedFilterNotFound",
+    "SavedFilterRequestInvalid",
     "TagAssignmentConflict",
     "TagDescriptionInvalid",
     "TagInUse",
@@ -93,3 +98,43 @@ class TagAssignmentConflict(AppError):
 
     def _default_message(self) -> str:
         return "Tag revision does not match the stored revision"
+
+
+class SavedFilterNotFound(AppError):
+    code = "SAVED_FILTER_NOT_FOUND"
+    http_status = 404
+
+    def _default_message(self) -> str:
+        return "Saved filter not found"
+
+
+class SavedFilterNameInvalid(AppError):
+    code = "SAVED_FILTER_NAME_INVALID"
+    http_status = 422
+
+    def _default_message(self) -> str:
+        return "Saved filter name is not valid"
+
+
+class SavedFilterNameConflict(AppError):
+    code = "SAVED_FILTER_NAME_CONFLICT"
+    http_status = 409
+
+    def _default_message(self) -> str:
+        return "A saved filter with this name already exists"
+
+
+class SavedFilterLimit(AppError):
+    code = "SAVED_FILTER_LIMIT"
+    http_status = 422
+
+    def _default_message(self) -> str:
+        return "A list can keep at most 20 saved filters"
+
+
+class SavedFilterRequestInvalid(AppError):
+    code = "REQUEST_INVALID"
+    http_status = 422
+
+    def _default_message(self) -> str:
+        return "Request validation failed"

@@ -2059,5 +2059,12 @@
   "channels.fields.tags": "标签",
   "channels.list.tagFilter": "标签",
   "channels.list.tagNone": "没有匹配的标签",
-  "channels.list.activation": "启用状态"
+  "channels.list.activation": "启用状态",
+  "savedFilters.list": "保存的筛选",
+  "savedFilters.placeholder": "保存的筛选",
+  "savedFilters.name": "筛选名称",
+  "savedFilters.save": "保存筛选",
+  "savedFilters.clear": "回到默认视图",
+  "savedFilters.saved": "筛选已保存",
+  "savedFilters.nameRequired": "请填写筛选名称"
 }

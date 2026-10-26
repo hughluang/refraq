@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { listChannels } from "@/features/channels/api";
-import { channelListRequest } from "@/features/channels/channelListFilter";
+import {
+  channelListRequest,
+  channelSavedQuery,
+} from "@/features/channels/channelListFilter";
 
 const EMPTY_PAGE = { items: [], total: 0, limit: 50, offset: 0 };
 
@@ -103,5 +106,26 @@ describe("channel list filters", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("stores the name query, activation, and tag ids, and leaves offset out", () => {
+    const stored = channelSavedQuery({
+      q: "  Alpha ",
+      active: "",
+      tagIds: ["tag_ledger", "tag_ledger"],
+    });
+    expect(stored).toEqual({
+      q: "Alpha",
+      active: null,
+      tag_ids: ["tag_ledger"],
+    });
+    expect(Object.keys(stored)).not.toContain("offset");
+    expect(
+      channelSavedQuery({
+        q: "",
+        active: "false",
+        tagIds: [],
+      }).active,
+    ).toBe(false);
   });
 });
