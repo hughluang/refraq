@@ -1,5 +1,3 @@
-import type { Instant } from "@/lib/instant";
-
 export type DictionaryEntry = {
   code: string;
   label?: string | null;
@@ -23,12 +21,12 @@ export type Dictionary = {
   display_name: string;
   description: string | null;
   revision: number;
-  deprecated_at: Instant | null;
+  deprecated_at: string | null;
   entry_count: number;
   entries?: DictionaryEntry[];
   usages?: DictionaryUsage[];
-  created_at: Instant;
-  updated_at: Instant;
+  created_at: string;
+  updated_at: string;
 };
 
 export type DictionaryEntryDraft = {

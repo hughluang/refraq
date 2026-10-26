@@ -11,7 +11,7 @@ import { JobDetailModal } from "@/features/jobs/JobDetailModal";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
 import { barHeightRatio, buildRunSlots } from "@/features/schedules/runStrip";
 import type { ScheduleRecentJob } from "@/features/schedules/types";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useShowInstant } from "@/hooks/useFormatInstant";
 import { formatDurationMs, runDurationMs } from "@/lib/datetime";
 
 const STRIP_HEIGHT = 24;
@@ -26,7 +26,7 @@ type Props = {
 
 export function ScheduleRunStrip({ jobs, kind, onOpenJobs }: Props) {
   const t = useTranslate();
-  const formatInstant = useFormatInstant();
+  const showInstant = useShowInstant();
   const [detailId, setDetailId] = useState<string | null>(null);
   const { slots, maxMs } = useMemo(() => {
     const at = Date.now();
@@ -84,7 +84,7 @@ export function ScheduleRunStrip({ jobs, kind, onOpenJobs }: Props) {
                     <JobStatusBadge status={job.status} />
                   )}
                   <Text size="xs">
-                    {t("jobs.fields.started")}: {formatInstant(job.started_at)}
+                    {t("jobs.fields.started")}: {showInstant(job.started_at)}
                   </Text>
                   <Text size="xs">
                     {t("jobs.fields.duration")}: {ms === null ? "—" : formatDurationMs(ms)}

@@ -4,6 +4,7 @@ import { Button, Stack, Table, Text } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
 import { useEffect, useState } from "react";
 
+import { Instant } from "@/components/display/Instant";
 import { ListTable } from "@/components/display/ListTable";
 import { StatusBadge } from "@/components/display/StatusBadge";
 import { presentNodeStatus } from "@/components/display/statusTone";
@@ -13,6 +14,7 @@ import { nodeDisplayName } from "@/features/channels/formatRunSubject";
 import { RunErrorText } from "@/features/channels/RunErrorText";
 import { RunExecutionOutput } from "@/features/channels/RunExecutionOutput";
 import type { Graph, NodeExecution, NodeTypeSpec } from "@/features/channels/types";
+import { successRequestId } from "@/lib/api";
 import { listPresentationOf } from "@/lib/list-state";
 import { pageToOffset } from "@/lib/pagination";
 import { problemMessage } from "@/lib/problem";
@@ -36,6 +38,7 @@ export function RunExecutionBrowser({
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [requestId, setRequestId] = useState<string | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
@@ -50,6 +53,7 @@ export function RunExecutionBrowser({
         if (cancelled) return;
         setItems(body.items);
         setTotal(body.total);
+        setRequestId(successRequestId(body));
         setError(null);
       })
       .catch((reason: unknown) => {
@@ -88,12 +92,13 @@ export function RunExecutionBrowser({
       <ListTable
         embedded
         list={list}
-        columnCount={3}
+        columnCount={4}
         minWidth={480}
         head={
           <Table.Tr>
             <Table.Th>{t("channels.run.column.node")}</Table.Th>
             <Table.Th>{t("channels.run.column.status")}</Table.Th>
+            <Table.Th>{t("channels.runs.started")}</Table.Th>
             <Table.Th>{t("channels.run.column.error")}</Table.Th>
           </Table.Tr>
         }
@@ -118,6 +123,9 @@ export function RunExecutionBrowser({
                   tone={presentNodeStatus(item.status).tone}
                   labelKey={presentNodeStatus(item.status).labelKey}
                 />
+              </Table.Td>
+              <Table.Td>
+                <Instant value={item.started_at} requestId={requestId} />
               </Table.Td>
               <Table.Td>
                 <RunErrorText code={item.error_code} message={item.error_message} />

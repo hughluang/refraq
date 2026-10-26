@@ -55,13 +55,9 @@ export class UnreadableInstantError extends Error {
 }
 
 function dateFromReceivedInstant(value: string): Date {
-  let instant: Instant;
-  try {
-    instant = Instant.parse(value);
-  } catch {
-    throw new UnreadableInstantError(value);
-  }
-  return new Date(instant.epochMs());
+  const ms = Instant.epochMsOf(value);
+  if (ms === null) throw new UnreadableInstantError(value);
+  return new Date(ms);
 }
 
 export type FormatInstantOptions = {
@@ -104,9 +100,26 @@ export function formatInstant(
 
 type JobDurationFields = {
   status: string;
-  started_at: Instant | null;
-  finished_at: Instant | null;
+  started_at: string | null;
+  finished_at: string | null;
 };
+
+/**
+ * Text for a received Instant. An unreadable string becomes the contract
+ * problem instead of escaping the caller.
+ */
+export function showContractInstant(
+  value: string | null | undefined,
+  format: (value: string | null | undefined) => string,
+  translate: (key: string) => string,
+): string {
+  try {
+    return format(value);
+  } catch (error) {
+    if (!(error instanceof UnreadableInstantError)) throw error;
+    return translate("problems.API_CONTRACT_INVALID");
+  }
+}
 
 /** Format a non-negative duration in milliseconds. */
 export function formatDurationMs(ms: number): string {
@@ -136,10 +149,13 @@ export function formatDurationMs(ms: number): string {
  */
 export function runDurationMs(job: JobDurationFields, now: number): number | null {
   if (!job.started_at) return null;
-  const start = job.started_at.epochMs();
+  const start = Instant.epochMsOf(job.started_at);
+  if (start === null) return null;
   let ms: number;
   if (job.finished_at) {
-    ms = job.finished_at.epochMs() - start;
+    const finished = Instant.epochMsOf(job.finished_at);
+    if (finished === null) return null;
+    ms = finished - start;
   } else if (job.status === "running") {
     ms = now - start;
   } else {

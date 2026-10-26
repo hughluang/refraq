@@ -26,7 +26,6 @@ import {
   type Confirmation,
   type NodeTypeSpec,
 } from "@/features/channels/types";
-import { Instant } from "@/lib/instant";
 
 vi.mock("@refinedev/core", () => ({
   useTranslate: () => (key: string, options?: { defaultValue?: string }) =>
@@ -77,7 +76,7 @@ vi.mock("@/features/branding/BrandingProvider", () => ({
   useBranding: () => ({ brandName: "Refraq" }),
 }));
 
-const now = Instant.parse("2026-01-01T00:00:00Z");
+const now = "2026-01-01T00:00:00Z";
 
 const spec: NodeTypeSpec = {
   type: "manual",

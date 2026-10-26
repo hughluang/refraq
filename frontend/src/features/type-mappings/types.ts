@@ -1,5 +1,3 @@
-import type { Instant } from "@/lib/instant";
-
 export type TypeMappingOrigin = "product" | "job" | "user";
 
 export type PatchableNormalizedType =
@@ -22,6 +20,6 @@ export type TypeMapping = {
   native_type: string;
   normalized_type: string;
   origin: TypeMappingOrigin;
-  created_at: Instant;
-  updated_at: Instant;
+  created_at: string;
+  updated_at: string;
 };

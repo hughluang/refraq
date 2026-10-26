@@ -749,7 +749,7 @@ function ChannelExisting({
       titleSlot={
         <ChannelNameHeading
           ref={nameEditorRef}
-          key={`${channel.id}:${channel.updated_at.toJSON()}`}
+          key={`${channel.id}:${channel.updated_at}`}
           name={form.values.name}
           editable={draftEditable && !busy}
           onCommit={(name) => form.setFieldValue("name", name)}

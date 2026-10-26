@@ -20,7 +20,7 @@ import { formatScheduleNextRun } from "@/features/schedules/nextRunPreview";
 import { scheduleIdentityLabel } from "@/features/schedules/scheduleIdentity";
 import type { ScheduledTask } from "@/features/schedules/types";
 import { getSource } from "@/features/sources/api/sources";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useListQuery } from "@/hooks/useListQuery";
 import type { PageQuery } from "@/lib/pagination";
@@ -33,7 +33,7 @@ type Props = {
 
 export function SourceSchedulesPage({ sourceId }: Props) {
   const t = useTranslate();
-  const formatInstant = useFormatInstant();
+  const showInstant = useShowInstant();
 
   const [sourceLabel, setSourceLabel] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -135,7 +135,7 @@ export function SourceSchedulesPage({ sourceId }: Props) {
                   <Text size="sm">
                     {formatScheduleNextRun(
                       task,
-                      formatInstant,
+                      showInstant,
                       t("schedules.fields.nextRunPaused"),
                     )}
                   </Text>

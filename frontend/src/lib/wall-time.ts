@@ -1,4 +1,4 @@
-import type { Instant } from "@/lib/instant";
+import { Instant, type Instant as InstantValue } from "@/lib/instant";
 
 /** Wall-time text: picker `YYYY-MM-DD HH:mm:ss` or datetime-local `YYYY-MM-DDTHH:mm`. */
 const WALL_PATTERN = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/;
@@ -54,14 +54,16 @@ function zoneOffsetMs(ms: number, zone: string): number {
   return wallAsUtcMs(wallPartsAt(ms, zone)) - Math.floor(ms / 1000) * 1000;
 }
 
-/** Instant → wall time in `zone`. Null or absent → null. */
+/** Instant or received Instant text → wall time in `zone`. Null, absent, or unreadable → null. */
 export function instantToWall(
-  value: Instant | null | undefined,
+  value: InstantValue | string | null | undefined,
   zone: string,
   separator: " " | "T" = " ",
 ): string | null {
   if (!value) return null;
-  const p = wallPartsAt(value.epochMs(), zone);
+  const ms = typeof value === "string" ? Instant.epochMsOf(value) : value.epochMs();
+  if (ms === null) return null;
+  const p = wallPartsAt(ms, zone);
   return `${p.year}-${pad(p.month)}-${pad(p.day)}${separator}${pad(p.hour)}:${pad(p.minute)}:${pad(p.second)}`;
 }
 

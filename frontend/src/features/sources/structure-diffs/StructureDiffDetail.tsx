@@ -23,7 +23,7 @@ import {
 } from "@/features/sources/structure-diffs/groupChanges";
 import type { StructureDiff } from "@/features/sources/types";
 import { useSourceName } from "@/features/sources/structure-diffs/useSourceName";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useShowInstant } from "@/hooks/useFormatInstant";
 import { problemMessage } from "@/lib/problem";
 
 type Props = {
@@ -50,7 +50,7 @@ function formatValue(value: unknown): string {
 
 export function StructureDiffDetail({ sourceId, diffId }: Props) {
   const t = useTranslate();
-  const formatInstant = useFormatInstant();
+  const showInstant = useShowInstant();
 
   const [diff, setDiff] = useState<StructureDiff | null>(null);
   const [loading, setLoading] = useState(true);
@@ -138,7 +138,7 @@ export function StructureDiffDetail({ sourceId, diffId }: Props) {
             {diff.id}
           </Text>
           <Text size="sm" c="dimmed">
-            {formatInstant(diff.created_at)}
+            {showInstant(diff.created_at)}
           </Text>
           <JobReference
             jobId={diff.job_id}

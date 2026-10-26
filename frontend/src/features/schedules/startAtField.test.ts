@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import { isAllowedStartAt, startsInFuture } from "@/features/schedules/startAtField";
-import { Instant } from "@/lib/instant";
 
 describe("isAllowedStartAt", () => {
   const now = Date.parse("2026-10-06T00:00:00Z");
@@ -23,8 +22,9 @@ describe("startsInFuture", () => {
   const now = Date.parse("2026-10-06T00:00:00Z");
 
   it("is true only while the start is ahead", () => {
-    expect(startsInFuture(Instant.parse("2026-10-12T00:00:00Z"), now)).toBe(true);
-    expect(startsInFuture(Instant.parse("2026-10-01T00:00:00Z"), now)).toBe(false);
+    expect(startsInFuture("2026-10-12T00:00:00Z", now)).toBe(true);
+    expect(startsInFuture("2026-10-01T00:00:00Z", now)).toBe(false);
+    expect(startsInFuture("2026-10-12", now)).toBe(false);
     expect(startsInFuture(null, now)).toBe(false);
   });
 });

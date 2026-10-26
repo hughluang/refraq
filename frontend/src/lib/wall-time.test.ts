@@ -9,6 +9,13 @@ describe("instantToWall", () => {
     expect(instantToWall(undefined, "UTC")).toBeNull();
   });
 
+  it("reads a received Instant string and rejects a calendar date", () => {
+    expect(instantToWall("2026-10-11T16:00:00Z", "Asia/Shanghai")).toBe(
+      "2026-10-12 00:00:00",
+    );
+    expect(instantToWall("2026-10-11", "UTC")).toBeNull();
+  });
+
   it("renders the Instant as wall time in the given zone", () => {
     expect(instantToWall(Instant.parse("2026-10-11T16:00:00Z"), "Asia/Shanghai")).toBe(
       "2026-10-12 00:00:00",

@@ -10,7 +10,7 @@ import { JobCancelButton } from "@/features/jobs/JobCancelButton";
 import { JobDetailModal } from "@/features/jobs/JobDetailModal";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
 import { listScheduleJobs } from "@/features/schedules/api";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { formatJobDuration } from "@/lib/datetime";
 import type { PageQuery } from "@/lib/pagination";
@@ -31,7 +31,7 @@ export function ScheduleJobsModal({
   onClose,
 }: Props) {
   const t = useTranslate();
-  const formatInstant = useFormatInstant();
+  const showInstant = useShowInstant();
   const [detailId, setDetailId] = useState<string | null>(null);
 
   const fetchPage = useCallback(
@@ -115,7 +115,7 @@ export function ScheduleJobsModal({
                   <Text size="sm">{formatJobTrigger(job, t)}</Text>
                 </Table.Td>
                 <Table.Td>
-                  <Text size="sm">{formatInstant(job.created_at)}</Text>
+                  <Text size="sm">{showInstant(job.created_at)}</Text>
                 </Table.Td>
                 <Table.Td>
                   <Text size="sm">{formatJobDuration(job)}</Text>

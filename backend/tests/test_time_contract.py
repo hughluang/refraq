@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, get_args, get_origin
@@ -286,16 +285,22 @@ def test_instant_fields_declare_date_time() -> None:
 
 
 def test_exported_time_fields_match_openapi() -> None:
+    """Derivation still sees OpenAPI Instants. The console does not load that table."""
     from backend.main import app
 
     module = _export_time_fields()
     derived = module.derive_response_time_fields(app.openapi())
-    committed = json.loads(module.OUTPUT.read_text(encoding="utf-8"))
-    assert committed == derived
     assert "items[].started_at" in derived["GET /channels/{channel_id}/runs"]
     assert "items[].created_at" in derived["GET /channels/{channel_id}/runs"]
     assert "grants[].valid_until" in derived["GET /entities/{entity_id}/access"]
     assert "next_run_ats[]" in derived["POST /schedules/cron-preview"]
+    frontend = Path(__file__).resolve().parents[2] / "frontend" / "src"
+    runtime_sources = [
+        path.read_text(encoding="utf-8")
+        for path in frontend.rglob("*")
+        if path.suffix in {".ts", ".tsx"}
+    ]
+    assert all("api-time-fields.generated.json" not in source for source in runtime_sources)
 
 
 def test_derivation_rejects_dynamic_keys_that_hold_instants() -> None:

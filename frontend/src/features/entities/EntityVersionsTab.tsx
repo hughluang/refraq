@@ -23,14 +23,14 @@ import type {
   EntityVersion,
 } from "@/features/entities/types";
 import { JobReference } from "@/components/display/JobReference";
-import type { Instant } from "@/lib/instant";
+import { showContractInstant } from "@/lib/datetime";
 
 type Props = {
   entity: BusinessEntity;
   versions: EntityVersion[];
   canDropTable: boolean;
   busy: boolean;
-  formatInstant: (value: Instant | null | undefined) => string;
+  formatInstant: (value: string | null | undefined) => string;
   onOpenJob: (jobId: string | null) => void;
   onViewError: (err: unknown) => void;
   onDrop: (version: EntityVersion) => void;
@@ -152,7 +152,9 @@ export function EntityVersionsTab({
                 <PublishStatusBadge publishStatus={version.publish_status} />
               </Table.Td>
               <Table.Td>{version.attribute_count}</Table.Td>
-              <Table.Td>{formatInstant(version.created_at)}</Table.Td>
+              <Table.Td>
+                {showContractInstant(version.created_at, formatInstant, t)}
+              </Table.Td>
               <Table.Td>
                 {version.alignment.latest_job_id &&
                 version.alignment.latest_job_status ? (

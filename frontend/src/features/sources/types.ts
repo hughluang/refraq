@@ -1,6 +1,4 @@
 import type { JsonSchemaProperty } from "@/lib/json-schema";
-import type { Instant } from "@/lib/instant";
-
 export type { JsonSchemaProperty };
 
 export type Engine = "postgresql" | "mssql" | "oracle";
@@ -27,7 +25,7 @@ export type Source = {
   engine: string | null;
   access: SourceAccess | null;
   has_access: boolean;
-  access_updated_at: Instant | null;
+  access_updated_at: string | null;
 };
 
 export type ObjectCategory =
@@ -84,13 +82,13 @@ export type CatalogObject = {
   open_questions?: string[] | null;
   semantic_source?: string | null;
   business_semantics_ready?: boolean;
-  semantics_updated_at?: Instant | null;
+  semantics_updated_at?: string | null;
   columns: CatalogColumn[];
   foreign_keys?: CatalogForeignKey[];
   indexes?: CatalogIndex[];
   ddl: string | null;
   is_present: boolean;
-  collected_at: Instant | null;
+  collected_at: string | null;
 };
 
 export type CatalogColumn = {
@@ -138,9 +136,9 @@ export type CatalogJoin = {
   join_kind?: string;
   join_expression?: string | null;
   created_by_user_id: string | null;
-  created_at: Instant;
+  created_at: string;
   is_rejected?: boolean;
-  rejected_at?: Instant | null;
+  rejected_at?: string | null;
   rejected_by_user_id?: string | null;
 };
 
@@ -223,7 +221,7 @@ export type StructureDiff = {
   job_id: string;
   class: string;
   counts: Record<string, number>;
-  created_at: Instant;
+  created_at: string;
   changes?: StructureDiffChange[];
 };
 
@@ -236,6 +234,6 @@ export type SemanticsChange = {
   new_value: unknown;
   semantic_source: string;
   actor_user_id: string | null;
-  created_at: Instant;
+  created_at: string;
 };
 

@@ -21,7 +21,7 @@ import {
   scheduleIdentityLabel,
 } from "@/features/schedules/scheduleIdentity";
 import type { ScheduledTask } from "@/features/schedules/types";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useListQuery } from "@/hooks/useListQuery";
 import type { PageQuery } from "@/lib/pagination";
@@ -30,7 +30,7 @@ const PAGE_SIZE = 50;
 
 export function ScheduleList() {
   const t = useTranslate();
-  const formatInstant = useFormatInstant();
+  const showInstant = useShowInstant();
   const [editing, setEditing] = useState<ScheduledTask | null>(null);
   const [jobsTask, setJobsTask] = useState<ScheduledTask | null>(null);
   const [cronTimezone, setCronTimezone] = useState<string | null>(null);
@@ -85,7 +85,7 @@ export function ScheduleList() {
               <Text size="sm">
                 {formatScheduleNextRun(
                   task,
-                  formatInstant,
+                  showInstant,
                   t("schedules.fields.nextRunPaused"),
                 )}
               </Text>

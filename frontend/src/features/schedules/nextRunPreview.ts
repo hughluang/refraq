@@ -1,9 +1,7 @@
-import type { Instant } from "@/lib/instant";
-
 /** Same string the schedule list uses for the next-run cell. */
 export function formatScheduleNextRun(
-  task: { enabled: boolean; next_run_at: Instant | null },
-  formatInstant: (value: Instant | null | undefined) => string,
+  task: { enabled: boolean; next_run_at: string | null },
+  formatInstant: (value: string | null | undefined) => string,
   pausedLabel: string,
 ): string {
   if (!task.enabled) return pausedLabel;

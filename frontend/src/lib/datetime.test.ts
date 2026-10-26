@@ -7,6 +7,7 @@ import {
   formatDurationMs,
   formatInstant,
   formatJobDuration,
+  showContractInstant,
   resolveDisplayZone,
   runDurationMs,
 } from "@/lib/datetime";
@@ -164,6 +165,34 @@ describe("displayZoneId", () => {
   });
 });
 
+describe("showContractInstant", () => {
+  const translate = (key: string) => key;
+
+  it("returns the contract problem for an unreadable instant", () => {
+    expect(showContractInstant("yesterday", formatInstant, translate)).toBe(
+      "problems.API_CONTRACT_INVALID",
+    );
+    expect(showContractInstant("2026-10-11", formatInstant, translate)).toBe(
+      "problems.API_CONTRACT_INVALID",
+    );
+  });
+
+  it("formats a platform instant and rethrows other errors", () => {
+    expect(
+      showContractInstant("2026-10-11T06:00:29Z", (value) => value ?? "—", translate),
+    ).toBe("2026-10-11T06:00:29Z");
+    expect(() =>
+      showContractInstant(
+        "2026-10-11T06:00:29Z",
+        () => {
+          throw new RangeError("bad locale");
+        },
+        translate,
+      ),
+    ).toThrow(RangeError);
+  });
+});
+
 describe("formatDurationMs", () => {
   it("formats sub-second as ms", () => {
     expect(formatDurationMs(320)).toBe("320ms");
@@ -192,8 +221,8 @@ describe("formatDurationMs", () => {
 });
 
 describe("formatJobDuration", () => {
-  const started = Instant.parse("2026-08-11T10:00:00.000Z");
-  const finished = Instant.parse("2026-08-11T10:00:45.000Z");
+  const started = "2026-08-11T10:00:00.000Z";
+  const finished = "2026-08-11T10:00:45.000Z";
 
   it("uses finished - started when both present", () => {
     expect(
@@ -237,13 +266,13 @@ describe("formatJobDuration", () => {
 });
 
 describe("runDurationMs", () => {
-  const started = Instant.parse("2026-10-04T10:00:00Z");
+  const started = "2026-10-04T10:00:00Z";
   const now = Date.parse("2026-10-04T10:01:00Z");
 
   it("uses finished minus started", () => {
     expect(
       runDurationMs(
-        { status: "succeeded", started_at: started, finished_at: Instant.parse("2026-10-04T10:00:10Z") },
+        { status: "succeeded", started_at: started, finished_at: "2026-10-04T10:00:10Z" },
         now,
       ),
     ).toBe(10_000);
@@ -261,10 +290,31 @@ describe("runDurationMs", () => {
     ).toBeNull();
   });
 
+  it("is null when a boundary is not a platform Instant", () => {
+    expect(
+      runDurationMs(
+        { status: "succeeded", started_at: "yesterday", finished_at: started },
+        now,
+      ),
+    ).toBeNull();
+    expect(
+      runDurationMs(
+        { status: "running", started_at: "2026-10-11", finished_at: null },
+        now,
+      ),
+    ).toBeNull();
+    expect(
+      runDurationMs(
+        { status: "succeeded", started_at: "2026-10-04T10:00:00", finished_at: started },
+        now,
+      ),
+    ).toBeNull();
+  });
+
   it("is null when finish precedes start", () => {
     expect(
       runDurationMs(
-        { status: "failed", started_at: started, finished_at: Instant.parse("2026-10-04T09:59:00Z") },
+        { status: "failed", started_at: started, finished_at: "2026-10-04T09:59:00Z" },
         now,
       ),
     ).toBeNull();

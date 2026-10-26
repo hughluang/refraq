@@ -20,7 +20,7 @@ import type {
   OutputView,
   RefinedPort,
 } from "@/features/channels/types";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useShowInstant } from "@/hooks/useFormatInstant";
 import { problemMessage } from "@/lib/problem";
 
 const GRAPH_DEBOUNCE_MS = 400;
@@ -143,7 +143,7 @@ export function SampleBar({
   onRound: (containerId: string, round: number) => void;
 }) {
   const t = useTranslate();
-  const formatInstant = useFormatInstant();
+  const showInstant = useShowInstant();
   const controls = roundControlIds(nodes, nodeId);
   return (
     <div className="channel-sample-bar" aria-busy={loading || undefined}>
@@ -151,7 +151,7 @@ export function SampleBar({
         {t(run.target === "published" ? "channels.run.target.published" : "channels.run.target.draft")}
       </Text>
       <Text size="xs" c="dimmed">
-        {t("channels.run.startedAt", { time: formatInstant(run.started_at) })}
+        {t("channels.run.startedAt", { time: showInstant(run.started_at) })}
       </Text>
       <Text size="xs">
         {t(

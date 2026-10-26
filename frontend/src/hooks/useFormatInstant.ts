@@ -1,8 +1,14 @@
 "use client";
 
+import { useTranslate } from "@refinedev/core";
 import { useCallback, useMemo } from "react";
 
-import { displayZoneId, formatInstant, resolveDisplayZone } from "@/lib/datetime";
+import {
+  displayZoneId,
+  formatInstant,
+  resolveDisplayZone,
+  showContractInstant,
+} from "@/lib/datetime";
 import type { Instant } from "@/lib/instant";
 import { useSessionStore } from "@/providers/session-store";
 import { useTimeZones } from "@/providers/time-zones";
@@ -44,5 +50,15 @@ export function useFormatInstant() {
         locale: locale || undefined,
       }),
     [aliases, displayTimezone, locale],
+  );
+}
+
+/** Received Instant text for a display cell. An unreadable string stays in that cell. */
+export function useShowInstant() {
+  const t = useTranslate();
+  const formatInstant = useFormatInstant();
+  return useCallback(
+    (value: string | null | undefined) => showContractInstant(value, formatInstant, t),
+    [formatInstant, t],
   );
 }

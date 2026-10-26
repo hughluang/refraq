@@ -43,7 +43,7 @@ import {
   storedIntegerViolatesConstraint,
 } from "@/features/settings/constraint";
 import type { SystemParameter } from "@/features/settings/types";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useShowInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
 import { problemMessage } from "@/lib/problem";
 
@@ -57,7 +57,7 @@ function draftReasonKey(reason: string): string {
 
 export function SettingsPanel() {
   const t = useTranslate();
-  const formatInstant = useFormatInstant();
+  const showInstant = useShowInstant();
   const { open } = useNotification();
   const resetAction = useConsoleMutation();
   const { data: canWrite } = useCan({
@@ -320,7 +320,7 @@ export function SettingsPanel() {
                           label={t("settings.changedAt")}
                           value={
                             item.updated_at
-                              ? formatInstant(item.updated_at)
+                              ? showInstant(item.updated_at)
                               : undefined
                           }
                         />

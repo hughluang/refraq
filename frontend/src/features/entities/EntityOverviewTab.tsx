@@ -6,11 +6,11 @@ import { useTranslate } from "@refinedev/core";
 import { DisplayField } from "@/components/display/DisplayField";
 import type { BusinessEntity } from "@/features/entities/types";
 import { JobReference } from "@/components/display/JobReference";
-import type { Instant } from "@/lib/instant";
+import { showContractInstant } from "@/lib/datetime";
 
 type Props = {
   entity: BusinessEntity;
-  formatInstant: (value: Instant | null | undefined) => string;
+  formatInstant: (value: string | null | undefined) => string;
   onOpenJob: (jobId: string | null) => void;
 };
 
@@ -26,7 +26,7 @@ export function EntityOverviewTab({
     <Group gap="xl" align="flex-start">
       <DisplayField
         label={t("entities.fields.updatedAt")}
-        value={formatInstant(entity.updated_at)}
+        value={showContractInstant(entity.updated_at, formatInstant, t)}
       />
       {current?.alignment.latest_job_id ? (
         <DisplayField

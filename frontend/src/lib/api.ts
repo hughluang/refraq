@@ -1,7 +1,22 @@
-import { ApiContractError, decodeResponseInstants } from "@/lib/instant";
 import { isProtectedPath } from "@/lib/route-scope";
 
 const baseUrl = process.env.NEXT_PUBLIC_REFRAQ_API_BASE_URL || "/api";
+
+const successRequestIds = new WeakMap<object, string>();
+
+/** `X-Request-ID` of a success JSON object. Absent when the header was empty. */
+export function successRequestId(body: unknown): string | null {
+  if (typeof body !== "object" || body === null) return null;
+  return successRequestIds.get(body) ?? null;
+}
+
+function rememberSuccessRequestId(body: unknown, response: Response): void {
+  if (typeof body !== "object" || body === null) return;
+  const requestId = response.headers.get("x-request-id");
+  if (requestId && requestId.length > 0) {
+    successRequestIds.set(body, requestId);
+  }
+}
 
 const SESSION_EXPIRY_SKIP_PATHS = new Set(["/auth/login", "/auth/logout"]);
 
@@ -188,18 +203,7 @@ export async function apiClient<T = unknown>(
     return undefined as T;
   }
 
-  const method = (fetchInit.method ?? "GET").toUpperCase();
   const body: unknown = await response.json();
-  try {
-    return decodeResponseInstants(method, normalizedPath, body) as T;
-  } catch (err) {
-    if (!(err instanceof ApiContractError)) throw err;
-    const requestId = response.headers.get("x-request-id");
-    throw new ApiError(
-      response.status,
-      "API_CONTRACT_INVALID",
-      err.message,
-      requestId && requestId.length > 0 ? requestId : null,
-    );
-  }
+  rememberSuccessRequestId(body, response);
+  return body as T;
 }

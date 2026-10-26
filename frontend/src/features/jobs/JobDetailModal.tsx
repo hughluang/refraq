@@ -24,7 +24,7 @@ import { JobCancelButton } from "@/features/jobs/JobCancelButton";
 import { formatJobError } from "@/features/jobs/formatJobError";
 import { formatJobTrigger } from "@/features/jobs/formatJobTrigger";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useLiveStatus } from "@/hooks/useLiveStatus";
 import { formatJobDuration } from "@/lib/datetime";
 
@@ -38,8 +38,8 @@ type Props = {
 };
 
 export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
-  const formatInstant = useFormatInstant();
   const t = useTranslate();
+  const showInstant = useShowInstant();
   const logEndRef = useRef<HTMLDivElement | null>(null);
   const live = useLiveStatus({
     enabled: opened && Boolean(jobId),
@@ -109,14 +109,14 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
               <Text span c="dimmed">
                 {t("jobs.fields.created")}:{" "}
               </Text>
-              {formatInstant(job.created_at)}
+              {showInstant(job.created_at)}
             </Text>
             {job.started_at ? (
               <Text size="sm">
                 <Text span c="dimmed">
                   {t("jobs.fields.started")}:{" "}
                 </Text>
-                {formatInstant(job.started_at)}
+                {showInstant(job.started_at)}
               </Text>
             ) : null}
             {job.finished_at ? (
@@ -124,7 +124,7 @@ export function JobDetailModal({ jobId, opened, onClose, onChanged }: Props) {
                 <Text span c="dimmed">
                   {t("jobs.fields.finished")}:{" "}
                 </Text>
-                {formatInstant(job.finished_at)}
+                {showInstant(job.finished_at)}
               </Text>
             ) : null}
             <Text size="sm">

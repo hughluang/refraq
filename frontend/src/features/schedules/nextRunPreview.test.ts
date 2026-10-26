@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { formatScheduleNextRun } from "@/features/schedules/nextRunPreview";
-import { Instant } from "@/lib/instant";
 
 describe("formatScheduleNextRun", () => {
-  const formatInstant = (value: Instant | null | undefined) =>
-    value ? `fmt:${value.toJSON()}` : "—";
-  const at = Instant.parse("2026-10-04T02:00:00Z");
+  const formatInstant = (value: string | null | undefined) =>
+    value ? `fmt:${value}` : "—";
+  const at = "2026-10-04T02:00:00Z";
 
   it("uses the list's paused label, instant, or em dash", () => {
     expect(
@@ -22,7 +21,7 @@ describe("formatScheduleNextRun", () => {
         formatInstant,
         "Paused",
       ),
-    ).toBe(`fmt:${at.toJSON()}`);
+    ).toBe(`fmt:${at}`);
     expect(
       formatScheduleNextRun(
         { enabled: true, next_run_at: null },

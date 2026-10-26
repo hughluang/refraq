@@ -31,7 +31,7 @@ import { defaultExpiresWall, tokenStatus } from "@/features/tokens/status";
 import type { TokenMetadata } from "@/features/tokens/types";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useListQuery } from "@/hooks/useListQuery";
-import { useEntryZone, useFormatInstant } from "@/hooks/useFormatInstant";
+import { useEntryZone, useShowInstant } from "@/hooks/useFormatInstant";
 import { SecretRevealDialog } from "@/features/tokens/SecretRevealDialog";
 import type { PageQuery } from "@/lib/pagination";
 import { wallToInstant } from "@/lib/wall-time";
@@ -47,7 +47,7 @@ type CreateFormValues = {
 export function TokenList() {
   const t = useTranslate();
   const { open } = useNotification();
-  const formatInstant = useFormatInstant();
+  const showInstant = useShowInstant();
   const zone = useEntryZone();
   const { data: canDelete } = useCan({
     resource: ModuleId.tokens,
@@ -181,9 +181,9 @@ export function TokenList() {
                   labelKey={statusTone.labelKey}
                 />
               </Table.Td>
-              <Table.Td>{formatInstant(row.expires_at)}</Table.Td>
-              <Table.Td>{formatInstant(row.created_at)}</Table.Td>
-              <Table.Td>{formatInstant(row.last_used_at)}</Table.Td>
+              <Table.Td>{showInstant(row.expires_at)}</Table.Td>
+              <Table.Td>{showInstant(row.created_at)}</Table.Td>
+              <Table.Td>{showInstant(row.last_used_at)}</Table.Td>
               <Table.Td>
                 <RowActions
                   recordName={row.name}

@@ -1,5 +1,3 @@
-import type { Instant } from "@/lib/instant";
-
 export type ScheduleTarget = {
   source_id?: string | null;
   source_key?: string | null;
@@ -12,9 +10,9 @@ export type ScheduleTarget = {
 export type ScheduleRecentJob = {
   id: string;
   status: string;
-  created_at: Instant | null;
-  started_at: Instant | null;
-  finished_at: Instant | null;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
   error_code: string | null;
 };
 
@@ -29,14 +27,14 @@ export type ScheduledTask = {
   cron: string | null;
   running_timeout_sec: number | null;
   /** Schedule Start Instant; null means start immediately. */
-  start_at: Instant | null;
+  start_at: string | null;
   deletable: boolean;
-  last_run_at: Instant | null;
-  next_run_at: Instant | null;
+  last_run_at: string | null;
+  next_run_at: string | null;
   /** Latest Jobs of this schedule, oldest first; the last element is the last run. */
   recent_jobs: ScheduleRecentJob[];
-  created_at: Instant;
-  updated_at: Instant;
+  created_at: string;
+  updated_at: string;
 };
 
 export type CreateScheduleBody = {

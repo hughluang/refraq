@@ -1,5 +1,5 @@
 import { MAX_CADENCE_SECONDS } from "@/features/schedules/intervalUnits";
-import type { Instant } from "@/lib/instant";
+import { Instant } from "@/lib/instant";
 
 /** Empty (start immediately), any past anchor, or a future start within the cadence horizon. */
 export function isAllowedStartAt(
@@ -13,9 +13,10 @@ export function isAllowedStartAt(
 
 /** True while a Schedule Start is still ahead; a past one is only the anchor. */
 export function startsInFuture(
-  value: Instant | null | undefined,
+  value: string | null | undefined,
   now: number = Date.now(),
 ): boolean {
   if (!value) return false;
-  return value.epochMs() > now;
+  const ms = Instant.epochMsOf(value);
+  return ms !== null && ms > now;
 }

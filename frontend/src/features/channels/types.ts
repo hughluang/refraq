@@ -1,5 +1,3 @@
-import type { Instant } from "@/lib/instant";
-
 import type { SchemaObject } from "@/features/channels/configSchemaForm";
 
 export type GraphNode = {
@@ -50,17 +48,17 @@ export type Channel = {
   description: string | null;
   active: boolean;
   draft_revision: number;
-  draft_updated_at: Instant;
-  latest_version: { number: number; published_at: Instant } | null;
+  draft_updated_at: string;
+  latest_version: { number: number; published_at: string } | null;
   failure_streak: number;
   persistently_failing: boolean;
-  created_at: Instant;
-  updated_at: Instant;
+  created_at: string;
+  updated_at: string;
 };
 
 export type ChannelDraft = {
   draft_revision: number;
-  draft_updated_at: Instant;
+  draft_updated_at: string;
   graph: Graph;
 };
 
@@ -80,9 +78,9 @@ export type ChannelRun = {
   stop_at_node_id?: string | null;
   failed_node_id: string | null;
   stopped_node_id?: string | null;
-  created_at: Instant;
-  started_at: Instant | null;
-  finished_at: Instant | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
   error_code: string | null;
   error_message: string | null;
 };
@@ -101,8 +99,8 @@ export type NodeExecution = {
   container_seq: number | null;
   round: number | null;
   status: string;
-  started_at: Instant | null;
-  finished_at: Instant | null;
+  started_at: string | null;
+  finished_at: string | null;
   output_bytes: number;
   output_preview: unknown;
   output_truncated: boolean;
@@ -163,7 +161,7 @@ export type ChannelVersion = {
   channel_id: string;
   number: number;
   graph?: Graph;
-  published_at: Instant;
+  published_at: string;
   published_by_user_id: string;
   published_by_name: string | null;
 };
@@ -171,7 +169,7 @@ export type ChannelVersion = {
 export type Confirmation = {
   draft_revision: number;
   mirrors_to_open: { object_id: string; locator: string }[];
-  runs_to_cancel: { job_id: string; version: number; started_at: Instant }[];
+  runs_to_cancel: { job_id: string; version: number; started_at: string }[];
   missing_run_timeout: boolean;
 };
 

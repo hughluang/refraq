@@ -22,7 +22,6 @@ import {
 import en from "@/locales/en-US/common.json";
 import zh from "@/locales/zh-CN/common.json";
 import { canvasViewportDuration } from "@/features/channels/useCanvasShortcuts";
-import { Instant } from "@/lib/instant";
 
 function canvasPlus(root: ParentNode): SVGElement {
   const glyph = root.querySelector("svg.channel-canvas-plus");
@@ -762,7 +761,7 @@ describe("ChannelCanvas controls", () => {
   });
 
   it("opens configuration when a node is clicked during a session run", async () => {
-    const now = Instant.parse("2026-01-01T00:00:00Z");
+    const now = "2026-01-01T00:00:00Z";
     const sessionRun: ChannelRunDetail = {
       run: {
         job_id: "job_1",
@@ -834,7 +833,7 @@ describe("ChannelCanvas controls", () => {
     expect(within(idleHeader).queryByText("Succeeded")).toBeNull();
 
     cleanup();
-    const now = Instant.parse("2026-01-01T00:00:00Z");
+    const now = "2026-01-01T00:00:00Z";
     const sessionRun: ChannelRunDetail = {
       run: {
         job_id: "job_1",
@@ -2460,7 +2459,7 @@ describe("channel ports", () => {
   });
 
   it("counts repeated executions and marks a node that did not run", async () => {
-    const now = Instant.parse("2026-01-01T00:00:00Z");
+    const now = "2026-01-01T00:00:00Z";
     const ran: Graph = {
       ...EMPTY_GRAPH,
       nodes: [
@@ -2534,7 +2533,7 @@ describe("channel ports", () => {
   });
 
   it("says Running on a node whose execution is running", async () => {
-    const now = Instant.parse("2026-01-01T00:00:00Z");
+    const now = "2026-01-01T00:00:00Z";
     const graph: Graph = {
       ...EMPTY_GRAPH,
       nodes: [placed("trigger", "trigger.manual", "Start", 20)],
@@ -2580,7 +2579,7 @@ describe("channel ports", () => {
   });
 
   it("says Waiting, not the detail-panel sentence, on a node that has not started", async () => {
-    const now = Instant.parse("2026-01-01T00:00:00Z");
+    const now = "2026-01-01T00:00:00Z";
     const graph: Graph = {
       ...EMPTY_GRAPH,
       nodes: [
@@ -2637,7 +2636,7 @@ describe("channel ports", () => {
   });
 
   it("says Failed on a node whose execution failed", async () => {
-    const now = Instant.parse("2026-01-01T00:00:00Z");
+    const now = "2026-01-01T00:00:00Z";
     const graph: Graph = {
       ...EMPTY_GRAPH,
       nodes: [placed("trigger", "trigger.manual", "Start", 20)],
@@ -2683,7 +2682,7 @@ describe("channel ports", () => {
   });
 
   it("keeps the selected class beside the running phase", async () => {
-    const now = Instant.parse("2026-01-01T00:00:00Z");
+    const now = "2026-01-01T00:00:00Z";
     const graph: Graph = {
       ...EMPTY_GRAPH,
       nodes: [placed("trigger", "trigger.manual", "Start", 20)],
@@ -3155,7 +3154,7 @@ function runDetail(
   status: string,
   executions: { seq: number; node_id: string; status: string }[],
 ): ChannelRunDetail {
-  const now = Instant.parse("2026-01-01T00:00:00Z");
+  const now = "2026-01-01T00:00:00Z";
   const terminal = status === "succeeded" || status === "failed" || status === "cancelled";
   return {
     run: {

@@ -14,7 +14,7 @@ import { PageChrome } from "@/components/layout/PageChrome";
 import { listChannels } from "@/features/channels/api";
 import { ModuleId } from "@/features/console/module-identity";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useListQuery } from "@/hooks/useListQuery";
 import type { PageQuery } from "@/lib/pagination";
 
@@ -22,7 +22,7 @@ const PAGE_SIZE = 50;
 
 export function ChannelList() {
   const t = useTranslate();
-  const formatInstant = useFormatInstant();
+  const showInstant = useShowInstant();
   const query = useListQuery();
   const fetchPage = useCallback(
     (page: PageQuery) =>
@@ -92,7 +92,7 @@ export function ChannelList() {
             <Table.Td>
               {channel.latest_version ? channel.latest_version.number : "—"}
             </Table.Td>
-            <Table.Td>{formatInstant(channel.updated_at)}</Table.Td>
+            <Table.Td>{showInstant(channel.updated_at)}</Table.Td>
           </Table.Tr>
         ))}
       </ListTable>

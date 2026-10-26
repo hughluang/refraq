@@ -8,7 +8,7 @@ import { RecordReference } from "@/components/display/RecordReference";
 import { RowActions } from "@/components/display/RowActions";
 import type { PendingFederatedIdentity } from "@/features/identity-providers/types";
 import type { UsePagedListResult } from "@/hooks/usePagedList";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useShowInstant } from "@/hooks/useFormatInstant";
 
 type PendingFederatedIdentityTableProps = {
   list: UsePagedListResult<PendingFederatedIdentity>;
@@ -20,7 +20,7 @@ export function PendingFederatedIdentityTable({
   onClaim,
 }: PendingFederatedIdentityTableProps) {
   const t = useTranslate();
-  const formatInstant = useFormatInstant();
+  const showInstant = useShowInstant();
 
   return (
     <ListTable
@@ -67,7 +67,7 @@ export function PendingFederatedIdentityTable({
               ? item.groups.join(", ")
               : t("identityProviders.fields.notConfigured")}
           </Table.Td>
-          <Table.Td>{formatInstant(item.expires_at)}</Table.Td>
+          <Table.Td>{showInstant(item.expires_at)}</Table.Td>
           <Table.Td>{item.attempt_count}</Table.Td>
           <Table.Td>
             <RowActions

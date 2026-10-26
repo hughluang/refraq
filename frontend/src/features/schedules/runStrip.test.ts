@@ -6,15 +6,14 @@ import {
   buildRunSlots,
 } from "@/features/schedules/runStrip";
 import type { ScheduleRecentJob } from "@/features/schedules/types";
-import { Instant } from "@/lib/instant";
 
 function job(id: string, over: Partial<ScheduleRecentJob> = {}): ScheduleRecentJob {
   return {
     id,
     status: "succeeded",
-    created_at: Instant.parse("2026-10-04T10:00:00Z"),
-    started_at: Instant.parse("2026-10-04T10:00:00Z"),
-    finished_at: Instant.parse("2026-10-04T10:00:10Z"),
+    created_at: "2026-10-04T10:00:00Z",
+    started_at: "2026-10-04T10:00:00Z",
+    finished_at: "2026-10-04T10:00:10Z",
     error_code: null,
     ...over,
   };

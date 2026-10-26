@@ -107,7 +107,39 @@ describe("apiClient Problem Details", () => {
     expect((blank as ApiError).details).toBeUndefined();
   });
 
-  it("turns an unparseable Instant into API_CONTRACT_INVALID with the request id", async () => {
+  it("returns success JSON for an operation that is not in the time table", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            items: [{ round: 1, seq: 2 }],
+            total: 1,
+            limit: 50,
+            offset: 0,
+          }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+              "X-Request-ID": "req-rounds",
+            },
+          },
+        );
+      }),
+    );
+
+    await expect(
+      apiClient("/channels/chn_1/runs/job_1/executions/4/rounds?limit=50"),
+    ).resolves.toEqual({
+      items: [{ round: 1, seq: 2 }],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    });
+  });
+
+  it("returns an illegal Instant string inside success JSON", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
@@ -124,15 +156,45 @@ describe("apiClient Problem Details", () => {
       }),
     );
 
-    await expect(apiClient("/users")).rejects.toEqual(
-      expect.objectContaining({
-        status: 200,
-        code: "API_CONTRACT_INVALID",
-        detail: "items[].last_login_at is not an Instant: yesterday",
-        requestId: "req-contract",
-      }),
+    await expect(apiClient("/users")).resolves.toEqual({
+      items: [{ last_login_at: "yesterday" }],
+    });
+  });
+
+  it("does not read a 204 body", async () => {
+    const response = new Response(null, { status: 204 });
+    const json = vi.spyOn(response, "json");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response),
     );
-    await expect(apiClient("/users")).rejects.toBeInstanceOf(ApiError);
+
+    await expect(apiClient("/tokens/tok_1", { method: "DELETE" })).resolves.toBeUndefined();
+    expect(json).not.toHaveBeenCalled();
+  });
+
+  it("does not replay a failed write", async () => {
+    const fetchMock = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          status: 422,
+          detail: "Request validation failed",
+          code: "REQUEST_INVALID",
+          request_id: "rid-write",
+        }),
+        { status: 422, headers: { "Content-Type": "application/problem+json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      apiClient("/tokens", { method: "POST", body: "{}" }),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: "REQUEST_INVALID",
+      requestId: "rid-write",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("aborts when timeoutMs elapses", async () => {

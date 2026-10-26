@@ -11,13 +11,13 @@ import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useListQuery } from "@/hooks/useListQuery";
 import { apiClient } from "@/lib/api";
-import type { Instant as InstantValue } from "@/lib/instant";
 import type { OffsetPage } from "@/lib/pagination";
+
 type Variable = {
   name: string;
   value: unknown;
-  expires_at: InstantValue | null;
-  updated_at: InstantValue;
+  expires_at: string | null;
+  updated_at: string;
 };
 
 async function listVariables(query: { limit: number; offset: number }): Promise<OffsetPage<Variable>> {

@@ -1,5 +1,3 @@
-import type { Instant } from "@/lib/instant";
-
 export type UserStatus = "active" | "disabled";
 
 export type UserRow = {
@@ -14,7 +12,7 @@ export type UserRow = {
   role_name: string | null;
   status: UserStatus;
   identity_source: "local" | "oidc";
-  last_login_at: Instant | null;
+  last_login_at: string | null;
 };
 
 export type UserCreateValues = {

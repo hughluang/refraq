@@ -14,7 +14,7 @@ import { PageChrome } from "@/components/layout/PageChrome";
 import { JobDetailModal } from "@/features/jobs/JobDetailModal";
 import { listStructureDiffs } from "@/features/sources/api/structure-diffs";
 import { StructureDiffClassBadge } from "@/features/sources/structure-diffs/StructureDiffClassBadge";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useSourceName } from "@/features/sources/structure-diffs/useSourceName";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useListQuery } from "@/hooks/useListQuery";
@@ -36,7 +36,7 @@ function nonzeroCounts(counts: Record<string, number> | undefined): string {
 
 export function StructureDiffList({ sourceId }: Props) {
   const t = useTranslate();
-  const formatInstant = useFormatInstant();
+  const showInstant = useShowInstant();
   const { push } = useConsoleNavigation();
   const [jobId, setJobId] = useState<string | null>(null);
   const query = useListQuery({ search: false });
@@ -109,7 +109,7 @@ export function StructureDiffList({ sourceId }: Props) {
               </Table.Td>
               <Table.Td>
                 <RecordReference
-                  name={formatInstant(diff.created_at)}
+                  name={showInstant(diff.created_at)}
                   recordKey={diff.id}
                   href={href}
                 />

@@ -50,7 +50,7 @@ import {
 import { scheduleKindFromTask } from "@/features/schedules/scheduleKindField";
 import { isAllowedStartAt } from "@/features/schedules/startAtField";
 import type { ScheduledTask } from "@/features/schedules/types";
-import { useDisplayZoneId, useFormatInstant } from "@/hooks/useFormatInstant";
+import { useDisplayZoneId, useShowInstant } from "@/hooks/useFormatInstant";
 import { ApiError } from "@/lib/api";
 import { instantToWall, wallToInstant } from "@/lib/wall-time";
 
@@ -151,7 +151,7 @@ function ScheduleForm({
   const t = useTranslate();
   const locale = useGetLocale()() ?? "en-US";
   const { open } = useNotification();
-  const formatInstant = useFormatInstant();
+  const showInstant = useShowInstant();
   const displayZone = useDisplayZoneId();
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const form = useConsoleForm<FormValues>({
@@ -423,8 +423,8 @@ function ScheduleForm({
             })}
           </Text>
           {preview.data.next_run_ats.map((instant) => (
-            <Text key={instant.toJSON()} size="sm">
-              {formatInstant(instant)}
+            <Text key={instant} size="sm">
+              {showInstant(instant)}
             </Text>
           ))}
           {form.values.enabled ? null : (

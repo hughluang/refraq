@@ -13,7 +13,7 @@ import { cancelJob, listJobs } from "@/features/jobs/api";
 import { formatJobTrigger } from "@/features/jobs/formatJobTrigger";
 import { JobDetailModal } from "@/features/jobs/JobDetailModal";
 import { JobStatusBadge } from "@/features/jobs/JobStatusBadge";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useListQuery } from "@/hooks/useListQuery";
 import { formatJobDuration } from "@/lib/datetime";
@@ -23,7 +23,7 @@ const PAGE_SIZE = 50;
 
 export function JobList() {
   const t = useTranslate();
-  const formatInstant = useFormatInstant();
+  const showInstant = useShowInstant();
   const [detailId, setDetailId] = useState<string | null>(null);
 
   const query = useListQuery({ search: false });
@@ -83,7 +83,7 @@ export function JobList() {
                 <Text size="sm">{formatJobTrigger(job, t)}</Text>
               </Table.Td>
               <Table.Td>
-                <Text size="sm">{formatInstant(job.created_at)}</Text>
+                <Text size="sm">{showInstant(job.created_at)}</Text>
               </Table.Td>
               <Table.Td>
                 <Text size="sm">{formatJobDuration(job)}</Text>

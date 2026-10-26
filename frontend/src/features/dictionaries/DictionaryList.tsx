@@ -17,7 +17,7 @@ import {
   type DictionaryListStatus,
 } from "@/features/dictionaries/dictionaryListFilter";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useListQuery } from "@/hooks/useListQuery";
 import type { PageQuery } from "@/lib/pagination";
 
@@ -25,7 +25,7 @@ const PAGE_SIZE = 50;
 
 export function DictionaryList() {
   const t = useTranslate();
-  const formatInstant = useFormatInstant();
+  const showInstant = useShowInstant();
   const query = useListQuery({
     filters: [
       {
@@ -127,7 +127,7 @@ export function DictionaryList() {
             </Table.Td>
             <Table.Td>
               <Text size="sm" c="dimmed">
-                {formatInstant(row.updated_at)}
+                {showInstant(row.updated_at)}
               </Text>
             </Table.Td>
           </Table.Tr>

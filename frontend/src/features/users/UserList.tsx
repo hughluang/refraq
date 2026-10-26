@@ -40,7 +40,7 @@ import { UserRoleBadge } from "@/features/users/UserRoleBadge";
 import { listUsers } from "@/features/users/api";
 import type { UserRow, UserStatus } from "@/features/users/types";
 import { useConfirmAction } from "@/hooks/useConfirmAction";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useListQuery } from "@/hooks/useListQuery";
 import { problemMessage } from "@/lib/problem";
@@ -58,7 +58,7 @@ const PAGE_SIZE = 50;
 export function UserList() {
   const t = useTranslate();
   const { open } = useNotification();
-  const formatInstant = useFormatInstant();
+  const showInstant = useShowInstant();
   const { data: identity } = useGetIdentity<CurrentUser>();
   const { data: canWrite } = useCan({
     resource: ModuleId.users,
@@ -339,7 +339,7 @@ export function UserList() {
             <Table.Td>
               <Text size="sm">{t(`identitySource.${row.identity_source}`)}</Text>
             </Table.Td>
-            <Table.Td>{formatInstant(row.last_login_at)}</Table.Td>
+            <Table.Td>{showInstant(row.last_login_at)}</Table.Td>
             <Table.Td>
               <RowActions
                 recordName={row.display_name || row.account}

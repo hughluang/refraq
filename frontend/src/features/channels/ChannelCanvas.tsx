@@ -163,7 +163,7 @@ import { problemIdentity, type ProblemGraph } from "@/features/channels/problemL
 import { completionSamples, templateInsertion, upstreamOutputs } from "@/features/channels/templateLogic";
 import { outputPath } from "@/features/channels/templateScope";
 import type { TemplateCaret } from "@/features/channels/TemplateField";
-import { useFormatInstant } from "@/hooks/useFormatInstant";
+import { useShowInstant } from "@/hooks/useFormatInstant";
 import type {
   ChannelRunDetail,
   ExpressionContext,
@@ -464,7 +464,7 @@ function ChannelCanvasBody({
   focusNodeId = null,
 }: Props) {
   const t = useTranslate();
-  const formatInstant = useFormatInstant();
+  const showInstant = useShowInstant();
   const colorScheme = useComputedColorScheme("light", { getInitialValueInEffect: false });
   const { data: heldPermissions } = usePermissions<string[]>({});
   const { screenToFlowPosition, flowToScreenPosition, setCenter, getInternalNode, fitView } =
@@ -2382,7 +2382,7 @@ function ChannelCanvasBody({
                   }
                   sampleScope={sampleScope}
                   runTime={
-                    sessionRun?.run.started_at ? formatInstant(sessionRun.run.started_at) : null
+                    sessionRun?.run.started_at ? showInstant(sessionRun.run.started_at) : null
                   }
                   onTemplateCaret={mutable ? onTemplateCaret : undefined}
                   phase={phases.get(selected.id) ?? null}

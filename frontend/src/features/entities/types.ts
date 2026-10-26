@@ -1,6 +1,4 @@
 import type { AttributeType } from "@/features/entities/attributeTypes.generated";
-import type { Instant } from "@/lib/instant";
-
 export type { AttributeType };
 
 export type DictionaryRef = {
@@ -103,12 +101,12 @@ export type BusinessEntity = {
   table_name: string;
   name: string;
   description: string;
-  deprecated_at: Instant | null;
+  deprecated_at: string | null;
   ever_published: boolean;
   current_version: CurrentVersionSummary | null;
   inbound_references?: InboundReference[];
-  created_at: Instant;
-  updated_at: Instant;
+  created_at: string;
+  updated_at: string;
 };
 
 export type EntityVersion = {
@@ -120,8 +118,8 @@ export type EntityVersion = {
   attribute_count?: number;
   table_name: string | null;
   alignment: Alignment;
-  created_at: Instant;
-  updated_at: Instant;
+  created_at: string;
+  updated_at: string;
 };
 
 export type EntityCreate = {
