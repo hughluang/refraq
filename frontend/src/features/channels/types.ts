@@ -42,6 +42,11 @@ export type Graph = {
   notes?: GraphNote[];
 };
 
+export type ChannelTag = {
+  id: string;
+  name: string;
+};
+
 export type Channel = {
   id: string;
   name: string;
@@ -52,6 +57,8 @@ export type Channel = {
   latest_version: { number: number; published_at: string } | null;
   failure_streak: number;
   persistently_failing: boolean;
+  tags: ChannelTag[];
+  tag_revision: number;
   created_at: string;
   updated_at: string;
 };

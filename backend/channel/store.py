@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
@@ -65,7 +67,12 @@ class ChannelVersionRecord:
 
 
 class ChannelStore(Protocol):
-    def create(self, record: ChannelRecord) -> ChannelRecord: ...
+    def create(
+        self,
+        record: ChannelRecord,
+        *,
+        after: Callable[[Session | None], None] | None = None,
+    ) -> ChannelRecord: ...
 
     def get(self, channel_id: str) -> ChannelRecord | None: ...
 
@@ -80,7 +87,12 @@ class ChannelStore(Protocol):
 
     def save(self, record: ChannelRecord) -> ChannelRecord: ...
 
-    def delete(self, channel_id: str) -> bool: ...
+    def delete(
+        self,
+        channel_id: str,
+        *,
+        after: Callable[[Session | None], None] | None = None,
+    ) -> bool: ...
 
     def replace_draft(
         self,
@@ -144,9 +156,20 @@ class MemoryChannelStore:
         self._versions: dict[tuple[str, int], ChannelVersionRecord] = {}
         self._lock = threading.Lock()
 
-    def create(self, record: ChannelRecord) -> ChannelRecord:
+    def create(
+        self,
+        record: ChannelRecord,
+        *,
+        after: Callable[[Session | None], None] | None = None,
+    ) -> ChannelRecord:
         with self._lock:
             self._channels[record.id] = _clone_channel(record)
+            if after is not None:
+                try:
+                    after(None)
+                except Exception:
+                    self._channels.pop(record.id, None)
+                    raise
             return _clone_channel(self._channels[record.id])
 
     def get(self, channel_id: str) -> ChannelRecord | None:
@@ -182,13 +205,35 @@ class MemoryChannelStore:
             self._channels[record.id] = _clone_channel(record)
             return _clone_channel(self._channels[record.id])
 
-    def delete(self, channel_id: str) -> bool:
+    @contextmanager
+    def lock_channel(
+        self, channel_id: str
+    ) -> Iterator[tuple[Session | None, ChannelRecord | None]]:
         with self._lock:
-            if channel_id not in self._channels:
+            record = self._channels.get(channel_id)
+            yield None, None if record is None else _clone_channel(record)
+
+    def delete(
+        self,
+        channel_id: str,
+        *,
+        after: Callable[[Session | None], None] | None = None,
+    ) -> bool:
+        with self._lock:
+            existing = self._channels.pop(channel_id, None)
+            if existing is None:
                 return False
-            del self._channels[channel_id]
-            for key in [key for key in self._versions if key[0] == channel_id]:
-                del self._versions[key]
+            removed = {
+                key: self._versions.pop(key)
+                for key in [key for key in self._versions if key[0] == channel_id]
+            }
+            if after is not None:
+                try:
+                    after(None)
+                except Exception:
+                    self._channels[channel_id] = existing
+                    self._versions.update(removed)
+                    raise
             return True
 
     def replace_draft(
@@ -306,7 +351,12 @@ def _version_from_row(row: ChannelVersionRow) -> ChannelVersionRecord:
 
 
 class SqlChannelStore:
-    def create(self, record: ChannelRecord) -> ChannelRecord:
+    def create(
+        self,
+        record: ChannelRecord,
+        *,
+        after: Callable[[Session | None], None] | None = None,
+    ) -> ChannelRecord:
         with session_scope() as session:
             session.add(
                 ChannelRow(
@@ -323,6 +373,8 @@ class SqlChannelStore:
                 )
             )
             session.flush()
+            if after is not None:
+                after(session)
             return _clone_channel(record)
 
     def get(self, channel_id: str) -> ChannelRecord | None:
@@ -368,12 +420,27 @@ class SqlChannelStore:
             session.flush()
             return _channel_from_row(row)
 
-    def delete(self, channel_id: str) -> bool:
+    @contextmanager
+    def lock_channel(
+        self, channel_id: str
+    ) -> Iterator[tuple[Session | None, ChannelRecord | None]]:
+        with session_scope() as session:
+            row = session.get(ChannelRow, channel_id, with_for_update=True)
+            yield session, None if row is None else _channel_from_row(row)
+
+    def delete(
+        self,
+        channel_id: str,
+        *,
+        after: Callable[[Session | None], None] | None = None,
+    ) -> bool:
         with session_scope() as session:
             row = session.get(ChannelRow, channel_id)
             if row is None:
                 return False
             session.delete(row)
+            if after is not None:
+                after(session)
             return True
 
     def replace_draft(

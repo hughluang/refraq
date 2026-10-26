@@ -189,11 +189,21 @@ class GraphIn(BaseModel):
         return self
 
 
+class ChannelTagAssignmentIn(BaseModel):
+    """Tags submitted with Channel create. Omitted means an empty set."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tag_ids: list[str] = Field(default_factory=list)
+    names: list[str] = Field(default_factory=list)
+
+
 class ChannelCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
     description: str | None = None
+    tags: ChannelTagAssignmentIn | None = None
 
     @field_validator("name")
     @classmethod
@@ -209,6 +219,19 @@ class ChannelCreateRequest(BaseModel):
         if value is not None and len(value) > 2000:
             raise ValueError("description must be at most 2000 characters")
         return value
+
+
+class ChannelTagsReplaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    base_revision: int
+    tag_ids: list[str]
+    names: list[str]
+
+
+class ChannelTagsReplaceResponse(BaseModel):
+    tags: list[ChannelTagOut]
+    tag_revision: int
 
 
 class ChannelPatchRequest(BaseModel):
@@ -259,6 +282,11 @@ class LatestVersionOut(BaseModel):
     published_at: Instant
 
 
+class ChannelTagOut(BaseModel):
+    id: str
+    name: str
+
+
 class ChannelOut(BaseModel):
     id: str
     name: str
@@ -269,6 +297,8 @@ class ChannelOut(BaseModel):
     latest_version: LatestVersionOut | None
     failure_streak: int
     persistently_failing: bool
+    tags: list[ChannelTagOut]
+    tag_revision: int
     created_at: Instant
     updated_at: Instant
 

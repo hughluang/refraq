@@ -4,6 +4,7 @@ import type { OffsetPage } from "@/lib/pagination";
 import type {
   Channel,
   ChannelDraft,
+  ChannelTag,
   ChannelRun,
   ChannelRunDetail,
   ChannelVersion,
@@ -49,7 +50,11 @@ export function listChannels(params?: {
   return apiClient<OffsetPage<Channel>>(`/channels${querySuffix(params)}`);
 }
 
-export function createChannel(body: { name: string; description: string | null }) {
+export function createChannel(body: {
+  name: string;
+  description: string | null;
+  tags?: { tag_ids: string[]; names: string[] };
+}) {
   return apiClient<{ channel: Channel }>("/channels", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -59,6 +64,20 @@ export function createChannel(body: { name: string; description: string | null }
 
 export function getChannel(id: string) {
   return apiClient<{ channel: Channel }>(`/channels/${id}`);
+}
+
+export function replaceChannelTags(
+  id: string,
+  body: { base_revision: number; tag_ids: string[]; names: string[] },
+) {
+  return apiClient<{ tags: ChannelTag[]; tag_revision: number }>(
+    `/channels/${id}/tags`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
 }
 
 export function patchChannel(

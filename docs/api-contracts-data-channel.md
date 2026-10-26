@@ -58,6 +58,8 @@ Collection lists use the **Offset Page** envelope `{ "items", "total", "limit", 
   "draft_revision": 12,
   "draft_updated_at": "2026-10-09T08:00:00Z",
   "latest_version": { "number": 3, "published_at": "2026-10-08T09:30:00Z" },
+  "tags": [{ "id": "tag_01ABC", "name": "finance" }],
+  "tag_revision": 2,
   "created_at": "2026-10-01T02:00:00Z",
   "updated_at": "2026-10-09T08:00:00Z"
 }
@@ -68,6 +70,7 @@ Collection lists use the **Offset Page** envelope `{ "items", "total", "limit", 
 - `failure_streak` is the count of published failure episodes (§6.8 of the business rules). It starts at 0.
 - `persistently_failing` is true when `failure_streak` is at least 3.
 - `latest_version` is `null` until the first publish.
+- `tags` is `{ "id", "name" }[]`, ordered by comparison form, then id. `tag_revision` starts at 1 and increases by 1 only when the set changes. List items, detail, and the create response include both. Comparison form is not a response field. Replacing Tags does not change `draft_revision`, `draft_updated_at`, or `updated_at`.
 
 ### 3.2 Graph
 
@@ -514,6 +517,7 @@ On `succeeded` only:
 | `GET` | `/channels` | `channel:read` | List channels (**Offset Page**) |
 | `GET` | `/channels/{id}` | `channel:read` | Get one channel |
 | `PATCH` | `/channels/{id}` | `channel:write` | Edit `name` and `description` |
+| `PUT` | `/channels/{id}/tags` | `channel:write` | Replace the channel's Tags |
 | `DELETE` | `/channels/{id}` | `channel:write` | Delete the channel |
 | `GET` | `/channels/{id}/draft` | `channel:read` | Read the draft graph |
 | `PUT` | `/channels/{id}/draft` | `channel:write` | Replace the draft graph |
@@ -542,8 +546,12 @@ On `succeeded` only:
 ### 5.2 `POST /channels`
 
 ```json
-{ "name": "Material master", "description": null }
+{ "name": "Material master", "description": null, "tags": { "tag_ids": [], "names": [] } }
 ```
+
+`name` is required. `description` is optional. `tags` is optional. `tag_ids` and `names` both default to empty. Any other field is `422 REQUEST_INVALID`.
+
+An omitted `tags`, or both arrays empty, leaves the new channel with no Tags and `tag_revision` 1. `tag_ids` names existing Tags. `names` creates Tags in the same request. A rejected name or a set of more than ten leaves neither the channel nor a new Tag. A name that folds onto an existing Tag attaches it and does not return `TAG_NAME_CONFLICT`.
 
 `201` `{ "channel": { … } }`. The draft starts as `{ "nodes": [], "edges": [], "settings": { "run_timeout_sec": null, "run_retry_limit": null, "error_channel_id": null } }` with `draft_revision` 1. `active` is `false`.
 
@@ -555,11 +563,31 @@ Query: `q` (optional case-insensitive substring of `name`; a blank or whitespace
 
 ### 5.4 `PATCH /channels/{id}`
 
-Any subset of `name` and `description`. Present `description` `null` clears it. `200` `{ "channel": { … } }`. Does not touch the draft or versions. A changed channel name rewrites the name of the synced schedule row without another publish. A description-only change leaves that schedule name as stored.
+Any subset of `name` and `description`. Present `description` `null` clears it. `200` `{ "channel": { … } }`. Does not touch the draft or versions. A changed channel name rewrites the name of the synced schedule row without another publish. A description-only change leaves that schedule name as stored. A `tags` field is `422 REQUEST_INVALID` and leaves the Tag set and `tag_revision` unchanged.
+
+### 5.4a `PUT /channels/{id}/tags`
+
+Purpose: replace the channel's Tags. This is not a draft save and does not take the draft-run lock.
+
+- Permission: `channel:write`. A caller without it receives `403 AUTH_FORBIDDEN` before the id is resolved, including when the body is invalid. `tag:write` is not required, including when `names` creates a Tag.
+
+```json
+{ "base_revision": 1, "tag_ids": [], "names": [] }
+```
+
+`tag_ids` and `names` are required arrays. Both empty clears the set. The cap counts the resulting set: an id already held, or a repeated id, counts once. More than ten is `422 TAG_LIMIT_EXCEEDED` and writes nothing of that request. The extension `subjects` is `[{ "kind": "channel", "id": "<channel id>" }]`.
+
+`base_revision` must equal the stored revision. A stale revision is `409 TAG_ASSIGNMENT_CONFLICT` and leaves the newer set. The same set at the current revision is `200` and does not increment the revision.
+
+Success `200`: `{ "tags": [{ "id", "name" }], "tag_revision": N }`. Tags are ordered by comparison form, then id.
+
+Error order: unknown channel `404 CHANNEL_NOT_FOUND`; stale revision `409 TAG_ASSIGNMENT_CONFLICT`; an unknown `tag_ids` entry `404 TAG_NOT_FOUND`; an invalid name `422 TAG_NAME_INVALID`; more than ten `422 TAG_LIMIT_EXCEEDED`. A folded name attaches the existing Tag and does not change its stored display name.
+
+The call is allowed while a draft run is queued or running, and while the channel is active or inactive. It does not change `draft_revision`, `draft_updated_at`, or the channel `updated_at`. A committed set change writes one audit event, resource type `channel`, action `tags.replace`, detail `{ "tag_ids": [ ... ] }` in response order. Each inline create also writes a Tag create event. An unchanged set writes neither.
 
 ### 5.5 `DELETE /channels/{id}`
 
-`204`. Withdraws schedule rows whose `owner_ref` is `channel:{id}`, requests cancel of the channel's other unfinished runs, and removes the channel, its draft, its versions, its checkpoints, and its run records. Historical Jobs remain. Rows already written to Entity Tables stay.
+`204`. Withdraws schedule rows whose `owner_ref` is `channel:{id}`, requests cancel of the channel's other unfinished runs, and removes the channel, its draft, its versions, its checkpoints, its run records, and its Tag assignments. A refused delete leaves the assignments. Historical Jobs remain. Rows already written to Entity Tables stay.
 
 ### 5.6 `GET` and `PUT /channels/{id}/draft`
 
@@ -626,7 +654,7 @@ List query: `limit` (default 50, max 200), `offset` (default 0). Ordered by `num
 
 ### 5.10 `POST /channels/{id}/activate` and `POST /channels/{id}/deactivate`
 
-Empty body. `200` `{ "channel": { … } }`. Idempotent: activating an active channel, or deactivating an inactive one, succeeds without change. Activate sets every synced schedule row `enabled`; deactivate disables them and does not cancel queued or running Jobs. Activating a channel with no published version is allowed and has no schedule rows to enable. Requires `channel:write`.
+Empty body. `200` `{ "channel": { … } }`. Idempotent: activating an active channel, or deactivating an inactive one, succeeds without change. Activate sets every synced schedule row `enabled`; deactivate disables them and does not cancel queued or running Jobs. Activating a channel with no published version is allowed and has no schedule rows to enable. Requires `channel:write`. Activation and deactivation do not change Tags or `tag_revision`.
 
 ### 5.11 `POST /channels/{id}/runs`
 

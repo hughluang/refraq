@@ -114,7 +114,17 @@ A Data Channel carries an `active` switch that lives outside versions.
 
 ### 3.7 Delete
 
-Deleting a Data Channel withdraws its Scheduled Task rows by `owner_ref` (`docs/business-scheduled-tasks.md`), which cancels unfinished Jobs those rows minted, and requests cancel of the channel's other unfinished Channel Runs. Historical Jobs remain. The channel's checkpoints and run records are removed with it, and the datasets of those runs are removed with the records. Deleting a channel does not delete rows it wrote into Entity Tables.
+Deleting a Data Channel withdraws its Scheduled Task rows by `owner_ref` (`docs/business-scheduled-tasks.md`), which cancels unfinished Jobs those rows minted, and requests cancel of the channel's other unfinished Channel Runs. Historical Jobs remain. The channel's checkpoints and run records are removed with it, and the datasets of those runs are removed with the records. Deleting a channel does not delete rows it wrote into Entity Tables. A successful delete also removes that channel's **Tag** assignments. A refused delete leaves them.
+
+### 3.8 Tags
+
+**Tag**s belong to the Data Channel. They are not part of the draft and they are not copied onto a Channel Version. A new channel, and every channel that existed before assignments, has no Tags and `tag_revision` 1.
+
+An operator with `channel:write` may replace the set from create, from edit, and from show, including while a draft run is in progress and whether the channel is active or inactive. The set holds at most ten Tag ids. Show and edit save that set with their own action. That action does not write the draft, does not change `draft_revision` or `draft_updated_at`, and does not change the channel `updated_at`. Create sends the set on the create body. `PATCH` does not accept Tags.
+
+The draft-run lock still blocks the canvas, the name, the description, activation, save, and publish. It does not block this Tag control.
+
+Deactivation does not remove the assignments and does not change `tag_revision`. An inline name on create or replace requires `channel:write` and does not require `tag:write`. A name that folds onto an existing Tag attaches that Tag and does not change its stored display name.
 
 ## 4. Items, Node Types, And Node Families
 
@@ -476,7 +486,7 @@ All keys are `platform`-scoped.
 | Permission | Grants |
 | --- | --- |
 | `channel:read` | Read channels, drafts, versions, run lists, and run records, including the execution list, container rounds of a container execution, and paging dataset rows of a run record; read **Source Mirror** data through read nodes and records |
-| `channel:write` | Create, edit, save drafts, validate, publish, and delete channels; Template Preview and **Node Sample** against a run record; Global Variable writes; on-demand runs (target `draft` or `published`, with an optional stop node) and rerun; cancel a `channel_run` Job; reference an existing **Webhook** from an `action.webhook` node; reference an existing **Email Account** from an `action.email` node |
+| `channel:write` | Create, edit, save drafts, validate, publish, and delete channels; replace the channel's **Tag**s, including an inline Tag name; Template Preview and **Node Sample** against a run record; Global Variable writes; on-demand runs (target `draft` or `published`, with an optional stop node) and rerun; cancel a `channel_run` Job; reference an existing **Webhook** from an `action.webhook` node; reference an existing **Email Account** from an `action.email` node. Inline Tag creation does not require `tag:write` |
 | `channel:code_write` | Author a Code node. Required in addition to `channel:write` |
 | `channel:source_query` | Author a live Source query node. Required in addition to `channel:write`. Does not grant `query:run` |
 | `webhook:read` | List and read **Webhook**s. Controls the Console Module |
@@ -522,11 +532,11 @@ Under every template field, including a nested mapping value, a filter value, an
 
 Completion uses the Node Sample of the same scope. At an element of an array, such as `rows[0].`, the candidates are the properties of the element schema and the keys observed on that element.
 
-While the channel's latest draft **Channel Run** has not ended `succeeded`, `failed`, or `cancelled`, the edit page keeps its editing chrome and refuses draft edits: the canvas, node configuration, name, activation switch, description, save, and publish. Refreshing the edit page applies the same lock, because the page loads that latest draft run. The lock follows the channel, not the user who started the run. Delete stays available and still requests cancel of the channel's unfinished runs.
+While the channel's latest draft **Channel Run** has not ended `succeeded`, `failed`, or `cancelled`, the edit page keeps its editing chrome and refuses draft edits: the canvas, node configuration, name, activation switch, description, save, and publish. Refreshing the edit page applies the same lock, because the page loads that latest draft run. The lock follows the channel, not the user who started the run. Delete stays available and still requests cancel of the channel's unfinished runs. The **Tag** control stays available on create, show, and edit during that lock. Saving Tags uses its own action, does not save the draft, and does not change `draft_revision`. Show, and any mode without `channel:write`, renders that control in display mode.
 
 ## 13. Management Audit
 
-Persist a **Management Audit Event** for: channel create, identity edit, draft save, publish, activation change, delete, manual run enqueue, rerun enqueue, Global Variable manual delete, Webhook create, update, delete, and test, Email Account create, update, delete, and test, and every Source Mirror operation. Each event records actor, **Instant**, resource, action, and result.
+Persist a **Management Audit Event** for: channel create, identity edit, draft save, publish, activation change, delete, manual run enqueue, rerun enqueue, Global Variable manual delete, Webhook create, update, delete, and test, Email Account create, update, delete, and test, and every Source Mirror operation. A committed **Tag**-set change writes one event with resource type `channel`, action `tags.replace`, and the resulting Tag ids. An inline Tag create also writes the Tag create event. A replacement that does not change the set writes neither. A Tag change does not write a draft-save event. Each event records actor, **Instant**, resource, action, and result.
 
 ## 14. Non-Goals
 

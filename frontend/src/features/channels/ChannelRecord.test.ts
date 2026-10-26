@@ -102,6 +102,8 @@ function channel(): Channel {
     latest_version: null,
     failure_streak: 0,
     persistently_failing: false,
+    tags: [],
+    tag_revision: 1,
     created_at: now,
     updated_at: now,
   };

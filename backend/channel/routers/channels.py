@@ -20,6 +20,9 @@ from backend.channel.schemas.channels import (
     ChannelListResponse,
     ChannelOut,
     ChannelPatchRequest,
+    ChannelTagOut,
+    ChannelTagsReplaceRequest,
+    ChannelTagsReplaceResponse,
     ChannelResponse,
     ConfirmationOut,
     DraftPutRequest,
@@ -54,6 +57,7 @@ from backend.channel.service import (
     list_versions,
     patch_channel,
     preview_publish,
+    replace_channel_tags,
     set_channel_active,
     publish_channel,
     save_draft,
@@ -62,6 +66,7 @@ from backend.channel.service import (
 from backend.channel.recovery import PERSISTENT_FAILURE_STREAK
 from backend.channel.store import ChannelRecord, ChannelVersionRecord
 from backend.core.pagination import PageBounds, PageParams, page_params
+from backend.tags.api import KIND_CHANNEL, read_assignment
 
 router = APIRouter(tags=["channels"])
 
@@ -72,6 +77,7 @@ def _channel_out(
     record: ChannelRecord,
     latest: tuple[int, datetime] | None,
 ) -> ChannelOut:
+    assignment = read_assignment(KIND_CHANNEL, record.id)
     latest_out = None
     if latest is not None:
         number, published_at = latest
@@ -86,6 +92,10 @@ def _channel_out(
         latest_version=latest_out,
         failure_streak=record.failure_streak,
         persistently_failing=record.failure_streak >= PERSISTENT_FAILURE_STREAK,
+        tags=[
+            ChannelTagOut(id=tag.id, name=tag.name) for tag in assignment.tags
+        ],
+        tag_revision=assignment.tag_revision,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
@@ -180,11 +190,14 @@ def http_create_channel(
     user: UserRecord = Depends(require_permission("channel:write")),
     actor_token_id: str | None = Depends(get_actor_token_id),
 ) -> ChannelResponse:
+    tags = body.tags
     record = create_channel(
         name=body.name,
         description=body.description,
         actor_user_id=user.id,
         actor_token_id=actor_token_id,
+        tag_ids=list(tags.tag_ids) if tags is not None else [],
+        names=list(tags.names) if tags is not None else [],
     )
     return ChannelResponse(channel=_channel_out(record, None))
 
@@ -216,6 +229,27 @@ def http_get_channel(
     del user
     record, latest = get_channel(channel_id)
     return ChannelResponse(channel=_channel_out(record, latest))
+
+
+@router.put(
+    "/channels/{channel_id}/tags",
+    response_model=ChannelTagsReplaceResponse,
+)
+def http_replace_channel_tags(
+    channel_id: str,
+    body: ChannelTagsReplaceRequest,
+    user: UserRecord = Depends(require_permission("channel:write")),
+    actor_token_id: str | None = Depends(get_actor_token_id),
+) -> ChannelTagsReplaceResponse:
+    payload = replace_channel_tags(
+        channel_id=channel_id,
+        base_revision=body.base_revision,
+        tag_ids=list(body.tag_ids),
+        names=list(body.names),
+        actor_user_id=user.id,
+        actor_token_id=actor_token_id,
+    )
+    return ChannelTagsReplaceResponse.model_validate(payload)
 
 
 @router.patch("/channels/{channel_id}", response_model=ChannelResponse)

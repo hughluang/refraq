@@ -74,6 +74,7 @@ import {
   type DraftValidation,
 } from "@/features/channels/api";
 import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
+import { ChannelTagsControl } from "@/features/channels/ChannelTagsControl";
 import { isTerminalRun, recordedKey } from "@/features/channels/runSession";
 import type { ChannelTemplatePreview } from "@/features/channels/TemplateRunPreview";
 import { ChannelRuns } from "@/features/channels/ChannelRuns";
@@ -93,10 +94,17 @@ import { useLiveStatus } from "@/hooks/useLiveStatus";
 import { ApiError } from "@/lib/api";
 import { problemMessage } from "@/lib/problem";
 
-import type { Channel, ChannelRunDetail, Confirmation, NodeTypeSpec } from "@/features/channels/types";
+import type {
+  Channel,
+  ChannelRunDetail,
+  ChannelTag,
+  Confirmation,
+  NodeTypeSpec,
+} from "@/features/channels/types";
 import { cancelJob } from "@/features/jobs/api";
 
 const FORM_ID = "channel-record-form";
+const EMPTY_TAGS: ChannelTag[] = [];
 const NAME_MAX = 200;
 const DESCRIPTION_MAX = 2000;
 
@@ -146,10 +154,18 @@ export function ChannelRecord(props: Props) {
 function ChannelCreate() {
   const t = useTranslate();
   const { open } = useNotification();
+  const { data: canWrite } = useCan({
+    resource: ModuleId.channels,
+    action: ModuleAction.edit,
+  });
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const form = useConsoleForm({
     initialValues: { name: "", description: "" },
     onValuesChange: () => setSaveFailure(null),
+  });
+  const [tagDraft, setTagDraft] = useState<{ tag_ids: string[]; names: string[] }>({
+    tag_ids: [],
+    names: [],
   });
 
   return (
@@ -185,6 +201,7 @@ function ChannelCreate() {
             const created = await createChannel({
               name: values.name.trim(),
               description: description ? description : null,
+              tags: tagDraft,
             });
             form.markSaved();
             suppressLeaveGuard();
@@ -205,6 +222,13 @@ function ChannelCreate() {
         <Stack gap="sm">
           <FormErrorSummary failure={saveFailure} />
           <IdentityFields form={form} editable />
+          <ChannelTagsControl
+            mode="create"
+            tags={EMPTY_TAGS}
+            tagRevision={1}
+            editable={Boolean(canWrite?.can)}
+            onDraftChange={setTagDraft}
+          />
         </Stack>
       </form>
     </PageChrome>
@@ -967,6 +991,20 @@ function ChannelExisting({
             }
           },
         )}
+      />
+      <ChannelTagsControl
+        mode={mode}
+        channelId={channelId}
+        tags={channel.tags}
+        tagRevision={channel.tag_revision}
+        editable={Boolean(canWrite?.can)}
+        onSaved={(next) => {
+          setChannel((current) =>
+            current
+              ? { ...current, tags: next.tags, tag_revision: next.tag_revision }
+              : current,
+          );
+        }}
       />
       <FillColumn>
         <FormErrorSummary failure={saveFailure} />

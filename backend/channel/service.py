@@ -36,6 +36,7 @@ from backend.channel.store import (
 from backend.channel.run_store import get_run_store
 from backend.core.time import format_instant, utc_now
 from backend.jobs.store import get_job_store
+from backend.tags.api import KIND_CHANNEL, clear_assignment, replace_assignment
 from backend.worker.api import withdraw_schedules_by_owner_ref
 
 __all__ = [
@@ -49,6 +50,7 @@ __all__ = [
     "list_versions",
     "patch_channel",
     "preview_publish",
+    "replace_channel_tags",
     "set_channel_active",
     "publish_channel",
     "save_draft",
@@ -62,6 +64,8 @@ def create_channel(
     description: str | None,
     actor_user_id: str,
     actor_token_id: str | None,
+    tag_ids: list[str] | None = None,
+    names: list[str] | None = None,
 ) -> ChannelRecord:
     now = utc_now()
     record = ChannelRecord(
@@ -75,7 +79,22 @@ def create_channel(
         created_at=now,
         updated_at=now,
     )
-    saved = get_channel_store().create(record)
+    requested_tag_ids = list(tag_ids or [])
+    requested_names = list(names or [])
+
+    def _bind(session: Any) -> None:
+        replace_assignment(
+            kind=KIND_CHANNEL,
+            subject_id=record.id,
+            base_revision=1,
+            tag_ids=requested_tag_ids,
+            names=requested_names,
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+            session=session,
+        )
+
+    saved = get_channel_store().create(record, after=_bind)
     _audit(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,
@@ -107,6 +126,36 @@ def get_channel(
     record = _require(channel_id)
     latest = get_channel_store().latest_versions([channel_id]).get(channel_id)
     return record, latest
+
+
+def replace_channel_tags(
+    *,
+    channel_id: str,
+    base_revision: int,
+    tag_ids: list[str],
+    names: list[str],
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+) -> dict[str, Any]:
+    """Replace Tags on one Channel. Does not write the Channel or its draft."""
+
+    with get_channel_store().lock_channel(channel_id) as (session, record):
+        if record is None:
+            raise ChannelNotFound()
+        assignment = replace_assignment(
+            kind=KIND_CHANNEL,
+            subject_id=record.id,
+            base_revision=base_revision,
+            tag_ids=tag_ids,
+            names=names,
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+            session=session,
+        )
+    return {
+        "tags": [{"id": tag.id, "name": tag.name} for tag in assignment.tags],
+        "tag_revision": assignment.tag_revision,
+    }
 
 
 def patch_channel(
@@ -176,7 +225,11 @@ def delete_channel(
         raise ChannelNotFound()
     withdraw_schedules_by_owner_ref(owner_ref_for(channel_id))
     cancel_channel_jobs(channel_id)
-    if not get_channel_store().delete(channel_id):
+
+    def _clear(session: Any) -> None:
+        clear_assignment(kind=KIND_CHANNEL, subject_id=channel_id, session=session)
+
+    if not get_channel_store().delete(channel_id, after=_clear):
         raise ChannelNotFound()
     _audit(
         actor_user_id=actor_user_id,
