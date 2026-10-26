@@ -42,6 +42,7 @@ function querySuffix(
 export function listEntities(params?: {
   q?: string;
   status?: readonly EntityStatus[];
+  tag_id?: readonly string[];
   limit?: number;
   offset?: number;
   signal?: AbortSignal;

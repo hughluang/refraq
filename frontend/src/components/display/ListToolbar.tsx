@@ -2,7 +2,7 @@
 
 import { Button, Group, MultiSelect, Select, TextInput } from "@mantine/core";
 import { useTranslate } from "@refinedev/core";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import {
   isChannelCanvasTarget,
@@ -21,12 +21,15 @@ export type ListToolbarProps = {
   query: ListQuery;
   searchPlaceholder?: string;
   filters?: readonly ListToolbarField[];
+  /** Extra filter control, rendered before Clear. */
+  extra?: ReactNode;
 };
 
 export function ListToolbar({
   query,
   searchPlaceholder,
   filters = [],
+  extra = null,
 }: ListToolbarProps) {
   const t = useTranslate();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -146,6 +149,7 @@ export function ListToolbar({
           />
         );
       })}
+      {extra}
       {query.isFiltered ? (
         <Button type="button" variant="subtle" size="xs" onClick={query.clear}>
           {t("common.filters.clear")}

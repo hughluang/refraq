@@ -1,6 +1,6 @@
 "use client";
 
-import { Table, Text } from "@mantine/core";
+import { Badge, Group, Table, Text } from "@mantine/core";
 import { useCan, useTranslate } from "@refinedev/core";
 import { useCallback, useMemo } from "react";
 
@@ -10,14 +10,14 @@ import { ListToolbar } from "@/components/display/ListToolbar";
 import { RecordReference } from "@/components/display/RecordReference";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
+import { EntityListTagFilter } from "@/features/entities/EntityListTagFilter";
 import { EntityRowActions } from "@/features/entities/EntityRowActions";
 import { EntityStatusBadge } from "@/features/entities/EntityStatusBadge";
 import { PublishStatusBadge } from "@/features/entities/PublishStatusBadge";
 import { listEntities } from "@/features/entities/api";
 import {
   DEFAULT_ENTITY_LIST_STATUSES,
-  entityListShouldFetch,
-  entityListStatuses,
+  entityListRequest,
 } from "@/features/entities/entityListFilter";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useShowInstant } from "@/hooks/useFormatInstant";
@@ -25,6 +25,7 @@ import { useListQuery } from "@/hooks/useListQuery";
 import type { PageQuery } from "@/lib/pagination";
 
 const PAGE_SIZE = 50;
+const NO_TAG_IDS: readonly string[] = [];
 
 export function EntityList() {
   const t = useTranslate();
@@ -40,17 +41,26 @@ export function EntityList() {
         type: "multi",
         defaultValue: DEFAULT_ENTITY_LIST_STATUSES,
       },
+      {
+        key: "tag_id",
+        type: "multi",
+        defaultValue: NO_TAG_IDS,
+      },
     ],
   });
   const statusQuery = query.multi("status");
-  const statuses = useMemo(
-    () => entityListStatuses(statusQuery),
-    [statusQuery],
-  );
+  const tagIds = query.multi("tag_id");
 
   const fetchPage = useCallback(
     (pageQuery: PageQuery) => {
-      if (!entityListShouldFetch(statuses)) {
+      const request = entityListRequest({
+        q: query.search,
+        statuses: statusQuery,
+        tagIds,
+        limit: pageQuery.limit,
+        offset: pageQuery.offset,
+      });
+      if (request === null) {
         return {
           items: [],
           total: 0,
@@ -58,24 +68,27 @@ export function EntityList() {
           offset: pageQuery.offset,
         };
       }
-      return listEntities({
-        q: query.search || undefined,
-        status: statuses,
-        ...pageQuery,
-      });
+      return listEntities(request);
     },
-    [query.search, statuses],
+    [query.search, statusQuery, tagIds],
   );
 
   const list = useConsolePagedList({
     pageSize: PAGE_SIZE,
     fetch: fetchPage,
-    resetDeps: [query.search, statuses],
+    resetDeps: [query.search, statusQuery, tagIds],
     filtered: query.isFiltered,
     page: query.page,
     onPageChange: query.setPage,
   });
   const { items } = list;
+  const knownTags = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const row of items) {
+      for (const tag of row.tags) names.set(tag.id, tag.name);
+    }
+    return names;
+  }, [items]);
 
   return (
     <PageChrome
@@ -104,12 +117,19 @@ export function EntityList() {
               ],
             },
           ]}
+          extra={
+            <EntityListTagFilter
+              value={tagIds}
+              onChange={(ids) => query.setFilter("tag_id", ids)}
+              known={knownTags}
+            />
+          }
         />
       }
     >
       <ListTable
         list={list}
-        columnCount={6}
+        columnCount={7}
         emptyMessage={t("entities.list.empty")}
         emptyAction={
           <CreateListAction
@@ -124,6 +144,7 @@ export function EntityList() {
         head={
           <Table.Tr>
             <Table.Th>{t("entities.fields.name")}</Table.Th>
+            <Table.Th>{t("entities.fields.tags")}</Table.Th>
             <Table.Th>{t("entities.fields.version")}</Table.Th>
             <Table.Th>{t("entities.fields.entityStatus")}</Table.Th>
             <Table.Th>{t("entities.fields.versionStatus")}</Table.Th>
@@ -142,6 +163,19 @@ export function EntityList() {
                   recordKey={row.table_name}
                   href={`/console/entities/${row.id}`}
                 />
+              </Table.Td>
+              <Table.Td>
+                {row.tags.length === 0 ? (
+                  "—"
+                ) : (
+                  <Group gap={4} wrap="wrap">
+                    {row.tags.map((tag) => (
+                      <Badge key={tag.id} size="sm" variant="light" color="gray">
+                        {tag.name}
+                      </Badge>
+                    ))}
+                  </Group>
+                )}
               </Table.Td>
               <Table.Td>{current ? current.version : "—"}</Table.Td>
               <Table.Td>

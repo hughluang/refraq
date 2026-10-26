@@ -2040,5 +2040,8 @@
   "entities.actions.alreadyPublished": "已发布的实体不能删除。",
   "channels.delete.consequence": "数据通道及其草稿会被删除。",
   "channels.delete.outcome": "已删除",
-  "identityProviders.enable.outcome": "已启用"
+  "identityProviders.enable.outcome": "已启用",
+  "entities.fields.tags": "标签",
+  "entities.list.tagFilter": "标签",
+  "entities.list.tagNone": "没有匹配的标签"
 }

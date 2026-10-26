@@ -116,6 +116,8 @@ Assignment is allowed while the current version is `unpublished`, `publishing`, 
 
 Deleting a never-published Entity removes its assignments in that same successful delete. A refused delete leaves them. An inline name on create or replace requires `entity:write` and does not require `tag:write`. A name that folds onto an existing Tag attaches that Tag and does not change its stored display name.
 
+The Entity list shows each Entity's Tags. Repeatable `tag_id` keeps Entities that carry any of those Tags. That condition combines with the name query and the entity-status filter. Omitting `tag_id` applies no Tag condition. An id that is not a live Tag matches no Entity and does not fail the list; other ids in the same request still match. The condition is applied with the name query and the entity-status filter, before paging. `total` counts that set. A caller who does not see every definition still sees only the visible Entities of that set.
+
 ## 3. Entity Version, Save, And Publish
 
 ### 3.1 A Version Is One Published Shape
@@ -247,7 +249,7 @@ Entity status is derived, not stored. It is **Deprecated** when `deprecated_at` 
 
 The list shows entity status and the current version's publish status. The page title shows entity status. Each version row shows that version's publish status, attribute count, created time, and latest publish Job, including after the Entity is deprecated. While the Entity is not deprecated, the row for the metadata head — the latest published version that still has a table — is marked in use. A row action opens a read-only view of that version's saved attributes. The overview shows the current version's publish Job and does not repeat a version status.
 
-The Console list filters by entity status. The control opens on **Not in service** and **In service** and sends that selection as `status`. The list API applies an entity-status predicate only when `status` is present.
+The Console list filters by entity status. The control opens on **Not in service** and **In service** and sends that selection as `status`. The list API applies an entity-status predicate only when `status` is present. The same list shows each row's Tags and filters by Tag. The control searches the Tag vocabulary as the operator types and does not create a Tag. Each selected id is sent as `tag_id`. Choosing no Tag omits that parameter. The opening request stays **Not in service** and **In service**, with no Tag id. An operator who can read Entities can search and select Tags without `tag:read`.
 
 The Dictionary list shows status: **Available** when `deprecated_at` is null, otherwise **Deprecated**. The list filters by that status. The control opens on **Available** and sends that selection as `status`. The list API applies a dictionary-status predicate only when `status` is present.
 

@@ -277,9 +277,11 @@ Every read endpoint in §4 and §5 applies definition visibility (`docs/api-cont
 
 ### 4.1 `GET /entities`
 
-**Offset Page** (`created_at DESC`, `id DESC`). Query params: `q` (literal substring of `table_name` or `name`), `status` (repeatable), `limit` (default **50**, max **200**), `offset` (default **0**).
+**Offset Page** (`created_at DESC`, `id DESC`). Query params: `q` (literal substring of `table_name` or `name`), `status` (repeatable), `tag_id` (repeatable), `limit` (default **50**, max **200**), `offset` (default **0**).
 
 `status` is `not_serving`, `serving`, or `deprecated`. Omit it to apply no entity-status predicate, so deprecated entities stay in the page. Repeat it to keep entities whose derived entity status is any listed value. Derived status is **deprecated** when `deprecated_at` is set; otherwise **serving** when any version is `published`; otherwise **not_serving**. All three values match the omitted predicate. Duplicate values are one value. Any other value is `422 REQUEST_INVALID`. When `q` is also present, an entity must match both.
+
+Repeat `tag_id` to keep entities that carry any listed Tag. The condition combines with `q` and `status`: an entity must match every condition that is present. Omit `tag_id` to apply no Tag predicate. An id that is not a live Tag matches no entity and does not fail the list; other ids in the same query still match. The predicate is applied with `q` and `status` before paging. `total` counts that filtered set. Definition visibility still limits the set to Entities the caller can see, and `total` then counts that visible set.
 
 Response: `{ "items": […], "total": N, "limit": L, "offset": O }`. Items use the Business Entity shape.
 

@@ -44,6 +44,7 @@ class EntityStore(Protocol):
         *,
         q: str | None,
         statuses: frozenset[EntityListStatus] | None,
+        subject_ids: frozenset[str] | None,
         limit: int,
         offset: int,
     ) -> tuple[list[BusinessEntityRecord], int]: ...
@@ -106,6 +107,7 @@ class MemoryEntityStore:
         *,
         q: str | None,
         statuses: frozenset[EntityListStatus] | None,
+        subject_ids: frozenset[str] | None = None,
         limit: int,
         offset: int,
     ) -> tuple[list[BusinessEntityRecord], int]:
@@ -128,6 +130,8 @@ class MemoryEntityStore:
                 for item in items
                 if entity_list_status(item, by_entity.get(item.id, [])) in statuses
             ]
+        if subject_ids is not None:
+            items = [item for item in items if item.id in subject_ids]
         items.sort(key=lambda item: (item.created_at, item.id), reverse=True)
         total = len(items)
         return items[offset : offset + limit], total
@@ -304,6 +308,7 @@ class SqlEntityStore:
         *,
         q: str | None,
         statuses: frozenset[EntityListStatus] | None,
+        subject_ids: frozenset[str] | None = None,
         limit: int,
         offset: int,
     ) -> tuple[list[BusinessEntityRecord], int]:
@@ -322,6 +327,14 @@ class SqlEntityStore:
                 status_filt = _entity_status_filter(statuses)
                 stmt = stmt.where(status_filt)
                 count_stmt = count_stmt.where(status_filt)
+            if subject_ids is not None:
+                id_filt = (
+                    false()
+                    if not subject_ids
+                    else BusinessEntityRow.id.in_(subject_ids)
+                )
+                stmt = stmt.where(id_filt)
+                count_stmt = count_stmt.where(id_filt)
             total = int(session.execute(count_stmt).scalar_one())
             rows = (
                 session.execute(

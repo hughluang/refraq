@@ -86,11 +86,17 @@ def http_list_entities(
     status: list[Literal["not_serving", "serving", "deprecated"]] | None = Query(
         default=None
     ),
+    tag_id: list[str] | None = Query(default=None),
     page: PageParams = Depends(page_params(ENTITY_LIST)),
     user: UserRecord = Depends(require_permission("entity:read")),
 ) -> BusinessEntityListResponse:
     items, total = list_entities(
-        q=q, statuses=status, limit=page.limit, offset=page.offset, user=user
+        q=q,
+        statuses=status,
+        tag_ids=tag_id,
+        limit=page.limit,
+        offset=page.offset,
+        user=user,
     )
     return BusinessEntityListResponse(
         items=[BusinessEntityOut.model_validate(item) for item in items],

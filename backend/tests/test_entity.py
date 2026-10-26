@@ -692,6 +692,234 @@ def test_list_entities_filters_by_status(client: TestClient) -> None:
     assert invalid.json()["code"] == "REQUEST_INVALID"
 
 
+def _assign_tags(client: TestClient, entity: dict, tag_ids: list[str]) -> None:
+    replaced = client.put(
+        f"/entities/{entity['id']}/tags",
+        json={
+            "base_revision": entity["tag_revision"],
+            "tag_ids": tag_ids,
+            "names": [],
+        },
+    )
+    assert replaced.status_code == 200, replaced.text
+
+
+def _listed(response):
+    assert response.status_code == 200, response.text
+    body = response.json()
+    return {item["id"] for item in body["items"]}, body["total"], body
+
+
+def test_list_entities_filters_by_any_selected_tag(client: TestClient) -> None:
+    ledger = client.post("/tags", json={"name": "Ledger"}).json()["tag"]["id"]
+    tax = client.post("/tags", json={"name": "Tax"}).json()["tag"]["id"]
+
+    def create(table_name: str, name: str) -> dict:
+        created = client.post(
+            "/entities", json=_create_body(table_name=table_name, name=name)
+        )
+        assert created.status_code == 201, created.text
+        return created.json()["entity"]
+
+    alpha = create("alpha_row", "Alpha")
+    beta = create("beta_row", "Beta")
+    both = create("both_row", "Both")
+    plain = create("plain_row", "Plain")
+    _assign_tags(client, alpha, [ledger])
+    _assign_tags(client, beta, [tax])
+    _assign_tags(client, both, [ledger, tax])
+
+    everything, total, body = _listed(client.get("/entities"))
+    assert total == 4
+    assert everything == {alpha["id"], beta["id"], both["id"], plain["id"]}
+    tags_by_id = {item["id"]: item["tags"] for item in body["items"]}
+    assert tags_by_id[alpha["id"]] == [{"id": ledger, "name": "Ledger"}]
+    assert tags_by_id[plain["id"]] == []
+
+    one, one_total, _ = _listed(client.get("/entities", params=[("tag_id", ledger)]))
+    assert one_total == 2
+    assert one == {alpha["id"], both["id"]}
+
+    either, either_total, _ = _listed(
+        client.get("/entities", params=[("tag_id", ledger), ("tag_id", tax)])
+    )
+    assert either_total == 3
+    assert either == {alpha["id"], beta["id"], both["id"]}
+
+    named, named_total, _ = _listed(
+        client.get(
+            "/entities",
+            params=[("q", "Alpha"), ("status", "not_serving"), ("tag_id", ledger)],
+        )
+    )
+    assert named_total == 1
+    assert named == {alpha["id"]}
+
+    missed, missed_total, _ = _listed(
+        client.get(
+            "/entities",
+            params=[("q", "Alpha"), ("status", "deprecated"), ("tag_id", ledger)],
+        )
+    )
+    assert missed_total == 0
+    assert missed == set()
+
+
+def test_list_entities_unknown_tag_matches_no_row(client: TestClient) -> None:
+    kept = client.post("/tags", json={"name": "Kept"}).json()["tag"]["id"]
+    gone = client.post("/tags", json={"name": "Gone"})
+    assert gone.status_code == 201, gone.text
+    gone_id = gone.json()["tag"]["id"]
+    assert client.delete(f"/tags/{gone_id}").status_code == 204
+
+    created = client.post("/entities", json=_create_body(table_name="kept_row", name="Kept row"))
+    assert created.status_code == 201, created.text
+    entity = created.json()["entity"]
+    _assign_tags(client, entity, [kept])
+
+    missing, missing_total, _ = _listed(
+        client.get("/entities", params=[("tag_id", "tag_not_live")])
+    )
+    assert missing_total == 0
+    assert missing == set()
+
+    deleted, deleted_total, _ = _listed(
+        client.get("/entities", params=[("tag_id", gone_id)])
+    )
+    assert deleted_total == 0
+    assert deleted == set()
+
+    mixed, mixed_total, _ = _listed(
+        client.get(
+            "/entities",
+            params=[("tag_id", "tag_not_live"), ("tag_id", gone_id), ("tag_id", kept)],
+        )
+    )
+    assert mixed_total == 1
+    assert mixed == {entity["id"]}
+
+
+def test_list_entities_tag_page_matches_the_filtered_total(client: TestClient) -> None:
+    mark = client.post("/tags", json={"name": "PageMark"}).json()["tag"]["id"]
+    tagged = []
+    for index in range(3):
+        created = client.post(
+            "/entities",
+            json=_create_body(table_name=f"page_tag_{index}", name=f"Tagged {index}"),
+        )
+        assert created.status_code == 201, created.text
+        entity = created.json()["entity"]
+        _assign_tags(client, entity, [mark])
+        tagged.append(entity["id"])
+    for index in range(2):
+        extra = client.post(
+            "/entities",
+            json=_create_body(table_name=f"page_plain_{index}", name=f"Plain {index}"),
+        )
+        assert extra.status_code == 201, extra.text
+
+    seen: list[str] = []
+    for offset in (0, 1, 2):
+        _ids, total, body = _listed(
+            client.get(
+                "/entities",
+                params=[("tag_id", mark), ("limit", "1"), ("offset", str(offset))],
+            )
+        )
+        assert total == 3
+        assert body["limit"] == 1
+        assert body["offset"] == offset
+        assert len(body["items"]) == 1
+        seen.append(body["items"][0]["id"])
+    assert set(seen) == set(tagged)
+    assert len(set(seen)) == 3
+
+    beyond_ids, beyond_total, beyond = _listed(
+        client.get(
+            "/entities",
+            params=[("tag_id", mark), ("limit", "1"), ("offset", "3")],
+        )
+    )
+    assert beyond_total == 3
+    assert beyond["offset"] == 3
+    assert beyond_ids == set()
+    assert beyond["items"] == []
+
+
+def test_list_entities_tag_filter_stays_inside_visibility(client: TestClient) -> None:
+    from backend.tests.entity_access_oracle import seed_entity_entitlements
+
+    roles = get_role_store()
+    reader_role = create_role(
+        roles,
+        key="entity_tag_reader",
+        name="Entity tag reader",
+        permissions=["console:access", "entity:read", "entity:data_read"],
+    )
+    get_user_store().create_user(
+        account="tagreader",
+        display_name="Tag reader",
+        password_hash=hash_password("secret"),
+        role_id=reader_role.id,
+        status="active",
+    )
+    mark = client.post("/tags", json={"name": "VisibleMark"}).json()["tag"]["id"]
+
+    def create(table_name: str, name: str) -> dict:
+        created = client.post(
+            "/entities", json=_create_body(table_name=table_name, name=name)
+        )
+        assert created.status_code == 201, created.text
+        return created.json()["entity"]
+
+    def publish(entity: dict) -> None:
+        version_id = entity["current_version"]["id"]
+        published = client.post(f"/entities/{entity['id']}/versions/{version_id}/publish")
+        assert published.status_code == 201, published.text
+
+    shown = create("vis_shown", "Shown")
+    also = create("vis_also", "Also")
+    hidden = create("vis_hidden", "Hidden")
+    plain = create("vis_plain", "Plain")
+    for entity in (shown, also, hidden):
+        _assign_tags(client, entity, [mark])
+    for entity in (shown, also, hidden, plain):
+        publish(entity)
+    assert seed_entity_entitlements(shown["id"]) is True
+    assert seed_entity_entitlements(also["id"]) is True
+    assert seed_entity_entitlements(plain["id"]) is True
+
+    admin_ids, admin_total, _ = _listed(
+        client.get("/entities", params=[("tag_id", mark)])
+    )
+    assert admin_total == 3
+    assert admin_ids == {shown["id"], also["id"], hidden["id"]}
+
+    client.post("/auth/logout")
+    logged_in = client.post(
+        "/auth/login", json={"account": "tagreader", "password": "secret"}
+    )
+    assert logged_in.status_code == 200, logged_in.text
+
+    visible_ids, visible_total, _ = _listed(
+        client.get("/entities", params=[("tag_id", mark)])
+    )
+    assert visible_total == 2
+    assert visible_ids == {shown["id"], also["id"]}
+
+    page_ids, page_total, page = _listed(
+        client.get(
+            "/entities",
+            params=[("tag_id", mark), ("limit", "1"), ("offset", "1")],
+        )
+    )
+    assert page_total == 2
+    assert page["limit"] == 1
+    assert page["offset"] == 1
+    assert len(page_ids) == 1
+    assert page_ids <= {shown["id"], also["id"]}
+
+
 def test_unauthenticated_entities_are_401() -> None:
     with TestClient(app) as test_client:
         assert test_client.get("/entities").status_code == 401

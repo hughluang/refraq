@@ -2040,5 +2040,8 @@
   "entities.actions.alreadyPublished": "Published entities cannot be deleted.",
   "channels.delete.consequence": "The Data Channel and its draft are removed.",
   "channels.delete.outcome": "Deleted",
-  "identityProviders.enable.outcome": "Enabled"
+  "identityProviders.enable.outcome": "Enabled",
+  "entities.fields.tags": "Tags",
+  "entities.list.tagFilter": "Tags",
+  "entities.list.tagNone": "No matching tags"
 }

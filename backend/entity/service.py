@@ -57,6 +57,7 @@ from backend.entity.store import get_entity_store
 from backend.tags.api import (
     KIND_ENTITY,
     clear_assignment,
+    list_subject_ids,
     replace_assignment,
 )
 from backend.entity.table_name import physical_table_name, table_present
@@ -159,6 +160,14 @@ def _catalog_permissions(user: UserRecord) -> set[str]:
     return set(effective_permissions(role))
 
 
+def _tag_subject_ids(tag_ids: list[str] | None) -> frozenset[str] | None:
+    """None omits the Tag predicate. A present list matches subjects carrying any live id."""
+
+    if tag_ids is None:
+        return None
+    return frozenset(list_subject_ids(kind=KIND_ENTITY, tag_ids=tag_ids))
+
+
 def _sees_every_definition(user: UserRecord) -> bool:
     perms = _catalog_permissions(user)
     return "entity:write" in perms or "entity:access_manage" in perms
@@ -236,16 +245,19 @@ def list_entities(
     *,
     q: str | None,
     statuses: list[EntityListStatus] | None,
+    tag_ids: list[str] | None = None,
     limit: int,
     offset: int,
     user: UserRecord | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     store = get_entity_store()
+    subject_ids = _tag_subject_ids(tag_ids)
     full = user is None or _sees_every_definition(user)
     if full:
         records, total = store.list_entities(
             q=q,
             statuses=status_filter_selection(statuses),
+            subject_ids=subject_ids,
             limit=limit,
             offset=offset,
         )
@@ -253,6 +265,7 @@ def list_entities(
         records, _total = store.list_entities(
             q=q,
             statuses=status_filter_selection(statuses),
+            subject_ids=subject_ids,
             limit=1_000_000,
             offset=0,
         )
