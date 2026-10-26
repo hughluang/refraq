@@ -32,6 +32,20 @@ class ChannelNotFound(AppError):
     code = "CHANNEL_NOT_FOUND"
     http_status = 404
 
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        subjects: list[dict[str, str]] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.subjects = subjects
+
+    def extra_members(self) -> dict[str, Any]:
+        if self.subjects is None:
+            return {}
+        return {"subjects": self.subjects}
+
     def _default_message(self) -> str:
         return "Data Channel not found"
 

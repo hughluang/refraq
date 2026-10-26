@@ -56,6 +56,9 @@ from backend.entity.records import (
 from backend.entity.store import get_entity_store
 from backend.tags.api import (
     KIND_ENTITY,
+    BulkAssignment,
+    bulk_add_tags,
+    bulk_remove_tags,
     clear_assignment,
     list_subject_ids,
     replace_assignment,
@@ -82,6 +85,8 @@ __all__ = [
     "open_version",
     "patch_entity",
     "patch_version",
+    "add_entity_tags",
+    "remove_entity_tags",
     "replace_entity_tags",
     "require_entity",
     "require_version",
@@ -682,6 +687,109 @@ def replace_entity_tags(
     return {
         "tags": [{"id": tag.id, "name": tag.name} for tag in assignment.tags],
         "tag_revision": assignment.tag_revision,
+    }
+
+
+_BULK_SUBJECT_LIMIT = 200
+_BULK_TAG_LIMIT = 10
+
+
+def add_entity_tags(
+    *,
+    entity_ids: list[str],
+    tag_ids: list[str],
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+    user: UserRecord,
+) -> dict[str, Any]:
+    """Add Tags to many Entities. A failure writes nothing of the request."""
+
+    subjects, tags = _bulk_ids(entity_ids, tag_ids)
+    _require_entity_subjects(user, subjects)
+    return _bulk_payload(
+        bulk_add_tags(
+            kind=KIND_ENTITY,
+            subject_ids=subjects,
+            tag_ids=tags,
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+        )
+    )
+
+
+def remove_entity_tags(
+    *,
+    entity_ids: list[str],
+    tag_ids: list[str],
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+    user: UserRecord,
+) -> dict[str, Any]:
+    """Remove Tags from many Entities. A failure writes nothing of the request."""
+
+    subjects, tags = _bulk_ids(entity_ids, tag_ids)
+    _require_entity_subjects(user, subjects)
+    return _bulk_payload(
+        bulk_remove_tags(
+            kind=KIND_ENTITY,
+            subject_ids=subjects,
+            tag_ids=tags,
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+        )
+    )
+
+
+def _bulk_ids(subject_ids: list[str], tag_ids: list[str]) -> tuple[list[str], list[str]]:
+    subjects = _collapse_ids(subject_ids)
+    tags = _collapse_ids(tag_ids)
+    if (
+        not subjects
+        or len(subjects) > _BULK_SUBJECT_LIMIT
+        or not tags
+        or len(tags) > _BULK_TAG_LIMIT
+    ):
+        raise EntityRequestInvalid()
+    return subjects, tags
+
+
+def _collapse_ids(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _require_entity_subjects(user: UserRecord, entity_ids: list[str]) -> None:
+    missing: list[dict[str, str]] = []
+    deprecated: list[dict[str, str]] = []
+    for entity_id in entity_ids:
+        record = get_entity_store().get_entity(entity_id)
+        if record is None or not _definition(user, record.id)[0]:
+            missing.append({"kind": "entity", "id": entity_id})
+            continue
+        if is_deprecated(record):
+            deprecated.append({"kind": "entity", "id": entity_id})
+    if missing:
+        raise EntityNotFound(subjects=missing)
+    if deprecated:
+        raise EntityDeprecated(subjects=deprecated)
+
+
+def _bulk_payload(results: list[BulkAssignment]) -> dict[str, Any]:
+    return {
+        "subjects": [
+            {
+                "id": item.id,
+                "tags": [{"id": tag.id, "name": tag.name} for tag in item.tags],
+                "tag_revision": item.tag_revision,
+            }
+            for item in results
+        ]
     }
 
 

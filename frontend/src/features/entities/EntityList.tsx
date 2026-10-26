@@ -1,6 +1,6 @@
 "use client";
 
-import { Badge, Button, Group, Select, Table, Text, TextInput } from "@mantine/core";
+import { Badge, Button, Checkbox, Group, MultiSelect, Select, Table, Text, TextInput } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -9,13 +9,15 @@ import { CreateListAction } from "@/components/access/CreateListAction";
 import { ListTable } from "@/components/display/ListTable";
 import { ListToolbar } from "@/components/display/ListToolbar";
 import { RecordReference } from "@/components/display/RecordReference";
+import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { PageChrome } from "@/components/layout/PageChrome";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { EntityListTagFilter } from "@/features/entities/EntityListTagFilter";
 import { EntityRowActions } from "@/features/entities/EntityRowActions";
 import { EntityStatusBadge } from "@/features/entities/EntityStatusBadge";
 import { PublishStatusBadge } from "@/features/entities/PublishStatusBadge";
-import { listEntities } from "@/features/entities/api";
+import { addEntityTags, listEntities, removeEntityTags } from "@/features/entities/api";
+import { listTags } from "@/features/tags/api";
 import {
   DEFAULT_ENTITY_LIST_STATUSES,
   createEntitySavedFilter,
@@ -40,6 +42,72 @@ const PAGE_SIZE = 50;
 const NO_TAG_IDS: readonly string[] = [];
 
 type Gate = "reading" | "ready" | "failed";
+type BulkVerb = "add" | "remove";
+
+function ExistingTagPicker({
+  label,
+  emptyLabel,
+  value,
+  onChange,
+}: {
+  label: string;
+  emptyLabel: string;
+  value: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [matches, setMatches] = useState<{ id: string; name: string }[]>([]);
+  const [labels, setLabels] = useState<Map<string, string>>(() => new Map());
+
+  useEffect(() => {
+    const needle = search.trim();
+    if (needle === "") {
+      setMatches([]);
+      return;
+    }
+    let cancelled = false;
+    void listTags({ q: needle, limit: 8 })
+      .then((page) => {
+        if (cancelled) return;
+        const found = page.items.map((item) => ({ id: item.id, name: item.name }));
+        setMatches(found);
+        setLabels((current) => {
+          const next = new Map(current);
+          for (const tag of found) next.set(tag.id, tag.name);
+          return next;
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setMatches([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [search]);
+
+  const data = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const id of value) byId.set(id, labels.get(id) ?? id);
+    for (const tag of matches) byId.set(tag.id, tag.name);
+    return [...byId].map(([id, name]) => ({ value: id, label: name }));
+  }, [labels, matches, value]);
+
+  return (
+    <MultiSelect
+      aria-label={label}
+      placeholder={value.length === 0 ? label : undefined}
+      data={data}
+      value={value}
+      onChange={onChange}
+      searchValue={search}
+      onSearchChange={setSearch}
+      searchable
+      hidePickedOptions
+      filter={({ options }) => options}
+      nothingFoundMessage={search.trim() === "" ? undefined : emptyLabel}
+    />
+  );
+}
 
 export function EntityList() {
   const t = useTranslate();
@@ -49,6 +117,7 @@ export function EntityList() {
     resource: ModuleId.entities,
     action: ModuleAction.edit,
   });
+  const canEdit = Boolean(canWrite?.can);
   const searchParams = useSearchParams();
   const arrivedWithQuery = useRef(searchParams.toString() !== "").current;
   const [gate, setGate] = useState<Gate>(arrivedWithQuery ? "ready" : "reading");
@@ -84,6 +153,18 @@ export function EntityList() {
     () => entitySavedQuery({ q: query.search, statuses: statusQuery, tagIds }),
     [query.search, statusQuery, tagIds],
   );
+  const selectionScope = `${query.page}\0${query.search}\0${statusQuery.join("\0")}\0${tagIds.join("\0")}`;
+  const [checked, setChecked] = useState<ReadonlySet<string>>(() => new Set());
+  const [selectionScopeSeen, setSelectionScopeSeen] = useState(selectionScope);
+  const [bulk, setBulk] = useState<BulkVerb | null>(null);
+  const [bulkTagIds, setBulkTagIds] = useState<string[]>([]);
+  const [applying, setApplying] = useState(false);
+  if (selectionScopeSeen !== selectionScope) {
+    setSelectionScopeSeen(selectionScope);
+    setChecked(new Set());
+    setBulk(null);
+    setBulkTagIds([]);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -199,6 +280,39 @@ export function EntityList() {
     }
     return names;
   }, [items]);
+  const selectedIds = canEdit
+    ? items.flatMap((row) => (checked.has(row.id) ? [row.id] : []))
+    : [];
+  const allChecked = items.length > 0 && selectedIds.length === items.length;
+  const someChecked = selectedIds.length > 0;
+
+  function openBulk(verb: BulkVerb) {
+    setBulkTagIds([]);
+    setBulk(verb);
+  }
+
+  async function applyBulk() {
+    if (bulk === null || selectedIds.length === 0 || bulkTagIds.length === 0) return;
+    const verb = bulk;
+    const body = { entity_ids: selectedIds, tag_ids: bulkTagIds };
+    setApplying(true);
+    try {
+      if (verb === "add") await addEntityTags(body);
+      else await removeEntityTags(body);
+      setChecked(new Set());
+      setBulk(null);
+      setBulkTagIds([]);
+      open?.({
+        type: "success",
+        message: t(verb === "add" ? "entities.bulk.added" : "entities.bulk.removed"),
+      });
+      await list.reload();
+    } catch (error) {
+      report(error);
+    } finally {
+      setApplying(false);
+    }
+  }
   const matchedId =
     filters.find((item) => sameEntitySavedQuery(item.query, currentQuery))?.id ??
     null;
@@ -320,16 +434,41 @@ export function EntityList() {
         };
 
   return (
+    <>
     <PageChrome
       title={t("entities.title")}
       description={t("entities.description")}
       actions={
-        <CreateListAction
-          resource={ModuleId.entities}
-          href="/console/entities/new"
-        >
-          {t("entities.create")}
-        </CreateListAction>
+        <>
+          {canEdit ? (
+            <Group gap="xs">
+              <Button
+                type="button"
+                size="sm"
+                variant="default"
+                disabled={selectedIds.length === 0}
+                onClick={() => openBulk("add")}
+              >
+                {t("entities.bulk.add")}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="default"
+                disabled={selectedIds.length === 0}
+                onClick={() => openBulk("remove")}
+              >
+                {t("entities.bulk.remove")}
+              </Button>
+            </Group>
+          ) : null}
+          <CreateListAction
+            resource={ModuleId.entities}
+            href="/console/entities/new"
+          >
+            {t("entities.create")}
+          </CreateListAction>
+        </>
       }
       toolbar={
         gate === "ready" ? (
@@ -397,7 +536,7 @@ export function EntityList() {
     >
       <ListTable
         list={tableList}
-        columnCount={7}
+        columnCount={canEdit ? 8 : 7}
         emptyMessage={t("entities.list.empty")}
         emptyAction={
           <CreateListAction
@@ -411,6 +550,22 @@ export function EntityList() {
         onClearFilters={query.clear}
         head={
           <Table.Tr>
+            {canEdit ? (
+              <Table.Th w={40}>
+                <Checkbox
+                  aria-label={t("entities.bulk.selectPage")}
+                  checked={allChecked}
+                  indeterminate={someChecked && !allChecked}
+                  onChange={(event) => {
+                    setChecked(
+                      event.currentTarget.checked
+                        ? new Set(items.map((row) => row.id))
+                        : new Set(),
+                    );
+                  }}
+                />
+              </Table.Th>
+            ) : null}
             <Table.Th>{t("entities.fields.name")}</Table.Th>
             <Table.Th>{t("entities.fields.tags")}</Table.Th>
             <Table.Th>{t("entities.fields.version")}</Table.Th>
@@ -425,6 +580,23 @@ export function EntityList() {
           const current = row.current_version;
           return (
             <Table.Tr key={row.id}>
+              {canEdit ? (
+                <Table.Td>
+                  <Checkbox
+                    aria-label={t("entities.bulk.select", { name: row.name })}
+                    checked={checked.has(row.id)}
+                    onChange={(event) => {
+                      const on = event.currentTarget.checked;
+                      setChecked((current) => {
+                        const next = new Set(current);
+                        if (on) next.add(row.id);
+                        else next.delete(row.id);
+                        return next;
+                      });
+                    }}
+                  />
+                </Table.Td>
+              ) : null}
               <Table.Td>
                 <RecordReference
                   name={row.name}
@@ -473,5 +645,29 @@ export function EntityList() {
         })}
       </ListTable>
     </PageChrome>
+    <ConfirmActionModal
+      opened={bulk !== null}
+      onClose={() => {
+        if (applying) return;
+        setBulk(null);
+        setBulkTagIds([]);
+      }}
+      title={t(bulk === "remove" ? "entities.bulk.removeTitle" : "entities.bulk.addTitle")}
+      body={t(bulk === "remove" ? "entities.bulk.removeBody" : "entities.bulk.addBody")}
+      confirmLabel={t(
+        bulk === "remove" ? "entities.bulk.confirmRemove" : "entities.bulk.confirmAdd",
+      )}
+      confirmDisabled={bulkTagIds.length === 0 || selectedIds.length === 0}
+      loading={applying}
+      onConfirm={() => void applyBulk()}
+    >
+      <ExistingTagPicker
+        label={t("entities.bulk.tags")}
+        emptyLabel={t("entities.list.tagNone")}
+        value={bulkTagIds}
+        onChange={setBulkTagIds}
+      />
+    </ConfirmActionModal>
+    </>
   );
 }

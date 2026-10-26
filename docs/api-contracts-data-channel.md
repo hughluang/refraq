@@ -518,6 +518,8 @@ On `succeeded` only:
 | `GET` | `/channels/{id}` | `channel:read` | Get one channel |
 | `PATCH` | `/channels/{id}` | `channel:write` | Edit `name` and `description` |
 | `PUT` | `/channels/{id}/tags` | `channel:write` | Replace the channel's Tags |
+| `POST` | `/channels/tags/add` | `channel:write` | Add Tags to the named channels |
+| `POST` | `/channels/tags/remove` | `channel:write` | Remove Tags from the named channels |
 | `DELETE` | `/channels/{id}` | `channel:write` | Delete the channel |
 | `GET` | `/channels/{id}/draft` | `channel:read` | Read the draft graph |
 | `PUT` | `/channels/{id}/draft` | `channel:write` | Replace the draft graph |
@@ -588,6 +590,34 @@ Success `200`: `{ "tags": [{ "id", "name" }], "tag_revision": N }`. Tags are ord
 Error order: unknown channel `404 CHANNEL_NOT_FOUND`; stale revision `409 TAG_ASSIGNMENT_CONFLICT`; an unknown `tag_ids` entry `404 TAG_NOT_FOUND`; an invalid name `422 TAG_NAME_INVALID`; more than ten `422 TAG_LIMIT_EXCEEDED`. A folded name attaches the existing Tag and does not change its stored display name.
 
 The call is allowed while a draft run is queued or running, and while the channel is active or inactive. It does not change `draft_revision`, `draft_updated_at`, or the channel `updated_at`. A committed set change writes one audit event, resource type `channel`, action `tags.replace`, detail `{ "tag_ids": [ ... ] }` in response order. Each inline create also writes a Tag create event. An unchanged set writes neither.
+
+### 5.4b `POST /channels/tags/add` and `POST /channels/tags/remove`
+
+Purpose: add Tags to many channels, or remove Tags from them. Add only inserts. Remove only deletes. Neither replaces the set, takes `base_revision`, nor creates a Tag.
+
+- Permission: `channel:write`. A caller without it receives `403 AUTH_FORBIDDEN` before any id is resolved. `tag:write` is not required.
+
+```json
+{ "channel_ids": ["chn_01HZX"], "tag_ids": ["tag_01HZX"] }
+```
+
+`channel_ids` and `tag_ids` are required arrays. Duplicates collapse, keeping the first occurrence. After that collapse, zero ids, more than 200 subject ids, zero Tag ids, or more than 10 Tag ids is `422 REQUEST_INVALID` and writes nothing. Any other field is `422 REQUEST_INVALID`.
+
+The request is one transaction. Each subject's assignment is locked, and the add or remove applies to the set found under that lock.
+
+Error order after the shape check: any unknown channel is `404 CHANNEL_NOT_FOUND` and `subjects` is `[{ "kind": "channel", "id" }]` for each such id, in request order after collapse; else, on add, an unknown Tag id is `404 TAG_NOT_FOUND`; else `422 TAG_LIMIT_EXCEEDED` and `subjects` lists every channel whose resulting set would exceed ten. One response, one code. A failure writes nothing of that request and writes no audit event. A Tag the subject already holds counts once toward the cap.
+
+Remove ignores a Tag id the channel does not carry, including an id that is not a live Tag.
+
+Success `200`:
+
+```json
+{ "subjects": [ { "id": "chn_01HZX", "tags": [{ "id": "tag_01HZX", "name": "Ledger" }], "tag_revision": 2 } ] }
+```
+
+Every requested channel is present once, in request order after collapse, including a channel whose set did not change. Tags are ordered by comparison form, then id. `tag_revision` increases by 1 only when that channel's set changes.
+
+The call is allowed while a draft run is queued or running, and while the channel is active or inactive. It does not change `draft_revision`, `draft_updated_at`, or the channel `updated_at`. A subject whose set changed writes one audit event, resource type `channel`, action `tags.add` or `tags.remove`, detail `{ "tag_ids": [ ... ] }` in response order. A subject whose set did not change writes no event.
 
 ### 5.5 `DELETE /channels/{id}`
 
@@ -926,7 +956,7 @@ Query: `limit` (default 50, max 200), `offset` (default 0). Requires `channel:re
 
 | Code | HTTP | When |
 | --- | --- | --- |
-| `CHANNEL_NOT_FOUND` | 404 | No Data Channel for this id |
+| `CHANNEL_NOT_FOUND` | 404 | No Data Channel for this id. A bulk Tag add or remove lists every such id in `subjects` as `{ "kind": "channel", "id" }` |
 | `CHANNEL_VERSION_NOT_FOUND` | 404 | No version with this number on the channel |
 | `CHANNEL_DRAFT_CONFLICT` | 409 | `base_revision` or `draft_revision` is not the stored draft revision |
 | `CHANNEL_GRAPH_INVALID` | 422 | Publish or an on-demand run whose scope has a validation error; the body carries `problems` |

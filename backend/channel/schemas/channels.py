@@ -234,6 +234,23 @@ class ChannelTagsReplaceResponse(BaseModel):
     tag_revision: int
 
 
+class ChannelBulkTagsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    channel_ids: list[str]
+    tag_ids: list[str]
+
+
+class ChannelBulkSubjectOut(BaseModel):
+    id: str
+    tags: list[ChannelTagOut]
+    tag_revision: int
+
+
+class ChannelBulkTagsResponse(BaseModel):
+    subjects: list[ChannelBulkSubjectOut]
+
+
 class ChannelPatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

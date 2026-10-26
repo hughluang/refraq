@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TypeVar
 
 from sqlalchemy.orm import Session
 
@@ -29,9 +30,12 @@ __all__ = [
     "KIND_CHANNEL",
     "KIND_ENTITY",
     "TAG_LIMIT",
+    "BulkAssignment",
     "SubjectTag",
     "SubjectTags",
     "add_tags",
+    "bulk_add_tags",
+    "bulk_remove_tags",
     "clear_assignment",
     "count_subjects",
     "list_subject_ids",
@@ -61,11 +65,21 @@ class SubjectTags:
 
 
 @dataclass(frozen=True, slots=True)
+class BulkAssignment:
+    id: str
+    tags: tuple[SubjectTag, ...]
+    tag_revision: int
+
+
+@dataclass(frozen=True, slots=True)
 class _Audit:
     resource_type: str
     resource_id: str
     action: str
     detail: dict[str, object]
+
+
+_R = TypeVar("_R")
 
 
 def read_assignment(kind: str, subject_id: str) -> SubjectTags:
@@ -253,6 +267,118 @@ def remove_tags(
     return _commit(work, actor_user_id=actor_user_id, actor_token_id=actor_token_id, session=session)
 
 
+def bulk_add_tags(
+    *,
+    kind: str,
+    subject_ids: list[str],
+    tag_ids: list[str],
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+    session: Session | None = None,
+) -> list[BulkAssignment]:
+    """Insert Tag ids into each set. One unit of work. Does not create Tags."""
+
+    return _bulk_apply(
+        kind=kind,
+        subject_ids=subject_ids,
+        tag_ids=tag_ids,
+        adding=True,
+        actor_user_id=actor_user_id,
+        actor_token_id=actor_token_id,
+        session=session,
+    )
+
+
+def bulk_remove_tags(
+    *,
+    kind: str,
+    subject_ids: list[str],
+    tag_ids: list[str],
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+    session: Session | None = None,
+) -> list[BulkAssignment]:
+    """Drop named Tag ids. Ids a subject does not carry, including unknown ids, are ignored."""
+
+    return _bulk_apply(
+        kind=kind,
+        subject_ids=subject_ids,
+        tag_ids=tag_ids,
+        adding=False,
+        actor_user_id=actor_user_id,
+        actor_token_id=actor_token_id,
+        session=session,
+    )
+
+
+def _bulk_apply(
+    *,
+    kind: str,
+    subject_ids: list[str],
+    tag_ids: list[str],
+    adding: bool,
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+    session: Session | None,
+) -> list[BulkAssignment]:
+    _require_kind(kind)
+
+    def work(view: TagUnit) -> tuple[list[BulkAssignment], list[_Audit]]:
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for subject_id in subject_ids:
+            if subject_id in seen:
+                continue
+            seen.add(subject_id)
+            ordered.append(subject_id)
+        for subject_id in sorted(ordered):
+            view.lock_subject(kind, subject_id)
+        incoming = _lock_known_ids(view, tag_ids) if adding else set(tag_ids)
+        planned: list[tuple[str, set[str], set[str], int]] = []
+        exceeded: list[dict[str, str]] = []
+        for subject_id in ordered:
+            current_ids, revision = view.read_assignment(kind, subject_id)
+            resulting = (current_ids | incoming) if adding else (current_ids - incoming)
+            if len(resulting) > TAG_LIMIT:
+                exceeded.append({"kind": kind, "id": subject_id})
+            planned.append((subject_id, current_ids, resulting, revision))
+        if exceeded:
+            raise TagLimitExceeded(exceeded)
+        results: list[BulkAssignment] = []
+        events: list[_Audit] = []
+        action = "tags.add" if adding else "tags.remove"
+        for subject_id, current_ids, resulting, revision in planned:
+            if resulting == current_ids:
+                presented = _ordered(view, current_ids, revision)
+            else:
+                revision = revision + 1
+                view.write_assignment(kind, subject_id, resulting, revision)
+                presented = _ordered(view, resulting, revision)
+                events.append(
+                    _Audit(
+                        resource_type=kind,
+                        resource_id=subject_id,
+                        action=action,
+                        detail={"tag_ids": [tag.id for tag in presented.tags]},
+                    )
+                )
+            results.append(
+                BulkAssignment(
+                    id=subject_id,
+                    tags=presented.tags,
+                    tag_revision=presented.tag_revision,
+                )
+            )
+        return results, events
+
+    return _commit(
+        work,
+        actor_user_id=actor_user_id,
+        actor_token_id=actor_token_id,
+        session=session,
+    )
+
+
 def clear_assignment(
     *,
     kind: str,
@@ -271,12 +397,12 @@ def clear_assignment(
 
 
 def _commit(
-    work: Callable[[TagUnit], tuple[SubjectTags, list[_Audit]]],
+    work: Callable[[TagUnit], tuple[_R, list[_Audit]]],
     *,
     actor_user_id: str | None,
     actor_token_id: str | None,
     session: Session | None,
-) -> SubjectTags:
+) -> _R:
     presented, events = get_tag_store().run(work, session=session)
     _emit(
         events,

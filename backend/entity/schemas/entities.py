@@ -234,6 +234,23 @@ class EntityTagsReplaceResponse(BaseModel):
     tag_revision: int
 
 
+class EntityBulkTagsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entity_ids: list[str]
+    tag_ids: list[str]
+
+
+class EntityBulkSubjectOut(BaseModel):
+    id: str
+    tags: list[EntityTagOut]
+    tag_revision: int
+
+
+class EntityBulkTagsResponse(BaseModel):
+    subjects: list[EntityBulkSubjectOut]
+
+
 class EntityCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

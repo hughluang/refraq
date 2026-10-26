@@ -76,6 +76,28 @@ export function getChannel(id: string) {
   return apiClient<{ channel: Channel }>(`/channels/${id}`);
 }
 
+export function addChannelTags(body: { channel_ids: string[]; tag_ids: string[] }) {
+  return apiClient<{ subjects: { id: string; tags: ChannelTag[]; tag_revision: number }[] }>(
+    "/channels/tags/add",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export function removeChannelTags(body: { channel_ids: string[]; tag_ids: string[] }) {
+  return apiClient<{ subjects: { id: string; tags: ChannelTag[]; tag_revision: number }[] }>(
+    "/channels/tags/remove",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
 export function replaceChannelTags(
   id: string,
   body: { base_revision: number; tag_ids: string[]; names: string[] },

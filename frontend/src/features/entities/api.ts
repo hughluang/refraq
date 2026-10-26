@@ -75,6 +75,28 @@ export function patchEntity(id: string, body: EntityPatch) {
   });
 }
 
+export function addEntityTags(body: { entity_ids: string[]; tag_ids: string[] }) {
+  return apiClient<{ subjects: { id: string; tags: EntityTag[]; tag_revision: number }[] }>(
+    "/entities/tags/add",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export function removeEntityTags(body: { entity_ids: string[]; tag_ids: string[] }) {
+  return apiClient<{ subjects: { id: string; tags: EntityTag[]; tag_revision: number }[] }>(
+    "/entities/tags/remove",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
 export function replaceEntityTags(
   id: string,
   body: { base_revision: number; tag_ids: string[]; names: string[] },

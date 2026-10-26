@@ -262,6 +262,8 @@ Publish acceptance freezes the active codes and whether the Dictionary is alread
 | `POST` | `/entities` | `entity:write` | Create a Business Entity and unpublished version `1` |
 | `GET` | `/entities/{id}` | `entity:read` | Get one Business Entity |
 | `PATCH` | `/entities/{id}` | `entity:write` | Patch identity and, optionally, current unpublished attributes |
+| `POST` | `/entities/tags/add` | `entity:write` | Add Tags to the named Entities |
+| `POST` | `/entities/tags/remove` | `entity:write` | Remove Tags from the named Entities |
 | `DELETE` | `/entities/{id}` | `entity:write` | Delete a never-published Business Entity |
 | `POST` | `/entities/{id}/classify` | `entity:read` | Classify a proposed shape against the current version |
 | `POST` | `/entities/{id}/deprecate` | `entity:write` | Deprecate the Entity |
@@ -351,6 +353,34 @@ Success `200`: `{ "tags": [{ "id", "name" }], "tag_revision": N }`. Tags are ord
 Error order: unknown or invisible Entity `404 ENTITY_NOT_FOUND`; deprecated `422 ENTITY_DEPRECATED`; stale revision `409 TAG_ASSIGNMENT_CONFLICT`; an unknown `tag_ids` entry `404 TAG_NOT_FOUND`; an invalid name `422 TAG_NAME_INVALID`; more than ten `422 TAG_LIMIT_EXCEEDED`. A folded name attaches the existing Tag and does not change its stored display name.
 
 The call does not change the Entity or version `updated_at`. A committed set change writes one audit event, resource type `entity`, action `tags.replace`, detail `{ "tag_ids": [ ... ] }` in response order. Each inline create also writes a Tag create event. An unchanged set writes neither.
+
+### 4.4b `POST /entities/tags/add` and `POST /entities/tags/remove`
+
+Purpose: add Tags to many Entities, or remove Tags from them. Add only inserts. Remove only deletes. Neither replaces the set, takes `base_revision`, nor creates a Tag.
+
+- Permission: `entity:write`. A caller without it receives `403 AUTH_FORBIDDEN` before any id is resolved. `tag:write` is not required.
+
+```json
+{ "entity_ids": ["ent_01HZX"], "tag_ids": ["tag_01HZX"] }
+```
+
+`entity_ids` and `tag_ids` are required arrays. Duplicates collapse, keeping the first occurrence. After that collapse, zero ids, more than 200 subject ids, zero Tag ids, or more than 10 Tag ids is `422 REQUEST_INVALID` and writes nothing. Any other field is `422 REQUEST_INVALID`.
+
+The request is one transaction. Each subject's assignment is locked, and the add or remove applies to the set found under that lock.
+
+Error order after the shape check: any unknown or invisible Entity is `404 ENTITY_NOT_FOUND` and `subjects` is `[{ "kind": "entity", "id" }]` for each such id, in request order after collapse; else any deprecated Entity is `422 ENTITY_DEPRECATED` and `subjects` lists those ids the same way; else, on add, an unknown Tag id is `404 TAG_NOT_FOUND`; else `422 TAG_LIMIT_EXCEEDED` and `subjects` lists every Entity whose resulting set would exceed ten. One response, one code. A failure writes nothing of that request and writes no audit event. A Tag the subject already holds counts once toward the cap.
+
+Remove ignores a Tag id the Entity does not carry, including an id that is not a live Tag.
+
+Success `200`:
+
+```json
+{ "subjects": [ { "id": "ent_01HZX", "tags": [{ "id": "tag_01HZX", "name": "Ledger" }], "tag_revision": 2 } ] }
+```
+
+Every requested Entity is present once, in request order after collapse, including an Entity whose set did not change. Tags are ordered by comparison form, then id. `tag_revision` increases by 1 only when that Entity's set changes.
+
+The call does not change the Entity or version `updated_at`. A subject whose set changed writes one audit event, resource type `entity`, action `tags.add` or `tags.remove`, detail `{ "tag_ids": [ ... ] }` in response order. A subject whose set did not change writes no event.
 
 ### 4.5 `DELETE /entities/{id}`
 
@@ -557,7 +587,7 @@ Kernel codes (`REQUEST_INVALID`, `AUTH_UNAUTHENTICATED`, and the other codes in 
 
 | Problem Code | HTTP status | When |
 | --- | --- | --- |
-| `ENTITY_NOT_FOUND` | 404 | Unknown Business Entity id |
+| `ENTITY_NOT_FOUND` | 404 | Unknown or invisible Business Entity id. A bulk Tag add or remove lists every such id in `subjects` as `{ "kind": "entity", "id" }` |
 | `ENTITY_VERSION_NOT_FOUND` | 404 | Unknown version id, or the version is not under the given entity |
 | `ENTITY_TABLE_NAME_INVALID` | 422 | `table_name` charset, length, or reserved physical table name (stem, `__v`, digits, `__`, 16 lowercase hexadecimal digits) is outside the rule |
 | `ENTITY_TABLE_NAME_DUP` | 409 | `table_name` already registered |
@@ -571,7 +601,7 @@ Kernel codes (`REQUEST_INVALID`, `AUTH_UNAUTHENTICATED`, and the other codes in 
 | `ENTITY_NOT_PUBLISHED` | 422 | Open version while the current version is not `published` |
 | `ENTITY_PUBLISHING` | 422 | A write while any version is `publishing` |
 | `ENTITY_PUBLISH_EMPTY` | 422 | Publish with an empty attribute list |
-| `ENTITY_DEPRECATED` | 422 | A deprecated Business Entity is closed |
+| `ENTITY_DEPRECATED` | 422 | A deprecated Business Entity is closed. A bulk Tag add or remove lists every deprecated id in `subjects` as `{ "kind": "entity", "id" }` |
 | `ENTITY_NEVER_PUBLISHED` | 422 | Deprecate while the Entity has never been published |
 | `ENTITY_ALREADY_DEPRECATED` | 422 | Deprecate when already deprecated |
 | `ENTITY_ALREADY_PUBLISHED` | 409 | Delete after the Entity has been published, while no version is `publishing` |
@@ -593,7 +623,7 @@ Job-terminal codes (successful GET of a failed Job; not Problem Details on the e
 
 ## 8. Management Audit
 
-Persist a **Management Audit Event** for: Business Entity create, definition save, version open, publish enqueue, deprecate, definition delete, and table-drop enqueue; and for Dictionary create, update, and delete. Tag replacement is §4.4a. Opening a version, publishing, deprecating, and dropping a table do not change Tags or `tag_revision`. Each event records actor, Instant, resource, action, and result.
+Persist a **Management Audit Event** for: Business Entity create, definition save, version open, publish enqueue, deprecate, definition delete, and table-drop enqueue; and for Dictionary create, update, and delete. Tag replacement is §4.4a. Bulk add and remove are §4.4b. Opening a version, publishing, deprecating, and dropping a table do not change Tags or `tag_revision`. Each event records actor, Instant, resource, action, and result.
 
 ## 9. Non-Goals
 

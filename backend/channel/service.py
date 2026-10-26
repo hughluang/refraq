@@ -13,6 +13,7 @@ from backend.channel.errors import (
     ChannelDraftConflict,
     ChannelGraphInvalid,
     ChannelNotFound,
+    ChannelRequestInvalid,
     ChannelVersionNotFound,
 )
 from backend.channel.graph import validate
@@ -38,6 +39,9 @@ from backend.core.time import format_instant, utc_now
 from backend.jobs.store import get_job_store
 from backend.tags.api import (
     KIND_CHANNEL,
+    BulkAssignment,
+    bulk_add_tags,
+    bulk_remove_tags,
     clear_assignment,
     list_subject_ids,
     replace_assignment,
@@ -55,6 +59,8 @@ __all__ = [
     "list_versions",
     "patch_channel",
     "preview_publish",
+    "add_channel_tags",
+    "remove_channel_tags",
     "replace_channel_tags",
     "set_channel_active",
     "publish_channel",
@@ -173,6 +179,101 @@ def replace_channel_tags(
     return {
         "tags": [{"id": tag.id, "name": tag.name} for tag in assignment.tags],
         "tag_revision": assignment.tag_revision,
+    }
+
+
+_BULK_SUBJECT_LIMIT = 200
+_BULK_TAG_LIMIT = 10
+
+
+def add_channel_tags(
+    *,
+    channel_ids: list[str],
+    tag_ids: list[str],
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+) -> dict[str, Any]:
+    """Add Tags to many Channels. A failure writes nothing of the request."""
+
+    subjects, tags = _bulk_ids(channel_ids, tag_ids)
+    _require_channel_subjects(subjects)
+    return _bulk_payload(
+        bulk_add_tags(
+            kind=KIND_CHANNEL,
+            subject_ids=subjects,
+            tag_ids=tags,
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+        )
+    )
+
+
+def remove_channel_tags(
+    *,
+    channel_ids: list[str],
+    tag_ids: list[str],
+    actor_user_id: str | None,
+    actor_token_id: str | None,
+) -> dict[str, Any]:
+    """Remove Tags from many Channels. A failure writes nothing of the request."""
+
+    subjects, tags = _bulk_ids(channel_ids, tag_ids)
+    _require_channel_subjects(subjects)
+    return _bulk_payload(
+        bulk_remove_tags(
+            kind=KIND_CHANNEL,
+            subject_ids=subjects,
+            tag_ids=tags,
+            actor_user_id=actor_user_id,
+            actor_token_id=actor_token_id,
+        )
+    )
+
+
+def _bulk_ids(subject_ids: list[str], tag_ids: list[str]) -> tuple[list[str], list[str]]:
+    subjects = _collapse_ids(subject_ids)
+    tags = _collapse_ids(tag_ids)
+    if (
+        not subjects
+        or len(subjects) > _BULK_SUBJECT_LIMIT
+        or not tags
+        or len(tags) > _BULK_TAG_LIMIT
+    ):
+        raise ChannelRequestInvalid()
+    return subjects, tags
+
+
+def _collapse_ids(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _require_channel_subjects(channel_ids: list[str]) -> None:
+    missing = [
+        {"kind": "channel", "id": channel_id}
+        for channel_id in channel_ids
+        if get_channel_store().get(channel_id) is None
+    ]
+    if missing:
+        raise ChannelNotFound(subjects=missing)
+
+
+def _bulk_payload(results: list[BulkAssignment]) -> dict[str, Any]:
+    return {
+        "subjects": [
+            {
+                "id": item.id,
+                "tags": [{"id": tag.id, "name": tag.name} for tag in item.tags],
+                "tag_revision": item.tag_revision,
+            }
+            for item in results
+        ]
     }
 
 

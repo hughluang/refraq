@@ -20,6 +20,8 @@ from backend.entity.schemas.entities import (
     BusinessEntityOut,
     BusinessEntityResponse,
     ClassificationOut,
+    EntityBulkTagsRequest,
+    EntityBulkTagsResponse,
     EntityCreateRequest,
     EntityJobEnqueueResponse,
     EntityPatchRequest,
@@ -31,6 +33,7 @@ from backend.entity.schemas.entities import (
     ShapeWriteRequest,
 )
 from backend.entity.service import (
+    add_entity_tags,
     classify_entity,
     create_entity,
     delete_entity,
@@ -42,6 +45,7 @@ from backend.entity.service import (
     open_version,
     patch_entity,
     patch_version,
+    remove_entity_tags,
     replace_entity_tags,
 )
 from backend.jobs.api import get_schedule_name_store, present_jobs
@@ -162,6 +166,38 @@ def http_replace_entity_tags(
         user=user,
     )
     return EntityTagsReplaceResponse.model_validate(payload)
+
+
+@router.post("/entities/tags/add", response_model=EntityBulkTagsResponse)
+def http_add_entity_tags(
+    body: EntityBulkTagsRequest,
+    user: UserRecord = Depends(require_permission("entity:write")),
+    actor_token_id: str | None = Depends(get_actor_token_id),
+) -> EntityBulkTagsResponse:
+    payload = add_entity_tags(
+        entity_ids=list(body.entity_ids),
+        tag_ids=list(body.tag_ids),
+        actor_user_id=user.id,
+        actor_token_id=actor_token_id,
+        user=user,
+    )
+    return EntityBulkTagsResponse.model_validate(payload)
+
+
+@router.post("/entities/tags/remove", response_model=EntityBulkTagsResponse)
+def http_remove_entity_tags(
+    body: EntityBulkTagsRequest,
+    user: UserRecord = Depends(require_permission("entity:write")),
+    actor_token_id: str | None = Depends(get_actor_token_id),
+) -> EntityBulkTagsResponse:
+    payload = remove_entity_tags(
+        entity_ids=list(body.entity_ids),
+        tag_ids=list(body.tag_ids),
+        actor_user_id=user.id,
+        actor_token_id=actor_token_id,
+        user=user,
+    )
+    return EntityBulkTagsResponse.model_validate(payload)
 
 
 @router.patch("/entities/{entity_id}", response_model=BusinessEntityResponse)

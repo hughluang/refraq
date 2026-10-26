@@ -16,6 +16,8 @@ from backend.admin.user_store import UserRecord
 from backend.channel.nodes import list_node_types
 from backend.channel.nodes.spec import NodeType
 from backend.channel.schemas.channels import (
+    ChannelBulkTagsRequest,
+    ChannelBulkTagsResponse,
     ChannelCreateRequest,
     ChannelListResponse,
     ChannelOut,
@@ -47,6 +49,7 @@ from backend.channel.context import context_schema
 from backend.channel.graph import refine_ports
 from backend.channel.references import ChannelReferenceResolver
 from backend.channel.service import (
+    add_channel_tags,
     create_channel,
     delete_channel,
     display_names,
@@ -57,6 +60,7 @@ from backend.channel.service import (
     list_versions,
     patch_channel,
     preview_publish,
+    remove_channel_tags,
     replace_channel_tags,
     set_channel_active,
     publish_channel,
@@ -255,6 +259,36 @@ def http_replace_channel_tags(
         actor_token_id=actor_token_id,
     )
     return ChannelTagsReplaceResponse.model_validate(payload)
+
+
+@router.post("/channels/tags/add", response_model=ChannelBulkTagsResponse)
+def http_add_channel_tags(
+    body: ChannelBulkTagsRequest,
+    user: UserRecord = Depends(require_permission("channel:write")),
+    actor_token_id: str | None = Depends(get_actor_token_id),
+) -> ChannelBulkTagsResponse:
+    payload = add_channel_tags(
+        channel_ids=list(body.channel_ids),
+        tag_ids=list(body.tag_ids),
+        actor_user_id=user.id,
+        actor_token_id=actor_token_id,
+    )
+    return ChannelBulkTagsResponse.model_validate(payload)
+
+
+@router.post("/channels/tags/remove", response_model=ChannelBulkTagsResponse)
+def http_remove_channel_tags(
+    body: ChannelBulkTagsRequest,
+    user: UserRecord = Depends(require_permission("channel:write")),
+    actor_token_id: str | None = Depends(get_actor_token_id),
+) -> ChannelBulkTagsResponse:
+    payload = remove_channel_tags(
+        channel_ids=list(body.channel_ids),
+        tag_ids=list(body.tag_ids),
+        actor_user_id=user.id,
+        actor_token_id=actor_token_id,
+    )
+    return ChannelBulkTagsResponse.model_validate(payload)
 
 
 @router.patch("/channels/{channel_id}", response_model=ChannelResponse)

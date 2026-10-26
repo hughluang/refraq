@@ -1,7 +1,7 @@
 "use client";
 
-import { Badge, Button, Group, Select, Table, TextInput } from "@mantine/core";
-import { useNotification, useTranslate } from "@refinedev/core";
+import { Badge, Button, Checkbox, Group, MultiSelect, Select, Table, TextInput } from "@mantine/core";
+import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -11,8 +11,9 @@ import { presentChannelActive } from "@/components/display/statusTone";
 import { ListTable } from "@/components/display/ListTable";
 import { ListToolbar } from "@/components/display/ListToolbar";
 import { RecordReference } from "@/components/display/RecordReference";
+import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { PageChrome } from "@/components/layout/PageChrome";
-import { listChannels } from "@/features/channels/api";
+import { addChannelTags, listChannels, removeChannelTags } from "@/features/channels/api";
 import { ChannelListTagFilter } from "@/features/channels/ChannelListTagFilter";
 import {
   channelListRequest,
@@ -26,7 +27,8 @@ import {
   type ChannelSavedFilter,
   type ChannelSavedQuery,
 } from "@/features/channels/channelListFilter";
-import { ModuleId } from "@/features/console/module-identity";
+import { ModuleAction, ModuleId } from "@/features/console/module-identity";
+import { listTags } from "@/features/tags/api";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useListQuery } from "@/hooks/useListQuery";
@@ -38,6 +40,72 @@ const PAGE_SIZE = 50;
 const NO_TAG_IDS: readonly string[] = [];
 
 type Gate = "reading" | "ready" | "failed";
+type BulkVerb = "add" | "remove";
+
+function ExistingTagPicker({
+  label,
+  emptyLabel,
+  value,
+  onChange,
+}: {
+  label: string;
+  emptyLabel: string;
+  value: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [matches, setMatches] = useState<{ id: string; name: string }[]>([]);
+  const [labels, setLabels] = useState<Map<string, string>>(() => new Map());
+
+  useEffect(() => {
+    const needle = search.trim();
+    if (needle === "") {
+      setMatches([]);
+      return;
+    }
+    let cancelled = false;
+    void listTags({ q: needle, limit: 8 })
+      .then((page) => {
+        if (cancelled) return;
+        const found = page.items.map((item) => ({ id: item.id, name: item.name }));
+        setMatches(found);
+        setLabels((current) => {
+          const next = new Map(current);
+          for (const tag of found) next.set(tag.id, tag.name);
+          return next;
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setMatches([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [search]);
+
+  const data = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const id of value) byId.set(id, labels.get(id) ?? id);
+    for (const tag of matches) byId.set(tag.id, tag.name);
+    return [...byId].map(([id, name]) => ({ value: id, label: name }));
+  }, [labels, matches, value]);
+
+  return (
+    <MultiSelect
+      aria-label={label}
+      placeholder={value.length === 0 ? label : undefined}
+      data={data}
+      value={value}
+      onChange={onChange}
+      searchValue={search}
+      onSearchChange={setSearch}
+      searchable
+      hidePickedOptions
+      filter={({ options }) => options}
+      nothingFoundMessage={search.trim() === "" ? undefined : emptyLabel}
+    />
+  );
+}
 
 function activeValue(active: boolean | null): string {
   if (active === true) return "true";
@@ -49,6 +117,11 @@ export function ChannelList() {
   const t = useTranslate();
   const { open } = useNotification();
   const showInstant = useShowInstant();
+  const { data: canWrite } = useCan({
+    resource: ModuleId.channels,
+    action: ModuleAction.edit,
+  });
+  const canEdit = Boolean(canWrite?.can);
   const searchParams = useSearchParams();
   const arrivedWithQuery = useRef(searchParams.toString() !== "").current;
   const [gate, setGate] = useState<Gate>(arrivedWithQuery ? "ready" : "reading");
@@ -76,6 +149,18 @@ export function ChannelList() {
     () => channelSavedQuery({ q: query.search, active, tagIds }),
     [active, query.search, tagIds],
   );
+  const selectionScope = `${query.page}\0${query.search}\0${active}\0${tagIds.join("\0")}`;
+  const [checked, setChecked] = useState<ReadonlySet<string>>(() => new Set());
+  const [selectionScopeSeen, setSelectionScopeSeen] = useState(selectionScope);
+  const [bulk, setBulk] = useState<BulkVerb | null>(null);
+  const [bulkTagIds, setBulkTagIds] = useState<string[]>([]);
+  const [applying, setApplying] = useState(false);
+  if (selectionScopeSeen !== selectionScope) {
+    setSelectionScopeSeen(selectionScope);
+    setChecked(new Set());
+    setBulk(null);
+    setBulkTagIds([]);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -182,6 +267,39 @@ export function ChannelList() {
     }
     return names;
   }, [items]);
+  const selectedIds = canEdit
+    ? items.flatMap((row) => (checked.has(row.id) ? [row.id] : []))
+    : [];
+  const allChecked = items.length > 0 && selectedIds.length === items.length;
+  const someChecked = selectedIds.length > 0;
+
+  function openBulk(verb: BulkVerb) {
+    setBulkTagIds([]);
+    setBulk(verb);
+  }
+
+  async function applyBulk() {
+    if (bulk === null || selectedIds.length === 0 || bulkTagIds.length === 0) return;
+    const verb = bulk;
+    const body = { channel_ids: selectedIds, tag_ids: bulkTagIds };
+    setApplying(true);
+    try {
+      if (verb === "add") await addChannelTags(body);
+      else await removeChannelTags(body);
+      setChecked(new Set());
+      setBulk(null);
+      setBulkTagIds([]);
+      open?.({
+        type: "success",
+        message: t(verb === "add" ? "channels.bulk.added" : "channels.bulk.removed"),
+      });
+      await list.reload();
+    } catch (error) {
+      report(error);
+    } finally {
+      setApplying(false);
+    }
+  }
   const matchedId =
     filters.find((item) => sameChannelSavedQuery(item.query, currentQuery))?.id ??
     null;
@@ -309,10 +427,37 @@ export function ChannelList() {
   );
 
   return (
+    <>
     <PageChrome
       title={t("channels.title")}
       description={t("channels.description")}
-      actions={createAction}
+      actions={
+        <>
+          {canEdit ? (
+            <Group gap="xs">
+              <Button
+                type="button"
+                size="sm"
+                variant="default"
+                disabled={selectedIds.length === 0}
+                onClick={() => openBulk("add")}
+              >
+                {t("channels.bulk.add")}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="default"
+                disabled={selectedIds.length === 0}
+                onClick={() => openBulk("remove")}
+              >
+                {t("channels.bulk.remove")}
+              </Button>
+            </Group>
+          ) : null}
+          {createAction}
+        </>
+      }
       toolbar={
         gate === "ready" ? (
           <ListToolbar
@@ -378,13 +523,29 @@ export function ChannelList() {
     >
       <ListTable
         list={tableList}
-        columnCount={5}
+        columnCount={canEdit ? 6 : 5}
         emptyMessage={t("channels.list.empty")}
         emptyAction={createAction}
         noMatchMessage={t("channels.list.noMatch")}
         onClearFilters={query.clear}
         head={
           <Table.Tr>
+            {canEdit ? (
+              <Table.Th w={40}>
+                <Checkbox
+                  aria-label={t("channels.bulk.selectPage")}
+                  checked={allChecked}
+                  indeterminate={someChecked && !allChecked}
+                  onChange={(event) => {
+                    setChecked(
+                      event.currentTarget.checked
+                        ? new Set(items.map((row) => row.id))
+                        : new Set(),
+                    );
+                  }}
+                />
+              </Table.Th>
+            ) : null}
             <Table.Th>{t("channels.fields.name")}</Table.Th>
             <Table.Th>{t("channels.fields.tags")}</Table.Th>
             <Table.Th>{t("channels.fields.active")}</Table.Th>
@@ -395,6 +556,23 @@ export function ChannelList() {
       >
         {items.map((channel) => (
           <Table.Tr key={channel.id}>
+            {canEdit ? (
+              <Table.Td>
+                <Checkbox
+                  aria-label={t("channels.bulk.select", { name: channel.name })}
+                  checked={checked.has(channel.id)}
+                  onChange={(event) => {
+                    const on = event.currentTarget.checked;
+                    setChecked((current) => {
+                      const next = new Set(current);
+                      if (on) next.add(channel.id);
+                      else next.delete(channel.id);
+                      return next;
+                    });
+                  }}
+                />
+              </Table.Td>
+            ) : null}
             <Table.Td>
               <RecordReference
                 name={channel.name}
@@ -434,5 +612,29 @@ export function ChannelList() {
         ))}
       </ListTable>
     </PageChrome>
+    <ConfirmActionModal
+      opened={bulk !== null}
+      onClose={() => {
+        if (applying) return;
+        setBulk(null);
+        setBulkTagIds([]);
+      }}
+      title={t(bulk === "remove" ? "channels.bulk.removeTitle" : "channels.bulk.addTitle")}
+      body={t(bulk === "remove" ? "channels.bulk.removeBody" : "channels.bulk.addBody")}
+      confirmLabel={t(
+        bulk === "remove" ? "channels.bulk.confirmRemove" : "channels.bulk.confirmAdd",
+      )}
+      confirmDisabled={bulkTagIds.length === 0 || selectedIds.length === 0}
+      loading={applying}
+      onConfirm={() => void applyBulk()}
+    >
+      <ExistingTagPicker
+        label={t("channels.bulk.tags")}
+        emptyLabel={t("channels.list.tagNone")}
+        value={bulkTagIds}
+        onChange={setBulkTagIds}
+      />
+    </ConfirmActionModal>
+    </>
   );
 }
