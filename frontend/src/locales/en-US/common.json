@@ -1536,6 +1536,7 @@
   "channels.run.copyDatasetId": "Copy dataset id {{id}}",
   "channels.run.column.round": "#",
   "channels.run.column.value": "Value",
+  "channels.run.column.until": "until",
   "channels.run.roundStatus": "Status",
   "channels.view.nested": "Nested",
   "channels.view.metric.count": "Count",

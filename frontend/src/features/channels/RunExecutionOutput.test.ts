@@ -28,6 +28,7 @@ vi.mock("@refinedev/core", () => ({
         "channels.run.rowsFailed": "The rows could not be loaded",
         "channels.run.showingRows": "Showing {{shown}} / {{total}}",
         "channels.run.column.value": "Value",
+        "channels.run.column.until": "until",
         "channels.run.column.round": "#",
         "channels.run.roundStatus": "Status",
         "channels.run.ordRange": "{{from}}–{{to}}",
@@ -418,14 +419,14 @@ it("shows an Until round's index in the value column", async () => {
     items: [
       {
         round: 0,
-        step_preview: { index: 0 },
+        step_preview: { index: 0, until: { value: false } },
         step_truncated: false,
         step_totals: {},
         status_counts: { succeeded: 1 },
       },
       {
         round: 1,
-        step_preview: { index: 1 },
+        step_preview: { index: 1, until: { value: true } },
         step_truncated: false,
         step_totals: {},
         status_counts: { succeeded: 1 },
@@ -447,6 +448,9 @@ it("shows an Until round's index in the value column", async () => {
   );
   expect(await screen.findByRole("button", { name: "0" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "1" })).toBeTruthy();
+  expect(screen.getByRole("columnheader", { name: "until" })).toBeTruthy();
+  expect(screen.getByText("false")).toBeTruthy();
+  expect(screen.getByText("true")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "0" }));
   expect(onPick).toHaveBeenCalledWith(["index"]);
 });

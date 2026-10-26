@@ -67,6 +67,7 @@ class NodeSampleRequest(BaseModel):
     graph: GraphIn
     node_id: str = Field(min_length=1, max_length=64)
     scope: list[ScopeLevelIn] | None = None
+    container_round: int | None = Field(default=None, ge=0)
 
 
 class ChannelRunOut(BaseModel):
@@ -390,6 +391,7 @@ def http_node_sample(
         graph=body.graph.model_dump(mode="json"),
         node_id=body.node_id,
         scope=_scope_arg(body.scope),
+        container_round=body.container_round,
     )
 
 

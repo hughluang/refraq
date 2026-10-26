@@ -148,8 +148,9 @@ def node_sample(
     graph: Mapping[str, Any],
     node_id: str,
     scope: Sequence[Mapping[str, Any]] | None = None,
+    container_round: int | None = None,
 ) -> dict[str, Any]:
-    _run, sample = _load(channel_id, job_id, graph, node_id, scope)
+    _run, sample = _load(channel_id, job_id, graph, node_id, scope, container_round)
     return {
         "scope": sample.scope,
         "config_changed": sample.config_changed,
@@ -164,12 +165,13 @@ def _load(
     graph: Mapping[str, Any],
     node_id: str,
     scope: Sequence[Mapping[str, Any]] | None,
+    container_round: int | None = None,
 ) -> tuple[Any, _Sample]:
     store = get_run_store()
     run = store.get_run(job_id)
     if run is None or run.channel_id != channel_id:
         raise ChannelRunNotFound()
-    return run, _bind(store, run, graph, node_id, scope)
+    return run, _bind(store, run, graph, node_id, scope, container_round)
 
 
 def _bind(
@@ -178,6 +180,7 @@ def _bind(
     graph: Mapping[str, Any],
     node_id: str,
     scope: Sequence[Mapping[str, Any]] | None,
+    container_round: int | None = None,
 ) -> _Sample:
     frames = _frames(graph, node_id)
     if frames is None:
@@ -213,11 +216,20 @@ def _bind(
         if item in by_id
     ]
     selected = _select_node(store, run.job_id, node_id, resolved)
+    presented = _present_node(selected)
+    if (
+        str(node.get("type")) == "volume.until"
+        and container_round is not None
+        and selected is not None
+    ):
+        presented = _overlay_until_condition(
+            store, run.job_id, selected.seq, container_round, presented
+        )
     return _Sample(
         scope=resolved,
         config_changed=_config_changed(run.graph, node_id, node.get("config")),
         upstream=upstream,
-        node=_present_node(selected),
+        node=presented,
     )
 
 
@@ -621,6 +633,23 @@ def _present_upstream(slot: _Slot) -> dict[str, Any]:
         "error": slot.error,
         "preview_only": slot.preview_only,
     }
+
+
+def _overlay_until_condition(
+    store: Any,
+    job_id: str,
+    seq: int,
+    round_index: int,
+    presented: dict[str, Any],
+) -> dict[str, Any]:
+    """Show one round's condition on the sample the config panel already reads.
+
+    The execution's stored input stays empty. This copy exists only on the response.
+    """
+    found = store.get_round(job_id, seq, round_index)
+    if found is None or "until" not in found.step:
+        return presented
+    return {**presented, "input": {"until": found.step["until"]}}
 
 
 def _present_node(record: NodeExecutionRecord | None) -> dict[str, Any]:

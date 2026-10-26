@@ -210,7 +210,12 @@ export function listDatasetRows(
 export function nodeSample(
   id: string,
   jobId: string,
-  body: { graph: Graph; node_id: string; scope?: readonly NodeSampleScopeInput[] },
+  body: {
+    graph: Graph;
+    node_id: string;
+    scope?: readonly NodeSampleScopeInput[];
+    container_round?: number;
+  },
 ) {
   return apiClient<NodeSample>(`/channels/${id}/runs/${jobId}/node-sample`, {
     method: "POST",

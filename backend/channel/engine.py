@@ -337,8 +337,10 @@ class _Run:
                 )
             value, error = render_field(self.hooks, config.get("until"), _BOOL, path="until")
             if error is not None:
+                _note_round_condition(self.hooks, seq, index, _until_error_entry(error))
                 self.hooks.on_finish(seq, node, error)
                 return self._failure(node_id, error)
+            _note_round_condition(self.hooks, seq, index, {"value": value})
             if value:
                 result.output = {"index": index, "count": index + 1, "iterations": collected}
                 self.hooks.on_finish(seq, node, result)
@@ -574,6 +576,17 @@ def _record_round(hooks: EngineHooks, seq: int, index: int, step: Any) -> None:
     recorder = getattr(hooks, "on_round", None)
     if callable(recorder):
         recorder(seq, index, step)
+
+
+def _note_round_condition(hooks: EngineHooks, seq: int, index: int, entry: Any) -> None:
+    """Record the condition on the round that just finished evaluating it."""
+    note = getattr(hooks, "note_round_condition", None)
+    if callable(note):
+        note(seq, index, entry)
+
+
+def _until_error_entry(error: NodeResult) -> dict[str, Any]:
+    return {"error": {"code": error.error_code, "message": error.error_message}}
 
 
 def _until_cap(node: Mapping[str, Any]) -> int | None:

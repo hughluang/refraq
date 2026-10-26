@@ -585,7 +585,7 @@ Avoid a loop-back port, a `loop` input, a `results` field, a legal cycle through
 
 ### Until
 
-A **Data Channel** volume container. A node is inside that Until when its `parent` is the Until's node id. Configuration is the boolean template `until` and the required integer `max_iterations` from 1 to 100000, with no default. The Until runs its **Loop Body** once per round until `until` is true. Its ports are the input `main` and the outputs `each` and `done`. During a round the body reads `{previous, index}`. The stored output is `{index, count, iterations}` and has no `previous`. A **Container Round** records `{index}` only. The Until fails with `CHANNEL_UNTIL_MAX_ITERATIONS` when `max_iterations` rounds finish and `until` is still false, and with `CHANNEL_ITERATION_VOLUME_EXCEEDED` when the compact JSON of `iterations` exceeds 16 MiB.
+A **Data Channel** volume container. A node is inside that Until when its `parent` is the Until's node id. Configuration is the boolean template `until` and the required integer `max_iterations` from 1 to 100000, with no default. The Until runs its **Loop Body** once per round until `until` is true. Its ports are the input `main` and the outputs `each` and `done`. During a round the body reads `{previous, index}`. The stored output is `{index, count, iterations}` and has no `previous`. A **Container Round** records `{index}` when the round starts and, after the condition is evaluated, `until` as `{value}` or `{error: {code, message}}`. `previous` is not on the round. The Until fails with `CHANNEL_UNTIL_MAX_ITERATIONS` when `max_iterations` rounds finish and `until` is still false, and with `CHANNEL_ITERATION_VOLUME_EXCEEDED` when the compact JSON of `iterations` exceeds 16 MiB.
 Avoid a loop-back port, a `loop` input, a back edge, a duration field, and a `previous` field on the stored output or the Container Round.
 
 ### Loop Body
@@ -620,7 +620,7 @@ Avoid reading an ancestor's stored output as this node's input, and storing a re
 
 ### Container Round
 
-The record a **For**, a Batch Read, or an **Until** writes at the start of one round. A For records `{current, index, count}`, the step the body reads. A Batch Read records `{rows, index, count, total}`, with `rows` kept to its first 100 elements and the original length recorded; the body reads the full page. An Until records `{index}` only. The Until body reads `{previous, index}` at run time, and that `previous` is not on the round record. The round is addressed by the run, the container execution, and the zero-based round index. It is not the container's stored output.
+The record a **For**, a Batch Read, or an **Until** writes at the start of one round. A For records `{current, index, count}`, the step the body reads. A Batch Read records `{rows, index, count, total}`, with `rows` kept to its first 100 elements and the original length recorded; the body reads the full page. An Until records `{index}` when the round starts and, after the condition is evaluated, `until` as `{value}` or `{error: {code, message}}`. The Until body reads `{previous, index}` at run time, and that `previous` is not on the round record. The round is addressed by the run, the container execution, and the zero-based round index. It is not the container's stored output.
 Avoid reading `iterations`, `{count, total, batch_size}`, or an Until `previous` as this record.
 
 ### Node Sample

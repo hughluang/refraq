@@ -57,6 +57,7 @@ export function RunExecutionOutput({
   batchChildId = null,
   batchSize = null,
   containerId,
+  recordedKey = "",
 }: {
   channelId: string;
   jobId: string;
@@ -86,6 +87,8 @@ export function RunExecutionOutput({
   batchSize?: number | null;
   /** Container whose direct child reconstructs an expanded batch. Defaults to `item.node_id`. */
   containerId?: string | null;
+  /** Live-run summary key. A change reloads the round page. */
+  recordedKey?: string;
 }) {
   const shownValue = value !== undefined ? value : item?.output_preview;
   const shownError = error !== undefined ? error : errorOf(item);
@@ -117,6 +120,7 @@ export function RunExecutionOutput({
       batchChildId={batchChildId}
       batchSize={batchSize}
       containerId={shownContainer}
+      recordedKey={recordedKey}
     />
   );
 }
@@ -148,6 +152,7 @@ type BodyProps = {
   batchChildId: string | null;
   batchSize: number | null;
   containerId: string | null;
+  recordedKey?: string;
 };
 
 function OutputBody(props: BodyProps) {
@@ -611,6 +616,7 @@ function RoundTable({
   onRoundsTotal,
   batchChildId,
   batchSize,
+  recordedKey = "",
 }: BodyProps & { itemKey: string }) {
   const t = useTranslate();
   const [page, setPage] = useState(1);
@@ -643,7 +649,7 @@ function RoundTable({
     return () => {
       cancelled = true;
     };
-  }, [channelId, jobId, seq, page, t]);
+  }, [channelId, jobId, seq, page, recordedKey, t]);
 
   if (seq == null) {
     return (
@@ -699,6 +705,9 @@ function RoundTable({
                 </button>
               </Table.Th>
             )}
+            {itemKey === "index" ? (
+              <Table.Th>{t("channels.run.column.until")}</Table.Th>
+            ) : null}
             <Table.Th>{t("channels.run.roundStatus")}</Table.Th>
           </Table.Tr>
         </Table.Thead>
@@ -751,6 +760,7 @@ function RoundTable({
                     </button>
                   </Table.Td>
                 )}
+                {itemKey === "index" ? <Table.Td>{conditionText(step?.until)}</Table.Td> : null}
                 <Table.Td>{statusText(t, item.status_counts)}</Table.Td>
               </Table.Tr>
             );
@@ -930,4 +940,10 @@ function scalarText(value: unknown): string {
     return String(value);
   }
   return JSON.stringify(value);
+}
+
+function conditionText(entry: unknown): string {
+  if (!isRecord(entry)) return "";
+  if (isRecord(entry.error)) return scalarText(entry.error.message);
+  return scalarText(entry.value);
 }

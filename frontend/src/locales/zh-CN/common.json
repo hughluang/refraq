@@ -1535,6 +1535,7 @@
   "channels.run.copyDatasetId": "复制数据集标识 {{id}}",
   "channels.run.column.round": "#",
   "channels.run.column.value": "值",
+  "channels.run.column.until": "直到条件",
   "channels.run.roundStatus": "状态",
   "channels.view.nested": "展开",
   "channels.view.metric.count": "计数",

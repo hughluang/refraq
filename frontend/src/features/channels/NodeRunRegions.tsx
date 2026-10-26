@@ -42,6 +42,7 @@ export function useNodeSample({
   graph,
   scope,
   recordedKey = "",
+  containerRound,
   enabled,
 }: {
   channelId: string;
@@ -51,6 +52,8 @@ export function useNodeSample({
   scope: readonly NodeSampleScopeInput[] | undefined;
   /** `recordedKey` of the live run. A change refetches without waiting for a graph edit. */
   recordedKey?: string;
+  /** Selected round of an Until node. Projects that round's condition into `node.input`. */
+  containerRound?: number;
   enabled: boolean;
 }): { sample: NodeSample | null; loading: boolean; failure: unknown } {
   const [sample, setSample] = useState<NodeSample | null>(null);
@@ -77,7 +80,7 @@ export function useNodeSample({
       return;
     }
     const identity = `${channelId}:${jobId}:${nodeId}`;
-    const other = `${identity}:${scopeKey}:${recordedKey}`;
+    const other = `${identity}:${scopeKey}:${recordedKey}:${containerRound ?? ""}`;
     const prior = previous.current;
     const graphChanged = prior != null && prior.graphKey !== graphKey;
     const otherChanged = prior == null || prior.other !== other;
@@ -96,6 +99,7 @@ export function useNodeSample({
         graph: graphRef.current,
         node_id: nodeId,
         ...(nextScope && nextScope.length > 0 ? { scope: [...nextScope] } : {}),
+        ...(typeof containerRound === "number" ? { container_round: containerRound } : {}),
       })
         .then((body) => {
           if (request.current !== id) return;
@@ -114,7 +118,7 @@ export function useNodeSample({
       window.clearTimeout(timer);
       if (request.current === id) request.current += 1;
     };
-  }, [enabled, channelId, jobId, nodeId, graphKey, scopeKey, recordedKey]);
+  }, [enabled, channelId, jobId, nodeId, graphKey, scopeKey, recordedKey, containerRound]);
 
   return { sample, loading, failure };
 }
@@ -594,6 +598,7 @@ export function ResultRegion({
   onRound,
   onRoundsTotal,
   onPick,
+  recordedKey = "",
 }: {
   channelId: string;
   jobId: string | null;
@@ -611,6 +616,7 @@ export function ResultRegion({
   onRound: (containerId: string, round: number) => void;
   onRoundsTotal: (containerId: string, total: number) => void;
   onPick?: OutputPick;
+  recordedKey?: string;
 }) {
   const t = useTranslate();
   const errorText = failure == null ? null : problemMessage(t, failure, t("channels.run.outputFailed"));
@@ -660,6 +666,7 @@ export function ResultRegion({
           onRoundsTotal={(total) => onRoundsTotal(nodeId, total)}
           batchChildId={nodes.find((node) => node.parent === nodeId)?.id ?? null}
           batchSize={batch?.batchSize ?? null}
+          recordedKey={recordedKey}
         />
         </Stack>
       ) : null}

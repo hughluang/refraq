@@ -441,6 +441,14 @@ class _RunHooks:
             step_totals=totals,
         )
 
+    def note_round_condition(self, seq: int, index: int, entry: Any) -> None:
+        get_run_store().set_round_condition(
+            self.run_id,
+            container_seq=seq,
+            round=index,
+            condition=entry,
+        )
+
     def on_finish(self, seq: int, node: Mapping[str, Any], result: NodeResult) -> None:
         store = get_run_store()
         record = store.get_execution(self.run_id, seq)

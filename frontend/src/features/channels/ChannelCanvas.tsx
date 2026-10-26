@@ -1504,6 +1504,10 @@ function ChannelCanvasBody({
     graph,
     scope: sampleScope,
     recordedKey: summaryKey,
+    containerRound:
+      selected?.data.nodeType === "volume.until"
+        ? (pinnedRounds[selected.id] ?? adoptedRounds[selected.id] ?? 0)
+        : undefined,
     enabled: Boolean(channelId && sessionRun && selected),
   });
   useEffect(() => {
@@ -2437,6 +2441,7 @@ function ChannelCanvasBody({
                       selectedRound={roundOf(selected.id)}
                       onRound={setRound}
                       onRoundsTotal={rememberRounds}
+                      recordedKey={summaryKey}
                     />
                   }
                   onClose={beginClose}
