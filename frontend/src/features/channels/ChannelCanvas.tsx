@@ -2355,6 +2355,7 @@ function ChannelCanvasBody({
                             ref: node.data.ref,
                             name: node.data.name,
                             parent: node.parentId,
+                            nodeType: node.data.nodeType,
                           }]
                         : [],
                     ),

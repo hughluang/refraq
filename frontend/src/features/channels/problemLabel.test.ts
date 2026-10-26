@@ -5,6 +5,7 @@ import zh from "@/locales/zh-CN/common.json";
 import {
   fieldMessages,
   formatGraphProblem,
+  formatRunError,
   problemIdentity,
   type ProblemGraph,
 } from "@/features/channels/problemLabel";
@@ -185,10 +186,6 @@ const LOOP_BODY_REASONS = [
     "each connects only to a direct child of this container",
     "problems.CHANNEL_LOOP_BODY_INVALID.each",
   ],
-  [
-    "A Dataset Query or Materialize cannot run inside a container",
-    "problems.CHANNEL_LOOP_BODY_INVALID.dataset",
-  ],
 ] as const;
 
 function catalogTranslate(catalog: Record<string, string>) {
@@ -234,19 +231,28 @@ describe("frame-rule sentences", () => {
     );
   });
 
-  it("says a dataset producer cannot sit in the frame", () => {
-    const zhMessages = zh as Record<string, string>;
+  it("uses the server message when an Until volume failure is not the For sentence", () => {
     const enMessages = en as Record<string, string>;
-    const dataset = "A Dataset Query or Materialize cannot run inside a container";
-    const zhSentence = "\u6570\u636e\u96c6\u67e5\u8be2\u548c\u7269\u5316\u4e0d\u80fd\u653e\u8fdb\u6846";
-    expect(zhMessages["problems.CHANNEL_LOOP_BODY_INVALID.dataset"]).toBe(zhSentence);
-    expect(zhSentence).not.toContain("For");
-    expect(formatGraphProblem(catalogTranslate(zhMessages), loopBody(dataset), graph)).toBe(
-      `${zhSentence} (Read suppliers)`,
-    );
-    expect(formatGraphProblem(catalogTranslate(enMessages), loopBody(dataset), graph)).toBe(
-      "A Dataset Query or a Materialize cannot sit inside a frame (Read suppliers)",
-    );
+    const zhMessages = zh as Record<string, string>;
+    const forSentence = "For iteration output exceeds 16 MiB. Read the items in batches.";
+    const untilSentence = "Until iteration output exceeds 16 MiB.";
+    expect(enMessages["problems.CHANNEL_ITERATION_VOLUME_EXCEEDED"]).toBe(forSentence);
+    expect(formatRunError(catalogTranslate(zhMessages), "CHANNEL_ITERATION_VOLUME_EXCEEDED", forSentence)).toEqual({
+      label: zhMessages["problems.CHANNEL_ITERATION_VOLUME_EXCEEDED"],
+      detail: forSentence,
+    });
+    expect(formatRunError(catalogTranslate(zhMessages), "CHANNEL_ITERATION_VOLUME_EXCEEDED", untilSentence)).toEqual({
+      label: untilSentence,
+      detail: untilSentence,
+    });
+    expect(zhMessages["problems.CHANNEL_UNTIL_MAX_ITERATIONS"]).toBe("直到条件成立之前已达到最大轮次。");
+    expect(
+      formatRunError(
+        catalogTranslate(enMessages),
+        "CHANNEL_UNTIL_MAX_ITERATIONS",
+        "Until reached max_iterations before its condition became true.",
+      ).label,
+    ).toBe("Until reached max_iterations before its condition became true.");
   });
 
   it("keeps an edge place on a frame reason and does not append the English detail", () => {

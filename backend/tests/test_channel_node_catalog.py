@@ -49,6 +49,7 @@ _OUTPUT_VIEWS = {
     "volume.materialize": OutputView(
         kind="dataset", dataset="dataset", metrics=("count",)
     ),
+    "volume.until": OutputView(kind="container", metrics=("count",), item="index"),
     "state.variable": OutputView(kind="record"),
     "write.entity": OutputView(
         kind="counts",
@@ -128,6 +129,27 @@ def test_every_node_module_is_registered_and_exports_only_node_type() -> None:
     assert found.keys() == registered.keys()
     for type_id, node in found.items():
         assert registered[type_id] is node
+
+
+def test_until_is_registered_as_a_container() -> None:
+    from backend.channel.item_limit import ITEM_LIMIT
+
+    node = next(item for item in list_node_types() if item.type_id == "volume.until")
+    assert [port.port for port in node.inputs] == ["main"]
+    assert [port.port for port in node.outputs] == ["each", "done"]
+    assert all(port.loop_back is False for port in (*node.inputs, *node.outputs))
+    assert node.output_view == OutputView(kind="container", metrics=("count",), item="index")
+    schema = node.config_schema
+    assert schema["required"] == ["until", "max_iterations"]
+    until = schema["properties"]["until"]
+    assert until["type"] == "string"
+    assert until["x-refraq-template"] == {"type": "boolean"}
+    assert "default" not in until
+    cap = schema["properties"]["max_iterations"]
+    assert cap["type"] == "integer"
+    assert cap["minimum"] == 1
+    assert cap["maximum"] == ITEM_LIMIT
+    assert "default" not in cap
 
 
 def test_batch_read_is_registered_as_a_container() -> None:

@@ -73,7 +73,7 @@ export function RunExecutionOutput({
   /** Schema property names of the row element, in declaration order. */
   rowProperties?: readonly string[];
   graph?: Graph | null;
-  /** Round-step key (`current` or `rows`) when this value is a Container Round. */
+  /** Round-step field named by the container view's item. */
   stepItem?: string | null;
   /** For output read from `done`: `iterations` is one row per round. */
   iterations?: boolean;
@@ -694,7 +694,7 @@ function RoundTable({
               ))
             ) : (
               <Table.Th>
-                <button type="button" className="channel-view-pick" onClick={() => onPick?.(["current"])}>
+                <button type="button" className="channel-view-pick" onClick={() => onPick?.([itemKey])}>
                   {t("channels.run.column.value")}
                 </button>
               </Table.Th>
@@ -746,8 +746,8 @@ function RoundTable({
                   ))
                 ) : (
                   <Table.Td>
-                    <button type="button" className="channel-view-pick" onClick={() => onPick?.(["current"])}>
-                      {scalarText(current)}
+                    <button type="button" className="channel-view-pick" onClick={() => onPick?.([itemKey])}>
+                      {scalarText(step ? step[itemKey] : undefined)}
                     </button>
                   </Table.Td>
                 )}

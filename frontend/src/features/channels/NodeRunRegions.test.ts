@@ -77,6 +77,7 @@ vi.mock("@refinedev/core", () => ({
 const rowsView: OutputView = { kind: "rows", rows: "rows", metrics: ["count"] };
 const recordView: OutputView = { kind: "record", metrics: [] };
 const forView: OutputView = { kind: "container", item: "current", metrics: ["count"] };
+const untilView: OutputView = { kind: "container", item: "index", metrics: ["count"] };
 const batchView: OutputView = {
   kind: "container",
   item: "rows",
@@ -122,6 +123,19 @@ const catalog: NodeTypeSpec[] = [
     config_schema: {},
     permission: null,
     output_view: forView,
+  },
+  {
+    type: "volume.until",
+    family: "volume",
+    label: "Until",
+    summary: "Repeats",
+    description: "",
+    trigger: false,
+    inputs: [],
+    outputs: [],
+    config_schema: {},
+    permission: null,
+    output_view: untilView,
   },
   {
     type: "volume.batch_read",
@@ -722,6 +736,45 @@ describe("node run regions", () => {
     await waitFor(() =>
       expect(listRounds).toHaveBeenCalledWith("chn_1", "job_1", 9, { limit: 50, offset: 0 }),
     );
+  });
+
+  it("shows Until iterations in the same per-round table as For", () => {
+    mount(
+      createElement(UpstreamRegion, {
+        channelId: "chn_1",
+        jobId: "job_1",
+        hasUpstream: true,
+        detail: detail("succeeded"),
+        loading: false,
+        failure: null,
+        catalog,
+        ports: [],
+        roundOf: () => 0,
+        sample: sample({
+          upstream: [
+            upstream({
+              node_id: "hold",
+              ref: "hold",
+              name: "Hold",
+              type_id: "volume.until",
+              referenced: true,
+              source: "execution",
+              seq: 4,
+              value: {
+                count: 2,
+                index: 1,
+                iterations: [{ read: { code: "S-01" } }, { read: { code: "S-02" } }],
+              },
+              totals: {},
+            }),
+          ],
+        }),
+      }),
+    );
+    expect(screen.getByRole("columnheader", { name: "read" })).toBeTruthy();
+    expect(screen.getByText("Showing 2 / 2")).toBeTruthy();
+    expect(screen.getByRole("button", { name: '{"code":"S-01"}' })).toBeTruthy();
+    expect(screen.getByRole("button", { name: '{"code":"S-02"}' })).toBeTruthy();
   });
 });
 

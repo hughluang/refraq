@@ -1,7 +1,7 @@
 /** Canvas placement for catalog ports and container frames. */
 
 /** Node types that own a frame. Membership is the set, not a For-only compare. */
-export const CONTAINER_NODE_TYPES = new Set(["volume.for", "volume.batch_read"]);
+export const CONTAINER_NODE_TYPES = new Set(["volume.for", "volume.batch_read", "volume.until"]);
 
 export function isContainerNode(nodeType: string): boolean {
   return CONTAINER_NODE_TYPES.has(nodeType);

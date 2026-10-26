@@ -719,7 +719,7 @@ function isBatchDone(entry: NodeSampleUpstream): boolean {
 function isForIterations(entry: NodeSampleUpstream): boolean {
   return (
     entry.source === "execution" &&
-    entry.type_id === "volume.for" &&
+    (entry.type_id === "volume.for" || entry.type_id === "volume.until") &&
     typeof entry.value === "object" &&
     entry.value !== null &&
     !Array.isArray(entry.value) &&

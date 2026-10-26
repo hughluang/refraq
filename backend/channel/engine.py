@@ -9,8 +9,10 @@ the next sibling.
 A container runs once for each element. Its body is the nodes whose parent is
 that container. ``CONTAINER_TYPES`` names the containers. Each accumulated
 round records the outputs of the body nodes that ran. A container that does
-not accumulate leaves those rounds off its output. An incoming edge that does
-not target main does not gate the container.
+not accumulate leaves those rounds off its output. Until is the exception:
+it repeats its direct children until a boolean template is true, and the
+rounds are not known before the body runs. An incoming edge that does not
+target main does not gate the container.
 """
 
 from __future__ import annotations
@@ -20,6 +22,8 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 from backend.channel.graph import CONTAINER_TYPES, ancestor_closure, refine_ports
+from backend.channel.item_limit import ITEM_LIMIT
+from backend.channel.node_support import render_field
 from backend.channel.nodes.spec import EngineHooks, NodeResult, NodeType, ReferenceResolver
 from backend.channel.template import output_matches
 from backend.channel.variables import value_size
@@ -32,6 +36,10 @@ __all__ = [
 
 ITERATION_VOLUME_MAX_BYTES = 16 * 1024 * 1024
 _EACH_PORT = "each"
+_UNTIL_TYPE = "volume.until"
+_BOOL = {"type": "boolean"}
+_UNTIL_CAP_MESSAGE = "Until reached max_iterations before its condition became true."
+_UNTIL_VOLUME_MESSAGE = "Until iteration output exceeds 16 MiB."
 
 
 @dataclass
@@ -255,12 +263,102 @@ class _Run:
             self._settle(node_id, result, {_EACH_PORT})
             self._push(node_id, direct, done, stack)
             return None
-        outcome = self._iterate(node_id, seq, result)
+        if str(node.get("type")) == _UNTIL_TYPE:
+            outcome = self._until(node_id, seq, result)
+        else:
+            outcome = self._iterate(node_id, seq, result)
         if outcome is not None:
             return outcome
         self._settle(node_id, result, {_EACH_PORT})
         self._push(node_id, direct, done, stack)
         return None
+
+    def _until(self, node_id: str, seq: int, result: NodeResult) -> RunOutcome | None:
+        """Repeat direct children until the boolean template is true.
+
+        Rounds are not known before the body runs. ``previous`` is frozen from
+        the round that just finished, before the next round drops those outputs.
+        """
+        node = self.nodes[node_id]
+        body = self.bodies[node_id]
+        cap = _until_cap(node)
+        if cap is None:
+            failed = NodeResult(
+                status="failed",
+                error_code="CHANNEL_NODE_CONFIG_INVALID",
+                error_message="max_iterations must be an integer from 1 through 100000",
+            )
+            self.hooks.on_finish(seq, node, failed)
+            return self._failure(node_id, failed)
+        previous: Any = None
+        collected: list[Any] = []
+        config = node["config"]
+        for index in range(cap):
+            step = {"previous": previous, "index": index}
+            self._drop(body)
+            for body_id in body:
+                self.produced.pop(body_id, None)
+            self.hooks.on_output(node, step)
+            self.produced[node_id] = step
+            _record_round(self.hooks, seq, index, {"index": index})
+            self._arm(node_id, body)
+            self.ran_stack.append(set())
+            self._frames.append((seq, index))
+            try:
+                outcome = self.walk(body, start=None)
+            finally:
+                self._frames.pop()
+            ran = self.ran_stack.pop()
+            if outcome is not None:
+                self.hooks.on_finish(
+                    seq,
+                    node,
+                    NodeResult(
+                        status="failed",
+                        error_code=outcome.error_code,
+                        error_message=outcome.error_message or "cancelled",
+                    ),
+                )
+                return outcome
+            collected.append(self._round(ran))
+            if value_size(collected) > ITERATION_VOLUME_MAX_BYTES:
+                failed = NodeResult(
+                    status="failed",
+                    error_code="CHANNEL_ITERATION_VOLUME_EXCEEDED",
+                    error_message=_UNTIL_VOLUME_MESSAGE,
+                )
+                self.hooks.on_finish(seq, node, failed)
+                return RunOutcome(
+                    status="failed",
+                    error_code="CHANNEL_ITERATION_VOLUME_EXCEEDED",
+                    error_message=_UNTIL_VOLUME_MESSAGE,
+                    failed_node_id=node_id,
+                    skipped_node_ids=list(self.skipped),
+                )
+            value, error = render_field(self.hooks, config.get("until"), _BOOL, path="until")
+            if error is not None:
+                self.hooks.on_finish(seq, node, error)
+                return self._failure(node_id, error)
+            if value:
+                result.output = {"index": index, "count": index + 1, "iterations": collected}
+                self.hooks.on_finish(seq, node, result)
+                self._note(node_id, result)
+                return None
+            previous = collected[-1]
+        failed = NodeResult(
+            status="failed",
+            error_code="CHANNEL_UNTIL_MAX_ITERATIONS",
+            error_message=_UNTIL_CAP_MESSAGE,
+            output={"index": cap - 1, "count": cap, "iterations": collected},
+        )
+        self.hooks.on_finish(seq, node, failed)
+        return RunOutcome(
+            status="failed",
+            error_code="CHANNEL_UNTIL_MAX_ITERATIONS",
+            error_message=_UNTIL_CAP_MESSAGE,
+            failed_node_id=node_id,
+            skipped_node_ids=list(self.skipped),
+        )
 
     def _iterate(self, node_id: str, seq: int, result: NodeResult) -> RunOutcome | None:
         node = self.nodes[node_id]
@@ -476,6 +574,18 @@ def _record_round(hooks: EngineHooks, seq: int, index: int, step: Any) -> None:
     recorder = getattr(hooks, "on_round", None)
     if callable(recorder):
         recorder(seq, index, step)
+
+
+def _until_cap(node: Mapping[str, Any]) -> int | None:
+    config = node.get("config")
+    if not isinstance(config, dict):
+        return None
+    value = config.get("max_iterations")
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 1 or value > ITEM_LIMIT:
+        return None
+    return value
 
 
 def _iteration_steps(iterations: Any) -> Any:

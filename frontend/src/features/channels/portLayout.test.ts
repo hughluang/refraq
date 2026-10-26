@@ -53,9 +53,10 @@ describe("layoutNodePorts", () => {
 });
 
 describe("container node types", () => {
-  it("includes For and Batch Read and leaves other volume nodes out", () => {
+  it("includes For, Batch Read, and Until and leaves other volume nodes out", () => {
     expect(isContainerNode("volume.for")).toBe(true);
     expect(isContainerNode("volume.batch_read")).toBe(true);
+    expect(isContainerNode("volume.until")).toBe(true);
     expect(isContainerNode("volume.dataset_query")).toBe(false);
     expect(isContainerNode("volume.materialize")).toBe(false);
   });

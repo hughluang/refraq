@@ -25,8 +25,6 @@ const LOOP_BODY_DETAIL_KEYS: Record<string, string> = {
   "Edge crosses a container frame": "problems.CHANNEL_LOOP_BODY_INVALID.cross",
   "A container frame is entered only from each": "problems.CHANNEL_LOOP_BODY_INVALID.entry",
   "each connects only to a direct child of this container": "problems.CHANNEL_LOOP_BODY_INVALID.each",
-  "A Dataset Query or Materialize cannot run inside a container":
-    "problems.CHANNEL_LOOP_BODY_INVALID.dataset",
 };
 
 export function formatGraphProblem(
@@ -103,12 +101,22 @@ export function fieldMessages(
 }
 
 
+const FOR_ITERATION_VOLUME =
+  "For iteration output exceeds 16 MiB. Read the items in batches.";
+
 export function formatRunError(
   t: (key: string) => string,
   code: string | null,
   message: string | null,
 ): { label: string; detail: string | null } {
   const detail = message ? message : null;
+  if (
+    code === "CHANNEL_ITERATION_VOLUME_EXCEEDED" &&
+    message &&
+    message !== FOR_ITERATION_VOLUME
+  ) {
+    return { label: message, detail };
+  }
   if (code) {
     const key = `problems.${code}`;
     const translated = t(key);

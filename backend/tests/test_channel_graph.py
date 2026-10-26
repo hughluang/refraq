@@ -908,9 +908,6 @@ def test_for_frame_is_entered_only_from_each() -> None:
     assert each_problems[0].detail == "each connects only to a direct child of this container"
 
 
-_DATASET_IN_CONTAINER = "A Dataset Query or Materialize cannot run inside a container"
-
-
 def _dataset_query(node_id: str, *, parent: str | None = None) -> dict:
     return _node(
         node_id,
@@ -931,7 +928,7 @@ def _materialize(node_id: str, *, parent: str | None = None) -> dict:
     )
 
 
-def test_dataset_producers_cannot_sit_inside_a_container() -> None:
+def test_dataset_producers_may_sit_inside_a_container() -> None:
     top = _graph(
         [
             _node("nd_trigger", "trigger.manual", "Run"),
@@ -947,20 +944,13 @@ def test_dataset_producers_cannot_sit_inside_a_container() -> None:
 
     inside = _for_frame()
     inside["nodes"][2] = _dataset_query("nd_step", parent="nd_walk")
-    placed = [
-        item
-        for item in validate(inside, FakeResolver())
-        if item.detail == _DATASET_IN_CONTAINER
-    ]
-    assert [(item.code, item.node_id) for item in placed] == [
-        ("CHANNEL_LOOP_BODY_INVALID", "nd_step")
-    ]
+    assert [item for item in validate(inside, FakeResolver()) if item.severity == "error"] == []
 
     nested = _graph(
         [
             _node("nd_trigger", "trigger.manual", "Run"),
             _node("nd_outer", "volume.for", "Outer", {"items": "[1]"}),
-            _node("nd_inner", "volume.for", "Inner", {"items": "[2]"}, parent="nd_outer"),
+            _node("nd_inner", "volume.until", "Inner", _until_config(), parent="nd_outer"),
             _materialize("nd_leaf", parent="nd_inner"),
             _node("nd_after", "transform.set_fields", "After", _fields("1")),
         ],
@@ -971,17 +961,21 @@ def test_dataset_producers_cannot_sit_inside_a_container() -> None:
             _edge("ed_outer_done", "nd_outer", "nd_after", source_port="done"),
         ],
     )
-    nested_problems = [
+    assert [item for item in validate(nested, FakeResolver()) if item.severity == "error"] == []
+
+    crossed = _for_frame()
+    crossed["nodes"][2] = _dataset_query("nd_step", parent="nd_walk")
+    crossed["edges"].append(_edge("ed_escape", "nd_step", "nd_after"))
+    cross = [
         item
-        for item in validate(nested, FakeResolver())
+        for item in validate(crossed, FakeResolver())
         if item.code == "CHANNEL_LOOP_BODY_INVALID"
     ]
-    assert [(item.node_id, item.detail) for item in nested_problems] == [
-        ("nd_leaf", _DATASET_IN_CONTAINER)
-    ]
+    assert [item.edge_id for item in cross] == ["ed_escape"]
+    assert cross[0].detail == "Edge crosses a container frame"
 
 
-def test_dataset_producers_use_the_container_set(monkeypatch) -> None:
+def test_dataset_producers_inside_batch_read_are_valid(monkeypatch) -> None:
     from backend.channel.graph import CONTAINER_TYPES, ContainerType
 
     monkeypatch.setitem(
@@ -1003,17 +997,10 @@ def test_dataset_producers_use_the_container_set(monkeypatch) -> None:
             _edge("ed_done", "nd_batch", "nd_after", source_port="done"),
         ],
     )
-    problems = [
-        item
-        for item in validate(graph, FakeResolver(), catalog)
-        if item.code == "CHANNEL_LOOP_BODY_INVALID"
-    ]
-    assert [(item.node_id, item.detail) for item in problems] == [
-        ("nd_query", _DATASET_IN_CONTAINER)
-    ]
+    assert [item for item in validate(graph, FakeResolver(), catalog) if item.severity == "error"] == []
 
 
-def test_batch_read_is_a_legal_parent_and_still_rejects_dataset_nodes() -> None:
+def test_batch_read_is_a_legal_parent_and_accepts_dataset_nodes() -> None:
     dataset = '{"dataset_id":"dset","columns":[{"name":"n","type":"integer"}],"count":1}'
     graph = _graph(
         [
@@ -1053,7 +1040,7 @@ def test_batch_read_is_a_legal_parent_and_still_rejects_dataset_nodes() -> None:
     )
     assert [item for item in validate(nested, FakeResolver()) if item.severity == "error"] == []
 
-    blocked = _graph(
+    placed = _graph(
         [
             _node("nd_trigger", "trigger.manual", "Run"),
             _node("nd_batch", "volume.batch_read", "Batch", {"dataset": dataset}),
@@ -1066,23 +1053,273 @@ def test_batch_read_is_a_legal_parent_and_still_rejects_dataset_nodes() -> None:
             _edge("ed_load", "nd_query", "nd_load"),
         ],
     )
-    problems = [
-        (item.node_id, item.detail)
-        for item in validate(blocked, FakeResolver())
+    assert [item for item in validate(placed, FakeResolver()) if item.severity == "error"] == []
+
+
+def _until_config(condition: str = "true", cap: int = 3) -> dict:
+    return {"until": condition, "max_iterations": cap}
+
+
+def test_until_template_may_name_ancestors_and_direct_children() -> None:
+    legal = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node(
+                "nd_hold",
+                "volume.until",
+                "Hold",
+                _until_config("{{ self.step.output.n == self.trigger.output }}"),
+            ),
+            _node("nd_step", "transform.set_fields", "Step", _fields("1"), parent="nd_hold"),
+            _node("nd_later", "transform.set_fields", "Later", _fields("1"), parent="nd_hold"),
+            _node("nd_inner", "volume.for", "Inner", {"items": "[1]"}, parent="nd_hold"),
+            _node("nd_leaf", "transform.set_fields", "Leaf", _fields("1"), parent="nd_inner"),
+            _node("nd_after", "transform.set_fields", "After", _fields("1")),
+            _node("nd_other", "transform.set_fields", "Other", _fields("1")),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_hold"),
+            _edge("ed_each", "nd_hold", "nd_step", source_port="each"),
+            _edge("ed_later", "nd_step", "nd_later"),
+            _edge("ed_inner", "nd_hold", "nd_inner", source_port="each"),
+            _edge("ed_leaf", "nd_inner", "nd_leaf", source_port="each"),
+            _edge("ed_done", "nd_hold", "nd_after", source_port="done"),
+            _edge("ed_other", "nd_after", "nd_other"),
+        ],
+    )
+    assert [
+        item for item in validate(legal, FakeResolver()) if item.severity == "error"
+    ] == []
+
+    def renamed(text: str) -> dict:
+        graph = _graph(legal["nodes"], legal["edges"])
+        graph["nodes"][1]["config"] = _until_config(text)
+        return graph
+
+    grandchild = [
+        item
+        for item in validate(renamed("{{ self.leaf.output.n }}"), FakeResolver())
+        if item.code == "CHANNEL_TEMPLATE_REF_INVALID"
+    ]
+    assert [item.node_id for item in grandchild] == ["nd_hold"]
+
+    downstream = [
+        item
+        for item in validate(renamed("{{ self.other.output.n }}"), FakeResolver())
+        if item.code == "CHANNEL_TEMPLATE_REF_INVALID"
+    ]
+    assert [item.node_id for item in downstream] == ["nd_hold"]
+
+    by_name = renamed('{{ self.nodes["Later"].output.n }}')
+    assert [
+        item for item in validate(by_name, FakeResolver()) if item.severity == "error"
+    ] == []
+
+
+def test_until_max_iterations_rejects_missing_zero_and_above_the_ceiling() -> None:
+    def invalid(config: dict) -> list[tuple[str, ...]]:
+        graph = _graph(
+            [
+                _node("nd_trigger", "trigger.manual", "Run"),
+                _node("nd_hold", "volume.until", "Hold", config),
+            ],
+            [_edge("ed_in", "nd_trigger", "nd_hold")],
+        )
+        return [
+            item.path
+            for item in validate(graph, FakeResolver())
+            if item.code == "CHANNEL_NODE_CONFIG_INVALID"
+        ]
+
+    assert ("max_iterations",) in invalid({"until": "true"})
+    assert ("until",) in invalid({"max_iterations": 1})
+    assert ("max_iterations",) in invalid({"until": "true", "max_iterations": 0})
+    assert ("max_iterations",) in invalid({"until": "true", "max_iterations": 100_001})
+    assert invalid({"until": "true", "max_iterations": 1}) == []
+    assert invalid({"until": "true", "max_iterations": 100_000}) == []
+
+
+def test_until_frame_uses_each_and_done_and_stays_acyclic() -> None:
+    entered = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_hold", "volume.until", "Hold", _until_config()),
+            _node("nd_step", "transform.set_fields", "Step", _fields("1"), parent="nd_hold"),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_hold"),
+            _edge("ed_done_in", "nd_hold", "nd_step", source_port="done"),
+        ],
+    )
+    done_in = [
+        item
+        for item in validate(entered, FakeResolver())
         if item.code == "CHANNEL_LOOP_BODY_INVALID"
     ]
-    assert problems == [
-        ("nd_query", _DATASET_IN_CONTAINER),
-        ("nd_load", _DATASET_IN_CONTAINER),
+    assert [item.edge_id for item in done_in] == ["ed_done_in"]
+    assert done_in[0].detail == "A container frame is entered only from each"
+
+    escaped = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_hold", "volume.until", "Hold", _until_config()),
+            _node("nd_step", "transform.set_fields", "Step", _fields("1"), parent="nd_hold"),
+            _node("nd_after", "transform.set_fields", "After", _fields("1")),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_hold"),
+            _edge("ed_each", "nd_hold", "nd_step", source_port="each"),
+            _edge("ed_escape", "nd_step", "nd_after"),
+        ],
+    )
+    cross = [
+        item
+        for item in validate(escaped, FakeResolver())
+        if item.code == "CHANNEL_LOOP_BODY_INVALID"
     ]
+    assert [item.edge_id for item in cross] == ["ed_escape"]
+    assert cross[0].detail == "Edge crosses a container frame"
+
+    each_out = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_hold", "volume.until", "Hold", _until_config()),
+            _node("nd_step", "transform.set_fields", "Step", _fields("1"), parent="nd_hold"),
+            _node("nd_after", "transform.set_fields", "After", _fields("1")),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_hold"),
+            _edge("ed_each", "nd_hold", "nd_step", source_port="each"),
+            _edge("ed_each_out", "nd_hold", "nd_after", source_port="each"),
+        ],
+    )
+    stray = [
+        item
+        for item in validate(each_out, FakeResolver())
+        if item.code == "CHANNEL_LOOP_BODY_INVALID" and item.edge_id == "ed_each_out"
+    ]
+    assert len(stray) == 1
+    assert stray[0].detail == "each connects only to a direct child of this container"
+
+    cycled = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_hold", "volume.until", "Hold", _until_config()),
+            _node("nd_step", "transform.set_fields", "Step", _fields("1"), parent="nd_hold"),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_hold"),
+            _edge("ed_each", "nd_hold", "nd_step", source_port="each"),
+            _edge("ed_back", "nd_step", "nd_hold"),
+        ],
+    )
+    assert "CHANNEL_GRAPH_CYCLE" in {item.code for item in validate(cycled, FakeResolver())}
 
 
-def test_for_and_batch_read_are_the_container_types() -> None:
+def test_an_empty_until_body_is_legal() -> None:
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_hold", "volume.until", "Hold", _until_config("true", 1)),
+            _node("nd_after", "transform.set_fields", "After", _fields("1")),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_hold"),
+            _edge("ed_done", "nd_hold", "nd_after", source_port="done"),
+        ],
+    )
+    assert [item for item in validate(graph, FakeResolver()) if item.severity == "error"] == []
+
+
+def test_until_nests_with_for_and_batch_read_in_either_direction() -> None:
+    dataset = '{"dataset_id":"dset","columns":[{"name":"n","type":"integer"}],"count":1}'
+    inside_for = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_walk", "volume.for", "Walk", {"items": "[1]"}),
+            _node("nd_hold", "volume.until", "Hold", _until_config(), parent="nd_walk"),
+            _node("nd_step", "transform.set_fields", "Step", _fields("1"), parent="nd_hold"),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_walk"),
+            _edge("ed_each", "nd_walk", "nd_hold", source_port="each"),
+            _edge("ed_inner", "nd_hold", "nd_step", source_port="each"),
+        ],
+    )
+    assert [item for item in validate(inside_for, FakeResolver()) if item.severity == "error"] == []
+
+    around_batch = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_hold", "volume.until", "Hold", _until_config()),
+            _node(
+                "nd_batch",
+                "volume.batch_read",
+                "Batch",
+                {"dataset": dataset},
+                parent="nd_hold",
+            ),
+            _node("nd_step", "transform.set_fields", "Step", _fields("1"), parent="nd_batch"),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_hold"),
+            _edge("ed_each", "nd_hold", "nd_batch", source_port="each"),
+            _edge("ed_batch", "nd_batch", "nd_step", source_port="each"),
+        ],
+    )
+    assert [item for item in validate(around_batch, FakeResolver()) if item.severity == "error"] == []
+
+
+def test_until_stop_closure_includes_the_body_and_not_done() -> None:
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_hold", "volume.until", "Hold", _until_config()),
+            _node("nd_step", "transform.set_fields", "Step", _fields("1"), parent="nd_hold"),
+            _node("nd_tail", "transform.set_fields", "Tail", _fields("2"), parent="nd_hold"),
+            _node("nd_after", "transform.set_fields", "After", _fields("3")),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_hold"),
+            _edge("ed_each", "nd_hold", "nd_step", source_port="each"),
+            _edge("ed_next", "nd_step", "nd_tail"),
+            _edge("ed_done", "nd_hold", "nd_after", source_port="done"),
+            _edge("ed_back", "nd_tail", "nd_hold", target_port="loop"),
+        ],
+    )
+    assert ancestor_closure(graph, "nd_step") == {"nd_trigger", "nd_hold", "nd_step"}
+    assert ancestor_closure(graph, "nd_tail") == {"nd_trigger", "nd_hold", "nd_step", "nd_tail"}
+    after = ancestor_closure(graph, "nd_after")
+    assert after is not None
+    assert "nd_hold" in after
+    assert "nd_step" not in after
+    assert "nd_tail" not in after
+
+
+def test_until_is_a_legal_parent() -> None:
+    graph = _graph(
+        [
+            _node("nd_trigger", "trigger.manual", "Run"),
+            _node("nd_hold", "volume.until", "Hold", _until_config()),
+            _node("nd_step", "transform.set_fields", "Step", _fields("1"), parent="nd_hold"),
+            _node("nd_after", "transform.set_fields", "After", _fields("2")),
+        ],
+        [
+            _edge("ed_in", "nd_trigger", "nd_hold"),
+            _edge("ed_each", "nd_hold", "nd_step", source_port="each"),
+            _edge("ed_done", "nd_hold", "nd_after", source_port="done"),
+        ],
+    )
+    assert [item for item in validate(graph, FakeResolver()) if item.severity == "error"] == []
+
+
+def test_for_batch_read_and_until_are_the_container_types() -> None:
     from backend.channel.graph import CONTAINER_TYPES
 
-    assert set(CONTAINER_TYPES) == {"volume.for", "volume.batch_read"}
+    assert set(CONTAINER_TYPES) == {"volume.for", "volume.batch_read", "volume.until"}
     assert CONTAINER_TYPES["volume.for"].accumulate is True
     assert CONTAINER_TYPES["volume.batch_read"].accumulate is False
+    assert CONTAINER_TYPES["volume.until"].accumulate is True
 
 
 def test_a_non_for_container_in_the_set_is_a_legal_parent(monkeypatch) -> None:

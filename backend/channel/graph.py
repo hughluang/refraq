@@ -3,9 +3,8 @@
 `validate` reports every problem it finds. It does not read stores; callers
 pass a reference resolver. Every cycle is illegal. A container frame is the
 set of nodes whose parent is a container. ``CONTAINER_TYPES`` is that set.
-Dataset Query and Materialize are rejected anywhere
-inside that set. An edge may enter a frame only from that container's
-each port. Ancestors walk incoming edges and skip edges that cross a frame.
+An edge may enter a frame only from that container's each port. Ancestors
+walk incoming edges and skip edges that cross a frame.
 """
 
 from __future__ import annotations
@@ -81,7 +80,6 @@ def validate(
     problems.extend(_reachability_problems(nodes, edges, by_id, by_type))
     problems.extend(_cycle_problems(nodes, edges, by_id))
     problems.extend(_for_frame_problems(nodes, edges, by_id))
-    problems.extend(_dataset_container_problems(nodes, by_id))
     problems.extend(_reference_problems(nodes, by_type, resolver))
     problems.extend(_settings_problems(graph["settings"], resolver))
     return problems
@@ -219,6 +217,26 @@ def template_site(
     return None
 
 
+def _template_upstream(
+    node: Mapping[str, Any],
+    node_id: str,
+    upstream: set[str],
+    by_id: Mapping[str, Mapping[str, Any]],
+    path: tuple[str | int, ...],
+) -> set[str]:
+    """Nodes a template may name.
+
+    Ancestors only, except an Until condition, which may also name that
+    Until's direct children.
+    """
+    allowed = set(upstream)
+    if str(node.get("type")) == "volume.until" and path == ("until",):
+        for other_id, other in by_id.items():
+            if other.get("parent") == node_id:
+                allowed.add(str(other_id))
+    return allowed
+
+
 def _template_problems(
     text: str,
     value_schema: dict[str, Any] | None,
@@ -240,11 +258,12 @@ def _template_problems(
             )
         ]
     problems: list[Problem] = []
+    allowed = _template_upstream(node, node_id, upstream, by_id, path)
     by_ref = {str(item.get("ref")): str(item["id"]) for item in by_id.values()}
     by_name = {str(item.get("name")): str(item["id"]) for item in by_id.values()}
     for ref in template.refs:
         target = by_ref.get(ref)
-        if target is None or target not in upstream:
+        if target is None or target not in allowed:
             problems.append(
                 Problem(
                     "CHANNEL_TEMPLATE_REF_INVALID",
@@ -255,7 +274,7 @@ def _template_problems(
             )
     for name in template.node_names:
         target = by_name.get(name)
-        if target is None or target not in upstream:
+        if target is None or target not in allowed:
             problems.append(
                 Problem(
                     "CHANNEL_TEMPLATE_REF_INVALID",
@@ -264,7 +283,6 @@ def _template_problems(
                     path=path,
                 )
             )
-    del node
     if value_schema is None:
         return problems
     try:
@@ -794,6 +812,7 @@ class ContainerType:
 CONTAINER_TYPES: dict[str, ContainerType] = {
     "volume.for": ContainerType(),
     "volume.batch_read": ContainerType(accumulate=False),
+    "volume.until": ContainerType(),
 }
 
 
@@ -908,46 +927,6 @@ def _for_frame_problems(
                 )
             )
     return problems
-
-
-_DATASET_NODES = frozenset({"volume.dataset_query", "volume.materialize"})
-_DATASET_IN_CONTAINER = "A Dataset Query or Materialize cannot run inside a container"
-
-
-def _dataset_container_problems(
-    nodes: list[dict[str, Any]],
-    by_id: dict[str, dict[str, Any]],
-) -> list[Problem]:
-    problems: list[Problem] = []
-    for node in nodes:
-        if str(node.get("type")) not in _DATASET_NODES:
-            continue
-        if not _has_container_ancestor(str(node["id"]), by_id):
-            continue
-        problems.append(
-            Problem(
-                "CHANNEL_LOOP_BODY_INVALID",
-                _DATASET_IN_CONTAINER,
-                node_id=str(node["id"]),
-            )
-        )
-    return problems
-
-
-def _has_container_ancestor(
-    node_id: str,
-    by_id: Mapping[str, Mapping[str, Any]],
-) -> bool:
-    seen = {node_id}
-    current = node_id
-    while True:
-        parent = _parent_ref(by_id[current])
-        if parent is None or parent not in by_id or parent in seen:
-            return False
-        if _is_container(by_id[parent].get("type")):
-            return True
-        seen.add(parent)
-        current = parent
 
 
 class _Upstream(dict[str, Any]):

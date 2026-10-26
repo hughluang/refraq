@@ -338,6 +338,7 @@ def test_node_type_catalog_and_audit(client: TestClient) -> None:
         "volume.dataset_query",
         "volume.for",
         "volume.materialize",
+        "volume.until",
         "state.variable",
         "write.entity",
         "action.email",

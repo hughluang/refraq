@@ -49,6 +49,19 @@ describe("frameLinkAllowed", () => {
     member("after", "read.sql", { x: 400, y: 40 }),
   ];
 
+  it("treats Until as a frame with the same each and done rules", () => {
+    const hold = member("hold", "volume.until", { x: 0, y: 0 });
+    const step = member("step", "transform.set_fields", { x: 40, y: 48 }, "hold");
+    const after = member("after", "transform.set_fields", { x: 400, y: 0 });
+    const members = [hold, step, after];
+    expect(frameLinkAllowed(members, { source: "hold", target: "step", sourceHandle: "each" })).toBe(true);
+    expect(frameLinkAllowed(members, { source: "hold", target: "after", sourceHandle: "each" })).toBe(false);
+    expect(frameLinkAllowed(members, { source: "hold", target: "after", sourceHandle: "done" })).toBe(true);
+    expect(frameLinkAllowed(members, { source: "hold", target: "step", sourceHandle: "done" })).toBe(false);
+    expect(frameLinkAllowed(members, { source: "step", target: "after", sourceHandle: "main" })).toBe(false);
+    expect(freezeFrames(members).map((item) => item.id)).toEqual(["hold"]);
+  });
+
   it("treats Batch Read as a container, not a For-only type compare", () => {
     const batch = member("batch", "volume.batch_read", { x: 0, y: 0 });
     const nested = member("inner", "volume.for", { x: 40, y: 48 }, "batch");

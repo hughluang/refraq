@@ -198,7 +198,13 @@ export type ScopeEdge = {
 
 export function upstreamOutputs(
   nodeId: string,
-  nodes: readonly { id: string; ref: string; name: string; parent?: string | null }[],
+  nodes: readonly {
+    id: string;
+    ref: string;
+    name: string;
+    parent?: string | null;
+    nodeType?: string;
+  }[],
   edges: readonly ScopeEdge[],
   schemas: ReadonlyMap<string, SchemaObject | null>,
   samples: ReadonlyMap<string, unknown> = new Map(),
@@ -220,6 +226,14 @@ export function upstreamOutputs(
     seen.add(edge.source);
     portByNode.set(edge.source, edge.sourcePort);
     stack.push(...(incoming.get(edge.source) ?? []));
+  }
+  const self = nodes.find((node) => node.id === nodeId);
+  if (self?.nodeType === "volume.until") {
+    for (const child of nodes) {
+      if (child.parent === nodeId) {
+        seen.add(child.id);
+      }
+    }
   }
   return nodes
     .filter((node) => seen.has(node.id) && node.ref)

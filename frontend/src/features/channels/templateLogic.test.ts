@@ -320,6 +320,42 @@ describe("upstreamOutputs", () => {
     expect(doneOptions).toContain("self.walk.output.iterations");
     expect(doneOptions).not.toContain("self.walk.output.results");
   });
+
+  it("offers an Until node's direct children and not a grandchild or a done successor", () => {
+    const nodes = [
+      { id: "trigger", ref: "run_manually", name: "Run", nodeType: "trigger.manual" },
+      { id: "loop", ref: "hold", name: "Hold", nodeType: "volume.until" },
+      { id: "body", ref: "step", name: "Step", parent: "loop", nodeType: "transform.set_fields" },
+      { id: "later", ref: "later", name: "Later", parent: "loop", nodeType: "transform.set_fields" },
+      { id: "leaf", ref: "leaf", name: "Leaf", parent: "body", nodeType: "transform.set_fields" },
+      { id: "after", ref: "after", name: "After", nodeType: "transform.set_fields" },
+    ];
+    const edges = [
+      { source: "trigger", target: "loop", sourcePort: "main" },
+      { source: "loop", target: "body", sourcePort: "each" },
+      { source: "body", target: "later", sourcePort: "main" },
+      { source: "loop", target: "after", sourcePort: "done" },
+    ];
+    const schemas = new Map<string, { type: string; properties: Record<string, unknown> } | null>([
+      ["body", { type: "object", properties: { n: {} } }],
+    ]);
+    const found = upstreamOutputs("loop", nodes, edges, schemas);
+    expect(found.map((item) => item.ref).sort()).toEqual(["later", "run_manually", "step"]);
+    expect(found.find((item) => item.ref === "step")?.schema?.properties).toHaveProperty("n");
+    const text = "{{ self.";
+    const options = templateCompletions(text, text.length, false, scopeOf(found))?.options ?? [];
+    expect(options).toContain("self.step");
+    expect(options).toContain("self.later");
+    expect(options).not.toContain("self.leaf");
+    expect(options).not.toContain("self.after");
+    expect(options).not.toContain("self.hold");
+
+    const forNodes = nodes.map((node) =>
+      node.id === "loop" ? { ...node, nodeType: "volume.for" } : node,
+    );
+    const insideFor = upstreamOutputs("loop", forNodes, edges, schemas);
+    expect(insideFor.map((item) => item.ref)).toEqual(["run_manually"]);
+  });
 });
 
 describe("templateInsertion", () => {

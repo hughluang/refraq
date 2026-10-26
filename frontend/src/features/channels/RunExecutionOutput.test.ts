@@ -92,6 +92,7 @@ const countsView: OutputView = {
 };
 const datasetView: OutputView = { kind: "dataset", dataset: "dataset", metrics: ["count"] };
 const forView: OutputView = { kind: "container", item: "current", metrics: ["count"] };
+const untilView: OutputView = { kind: "container", item: "index", metrics: ["count"] };
 const batchView: OutputView = {
   kind: "container",
   item: "rows",
@@ -409,6 +410,45 @@ it("spreads a For round into columns, highlights a failed round, and selects tha
   expect(onPick).toHaveBeenCalledWith(["current", "code"]);
   expect(onSelectRound).toHaveBeenCalledWith(0);
   expect(listRounds).toHaveBeenCalledWith("chn_1", "job_1", 7, { limit: 50, offset: 0 });
+});
+
+it("shows an Until round's index in the value column", async () => {
+  const onPick = vi.fn();
+  vi.mocked(listRounds).mockResolvedValue({
+    items: [
+      {
+        round: 0,
+        step_preview: { index: 0 },
+        step_truncated: false,
+        step_totals: {},
+        status_counts: { succeeded: 1 },
+      },
+      {
+        round: 1,
+        step_preview: { index: 1 },
+        step_truncated: false,
+        step_totals: {},
+        status_counts: { succeeded: 1 },
+      },
+    ],
+    total: 2,
+    limit: 50,
+    offset: 0,
+  });
+  mount(
+    createElement(RunExecutionOutput, {
+      channelId: "chn_1",
+      jobId: "job_1",
+      view: untilView,
+      value: { count: 2, index: 1, iterations: [] },
+      seq: 4,
+      onPick,
+    }),
+  );
+  expect(await screen.findByRole("button", { name: "0" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "1" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "0" }));
+  expect(onPick).toHaveBeenCalledWith(["index"]);
 });
 
 it("shows a batch round's ordinal range and expands that batch through the row window", async () => {
