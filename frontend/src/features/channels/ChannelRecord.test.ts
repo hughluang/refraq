@@ -153,6 +153,12 @@ function stubDomApis() {
     disconnect() {}
   }
   globalThis.ResizeObserver = ResizeObserverStub;
+  if (!document.fonts) {
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: { addEventListener() {}, removeEventListener() {} },
+    });
+  }
   if (!SVGElement.prototype.getBBox) {
     SVGElement.prototype.getBBox = () => ({
       x: 0,

@@ -159,6 +159,12 @@ function stubDomApis() {
     disconnect() {}
   }
   globalThis.ResizeObserver = ResizeObserverStub;
+  if (!document.fonts) {
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: { addEventListener() {}, removeEventListener() {} },
+    });
+  }
   if (!SVGElement.prototype.getBBox) {
     SVGElement.prototype.getBBox = () => ({
       x: 0,
@@ -174,8 +180,15 @@ function stubDomApis() {
   }
 }
 
-function button(name: string) {
-  return screen.getByRole("button", { name: (value) => value === name }) as HTMLButtonElement;
+function button(name: string, options?: { hidden?: boolean }) {
+  return screen.getByRole("button", {
+    name: (value) => value === name,
+    hidden: options?.hidden,
+  }) as HTMLButtonElement;
+}
+
+function openSettings() {
+  fireEvent.click(button("channels.details.title"));
 }
 
 async function renderRecord(mode: "show" | "edit" | "create" = "show") {
@@ -221,11 +234,13 @@ describe("ChannelRecord tags", { timeout: 15_000 }, () => {
   it("saves show-page tags through PUT and leaves the draft save alone", async () => {
     await renderRecord("show");
     expect(await screen.findByRole("heading", { name: "Intake" })).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "channels.tags.title" })).toBeNull();
+    openSettings();
 
-    const field = screen.getByRole("textbox", { name: "channels.tags.field" });
+    const field = screen.getByRole("combobox", { name: "channels.tags.title" });
     fireEvent.change(field, { target: { value: "Ledger" } });
     fireEvent.keyDown(field, { key: "Enter" });
-    expect(button("channels.actions.publish").disabled).toBe(false);
+    expect(button("channels.actions.publish", { hidden: true }).disabled).toBe(false);
 
     fireEvent.click(button("channels.tags.save"));
     await waitFor(() => {
@@ -238,7 +253,7 @@ describe("ChannelRecord tags", { timeout: 15_000 }, () => {
     expect(button("channels.tags.remove")).toBeTruthy();
     expect(patchChannel).not.toHaveBeenCalled();
     expect(saveDraft).not.toHaveBeenCalled();
-    expect(button("channels.actions.publish").disabled).toBe(false);
+    expect(button("channels.actions.publish", { hidden: true }).disabled).toBe(false);
   });
 
   it("saves a suggested tag by its name as that tag id", async () => {
@@ -258,8 +273,9 @@ describe("ChannelRecord tags", { timeout: 15_000 }, () => {
     });
     await renderRecord("show");
     expect(await screen.findByRole("heading", { name: "Intake" })).toBeTruthy();
+    openSettings();
 
-    fireEvent.change(screen.getByRole("textbox", { name: "channels.tags.field" }), {
+    fireEvent.change(screen.getByRole("combobox", { name: "channels.tags.title" }), {
       target: { value: "Led" },
     });
     fireEvent.click(await screen.findByRole("option", { name: (value) => value === "Ledger" }));
@@ -298,7 +314,7 @@ describe("ChannelRecord tags", { timeout: 15_000 }, () => {
     expect(screen.queryByRole("textbox", { name: "channels.fields.description" })).toBeNull();
     expect(screen.queryByRole("button", { name: "channels.description.apply" })).toBeNull();
 
-    const field = screen.getByRole("textbox", { name: "channels.tags.field" });
+    const field = screen.getByRole("combobox", { name: "channels.tags.title" });
     fireEvent.change(field, { target: { value: "Ledger" } });
     fireEvent.keyDown(field, { key: "Enter" });
     expect((button("channels.tags.save") as HTMLButtonElement).disabled).toBe(false);
@@ -312,8 +328,8 @@ describe("ChannelRecord tags", { timeout: 15_000 }, () => {
     });
     expect(saveDraft).not.toHaveBeenCalled();
     expect(patchChannel).not.toHaveBeenCalled();
-    expect((button("channels.edit.submit") as HTMLButtonElement).disabled).toBe(true);
-    expect((button("channels.actions.publish") as HTMLButtonElement).disabled).toBe(true);
+    expect((button("channels.edit.submit", { hidden: true }) as HTMLButtonElement).disabled).toBe(true);
+    expect((button("channels.actions.publish", { hidden: true }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("sends committed tag names with the create body", async () => {
@@ -325,7 +341,7 @@ describe("ChannelRecord tags", { timeout: 15_000 }, () => {
     fireEvent.change(screen.getByRole("textbox", { name: "channels.fields.description" }), {
       target: { value: "From the plant" },
     });
-    const field = screen.getByRole("textbox", { name: "channels.tags.field" });
+    const field = screen.getByRole("combobox", { name: "channels.tags.title" });
     fireEvent.change(field, { target: { value: "Ledger" } });
     fireEvent.keyDown(field, { key: "Enter" });
     expect(screen.queryByRole("button", { name: "channels.tags.save" })).toBeNull();
@@ -346,17 +362,17 @@ describe("ChannelRecord tags", { timeout: 15_000 }, () => {
     fireEvent.change(await screen.findByRole("textbox", { name: "channels.fields.name" }), {
       target: { value: "Intake" },
     });
-    const tagField = screen.getByRole("textbox", { name: "channels.tags.field" });
-    expect(screen.getByText("channels.tags.empty")).toBeTruthy();
-    fireEvent.change(tagField, { target: { value: "Ledger" } });
+    const tagField = screen.getByRole("combobox", { name: "channels.tags.title" });
+    expect(tagField.getAttribute("placeholder")).toBe("tags.editor.placeholder");
     expect(screen.queryByText("channels.tags.empty")).toBeNull();
+    fireEvent.change(tagField, { target: { value: "Ledger" } });
     expect(screen.queryByRole("button", { name: "channels.tags.remove" })).toBeNull();
     fireEvent.change(tagField, { target: { value: "   " } });
-    expect(screen.getByText("channels.tags.empty")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "channels.tags.remove" })).toBeNull();
     fireEvent.change(tagField, { target: { value: "" } });
-    expect(screen.getByText("channels.tags.empty")).toBeTruthy();
+    expect(tagField.getAttribute("placeholder")).toBe("tags.editor.placeholder");
     fireEvent.change(tagField, { target: { value: "Ledger" } });
-    expect(screen.queryByText("channels.tags.empty")).toBeNull();
+    expect(screen.queryByRole("button", { name: "channels.tags.remove" })).toBeNull();
     expect(screen.getByText("channels.tags.createDescription")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "channels.tags.save" })).toBeNull();
     fireEvent.click(button("channels.create.submit"));
@@ -373,9 +389,12 @@ describe("ChannelRecord tags", { timeout: 15_000 }, () => {
   it("sends the tag field text when save tags is clicked without Enter", async () => {
     await renderRecord("show");
     expect(await screen.findByRole("heading", { name: "Intake" })).toBeTruthy();
+    openSettings();
 
-    expect(await screen.findByText("channels.tags.empty")).toBeTruthy();
-    fireEvent.change(screen.getByRole("textbox", { name: "channels.tags.field" }), {
+    const tagField = screen.getByRole("combobox", { name: "channels.tags.title" });
+    expect(tagField.getAttribute("placeholder")).toBe("tags.editor.placeholder");
+    expect(screen.queryByText("channels.tags.empty")).toBeNull();
+    fireEvent.change(tagField, {
       target: { value: "Ledger" },
     });
     expect(screen.queryByText("channels.tags.empty")).toBeNull();
@@ -399,16 +418,21 @@ describe("ChannelRecord tags", { timeout: 15_000 }, () => {
       }),
     });
     await renderRecord("edit");
-    const field = await screen.findByRole("textbox", { name: "channels.tags.field" });
+    expect(await screen.findByRole("heading", { name: "Intake" })).toBeTruthy();
+    openSettings();
+    const field = screen.getByRole("combobox", { name: "channels.tags.title" });
     fireEvent.change(field, { target: { value: "Ledger" } });
     fireEvent.keyDown(field, { key: "Enter" });
     expect(button("channels.tags.remove")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "channels.description.apply" })).toBeTruthy();
 
+    fireEvent.click(button("form.dialog.close"));
     fireEvent.click(screen.getByRole("switch", { name: "channels.fields.active" }));
     fireEvent.click(button("channels.edit.submit"));
     await waitFor(() => {
       expect(activateChannel).toHaveBeenCalledWith("chn_1");
     });
+    openSettings();
     expect(button("channels.tags.remove")).toBeTruthy();
     expect(replaceChannelTags).not.toHaveBeenCalled();
   });
@@ -419,8 +443,12 @@ describe("ChannelRecord tags", { timeout: 15_000 }, () => {
       channel: channel({ tags: [{ id: "tag_ledger", name: "Ledger" }] }),
     });
     await renderRecord("show");
-    expect(await screen.findByText("Ledger")).toBeTruthy();
-    expect(screen.queryByRole("textbox", { name: "channels.tags.field" })).toBeNull();
+    expect(await screen.findByRole("heading", { name: "Intake" })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "channels.details.title" })).toBeNull();
+    openSettings();
+    expect(screen.getByRole("dialog", { name: "channels.details.title" })).toBeTruthy();
+    expect(screen.getByText("Ledger")).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "channels.tags.title" })).toBeNull();
     expect(screen.queryByRole("button", { name: "channels.tags.save" })).toBeNull();
   });
 
@@ -428,7 +456,7 @@ describe("ChannelRecord tags", { timeout: 15_000 }, () => {
     flags.canWrite = false;
     await renderRecord("create");
     expect(await screen.findByText("channels.tags.empty")).toBeTruthy();
-    expect(screen.queryByRole("textbox", { name: "channels.tags.field" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "channels.tags.title" })).toBeNull();
     expect(screen.queryByRole("button", { name: "channels.tags.save" })).toBeNull();
   });
 });

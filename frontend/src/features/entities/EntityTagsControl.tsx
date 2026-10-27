@@ -38,7 +38,6 @@ export const EntityTagsControl = forwardRef<EntityTagsControlHandle, Props>(
     return (
       <RecordTagEditor
         ref={ref}
-        fieldLabel={t("entities.tags.field")}
         title={t("entities.tags.title")}
         description={t(
           mode === "create" ? "entities.tags.createDescription" : "entities.tags.description",

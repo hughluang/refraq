@@ -27,6 +27,8 @@ export type FormDialogProps = {
   size?: ModalProps["size"];
   /** Primary stays visible but does not submit. */
   submitDisabled?: boolean;
+  /** Keep fields mounted while the dialog is closed. */
+  keepMounted?: boolean;
 };
 
 const FIRST_FIELD =
@@ -50,6 +52,7 @@ export function FormDialog({
   leading,
   size,
   submitDisabled = false,
+  keepMounted = false,
 }: FormDialogProps) {
   const t = useTranslate();
   useLeaveGuardRegistration(Boolean(opened && dirty));
@@ -90,6 +93,7 @@ export function FormDialog({
       onClose={requestClose}
       title={title}
       size={size}
+      keepMounted={keepMounted}
       closeOnClickOutside={!dirty}
       closeOnEscape
       closeButtonProps={{ "aria-label": t("form.dialog.close") }}

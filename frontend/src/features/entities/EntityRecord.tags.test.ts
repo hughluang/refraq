@@ -32,8 +32,8 @@ const LABELS: Record<string, string> = {
   "entities.tags.title": "Tags",
   "entities.tags.description": "Tags organize this Entity. Saving them does not change the definition.",
   "entities.tags.createDescription": "Tags organize this Entity. They are submitted with this save.",
-  "entities.tags.field": "Add a tag",
   "entities.tags.save": "Save tags",
+  "tags.editor.placeholder": "Search or type a new tag",
   "entities.tags.empty": "No tags",
   "entities.tags.remove": "Remove {{name}}",
   "entities.tabs.overview": "Overview",
@@ -246,7 +246,7 @@ describe("EntityRecord tags", () => {
     });
     await renderRecord(entity());
 
-    fireEvent.change(screen.getByRole("textbox", { name: "Add a tag" }), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Tags" }), {
       target: { value: "Ledger" },
     });
     fireEvent.click(await screen.findByRole("option", { name: (value) => value === "Ledger" }));
@@ -282,7 +282,7 @@ describe("EntityRecord tags", () => {
       }),
     );
 
-    const field = screen.getByRole("textbox", { name: "Add a tag" });
+    const field = screen.getByRole("combobox", { name: "Tags" });
     fireEvent.change(field, { target: { value: "Books" } });
     fireEvent.keyDown(field, { key: "Enter" });
 
@@ -319,7 +319,7 @@ describe("EntityRecord tags", () => {
     );
 
     expect(screen.getByText("Ledger")).toBeTruthy();
-    expect(screen.queryByRole("textbox", { name: "Add a tag" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Tags" })).toBeNull();
     expect(screen.queryByRole("button", { name: (value) => value === "Save tags" })).toBeNull();
   });
 
@@ -328,7 +328,7 @@ describe("EntityRecord tags", () => {
     await renderRecord(entity());
 
     expect(screen.getByText("No tags")).toBeTruthy();
-    expect(screen.queryByRole("textbox", { name: "Add a tag" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Tags" })).toBeNull();
     expect(screen.queryByRole("button", { name: (value) => value === "Save tags" })).toBeNull();
   });
 
@@ -336,7 +336,7 @@ describe("EntityRecord tags", () => {
     vi.mocked(patchEntity).mockResolvedValue({ entity: entity() });
     await renderRecord(entity(), "edit");
 
-    const field = screen.getByRole("textbox", { name: "Add a tag" });
+    const field = screen.getByRole("combobox", { name: "Tags" });
     fireEvent.change(field, { target: { value: "Books" } });
     fireEvent.keyDown(field, { key: "Enter" });
     expect(patchEntity).not.toHaveBeenCalled();
@@ -363,7 +363,7 @@ describe("EntityRecord tags", () => {
     vi.mocked(patchEntity).mockResolvedValue({ entity: record });
     await renderRecord(record, "edit");
 
-    const field = screen.getByRole("textbox", { name: "Add a tag" });
+    const field = screen.getByRole("combobox", { name: "Tags" });
     fireEvent.change(field, { target: { value: "Books" } });
     fireEvent.keyDown(field, { key: "Enter" });
     expect(screen.getByRole("button", { name: "Remove Books" })).toBeTruthy();
@@ -388,8 +388,10 @@ describe("EntityRecord tags", () => {
   it("sends the tag field text when save tags is clicked without Enter", async () => {
     await renderRecord(entity(), "edit");
 
-    expect(screen.getByText("No tags")).toBeTruthy();
-    fireEvent.change(screen.getByRole("textbox", { name: "Add a tag" }), {
+    const tagField = screen.getByRole("combobox", { name: "Tags" });
+    expect(tagField.getAttribute("placeholder")).toBe("Search or type a new tag");
+    expect(screen.queryByText("No tags")).toBeNull();
+    fireEvent.change(tagField, {
       target: { value: "Books" },
     });
     expect(screen.queryByText("No tags")).toBeNull();
@@ -422,7 +424,7 @@ describe("EntityRecord tags", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
       target: { value: "A material" },
     });
-    const field = screen.getByRole("textbox", { name: "Add a tag" });
+    const field = screen.getByRole("combobox", { name: "Tags" });
     fireEvent.change(field, { target: { value: "Ledger" } });
     fireEvent.keyDown(field, { key: "Enter" });
     fireEvent.click(button("Save"));
@@ -457,17 +459,17 @@ describe("EntityRecord tags", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
       target: { value: "A material" },
     });
-    const tagField = screen.getByRole("textbox", { name: "Add a tag" });
-    expect(screen.getByText("No tags")).toBeTruthy();
-    fireEvent.change(tagField, { target: { value: "Ledger" } });
+    const tagField = screen.getByRole("combobox", { name: "Tags" });
+    expect(tagField.getAttribute("placeholder")).toBe("Search or type a new tag");
     expect(screen.queryByText("No tags")).toBeNull();
+    fireEvent.change(tagField, { target: { value: "Ledger" } });
     expect(screen.queryByRole("button", { name: "Remove Ledger" })).toBeNull();
     fireEvent.change(tagField, { target: { value: "   " } });
-    expect(screen.getByText("No tags")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Remove Ledger" })).toBeNull();
     fireEvent.change(tagField, { target: { value: "" } });
-    expect(screen.getByText("No tags")).toBeTruthy();
+    expect(tagField.getAttribute("placeholder")).toBe("Search or type a new tag");
     fireEvent.change(tagField, { target: { value: "Ledger" } });
-    expect(screen.queryByText("No tags")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove Ledger" })).toBeNull();
     expect(
       screen.getByText("Tags organize this Entity. They are submitted with this save."),
     ).toBeTruthy();

@@ -3,6 +3,7 @@
 import {
   Box,
   Button,
+  Divider,
   Drawer,
   Group,
   Modal,
@@ -752,6 +753,31 @@ function ChannelExisting({
     detailsForm.markSaved();
     setDescriptionOpen(false);
   };
+  const tagSettings = (
+    <>
+      <Divider />
+      <Box
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.stopPropagation();
+        }}
+      >
+        <ChannelTagsControl
+          mode={mode}
+          channelId={channelId}
+          tags={channel.tags}
+          tagRevision={channel.tag_revision}
+          editable={Boolean(canWrite?.can)}
+          onSaved={(next) => {
+            setChannel((current) =>
+              current
+                ? { ...current, tags: next.tags, tag_revision: next.tag_revision }
+                : current,
+            );
+          }}
+        />
+      </Box>
+    </>
+  );
 
   return (
     // Above app chrome (100/101) and below modal (200) and popover (300).
@@ -997,20 +1023,6 @@ function ChannelExisting({
           },
         )}
       />
-      <ChannelTagsControl
-        mode={mode}
-        channelId={channelId}
-        tags={channel.tags}
-        tagRevision={channel.tag_revision}
-        editable={Boolean(canWrite?.can)}
-        onSaved={(next) => {
-          setChannel((current) =>
-            current
-              ? { ...current, tags: next.tags, tag_revision: next.tag_revision }
-              : current,
-          );
-        }}
-      />
       <FillColumn>
         <FormErrorSummary failure={saveFailure} />
         <LiveStatusAnnouncer
@@ -1073,6 +1085,7 @@ function ChannelExisting({
           submitting={detailsForm.submitting}
           submitLabel={t("channels.description.apply")}
           onSubmit={() => void detailsForm.submit(applyDescription)}
+          keepMounted
         >
           <Stack gap="sm">
             <Text size="sm" c="dimmed">
@@ -1125,6 +1138,7 @@ function ChannelExisting({
               clearable
               onChange={(next) => detailsForm.setFieldValue("errorChannelId", next)}
             />
+            {tagSettings}
           </Stack>
         </FormDialog>
       ) : (
@@ -1132,6 +1146,7 @@ function ChannelExisting({
           opened={descriptionOpen}
           onClose={closeDescription}
           title={t("channels.details.title")}
+          keepMounted
         >
           <Stack gap="sm">
             <Stack gap={4}>
@@ -1166,6 +1181,7 @@ function ChannelExisting({
                 errorChannelsFailed ? t("channels.settings.errorChannelLoadFailed") : undefined
               }
             />
+            {tagSettings}
             <Group justify="flex-end">
               <Button variant="default" onClick={closeDescription}>
                 {t("channels.description.close")}

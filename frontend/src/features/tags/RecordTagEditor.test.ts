@@ -1,18 +1,22 @@
 /** @vitest-environment jsdom */
 
 import { MantineProvider } from "@mantine/core";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { listTags } from "@/features/tags/api";
 
 const LABELS: Record<string, string> = {
+  "common.retry": "Retry",
   "tags.editor.searching": "Looking up tags",
-  "tags.editor.searchFailed":
-    "Couldn't look up tags. You can still save the name you typed.",
-  "tags.editor.limit": "A record can carry ten tags.",
-  "tags.editor.new": "New",
+  "tags.editor.searchFailed": "Couldn't look up tags. Try again.",
+  "tags.editor.limitHint": "A record can carry at most ten tags.",
+  "tags.editor.limitBlocked": "This record already has ten tags. Remove one, then add another.",
+  "tags.editor.placeholder": "Search or type a new tag",
+  "tags.editor.create": "Create tag “{{name}}”",
+  "tags.editor.duplicate": "This tag is already on the record.",
+  "tags.editor.unsaved": "Unsaved",
 };
 
 vi.mock("@refinedev/core", () => ({
@@ -55,7 +59,6 @@ function renderEditor(props: Record<string, unknown> = {}) {
           MantineProvider,
           { env: "test" },
           createElement(RecordTagEditor, {
-          fieldLabel: "Add a tag",
           title: "Tags",
           description: "Tags organize this record.",
           emptyLabel: "No tags",
@@ -83,28 +86,35 @@ describe("RecordTagEditor", () => {
   it("commits the typed name on Enter when nothing is highlighted", async () => {
     await renderEditor();
 
-    const field = screen.getByRole("textbox", { name: "Add a tag" });
+    const field = screen.getByRole("combobox", { name: "Tags" });
     fireEvent.change(field, { target: { value: "Books" } });
     fireEvent.keyDown(field, { key: "Enter" });
 
+    const books = screen.getByText("Books");
+    const pending = books.closest(".mantine-Pill-root");
+    expect(pending?.textContent).toContain("Books");
+    expect(pending?.textContent).not.toContain("New");
+    expect(pending?.hasAttribute("data-pending")).toBe(true);
     expect(screen.getByRole("button", { name: "Remove Books" }).textContent).not.toContain(
       "Remove Books",
     );
-    expect(screen.getByText("Books")).toBeTruthy();
-    expect(screen.getByText("New")).toBeTruthy();
+    expect(screen.queryByText("New")).toBeNull();
   });
 
-  it("shows a saved tag as its name and a pending name with New", async () => {
+  it("shows a saved tag as its name and a pending name without a status word", async () => {
     await renderEditor({ tags: [{ id: "tag_ledger", name: "Ledger" }] });
 
-    const field = screen.getByRole("textbox", { name: "Add a tag" });
+    const field = screen.getByRole("combobox", { name: "Tags" });
     fireEvent.change(field, { target: { value: "Books" } });
     fireEvent.keyDown(field, { key: "Enter" });
 
-    const ledger = screen.getByText("Ledger");
-    expect(ledger.textContent).toBe("Ledger");
-    expect(ledger.closest(".mantine-Badge-root")?.textContent).toBe("Ledger");
-    expect(screen.getByText("New").closest(".mantine-Badge-root")?.textContent).toContain("Books");
+    const ledger = screen.getByText("Ledger").closest(".mantine-Pill-root");
+    expect(ledger?.textContent).toContain("Ledger");
+    expect(ledger?.textContent).not.toContain("New");
+    expect(ledger?.hasAttribute("data-pending")).toBe(false);
+    const books = screen.getByText("Books").closest(".mantine-Pill-root");
+    expect(books?.textContent).toContain("Books");
+    expect(books?.hasAttribute("data-pending")).toBe(true);
     expect(screen.getByRole("button", { name: "Remove Ledger" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Remove Books" })).toBeTruthy();
   });
@@ -126,12 +136,14 @@ describe("RecordTagEditor", () => {
     });
     await renderEditor();
 
-    fireEvent.change(screen.getByRole("textbox", { name: "Add a tag" }), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Tags" }), {
       target: { value: "Led" },
     });
     fireEvent.click(await screen.findByRole("option", { name: "Ledger" }));
 
-    expect(screen.getByText("Ledger").closest(".mantine-Badge-root")?.textContent).toBe("Ledger");
+    const ledger = screen.getByText("Ledger").closest(".mantine-Pill-root");
+    expect(ledger?.textContent).toContain("Ledger");
+    expect(ledger?.hasAttribute("data-pending")).toBe(false);
     expect(screen.queryByText("New")).toBeNull();
     expect(screen.queryByRole("button", { name: "Remove Led" })).toBeNull();
     expect(screen.getByRole("button", { name: "Remove Ledger" })).toBeTruthy();
@@ -173,7 +185,7 @@ describe("RecordTagEditor", () => {
     });
     await renderEditor({ tags: [{ id: "tag_ledger", name: "Ledger" }] });
 
-    const field = screen.getByRole("textbox", { name: "Add a tag" });
+    const field = screen.getByRole("combobox", { name: "Tags" });
     fireEvent.change(field, { target: { value: "Books" } });
     fireEvent.keyDown(field, { key: "Enter" });
     fireEvent.change(field, { target: { value: "s" } });
@@ -207,37 +219,54 @@ describe("RecordTagEditor", () => {
     });
     await renderEditor();
 
-    const field = screen.getByRole("textbox", { name: "Add a tag" });
+    const field = screen.getByRole("combobox", { name: "Tags" });
     fireEvent.change(field, { target: { value: "Led" } });
     await screen.findByRole("option", { name: "Ledger" });
     fireEvent.keyDown(field, { key: "ArrowDown", code: "ArrowDown" });
     fireEvent.keyDown(field, { key: "Enter", code: "Enter" });
 
-    expect(screen.getByText("Ledger").closest(".mantine-Badge-root")?.textContent).toBe("Ledger");
+    const ledger = screen.getByText("Ledger").closest(".mantine-Pill-root");
+    expect(ledger?.textContent).toContain("Ledger");
+    expect(ledger?.hasAttribute("data-pending")).toBe(false);
     expect(screen.queryByText("New")).toBeNull();
     expect(screen.queryByRole("button", { name: "Remove Led" })).toBeNull();
   });
 
-  it("shows a lookup failure beside the field instead of an empty list", async () => {
+  it("shows a lookup failure in the list and does not create on Enter", async () => {
     vi.mocked(listTags).mockRejectedValue(new Error("offline"));
     await renderEditor();
 
-    const field = screen.getByRole("textbox", { name: "Add a tag" });
+    const field = screen.getByRole("combobox", { name: "Tags" });
     fireEvent.change(field, { target: { value: "Led" } });
 
-    expect(
-      await screen.findByText(
-        "Couldn't look up tags. You can still save the name you typed.",
-      ),
-    ).toBeTruthy();
+    const failed = await screen.findByText("Couldn't look up tags. Try again.");
+    expect(failed.closest("[role='listbox']")).toBeTruthy();
     expect(screen.queryByRole("option")).toBeNull();
 
     fireEvent.keyDown(field, { key: "Enter" });
-    expect(screen.getByRole("button", { name: "Remove Led" })).toBeTruthy();
-    expect(screen.getByText("New")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Remove Led" })).toBeNull();
+    expect((field as HTMLInputElement).value).toBe("Led");
+
+    vi.mocked(listTags).mockResolvedValue({
+      items: [
+        {
+          id: "tag_ledger",
+          name: "Ledger",
+          description: null,
+          created_at: "2026-09-10T04:00:00Z",
+          updated_at: "2026-09-10T04:00:00Z",
+        },
+      ],
+      total: 1,
+      limit: 8,
+      offset: 0,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("option", { name: "Ledger" })).toBeTruthy();
+    expect(screen.queryByText("Couldn't look up tags. Try again.")).toBeNull();
   });
 
-  it("commits the typed name on Enter when a failed lookup drops the highlight", async () => {
+  it("does not commit a typed name on Enter after a failed lookup", async () => {
     vi.mocked(listTags)
       .mockResolvedValueOnce({
         items: [
@@ -256,22 +285,19 @@ describe("RecordTagEditor", () => {
       .mockRejectedValueOnce(new Error("offline"));
     await renderEditor();
 
-    const field = screen.getByRole("textbox", { name: "Add a tag" });
+    const field = screen.getByRole("combobox", { name: "Tags" });
     fireEvent.change(field, { target: { value: "Led" } });
     await screen.findByRole("option", { name: "Ledger" });
     fireEvent.keyDown(field, { key: "ArrowDown", code: "ArrowDown" });
     fireEvent.change(field, { target: { value: "Books" } });
 
-    expect(
-      await screen.findByText(
-        "Couldn't look up tags. You can still save the name you typed.",
-      ),
-    ).toBeTruthy();
+    expect(await screen.findByText("Couldn't look up tags. Try again.")).toBeTruthy();
     fireEvent.keyDown(field, { key: "Enter", code: "Enter" });
 
-    expect(screen.getByRole("button", { name: "Remove Books" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Remove Books" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Remove Ledger" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Remove Led" })).toBeNull();
+    expect((field as HTMLInputElement).value).toBe("Books");
   });
 
   it("shows an in-flight lookup inside the listbox", async () => {
@@ -295,12 +321,16 @@ describe("RecordTagEditor", () => {
     );
     await renderEditor();
 
-    fireEvent.change(screen.getByRole("textbox", { name: "Add a tag" }), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Tags" }), {
       target: { value: "Led" },
     });
 
     const searching = await screen.findByText("Looking up tags");
     expect(searching.closest("[role='listbox']")).toBeTruthy();
+    expect(screen.queryByRole("option")).toBeNull();
+    await waitFor(() => {
+      expect(listTags).toHaveBeenCalled();
+    });
 
     resolveSearch({
       items: [
@@ -321,7 +351,7 @@ describe("RecordTagEditor", () => {
     expect(screen.queryByText("Looking up tags")).toBeNull();
   });
 
-  it("keeps the ten-tag limit visible and still saves an eleventh name", async () => {
+  it("refuses an eleventh name and leaves it in the field", async () => {
     const onSave = vi.fn(async () => undefined);
     const tags = Array.from({ length: 10 }, (_, index) => ({
       id: `tag_${index}`,
@@ -329,18 +359,20 @@ describe("RecordTagEditor", () => {
     }));
     await renderEditor({ tags, saveLabel: "Save tags", onSave });
 
-    expect(screen.getByText("A record can carry ten tags.")).toBeTruthy();
-    fireEvent.change(screen.getByRole("textbox", { name: "Add a tag" }), {
-      target: { value: "Extra" },
-    });
+    expect(screen.getByText("A record can carry at most ten tags.")).toBeTruthy();
+    const field = screen.getByRole("combobox", { name: "Tags" });
+    fireEvent.change(field, { target: { value: "Extra" } });
+    expect(
+      (await screen.findAllByText("This record already has ten tags. Remove one, then add another."))
+        .length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByRole("option", { name: "Create tag “Extra”" })).toBeNull();
+    fireEvent.keyDown(field, { key: "Enter" });
     fireEvent.click(screen.getByRole("button", { name: "Save tags" }));
 
-    expect(onSave).toHaveBeenCalledWith({
-      tag_ids: tags.map((tag) => tag.id),
-      names: ["Extra"],
-    });
-    expect(screen.getByText("A record can carry ten tags.")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Remove Extra" })).toBeTruthy();
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Remove Extra" })).toBeNull();
+    expect((field as HTMLInputElement).value).toBe("Extra");
   });
 
   it("disables save when the field is empty and the set matches the loaded assignment", async () => {
@@ -352,22 +384,26 @@ describe("RecordTagEditor", () => {
     const save = screen.getByRole("button", { name: "Save tags" }) as HTMLButtonElement;
     expect(save.disabled).toBe(true);
     expect(save.getAttribute("data-variant")).toBe("light");
+    expect(screen.queryByText("Unsaved")).toBeNull();
 
-    const field = screen.getByRole("textbox", { name: "Add a tag" });
+    const field = screen.getByRole("combobox", { name: "Tags" });
     fireEvent.change(field, { target: { value: "   " } });
     expect(save.disabled).toBe(true);
+    expect(screen.queryByText("Unsaved")).toBeNull();
 
     fireEvent.change(field, { target: { value: "Books" } });
     expect(save.disabled).toBe(false);
+    expect(screen.getByText("Unsaved")).toBeTruthy();
 
     fireEvent.change(field, { target: { value: "" } });
     expect(save.disabled).toBe(true);
+    expect(screen.queryByText("Unsaved")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Remove Ledger" }));
     expect(save.disabled).toBe(false);
   });
 
-  it("clears the query and closes suggestions on Escape without changing chosen tags", async () => {
+  it("closes suggestions on Escape, then clears the query on a second Escape", async () => {
     vi.mocked(listTags).mockResolvedValue({
       items: [
         {
@@ -384,22 +420,26 @@ describe("RecordTagEditor", () => {
     });
     await renderEditor({ tags: [{ id: "tag_kept", name: "Kept" }] });
 
-    const field = screen.getByRole("textbox", { name: "Add a tag" });
+    const field = screen.getByRole("combobox", { name: "Tags" });
     fireEvent.change(field, { target: { value: "Led" } });
     expect(await screen.findByRole("option", { name: "Ledger" })).toBeTruthy();
     fireEvent.keyDown(field, { key: "Escape" });
 
-    expect((field as HTMLInputElement).value).toBe("");
-    expect(screen.queryByRole("option", { name: "Ledger" })).toBeNull();
+    expect((field as HTMLInputElement).value).toBe("Led");
+    expect(field.getAttribute("aria-expanded")).toBe("false");
     expect(screen.getByRole("button", { name: "Remove Kept" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Remove Ledger" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Remove Led" })).toBeNull();
+
+    fireEvent.keyDown(field, { key: "Escape" });
+    expect((field as HTMLInputElement).value).toBe("");
+    expect(screen.getByRole("button", { name: "Remove Kept" })).toBeTruthy();
   });
 
   it("removes the last pending name, otherwise the last chosen tag, on Backspace in an empty field", async () => {
     await renderEditor({ tags: [{ id: "tag_ledger", name: "Ledger" }] });
 
-    const field = screen.getByRole("textbox", { name: "Add a tag" });
+    const field = screen.getByRole("combobox", { name: "Tags" });
     fireEvent.change(field, { target: { value: "Books" } });
     fireEvent.keyDown(field, { key: "Enter" });
     expect(screen.getByRole("button", { name: "Remove Books" })).toBeTruthy();
@@ -416,5 +456,45 @@ describe("RecordTagEditor", () => {
 
     fireEvent.keyDown(field, { key: "Backspace" });
     expect(screen.queryByRole("button", { name: "Remove Ledger" })).toBeNull();
+  });
+
+  it("adds a pending tag from the create row after lookup", async () => {
+    await renderEditor();
+
+    const field = screen.getByRole("combobox", { name: "Tags" });
+    fireEvent.change(field, { target: { value: "Books" } });
+    fireEvent.click(await screen.findByRole("option", { name: "Create tag “Books”" }));
+
+    const books = screen.getByText("Books").closest(".mantine-Pill-root");
+    expect(books?.hasAttribute("data-pending")).toBe(true);
+    expect((field as HTMLInputElement).value).toBe("");
+    expect(screen.queryByText("New")).toBeNull();
+  });
+
+  it("leaves a typed name in the field on blur", async () => {
+    await renderEditor({ tags: [{ id: "tag_kept", name: "Kept" }] });
+
+    const field = screen.getByRole("combobox", { name: "Tags" });
+    fireEvent.change(field, { target: { value: "Books" } });
+    fireEvent.blur(field);
+
+    expect((field as HTMLInputElement).value).toBe("Books");
+    expect(screen.queryByRole("button", { name: "Remove Books" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Remove Kept" })).toBeTruthy();
+  });
+
+  it("does not add a second chip when the name is already chosen", async () => {
+    await renderEditor({ tags: [{ id: "tag_books", name: "Books" }] });
+
+    const field = screen.getByRole("combobox", { name: "Tags" });
+    fireEvent.change(field, { target: { value: "books" } });
+
+    expect(
+      (await screen.findAllByText("This tag is already on the record.")).length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByRole("option", { name: "Create tag “books”" })).toBeNull();
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(screen.getAllByRole("button", { name: "Remove Books" })).toHaveLength(1);
+    expect((field as HTMLInputElement).value).toBe("books");
   });
 });

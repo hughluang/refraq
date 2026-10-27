@@ -38,7 +38,6 @@ export const ChannelTagsControl = forwardRef<ChannelTagsControlHandle, Props>(
     return (
       <RecordTagEditor
         ref={ref}
-        fieldLabel={t("channels.tags.field")}
         title={t("channels.tags.title")}
         description={t(
           mode === "create" ? "channels.tags.createDescription" : "channels.tags.description",

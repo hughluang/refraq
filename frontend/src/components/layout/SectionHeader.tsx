@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 
 type SectionHeaderProps = {
   title: string;
+  titleId?: string;
   titleSlot?: ReactNode;
   titleExtra?: ReactNode;
   description?: string;
@@ -16,6 +17,7 @@ type SectionHeaderProps = {
 
 export function SectionHeader({
   title,
+  titleId,
   titleSlot,
   titleExtra,
   description,
@@ -25,11 +27,17 @@ export function SectionHeader({
   pageHeading = false,
 }: SectionHeaderProps) {
   const heading = titleSlot ? (
-    <span data-page-heading="" tabIndex={-1} style={{ display: "inline-flex", minWidth: 0 }}>
+    <span
+      id={titleId}
+      data-page-heading=""
+      tabIndex={-1}
+      style={{ display: "inline-flex", minWidth: 0 }}
+    >
       {titleSlot}
     </span>
   ) : (
     <Title
+      id={titleId}
       order={pageHeading ? 1 : order}
       size={pageHeading ? "h2" : undefined}
       data-page-heading={pageHeading ? "" : undefined}
