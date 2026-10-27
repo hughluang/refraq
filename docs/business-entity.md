@@ -264,7 +264,7 @@ Page actions:
 - Publishing: no write actions.
 - Deprecated: no authoring actions; table drop remains for holders of `entity:drop_table`.
 - Delete appears only when the Entity has never been published.
-- Tags are a separate control. On create they submit with the create body. On show and edit they save by themselves and do not dirty the definition form, so Publish and Open new version stay available. A deprecated Entity, and any mode without `entity:write`, shows that control in display mode.
+- Tags are a separate control. On create they submit with the create body. On show and edit they save by themselves and do not dirty the definition form, so Publish and Open new version stay available. While the editable field holds a name that write will submit, the section does not say there are no Tags. A deprecated Entity, and any mode without `entity:write`, shows that control in display mode.
 
 The record also carries an access control tab and a data page; their rules are `docs/business-entity-access.md` §19. The version tab shows physical table names only to `entity:write` holders.
 

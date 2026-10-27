@@ -8,6 +8,7 @@ import { SectionHeader } from "@/components/layout/SectionHeader";
 import { replaceEntityTags } from "@/features/entities/api";
 import type { EntityTag } from "@/features/entities/types";
 import { tagAssignmentKey } from "@/features/tags/assignmentKey";
+import { commitTagDraft } from "@/features/tags/commitTagDraft";
 import { listTags } from "@/features/tags/api";
 import { problemMessage } from "@/lib/problem";
 
@@ -82,24 +83,12 @@ export const EntityTagsControl = forwardRef<EntityTagsControlHandle, Props>(
     });
   }
 
-  function commit(raw: string): { selected: EntityTag[]; pending: string[] } {
-    const name = raw.trim();
-    if (name === "") return { selected, pending };
-    const match = matches.find((item) => item.name.toLowerCase() === name.toLowerCase());
-    if (match) {
-      if (selected.some((tag) => tag.id === match.id)) {
-        return { selected, pending };
-      }
-      const nextSelected = [...selected, match];
-      emit(nextSelected, pending);
-      return { selected: nextSelected, pending };
+  function commit(raw: string) {
+    const next = commitTagDraft({ raw, selected, pending, matches });
+    if (next.selected !== selected || next.pending !== pending) {
+      emit(next.selected, next.pending);
     }
-    if (pending.some((item) => item.toLowerCase() === name.toLowerCase())) {
-      return { selected, pending };
-    }
-    const nextPending = [...pending, name];
-    emit(selected, nextPending);
-    return { selected, pending: nextPending };
+    return next;
   }
 
   function addCommitted(raw: string) {
@@ -117,10 +106,7 @@ export const EntityTagsControl = forwardRef<EntityTagsControlHandle, Props>(
     setPending(next.pending);
     setQuery("");
     setMatches([]);
-    return {
-      tag_ids: next.selected.map((tag) => tag.id),
-      names: next.pending,
-    };
+    return next.draft;
   };
 
   useImperativeHandle(ref, () => ({
@@ -164,6 +150,13 @@ export const EntityTagsControl = forwardRef<EntityTagsControlHandle, Props>(
   }
 
   const names = [...selected.map((tag) => tag.name), ...pending];
+  const written = commitTagDraft({
+    raw: editable ? query : "",
+    selected,
+    pending,
+    matches,
+  });
+  const writeEmpty = written.draft.tag_ids.length === 0 && written.draft.names.length === 0;
 
   return (
     <Stack gap="sm">
@@ -174,11 +167,11 @@ export const EntityTagsControl = forwardRef<EntityTagsControlHandle, Props>(
           mode === "create" ? "entities.tags.createDescription" : "entities.tags.description",
         )}
       />
-      {names.length === 0 ? (
+      {writeEmpty ? (
         <Text size="sm" c="dimmed">
           {t("entities.tags.empty")}
         </Text>
-      ) : (
+      ) : names.length === 0 ? null : (
         <Group gap="xs">
           {selected.map((tag) =>
             editable ? (

@@ -311,9 +311,17 @@ describe("ChannelRecord tags", () => {
     fireEvent.change(await screen.findByRole("textbox", { name: "channels.fields.name" }), {
       target: { value: "Intake" },
     });
-    fireEvent.change(screen.getByRole("textbox", { name: "channels.tags.field" }), {
-      target: { value: "Ledger" },
-    });
+    const tagField = screen.getByRole("textbox", { name: "channels.tags.field" });
+    expect(screen.getByText("channels.tags.empty")).toBeTruthy();
+    fireEvent.change(tagField, { target: { value: "Ledger" } });
+    expect(screen.queryByText("channels.tags.empty")).toBeNull();
+    expect(screen.queryByRole("button", { name: "channels.tags.remove" })).toBeNull();
+    fireEvent.change(tagField, { target: { value: "   " } });
+    expect(screen.getByText("channels.tags.empty")).toBeTruthy();
+    fireEvent.change(tagField, { target: { value: "" } });
+    expect(screen.getByText("channels.tags.empty")).toBeTruthy();
+    fireEvent.change(tagField, { target: { value: "Ledger" } });
+    expect(screen.queryByText("channels.tags.empty")).toBeNull();
     expect(screen.getByText("channels.tags.createDescription")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "channels.tags.save" })).toBeNull();
     fireEvent.click(button("channels.create.submit"));
@@ -331,9 +339,12 @@ describe("ChannelRecord tags", () => {
     await renderRecord("show");
     expect(await screen.findByRole("heading", { name: "Intake" })).toBeTruthy();
 
+    expect(await screen.findByText("channels.tags.empty")).toBeTruthy();
     fireEvent.change(screen.getByRole("textbox", { name: "channels.tags.field" }), {
       target: { value: "Ledger" },
     });
+    expect(screen.queryByText("channels.tags.empty")).toBeNull();
+    expect(screen.queryByRole("button", { name: "channels.tags.remove" })).toBeNull();
     fireEvent.click(button("channels.tags.save"));
     await waitFor(() => {
       expect(replaceChannelTags).toHaveBeenCalledWith("chn_1", {

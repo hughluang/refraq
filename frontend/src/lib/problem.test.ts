@@ -96,6 +96,68 @@ describe("saved filter problem codes", () => {
   });
 });
 
+const TAG_IN_USE_DETAIL = "Tag is still assigned";
+
+function catalogTranslate(catalog: Record<string, string>) {
+  return (key: string, options?: Record<string, string>) => {
+    const template = catalog[key] ?? key;
+    if (!options) return template;
+    return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => options[name] ?? "");
+  };
+}
+
+describe("TAG_IN_USE", () => {
+  it.each([
+    ["en-US", en],
+    ["zh-CN", zh],
+  ] as const)("%s states both counts and leaves server detail out of the main line", (_locale, catalog) => {
+    const translate = catalogTranslate(catalog);
+    const message = problemMessage(
+      translate,
+      new ApiError(409, "TAG_IN_USE", TAG_IN_USE_DETAIL, "req-1", {
+        entity_count: 1,
+        channel_count: 0,
+      }),
+      "failed",
+    );
+    expect(message).toContain("1");
+    expect(message).toContain("0");
+    expect(message).not.toBe(TAG_IN_USE_DETAIL);
+    expect(message).not.toContain("{{");
+    expect(message).not.toBe(translate("problems.TAG_IN_USE_BARE"));
+  });
+
+  it.each([
+    ["en-US", en],
+    ["zh-CN", zh],
+  ] as const)("%s uses the sentence without counts when an extension is missing", (_locale, catalog) => {
+    const translate = catalogTranslate(catalog);
+    const message = problemMessage(
+      translate,
+      new ApiError(409, "TAG_IN_USE", TAG_IN_USE_DETAIL, "req-1", {
+        entity_count: 1,
+      }),
+      "failed",
+    );
+    expect(message).toBe(translate("problems.TAG_IN_USE_BARE"));
+    expect(message).not.toMatch(/\d/);
+    expect(message).not.toBe(TAG_IN_USE_DETAIL);
+  });
+
+  it("does not treat a non-integer extension as a count", () => {
+    const translate = catalogTranslate(en);
+    const message = problemMessage(
+      translate,
+      new ApiError(409, "TAG_IN_USE", TAG_IN_USE_DETAIL, "req-1", {
+        entity_count: 1,
+        channel_count: "0",
+      }),
+      "failed",
+    );
+    expect(message).toBe(translate("problems.TAG_IN_USE_BARE"));
+  });
+});
+
 describe("email account and webhook problem codes", () => {
   it.each([
     ["en-US", en],

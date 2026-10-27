@@ -388,9 +388,12 @@ describe("EntityRecord tags", () => {
   it("sends the tag field text when save tags is clicked without Enter", async () => {
     await renderRecord(entity(), "edit");
 
+    expect(screen.getByText("No tags")).toBeTruthy();
     fireEvent.change(screen.getByRole("textbox", { name: "Add a tag" }), {
       target: { value: "Books" },
     });
+    expect(screen.queryByText("No tags")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove Books" })).toBeNull();
     fireEvent.click(button("Save tags"));
 
     await waitFor(() => {
@@ -454,9 +457,17 @@ describe("EntityRecord tags", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
       target: { value: "A material" },
     });
-    fireEvent.change(screen.getByRole("textbox", { name: "Add a tag" }), {
-      target: { value: "Ledger" },
-    });
+    const tagField = screen.getByRole("textbox", { name: "Add a tag" });
+    expect(screen.getByText("No tags")).toBeTruthy();
+    fireEvent.change(tagField, { target: { value: "Ledger" } });
+    expect(screen.queryByText("No tags")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove Ledger" })).toBeNull();
+    fireEvent.change(tagField, { target: { value: "   " } });
+    expect(screen.getByText("No tags")).toBeTruthy();
+    fireEvent.change(tagField, { target: { value: "" } });
+    expect(screen.getByText("No tags")).toBeTruthy();
+    fireEvent.change(tagField, { target: { value: "Ledger" } });
+    expect(screen.queryByText("No tags")).toBeNull();
     expect(
       screen.getByText("Tags organize this Entity. They are submitted with this save."),
     ).toBeTruthy();

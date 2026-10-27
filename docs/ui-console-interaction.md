@@ -42,7 +42,7 @@ Notifications render at the top right, at most three at a time (`frontend/src/pr
 
 ## 5. Problem Presenter
 
-`problemMessage` (`frontend/src/lib/problem.ts`) is the main line of an error. It returns the localized `problems.{code}` string, or the localized `problems.unknown` string when that code has no entry. It never uses the server `detail` as the main message.
+`problemMessage` (`frontend/src/lib/problem.ts`) is the main line of an error. It returns the localized `problems.{code}` string, or the localized `problems.unknown` string when that code has no entry. It never uses the server `detail` as the main message. For `TAG_IN_USE`, when the refusal carries non-negative integer `entity_count` and `channel_count`, that main line states both counts from those extensions, including zero. A refusal that does not carry both counts uses the sentence without counts.
 
 Server `detail` and `request_id` sit in a details disclosure with click-to-copy (`ProblemDetails`, also used by `FormErrorSummary`). Copy goes through `copyText`.
 

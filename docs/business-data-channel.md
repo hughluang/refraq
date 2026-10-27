@@ -120,7 +120,7 @@ Deleting a Data Channel withdraws its Scheduled Task rows by `owner_ref` (`docs/
 
 **Tag**s belong to the Data Channel. They are not part of the draft and they are not copied onto a Channel Version. A new channel, and every channel that existed before assignments, has no Tags and `tag_revision` 1.
 
-An operator with `channel:write` may replace the set from create, from edit, and from show, including while a draft run is in progress and whether the channel is active or inactive. The set holds at most ten Tag ids. Show and edit save that set with their own action. That action does not write the draft, does not change `draft_revision` or `draft_updated_at`, and does not change the channel `updated_at`. Create sends the set on the create body. `PATCH` does not accept Tags.
+An operator with `channel:write` may replace the set from create, from edit, and from show, including while a draft run is in progress and whether the channel is active or inactive. The set holds at most ten Tag ids. Show and edit save that set with their own action. That action does not write the draft, does not change `draft_revision` or `draft_updated_at`, and does not change the channel `updated_at`. Create sends the set on the create body. `PATCH` does not accept Tags. While the editable field holds a name that write will submit, the section does not say there are no Tags.
 
 The draft-run lock still blocks the canvas, the name, the description, activation, save, and publish. It does not block this Tag control.
 
