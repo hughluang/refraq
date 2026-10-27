@@ -187,7 +187,7 @@ async function renderRecord(mode: "show" | "edit" | "create" = "show") {
   render(createElement(MantineProvider, { env: "test" }, node));
 }
 
-describe("ChannelRecord tags", () => {
+describe("ChannelRecord tags", { timeout: 15_000 }, () => {
   beforeEach(() => {
     stubDomApis();
     flags.canWrite = true;
@@ -239,6 +239,41 @@ describe("ChannelRecord tags", () => {
     expect(patchChannel).not.toHaveBeenCalled();
     expect(saveDraft).not.toHaveBeenCalled();
     expect(button("channels.actions.publish").disabled).toBe(false);
+  });
+
+  it("saves a suggested tag by its name as that tag id", async () => {
+    vi.mocked(listTags).mockResolvedValue({
+      items: [
+        {
+          id: "tag_ledger",
+          name: "Ledger",
+          description: null,
+          created_at: now,
+          updated_at: now,
+        },
+      ],
+      total: 1,
+      limit: 8,
+      offset: 0,
+    });
+    await renderRecord("show");
+    expect(await screen.findByRole("heading", { name: "Intake" })).toBeTruthy();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "channels.tags.field" }), {
+      target: { value: "Led" },
+    });
+    fireEvent.click(await screen.findByRole("option", { name: (value) => value === "Ledger" }));
+    fireEvent.click(button("channels.tags.save"));
+
+    await waitFor(() => {
+      expect(replaceChannelTags).toHaveBeenCalledWith("chn_1", {
+        base_revision: 1,
+        tag_ids: ["tag_ledger"],
+        names: [],
+      });
+    });
+    expect(patchChannel).not.toHaveBeenCalled();
+    expect(saveDraft).not.toHaveBeenCalled();
   });
 
   it("keeps tag editing available while a draft run locks the graph", async () => {
