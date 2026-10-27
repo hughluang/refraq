@@ -203,13 +203,13 @@ async function renderRecord(
   });
   vi.mocked(getVersion).mockResolvedValue({ version: versionFor(record) });
   const { EntityRecord } = await import("@/features/entities/EntityRecord");
-  render(
-    createElement(
-      MantineProvider,
-      null,
-      createElement(EntityRecord, { mode, entityId: record.id }),
-    ),
-  );
+    render(
+      createElement(
+        MantineProvider,
+        { env: "test" },
+        createElement(EntityRecord, { mode, entityId: record.id }),
+      ),
+    );
   await screen.findByText("Material · material");
 }
 
@@ -249,7 +249,7 @@ describe("EntityRecord tags", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Add a tag" }), {
       target: { value: "Ledger" },
     });
-    fireEvent.click(await screen.findByRole("button", { name: (value) => value === "Ledger" }));
+    fireEvent.click(await screen.findByRole("option", { name: (value) => value === "Ledger" }));
 
     expect(button("Publish").disabled).toBe(false);
     fireEvent.click(button("Save tags"));
@@ -409,7 +409,7 @@ describe("EntityRecord tags", () => {
     vi.mocked(createEntity).mockImplementation(() => new Promise(() => {}));
     const { EntityRecord } = await import("@/features/entities/EntityRecord");
     render(
-      createElement(MantineProvider, null, createElement(EntityRecord, { mode: "create" })),
+      createElement(MantineProvider, { env: "test" }, createElement(EntityRecord, { mode: "create" })),
     );
     await screen.findByRole("textbox", { name: "Table name" });
 
@@ -444,7 +444,7 @@ describe("EntityRecord tags", () => {
     vi.mocked(createEntity).mockImplementation(() => new Promise(() => {}));
     const { EntityRecord } = await import("@/features/entities/EntityRecord");
     render(
-      createElement(MantineProvider, null, createElement(EntityRecord, { mode: "create" })),
+      createElement(MantineProvider, { env: "test" }, createElement(EntityRecord, { mode: "create" })),
     );
     await screen.findByRole("textbox", { name: "Table name" });
 

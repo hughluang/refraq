@@ -1,15 +1,11 @@
 "use client";
 
-import { Button, Group, Stack, Text, TextInput } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef } from "react";
 
-import { SectionHeader } from "@/components/layout/SectionHeader";
 import { replaceEntityTags } from "@/features/entities/api";
 import type { EntityTag } from "@/features/entities/types";
-import { tagAssignmentKey } from "@/features/tags/assignmentKey";
-import { commitTagDraft } from "@/features/tags/commitTagDraft";
-import { listTags } from "@/features/tags/api";
+import { RecordTagEditor } from "@/features/tags/RecordTagEditor";
 import { problemMessage } from "@/lib/problem";
 
 type Draft = {
@@ -36,210 +32,46 @@ export const EntityTagsControl = forwardRef<EntityTagsControlHandle, Props>(
     { mode, entityId, tags, tagRevision, editable, onDraftChange, onSaved },
     ref,
   ) {
-  const t = useTranslate();
-  const { open } = useNotification();
-  const [selected, setSelected] = useState<EntityTag[]>(tags);
-  const [pending, setPending] = useState<string[]>([]);
-  const [query, setQuery] = useState("");
-  const [matches, setMatches] = useState<EntityTag[]>([]);
-  const [saving, setSaving] = useState(false);
+    const t = useTranslate();
+    const { open } = useNotification();
 
-  // A new array with the same assignment must not drop unsaved names.
-  const assignmentKey = tagAssignmentKey(tagRevision, tags);
-  const seenAssignment = useRef(assignmentKey);
-  useEffect(() => {
-    if (seenAssignment.current === assignmentKey) return;
-    seenAssignment.current = assignmentKey;
-    setSelected(tags);
-    setPending([]);
-    setQuery("");
-  }, [assignmentKey, tags]);
-
-  useEffect(() => {
-    const needle = query.trim();
-    if (!editable || needle === "") {
-      setMatches([]);
-      return;
-    }
-    let cancelled = false;
-    void listTags({ q: needle, limit: 8 })
-      .then((page) => {
-        if (!cancelled) {
-          setMatches(page.items.map((item) => ({ id: item.id, name: item.name })));
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setMatches([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [editable, query]);
-
-  function emit(nextSelected: EntityTag[], nextPending: string[]) {
-    onDraftChange?.({
-      tag_ids: nextSelected.map((tag) => tag.id),
-      names: nextPending,
-    });
-  }
-
-  function commit(raw: string) {
-    const next = commitTagDraft({ raw, selected, pending, matches });
-    if (next.selected !== selected || next.pending !== pending) {
-      emit(next.selected, next.pending);
-    }
-    return next;
-  }
-
-  function addCommitted(raw: string) {
-    const next = commit(raw);
-    setSelected(next.selected);
-    setPending(next.pending);
-    setQuery("");
-    setMatches([]);
-  }
-
-  const flushRef = useRef<() => Draft>(() => ({ tag_ids: [], names: [] }));
-  flushRef.current = () => {
-    const next = commit(query);
-    setSelected(next.selected);
-    setPending(next.pending);
-    setQuery("");
-    setMatches([]);
-    return next.draft;
-  };
-
-  useImperativeHandle(ref, () => ({
-    flush: () => flushRef.current(),
-  }));
-
-  function removeSelected(id: string) {
-    const nextSelected = selected.filter((tag) => tag.id !== id);
-    setSelected(nextSelected);
-    emit(nextSelected, pending);
-  }
-
-  function removePending(name: string) {
-    const nextPending = pending.filter((item) => item !== name);
-    setPending(nextPending);
-    emit(selected, nextPending);
-  }
-
-  async function save() {
-    if (!entityId) return;
-    const draft = flushRef.current();
-    setSaving(true);
-    try {
-      const saved = await replaceEntityTags(entityId, {
-        base_revision: tagRevision,
-        tag_ids: draft.tag_ids,
-        names: draft.names,
-      });
-      setSelected(saved.tags);
-      setPending([]);
-      onSaved?.(saved);
-      open?.({ type: "success", message: t("entities.tags.saved") });
-    } catch (err) {
-      open?.({
-        type: "error",
-        message: problemMessage(t, err, t("entities.tags.failed")),
-      });
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const names = [...selected.map((tag) => tag.name), ...pending];
-  const written = commitTagDraft({
-    raw: editable ? query : "",
-    selected,
-    pending,
-    matches,
-  });
-  const writeEmpty = written.draft.tag_ids.length === 0 && written.draft.names.length === 0;
-
-  return (
-    <Stack gap="sm">
-      <SectionHeader
-        order={4}
+    return (
+      <RecordTagEditor
+        ref={ref}
+        fieldLabel={t("entities.tags.field")}
         title={t("entities.tags.title")}
         description={t(
           mode === "create" ? "entities.tags.createDescription" : "entities.tags.description",
         )}
+        emptyLabel={t("entities.tags.empty")}
+        removeLabel={(name) => t("entities.tags.remove", { name })}
+        saveLabel={mode === "create" ? undefined : t("entities.tags.save")}
+        editable={editable}
+        tags={tags}
+        tagRevision={tagRevision}
+        onDraftChange={onDraftChange}
+        onSave={
+          mode === "create"
+            ? undefined
+            : async (draft) => {
+                if (!entityId) return;
+                try {
+                  const saved = await replaceEntityTags(entityId, {
+                    base_revision: tagRevision,
+                    tag_ids: draft.tag_ids,
+                    names: draft.names,
+                  });
+                  onSaved?.(saved);
+                  open?.({ type: "success", message: t("entities.tags.saved") });
+                } catch (err) {
+                  open?.({
+                    type: "error",
+                    message: problemMessage(t, err, t("entities.tags.failed")),
+                  });
+                }
+              }
+        }
       />
-      {writeEmpty ? (
-        <Text size="sm" c="dimmed">
-          {t("entities.tags.empty")}
-        </Text>
-      ) : names.length === 0 ? null : (
-        <Group gap="xs">
-          {selected.map((tag) =>
-            editable ? (
-              <Button
-                key={tag.id}
-                type="button"
-                size="sm"
-                variant="light"
-                onClick={() => removeSelected(tag.id)}
-              >
-                {t("entities.tags.remove", { name: tag.name })}
-              </Button>
-            ) : (
-              <Text key={tag.id} size="sm">
-                {tag.name}
-              </Text>
-            ),
-          )}
-          {pending.map((name) => (
-            <Button
-              key={name}
-              type="button"
-              size="sm"
-              variant="light"
-              onClick={() => removePending(name)}
-            >
-              {t("entities.tags.remove", { name })}
-            </Button>
-          ))}
-        </Group>
-      )}
-      {editable ? (
-        <Stack gap="xs">
-          <TextInput
-            label={t("entities.tags.field")}
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter") return;
-              event.preventDefault();
-              addCommitted(query);
-            }}
-          />
-          {matches.length > 0 ? (
-            <Group gap="xs">
-              {matches.map((match) => (
-                <Button
-                  key={match.id}
-                  type="button"
-                  size="sm"
-                  variant="default"
-                  onClick={() => addCommitted(match.name)}
-                >
-                  {match.name}
-                </Button>
-              ))}
-            </Group>
-          ) : null}
-          {mode === "create" ? null : (
-            <Group>
-              <Button type="button" size="sm" loading={saving} onClick={() => void save()}>
-                {t("entities.tags.save")}
-              </Button>
-            </Group>
-          )}
-        </Stack>
-      ) : null}
-    </Stack>
-  );
-},
+    );
+  },
 );
