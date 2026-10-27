@@ -84,6 +84,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "entity.heads",
             "entity.rows",
             "entity.publish_confirmation",
+            "entity.subject_displays",
             "entity.statements",
             "entity.datasets",
             "entity.routers",
@@ -96,6 +97,7 @@ PUBLISHED: dict[str, frozenset[str]] = {
             "channel.tasks",
             "channel.parameters",
             "channel.write_targets",
+            "channel.subject_displays",
             "channel.schedules",
             "channel.schedule_projection",
         }

@@ -5,12 +5,8 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { listChannels } from "@/features/channels/api";
-import type { Channel } from "@/features/channels/types";
-import { listEntities } from "@/features/entities/api";
-import type { BusinessEntity } from "@/features/entities/types";
-import { getTag } from "@/features/tags/api";
-import type { Tag } from "@/features/tags/types";
+import { getTag, listTagSubjects } from "@/features/tags/api";
+import type { Tag, TagSubject } from "@/features/tags/types";
 import en from "@/locales/en-US/common.json";
 import zh from "@/locales/zh-CN/common.json";
 
@@ -25,8 +21,13 @@ const access = vi.hoisted(() => ({
 const notify = vi.hoisted(() => ({ open: vi.fn() }));
 
 const USAGE_KEYS = [
-  "tags.usage.entities",
-  "tags.usage.channels",
+  "tags.usage.title",
+  "tags.usage.kind",
+  "tags.usage.kind.entity",
+  "tags.usage.kind.channel",
+  "tags.usage.name",
+  "tags.usage.status",
+  "tags.usage.empty",
   "tags.usage.entitiesEmpty",
   "tags.usage.channelsEmpty",
 ] as const;
@@ -78,14 +79,7 @@ vi.mock("@/features/tags/api", () => ({
   patchTag: vi.fn(),
   deleteTag: vi.fn(),
   listTags: vi.fn(),
-}));
-
-vi.mock("@/features/entities/api", () => ({
-  listEntities: vi.fn(),
-}));
-
-vi.mock("@/features/channels/api", () => ({
-  listChannels: vi.fn(),
+  listTagSubjects: vi.fn(),
 }));
 
 function stubDomApis() {
@@ -119,46 +113,23 @@ function tag(overrides: Partial<Tag> = {}): Tag {
   };
 }
 
-function entity(overrides: Partial<BusinessEntity> = {}): BusinessEntity {
-  return {
-    id: "ent_visible",
-    table_name: "visible_row",
-    name: "Visible",
-    description: "",
-    deprecated_at: "2026-02-01T00:00:00Z",
-    ever_published: true,
-    current_version: null,
-    tags: [{ id: TAG_ID, name: "Ledger" }],
-    tag_revision: 2,
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
-    ...overrides,
-  };
-}
-
-function channel(overrides: Partial<Channel> = {}): Channel {
-  return {
-    id: "chn_quiet",
-    name: "Quiet",
-    description: null,
-    active: false,
-    draft_revision: 1,
-    draft_updated_at: "2026-01-01T00:00:00Z",
-    latest_version: null,
-    failure_streak: 0,
-    persistently_failing: false,
-    tags: [{ id: TAG_ID, name: "Ledger" }],
-    tag_revision: 2,
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
-    ...overrides,
-  };
-}
-
-function fieldText(label: string): string {
-  const labelNode = screen.getByText(label);
-  const stack = labelNode.closest(".field-chrome__label")?.parentElement;
-  return stack?.textContent ?? "";
+function subjects(): TagSubject[] {
+  return [
+    {
+      kind: "entity",
+      id: "ent_visible",
+      name: "Visible",
+      table_name: "visible_row",
+      deprecated_at: "2026-02-01T00:00:00Z",
+      ever_published: true,
+    },
+    {
+      kind: "channel",
+      id: "chn_quiet",
+      name: "Quiet",
+      active: false,
+    },
+  ];
 }
 
 async function renderTag(mode: "show" | "edit", record: Tag = tag()) {
@@ -181,15 +152,9 @@ describe("Tag show usage", () => {
     access.entities = true;
     access.channels = true;
     vi.clearAllMocks();
-    vi.mocked(listEntities).mockResolvedValue({
-      items: [entity()],
-      total: 1,
-      limit: 50,
-      offset: 0,
-    });
-    vi.mocked(listChannels).mockResolvedValue({
-      items: [channel()],
-      total: 1,
+    vi.mocked(listTagSubjects).mockResolvedValue({
+      items: subjects(),
+      total: 2,
       limit: 50,
       offset: 0,
     });
@@ -199,23 +164,20 @@ describe("Tag show usage", () => {
     cleanup();
   });
 
-  it("lists carriers without status, active, or a saved filter", async () => {
+  it("lists carriers in one table", async () => {
     await renderTag("show");
 
     await waitFor(() => {
-      expect(listEntities).toHaveBeenCalledWith({
-        tag_id: [TAG_ID],
+      expect(listTagSubjects).toHaveBeenCalledWith(TAG_ID, {
         limit: 50,
         offset: 0,
       });
     });
-    expect(listChannels).toHaveBeenCalledWith({
-      tag_id: [TAG_ID],
-      limit: 50,
-      offset: 0,
-    });
     expect(await screen.findByText("Visible")).toBeTruthy();
     expect(screen.getByText("Quiet")).toBeTruthy();
+    expect(screen.getByText("tags.usage.kind.entity")).toBeTruthy();
+    expect(screen.getByText("tags.usage.kind.channel")).toBeTruthy();
+    expect(screen.getByText("visible_row")).toBeTruthy();
     expect(screen.getByText("entities.status.deprecated")).toBeTruthy();
     expect(screen.getByText("channels.status.inactive")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Visible" }).getAttribute("href")).toBe(
@@ -224,70 +186,68 @@ describe("Tag show usage", () => {
     expect(screen.getByRole("link", { name: "Quiet" }).getAttribute("href")).toBe(
       "/console/channels/chn_quiet",
     );
+    expect(screen.getByRole("heading", { name: "tags.usage.title" })).toBeTruthy();
+    expect(screen.queryByText("tags.fields.entityCount")).toBeNull();
+    expect(screen.queryByText("tags.fields.channelCount")).toBeNull();
   });
 
-  it("shows the detail counts when the visible lists are smaller", async () => {
-    await renderTag("show", tag({ entity_count: 2, channel_count: 2 }));
-
-    await screen.findByText("Visible");
-    expect(fieldText("tags.fields.entityCount")).toContain("2");
-    expect(fieldText("tags.fields.entityCount")).not.toContain("1");
-    expect(fieldText("tags.fields.channelCount")).toContain("2");
-    expect(fieldText("tags.fields.channelCount")).not.toContain("1");
-    expect(screen.getByRole("heading", { name: "tags.usage.entities" }).textContent).toBe(
-      "tags.usage.entities",
-    );
-    expect(screen.getByRole("heading", { name: "tags.usage.channels" }).textContent).toBe(
-      "tags.usage.channels",
-    );
-  });
-
-  it("omits a side the caller cannot list and still shows its count", async () => {
+  it("renders the subject page the server returned when one side is hidden", async () => {
     access.entities = false;
-    await renderTag("show", tag({ entity_count: 2, channel_count: 2 }));
+    vi.mocked(listTagSubjects).mockResolvedValue({
+      items: [subjects()[1]],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    });
+    await renderTag("show");
 
     await waitFor(() => {
-      expect(listChannels).toHaveBeenCalledWith({
-        tag_id: [TAG_ID],
+      expect(listTagSubjects).toHaveBeenCalledWith(TAG_ID, {
         limit: 50,
         offset: 0,
       });
     });
-    expect(listEntities).not.toHaveBeenCalled();
-    expect(screen.queryByRole("heading", { name: "tags.usage.entities" })).toBeNull();
     expect(screen.queryByText("Visible")).toBeNull();
-    expect(fieldText("tags.fields.entityCount")).toContain("2");
-    expect(screen.getByRole("heading", { name: "tags.usage.channels" })).toBeTruthy();
     expect(screen.getByText("Quiet")).toBeTruthy();
+    expect(screen.queryByText("tags.fields.entityCount")).toBeNull();
   });
 
-  it("keeps the counts when no visible record carries the tag", async () => {
-    vi.mocked(listEntities).mockResolvedValue({
-      items: [],
-      total: 0,
-      limit: 50,
-      offset: 0,
-    });
-    vi.mocked(listChannels).mockResolvedValue({
+  it("uses one empty line when nothing visible carries the tag", async () => {
+    vi.mocked(listTagSubjects).mockResolvedValue({
       items: [],
       total: 0,
       limit: 50,
       offset: 0,
     });
     await renderTag("show", tag({ entity_count: 2, channel_count: 3 }));
-    expect(await screen.findByText("tags.usage.entitiesEmpty")).toBeTruthy();
-    expect(screen.getByText("tags.usage.channelsEmpty")).toBeTruthy();
-    expect(fieldText("tags.fields.entityCount")).toContain("2");
-    expect(fieldText("tags.fields.channelCount")).toContain("3");
-    expect(fieldText("tags.fields.channelCount")).not.toContain("0");
+    expect(await screen.findByText("tags.usage.empty")).toBeTruthy();
+    expect(screen.queryByText("tags.fields.entityCount")).toBeNull();
+    expect(screen.queryByText("tags.fields.channelCount")).toBeNull();
   });
 
-  it("does not load usage lists on edit", async () => {
+  it("uses the entity empty line when channels cannot be listed", async () => {
+    access.channels = false;
+    vi.mocked(listTagSubjects).mockResolvedValue({
+      items: [],
+      total: 0,
+      limit: 50,
+      offset: 0,
+    });
+    await renderTag("show");
+    expect(await screen.findByText("tags.usage.entitiesEmpty")).toBeTruthy();
+  });
+
+  it("does not load subjects on edit or without either list permission", async () => {
     await renderTag("edit");
-    expect(listEntities).not.toHaveBeenCalled();
-    expect(listChannels).not.toHaveBeenCalled();
-    expect(screen.queryByRole("heading", { name: "tags.usage.entities" })).toBeNull();
-    expect(fieldText("tags.fields.entityCount")).toContain("2");
+    expect(listTagSubjects).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "tags.usage.title" })).toBeNull();
+    cleanup();
+
+    access.entities = false;
+    access.channels = false;
+    await renderTag("show");
+    expect(listTagSubjects).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "tags.usage.title" })).toBeNull();
   });
 
   it("has English and Chinese usage copy", () => {

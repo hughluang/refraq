@@ -223,7 +223,8 @@ Responsibilities:
 
 - Platform **Tag** vocabulary: display name, comparison form, and optional description
 - Tag assignments through the published `tags.api`: resolve-or-create, replace, add, remove, clear, list subject ids, and count by kind
-- Tag collection HTTP under `tags/routers/` and shapes under `tags/schemas/`
+- Tag collection HTTP under `tags/routers/` and shapes under `tags/schemas/`, including the subject page
+- The subject-page port in `tags.subjects`, bound by composition to Entity and Channel display reads
 - Management audit events for a committed create, update, or delete, and for a committed assignment change
 
 Must not contain:

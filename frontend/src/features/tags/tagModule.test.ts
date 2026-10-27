@@ -41,8 +41,6 @@ const COPY_KEYS = [
   "tags.actions.standard",
   "tags.fields.name",
   "tags.fields.description",
-  "tags.fields.entityCount",
-  "tags.fields.channelCount",
   "tags.fields.updatedAt",
   "tags.validation.name",
   "problems.TAG_NOT_FOUND",

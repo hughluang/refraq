@@ -144,6 +144,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | `backend.entity.statements` | Execute one statement on the entity owner connection (`execute_entity_statement`) for Data Channel SQL that selects the entity database. Sets `search_path` to `entity_data` for that transaction. |
 | `backend.entity.datasets` | Create, read, and drop run-scoped dataset tables in entity-database schema `channel_dataset` (the reader role is not granted): a query that builds the table, a chunked copy from rows, a page or a batch by `_ord`, an existence check, the relation size, and delete. Does not import `channel`. Channel owns the registry and the lifecycle |
 | `backend.entity.publish_confirmation` | Port a Data Channel adapter fills with write nodes a candidate head would make incompatible; bound by composition. Entity HTTP calls it and does not import `channel` |
+| `backend.entity.subject_displays` | Short Entity rows (`id`, `name`, `table_name`, `deprecated_at`, `ever_published`) for ids the caller can open. Missing and hidden ids are omitted. Bound by composition into the Tag subject page. Does not import `channel` or `tags` |
 | `backend.entity.routers.*` | Domain use-case HTTP (definition, access management, and Entity Data API); mounted by `main` |
 
 ### `channel` published modules
@@ -158,9 +159,10 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | `backend.channel.schedule_projection` | `channel_run` schedule `work_kind` / `target` projection adapter, bound by composition into the platform schedule list |
 | `backend.channel.schedules` | Publish sync, activation, withdraw, and the due-tick task that mints `channel_run` Jobs |
 | `backend.channel.write_targets` | Write-node consumers of a Business Entity, bound by composition into the Entity publish confirmation |
+| `backend.channel.subject_displays` | Short Channel rows (`id`, `name`, `active`) for ids that still exist. Missing ids are omitted. Bound by composition into the Tag subject page. Does not import `entity` or `tags` |
 | `backend.channel.routers.*` | Domain use-case HTTP; mounted by `main` |
 
-No module is created empty. `channel.errors`, `channel.routers`, `channel.tasks`, `channel.parameters`, `channel.write_targets`, `channel.schedules`, and `channel.schedule_projection` are published.
+No module is created empty. `channel.errors`, `channel.routers`, `channel.tasks`, `channel.parameters`, `channel.write_targets`, `channel.subject_displays`, `channel.schedules`, and `channel.schedule_projection` are published.
 
 **Consumed published surfaces.** `channel` consumes, through published modules only:
 
@@ -174,7 +176,7 @@ No module is created empty. `channel.errors`, `channel.routers`, `channel.tasks`
 
 ### `tags` published modules
 
-`tags` is the **Tag** product domain (`docs/business-tags.md`). It owns the platform Tag vocabulary, Tag assignments, and the Tag collection HTTP. It publishes `tags.api` for resolve-or-create, replace, add, remove, clear, listing subject ids by Tag id, and counting subjects by kind. Composition (`main`) mounts `backend.tags.routers`. Alembic imports `backend.tags.models`. `entity` and `channel` may import `tags.api` only. `admin` must not import `tags`. `tags` imports `core` and published `admin` only. It does not import `entity` or `channel`.
+`tags` is the **Tag** product domain (`docs/business-tags.md`). It owns the platform Tag vocabulary, Tag assignments, and the Tag collection HTTP, including `GET /tags/{id}/subjects`. It publishes `tags.api` for resolve-or-create, replace, add, remove, clear, listing subject ids by Tag id, and counting subjects by kind. `tags.subjects` is the subject-page port. Composition (`main`) mounts `backend.tags.routers` and binds that port to `entity.subject_displays` and `channel.subject_displays`. Alembic imports `backend.tags.models`. `entity` and `channel` may import `tags.api` only. `admin` must not import `tags`. `tags` imports `core` and published `admin` only. It does not import `entity` or `channel`.
 
 ### `worker` published modules
 
@@ -285,7 +287,7 @@ Concrete edges:
 
 | From | May import |
 |------|------------|
-| `main` (composition) | `core`, published `admin` / `jobs` / `metadata` / `entity` / `channel` / `worker` (including their `routers.*` for mount), `tags.routers` for mount, Site Bootstrap helpers |
+| `main` (composition) | `core`, published `admin` / `jobs` / `metadata` / `entity` / `channel` / `worker` (including their `routers.*` for mount), `tags.routers` for mount, `tags.subjects` to bind the subject-page port, Site Bootstrap helpers |
 | `core` | stdlib, third parties, Alembic; `admin.roles` published symbols from `upgrade` only; `worker.api` / `worker.parameters` from `upgrade` only; `metadata.type_mappings.seeds` from `upgrade` only |
 | `admin` | `core`; own stores/schemas/routers / `system_parameters` / `parameters` / `model_services` / `subjects`. Must not import `entity` or `tags` |
 | `jobs` | `core`; own store/schemas/routers / `parameters`; published `admin` (audit, System Parameter resolver); process entry `job_child` may import `worker.parameters` |

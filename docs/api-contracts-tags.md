@@ -2,9 +2,9 @@
 
 ## 1. Purpose
 
-This document defines the Tag collection HTTP: list, create, read, rename, describe, and delete.
+This document defines the Tag collection HTTP: list, create, read, rename, describe, and delete, and the page of records that carry one Tag.
 
-It does not define attaching a Tag to a **Business Entity** or a **Data Channel**, list filters by Tag, or bulk edits. Tag detail does not embed record names. **Saved Filter** HTTP is §9.
+It does not define attaching a Tag to a **Business Entity** or a **Data Channel**, list filters by Tag, or bulk edits. Tag detail does not embed record names. Those names are §6.1. **Saved Filter** HTTP is §9.
 
 Related boundaries:
 
@@ -31,7 +31,7 @@ Create, read, and patch return `{ "tag": <detail> }`. Detail is the list item pl
 
 `id` is `tag_` plus 12 lowercase hex characters. Any other string is an unknown id, not a validation error.
 
-`entity_count` and `channel_count` count records that carry the Tag, across the platform, including records the caller cannot open. The Tag list omits the counts. A Tag that nothing carries reports 0 and 0. Detail does not include the names. Those names are `GET /entities` with `tag_id` and without `status`, and `GET /channels` with `tag_id` and without `active`. Either list `total` can be smaller than the matching count, because Entity visibility drops records the caller cannot open. A caller who cannot list one side has no list for that side; the count on the Tag remains. The list `total` is not `entity_count` or `channel_count`.
+`entity_count` and `channel_count` count records that carry the Tag, across the platform, including records the caller cannot open and a subject id whose record is gone. The Tag list omits the counts. A Tag that nothing carries reports 0 and 0. Detail does not include the names. The Console page of names is §6.1. `GET /entities` with `tag_id` and without `status`, and `GET /channels` with `tag_id` and without `active`, remain the two modules' own lists. Either of those list `total`s can be smaller than the matching count, because Entity visibility drops records the caller cannot open. A caller who cannot list one side has no rows of that kind on §6.1; the count on the Tag remains. Neither list `total`, nor the §6.1 `total`, is `entity_count` or `channel_count`.
 
 Unknown JSON fields are `422` `REQUEST_INVALID`.
 
@@ -115,6 +115,43 @@ Purpose: read one Tag.
 `{ "tag": <detail> }`.
 
 Unknown id: `404` `TAG_NOT_FOUND`.
+
+## 6.1 `GET /tags/{tag_id}/subjects`
+
+Purpose: one Offset Page of the records that carry this Tag and that the caller can open.
+
+- Permission: `tag:read`. `entity:read` or `channel:read` without `tag:read` is `403` `AUTH_FORBIDDEN`.
+- Query: `limit` and `offset`, the same bounds as `GET /tags` (default 50, maximum 200).
+
+The page is built from `tag_assignments` for this Tag. Entities the caller can open come first, then Channels, each ordered by subject id ascending. Rows are omitted before the window when the caller lacks `entity:read` or `channel:read` for that kind, when Entity visibility hides the Entity, or when the subject id no longer has a record. No entity-status predicate and no activation predicate are applied. `total` is the length of that filtered sequence. It can be smaller than `entity_count` plus `channel_count`.
+
+### Response: `200`
+
+```json
+{
+  "items": [
+    {
+      "kind": "entity",
+      "id": "ent_0123456789ab",
+      "name": "Material",
+      "table_name": "material",
+      "deprecated_at": null,
+      "ever_published": true
+    },
+    {
+      "kind": "channel",
+      "id": "chn_0123456789ab",
+      "name": "Nightly",
+      "active": false
+    }
+  ],
+  "total": 2,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+An entity item carries `table_name`, `deprecated_at`, and `ever_published`. A channel item carries `active`. Unknown tag id: `404` `TAG_NOT_FOUND`.
 
 ## 7. `PATCH /tags/{tag_id}`
 
@@ -265,7 +302,7 @@ Empty body. If that filter was the remembered id for its list, the memory become
 ## 10. Non-Goals
 
 1. `tag_id` on Entity or Channel lists, bulk add, and bulk remove.
-2. Record names embedded on Tag detail.
+2. Record names embedded on the Tag detail resource. Names are §6.1.
 3. Assignment HTTP on a Channel. Entity assignment is `docs/api-contracts-entity.md` §4.4a. The published operations live on `backend.tags.api`.
 4. Making `GET /entities` or `GET /channels` read the remembered filter.
 

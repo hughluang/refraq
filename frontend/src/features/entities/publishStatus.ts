@@ -2,7 +2,10 @@ import type { BusinessEntity } from "@/features/entities/types";
 
 export type EntityStatus = "not_serving" | "serving" | "deprecated";
 
-export function entityStatus(entity: BusinessEntity): EntityStatus {
+export function entityStatus(entity: {
+  deprecated_at: string | null;
+  ever_published: boolean;
+}): EntityStatus {
   if (entity.deprecated_at) {
     return "deprecated";
   }

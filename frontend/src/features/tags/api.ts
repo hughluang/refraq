@@ -1,7 +1,13 @@
 import { apiClient } from "@/lib/api";
 import type { OffsetPage } from "@/lib/pagination";
 
-import type { Tag, TagCreateBody, TagPatchBody, TagSummary } from "@/features/tags/types";
+import type {
+  Tag,
+  TagCreateBody,
+  TagPatchBody,
+  TagSubject,
+  TagSummary,
+} from "@/features/tags/types";
 
 function querySuffix(params?: Record<string, string | number | undefined>) {
   const qs = new URLSearchParams();
@@ -27,6 +33,17 @@ export function listTags(params?: {
 
 export function getTag(id: string, init?: { signal?: AbortSignal }) {
   return apiClient<{ tag: Tag }>(`/tags/${id}`, { signal: init?.signal });
+}
+
+export function listTagSubjects(
+  tagId: string,
+  params?: { limit?: number; offset?: number; signal?: AbortSignal },
+) {
+  const { signal, ...query } = params ?? {};
+  return apiClient<OffsetPage<TagSubject>>(
+    `/tags/${tagId}/subjects${querySuffix(query)}`,
+    { signal },
+  );
 }
 
 export function createTag(body: TagCreateBody) {

@@ -48,7 +48,7 @@ Routes are `/console/tags`, `/console/tags/new`, `/console/tags/:id`, and `/cons
 
 The list is newest first (`created_at` descending, then `id` descending) and can be searched by the stored display name. Show and edit record a recent visit the same way other record modules do. The command palette lists at most five Tags, and only for a caller who may open the module.
 
-Detail reports `entity_count` and `channel_count`. Those counts are global: how many Business Entities and how many Data Channels carry the Tag, including an Entity the caller cannot open. The Tag list omits the counts. A Tag that nothing carries reports 0 and 0, and deleting it succeeds. Deleting a Tag that any record still carries is refused. The refusal reports both counts, including records the caller cannot open. The Console notification main line states both counts from that refusal, including zero. The show page then names the records the caller can open by reading the Entity list and the Channel list for that Tag, with no entity-status predicate and no activation predicate. A deprecated Entity and an inactive Channel stay on those lists when the caller can see them. A side the caller cannot list is omitted, and its count is still shown. Either list total can be smaller than the matching count. The list total is not the usage count.
+Detail reports `entity_count` and `channel_count`. Those counts are global: how many Business Entities and how many Data Channels carry the Tag, including an Entity the caller cannot open. The Tag list omits the counts. A Tag that nothing carries reports 0 and 0, and deleting it succeeds. Deleting a Tag that any record still carries is refused. The refusal reports both counts, including records the caller cannot open. The Console notification main line states both counts from that refusal, including zero. The show page does not display the counts. It names the records the caller can open with `GET /tags/{id}/subjects`. That page lists visible Entities first, then Channels, each ordered by subject id. It applies no entity-status predicate and no activation predicate. A deprecated Entity and an inactive Channel stay on the page when the caller can see them. A side the caller cannot list is absent. An Entity the caller cannot open is absent, and so is a subject id whose record is gone. The page total can be smaller than `entity_count` plus `channel_count`. The page total is not the usage count.
 
 The browser blocks a name that is empty after trim. It does not copy the nickname profile or the length caps. The server remains authoritative.
 
@@ -79,7 +79,7 @@ Saved Filters are not shown in Account Center or Platform Settings. `GET /entiti
 ## 8. Non-Goals
 
 1. List filters, bulk add, and bulk remove.
-2. Embedding record names on Tag detail.
+2. Embedding record names on the Tag detail resource. Names are `GET /tags/{id}/subjects`.
 3. Seeding `tag:read` or `tag:write` onto the operator role.
 4. MCP tools, Entity Data API fields, and Channel run-context fields.
 5. Channel assignment pages. Entity assignment is `docs/business-entity.md` §2.7.

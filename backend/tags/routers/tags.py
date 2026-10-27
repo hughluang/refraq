@@ -19,15 +19,19 @@ from backend.tags.api import count_subjects
 from backend.tags.records import TagRecord
 from backend.tags.routers.saved_filters import router as saved_filters_router
 from backend.tags.schemas.tags import (
+    ChannelSubjectOut,
+    EntitySubjectOut,
     TagCreateRequest,
     TagDetail,
     TagListResponse,
     TagOut,
     TagPatchRequest,
     TagResponse,
+    TagSubjectListResponse,
 )
 from backend.tags.service import create_tag, delete_tag, get_tag, update_tag
 from backend.tags.store import get_tag_store
+from backend.tags.subjects import ChannelSubjectView, EntitySubjectView, list_tag_subjects
 
 router = APIRouter(tags=["tags"])
 router.include_router(saved_filters_router)
@@ -101,6 +105,45 @@ def http_create_tag(
         actor_token_id=actor_token_id,
     )
     return TagResponse(tag=_detail(record))
+
+
+@router.get("/tags/{tag_id}/subjects", response_model=TagSubjectListResponse)
+def http_list_tag_subjects(
+    tag_id: str,
+    page: PageParams = Depends(_LIST_PAGE),
+    user: UserRecord = Depends(require_permission("tag:read")),
+    roles: RoleStore = Depends(get_role_store),
+) -> TagSubjectListResponse:
+    perms = resolve_user_permissions(user, roles)
+    rows, total = list_tag_subjects(
+        tag_id=tag_id,
+        user=user,
+        include_entities=permissions_include(perms, "entity:read"),
+        include_channels=permissions_include(perms, "channel:read"),
+        limit=page.limit,
+        offset=page.offset,
+    )
+    return TagSubjectListResponse(
+        items=[_subject_out(row) for row in rows],
+        total=total,
+        limit=page.limit,
+        offset=page.offset,
+    )
+
+
+def _subject_out(
+    row: EntitySubjectView | ChannelSubjectView,
+) -> EntitySubjectOut | ChannelSubjectOut:
+    if isinstance(row, EntitySubjectView):
+        return EntitySubjectOut(
+            kind="entity",
+            id=row.id,
+            name=row.name,
+            table_name=row.table_name,
+            deprecated_at=row.deprecated_at,
+            ever_published=row.ever_published,
+        )
+    return ChannelSubjectOut(kind="channel", id=row.id, name=row.name, active=row.active)
 
 
 @router.get("/tags/{tag_id}", response_model=TagResponse)

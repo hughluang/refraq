@@ -228,3 +228,179 @@ def test_omitted_active_lists_an_inactive_channel_that_carries_the_tag(
     assert ids == {quiet["id"], live["id"]}
     quiet_row = next(item for item in body["items"] if item["id"] == quiet["id"])
     assert quiet_row["active"] is False
+
+
+def _subjects(client: TestClient, tag_id: str, **params: int):
+    response = client.get(f"/tags/{tag_id}/subjects", params=params)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    return body["items"], body["total"], body
+
+
+def test_subjects_page_orders_entities_then_channels(client: TestClient) -> None:
+    tag_id = client.post("/tags", json={"name": "PageMark"}).json()["tag"]["id"]
+    first = _create_entity(client, "usage_first", "First")
+    second = _create_entity(client, "usage_second", "Second")
+    created = client.post("/channels", json={"name": "Live", "description": None})
+    assert created.status_code == 201, created.text
+    channel = created.json()["channel"]
+    _assign_entity_tags(client, second, [tag_id])
+    _assign_entity_tags(client, first, [tag_id])
+    _assign_channel_tags(client, channel, [tag_id])
+
+    page, total, _ = _subjects(client, tag_id, limit=2, offset=0)
+    assert total == 3
+    assert [item["kind"] for item in page] == ["entity", "entity"]
+    assert [item["id"] for item in page] == sorted([first["id"], second["id"]])
+    assert page[0]["table_name"] in {"usage_first", "usage_second"}
+
+    rest, rest_total, _ = _subjects(client, tag_id, limit=2, offset=2)
+    assert rest_total == 3
+    assert rest == [
+        {
+            "kind": "channel",
+            "id": channel["id"],
+            "name": "Live",
+            "active": False,
+        }
+    ]
+
+
+def test_subjects_drop_a_hidden_entity_and_a_missing_subject(client: TestClient) -> None:
+    from backend.tags.api import KIND_ENTITY, add_tags
+    from backend.tests.entity_access_oracle import seed_entity_entitlements
+
+    roles = get_role_store()
+    reader_role = create_role(
+        roles,
+        key="tag_subject_reader",
+        name="Tag subject reader",
+        permissions=[
+            "console:access",
+            "tag:read",
+            "entity:read",
+            "entity:data_read",
+        ],
+    )
+    get_user_store().create_user(
+        account="tagsubject",
+        display_name="Tag subject",
+        password_hash=hash_password("secret"),
+        role_id=reader_role.id,
+        status="active",
+    )
+    tag_id = client.post("/tags", json={"name": "VisibleMark"}).json()["tag"]["id"]
+    shown = _create_entity(client, "subject_shown", "Shown")
+    hidden = _create_entity(client, "subject_hidden", "Hidden")
+    _assign_entity_tags(client, shown, [tag_id])
+    _assign_entity_tags(client, hidden, [tag_id])
+    _publish(client, shown)
+    _publish(client, hidden)
+    assert seed_entity_entitlements(shown["id"]) is True
+    add_tags(
+        kind=KIND_ENTITY,
+        subject_id="ent_gone",
+        tag_ids=[tag_id],
+        actor_user_id=None,
+        actor_token_id=None,
+    )
+
+    detail = client.get(f"/tags/{tag_id}")
+    assert detail.json()["tag"]["entity_count"] == 3
+
+    client.post("/auth/logout")
+    logged_in = client.post(
+        "/auth/login", json={"account": "tagsubject", "password": "secret"}
+    )
+    assert logged_in.status_code == 200, logged_in.text
+    items, total, _ = _subjects(client, tag_id)
+    assert total == 1
+    assert items[0]["id"] == shown["id"]
+    assert items[0]["ever_published"] is True
+    assert "ent_gone" not in {item["id"] for item in items}
+    assert hidden["id"] not in {item["id"] for item in items}
+
+
+def test_subjects_keep_deprecated_entities_and_inactive_channels(
+    client: TestClient,
+) -> None:
+    tag_id = client.post("/tags", json={"name": "StayMark"}).json()["tag"]["id"]
+    draft = _create_entity(client, "subject_draft", "Draft")
+    retired = _create_entity(client, "subject_retired", "Retired")
+    _assign_entity_tags(client, draft, [tag_id])
+    _assign_entity_tags(client, retired, [tag_id])
+    _publish(client, retired)
+    assert client.post(f"/entities/{retired['id']}/deprecate").status_code == 200
+    created = client.post("/channels", json={"name": "Quiet", "description": None})
+    channel = created.json()["channel"]
+    _assign_channel_tags(client, channel, [tag_id])
+
+    items, total, _ = _subjects(client, tag_id)
+    assert total == 3
+    by_id = {item["id"]: item for item in items}
+    assert by_id[draft["id"]]["ever_published"] is False
+    assert by_id[retired["id"]]["deprecated_at"] is not None
+    assert by_id[channel["id"]]["active"] is False
+
+
+def test_subjects_omit_a_side_without_list_permission(client: TestClient) -> None:
+    roles = get_role_store()
+    channel_only = create_role(
+        roles,
+        key="tag_channel_only",
+        name="Tag channel only",
+        permissions=["console:access", "tag:read", "channel:read"],
+    )
+    get_user_store().create_user(
+        account="tagchannel",
+        display_name="Tag channel",
+        password_hash=hash_password("secret"),
+        role_id=channel_only.id,
+        status="active",
+    )
+    tag_id = client.post("/tags", json={"name": "SideMark"}).json()["tag"]["id"]
+    entity = _create_entity(client, "subject_side", "Side")
+    _assign_entity_tags(client, entity, [tag_id])
+    created = client.post("/channels", json={"name": "Side channel", "description": None})
+    channel = created.json()["channel"]
+    _assign_channel_tags(client, channel, [tag_id])
+
+    client.post("/auth/logout")
+    logged_in = client.post(
+        "/auth/login", json={"account": "tagchannel", "password": "secret"}
+    )
+    assert logged_in.status_code == 200, logged_in.text
+    items, total, _ = _subjects(client, tag_id)
+    assert total == 1
+    assert items[0]["kind"] == "channel"
+    assert items[0]["id"] == channel["id"]
+
+
+def test_subjects_require_tag_read_and_a_live_tag(client: TestClient) -> None:
+    roles = get_role_store()
+    entity_only = create_role(
+        roles,
+        key="tag_entity_only",
+        name="Tag entity only",
+        permissions=["console:access", "entity:read"],
+    )
+    get_user_store().create_user(
+        account="tagentity",
+        display_name="Tag entity",
+        password_hash=hash_password("secret"),
+        role_id=entity_only.id,
+        status="active",
+    )
+    client.post("/auth/logout")
+    logged_in = client.post(
+        "/auth/login", json={"account": "tagentity", "password": "secret"}
+    )
+    assert logged_in.status_code == 200, logged_in.text
+    missing_permission = client.get("/tags/tag_0123456789ab/subjects")
+    assert_problem(missing_permission, status=403, code="AUTH_FORBIDDEN")
+
+    client.post("/auth/logout")
+    admin = client.post("/auth/login", json={"account": "admin", "password": "secret"})
+    assert admin.status_code == 200, admin.text
+    missing = client.get("/tags/tag_0123456789ab/subjects")
+    assert_problem(missing, status=404, code="TAG_NOT_FOUND")

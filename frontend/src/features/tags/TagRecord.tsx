@@ -4,7 +4,6 @@ import { Button, Group, Stack } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useState } from "react";
 
-import { DisplayField } from "@/components/display/DisplayField";
 import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
 import {
   FormErrorSummary,
@@ -287,8 +286,6 @@ function ExistingTagRecord({
   const body = (
     <Stack>
       <TagFormFields form={form} editable={fieldsWritable} />
-      <DisplayField label={t("tags.fields.entityCount")} value={record.entity_count} />
-      <DisplayField label={t("tags.fields.channelCount")} value={record.channel_count} />
     </Stack>
   );
 

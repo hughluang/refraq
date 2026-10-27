@@ -30,3 +30,21 @@ export type TagFormValues = {
   name: string;
   description: string;
 };
+
+export type EntityTagSubject = {
+  kind: "entity";
+  id: string;
+  name: string;
+  table_name: string;
+  deprecated_at: string | null;
+  ever_published: boolean;
+};
+
+export type ChannelTagSubject = {
+  kind: "channel";
+  id: string;
+  name: string;
+  active: boolean;
+};
+
+export type TagSubject = EntityTagSubject | ChannelTagSubject;

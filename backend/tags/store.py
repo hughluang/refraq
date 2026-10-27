@@ -267,6 +267,8 @@ class TagUnit(Protocol):
 
     def count_kinds(self, tag_id: str) -> tuple[int, int]: ...
 
+    def assignment_subjects(self, tag_id: str) -> list[tuple[str, str]]: ...
+
     def subjects_with_any(self, kind: str, tag_ids: set[str]) -> list[str]: ...
 
 
@@ -339,6 +341,13 @@ class _MemoryUnit:
 
     def count_kinds(self, tag_id: str) -> tuple[int, int]:
         return _memory_counts(self._store, tag_id)
+
+    def assignment_subjects(self, tag_id: str) -> list[tuple[str, str]]:
+        found: list[tuple[str, str]] = []
+        for (kind, subject_id), ids in self._store._assignments.items():
+            if tag_id in ids:
+                found.append((kind, subject_id))
+        return found
 
     def subjects_with_any(self, kind: str, tag_ids: set[str]) -> list[str]:
         found: list[str] = []
@@ -443,6 +452,14 @@ class _SqlUnit:
 
     def count_kinds(self, tag_id: str) -> tuple[int, int]:
         return _sql_counts(self._session, tag_id)
+
+    def assignment_subjects(self, tag_id: str) -> list[tuple[str, str]]:
+        rows = self._session.execute(
+            select(TagAssignmentRow.subject_kind, TagAssignmentRow.subject_id).where(
+                TagAssignmentRow.tag_id == tag_id
+            )
+        ).all()
+        return [(kind, subject_id) for kind, subject_id in rows]
 
     def subjects_with_any(self, kind: str, tag_ids: set[str]) -> list[str]:
         rows = self._session.execute(

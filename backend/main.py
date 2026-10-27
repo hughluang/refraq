@@ -84,8 +84,11 @@ from backend.channel.routers.runs import router as channel_runs_router
 from backend.channel.routers.variables import router as channel_variables_router
 from backend.channel.routers.webhooks import router as webhooks_router
 from backend.channel.routers.email_accounts import router as email_accounts_router
+from backend.channel.subject_displays import channel_subject_displays
 from backend.channel.write_targets import incompatible_writers
 from backend.entity.publish_confirmation import bind_write_target_port
+from backend.entity.subject_displays import entity_subject_displays
+from backend.tags.subjects import bind_subject_display_port
 from backend.metadata.catalog_embed_jobs.schedule import ensure_catalog_embed_schedule
 from backend.worker.api import ensure_system_schedules
 from backend.worker.parameters import assemble_system_parameters
@@ -104,6 +107,17 @@ class _ChannelWriteTargets:
 
 
 bind_write_target_port(_ChannelWriteTargets())
+
+
+class _SubjectDisplays:
+    def entities(self, user: object, entity_ids: object) -> list:
+        return entity_subject_displays(user, entity_ids)  # type: ignore[arg-type]
+
+    def channels(self, channel_ids: object) -> list:
+        return channel_subject_displays(channel_ids)  # type: ignore[arg-type]
+
+
+bind_subject_display_port(_SubjectDisplays())
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
