@@ -1456,6 +1456,10 @@
   "problems.TAG_IN_USE": "This Tag is still assigned.",
   "problems.TAG_LIMIT_EXCEEDED": "A record can carry at most ten Tags.",
   "problems.TAG_ASSIGNMENT_CONFLICT": "Tags were saved by someone else. Reload and try again.",
+  "problems.SAVED_FILTER_LIMIT": "This list already has 20 saved filters.",
+  "problems.SAVED_FILTER_NAME_CONFLICT": "This list already has a saved filter with this name.",
+  "problems.SAVED_FILTER_NAME_INVALID": "Saved filter name is not a valid display name.",
+  "problems.SAVED_FILTER_NOT_FOUND": "That saved filter was not found.",
   "channels.template.parsed": "Static value matches the declared type",
   "channels.template.parseFailed": "Static value does not match the declared type",
   "channels.template.insert": "Insert calculation",
@@ -2094,5 +2098,9 @@
   "channels.bulk.confirmAdd": "Add tags",
   "channels.bulk.confirmRemove": "Remove tags",
   "channels.bulk.added": "Tags added",
-  "channels.bulk.removed": "Tags removed"
+  "channels.bulk.removed": "Tags removed",
+  "tags.bulk.wroteNothing": "None of the checked rows were changed.",
+  "tags.bulk.nameSeparator": ", ",
+  "tags.bulk.refused": "{{lead}} {{unchanged}}",
+  "tags.bulk.refusedNamed": "{{lead}} {{names}}. {{unchanged}}"
 }

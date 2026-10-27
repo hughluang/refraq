@@ -358,6 +358,33 @@ describe("EntityRecord tags", () => {
     expect(body).not.toHaveProperty("tags");
   });
 
+  it("keeps an unsaved tag name when a definition save returns the same assignment", async () => {
+    const record = entity();
+    vi.mocked(patchEntity).mockResolvedValue({ entity: record });
+    await renderRecord(record, "edit");
+
+    const field = screen.getByRole("textbox", { name: "Add a tag" });
+    fireEvent.change(field, { target: { value: "Books" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(screen.getByRole("button", { name: "Remove Books" })).toBeTruthy();
+
+    vi.mocked(getEntity).mockImplementation(async () => ({
+      entity: {
+        ...record,
+        tags: record.tags.map((tag) => ({ id: tag.id, name: tag.name })),
+      },
+    }));
+    fireEvent.click(button("Save"));
+    await waitFor(() => {
+      expect(patchEntity).toHaveBeenCalled();
+      expect(getEntity.mock.calls.length).toBeGreaterThan(1);
+    });
+    expect(screen.getByRole("button", { name: "Remove Books" })).toBeTruthy();
+    expect(replaceEntityTags).not.toHaveBeenCalled();
+    const body = vi.mocked(patchEntity).mock.calls[0]?.[1];
+    expect(body).not.toHaveProperty("tags");
+  });
+
   it("sends the tag field text when save tags is clicked without Enter", async () => {
     await renderRecord(entity(), "edit");
 

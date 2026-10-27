@@ -1456,6 +1456,10 @@
   "problems.TAG_IN_USE": "这个标签仍被使用",
   "problems.TAG_LIMIT_EXCEEDED": "一条记录最多十个标签",
   "problems.TAG_ASSIGNMENT_CONFLICT": "标签已被其他人保存，重新加载后再试",
+  "problems.SAVED_FILTER_LIMIT": "这个列表最多保存二十条筛选",
+  "problems.SAVED_FILTER_NAME_CONFLICT": "这个列表已有同名筛选",
+  "problems.SAVED_FILTER_NAME_INVALID": "筛选名称不符合规则",
+  "problems.SAVED_FILTER_NOT_FOUND": "找不到该筛选",
   "channels.template.parsed": "静态值符合声明类型",
   "channels.template.parseFailed": "静态值不符合声明类型",
   "channels.template.insert": "插入计算",
@@ -2094,5 +2098,9 @@
   "channels.bulk.confirmAdd": "添加标签",
   "channels.bulk.confirmRemove": "移除标签",
   "channels.bulk.added": "已添加标签",
-  "channels.bulk.removed": "已移除标签"
+  "channels.bulk.removed": "已移除标签",
+  "tags.bulk.wroteNothing": "已勾选的行都没有改。",
+  "tags.bulk.nameSeparator": "、",
+  "tags.bulk.refused": "{{lead}}{{unchanged}}",
+  "tags.bulk.refusedNamed": "{{lead}}：{{names}}。{{unchanged}}"
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { Badge, Button, Checkbox, Group, MultiSelect, Select, Table, TextInput } from "@mantine/core";
+import { Button, Checkbox, Group, MultiSelect, Select, Table, TextInput } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -28,6 +28,8 @@ import {
 } from "@/features/channels/channelListFilter";
 import { ModuleAction, ModuleId } from "@/features/console/module-identity";
 import { listTags } from "@/features/tags/api";
+import { bulkTagFailureMessage } from "@/features/tags/bulkTagFailure";
+import { TagNameBadge } from "@/features/tags/TagNameBadge";
 import { useConsolePagedList } from "@/hooks/useConsolePagedList";
 import { useShowInstant } from "@/hooks/useFormatInstant";
 import { useListQuery } from "@/hooks/useListQuery";
@@ -293,7 +295,8 @@ export function ChannelList() {
       });
       await list.reload();
     } catch (error) {
-      report(error);
+      const namesById = new Map(items.map((row) => [row.id, row.name]));
+      open?.({ type: "error", message: bulkTagFailureMessage(t, error, namesById) });
     } finally {
       setApplying(false);
     }
@@ -584,9 +587,7 @@ export function ChannelList() {
               ) : (
                 <Group gap={4} wrap="wrap">
                   {channel.tags.map((tag) => (
-                    <Badge key={tag.id} size="sm" variant="light" color="gray">
-                      {tag.name}
-                    </Badge>
+                    <TagNameBadge key={tag.id} name={tag.name} />
                   ))}
                 </Group>
               )}

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addChannelTags, listChannels } from "@/features/channels/api";
 import type { Channel } from "@/features/channels/types";
 import { listTags } from "@/features/tags/api";
+import { ApiError } from "@/lib/api";
 
 const flags = vi.hoisted(() => ({ canWrite: true }));
 const notify = vi.hoisted(() => vi.fn());
@@ -44,6 +45,12 @@ const LABELS: Record<string, string> = {
   "savedFilters.placeholder": "Saved filter",
   "savedFilters.name": "Filter name",
   "savedFilters.save": "Save filter",
+  "problems.TAG_LIMIT_EXCEEDED": "A record can carry at most ten Tags.",
+  "problems.unknown": "Something went wrong. Try again.",
+  "tags.bulk.wroteNothing": "None of the checked rows were changed.",
+  "tags.bulk.nameSeparator": ", ",
+  "tags.bulk.refused": "{{lead}} {{unchanged}}",
+  "tags.bulk.refusedNamed": "{{lead}} {{names}}. {{unchanged}}",
 };
 
 vi.mock("@refinedev/core", () => ({
@@ -272,6 +279,37 @@ describe("ChannelList bulk tags", () => {
     });
     expect(
       (screen.getByRole("button", { name: "Add tags" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it("names the row that would pass ten tags and leaves the checked rows unchanged", async () => {
+    vi.mocked(addChannelTags).mockRejectedValueOnce(
+      new ApiError(422, "TAG_LIMIT_EXCEEDED", "A record can carry at most ten Tags", null, {
+        subjects: [{ kind: "channel", id: "chn_0" }],
+      }),
+    );
+    await renderList();
+    const fetches = vi.mocked(listChannels).mock.calls.length;
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Alpha" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Beta" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add tags" }));
+    await pickLedger();
+    await waitFor(() => {
+      expect(notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          message:
+            "A record can carry at most ten Tags. Alpha. None of the checked rows were changed.",
+        }),
+      );
+    });
+    expect(vi.mocked(listChannels).mock.calls.length).toBe(fetches);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(
+      (screen.getByRole("checkbox", { name: "Select Alpha" }) as HTMLInputElement).checked,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("checkbox", { name: "Select Beta" }) as HTMLInputElement).checked,
     ).toBe(true);
   });
 

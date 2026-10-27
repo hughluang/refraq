@@ -7,6 +7,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import { SectionHeader } from "@/components/layout/SectionHeader";
 import { replaceEntityTags } from "@/features/entities/api";
 import type { EntityTag } from "@/features/entities/types";
+import { tagAssignmentKey } from "@/features/tags/assignmentKey";
 import { listTags } from "@/features/tags/api";
 import { problemMessage } from "@/lib/problem";
 
@@ -42,11 +43,16 @@ export const EntityTagsControl = forwardRef<EntityTagsControlHandle, Props>(
   const [matches, setMatches] = useState<EntityTag[]>([]);
   const [saving, setSaving] = useState(false);
 
+  // A new array with the same assignment must not drop unsaved names.
+  const assignmentKey = tagAssignmentKey(tagRevision, tags);
+  const seenAssignment = useRef(assignmentKey);
   useEffect(() => {
+    if (seenAssignment.current === assignmentKey) return;
+    seenAssignment.current = assignmentKey;
     setSelected(tags);
     setPending([]);
     setQuery("");
-  }, [tagRevision, tags]);
+  }, [assignmentKey, tags]);
 
   useEffect(() => {
     const needle = query.trim();

@@ -1,6 +1,6 @@
 "use client";
 
-import { Badge, Button, Checkbox, Group, MultiSelect, Select, Table, Text, TextInput } from "@mantine/core";
+import { Button, Checkbox, Group, MultiSelect, Select, Table, Text, TextInput } from "@mantine/core";
 import { useCan, useNotification, useTranslate } from "@refinedev/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -17,6 +17,8 @@ import { EntityStatusBadge } from "@/features/entities/EntityStatusBadge";
 import { PublishStatusBadge } from "@/features/entities/PublishStatusBadge";
 import { addEntityTags, listEntities, removeEntityTags } from "@/features/entities/api";
 import { listTags } from "@/features/tags/api";
+import { bulkTagFailureMessage } from "@/features/tags/bulkTagFailure";
+import { TagNameBadge } from "@/features/tags/TagNameBadge";
 import {
   DEFAULT_ENTITY_LIST_STATUSES,
   createEntitySavedFilter,
@@ -306,7 +308,8 @@ export function EntityList() {
       });
       await list.reload();
     } catch (error) {
-      report(error);
+      const namesById = new Map(items.map((row) => [row.id, row.name]));
+      open?.({ type: "error", message: bulkTagFailureMessage(t, error, namesById) });
     } finally {
       setApplying(false);
     }
@@ -608,9 +611,7 @@ export function EntityList() {
                 ) : (
                   <Group gap={4} wrap="wrap">
                     {row.tags.map((tag) => (
-                      <Badge key={tag.id} size="sm" variant="light" color="gray">
-                        {tag.name}
-                      </Badge>
+                      <TagNameBadge key={tag.id} name={tag.name} />
                     ))}
                   </Group>
                 )}

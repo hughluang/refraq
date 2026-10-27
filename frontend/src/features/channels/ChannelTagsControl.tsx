@@ -7,6 +7,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import { SectionHeader } from "@/components/layout/SectionHeader";
 import { replaceChannelTags } from "@/features/channels/api";
 import type { ChannelTag } from "@/features/channels/types";
+import { tagAssignmentKey } from "@/features/tags/assignmentKey";
 import { listTags } from "@/features/tags/api";
 import { problemMessage } from "@/lib/problem";
 
@@ -43,10 +44,7 @@ export const ChannelTagsControl = forwardRef<ChannelTagsControlHandle, Props>(
   const [saving, setSaving] = useState(false);
 
   // A new array with the same assignment must not drop unsaved names.
-  const assignmentKey = JSON.stringify([
-    tagRevision,
-    tags.map((tag) => [tag.id, tag.name]),
-  ]);
+  const assignmentKey = tagAssignmentKey(tagRevision, tags);
   const seenAssignment = useRef(assignmentKey);
   useEffect(() => {
     if (seenAssignment.current === assignmentKey) return;

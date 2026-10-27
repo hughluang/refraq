@@ -58,6 +58,44 @@ describe("problemMessage", () => {
   });
 });
 
+const SAVED_FILTER_CODES = [
+  "SAVED_FILTER_LIMIT",
+  "SAVED_FILTER_NAME_CONFLICT",
+  "SAVED_FILTER_NAME_INVALID",
+  "SAVED_FILTER_NOT_FOUND",
+] as const;
+
+const SAVED_FILTER_DETAIL: Record<(typeof SAVED_FILTER_CODES)[number], string> = {
+  SAVED_FILTER_LIMIT: "A list can keep at most 20 saved filters",
+  SAVED_FILTER_NAME_CONFLICT: "A saved filter with this name already exists",
+  SAVED_FILTER_NAME_INVALID: "Saved filter name is not valid",
+  SAVED_FILTER_NOT_FOUND: "Saved filter not found",
+};
+
+describe("saved filter problem codes", () => {
+  it.each([
+    ["en-US", en],
+    ["zh-CN", zh],
+  ] as const)("%s states the refusal and does not ask for a retry", (_locale, catalog) => {
+    const translate = (key: string) => catalog[key as keyof typeof catalog] ?? key;
+    for (const code of SAVED_FILTER_CODES) {
+      const key = `problems.${code}`;
+      const copy = translate(key);
+      expect(copy).not.toBe(key);
+      expect(copy).not.toBe(translate("problems.unknown"));
+      expect(copy.toLowerCase()).not.toContain("retry");
+      expect(copy.toLowerCase()).not.toContain("try again");
+      const message = problemMessage(
+        translate,
+        new ApiError(422, code, SAVED_FILTER_DETAIL[code], "req-1"),
+        "failed",
+      );
+      expect(message).toBe(copy);
+      expect(message).not.toBe(SAVED_FILTER_DETAIL[code]);
+    }
+  });
+});
+
 describe("email account and webhook problem codes", () => {
   it.each([
     ["en-US", en],
