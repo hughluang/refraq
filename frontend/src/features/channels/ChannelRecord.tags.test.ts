@@ -305,6 +305,45 @@ describe("ChannelRecord tags", () => {
     expect(replaceChannelTags).not.toHaveBeenCalled();
   });
 
+  it("sends the tag field text with the create body without Enter", async () => {
+    vi.mocked(createChannel).mockImplementation(() => new Promise(() => {}));
+    await renderRecord("create");
+    fireEvent.change(await screen.findByRole("textbox", { name: "channels.fields.name" }), {
+      target: { value: "Intake" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "channels.tags.field" }), {
+      target: { value: "Ledger" },
+    });
+    expect(screen.getByText("channels.tags.createDescription")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "channels.tags.save" })).toBeNull();
+    fireEvent.click(button("channels.create.submit"));
+    await waitFor(() => {
+      expect(createChannel).toHaveBeenCalledWith({
+        name: "Intake",
+        description: null,
+        tags: { tag_ids: [], names: ["Ledger"] },
+      });
+    });
+    expect(replaceChannelTags).not.toHaveBeenCalled();
+  });
+
+  it("sends the tag field text when save tags is clicked without Enter", async () => {
+    await renderRecord("show");
+    expect(await screen.findByRole("heading", { name: "Intake" })).toBeTruthy();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "channels.tags.field" }), {
+      target: { value: "Ledger" },
+    });
+    fireEvent.click(button("channels.tags.save"));
+    await waitFor(() => {
+      expect(replaceChannelTags).toHaveBeenCalledWith("chn_1", {
+        base_revision: 1,
+        tag_ids: [],
+        names: ["Ledger"],
+      });
+    });
+  });
+
   it("keeps an unsaved tag name when a definition save returns the same assignment", async () => {
     vi.mocked(activateChannel).mockResolvedValue({
       channel: channel({

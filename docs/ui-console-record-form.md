@@ -61,7 +61,7 @@ The filled primary is Save when the definition form is on screen (create and edi
 
 ### 3.3 Tag control
 
-A Tag control is not a definition field. On create it submits with the create body. On show and edit it may save with its own button. That save must not dirty the definition form and must not submit with the definition save. Show of a deprecated record, and any mode without write permission, renders the control in display mode. This allowance is only the Tag control. Show does not gain a general in-place edit.
+A Tag control is not a definition field. On create it submits with the create body. On show and edit it may save with its own button. That save must not dirty the definition form and must not submit with the definition save. On create and on the control's own save, the text in the tag field is part of the submitted set. A definition save does not include it. Show of a deprecated record, and any mode without write permission, renders the control in display mode. This allowance is only the Tag control. Show does not gain a general in-place edit.
 
 ## 4. Forbidden
 

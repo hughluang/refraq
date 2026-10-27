@@ -74,7 +74,10 @@ import {
   type DraftValidation,
 } from "@/features/channels/api";
 import { ChannelCanvas } from "@/features/channels/ChannelCanvas";
-import { ChannelTagsControl } from "@/features/channels/ChannelTagsControl";
+import {
+  ChannelTagsControl,
+  type ChannelTagsControlHandle,
+} from "@/features/channels/ChannelTagsControl";
 import { isTerminalRun, recordedKey } from "@/features/channels/runSession";
 import type { ChannelTemplatePreview } from "@/features/channels/TemplateRunPreview";
 import { ChannelRuns } from "@/features/channels/ChannelRuns";
@@ -167,6 +170,7 @@ function ChannelCreate() {
     tag_ids: [],
     names: [],
   });
+  const tagsControl = useRef<ChannelTagsControlHandle>(null);
 
   return (
     <PageChrome
@@ -201,7 +205,7 @@ function ChannelCreate() {
             const created = await createChannel({
               name: values.name.trim(),
               description: description ? description : null,
-              tags: tagDraft,
+              tags: tagsControl.current?.flush() ?? tagDraft,
             });
             form.markSaved();
             suppressLeaveGuard();
@@ -223,6 +227,7 @@ function ChannelCreate() {
           <FormErrorSummary failure={saveFailure} />
           <IdentityFields form={form} editable />
           <ChannelTagsControl
+            ref={tagsControl}
             mode="create"
             tags={EMPTY_TAGS}
             tagRevision={1}

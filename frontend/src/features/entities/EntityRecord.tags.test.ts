@@ -31,6 +31,7 @@ const LABELS: Record<string, string> = {
   "entities.validation.required": "Required",
   "entities.tags.title": "Tags",
   "entities.tags.description": "Tags organize this Entity. Saving them does not change the definition.",
+  "entities.tags.createDescription": "Tags organize this Entity. They are submitted with this save.",
   "entities.tags.field": "Add a tag",
   "entities.tags.save": "Save tags",
   "entities.tags.empty": "No tags",
@@ -357,6 +358,23 @@ describe("EntityRecord tags", () => {
     expect(body).not.toHaveProperty("tags");
   });
 
+  it("sends the tag field text when save tags is clicked without Enter", async () => {
+    await renderRecord(entity(), "edit");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Add a tag" }), {
+      target: { value: "Books" },
+    });
+    fireEvent.click(button("Save tags"));
+
+    await waitFor(() => {
+      expect(replaceEntityTags).toHaveBeenCalledWith("ent_1", {
+        base_revision: 1,
+        tag_ids: [],
+        names: ["Books"],
+      });
+    });
+  });
+
   it("sends committed tag names with the create body", async () => {
     vi.mocked(createEntity).mockImplementation(() => new Promise(() => {}));
     const { EntityRecord } = await import("@/features/entities/EntityRecord");
@@ -385,6 +403,42 @@ describe("EntityRecord tags", () => {
           table_name: "material",
           name: "Material",
           description: "A material",
+          tags: { tag_ids: [], names: ["Ledger"] },
+        }),
+      );
+    });
+    expect(replaceEntityTags).not.toHaveBeenCalled();
+  });
+
+  it("sends the tag field text with the create body without Enter", async () => {
+    vi.mocked(createEntity).mockImplementation(() => new Promise(() => {}));
+    const { EntityRecord } = await import("@/features/entities/EntityRecord");
+    render(
+      createElement(MantineProvider, null, createElement(EntityRecord, { mode: "create" })),
+    );
+    await screen.findByRole("textbox", { name: "Table name" });
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Table name" }), {
+      target: { value: "material" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      target: { value: "Material" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
+      target: { value: "A material" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Add a tag" }), {
+      target: { value: "Ledger" },
+    });
+    expect(
+      screen.getByText("Tags organize this Entity. They are submitted with this save."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: (value) => value === "Save tags" })).toBeNull();
+    fireEvent.click(button("Save"));
+
+    await waitFor(() => {
+      expect(createEntity).toHaveBeenCalledWith(
+        expect.objectContaining({
           tags: { tag_ids: [], names: ["Ledger"] },
         }),
       );

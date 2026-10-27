@@ -8,7 +8,7 @@ import {
   usePermissions,
   useTranslate,
 } from "@refinedev/core";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
@@ -43,7 +43,10 @@ import { EntityOverviewTab } from "@/features/entities/EntityOverviewTab";
 import { EntityTabs } from "@/features/entities/EntityTabs";
 import { EntityVersionsTab } from "@/features/entities/EntityVersionsTab";
 import { EntityStatusBadge } from "@/features/entities/EntityStatusBadge";
-import { EntityTagsControl } from "@/features/entities/EntityTagsControl";
+import {
+  EntityTagsControl,
+  type EntityTagsControlHandle,
+} from "@/features/entities/EntityTagsControl";
 import {
   createEntity,
   deleteEntity,
@@ -148,6 +151,7 @@ export function EntityRecord(props: Props) {
     tag_ids: [],
     names: [],
   });
+  const tagsControl = useRef<EntityTagsControlHandle>(null);
 
   const attributeFieldMessage = (
     values: EntityRecordFormValues,
@@ -290,7 +294,7 @@ export function EntityRecord(props: Props) {
           name: values.name.trim(),
           description: values.description.trim(),
           attributes: attributesFromDrafts(values.attributes),
-          tags: tagDraft,
+          tags: tagsControl.current?.flush() ?? tagDraft,
         });
         form.markSaved();
         suppressLeaveGuard();
@@ -627,6 +631,7 @@ export function EntityRecord(props: Props) {
               editable={fieldsWritable}
             />
             <EntityTagsControl
+              ref={tagsControl}
               mode={mode}
               entityId={entityId}
               tags={entity?.tags ?? EMPTY_TAGS}

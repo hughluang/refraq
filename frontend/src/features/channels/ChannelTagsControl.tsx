@@ -2,7 +2,7 @@
 
 import { Button, Group, Stack, Text, TextInput } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 import { SectionHeader } from "@/components/layout/SectionHeader";
 import { replaceChannelTags } from "@/features/channels/api";
@@ -15,6 +15,10 @@ type Draft = {
   names: string[];
 };
 
+export type ChannelTagsControlHandle = {
+  flush: () => Draft;
+};
+
 type Props = {
   mode: "create" | "show" | "edit";
   channelId?: string;
@@ -25,15 +29,11 @@ type Props = {
   onSaved?: (next: { tags: ChannelTag[]; tag_revision: number }) => void;
 };
 
-export function ChannelTagsControl({
-  mode,
-  channelId,
-  tags,
-  tagRevision,
-  editable,
-  onDraftChange,
-  onSaved,
-}: Props) {
+export const ChannelTagsControl = forwardRef<ChannelTagsControlHandle, Props>(
+  function ChannelTagsControl(
+    { mode, channelId, tags, tagRevision, editable, onDraftChange, onSaved },
+    ref,
+  ) {
   const t = useTranslate();
   const { open } = useNotification();
   const [selected, setSelected] = useState<ChannelTag[]>(tags);
@@ -112,6 +112,23 @@ export function ChannelTagsControl({
     setMatches([]);
   }
 
+  const flushRef = useRef<() => Draft>(() => ({ tag_ids: [], names: [] }));
+  flushRef.current = () => {
+    const next = commit(query);
+    setSelected(next.selected);
+    setPending(next.pending);
+    setQuery("");
+    setMatches([]);
+    return {
+      tag_ids: next.selected.map((tag) => tag.id),
+      names: next.pending,
+    };
+  };
+
+  useImperativeHandle(ref, () => ({
+    flush: () => flushRef.current(),
+  }));
+
   function removeSelected(id: string) {
     const nextSelected = selected.filter((tag) => tag.id !== id);
     setSelected(nextSelected);
@@ -126,16 +143,13 @@ export function ChannelTagsControl({
 
   async function save() {
     if (!channelId) return;
-    const next = commit(query);
-    setSelected(next.selected);
-    setPending(next.pending);
-    setQuery("");
+    const draft = flushRef.current();
     setSaving(true);
     try {
       const saved = await replaceChannelTags(channelId, {
         base_revision: tagRevision,
-        tag_ids: next.selected.map((tag) => tag.id),
-        names: next.pending,
+        tag_ids: draft.tag_ids,
+        names: draft.names,
       });
       setSelected(saved.tags);
       setPending([]);
@@ -158,7 +172,9 @@ export function ChannelTagsControl({
       <SectionHeader
         order={4}
         title={t("channels.tags.title")}
-        description={t("channels.tags.description")}
+        description={t(
+          mode === "create" ? "channels.tags.createDescription" : "channels.tags.description",
+        )}
       />
       {names.length === 0 ? (
         <Text size="sm" c="dimmed">
@@ -234,4 +250,5 @@ export function ChannelTagsControl({
       ) : null}
     </Stack>
   );
-}
+},
+);

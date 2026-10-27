@@ -2,7 +2,7 @@
 
 import { Button, Group, Stack, Text, TextInput } from "@mantine/core";
 import { useNotification, useTranslate } from "@refinedev/core";
-import { useEffect, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 import { SectionHeader } from "@/components/layout/SectionHeader";
 import { replaceEntityTags } from "@/features/entities/api";
@@ -15,6 +15,10 @@ type Draft = {
   names: string[];
 };
 
+export type EntityTagsControlHandle = {
+  flush: () => Draft;
+};
+
 type Props = {
   mode: "create" | "show" | "edit";
   entityId?: string;
@@ -25,15 +29,11 @@ type Props = {
   onSaved?: (next: { tags: EntityTag[]; tag_revision: number }) => void;
 };
 
-export function EntityTagsControl({
-  mode,
-  entityId,
-  tags,
-  tagRevision,
-  editable,
-  onDraftChange,
-  onSaved,
-}: Props) {
+export const EntityTagsControl = forwardRef<EntityTagsControlHandle, Props>(
+  function EntityTagsControl(
+    { mode, entityId, tags, tagRevision, editable, onDraftChange, onSaved },
+    ref,
+  ) {
   const t = useTranslate();
   const { open } = useNotification();
   const [selected, setSelected] = useState<EntityTag[]>(tags);
@@ -104,6 +104,23 @@ export function EntityTagsControl({
     setMatches([]);
   }
 
+  const flushRef = useRef<() => Draft>(() => ({ tag_ids: [], names: [] }));
+  flushRef.current = () => {
+    const next = commit(query);
+    setSelected(next.selected);
+    setPending(next.pending);
+    setQuery("");
+    setMatches([]);
+    return {
+      tag_ids: next.selected.map((tag) => tag.id),
+      names: next.pending,
+    };
+  };
+
+  useImperativeHandle(ref, () => ({
+    flush: () => flushRef.current(),
+  }));
+
   function removeSelected(id: string) {
     const nextSelected = selected.filter((tag) => tag.id !== id);
     setSelected(nextSelected);
@@ -118,16 +135,13 @@ export function EntityTagsControl({
 
   async function save() {
     if (!entityId) return;
-    const next = commit(query);
-    setSelected(next.selected);
-    setPending(next.pending);
-    setQuery("");
+    const draft = flushRef.current();
     setSaving(true);
     try {
       const saved = await replaceEntityTags(entityId, {
         base_revision: tagRevision,
-        tag_ids: next.selected.map((tag) => tag.id),
-        names: next.pending,
+        tag_ids: draft.tag_ids,
+        names: draft.names,
       });
       setSelected(saved.tags);
       setPending([]);
@@ -150,7 +164,9 @@ export function EntityTagsControl({
       <SectionHeader
         order={4}
         title={t("entities.tags.title")}
-        description={t("entities.tags.description")}
+        description={t(
+          mode === "create" ? "entities.tags.createDescription" : "entities.tags.description",
+        )}
       />
       {names.length === 0 ? (
         <Text size="sm" c="dimmed">
@@ -226,4 +242,5 @@ export function EntityTagsControl({
       ) : null}
     </Stack>
   );
-}
+},
+);
