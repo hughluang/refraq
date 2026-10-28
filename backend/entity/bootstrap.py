@@ -20,6 +20,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, make_url
 
 from backend.core.config import Settings
+from backend.entity.change_log import ensure_shared_relations
 from backend.entity.ddl import (
     ACL_OWNER_ROLE,
     ACL_SCHEMA,
@@ -649,6 +650,7 @@ def _converge(
     tables = _relation_names(conn, ENTITY_DATA_SCHEMA, ("r",))
     views = _relation_names(conn, ENTITY_DATA_SCHEMA, ("v",))
     _apply(conn, secure_existing_table_statements(tables, views))
+    ensure_shared_relations(conn)
     return BootstrapReport(
         database=database,
         moved=len(relations) if legacy_schema != ENTITY_DATA_SCHEMA else 0,
