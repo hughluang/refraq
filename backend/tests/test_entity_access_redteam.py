@@ -307,7 +307,12 @@ def test_unique_conflict_names_no_other_row(monkeypatch: pytest.MonkeyPatch) -> 
         yield object()
 
     monkeypatch.setattr(data_sql, "entity_connection", _open)
-    monkeypatch.setattr(data_sql, "select_by_column", lambda *args, **kwargs: dict(secret))
+    monkeypatch.setattr(data_sql, "set_change_log_actor", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        data_sql,
+        "select_stored_row",
+        lambda *args, **kwargs: (dict(secret), dict(secret)),
+    )
     monkeypatch.setattr(
         "backend.entity.data.service.row_visible", lambda access, row: False
     )

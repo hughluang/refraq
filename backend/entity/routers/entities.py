@@ -27,6 +27,10 @@ from backend.entity.entity_db import get_entity_engine
 from backend.entity.errors import EntityNotFound, EntityRequestInvalid
 from backend.entity.jobs import enqueue_drop
 from backend.entity.publish import accept
+from backend.entity.publish_confirmation import (
+    change_log_publish_effect,
+    incompatible_write_nodes,
+)
 from backend.entity.records import AttributeRecord
 from backend.entity.reference_binding import business_key_attr
 from backend.entity.schemas.entities import (
@@ -59,6 +63,7 @@ from backend.entity.service import (
     deprecate_entity,
     get_entity,
     get_version,
+    live_change_log,
     list_entities,
     list_versions,
     open_version,
@@ -529,12 +534,6 @@ def http_publish_preview(
     version_id: str,
     user: UserRecord = Depends(require_permission("entity:write")),
 ) -> dict[str, Any]:
-    from backend.entity.publish_confirmation import (
-        change_log_publish_effect,
-        incompatible_write_nodes,
-    )
-    from backend.entity.service import get_version, live_change_log
-
     version = get_version(entity_id, version_id, user=user)
     effective_enabled, effective_days = live_change_log(entity_id)
     return {

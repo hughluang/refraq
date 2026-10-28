@@ -1,6 +1,6 @@
 """Change-log policy state on entity versions.
 
-Revision ID: 0075_entity_version_change_log_policy
+Revision ID: 0075_entity_change_log_policy
 Revises: 0074_entity_version_change_log
 
 Null means the version never entered the policy step. pending and applied
@@ -14,7 +14,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0075_entity_version_change_log_policy"
+revision: str = "0075_entity_change_log_policy"
 down_revision: Union[str, None] = "0074_entity_version_change_log"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

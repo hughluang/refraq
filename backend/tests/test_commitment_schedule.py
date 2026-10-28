@@ -30,17 +30,23 @@ def test_overdue_commitment_is_due_once_per_dispatch() -> None:
         reset_clock()
 
 
+def _leave_only_the_reaper_overdue(clock: FixedClock) -> None:
+    """Other hidden duties are also seeded due. This test is about the reaper."""
+    ensure_system_schedules()
+    store = get_schedule_store()
+    future = clock.now() + timedelta(days=2)
+    overdue = clock.now() - timedelta(hours=1)
+    for record in store.list_enabled():
+        when = overdue if record.key == REAPER_SCHEDULE_KEY else future
+        store.upsert(replace(record, next_run_at=when))
+
+
 def test_overdue_commitment_does_not_tight_loop_on_beat_tick() -> None:
     clock = FixedClock(parse_instant("2026-08-16T10:00:00Z"))
     set_clock(clock)
     sent: list[str] = []
     try:
-        ensure_system_schedules()
-        record = get_schedule_store().get_by_key(REAPER_SCHEDULE_KEY)
-        assert record is not None
-        get_schedule_store().upsert(
-            replace(record, next_run_at=clock.now() - timedelta(hours=1))
-        )
+        _leave_only_the_reaper_overdue(clock)
         scheduler = DatabaseScheduler(app=celery_app, lazy=True)
         scheduler.setup_schedule()
 
@@ -86,12 +92,7 @@ def test_sync_does_not_redispatch_same_overdue_commitment_immediately() -> None:
     set_clock(clock)
     sent: list[str] = []
     try:
-        ensure_system_schedules()
-        record = get_schedule_store().get_by_key(REAPER_SCHEDULE_KEY)
-        assert record is not None
-        get_schedule_store().upsert(
-            replace(record, next_run_at=clock.now() - timedelta(hours=1))
-        )
+        _leave_only_the_reaper_overdue(clock)
         scheduler = DatabaseScheduler(app=celery_app, lazy=True)
         scheduler.setup_schedule()
         scheduler.apply_entry = lambda entry, producer=None: sent.append(entry.name)  # type: ignore[method-assign]

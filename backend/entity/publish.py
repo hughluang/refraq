@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import timedelta
 from typing import Any
 
 from backend.admin.audit import persist_audit_event
@@ -16,6 +17,14 @@ from backend.entity.access.views import (
     profile_view_statements,
     restore_profile_views,
 )
+from backend.entity.change_log import (
+    ChangeLogEffective,
+    delete_entries,
+    delete_entries_before,
+    install_triggers,
+    remove_triggers,
+    write_effective,
+)
 from backend.entity.classify import classify_shapes
 from backend.entity.ddl import ENTITY_DATA_SCHEMA, attr_wants_index
 from backend.entity.dictionary_binding import (
@@ -24,6 +33,7 @@ from backend.entity.dictionary_binding import (
     frozen_bindings_cover,
     require_attribute_dictionaries,
 )
+from backend.entity.entity_db import get_entity_engine
 from backend.entity.errors import (
     EntityAttributeInvalid,
     EntityNotUnpublished,
@@ -45,6 +55,7 @@ from backend.entity.reference_binding import (
     frozen_reference_bindings_cover,
     require_business_key_stable,
 )
+from backend.entity.publish_confirmation import change_log_publish_effect
 from backend.entity.records import (
     AttributeRecord,
     BusinessEntityRecord,
@@ -409,19 +420,6 @@ def _apply_change_log_policy(
     on its previous value until the finishing transaction, which also installs
     or removes triggers on every physical table that still exists.
     """
-    from datetime import timedelta
-
-    from backend.entity.change_log import (
-        ChangeLogEffective,
-        delete_entries,
-        delete_entries_before,
-        install_triggers,
-        remove_triggers,
-        write_effective,
-    )
-    from backend.entity.entity_db import get_entity_engine
-    from backend.entity.publish_confirmation import change_log_publish_effect
-
     tables = _physical_tables(entity)
     draft_on = bool(version.change_log_enabled)
     draft_days = version.change_log_retention_days

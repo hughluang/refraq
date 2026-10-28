@@ -8,8 +8,10 @@ from typing import Any, TypeVar
 
 from backend.admin.audit import persist_audit_event
 from backend.core.time import utc_now
+from backend.entity.change_log import ensure_shared_relations, read_effective
 from backend.entity.classify import Classification, classify_shapes
 from backend.entity.dictionary_binding import require_attribute_dictionaries
+from backend.entity.entity_db import get_entity_engine
 from backend.entity.errors import (
     EntityAlreadyDeprecated,
     EntityAlreadyPublished,
@@ -54,6 +56,7 @@ from backend.entity.records import (
     attribute_to_dict,
 )
 from backend.entity.store import get_entity_store
+from backend.entity.table_port import RecordingEntityTablePort, get_entity_table_port
 from backend.tags.api import (
     KIND_ENTITY,
     BulkAssignment,
@@ -260,8 +263,6 @@ def change_log_on_entity_database() -> bool:
     The recording port has no entity database. Callers must not open a
     connection in that case, even if a URL is set.
     """
-    from backend.entity.table_port import RecordingEntityTablePort, get_entity_table_port
-
     return not isinstance(get_entity_table_port(), RecordingEntityTablePort)
 
 
@@ -273,9 +274,6 @@ def live_change_log(entity_id: str) -> tuple[bool, int | None]:
     """
     if not change_log_on_entity_database():
         return False, None
-    from backend.entity.change_log import ensure_shared_relations, read_effective
-    from backend.entity.entity_db import get_entity_engine
-
     with get_entity_engine().begin() as conn:
         ensure_shared_relations(conn)
         row = read_effective(conn, entity_id)
