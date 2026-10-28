@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from backend.admin.user_store import UserRecord
+from backend.entity.change_log import SOURCE_USER
 from backend.entity.access.enforce import (
     DataAccess,
     begin_data,
@@ -79,6 +80,7 @@ def create_row(
             access, written=set(encoded), before=[], after=[encoded]
         )
         with data_sql.entity_connection() as conn:
+            data_sql.set_change_log_actor(conn, SOURCE_USER, user.id)
             row_id = data_sql.insert_row(conn, access.target, encoded)
         row = _present(access, [row_id])[0]
         access.log(row_count=1, outcome_code="ok", verb="create")
@@ -120,6 +122,7 @@ def create_many_rows(
             access, written=written, before=[], after=encoded_items
         )
         with data_sql.entity_connection() as conn:
+            data_sql.set_change_log_actor(conn, SOURCE_USER, user.id)
             row_ids = [
                 data_sql.insert_row(conn, target, values) for values in encoded_items
             ]
@@ -163,7 +166,10 @@ def update_row(
     encoded = encode_inbound_map(values_raw, target, partial=True)
     try:
         with data_sql.entity_connection() as conn:
-            pre = data_sql.select_by_column(conn, access.full, column, value, lock=True)
+            data_sql.set_change_log_actor(conn, SOURCE_USER, user.id)
+            pre, driver = data_sql.select_stored_row(
+                conn, access.full, column, value
+            )
             if not row_visible(access, pre):
                 raise EntityRowNotFound()
             post = {**pre, **encoded}
@@ -171,7 +177,8 @@ def update_row(
                 access, written=set(encoded), before=[pre], after=[post]
             )
             row_id = int(pre["row_id"])
-            data_sql.update_ids(conn, target, [row_id], encoded)
+            if _assignment_differs(target, driver, encoded):
+                data_sql.update_ids(conn, target, [row_id], encoded)
         row = _present(access, [row_id])[0]
         access.log(row_count=1, outcome_code="ok", verb="update")
         return row
@@ -185,6 +192,7 @@ def delete_row(table_name: str, body: dict[str, Any], user: UserRecord) -> None:
     try:
         column, value = _locator(body, write_locator_target(access), verb="delete")
         with data_sql.entity_connection() as conn:
+            data_sql.set_change_log_actor(conn, SOURCE_USER, user.id)
             pre = data_sql.select_by_column(conn, access.full, column, value, lock=True)
             if not row_visible(access, pre):
                 raise EntityRowNotFound()
@@ -287,17 +295,27 @@ def update_where_rows(
         assert compiled is not None
         encoded = encode_inbound_map(set_raw, target, partial=True)
         with data_sql.entity_connection() as conn:
-            rows = data_sql.select_matching(conn, access.full, compiled)
-            visible = [row for row in rows if row_visible(access, row)]
-            posts = [{**row, **encoded} for row in visible]
+            data_sql.set_change_log_actor(conn, SOURCE_USER, user.id)
+            pairs = data_sql.select_stored_matching(conn, access.full, compiled)
+            visible = [
+                (decoded, driver)
+                for decoded, driver in pairs
+                if row_visible(access, decoded)
+            ]
+            decoded_rows = [decoded for decoded, _driver in visible]
+            posts = [{**decoded, **encoded} for decoded, _driver in visible]
             require_write_grant(
-                access, written=set(encoded), before=visible, after=posts
+                access, written=set(encoded), before=decoded_rows, after=posts
             )
-            affected = data_sql.update_ids(
-                conn,
-                target,
-                [int(row["row_id"]) for row in visible],
-                encoded,
+            changed_ids = [
+                int(decoded["row_id"])
+                for decoded, driver in visible
+                if _assignment_differs(target, driver, encoded)
+            ]
+            affected = (
+                data_sql.update_ids(conn, target, changed_ids, encoded)
+                if changed_ids
+                else 0
             )
         access.log(row_count=affected, outcome_code="ok", verb="update-where")
         return {"affected": affected}
@@ -318,6 +336,7 @@ def delete_where_rows(
         )
         assert compiled is not None
         with data_sql.entity_connection() as conn:
+            data_sql.set_change_log_actor(conn, SOURCE_USER, user.id)
             rows = data_sql.select_matching(conn, access.full, compiled)
             visible = [row for row in rows if row_visible(access, row)]
             require_write_grant(
@@ -378,25 +397,27 @@ def _upsert_body(
     key_value = encoded[key_name]
     update_values = {name: value for name, value in encoded.items() if name != key_name}
     with data_sql.entity_connection() as conn:
+        data_sql.set_change_log_actor(conn, SOURCE_USER, access.user.id)
         try:
-            pre = data_sql.select_by_column(
-                conn, access.full, key_name, key_value, lock=True
+            found = data_sql.select_stored_row(
+                conn, access.full, key_name, key_value
             )
         except EntityRowNotFound:
-            pre = None
-        if pre is not None and not row_visible(access, pre):
+            found = None
+        if found is not None and not row_visible(access, found[0]):
             raise EntityRowConflict()
-        if pre is None:
+        if found is None:
             require_write_grant(
                 access, written=set(encoded), before=[], after=[encoded]
             )
             return data_sql.insert_row(conn, target, encoded), True
+        pre, driver = found
         post = {**pre, **update_values}
         require_write_grant(
             access, written=set(update_values), before=[pre], after=[post]
         )
         row_id = int(pre["row_id"])
-        if update_values:
+        if update_values and _assignment_differs(target, driver, update_values):
             data_sql.update_ids(conn, target, [row_id], update_values)
         return row_id, False
 
@@ -409,6 +430,49 @@ def _present(access: DataAccess, row_ids: list[int]) -> list[dict[str, Any]]:
     with data_sql.entity_read_connection(read_context(reader)) as conn:
         found = data_sql.select_ids(conn, reader.target, row_ids)
     return [found.get(row_id, {"row_id": row_id}) for row_id in row_ids]
+
+
+def _assignment_differs(
+    target: HeadTarget, driver: dict[str, Any], encoded: dict[str, Any]
+) -> bool:
+    """True when a driver value is distinct from the value this write would set.
+
+    Compares the physical value, not the decoded presentation. Timestamp
+    display drops subseconds, so those strings hide a real change. Null matches
+    null. A point update skips the statement when this is false for every
+    assigned column.
+    """
+    by_name = {attr.name: attr for attr in target.attributes}
+    return any(
+        _value_is_distinct(by_name[name], driver.get(name), value)
+        for name, value in encoded.items()
+    )
+
+
+def _value_is_distinct(attr: Any, stored: Any, proposed: Any) -> bool:
+    if stored is None or proposed is None:
+        return stored is not proposed
+    if attr.type == "json":
+        return _json_is_distinct(stored, proposed.obj)
+    return stored != proposed
+
+
+def _json_is_distinct(stored: Any, proposed: Any) -> bool:
+    """jsonb equality. A boolean is not a number, which Python ``!=`` misses."""
+    if isinstance(stored, bool) or isinstance(proposed, bool):
+        return type(stored) is not type(proposed) or stored is not proposed
+    if isinstance(stored, dict) and isinstance(proposed, dict):
+        if stored.keys() != proposed.keys():
+            return True
+        return any(_json_is_distinct(stored[key], proposed[key]) for key in stored)
+    if isinstance(stored, list) and isinstance(proposed, list):
+        if len(stored) != len(proposed):
+            return True
+        return any(
+            _json_is_distinct(left, right)
+            for left, right in zip(stored, proposed, strict=True)
+        )
+    return stored != proposed
 
 
 def _reject_batch_unique_dups(

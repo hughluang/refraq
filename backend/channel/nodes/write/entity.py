@@ -117,6 +117,7 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
                 match_key=config.get("match_key"),
                 rows=prepared,
                 user=hooks.user,
+                channel_run_id=hooks.run_id,
                 pulse=_pulse(hooks, int(timeout_sec)),
             )
         except _SourceRejected as rejected:

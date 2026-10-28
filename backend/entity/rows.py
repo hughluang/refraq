@@ -34,6 +34,7 @@ from backend.entity.data.values import (
     require_business_key_value,
     writable_dictionary_codes,
 )
+from backend.entity.change_log import SOURCE_CHANNEL_RUN
 from backend.entity.ddl import ident
 from backend.entity.errors import (
     EntityNotFound,
@@ -117,12 +118,15 @@ def write_rows(
     match_key: str | None,
     rows: Sequence[Mapping[str, Any]] | Iterable[Sequence[Mapping[str, Any]]],
     user: UserRecord,
+    channel_run_id: str | None = None,
     statement_timeout_ms: int | None = None,
     pulse: Callable[[], int] | None = None,
 ) -> RowWriteResult:
     """Stage every chunk, validate the whole set, then write it in one transaction.
 
-    A sequence of row mappings is one chunk, and ``_ord`` is the list index.
+    ``channel_run_id`` attributes the transaction as that Channel Run. A caller
+    that omits it leaves the write unattributed. A sequence of row mappings is
+    one chunk, and ``_ord`` is the list index.
     Any other iterable yields chunks. A chunk of mappings continues ``_ord``
     from the previous mapping chunk, starting at 0. A chunk of ``(ord, row)``
     pairs keeps those ordinals. ``pulse`` returns the remaining wall-clock
@@ -148,6 +152,8 @@ def write_rows(
     )
     try:
         with data_sql.entity_connection() as conn:
+            if channel_run_id is not None:
+                data_sql.set_change_log_actor(conn, SOURCE_CHANNEL_RUN, channel_run_id)
             result, row_count = _write_in_transaction(
                 conn,
                 access,

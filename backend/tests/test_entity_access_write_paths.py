@@ -91,7 +91,10 @@ class _Conn:
         self._answers = answers
 
     def execute(self, statement, params=None):
-        self._log.append(str(statement))
+        sql = str(statement)
+        self._log.append(sql)
+        if "set_config" in sql:
+            return _Result([])
         return _Result(self._answers.pop(0) if self._answers else [])
 
 
@@ -218,6 +221,10 @@ def _masked_entity() -> tuple[UserRecord, str]:
     return user, table
 
 
+def _data_sql(statements: list[str]) -> list[str]:
+    return [item for item in statements if "set_config" not in item]
+
+
 def test_reads_use_the_reader_connection_and_the_profile_view(channels: _Channels) -> None:
     user, table = _masked_entity()
     channels.reader_answers.append([(7, "A1", "n", "**34")])
@@ -235,8 +242,9 @@ def test_create_presents_the_row_through_the_read_view(channels: _Channels) -> N
     channels.reader_answers.append([(7, "A1", "n", "**34")])
     row = create_row(table, {"values": {"sku": "A1", "note": "n"}}, user)
     assert row == {"row_id": 7, "sku": "A1", "note": "n", "secret": "**34"}
-    assert channels.owner[0].startswith("INSERT INTO")
-    assert channels.owner[0].endswith('RETURNING "row_id"')
+    insert = _data_sql(channels.owner)[0]
+    assert insert.startswith("INSERT INTO")
+    assert insert.endswith('RETURNING "row_id"')
     assert '"entity_access".' in channels.reader[1]
 
 
@@ -247,7 +255,7 @@ def test_update_locks_the_pre_image_and_writes_by_row_id(channels: _Channels) ->
     row = update_row(table, {"row_id": 7, "values": {"note": "n2"}}, user)
     assert row == {"row_id": 7, "sku": "A1", "note": "n2", "secret": "**34"}
     assert RAW not in str(row)
-    select, update = channels.owner
+    select, update = _data_sql(channels.owner)
     assert select.endswith("FOR UPDATE")
     assert "entity_data" in select
     assert update.startswith("UPDATE") and '"row_id" = ANY(:ids)' in update
@@ -260,7 +268,7 @@ def test_upsert_returns_the_read_view_not_the_stored_values(channels: _Channels)
     row, created = upsert_one(table, {"key": "sku", "values": {"sku": "A1", "note": "n2"}}, user)
     assert created is False
     assert RAW not in str(row)
-    assert channels.owner[0].endswith("FOR UPDATE")
+    assert _data_sql(channels.owner)[0].endswith("FOR UPDATE")
 
 
 def test_update_where_locks_rows_and_mutates_by_id(channels: _Channels) -> None:
@@ -273,7 +281,7 @@ def test_update_where_locks_rows_and_mutates_by_id(channels: _Channels) -> None:
         user,
     )
     assert result == {"affected": 1}
-    select, update = channels.owner
+    select, update = _data_sql(channels.owner)
     assert "FOR UPDATE" in select
     assert '"row_id" = ANY(:ids)' in update
 
@@ -329,3 +337,37 @@ def test_update_rejects_filters(channels: _Channels) -> None:
     user, table = _masked_entity()
     with pytest.raises(EntityRequestInvalid):
         update_row(table, {"row_id": 7, "filters": {}, "values": {"note": "n"}}, user)
+
+
+def test_equal_update_where_counts_no_rows_and_does_not_write(channels: _Channels) -> None:
+    user, table = _masked_entity()
+    channels.owner_answers.append([(7, "A1", "n", RAW), (8, "A2", "n", RAW)])
+    result = update_where_rows(
+        table,
+        {"filters": {"field": "sku", "op": "eq", "value": "A1"}, "set": {"note": "n"}},
+        user,
+    )
+    assert result == {"affected": 0}
+    assert [statement for statement in channels.owner if statement.startswith("UPDATE")] == []
+
+
+def test_equal_upsert_stays_an_update_and_returns_the_current_row(channels: _Channels) -> None:
+    user, table = _masked_entity()
+    channels.owner_answers.append([(7, "A1", "n", RAW)])
+    channels.reader_answers.append([(7, "A1", "n", "**34")])
+    row, created = upsert_one(
+        table, {"key": "sku", "values": {"sku": "A1", "note": "n"}}, user
+    )
+    assert created is False
+    assert row == {"row_id": 7, "sku": "A1", "note": "n", "secret": "**34"}
+    assert [statement for statement in channels.owner if statement.startswith("UPDATE")] == []
+    assert [statement for statement in channels.owner if statement.startswith("INSERT")] == []
+
+
+def test_equal_point_update_returns_the_current_row_without_writing(channels: _Channels) -> None:
+    user, table = _masked_entity()
+    channels.owner_answers.append([(7, "A1", "n", RAW)])
+    channels.reader_answers.append([(7, "A1", "n", "**34")])
+    row = update_row(table, {"row_id": 7, "values": {"note": "n"}}, user)
+    assert row == {"row_id": 7, "sku": "A1", "note": "n", "secret": "**34"}
+    assert [statement for statement in channels.owner if statement.startswith("UPDATE")] == []

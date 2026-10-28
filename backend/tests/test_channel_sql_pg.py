@@ -99,3 +99,91 @@ def test_sql_returns_rows_and_write_results() -> None:
         finally:
             reset_entity_engine()
             reset_settings_cache()
+
+
+def test_sql_node_during_a_channel_run_stays_unattributed() -> None:
+    probe = None
+    try:
+        probe = create_engine(_MAINTENANCE)
+        with probe.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        pytest.skip(f"entity database is not available: {exc}")
+    finally:
+        if probe is not None:
+            probe.dispose()
+    from backend.channel.nodes import list_node_types
+    from backend.entity.change_log import (
+        ChangeLogEffective,
+        ensure_shared_relations,
+        install_triggers,
+        list_entries,
+        write_effective,
+    )
+    from backend.entity.entity_db import get_entity_engine
+    from backend.entity.ids import new_entity_id
+    from backend.entity.records import AttributeRecord
+    from backend.tests.channel_hooks_fake import FakeHooks
+
+    table = "material__v1__0123456789abcdef"
+    attributes = [AttributeRecord(name="code", type="text")]
+    with bootstrapped_entity_database(_MAINTENANCE, "refraq_chsqlu") as urls:
+        admin = create_engine(urls.admin_url)
+        with admin.begin() as conn:
+            conn.execute(
+                text(
+                    f"CREATE TABLE entity_data.{table} (row_id bigint, code text)"
+                )
+            )
+            conn.execute(
+                text(
+                    f"ALTER TABLE entity_data.{table} OWNER TO \"{ENTITY_OWNER_ROLE}\""
+                )
+            )
+        admin.dispose()
+        os.environ["ENTITY_DATABASE_URL"] = urls.owner_url
+        reset_settings_cache()
+        reset_entity_engine()
+        try:
+            entity_id = new_entity_id()
+            engine = get_entity_engine()
+            with engine.begin() as conn:
+                ensure_shared_relations(conn)
+                write_effective(
+                    conn,
+                    ChangeLogEffective(
+                        entity_id=entity_id,
+                        recording=True,
+                        retention_days=None,
+                        applied_version_id=None,
+                    ),
+                )
+                install_triggers(conn, entity_id, [table])
+            execute = next(
+                item.execute for item in list_node_types() if item.type_id == "read.sql"
+            )
+            hooks = FakeHooks(run_id="job_sql_run", channel_id="chn_sql")
+            result = execute(
+                {
+                    "id": "nd_sql",
+                    "type": "read.sql",
+                    "config": {
+                        "source": {"kind": "entity"},
+                        "sql": (
+                            f"INSERT INTO {table} (row_id, code) VALUES (3, 'C')"
+                        ),
+                        "statement_timeout_sec": 30,
+                    },
+                },
+                hooks,
+            )
+            assert result.status == "succeeded", result.error_message
+            assert result.output["rowcount"] == 1
+            with engine.begin() as conn:
+                entries = list_entries(conn, entity_id, attributes)
+            assert [(entry.operation, entry.source, entry.subject) for entry in entries] == [
+                ("insert", None, None)
+            ]
+        finally:
+            reset_entity_engine()
+            reset_settings_cache()

@@ -22,6 +22,7 @@ from backend.entity.data.capabilities import ROW_WRITE_LIMIT
 from backend.entity.data.filters import CompiledFilter
 from backend.entity.data.head import HeadTarget
 from backend.entity.data.values import decode_row
+from backend.entity.change_log import SOURCE_GUC, SUBJECT_GUC
 from backend.entity.ddl import ENTITY_DATA_SCHEMA, ident, qualified_table
 from backend.entity.entity_db import get_entity_engine, get_entity_reader_engine
 from backend.entity.errors import (
@@ -47,6 +48,9 @@ __all__ = [
     "select_by_column",
     "select_ids",
     "select_matching",
+    "select_stored_matching",
+    "select_stored_row",
+    "set_change_log_actor",
     "set_write_timeouts",
     "update_ids",
     "write_staged_counts",
@@ -130,6 +134,39 @@ def select_by_column(
     lock: bool = False,
 ) -> dict[str, Any]:
     """One row by locator. ``lock`` takes ``FOR UPDATE`` on the physical table."""
+    row = _fetch_one(conn, target, column, value, lock=lock)
+    if row is None:
+        raise EntityRowNotFound()
+    return decode_row(_column_names(target), row, target)
+
+
+def select_stored_row(
+    conn: Connection,
+    target: HeadTarget,
+    column: str,
+    value: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Locked physical row as ``(decoded, driver)``.
+
+    Grants and presentation use the decoded row. An equal-value check compares
+    driver values with the encoded assignment, which is what ``IS DISTINCT FROM``
+    compares.
+    """
+    row = _fetch_one(conn, target, column, value, lock=True)
+    if row is None:
+        raise EntityRowNotFound()
+    names = _column_names(target)
+    return decode_row(names, row, target), dict(zip(names, row, strict=True))
+
+
+def _fetch_one(
+    conn: Connection,
+    target: HeadTarget,
+    column: str,
+    value: Any,
+    *,
+    lock: bool,
+) -> tuple[Any, ...] | None:
     returning = _returning_cols(target)
     relation = target.qualified_table if lock else _read_from(target)
     sql = (
@@ -137,10 +174,10 @@ def select_by_column(
         f"WHERE {ident(column)} = :_locator"
         + (" FOR UPDATE" if lock else "")
     )
-    row = conn.execute(text(sql), {"_locator": value}).one_or_none()
-    if row is None:
-        raise EntityRowNotFound()
-    return decode_row(_column_names(target), tuple(row), target)
+    found = conn.execute(text(sql), {"_locator": value}).one_or_none()
+    if found is None:
+        return None
+    return tuple(found)
 
 
 def select_ids(
@@ -171,12 +208,27 @@ def update_ids(
     assigns = ", ".join(f"{ident(name)} = :{name}" for name in values)
     params = dict(values)
     params["ids"] = row_ids
+    distinct = " OR ".join(
+        f"{ident(name)} IS DISTINCT FROM :{name}" for name in values
+    )
     sql = (
         f"UPDATE {target.qualified_table} SET {assigns} "
-        f"WHERE {ident('row_id')} = ANY(:ids)"
+        f"WHERE {ident('row_id')} = ANY(:ids) AND ({distinct})"
     )
     result = conn.execute(text(sql), params)
     return int(result.rowcount or 0)
+
+
+def set_change_log_actor(conn: Connection, source: str, subject: str) -> None:
+    """Attribute this write transaction. Both settings end when it commits."""
+    conn.execute(
+        text("SELECT set_config(:name, :value, true)"),
+        {"name": SOURCE_GUC, "value": source},
+    )
+    conn.execute(
+        text("SELECT set_config(:name, :value, true)"),
+        {"name": SUBJECT_GUC, "value": subject},
+    )
 
 
 def set_write_timeouts(conn: Connection, remaining_ms: int) -> None:
@@ -437,6 +489,16 @@ def select_matching(
     compiled: CompiledFilter,
 ) -> list[dict[str, Any]]:
     """Physical rows matching a filter, locked for write attribution. Owner connection."""
+    stored = select_stored_matching(conn, target, compiled)
+    return [decoded for decoded, _driver in stored]
+
+
+def select_stored_matching(
+    conn: Connection,
+    target: HeadTarget,
+    compiled: CompiledFilter,
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Each locked match as ``(decoded, driver)``. See ``select_stored_row``."""
     where_sql, params = _where(compiled)
     returning = _returning_cols(target)
     sql = (
@@ -447,7 +509,10 @@ def select_matching(
     if len(rows) > ROW_WRITE_LIMIT:
         raise EntityRowLimitExceeded()
     names = _column_names(target)
-    return [decode_row(names, tuple(row), target) for row in rows]
+    return [
+        (decode_row(names, raw, target), dict(zip(names, raw, strict=True)))
+        for raw in (tuple(row) for row in rows)
+    ]
 
 
 def query_offset(

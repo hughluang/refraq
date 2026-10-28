@@ -1536,3 +1536,258 @@ def test_one_grant_must_accept_every_written_row(data_client) -> None:
     stored, _total = read_rows(entity_id, filters=[], user=admin, limit=20)
     assert stored == []
 
+
+def _arm_change_log(entity_id: str, physical: str, *, recording: bool) -> None:
+    from backend.entity.change_log import (
+        ChangeLogEffective,
+        ensure_shared_relations,
+        install_triggers,
+        write_effective,
+    )
+    from backend.entity.entity_db import get_entity_engine
+
+    with get_entity_engine().begin() as conn:
+        ensure_shared_relations(conn)
+        write_effective(
+            conn,
+            ChangeLogEffective(
+                entity_id=entity_id,
+                recording=recording,
+                retention_days=None,
+                applied_version_id=None,
+            ),
+        )
+        install_triggers(conn, entity_id, [physical])
+
+
+def _change_log(entity_id: str, attributes: list[AttributeRecord]):
+    from backend.entity.change_log import list_entries
+    from backend.entity.entity_db import get_entity_engine
+
+    with get_entity_engine().begin() as conn:
+        return list_entries(conn, entity_id, attributes)
+
+
+_LOG_ATTRIBUTES = [
+    AttributeRecord(
+        name="sku",
+        type="string",
+        required=True,
+        unique=True,
+        max_length=32,
+    ),
+    AttributeRecord(name="qty", type="integer"),
+    AttributeRecord(name="flag", type="boolean"),
+    AttributeRecord(name="note", type="text"),
+]
+
+
+def test_entity_data_api_write_is_sourced_as_the_acting_user(data_client) -> None:
+    client, stem, physical, entity_id = data_client
+    from backend.admin.user_store import get_user_store
+
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+    _arm_change_log(entity_id, physical, recording=True)
+    created = client.post(
+        f"/entities/{stem}/create",
+        json={"values": {"sku": "LOG1", "qty": 1, "flag": True, "note": "n"}},
+    )
+    assert created.status_code == 201, created.text
+    row_id = created.json()["row"]["row_id"]
+    updated = client.post(
+        f"/entities/{stem}/update",
+        json={"row_id": row_id, "values": {"qty": 2}},
+    )
+    assert updated.status_code == 200, updated.text
+    deleted = client.post(f"/entities/{stem}/delete", json={"row_id": row_id})
+    assert deleted.status_code == 204, deleted.text
+    entries = _change_log(entity_id, _LOG_ATTRIBUTES)
+    assert [(entry.operation, entry.source, entry.subject) for entry in entries] == [
+        ("delete", "user", admin.id),
+        ("update", "user", admin.id),
+        ("insert", "user", admin.id),
+    ]
+
+
+def test_entity_data_api_skips_equal_updates_and_counts_changed_rows(data_client) -> None:
+    client, stem, physical, entity_id = data_client
+    from backend.admin.user_store import get_user_store
+
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+    _arm_change_log(entity_id, physical, recording=True)
+
+    def create(sku: str, qty: int) -> dict:
+        response = client.post(
+            f"/entities/{stem}/create",
+            json={"values": {"sku": sku, "qty": qty, "flag": True, "note": "n"}},
+        )
+        assert response.status_code == 201, response.text
+        return response.json()["row"]
+
+    first = create("EQ1", 1)
+    create("EQ2", 1)
+    create("EQ3", 4)
+    before = _change_log(entity_id, _LOG_ATTRIBUTES)
+
+    same = client.post(
+        f"/entities/{stem}/update",
+        json={"row_id": first["row_id"], "values": {"qty": 1, "note": "n"}},
+    )
+    assert same.status_code == 200, same.text
+    assert same.json()["row"]["row_id"] == first["row_id"]
+    assert same.json()["row"]["qty"] == 1
+    assert same.json()["row"]["note"] == "n"
+
+    upsert_same = client.post(
+        f"/entities/{stem}/upsert",
+        json={"key": "sku", "values": {"sku": "EQ1", "qty": 1, "flag": True, "note": "n"}},
+    )
+    assert upsert_same.status_code == 200, upsert_same.text
+    assert upsert_same.json()["row"]["sku"] == "EQ1"
+    assert upsert_same.json()["row"]["qty"] == 1
+    assert _change_log(entity_id, _LOG_ATTRIBUTES) == before
+
+    counted = client.post(
+        f"/entities/{stem}/update-where",
+        json={
+            "filters": {"field": "qty", "op": "gte", "value": 1},
+            "set": {"qty": 1},
+        },
+    )
+    assert counted.status_code == 200, counted.text
+    assert counted.json()["affected"] == 1
+    entries = _change_log(entity_id, _LOG_ATTRIBUTES)
+    assert len(entries) == len(before) + 1
+    assert entries[0].operation == "update"
+    assert entries[0].source == "user"
+    assert entries[0].subject == admin.id
+    assert entries[0].after["sku"] == "EQ3"
+    assert entries[0].after["qty"] == 1
+
+    again = client.post(
+        f"/entities/{stem}/update-where",
+        json={
+            "filters": {"field": "qty", "op": "gte", "value": 1},
+            "set": {"qty": 1},
+        },
+    )
+    assert again.status_code == 200, again.text
+    assert again.json()["affected"] == 0
+    assert _change_log(entity_id, _LOG_ATTRIBUTES) == entries
+
+
+def test_equal_typed_api_update_and_upsert_return_the_current_row(data_client) -> None:
+    client, _stem, _physical, _entity_id = data_client
+    from backend.entity.lifecycle import latest_published_of
+    from backend.entity.store import get_entity_store
+
+    attrs = [
+        AttributeRecord(
+            name="code",
+            type="string",
+            required=True,
+            unique=True,
+            business_key=True,
+            max_length=32,
+        ),
+        AttributeRecord(name="payload", type="json"),
+        AttributeRecord(name="when", type="date"),
+        AttributeRecord(name="at", type="time"),
+        AttributeRecord(name="moment", type="timestamp"),
+        AttributeRecord(name="amount", type="decimal", precision=10, scale=2),
+    ]
+    entity_id = _publish_entity(attrs)
+    entity = get_entity_store().get_entity(entity_id)
+    assert entity is not None
+    version = latest_published_of(get_entity_store().list_all_versions(entity_id))
+    assert version is not None
+    physical, _comment = compose_physical(entity.table_name, version.version, version.id)
+    _arm_change_log(entity_id, physical, recording=True)
+    created = client.post(
+        f"/entities/{entity.table_name}/create",
+        json={"values": dict(_TYPED_ROW)},
+    )
+    assert created.status_code == 201, created.text
+    row = created.json()["row"]
+    updated = client.post(
+        f"/entities/{entity.table_name}/update",
+        json={
+            "row_id": row["row_id"],
+            "values": {key: value for key, value in _TYPED_ROW.items() if key != "code"},
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["row"] == row
+    upserted = client.post(
+        f"/entities/{entity.table_name}/upsert",
+        json={"values": dict(_TYPED_ROW)},
+    )
+    assert upserted.status_code == 200, upserted.text
+    assert upserted.json()["row"] == row
+    entries = _change_log(entity_id, attrs)
+    assert [(entry.operation, entry.source) for entry in entries] == [("insert", "user")]
+
+    nudged = client.post(
+        f"/entities/{entity.table_name}/update",
+        json={
+            "row_id": row["row_id"],
+            "values": {"moment": "2020-01-02T13:05:00.500000Z"},
+        },
+    )
+    assert nudged.status_code == 200, nudged.text
+    from backend.entity.ddl import qualified_table
+    from backend.entity.entity_db import get_entity_engine
+
+    relation = qualified_table("entity_data", physical)
+    with get_entity_engine().connect() as conn:
+        stored_moment = conn.execute(
+            text(f"SELECT moment FROM {relation} WHERE row_id = :row_id"),
+            {"row_id": row["row_id"]},
+        ).scalar_one()
+    assert stored_moment.microsecond == 500000
+    entries = _change_log(entity_id, attrs)
+    assert [(entry.operation, entry.source) for entry in entries] == [
+        ("update", "user"),
+        ("insert", "user"),
+    ]
+
+    flipped = client.post(
+        f"/entities/{entity.table_name}/update",
+        json={"row_id": row["row_id"], "values": {"payload": {"n": 1, "ok": 1}}},
+    )
+    assert flipped.status_code == 200, flipped.text
+    with get_entity_engine().connect() as conn:
+        stored_payload = conn.execute(
+            text(f"SELECT payload FROM {relation} WHERE row_id = :row_id"),
+            {"row_id": row["row_id"]},
+        ).scalar_one()
+    assert stored_payload == {"n": 1, "ok": 1}
+    entries = _change_log(entity_id, attrs)
+    assert [(entry.operation, entry.source) for entry in entries] == [
+        ("update", "user"),
+        ("update", "user"),
+        ("insert", "user"),
+    ]
+
+
+def test_api_writes_append_nothing_when_recording_is_off(data_client) -> None:
+    client, stem, physical, entity_id = data_client
+    _arm_change_log(entity_id, physical, recording=False)
+    created = client.post(
+        f"/entities/{stem}/create",
+        json={"values": {"sku": "OFF", "qty": 1, "flag": False}},
+    )
+    assert created.status_code == 201, created.text
+    row_id = created.json()["row"]["row_id"]
+    updated = client.post(
+        f"/entities/{stem}/update",
+        json={"row_id": row_id, "values": {"qty": 8}},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["row"]["qty"] == 8
+    deleted = client.post(f"/entities/{stem}/delete", json={"row_id": row_id})
+    assert deleted.status_code == 204, deleted.text
+    assert _change_log(entity_id, _LOG_ATTRIBUTES) == []
+

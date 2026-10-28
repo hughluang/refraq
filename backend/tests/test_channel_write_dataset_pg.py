@@ -100,6 +100,78 @@ def _load(store, rows: list[tuple]):
     )
 
 
+def test_write_entity_shares_one_channel_run_and_skips_an_equal_upsert(
+    dataset_store,
+) -> None:
+    from backend.admin.user_store import get_user_store
+    from backend.tests.channel_hooks_fake import FakeHooks
+    from backend.tests.test_entity_data import (
+        _LOG_ATTRIBUTES,
+        _arm_change_log,
+        _change_log,
+    )
+
+    (_client, _stem, physical, entity_id), _store = dataset_store
+    admin = get_user_store().get_by_account("admin")
+    assert admin is not None
+    _arm_change_log(entity_id, physical, recording=True)
+    run_id = "job_same_run"
+    hooks = FakeHooks(user=admin, run_id=run_id, channel_id="chn_hidden")
+
+    def write(node_id: str, source: str, mode: str = "upsert"):
+        return _execute()(
+            {
+                "id": node_id,
+                "type": "write.entity",
+                "config": {
+                    "entity_id": entity_id,
+                    "mode": mode,
+                    "match_key": "sku",
+                    "source": source,
+                    "mapping": [
+                        {"attribute": "sku", "key": "sku"},
+                        {"attribute": "qty", "key": "qty"},
+                        {"attribute": "note", "key": "note"},
+                    ],
+                    "on_incompatible_head": "fail",
+                },
+            },
+            hooks,
+        )
+
+    inserted = write("nd_write", '[{"sku": "RUN", "qty": 1, "note": "a"}]')
+    assert inserted.status == "succeeded", inserted.error_message
+    assert inserted.output["inserted"] == 1
+    unchanged = write("nd_other", '[{"sku": "RUN", "qty": 1, "note": "a"}]')
+    assert unchanged.status == "succeeded", unchanged.error_message
+    assert unchanged.output["unchanged"] == 1
+    updated = write(
+        "nd_other",
+        '[{"sku": "RUN", "qty": 4, "note": "b"}]',
+        mode="update",
+    )
+    assert updated.status == "succeeded", updated.error_message
+    assert updated.output["updated"] == 1
+    entries = _change_log(entity_id, _LOG_ATTRIBUTES)
+    assert [(entry.operation, entry.source, entry.subject) for entry in entries] == [
+        ("update", "channel_run", run_id),
+        ("insert", "channel_run", run_id),
+    ]
+    same = write(
+        "nd_write",
+        '[{"sku": "RUN", "qty": 4, "note": "b"}]',
+        mode="update",
+    )
+    assert same.status == "succeeded", same.error_message
+    assert same.output["unchanged"] == 1
+    assert _change_log(entity_id, _LOG_ATTRIBUTES) == entries
+    _arm_change_log(entity_id, physical, recording=False)
+    quiet = write("nd_write", '[{"sku": "QUIET", "qty": 3, "note": "z"}]')
+    assert quiet.status == "succeeded", quiet.error_message
+    assert quiet.output["inserted"] == 1
+    assert _change_log(entity_id, _LOG_ATTRIBUTES) == entries
+
+
 def test_dataset_write_matches_the_list_write(dataset_store) -> None:
     from backend.admin.user_store import get_user_store
     from backend.channel.dataset_ref import dataset_reference
