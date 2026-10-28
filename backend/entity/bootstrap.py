@@ -26,6 +26,7 @@ from backend.entity.ddl import (
     ACL_SCHEMA,
     CHANNEL_DATASET_SCHEMA,
     ENTITY_ACCESS_SCHEMA,
+    ENTITY_CHANGE_LOG_SCHEMA,
     ENTITY_DATA_SCHEMA,
     ENTITY_OWNER_ROLE,
     EXPOSURE_OWNER_ROLE,
@@ -151,19 +152,23 @@ def schema_statements() -> list[str]:
     access = ident(ENTITY_ACCESS_SCHEMA)
     acl = ident(ACL_SCHEMA)
     dataset = ident(CHANNEL_DATASET_SCHEMA)
+    change_log = ident(ENTITY_CHANGE_LOG_SCHEMA)
     return [
         f"CREATE SCHEMA IF NOT EXISTS {data} AUTHORIZATION {owner}",
         f"CREATE SCHEMA IF NOT EXISTS {access} AUTHORIZATION {owner}",
         f"CREATE SCHEMA IF NOT EXISTS {acl} AUTHORIZATION {ident(ACL_OWNER_ROLE)}",
         f"CREATE SCHEMA IF NOT EXISTS {dataset} AUTHORIZATION {owner}",
+        f"CREATE SCHEMA IF NOT EXISTS {change_log} AUTHORIZATION {owner}",
         f"ALTER SCHEMA {data} OWNER TO {owner}",
         f"ALTER SCHEMA {access} OWNER TO {owner}",
         f"ALTER SCHEMA {acl} OWNER TO {ident(ACL_OWNER_ROLE)}",
         f"ALTER SCHEMA {dataset} OWNER TO {owner}",
-        f"REVOKE ALL ON SCHEMA {data}, {access}, {acl} FROM PUBLIC",
+        f"ALTER SCHEMA {change_log} OWNER TO {owner}",
+        f"REVOKE ALL ON SCHEMA {data}, {access}, {acl}, {change_log} FROM PUBLIC",
         f"REVOKE ALL ON SCHEMA {dataset} FROM PUBLIC",
         f"REVOKE ALL ON SCHEMA {data} FROM {reader}",
         f"REVOKE ALL ON SCHEMA {dataset} FROM {reader}",
+        f"REVOKE ALL ON SCHEMA {change_log} FROM {reader}",
         f"GRANT USAGE ON SCHEMA {data} TO {exposure}",
         f"GRANT USAGE, CREATE ON SCHEMA {access} TO {exposure}",
         f"GRANT USAGE ON SCHEMA {access} TO {reader}",

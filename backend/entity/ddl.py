@@ -13,6 +13,7 @@ __all__ = [
     "ACL_SCHEMA",
     "CHANNEL_DATASET_SCHEMA",
     "ENTITY_ACCESS_SCHEMA",
+    "ENTITY_CHANGE_LOG_SCHEMA",
     "ENTITY_DATA_SCHEMA",
     "ENTITY_SCHEMAS",
     "ENTITY_OWNER_ROLE",
@@ -44,6 +45,7 @@ ENTITY_DATA_SCHEMA = "entity_data"
 ENTITY_ACCESS_SCHEMA = "entity_access"
 ACL_SCHEMA = "acl"
 CHANNEL_DATASET_SCHEMA = "channel_dataset"
+ENTITY_CHANGE_LOG_SCHEMA = "entity_change_log"
 # Schemas created by ``python -m backend.entity.bootstrap``. Startup refuses
 # when any name is absent.
 ENTITY_SCHEMAS = (
@@ -51,6 +53,7 @@ ENTITY_SCHEMAS = (
     ENTITY_ACCESS_SCHEMA,
     ACL_SCHEMA,
     CHANNEL_DATASET_SCHEMA,
+    ENTITY_CHANGE_LOG_SCHEMA,
 )
 
 ENTITY_OWNER_ROLE = "refraq_entity_owner"

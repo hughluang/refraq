@@ -17,13 +17,13 @@ from backend.entity.access.views import (
     profile_view_statements,
     restore_profile_views,
 )
+from backend.entity import change_log as entity_change_log
 from backend.entity.change_log import (
     ChangeLogEffective,
     delete_entries,
     delete_entries_before,
     install_triggers,
     remove_triggers,
-    write_effective,
 )
 from backend.entity.classify import classify_shapes
 from backend.entity.ddl import ENTITY_DATA_SCHEMA, attr_wants_index
@@ -447,7 +447,7 @@ def _apply_change_log_policy(
             delete_entries(conn, entity.id)
         if cutoff is not None:
             delete_entries_before(conn, entity.id, cutoff)
-        write_effective(
+        entity_change_log.write_effective(
             conn,
             ChangeLogEffective(
                 entity_id=entity.id,

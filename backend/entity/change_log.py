@@ -19,7 +19,13 @@ from sqlalchemy.engine import Connection
 
 from backend.entity.attribute_type import resolve
 from backend.entity.data.values import decode_row, reference_value_attr
-from backend.entity.ddl import ENTITY_DATA_SCHEMA, ENTITY_OWNER_ROLE, ident, qualified_table
+from backend.entity.ddl import (
+    ENTITY_CHANGE_LOG_SCHEMA,
+    ENTITY_DATA_SCHEMA,
+    ENTITY_OWNER_ROLE,
+    ident,
+    qualified_table,
+)
 from backend.entity.records import AttributeRecord
 
 __all__ = [
@@ -48,7 +54,7 @@ __all__ = [
     "write_effective",
 ]
 
-CHANGE_LOG_SCHEMA = "entity_change_log"
+CHANGE_LOG_SCHEMA = ENTITY_CHANGE_LOG_SCHEMA
 EFFECTIVE_TABLE = "effective"
 ENTRY_TABLE = "entry"
 SOURCE_GUC = "refraq.change_log_source"
