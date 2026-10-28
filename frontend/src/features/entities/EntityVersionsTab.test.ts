@@ -116,6 +116,8 @@ function version(overrides: Partial<EntityVersion> = {}): EntityVersion {
       latest_job_id: "job_1",
       latest_job_status: "succeeded",
     },
+    change_log_enabled: false,
+    change_log_retention_days: null,
     created_at: "2026-09-10T04:00:00Z",
     updated_at: "2026-09-10T05:00:00Z",
     ...overrides,

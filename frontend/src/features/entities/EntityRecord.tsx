@@ -38,6 +38,7 @@ import {
 import { EntityAttributesTab } from "@/features/entities/EntityAttributesTab";
 import { EntityAccessTab } from "@/features/entities/EntityAccessTab";
 import { EntityDataBrowser } from "@/features/entities/EntityDataBrowser";
+import { EntityChangeLogFields } from "@/features/entities/EntityChangeLogFields";
 import { EntityIdentityFields } from "@/features/entities/EntityIdentityFields";
 import { EntityOverviewTab } from "@/features/entities/EntityOverviewTab";
 import { EntityTabs } from "@/features/entities/EntityTabs";
@@ -95,6 +96,10 @@ type Props =
   | { mode: "show" | "edit"; entityId: string };
 
 const EMPTY_TAGS: EntityTag[] = [];
+
+function retentionDays(value: number | ""): number | null {
+  return value === "" ? null : value;
+}
 
 export function EntityRecord(props: Props) {
   const mode = props.mode;
@@ -179,6 +184,8 @@ export function EntityRecord(props: Props) {
       name: "",
       description: "",
       attributes: [],
+      change_log_enabled: false,
+      change_log_retention_days: "",
     },
     validate: {
       table_name: (value) =>
@@ -189,6 +196,13 @@ export function EntityRecord(props: Props) {
         value.trim() ? null : t("entities.validation.required"),
       description: (value) =>
         value.trim() ? null : t("entities.validation.required"),
+      change_log_retention_days: (value) => {
+        if (value === "") return null;
+        if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+          return t("entities.validation.changeLogRetention");
+        }
+        return null;
+      },
       attributes: {
         name: (_value, values, path) =>
           attributeFieldMessage(values, path, "name"),
@@ -232,6 +246,8 @@ export function EntityRecord(props: Props) {
         name: loaded.name,
         description: loaded.description,
         attributes: version ? draftsFromVersion(version) : [],
+        change_log_enabled: version?.change_log_enabled ?? false,
+        change_log_retention_days: version?.change_log_retention_days ?? "",
       });
       form.markSaved();
     } catch (err) {
@@ -287,6 +303,7 @@ export function EntityRecord(props: Props) {
       canAuthor(entity));
 
   const submit = async (values: EntityRecordFormValues) => {
+    if (canWrite?.can === false) return;
     try {
       if (mode === "create") {
         const created = await createEntity({
@@ -295,6 +312,8 @@ export function EntityRecord(props: Props) {
           description: values.description.trim(),
           attributes: attributesFromDrafts(values.attributes),
           tags: tagsControl.current?.flush() ?? tagDraft,
+          change_log_enabled: values.change_log_enabled,
+          change_log_retention_days: retentionDays(values.change_log_retention_days),
         });
         form.markSaved();
         suppressLeaveGuard();
@@ -307,6 +326,8 @@ export function EntityRecord(props: Props) {
         name: values.name.trim(),
         description: values.description.trim(),
         attributes: attributesFromDrafts(values.attributes),
+        change_log_enabled: values.change_log_enabled,
+        change_log_retention_days: retentionDays(values.change_log_retention_days),
       });
       form.markSaved();
       setSaveFailure(null);
@@ -630,6 +651,7 @@ export function EntityRecord(props: Props) {
               }
               editable={fieldsWritable}
             />
+            <EntityChangeLogFields form={form} editable={fieldsWritable} />
             <EntityTagsControl
               ref={tagsControl}
               mode={mode}

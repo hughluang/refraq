@@ -132,6 +132,8 @@ def http_create_entity(
         actor_token_id=actor_token_id,
         tag_ids=list(tags.tag_ids) if tags is not None else [],
         names=list(tags.names) if tags is not None else [],
+        change_log_enabled=body.change_log_enabled,
+        change_log_retention_days=body.change_log_retention_days,
     )
     return BusinessEntityResponse(entity=BusinessEntityOut.model_validate(payload))
 
@@ -213,6 +215,9 @@ def http_patch_entity(
         name=body.name if "name" in provided else None,
         description=body.description if "description" in provided else None,
         attributes=_attrs(body.attributes) if "attributes" in provided else None,
+        change_log_enabled=body.change_log_enabled,
+        change_log_retention_days=body.change_log_retention_days,
+        change_log_retention_set="change_log_retention_days" in provided,
         actor_user_id=user.id,
         actor_token_id=actor_token_id,
     )

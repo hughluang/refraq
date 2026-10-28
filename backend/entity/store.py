@@ -519,6 +519,8 @@ def _write_version_row(row: EntityVersionRow, version: EntityVersionRecord) -> N
     row.latest_reconcile_job_id = version.latest_reconcile_job_id
     row.dictionary_snapshots = dict(version.dictionary_snapshots)
     row.reference_snapshots = dict(version.reference_snapshots)
+    row.change_log_enabled = version.change_log_enabled
+    row.change_log_retention_days = version.change_log_retention_days
     row.updated_at = version.updated_at
 
 
@@ -620,6 +622,8 @@ def _version_from_row(row: EntityVersionRow) -> EntityVersionRecord:
         updated_at=row.updated_at,
         dictionary_snapshots=_snapshots_from_row(row.dictionary_snapshots),
         reference_snapshots=_snapshots_from_row(row.reference_snapshots),
+        change_log_enabled=bool(row.change_log_enabled),
+        change_log_retention_days=row.change_log_retention_days,
     )
 
 
@@ -634,6 +638,8 @@ def _version_to_row(record: EntityVersionRecord) -> EntityVersionRow:
         latest_reconcile_job_id=record.latest_reconcile_job_id,
         dictionary_snapshots=dict(record.dictionary_snapshots),
         reference_snapshots=dict(record.reference_snapshots),
+        change_log_enabled=record.change_log_enabled,
+        change_log_retention_days=record.change_log_retention_days,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )

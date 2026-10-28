@@ -94,6 +94,8 @@ function Host({
       name: "Items",
       description: "Items",
       attributes,
+      change_log_enabled: false,
+      change_log_retention_days: "",
     },
   });
   return createElement(AttributeEditor, {

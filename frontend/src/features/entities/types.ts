@@ -49,6 +49,8 @@ export type EntityRecordFormValues = {
   name: string;
   description: string;
   attributes: AttributeDraft[];
+  change_log_enabled: boolean;
+  change_log_retention_days: number | "";
 };
 
 export type AttributeDraft = {
@@ -125,6 +127,8 @@ export type EntityVersion = {
   attribute_count?: number;
   table_name: string | null;
   alignment: Alignment;
+  change_log_enabled: boolean;
+  change_log_retention_days: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -135,12 +139,16 @@ export type EntityCreate = {
   description: string;
   attributes: EntityAttribute[];
   tags?: { tag_ids: string[]; names: string[] };
+  change_log_enabled?: boolean;
+  change_log_retention_days?: number | null;
 };
 
 export type EntityPatch = {
   name?: string;
   description?: string;
   attributes?: EntityAttribute[];
+  change_log_enabled?: boolean;
+  change_log_retention_days?: number | null;
 };
 
 export type ShapeWrite = {

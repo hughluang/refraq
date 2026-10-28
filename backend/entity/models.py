@@ -47,6 +47,10 @@ class EntityVersionRow(Base):
     reference_snapshots: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict
     )
+    change_log_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    change_log_retention_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 

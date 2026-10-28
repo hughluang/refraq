@@ -332,6 +332,8 @@ def create_entity(
     actor_token_id: str | None,
     tag_ids: list[str] | None = None,
     names: list[str] | None = None,
+    change_log_enabled: bool = False,
+    change_log_retention_days: int | None = None,
 ) -> dict[str, Any]:
     cleaned_table_name = require_table_name(table_name)
     cleaned_name = _require_text(name, "name")
@@ -377,6 +379,8 @@ def create_entity(
             latest_reconcile_job_id=None,
             created_at=now,
             updated_at=now,
+            change_log_enabled=change_log_enabled,
+            change_log_retention_days=change_log_retention_days,
         )
         _saved_entity, saved_version = get_entity_store().create_entity(
             entity, version, after=_bind
@@ -404,6 +408,9 @@ def patch_entity(
     attributes: list[AttributeRecord] | None = None,
     actor_user_id: str | None,
     actor_token_id: str | None,
+    change_log_enabled: bool | None = None,
+    change_log_retention_days: int | None = None,
+    change_log_retention_set: bool = False,
 ) -> dict[str, Any]:
     entity = require_entity(entity_id)
     versions = get_entity_store().list_all_versions(entity_id)
@@ -441,7 +448,17 @@ def patch_entity(
         shape_changed = [attribute_to_dict(item) for item in proposed.attributes] != [
             attribute_to_dict(item) for item in current.attributes
         ]
-    if not changed_fields and not shape_changed:
+    new_enabled = current.change_log_enabled
+    new_retention = current.change_log_retention_days
+    if change_log_enabled is not None:
+        new_enabled = change_log_enabled
+    if change_log_retention_set:
+        new_retention = change_log_retention_days
+    log_changed = (
+        new_enabled != current.change_log_enabled
+        or new_retention != current.change_log_retention_days
+    )
+    if not changed_fields and not shape_changed and not log_changed:
         return _project_entity(entity, current, include_inbound=True)
     store = get_entity_store()
     saved_entity = entity
@@ -457,8 +474,14 @@ def patch_entity(
         else None
     )
     updated_version = (
-        replace(proposed, attributes=list(proposed.attributes), updated_at=now)
-        if shape_changed
+        replace(
+            proposed,
+            attributes=list(proposed.attributes),
+            change_log_enabled=new_enabled,
+            change_log_retention_days=new_retention,
+            updated_at=now,
+        )
+        if shape_changed or log_changed
         else None
     )
     if updated_entity is not None and updated_version is not None:
@@ -605,6 +628,8 @@ def open_version(
             latest_reconcile_job_id=None,
             created_at=now,
             updated_at=now,
+            change_log_enabled=False,
+            change_log_retention_days=None,
         )
         return get_entity_store().create_version(version)
 

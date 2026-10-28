@@ -230,6 +230,8 @@ function versionFor(entity: BusinessEntity): EntityVersion {
     attribute_count: 1,
     table_name: current.table_name,
     alignment: current.alignment,
+    change_log_enabled: false,
+    change_log_retention_days: null,
     created_at: "2026-09-10T04:00:00Z",
     updated_at: "2026-09-10T04:00:00Z",
   };

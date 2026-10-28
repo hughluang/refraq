@@ -185,6 +185,8 @@ def version_out(
         "publish_status": version.publish_status,
         "table_name": physical_table,
         "alignment": alignment,
+        "change_log_enabled": version.change_log_enabled,
+        "change_log_retention_days": version.change_log_retention_days,
         "created_at": version.created_at,
         "updated_at": version.updated_at,
     }

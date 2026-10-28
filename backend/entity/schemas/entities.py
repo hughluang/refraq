@@ -4,13 +4,32 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from backend.core.pagination import OffsetPage
 from backend.core.time import Instant
 from backend.entity.attribute_type import resolve
 from backend.entity.errors import EntityAttributeInvalid
 from backend.jobs.schemas.jobs import JobOut
+
+
+def _change_log_retention_days(value: Any) -> int | None:
+    """Never-expire is null. A stored window is a whole number of days >= 1."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(
+            "change_log_retention_days must be a whole number of days of at least 1"
+        )
+    return value
+
 
 _RETIRED_ATTRIBUTE_FIELDS = (
     "kind",
@@ -176,6 +195,8 @@ class EntityVersionOut(BaseModel):
     attribute_count: int | None = None
     table_name: str | None
     alignment: AlignmentOut
+    change_log_enabled: bool = False
+    change_log_retention_days: int | None = None
     created_at: Instant
     updated_at: Instant
 
@@ -259,6 +280,13 @@ class EntityCreateRequest(BaseModel):
     description: str = Field(min_length=1)
     attributes: list[AttributeIn]
     tags: EntityTagAssignmentIn | None = None
+    change_log_enabled: bool = False
+    change_log_retention_days: int | None = None
+
+    @field_validator("change_log_retention_days", mode="before")
+    @classmethod
+    def _retention_days(cls, value: Any) -> int | None:
+        return _change_log_retention_days(value)
 
 
 class EntityPatchRequest(BaseModel):
@@ -267,6 +295,13 @@ class EntityPatchRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=256)
     description: str | None = Field(default=None, min_length=1)
     attributes: list[AttributeIn] | None = None
+    change_log_enabled: bool | None = None
+    change_log_retention_days: int | None = None
+
+    @field_validator("change_log_retention_days", mode="before")
+    @classmethod
+    def _retention_days(cls, value: Any) -> int | None:
+        return _change_log_retention_days(value)
 
 
 class ShapeWriteRequest(BaseModel):
