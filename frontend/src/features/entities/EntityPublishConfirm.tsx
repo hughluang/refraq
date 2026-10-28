@@ -7,12 +7,17 @@ import { useEffect, useState } from "react";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import {
   previewEntityPublish,
+  type ChangeLogPublishEffect,
   type IncompatibleWriteNode,
 } from "@/features/entities/api";
 
 type PreviewState =
   | { phase: "loading" }
-  | { phase: "ready"; nodes: IncompatibleWriteNode[] }
+  | {
+      phase: "ready";
+      nodes: IncompatibleWriteNode[];
+      changeLogEffect: ChangeLogPublishEffect;
+    }
   | { phase: "failed" };
 
 type Props = {
@@ -57,7 +62,11 @@ export function EntityPublishConfirm({
     void previewEntityPublish(entityId, versionId)
       .then((body) => {
         if (!cancelled) {
-          setPreview({ phase: "ready", nodes: body.incompatible_write_nodes });
+          setPreview({
+            phase: "ready",
+            nodes: body.incompatible_write_nodes,
+            changeLogEffect: body.change_log_effect,
+          });
         }
       })
       .catch(() => {
@@ -89,6 +98,13 @@ export function EntityPublishConfirm({
       confirmLabel={t("entities.publish")}
       onConfirm={onConfirm}
     >
+      {preview.phase === "ready" && preview.changeLogEffect === "delete_all" ? (
+        <Text size="sm">{t("entities.publish.confirmDeleteAll")}</Text>
+      ) : null}
+      {preview.phase === "ready" &&
+      preview.changeLogEffect === "delete_expired" ? (
+        <Text size="sm">{t("entities.publish.confirmDeleteExpired")}</Text>
+      ) : null}
       <PreviewNotice preview={preview} onRetry={retry} />
     </ConfirmActionModal>
   );

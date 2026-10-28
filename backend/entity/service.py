@@ -243,7 +243,44 @@ def get_entity(entity_id: str, *, user: UserRecord | None = None) -> dict[str, A
     entity = require_entity(entity_id)
     _require_visible(user, entity.id)
     current = get_entity_store().current_version(entity.id)
-    return _project_entity(entity, current, include_inbound=True, user=user)
+    payload = _project_entity(entity, current, include_inbound=True, user=user)
+    if current is not None and current.publish_status == UNPUBLISHED:
+        enabled, days = live_change_log(entity.id)
+        payload["effective_change_log"] = {
+            "enabled": enabled,
+            "retention_days": days,
+        }
+    return payload
+
+
+def change_log_on_entity_database() -> bool:
+    """True when the bound table port can run change-log policy.
+
+    The recording port has no entity database. Callers must not open a
+    connection in that case, even if a URL is set.
+    """
+    from backend.entity.table_port import RecordingEntityTablePort, get_entity_table_port
+
+    return not isinstance(get_entity_table_port(), RecordingEntityTablePort)
+
+
+def live_change_log(entity_id: str) -> tuple[bool, int | None]:
+    """Effective switch and retention. A missing row is off and never-expire.
+
+    Does not call ``require_entity_capacity``. The recording port returns the
+    missing-row default without opening a connection.
+    """
+    if not change_log_on_entity_database():
+        return False, None
+    from backend.entity.change_log import ensure_shared_relations, read_effective
+    from backend.entity.entity_db import get_entity_engine
+
+    with get_entity_engine().begin() as conn:
+        ensure_shared_relations(conn)
+        row = read_effective(conn, entity_id)
+    if row is None:
+        return False, None
+    return row.recording, row.retention_days
 
 
 def list_entities(
@@ -616,6 +653,7 @@ def open_version(
             current.attributes, stored_attributes, versions=versions
         )
     now = utc_now()
+    enabled, days = live_change_log(entity.id)
 
     def _insert(version_id: str) -> EntityVersionRecord:
         version = EntityVersionRecord(
@@ -628,8 +666,8 @@ def open_version(
             latest_reconcile_job_id=None,
             created_at=now,
             updated_at=now,
-            change_log_enabled=False,
-            change_log_retention_days=None,
+            change_log_enabled=enabled,
+            change_log_retention_days=days,
         )
         return get_entity_store().create_version(version)
 

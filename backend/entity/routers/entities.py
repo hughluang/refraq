@@ -374,14 +374,24 @@ def http_publish_preview(
     version_id: str,
     user: UserRecord = Depends(require_permission("entity:write")),
 ) -> dict[str, Any]:
-    from backend.entity.publish_confirmation import incompatible_write_nodes
-    from backend.entity.service import get_version
+    from backend.entity.publish_confirmation import (
+        change_log_publish_effect,
+        incompatible_write_nodes,
+    )
+    from backend.entity.service import get_version, live_change_log
 
     version = get_version(entity_id, version_id, user=user)
+    effective_enabled, effective_days = live_change_log(entity_id)
     return {
         "incompatible_write_nodes": incompatible_write_nodes(
             entity_id, version.get("attributes") or []
-        )
+        ),
+        "change_log_effect": change_log_publish_effect(
+            effective_recording=effective_enabled,
+            effective_retention_days=effective_days,
+            draft_recording=bool(version.get("change_log_enabled")),
+            draft_retention_days=version.get("change_log_retention_days"),
+        ),
     }
 
 

@@ -10,6 +10,7 @@ import {
 } from "@refinedev/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { DisplayField } from "@/components/display/DisplayField";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
 import { EmptyState } from "@/components/feedback/EmptyState";
@@ -80,6 +81,7 @@ import {
 import { canAuthor, isPublishing } from "@/features/entities/publishStatus";
 import type {
   BusinessEntity,
+  EffectiveChangeLog,
   EntityRecordFormValues,
   EntityTag,
   EntityVersion,
@@ -651,6 +653,10 @@ export function EntityRecord(props: Props) {
               }
               editable={fieldsWritable}
             />
+            {entity?.current_version?.publish_status === "unpublished" &&
+            entity.effective_change_log ? (
+              <EntityChangeLogEffectiveFacts facts={entity.effective_change_log} />
+            ) : null}
             <EntityChangeLogFields form={form} editable={fieldsWritable} />
             <EntityTagsControl
               ref={tagsControl}
@@ -806,5 +812,25 @@ export function EntityRecord(props: Props) {
     </PageChrome>
       )}
     </EntityTabs>
+  );
+}
+
+function EntityChangeLogEffectiveFacts({ facts }: { facts: EffectiveChangeLog }) {
+  const t = useTranslate();
+  const retention =
+    facts.retention_days == null
+      ? t("entities.fields.changeLogRetentionNever")
+      : facts.retention_days;
+  return (
+    <>
+      <DisplayField
+        label={t("entities.fields.changeLogEffective")}
+        value={facts.enabled ? t("form.value.yes") : t("form.value.no")}
+      />
+      <DisplayField
+        label={t("entities.fields.changeLogEffectiveRetention")}
+        value={retention}
+      />
+    </>
   );
 }

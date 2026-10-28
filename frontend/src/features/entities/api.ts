@@ -150,11 +150,15 @@ export type IncompatibleWriteNode = {
   reasons: string[];
 };
 
+export type ChangeLogPublishEffect = "delete_all" | "delete_expired" | "none";
+
 export function previewEntityPublish(entityId: string, versionId: string) {
-  return apiClient<{ incompatible_write_nodes: IncompatibleWriteNode[] }>(
-    `/entities/${entityId}/versions/${versionId}/publish/preview`,
-    { method: "POST" },
-  );
+  return apiClient<{
+    incompatible_write_nodes: IncompatibleWriteNode[];
+    change_log_effect: ChangeLogPublishEffect;
+  }>(`/entities/${entityId}/versions/${versionId}/publish/preview`, {
+    method: "POST",
+  });
 }
 
 export function publishVersion(entityId: string, versionId: string) {

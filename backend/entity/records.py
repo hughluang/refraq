@@ -68,6 +68,8 @@ class EntityVersionRecord:
     reference_snapshots: dict[str, Any] = field(default_factory=dict)
     change_log_enabled: bool = False
     change_log_retention_days: int | None = None
+    # null: this version never entered the policy step. pending/applied: Postgres publish.
+    change_log_policy: str | None = None
 
 
 def attribute_to_dict(attr: AttributeRecord) -> dict[str, Any]:

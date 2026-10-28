@@ -47,12 +47,15 @@ from backend.entity.reference_binding import (
 )
 from backend.entity.records import (
     AttributeRecord,
+    BusinessEntityRecord,
     EntityVersionRecord,
     attribute_to_dict,
 )
 from backend.entity.service import (
     _assert_not_deprecated,
     _require_writable_shape,
+    change_log_on_entity_database,
+    live_change_log,
     require_entity,
     require_version,
 )
@@ -118,10 +121,14 @@ def accept(
         trigger_ref=actor_user_id,
         log_body=format_job_log_line(level="info", message="queued entity table publish"),
     )
+    policy_only = (
+        version.publish_status == PUBLISHED
+        and version.change_log_policy == "pending"
+    )
     get_entity_store().save_version(
         replace(
             version,
-            publish_status=PUBLISHING,
+            publish_status=version.publish_status if policy_only else PUBLISHING,
             latest_reconcile_job_id=job.id,
             updated_at=utc_now(),
         )
@@ -148,6 +155,8 @@ def execute(job_id: str, job_input: dict[str, Any]) -> dict[str, str]:
     entity = get_entity_store().get_entity(version.entity_id)
     if entity is None:
         return _fail(job_id, "ENTITY_NOT_FOUND", "Business Entity not found")
+    if version.publish_status == PUBLISHED and version.change_log_policy == "pending":
+        return _finish_change_log_policy(job_id, entity, version)
     bindings = frozen_bindings_cover(
         version.attributes, job_input.get("dictionary_bindings")
     )
@@ -271,6 +280,9 @@ def execute(job_id: str, job_input: dict[str, Any]) -> dict[str, str]:
                 dictionary_snapshots=snapshots,
                 reference_snapshots=reference_snapshots,
                 latest_reconcile_job_id=job_id,
+                change_log_policy=(
+                    "pending" if change_log_on_entity_database() else None
+                ),
                 updated_at=utc_now(),
             )
         )
@@ -299,6 +311,10 @@ def execute(job_id: str, job_input: dict[str, Any]) -> dict[str, str]:
             summary = f"{summary}; restore view failed: {undo_error}"
         rollback_status(version)
         return _fail(job_id, code, summary)
+    if change_log_on_entity_database():
+        failed = _apply_pending_policy(job_id, entity, version)
+        if failed is not None:
+            return failed
     result = {
         "schema": "entity_reconcile.v1",
         "entity_version_id": version_id,
@@ -336,10 +352,134 @@ def assign_attribute_ids(
     ]
 
 
+def _finish_change_log_policy(
+    job_id: str,
+    entity: BusinessEntityRecord,
+    version: EntityVersionRecord,
+) -> dict[str, str]:
+    """Run an unfinished policy. The head and published status stay as they are."""
+    failed = _apply_pending_policy(job_id, entity, version)
+    if failed is not None:
+        return failed
+    physical = physical_table_name(version, entity.table_name)
+    result = {
+        "schema": "entity_reconcile.v1",
+        "entity_version_id": version.id,
+        "table_name": physical,
+        "action": "change_log_policy",
+    }
+    append_job_log(job_id, level="info", message="change log policy applied")
+    mark_succeeded(job_id, result=result)
+    return {"status": "succeeded"}
+
+
+def _apply_pending_policy(
+    job_id: str,
+    entity: BusinessEntityRecord,
+    version: EntityVersionRecord,
+) -> dict[str, str] | None:
+    """Apply the policy and mark it applied.
+
+    Returns the failed job result. Does not undo the head or the published
+    status. None means the policy is stored.
+    """
+    try:
+        _apply_change_log_policy(entity, version)
+        _store_policy_applied(version.id)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(job_id, "JOB_EXECUTION_FAILED", str(exc))
+    return None
+
+
+def _store_policy_applied(version_id: str) -> None:
+    fresh = get_entity_store().get_version(version_id)
+    if fresh is None:
+        raise RuntimeError("Entity Version not found")
+    get_entity_store().save_version(
+        replace(fresh, change_log_policy="applied", updated_at=utc_now())
+    )
+
+
+def _apply_change_log_policy(
+    entity: BusinessEntityRecord, version: EntityVersionRecord
+) -> None:
+    """Delete what the new settings condemn, then publish the effective row.
+
+    Earlier transactions may remove condemned entries. The effective row stays
+    on its previous value until the finishing transaction, which also installs
+    or removes triggers on every physical table that still exists.
+    """
+    from datetime import timedelta
+
+    from backend.entity.change_log import (
+        ChangeLogEffective,
+        delete_entries,
+        delete_entries_before,
+        install_triggers,
+        remove_triggers,
+        write_effective,
+    )
+    from backend.entity.entity_db import get_entity_engine
+    from backend.entity.publish_confirmation import change_log_publish_effect
+
+    tables = _physical_tables(entity)
+    draft_on = bool(version.change_log_enabled)
+    draft_days = version.change_log_retention_days
+    effective_on, effective_days = live_change_log(entity.id)
+    effect = change_log_publish_effect(
+        effective_recording=effective_on,
+        effective_retention_days=effective_days,
+        draft_recording=draft_on,
+        draft_retention_days=draft_days,
+    )
+    cutoff = None
+    engine = get_entity_engine()
+    if effect == "delete_expired" and draft_days is not None:
+        cutoff = utc_now() - timedelta(days=draft_days)
+        with engine.begin() as conn:
+            delete_entries_before(conn, entity.id, cutoff)
+    if effect == "delete_all":
+        with engine.begin() as conn:
+            delete_entries(conn, entity.id)
+    with engine.begin() as conn:
+        if draft_on:
+            install_triggers(conn, entity.id, tables)
+        else:
+            remove_triggers(conn, entity.id, tables)
+            delete_entries(conn, entity.id)
+        if cutoff is not None:
+            delete_entries_before(conn, entity.id, cutoff)
+        write_effective(
+            conn,
+            ChangeLogEffective(
+                entity_id=entity.id,
+                recording=draft_on,
+                retention_days=draft_days,
+                applied_version_id=version.id,
+            ),
+        )
+
+
+def _physical_tables(entity: BusinessEntityRecord) -> list[str]:
+    names: list[str] = []
+    for item in get_entity_store().list_all_versions(entity.id):
+        name = physical_table_name(item, entity.table_name)
+        if name is not None:
+            names.append(name)
+    return names
+
+
 def _prepare(entity_id: str, version_id: str) -> EntityVersionRecord:
-    """Validate publish and return the current unpublished version."""
+    """Validate publish and return the current unpublished version.
+
+    A published version whose change-log policy is still pending is retried
+    as itself, even when a later draft is already current.
+    """
     entity = require_entity(entity_id)
     version = require_version(entity_id, version_id)
+    if version.publish_status == PUBLISHED and version.change_log_policy == "pending":
+        _assert_not_deprecated(entity)
+        return version
     versions = get_entity_store().list_all_versions(entity_id)
     current = current_version_of(versions)
     if current is None or current.id != version.id:

@@ -1014,3 +1014,100 @@ def test_persistent_drop_without_entity_url_fails_and_keeps_snapshot(
     assert "ENTITY_DATABASE_URL" in (job.error_summary or "")
     kept = client.get(f"/entities/{entity['id']}/versions/{v1}")
     assert kept.json()["version"]["alignment"]["table_present"] is True
+
+
+def test_change_log_publish_effect_names_only_two_deletions() -> None:
+    from backend.entity.publish_confirmation import change_log_publish_effect
+
+    assert (
+        change_log_publish_effect(
+            effective_recording=True,
+            effective_retention_days=30,
+            draft_recording=False,
+            draft_retention_days=30,
+        )
+        == "delete_all"
+    )
+    assert (
+        change_log_publish_effect(
+            effective_recording=True,
+            effective_retention_days=None,
+            draft_recording=True,
+            draft_retention_days=7,
+        )
+        == "delete_expired"
+    )
+    assert (
+        change_log_publish_effect(
+            effective_recording=True,
+            effective_retention_days=30,
+            draft_recording=True,
+            draft_retention_days=7,
+        )
+        == "delete_expired"
+    )
+    assert (
+        change_log_publish_effect(
+            effective_recording=False,
+            effective_retention_days=9,
+            draft_recording=True,
+            draft_retention_days=None,
+        )
+        == "none"
+    )
+    assert (
+        change_log_publish_effect(
+            effective_recording=True,
+            effective_retention_days=7,
+            draft_recording=True,
+            draft_retention_days=None,
+        )
+        == "none"
+    )
+    assert (
+        change_log_publish_effect(
+            effective_recording=True,
+            effective_retention_days=7,
+            draft_recording=True,
+            draft_retention_days=7,
+        )
+        == "none"
+    )
+    assert (
+        change_log_publish_effect(
+            effective_recording=True,
+            effective_retention_days=7,
+            draft_recording=True,
+            draft_retention_days=30,
+        )
+        == "none"
+    )
+
+
+def test_recording_port_preview_and_overview_use_missing_effective(
+    client: TestClient,
+) -> None:
+    entity = _create(client)
+    version_id = entity["current_version"]["id"]
+    detail = client.get(f"/entities/{entity['id']}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["entity"]["effective_change_log"] == {
+        "enabled": False,
+        "retention_days": None,
+    }
+    preview = client.post(
+        f"/entities/{entity['id']}/versions/{version_id}/publish/preview"
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["change_log_effect"] == "none"
+    assert "incompatible_write_nodes" in preview.json()
+    published = _publish(client, entity)
+    assert published["job"]["status"] == "succeeded"
+    stored = get_entity_store().get_version(version_id)
+    assert stored is not None
+    assert stored.change_log_policy is None
+    after = client.get(f"/entities/{entity['id']}")
+    assert "effective_change_log" not in after.json()["entity"]
+    second = client.post(f"/entities/{entity['id']}/versions/{version_id}/publish")
+    assert second.status_code == 422
+    assert second.json()["code"] == "ENTITY_NOT_UNPUBLISHED"

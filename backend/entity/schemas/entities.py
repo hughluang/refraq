@@ -168,6 +168,13 @@ class EntityTagOut(BaseModel):
     name: str
 
 
+class EffectiveChangeLogOut(BaseModel):
+    """Live recording facts. Present on the entity read only while a draft is current."""
+
+    enabled: bool
+    retention_days: int | None = None
+
+
 class BusinessEntityOut(BaseModel):
     id: str
     table_name: str
@@ -176,6 +183,10 @@ class BusinessEntityOut(BaseModel):
     deprecated_at: Instant | None = None
     ever_published: bool = False
     current_version: CurrentVersionOut | None = None
+    effective_change_log: EffectiveChangeLogOut | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     inbound_references: list[InboundReferenceOut] | None = Field(
         default=None,
         exclude_if=lambda value: value is None,

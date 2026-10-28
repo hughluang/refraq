@@ -15,7 +15,11 @@ import {
   patchEntity,
   publishVersion,
 } from "@/features/entities/api";
-import type { BusinessEntity, EntityVersion } from "@/features/entities/types";
+import type {
+  BusinessEntity,
+  EffectiveChangeLog,
+  EntityVersion,
+} from "@/features/entities/types";
 
 const LABELS: Record<string, string> = {
   "entities.title": "Business Entities",
@@ -35,6 +39,8 @@ const LABELS: Record<string, string> = {
   "entities.fields.name": "Name",
   "entities.fields.description": "Description",
   "entities.fields.changeLogEnabled": "Record changes",
+  "entities.fields.changeLogEffective": "Recording in effect",
+  "entities.fields.changeLogEffectiveRetention": "Retention in effect",
   "entities.fields.changeLogRetentionDays": "Retention (days)",
   "entities.fields.changeLogRetentionNever": "Never expire",
   "entities.edit.submit": "Save",
@@ -129,14 +135,15 @@ function stubDomApis() {
   globalThis.ResizeObserver = ResizeObserverStub;
 }
 
-function unpublishedEntity(): BusinessEntity {
+function unpublishedEntity(effective?: EffectiveChangeLog): BusinessEntity {
   return {
     id: "ent_1",
     table_name: "material",
     name: "Material",
     description: "x",
     deprecated_at: null,
-    ever_published: false,
+    ever_published: effective != null,
+    effective_change_log: effective,
     current_version: {
       id: "encv_1",
       version: 1,
@@ -179,8 +186,9 @@ function versionFor(
 async function renderRecord(
   mode: "show" | "edit",
   changeLog: { enabled: boolean; retentionDays: number | null },
+  effective?: EffectiveChangeLog,
 ) {
-  const entity = unpublishedEntity();
+  const entity = unpublishedEntity(effective);
   const version = versionFor(entity, changeLog);
   vi.mocked(getEntity).mockResolvedValue({ entity });
   vi.mocked(listVersions).mockResolvedValue({
@@ -318,5 +326,48 @@ describe("entity change-log draft on the record form", () => {
       );
     });
     expect(publishVersion).not.toHaveBeenCalled();
+  });
+
+  it("shows effective recording beside the draft and not as a second editor", async () => {
+    await renderRecord(
+      "edit",
+      { enabled: false, retentionDays: null },
+      { enabled: true, retention_days: 7 },
+    );
+    expect(screen.getByText("Recording in effect")).toBeTruthy();
+    expect(screen.getByText("Yes")).toBeTruthy();
+    expect(screen.getByText("Retention in effect")).toBeTruthy();
+    expect(screen.getByText("7")).toBeTruthy();
+    expect(screen.getAllByRole("switch")).toHaveLength(1);
+    expect(screen.getByRole("switch", { name: "Record changes" })).toBeTruthy();
+  });
+
+  it("hides effective facts when the current version is published", async () => {
+    const entity = unpublishedEntity({ enabled: true, retention_days: 7 });
+    entity.current_version = {
+      ...entity.current_version!,
+      publish_status: "published",
+      table_name: "material__v1__abc",
+    };
+    const version = versionFor(entity, { enabled: true, retentionDays: 7 });
+    vi.mocked(getEntity).mockResolvedValue({ entity });
+    vi.mocked(listVersions).mockResolvedValue({
+      items: [version],
+      total: 1,
+      limit: 200,
+      offset: 0,
+    });
+    vi.mocked(getVersion).mockResolvedValue({ version });
+    const { EntityRecord } = await import("@/features/entities/EntityRecord");
+    render(
+      createElement(
+        MantineProvider,
+        null,
+        createElement(EntityRecord, { mode: "show", entityId: entity.id }),
+      ),
+    );
+    await screen.findByText("Material · material");
+    expect(screen.queryByText("Recording in effect")).toBeNull();
+    expect(screen.queryByText("Retention in effect")).toBeNull();
   });
 });

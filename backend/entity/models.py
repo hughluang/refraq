@@ -5,7 +5,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -32,6 +40,10 @@ class EntityVersionRow(Base):
     __tablename__ = "entity_versions"
     __table_args__ = (
         UniqueConstraint("entity_id", "version", name="uq_entity_versions_entity_version"),
+        CheckConstraint(
+            "change_log_policy IS NULL OR change_log_policy IN ('pending', 'applied')",
+            name="ck_entity_versions_change_log_policy",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -51,6 +63,7 @@ class EntityVersionRow(Base):
         Boolean, nullable=False, default=False
     )
     change_log_retention_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    change_log_policy: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 

@@ -103,6 +103,11 @@ export type EntityTag = {
   name: string;
 };
 
+export type EffectiveChangeLog = {
+  enabled: boolean;
+  retention_days: number | null;
+};
+
 export type BusinessEntity = {
   id: string;
   table_name: string;
@@ -111,6 +116,7 @@ export type BusinessEntity = {
   deprecated_at: string | null;
   ever_published: boolean;
   current_version: CurrentVersionSummary | null;
+  effective_change_log?: EffectiveChangeLog | null;
   inbound_references?: InboundReference[];
   tags: EntityTag[];
   tag_revision: number;
