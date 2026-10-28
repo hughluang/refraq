@@ -29,7 +29,7 @@ Related boundaries:
 ### 2.2 What This Surface Is Not
 
 1. Not the Console definition / authoring API (that surface addresses by opaque Entity `id`).
-2. Not a **Data Channel**. Channel responsibility is not narrowed. Dual-write of the same head table is allowed; the platform does not tag row provenance; unique constraints arbitrate.
+2. Not a **Data Channel**. Channel responsibility is not narrowed. Dual-write of the same head table is allowed. The stored row is not tagged with provenance. An equal update does not write. The entity **Change Log**, not the row, carries the source. Unique constraints arbitrate.
 3. Not an ISC serving drop-in: no opaque `cursor` / `next_cursor`, no `rows:by-keys`, no message queue. Walks use explicit `after_row_id`. Errors use 422 Problem Details, not serving's 400.
 4. Not an MCP tool surface. The Metadata MCP does not expose definition, schema, or row verbs and does not open an entity pool. Entity SQL over MCP is a planned, separate surface that reads through the same Profile Views.
 5. Not an authoring surface. The Console data page calls this API to browse rows; Console authoring does not call this API's schema verb.
@@ -182,6 +182,7 @@ Rules:
 ## 6. Row Write And Read Bodies
 
 - `values` / `set` keys are attribute names in the caller's shape. Present `row_id`, `__withheld`, or a name outside the shape (unknown or hidden alike) → `422 ENTITY_ROW_INVALID`. `update` with `values: {}` or empty `set` → `422`.
+- An equal update does not write. `update`, an upsert that finds the row, and `update-where` skip a row whose assigned values already equal the stored values. `update` and that upsert still return the current row. `update-where` counts only rows that changed. The stored row is not tagged with provenance. The entity **Change Log** carries the source of a write that does change a row.
 - `get` / `update` / `delete` address one row by exactly one of `row_id` or `business_key`. Both, or neither, → `422 REQUEST_INVALID`. `business_key` when the head has no Business Key, a value that does not match the Business Key type, or a blank or whitespace-only string, → `422 REQUEST_INVALID`. Malformed `row_id` → `422 REQUEST_INVALID`. Missing row, or a row the caller cannot see → `404 ENTITY_ROW_NOT_FOUND`.
 - `update` and `update-where` must not change the Business Key attribute. A present key for that attribute, including a value equal to the current one, → `422 ENTITY_ROW_INVALID`.
 - Every write is attributed to one **Access Grant** and may write only columns that grant presents in `clear`; otherwise `403 ENTITY_ACCESS_WRITE_DENIED` (`docs/api-contracts-entity-access.md` §5.4).

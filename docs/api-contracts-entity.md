@@ -143,6 +143,8 @@ A config key that belongs to another type, an unknown config key, or a top-level
     "latest_job_id": null,
     "latest_job_status": null
   },
+  "change_log_enabled": false,
+  "change_log_retention_days": null,
   "created_at": "2026-09-10T04:00:00Z",
   "updated_at": "2026-09-10T04:00:00Z"
 }
@@ -150,7 +152,9 @@ A config key that belongs to another type, an unknown config key, or a top-level
 
 `version` is a positive integer. The first version is `1`. Each newly opened version is the previous current version plus one.
 
-`publish_status` is stored: `unpublished` | `publishing` | `published`. Create and open-version start `unpublished`. Publish is the only transition to `publishing` and then `published`. A failed publish Job returns the version to `unpublished`.
+`publish_status` is stored: `unpublished` | `publishing` | `published`. Create and open-version start `unpublished`. Publish is the only transition to `publishing` and then `published`. A failed publish Job returns the version to `unpublished` only when the failure happens before the version is stored `published`. A change-log policy failure after that leaves the version `published` (§5.5).
+
+`change_log_enabled` is a boolean. It defaults to `false`. `change_log_retention_days` is `null` for never-expire, otherwise a whole number of days of at least 1. Both are the version's draft. `change_log_policy` is not a response field.
 
 `table_name` on a version is the physical table of that version, derived and never stored: `null` when `table_present` is false; otherwise the composed physical name. That name is the Entity stem, `__v`, the version number with no zero-padding, `__`, and the version id (16 lowercase hexadecimal digits, no prefix). Example: `material__v1__0123456789abcdef`. The application keeps the name within 63 characters by shortening the stem from the right when the suffix would not fit, and the suffix stays whole. When the stem is shortened, publish writes `COMMENT ON TABLE` set to the full stem. When the stem fits, publish writes no comment. An `encv_` prefix is not a version id and is not a physical table name. The Entity `table_name` is a view of the latest published version that still has a table. Publish creates the physical table, replaces that view, then stores `published`. The view may already select the new table before `published` is stored. A superseded version is not a product write target.
 
@@ -162,7 +166,7 @@ A config key that belongs to another type, an unknown config key, or a top-level
 | `latest_job_id` | Latest `entity_reconcile` Job for this version, or `null` |
 | `latest_job_status` | That Job's `status`, or `null` |
 
-`publish_status` is the product lifecycle. `table_present` is a derived fact used for drop. A version list item may omit `attributes` and send `attribute_count` instead. Version detail always includes `attributes`.
+`publish_status` is the product lifecycle. `table_present` is a derived fact used for drop. A version list item may omit `attributes` and send `attribute_count` instead. Version detail always includes `attributes`. List items and detail both include `change_log_enabled` and `change_log_retention_days`.
 
 ### 3.3 Business Entity
 
@@ -196,7 +200,7 @@ A config key that belongs to another type, an unknown config key, or a top-level
 
 `tags` is `{ "id", "name" }[]`, ordered by comparison form, then id. `tag_revision` starts at 1 and increases by 1 only when the set changes. List items, detail, and the create response include both. Comparison form is not a response field.
 
-List items use this shape. Entity detail (`GET /entities/{id}`) adds `inbound_references` and `change_log_recording`. `change_log_recording` is the effective recording switch. It is present when the current version is published and when it is unpublished. Callers load versions and attributes from the nested endpoints. List items omit `inbound_references` and `change_log_recording`.
+List items use this shape. Entity detail (`GET /entities/{id}`) adds `inbound_references`, `change_log_recording`, and, only while the current version is `unpublished`, `effective_change_log`. `change_log_recording` is the effective recording switch. It is present when the current version is published and when it is unpublished. `effective_change_log` is `{ "enabled", "retention_days" }`. `retention_days` is `null` for never-expire, otherwise a whole number of days of at least 1. The field is omitted when the current version is not `unpublished`. The nested `current_version` does not include `change_log_enabled` or `change_log_retention_days`; those fields are on the version resource (§3.2). Callers load versions and attributes from the nested endpoints. List items omit `inbound_references`, `change_log_recording`, and `effective_change_log`.
 
 `inbound_references` is a read-only array, ordered by `table_name` then `attribute_name`. Each item is `{ "entity_id", "table_name", "attribute_name" }` for a Business Entity whose **current** version has an **Entity Reference** with `target_entity_id` equal to this entity's id. This entity's own current version counts. An unpublished current version counts. A historical version does not. The field is not accepted on create or patch; a present `inbound_references` is `422 REQUEST_INVALID`.
 
@@ -308,7 +312,7 @@ Response: `{ "items": […], "total": N, "limit": L, "offset": O }`. Items use t
 }
 ```
 
-Required: `table_name`, `name`, `description`, `attributes`. Optional: `tags`, an object `{ "tag_ids": [], "names": [] }`. Both arrays default to empty. Any other field is `422 REQUEST_INVALID`.
+Required: `table_name`, `name`, `description`, `attributes`. Optional: `tags`, an object `{ "tag_ids": [], "names": [] }`. Both arrays default to empty. Optional `change_log_enabled` defaults to `false`. Optional `change_log_retention_days` defaults to `null` (never-expire). A retention that is not `null` or a whole number of days of at least 1 is `422 REQUEST_INVALID`. Any other field is `422 REQUEST_INVALID`. `change_log_enabled` and `change_log_retention_days` are accepted fields. They write the new version's draft only. They do not write the effective record, and they are not fields of the entity response.
 
 An omitted `tags`, or both arrays empty, leaves the new Entity with no Tags and `tag_revision` 1. `tag_ids` names existing Tags. `names` creates Tags in the same request. A rejected name or a set of more than ten leaves neither the Entity nor a new Tag. A name that folds onto an existing Tag attaches it and does not return `TAG_NAME_CONFLICT`. Two overlapping creates of one new name yield one Tag. The losing caller attaches that Tag. Neither response is `500`.
 
@@ -324,13 +328,15 @@ Success `200`: `{ "entity": { … } }`. Missing id is `404 ENTITY_NOT_FOUND`.
 
 ### 4.4 `PATCH /entities/{id}`
 
-Accepted fields: `name`, `description`, `attributes`. Omitted fields stay unchanged. `table_name`, `code`, and `tags` are rejected if present (`422 REQUEST_INVALID`). A rejected `tags` field leaves the Tag set and `tag_revision` unchanged.
+Accepted fields: `name`, `description`, `attributes`, `change_log_enabled`, `change_log_retention_days`. Omitted fields stay unchanged. An omitted `change_log_retention_days` keeps the stored number. A present `null` sets never-expire. A retention that is not `null` or a whole number of days of at least 1 is `422 REQUEST_INVALID`. `table_name`, `code`, and `tags` are rejected if present (`422 REQUEST_INVALID`). A rejected `tags` field leaves the Tag set and `tag_revision` unchanged.
 
-`attributes`, when present, is the full replacement set for the current unpublished version. Storage stays on that version; this is not an Entity-level shape field. Version-scoped clients may still `PATCH` §5.4.
+`attributes`, when present, is the full replacement set for the current unpublished version. Storage stays on that version; this is not an Entity-level shape field. Version-scoped clients may still `PATCH` §5.4. That version PATCH does not accept the change-log fields.
+
+Saving `change_log_enabled` or `change_log_retention_days` writes the unpublished draft and does not write the effective record.
 
 Refused when the Entity is deprecated (`ENTITY_DEPRECATED`), when any version is `publishing` (`ENTITY_PUBLISHING`), or when the current version is not `unpublished` (`ENTITY_NOT_UNPUBLISHED`).
 
-An applied change writes one definition-save **Management Audit Event**. Identity-only changes record class `unchanged`. A shape change records the classifier class. No change is a no-op and writes no event.
+An applied change writes one definition-save **Management Audit Event**. Identity-only changes record class `unchanged`. A shape change records the classifier class. A patch that changes only `change_log_enabled` or `change_log_retention_days` still writes one event with class `unchanged` and does not list those fields. A patch that changes nothing, including one that only repeats the stored change-log values, is a no-op and writes no event.
 
 Success `200`: `{ "entity": { … } }`.
 
@@ -515,7 +521,7 @@ Response items are version summaries (`attributes` omitted; `attribute_count` pr
 
 Opens the next version under this Entity. The current version must be `published` and the Entity must not be deprecated. Otherwise `ENTITY_NOT_PUBLISHED` or `ENTITY_DEPRECATED`. A `publishing` Entity is `ENTITY_PUBLISHING`.
 
-The new version starts as a copy of the current version's saved shape; the body overlays that copy.
+The new version starts as a copy of the current version's saved shape; the body overlays that copy. The new version's change-log draft is the effective record, not the previous version's draft columns. `live_change_log` supplies that pair: a missing effective row is recording off and never-expire. The body does not accept `change_log_enabled` or `change_log_retention_days`. A present field is `422 REQUEST_INVALID`.
 
 ```json
 {
@@ -537,7 +543,7 @@ The field is optional. An omitted field stays as copied. A body that does not ch
 
 The server classifies the overlay against the current published shape before write validation. An `unchanged` classification, including an omitted `attributes` field and a body that repeats the stored attributes, stores a copy of the published shape and does not re-apply attribute write rules. A body that changes the shape must satisfy those rules. Failure is `422 ENTITY_ATTRIBUTE_INVALID`.
 
-Opening a version has no cross-database side effect. The new version is `unpublished` and readable immediately. Its table does not exist until publish succeeds. The prior version becomes superseded. The prior version's table and rows are untouched.
+Opening a version reads the effective record and does not change it. The new version is `unpublished` and readable immediately. Its table does not exist until publish succeeds. The prior version becomes superseded. The prior version's table and rows are untouched.
 
 Success `201`: `{ "version": { … } }`.
 
@@ -549,19 +555,19 @@ Success `200`: `{ "version": { … } }` with full `attributes`. Missing entity o
 
 Saves a shape on the current `unpublished` version. A superseded target is `422 ENTITY_VERSION_SUPERSEDED`. A published or publishing target is `422 ENTITY_NOT_UNPUBLISHED` or `422 ENTITY_PUBLISHING`. A deprecated Entity is `422 ENTITY_DEPRECATED`.
 
-Accepted fields: `attributes`. Omitted fields stay unchanged. `attributes`, when present, is the full replacement set. Any valid shape is accepted, including changes the classifier would call `breaking`.
+Accepted fields: `attributes`. Omitted fields stay unchanged. `attributes`, when present, is the full replacement set. Any valid shape is accepted, including changes the classifier would call `breaking`. `change_log_enabled` and `change_log_retention_days` are not accepted. A present field is `422 REQUEST_INVALID`. The draft switch and retention are saved by `PATCH /entities/{id}` (§4.4).
 
 Success `200`: `{ "version": { … } }`.
 
 ### 5.5 `POST /entities/{id}/versions/{version_id}/publish`
 
-Publishes the current `unpublished` version: set `publishing` and enqueue `entity_reconcile` to CREATE the version's physical table, replace the stem view so it selects that table, then store `published`. The previous physical table is not renamed. Acceptance freezes each dictionary attribute's active codes and deprecation into that Job's `dictionary_bindings`. It also freezes each reference attribute's target **Business Key** (attribute name, type, and `max_length` when `string`) into `reference_bindings`. Between acceptance and execution, a changed active code set, a Dictionary deprecated after acceptance, or a target Business Key that no longer matches the freeze fails the Job with `ENTITY_ATTRIBUTE_INVALID` and creates no table. The CHECK uses the frozen codes. The reference column uses the frozen key.
+Publishes the current `unpublished` version: set `publishing` and enqueue `entity_reconcile` to CREATE the version's physical table, replace the stem view so it selects that table, then store `published`. A later retry of a `published` version whose `change_log_policy` is `pending` does not set `publishing`. The previous physical table is not renamed. Acceptance freezes each dictionary attribute's active codes and deprecation into that Job's `dictionary_bindings`. It also freezes each reference attribute's target **Business Key** (attribute name, type, and `max_length` when `string`) into `reference_bindings`. Between acceptance and execution, a changed active code set, a Dictionary deprecated after acceptance, or a target Business Key that no longer matches the freeze fails the Job with `ENTITY_ATTRIBUTE_INVALID` and creates no table. The CHECK uses the frozen codes. The reference column uses the frozen key.
 
 Body is empty.
 
 - Empty `attributes` is `422 ENTITY_PUBLISH_EMPTY`.
-- Non-current target is `422 ENTITY_VERSION_SUPERSEDED`.
-- Non-unpublished is `422 ENTITY_NOT_UNPUBLISHED`.
+- Non-current target is `422 ENTITY_VERSION_SUPERSEDED`, except a `published` version whose `change_log_policy` is `pending`. That version is accepted even when a later draft is current.
+- Non-unpublished is `422 ENTITY_NOT_UNPUBLISHED`, except that same pending version. A `published` version whose `change_log_policy` is null is rejected.
 - Deprecated Entity is `422 ENTITY_DEPRECATED`.
 - The first publish of an Entity, and a publish whose shape is not `unchanged` relative to the latest published shape, apply the attribute write rules. Failure is `422 ENTITY_ATTRIBUTE_INVALID` and does not enqueue. A reference whose target current version has no Business Key is that failure. An `unchanged` successor of an already published shape is enqueued as stored and still freezes reference keys from the targets' current versions. Publish does not rewrite that shape. A publish that changes this entity's Business Key while an **Inbound Reference** exists is `409 ENTITY_REFERENCED`.
 
@@ -570,7 +576,7 @@ Enqueue is idempotent:
 - An in-flight create or drop Job for this version is returned as `200` with that Job. A second Job is not minted.
 - Otherwise the response is `201` `{ "job": { … } }`.
 
-A successful run writes `published`, the attribute-set snapshot, and the Job reference after the stem view selects the new table. A failed run returns the version to `unpublished`, drops the new physical table only when it is still empty, leaves a nonempty new table in place, puts the stem view back when this attempt moved it, leaves the definition in place, and records failure on the Job. When putting the view back fails, the Job summary includes that failure and the new physical table is left in place.
+A successful run writes `published`, the attribute-set snapshot, and the Job reference after the stem view selects the new table. On the entity database that same write stores `change_log_policy` `pending`, then applies policy outside the undo path and stores `applied`. Until that step finishes, writes follow the previous effective record. A failed policy step does not return the version to `unpublished`, does not drop the new table, and does not move the stem view back. Retrying publish of that same version, including after a later draft is current, does not set `publishing` and runs only the policy step. A failure before the version is stored `published` returns the version to `unpublished`, drops the new physical table only when it is still empty, leaves a nonempty new table in place, puts the stem view back when this attempt moved it, leaves the definition in place, and records failure on the Job. When putting the view back fails, the Job summary includes that failure and the new physical table is left in place. When the bound table port has no entity database, publish stores `change_log_policy` null and does not apply policy. A second publish of that version is still rejected.
 
 Success envelope on the Job (`result` only when `succeeded`):
 
@@ -590,7 +596,18 @@ Success envelope on the Job (`result` only when `succeeded`):
 }
 ```
 
-`action` is `created` on the product path. A publish-enqueue audit event is written only when a Job is minted.
+`action` is `created` when the run creates the table, including when that same run also applies policy. A retry that runs only the policy step returns `action` `change_log_policy` and does not include the column-count fields:
+
+```json
+{
+  "schema": "entity_reconcile.v1",
+  "entity_version_id": "0123456789abcdef",
+  "table_name": "material__v1__0123456789abcdef",
+  "action": "change_log_policy"
+}
+```
+
+A publish-enqueue audit event is written only when a Job is minted.
 
 ### 5.6 `POST /entities/{id}/versions/{version_id}/publish/preview`
 
@@ -609,11 +626,14 @@ Empty body. Computes, and does not store, the Data Channel write nodes whose map
       "on_incompatible_head": "fail",
       "reasons": ["attribute_missing"]
     }
-  ]
+  ],
+  "change_log_effect": "none"
 }
 ```
 
 `reasons` is a non-empty list drawn from `attribute_missing`, `match_key_not_unique`, and `business_key_missing`. Only write nodes in each channel's current published version are listed. A version that cannot be published for another reason still returns this list. Missing entity or version is `404`.
+
+`change_log_effect` is always present. It compares the effective record with that version's `change_log_enabled` and `change_log_retention_days`. `none` adds no deletion. `delete_all` is when effective recording is on and the draft turns it off. `delete_expired` is when recording stays on and the draft window is shorter. A never-expire draft is not shorter. A finite draft is shorter than never-expire. When both are finite, shorter means the draft's number of days is less than the effective number of days. This preview does not store the effect.
 
 ## 6. Table Drop
 

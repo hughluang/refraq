@@ -170,7 +170,7 @@ Any subset of `enabled`, `name`, `cron`, `interval_seconds`, `start_at`, `runnin
 
 ### `GET /schedules`
 
-**Offset Page** (newest first: `created_at DESC`, `id DESC`). Query params: `limit` (default **50**, max **200**), `offset` (default **0**), `hidden` (default `false`; `true` includes hidden rows for tests / debug). Hidden system rows include the stuck-Job reaper, entity access-log retention, and channel run-record retention (`channel_run_record_retention`, hourly, `store_only`). They are not created through this API.
+**Offset Page** (newest first: `created_at DESC`, `id DESC`). Query params: `limit` (default **50**, max **200**), `offset` (default **0**), `hidden` (default `false`; `true` includes hidden rows for tests / debug). Hidden system rows include the stuck-Job reaper, entity access-log retention, channel run-record retention (`channel_run_record_retention`, hourly, `store_only`), and entity change-log retention (`entity_change_log_retention`, 86400 seconds, `store_only`). The entity change-log row is not the channel duty Change Log cleanup. They are not created through this API.
 
 Response: `{ "items": […], "total": N, "limit": L, "offset": O, "cron_timezone": "UTC" }`. `total` is the filtered set. `cron_timezone` is the effective **Schedule Timezone** System Parameter, the same value on every page.
 

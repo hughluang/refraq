@@ -4,7 +4,7 @@
 
 This document defines the **Business Entity** definition surface: how a reusable business thing is declared, what meaning its declaration must carry, how an unpublished version is saved, how **Publish** creates that version's **Entity Table**, how a published Entity is locked and iterated, how an Entity is deprecated, and how a never-published definition is deleted. It defines the authorization, Console, and audit rules for that surface. The definition surface is Console HTTP. The Metadata **MCP endpoint** does not expose Business Entity. Who may read or write which rows and attributes of Entity data is **Entity Access Control** (`docs/business-entity-access.md`).
 
-Mapping a source column onto an attribute, transforming values, channel load, and recording lineage belong to a **Data Channel**. Synchronous head-table schema discovery and row read/write belong to the **Entity Data API** (`docs/api-contracts-entity-data.md`). Both may write the same head table; the platform does not tag row provenance.
+Mapping a source column onto an attribute, transforming values, channel load, and recording lineage belong to a **Data Channel**. Synchronous head-table schema discovery and row read/write belong to the **Entity Data API** (`docs/api-contracts-entity-data.md`). Both may write the same head table. The stored row is not tagged with provenance. An equal update does not write. The entity **Change Log**, not the row, carries the source.
 
 Related boundaries:
 

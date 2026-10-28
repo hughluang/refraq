@@ -178,7 +178,7 @@ Must not contain:
 - `entity/present.py` importing `entity/table_name.py` or `entity/inbound.py`
 - Owning User Group or Subject Attribute storage (lives in `admin/subjects/`)
 
-Entity owns the entity Change Log and the head-table row-write port that appends to it in the same transaction. Both the **Entity Data API** and Data Channel write nodes write through that port.
+Entity owns the entity Change Log. While the effective record has recording on, a trigger on each physical table appends an entry in the same transaction as the row write. The **Entity Data API** and Data Channel write nodes keep their own statements. Neither statement appends the log.
 
 ### `backend/channel/`
 
@@ -193,7 +193,7 @@ Responsibilities:
 - Execution engine with n8n v1 semantics; it knows nothing about specific node types, storage, or Celery. With no stop node it runs every node reachable from the entry. With a stop node it runs that node's ancestor closure, including the node
 - Expression evaluator and Code node sandbox (one reused subprocess per run; no network; allow-listed modules; time and memory limits)
 - **Dataset Reference**s as claim checks. Channel owns the dataset registry and the lifecycle: retention, the capacity ceiling, purge, and cascade with the run record. The physical tables are `backend.entity.datasets`
-- Entity writer: modes, match key, mapped attributes only, and head compatibility; writes through Entity's published row-write port
+- Entity writer: modes, match key, mapped attributes only, and head compatibility; writes through Entity's published row-write port. That port does not append the entity Change Log
 - **Checkpoint** store: per (channel, checkpoint-capable node, stream) cursors; each business node declares when and how it advances its cursor
 - Run records: node executions (including `container_seq` and `round`), preview storage for a successful execution under a Batch Read, and `failed_node_id` when `on_error` `stop` fails the run
 - **Channel Run** runner and triggers: `channel_run` Job kind, version resolution at start, a pinned version for rerun and `retry`, run-timeout checks between node executions, version supersede of unpinned runs, error workflow, `failure_streak`. User cancel kills the run's child process

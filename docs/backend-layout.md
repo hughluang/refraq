@@ -135,7 +135,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 | Module | Published for |
 |--------|----------------|
 | `backend.entity.errors` | Domain errors (subclass `AppError`, not `admin` concrete types) |
-| `backend.entity.tasks` | Job kind handler dispatch (`entity_reconcile`, `entity_table_drop`, `entity_access_views`) and access-log retention purge; discovered by `worker`. Not registered on `metadata.tasks` |
+| `backend.entity.tasks` | Job kind handler dispatch (`entity_reconcile`, `entity_table_drop`, `entity_access_views`), access-log retention purge, and the change-log retention purge that `backend.worker.tasks.purge_change_logs` runs; discovered by `worker`. Not registered on `metadata.tasks` |
 | `backend.entity.parameters` | Entity-owned System Parameter specs and typed accessors (`entity_access.max_profile_combinations`, `entity_access.access_log_retention_days`); collected by `worker.parameters` assembly |
 | `backend.entity.bootstrap` | Entity database bootstrap process entry (`python -m backend.entity.bootstrap`); uses `ENTITY_ADMIN_DATABASE_URL` only |
 | `backend.entity.dictionaries.active_codes` | Active dictionary codes, bound into subject attributes by composition |
@@ -170,7 +170,7 @@ No module is created empty. `channel.errors`, `channel.routers`, `channel.tasks`
 - `worker`: schedule store port and seam (`worker.api`, `worker.schedules`, `worker.errors`, `worker.schemas`, `worker.due`) for publish sync, activation, withdraw, and due consumption.
 - `admin`: deps and permissions, audit, and the System Parameter resolver.
 - `metadata`: Locator parsing and resolution, Catalog Object and column reads, Controlled Query guards and execution, Source statement execution, and Normalized Type.
-- `entity`: head resolution and head shape by Entity id (`entity.heads`), the head-table row read and batch write port (`entity.rows`), dataset tables (`entity.datasets`), entity Change Log reads, and head-switch events. Row writes go through Entity Access Control as the System Identity. Dataset table calls do not import `channel`.
+- `entity`: head resolution and head shape by Entity id (`entity.heads`), the head-table row read and batch write port (`entity.rows`), dataset tables (`entity.datasets`), and head-switch events. Row writes go through Entity Access Control as the System Identity. Dataset table calls do not import `channel`. The console reads an entity Change Log through the entity HTTP list (`docs/api-contracts-entity.md` §4.9). Channel does not publish a change-log read module.
 
 `metadata` and `entity` publish those capabilities as named leaf modules in their own §3 tables when the consuming code lands. Neither imports `channel`; where they need channel facts (the Entity publish confirmation listing incompatible write nodes, the platform schedule list projecting `channel_run` rows) they define a port that composition binds to a `channel` adapter.
 
