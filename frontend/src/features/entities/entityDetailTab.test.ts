@@ -28,6 +28,7 @@ describe("parseEntityDetailTab", () => {
     expect(parseEntityDetailTab("versions")).toBe("versions");
     expect(parseEntityDetailTab("access")).toBe("access");
     expect(parseEntityDetailTab("data")).toBe("data");
+    expect(parseEntityDetailTab("change_log")).toBe("change_log");
     expect(parseEntityDetailTab(null)).toBe("overview");
     expect(parseEntityDetailTab("nope")).toBe("overview");
   });
@@ -40,6 +41,7 @@ describe("isEntityDetailTab", () => {
     expect(isEntityDetailTab("attributes")).toBe(true);
     expect(isEntityDetailTab("access")).toBe(true);
     expect(isEntityDetailTab("data")).toBe(true);
+    expect(isEntityDetailTab("change_log")).toBe(true);
   });
 });
 
@@ -51,6 +53,9 @@ describe("entityDetailHref", () => {
     );
     expect(entityDetailHref("ent_1", "attributes")).toBe(
       "/console/entities/ent_1?tab=attributes",
+    );
+    expect(entityDetailHref("ent_1", "change_log")).toBe(
+      "/console/entities/ent_1?tab=change_log",
     );
   });
 });

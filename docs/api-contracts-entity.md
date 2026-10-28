@@ -33,7 +33,7 @@ Instants on the wire are UTC with a `Z` suffix.
 
 ### 2.2 Offset Page
 
-Every Entity collection list uses the **Offset Page** envelope `{ "items", "total", "limit", "offset" }`. Newest-first lists order by `created_at DESC`, `id DESC`. Version lists order by `version DESC`, `id DESC`. Name-ordered lists include an `id` tiebreaker.
+Every Entity collection list uses the **Offset Page** envelope `{ "items", "total", "limit", "offset" }`, except `GET /entities/{id}/change-log`, which uses a **Change Log Sequence Page** (§4.9). Newest-first lists order by `created_at DESC`, `id DESC`. Version lists order by `version DESC`, `id DESC`. Name-ordered lists include an `id` tiebreaker.
 
 Each list endpoint declares its default and max `limit`. HTTP rejects out-of-range `limit` or `offset` with `422 REQUEST_INVALID`. An `offset` past the end of the filtered set is `200` with empty `items` and the same `total`.
 
@@ -196,7 +196,7 @@ A config key that belongs to another type, an unknown config key, or a top-level
 
 `tags` is `{ "id", "name" }[]`, ordered by comparison form, then id. `tag_revision` starts at 1 and increases by 1 only when the set changes. List items, detail, and the create response include both. Comparison form is not a response field.
 
-List items use this shape. Entity detail (`GET /entities/{id}`) adds `inbound_references` and no other top-level fields. Callers load versions and attributes from the nested endpoints. List items omit `inbound_references`.
+List items use this shape. Entity detail (`GET /entities/{id}`) adds `inbound_references` and `change_log_recording`. `change_log_recording` is the effective recording switch. It is present when the current version is published and when it is unpublished. Callers load versions and attributes from the nested endpoints. List items omit `inbound_references` and `change_log_recording`.
 
 `inbound_references` is a read-only array, ordered by `table_name` then `attribute_name`. Each item is `{ "entity_id", "table_name", "attribute_name" }` for a Business Entity whose **current** version has an **Entity Reference** with `target_entity_id` equal to this entity's id. This entity's own current version counts. An unpublished current version counts. A historical version does not. The field is not accepted on create or patch; a present `inbound_references` is `422 REQUEST_INVALID`.
 
@@ -423,6 +423,76 @@ Success `200`: `{ "entity": { … } }` with `deprecated_at` set.
 `PATCH /dictionaries/{id}` accepts any subset of `display_name`, `description`, `deprecated`, and `entries`. `deprecated: true` sets `deprecated_at` when it is null. `deprecated: false` clears it. Omitting `entries` leaves the codes unchanged and does not write entry rows. Concurrent patches of one Dictionary are serialized; a patch that includes `entries` replaces the whole set, and a concurrent patch does not return `INTERNAL_ERROR`. The response is `{ "dictionary": { … } }`.
 
 `DELETE /dictionaries/{id}` is `204` with an empty body. A Dictionary named by any version attribute or any publish snapshot is `409 DICTIONARY_IN_USE`; Problem `detail` names the referring `table_name.attribute_name` pairs.
+
+### 4.9 `GET /entities/{id}/change-log`
+
+Permission: `entity:data_read`. A caller without it receives `403` before the id is resolved. An unknown or invisible entity is `404 ENTITY_NOT_FOUND`.
+
+The list is a **Change Log Sequence Page** (`docs/conventions-pagination.md` §4.3, ADR 0067):
+
+```json
+{
+  "items": [
+    {
+      "sequence": 12,
+      "occurred_at": "2026-10-02T00:00:00Z",
+      "operation": "insert",
+      "row_id": 7,
+      "business_key": "LEFT",
+      "physical_table": "\"entity_data\".\"material__v1__0123456789abcdef\"",
+      "source": "user",
+      "subject": "user_ada",
+      "subject_label": "Ada"
+    }
+  ],
+  "limit": 50,
+  "next_before_sequence": null
+}
+```
+
+`limit` is always 50. The request does not send `limit`, `offset`, or `total`. Items are the newest matching entries by sequence. `next_before_sequence` is the smallest sequence when `items` has 50 entries, and null when it has fewer. The next page sends that integer as `before_sequence`. The bound is exclusive, so a missing sequence is skipped. A page of exactly 50, including the last page of the log, still returns a bound; the following page is empty and its bound is null.
+
+Query parameters, all optional, combine. An omitted parameter does not constrain that side.
+
+| Param | Rule |
+| --- | --- |
+| `before_sequence` | Integer ≥ 1. Exclusive upper bound on `sequence`. Omit it for the newest page |
+| `operation` | `insert`, `update`, or `delete` |
+| `source` | `user`, `channel_run`, or `unattributed`. `unattributed` matches a null source |
+| `subject` | Exact stored subject id. A display name does not match |
+| `row_identity` | Exact `row_id` or Business Key text, on every physical table of the entity |
+| `occurred_from` | Inclusive **Instant**. Omit it to leave the start open |
+| `occurred_to` | Inclusive **Instant**. Omit it to leave the end open |
+
+Any other `operation`, `source`, or `before_sequence`, or an `occurred_from` / `occurred_to` that is not an **Instant**, is `422 REQUEST_INVALID`.
+
+An item does not include `before` or `after`. `row_id` is the physical row's `row_id`. `business_key` is that physical table's version's **Business Key** value, or null when that version has none. The two versions of one `row_id` are separate items, distinguished by `physical_table`. `physical_table` is the quoted qualified name stored on the entry.
+
+`source` is `user`, `channel_run`, or null. The entry stores the subject id. `subject_label` is resolved on read. A user subject uses the user's name when the user exists, and the stored id when it does not. A missing user does not drop the entry. A channel-run subject uses the stored run id. The response has no channel link. An unattributed entry has `source`, `subject`, and `subject_label` null.
+
+### 4.10 `GET /entities/{id}/change-log/{sequence}`
+
+Permission: `entity:data_read`. An unknown or invisible entity, or a sequence this entity does not have, is `404 ENTITY_NOT_FOUND`. `sequence` below 1 is `422 REQUEST_INVALID`.
+
+Success `200` is one list item plus the rebuilt physical images:
+
+```json
+{
+  "sequence": 12,
+  "occurred_at": "2026-10-02T00:00:00Z",
+  "operation": "update",
+  "row_id": 7,
+  "business_key": "LEFT",
+  "physical_table": "\"entity_data\".\"material__v1__0123456789abcdef\"",
+  "source": "user",
+  "subject": "user_ada",
+  "subject_label": "Ada",
+  "before": { "row_id": 7, "sku": "LEFT", "secret": "old" },
+  "after": { "row_id": 7, "sku": "LEFT", "secret": "new" }
+}
+```
+
+`before` and `after` are the full physical row of that table's version. An insert has `before` null. A delete has `after` null. An update's `before` is rebuilt from the stored after image plus the previous value of each column that differed. The images are not a Profile View and are not passed through an access grant. A column an access grant would hide on the data tab is still present here.
 
 ## 5. Entity Version And Attribute Endpoints
 

@@ -234,3 +234,24 @@ def test_draft_retention_can_return_to_never_expire(client: TestClient) -> None:
     version = _version(client, entity)
     assert version["change_log_enabled"] is True
     assert version["change_log_retention_days"] is None
+
+
+def test_change_log_list_is_empty_without_an_entity_database(
+    client: TestClient,
+) -> None:
+    created = client.post("/entities", json=_create_body(table_name="no_log_db"))
+    assert created.status_code == 201, created.text
+    entity = created.json()["entity"]
+    detail = client.get(f"/entities/{entity['id']}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["entity"]["change_log_recording"] is False
+    listed = client.get(f"/entities/{entity['id']}/change-log")
+    assert listed.status_code == 200, listed.text
+    assert listed.json() == {
+        "items": [],
+        "limit": 50,
+        "next_before_sequence": None,
+    }
+    missing = client.get(f"/entities/{entity['id']}/change-log/1")
+    assert missing.status_code == 404
+    assert missing.json()["code"] == "ENTITY_NOT_FOUND"

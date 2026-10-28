@@ -6,7 +6,7 @@ Domain terms: [`docs/glossary.md`](glossary.md).
 
 ## 1. Scope
 
-This document defines how collection reads are paged: the **Offset Page** envelope, total ordering, the **Cursor Page** admission rule, **Top-K Read** admission, Whole-Set Read exemptions, MCP mirroring, and Console list-footer rules.
+This document defines how collection reads are paged: the **Offset Page** envelope, total ordering, the **Cursor Page** admission rule, **Top-K Read** admission, **Entity Data Keyset Page** admission, **Change Log Sequence Page** admission, Whole-Set Read exemptions, MCP mirroring, and Console list-footer rules.
 
 It does not define Job/log retention, Catalog Sample row peeks, or Controlled Query row caps.
 
@@ -19,7 +19,7 @@ Related boundaries:
 
 ## 2. Offset Page
 
-Every HTTP collection list that pages uses this envelope, except Catalog Search (**Top-K Read**, §4.1). The envelope is always complete; omitting `limit` / `offset` applies the endpoint defaults and still returns all four fields.
+Every HTTP collection list that pages uses this envelope, except Catalog Search (**Top-K Read**, §4.1) and the entity change-log list (**Change Log Sequence Page**, §4.3). The envelope is always complete; omitting `limit` / `offset` applies the endpoint defaults and still returns all four fields.
 
 ```json
 {
@@ -74,6 +74,12 @@ It is admitted only for Catalog Search (ADR 0043). New endpoints must not choose
 
 An **Entity Data Keyset Page** is `{ "items": [...], "limit": L, "next_after_row_id": null | N }`. It is admitted only for **Entity Data API** query keyset mode (`docs/api-contracts-entity-data.md`, ADR 0051). It is not a Cursor Page and not a serving opaque cursor. New endpoints must not reuse this envelope without an ADR that names the admission.
 
+### 4.3 Change Log Sequence Page
+
+A **Change Log Sequence Page** is `{ "items": [...], "limit": 50, "next_before_sequence": null | N }`. It has no `total` and no `offset`. `next_before_sequence` is the smallest sequence on a page of 50 and null when the page is shorter. The next request passes that value as `before_sequence`, an exclusive upper bound, and keeps the same filters. Missing sequence numbers are skipped because the bound is the sequence, not a page index.
+
+It is admitted only for `GET /entities/{id}/change-log` (`docs/api-contracts-entity.md`, ADR 0067). It is not an **Offset Page**, not a **Cursor Page**, and not an **Entity Data Keyset Page**. New endpoints must not reuse this envelope without an ADR that names the admission.
+
 ## 5. Whole-Set Read
 
 A Whole-Set Read is not a page. It is a composite configuration document bounded by platform definition, not by data volume. Keys are not `items`:
@@ -97,7 +103,7 @@ Catalog Sample and Controlled Query are row peeks, not collection lists. They ke
 
 ## 7. Console
 
-Paged Management Console tables use one footer: `ListPager` (`frontend/src/components/display/ListPager.tsx`), composed by `ListTable` (`docs/ui-console-layout.md`). Count text always renders; page numbers render only when there is more than one page. `ListTable` disables paging while the first page is loading or existing rows are refreshing. Filter controls stay in the content toolbar. Do not hand-roll prev/next buttons for an Offset Page. Catalog Columns uses the same Console module through an in-memory Offset Page adapter over the object payload; it is not an HTTP Offset Page.
+Paged Management Console tables use one footer: `ListPager` (`frontend/src/components/display/ListPager.tsx`), composed by `ListTable` (`docs/ui-console-layout.md`). Count text always renders; page numbers render only when there is more than one page. `ListTable` disables paging while the first page is loading or existing rows are refreshing. Filter controls stay in the content toolbar. Do not hand-roll prev/next buttons for an Offset Page. Catalog Columns uses the same Console module through an in-memory Offset Page adapter over the object payload; it is not an HTTP Offset Page. The entity change-log list is a **Change Log Sequence Page** (§4.3). It has no total and does not jump to a page number, so it does not use `ListTable` or `ListPager`.
 
 Pickers that need a closed option set (role Select, Source Select) fetch one page at that list's documented max `limit`. They are not a second envelope.
 
@@ -105,7 +111,7 @@ Pickers that need a closed option set (role Select, Source Select) fetch one pag
 
 1. A collection list that pages with `{ "items": [...] }` only.
 2. Returning `total` / `limit` / `offset` only “when pagination params are used”.
-3. A third envelope (`has_more` on a collection list, `total_count`, cursor without §4 admission, Top-K Read without §4.1 admission, Entity Data Keyset Page without §4.2 admission).
+3. A third envelope (`has_more` on a collection list, `total_count`, cursor without §4 admission, Top-K Read without §4.1 admission, Entity Data Keyset Page without §4.2 admission, Change Log Sequence Page without §4.3 admission).
 4. Newest-first Offset Pages ordered by `created_at` without an `id` (or equivalent) tiebreaker.
 5. Computing Offset Page `total` by materializing every filtered row.
 6. A default `limit` with no documented max cap.

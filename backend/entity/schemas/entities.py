@@ -175,6 +175,35 @@ class EffectiveChangeLogOut(BaseModel):
     retention_days: int | None = None
 
 
+class ChangeLogEntryOut(BaseModel):
+    """One change-log row without the physical images."""
+
+    sequence: int
+    occurred_at: Instant
+    operation: str
+    row_id: int | None = None
+    business_key: str | int | None = None
+    physical_table: str
+    source: str | None = None
+    subject: str | None = None
+    subject_label: str | None = None
+
+
+class ChangeLogPageOut(BaseModel):
+    """Change Log Sequence Page. ``limit`` is 50. No total."""
+
+    items: list[ChangeLogEntryOut]
+    limit: int
+    next_before_sequence: int | None = None
+
+
+class ChangeLogDetailOut(ChangeLogEntryOut):
+    """One entry with the rebuilt physical before and after images."""
+
+    before: dict[str, Any] | None = None
+    after: dict[str, Any] | None = None
+
+
 class BusinessEntityOut(BaseModel):
     id: str
     table_name: str
@@ -184,6 +213,10 @@ class BusinessEntityOut(BaseModel):
     ever_published: bool = False
     current_version: CurrentVersionOut | None = None
     effective_change_log: EffectiveChangeLogOut | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    change_log_recording: bool | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
     )

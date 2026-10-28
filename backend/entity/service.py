@@ -244,8 +244,9 @@ def get_entity(entity_id: str, *, user: UserRecord | None = None) -> dict[str, A
     _require_visible(user, entity.id)
     current = get_entity_store().current_version(entity.id)
     payload = _project_entity(entity, current, include_inbound=True, user=user)
+    enabled, days = live_change_log(entity.id)
+    payload["change_log_recording"] = enabled
     if current is not None and current.publish_status == UNPUBLISHED:
-        enabled, days = live_change_log(entity.id)
         payload["effective_change_log"] = {
             "enabled": enabled,
             "retention_days": days,

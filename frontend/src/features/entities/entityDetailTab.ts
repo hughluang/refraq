@@ -4,6 +4,7 @@ export const ENTITY_DETAIL_TABS = [
   "versions",
   "access",
   "data",
+  "change_log",
 ] as const;
 
 export type EntityDetailTab = (typeof ENTITY_DETAIL_TABS)[number];
@@ -14,7 +15,8 @@ export function parseEntityDetailTab(raw: string | null): EntityDetailTab {
     raw === "versions" ||
     raw === "overview" ||
     raw === "access" ||
-    raw === "data"
+    raw === "data" ||
+    raw === "change_log"
   ) {
     return raw;
   }
@@ -27,7 +29,8 @@ export function isEntityDetailTab(raw: string | null): raw is EntityDetailTab {
     raw === "attributes" ||
     raw === "versions" ||
     raw === "access" ||
-    raw === "data"
+    raw === "data" ||
+    raw === "change_log"
   );
 }
 

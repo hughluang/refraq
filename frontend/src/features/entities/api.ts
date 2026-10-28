@@ -4,6 +4,8 @@ import type { EntityStatus } from "@/features/entities/publishStatus";
 
 import type {
   BusinessEntity,
+  ChangeLogEntryDetail,
+  ChangeLogPage,
   EntityCreate,
   EntityJobEnqueue,
   EntityPatch,
@@ -65,6 +67,37 @@ export function getEntity(id: string, init?: { signal?: AbortSignal }) {
   return apiClient<{ entity: BusinessEntity }>(`/entities/${id}`, {
     signal: init?.signal,
   });
+}
+
+export function listEntityChangeLog(
+  entityId: string,
+  params?: {
+    before_sequence?: number;
+    operation?: string;
+    source?: string;
+    subject?: string;
+    row_identity?: string;
+    occurred_from?: string;
+    occurred_to?: string;
+    signal?: AbortSignal;
+  },
+) {
+  const { signal, ...query } = params ?? {};
+  return apiClient<ChangeLogPage>(
+    `/entities/${entityId}/change-log${querySuffix(query)}`,
+    { signal },
+  );
+}
+
+export function getEntityChangeLogEntry(
+  entityId: string,
+  sequence: number,
+  init?: { signal?: AbortSignal },
+) {
+  return apiClient<ChangeLogEntryDetail>(
+    `/entities/${entityId}/change-log/${sequence}`,
+    { signal: init?.signal },
+  );
 }
 
 export function patchEntity(id: string, body: EntityPatch) {

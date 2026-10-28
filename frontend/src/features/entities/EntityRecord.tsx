@@ -38,6 +38,7 @@ import {
 } from "@/features/entities/attributeDraftValidation";
 import { EntityAttributesTab } from "@/features/entities/EntityAttributesTab";
 import { EntityAccessTab } from "@/features/entities/EntityAccessTab";
+import { EntityChangeLogTab } from "@/features/entities/EntityChangeLogTab";
 import { EntityDataBrowser } from "@/features/entities/EntityDataBrowser";
 import { EntityChangeLogFields } from "@/features/entities/EntityChangeLogFields";
 import { EntityIdentityFields } from "@/features/entities/EntityIdentityFields";
@@ -123,6 +124,9 @@ export function EntityRecord(props: Props) {
   const canData =
     Array.isArray(permissions) && permissions.includes(DATA_READ_PERMISSION);
 
+  const [entity, setEntity] = useState<BusinessEntity | null>(null);
+  const recordingOn = entity?.change_log_recording === true;
+
   const tabItems = useMemo(() => {
     const items = [
       { value: "overview" },
@@ -131,13 +135,15 @@ export function EntityRecord(props: Props) {
     ];
     if (mode !== "create" && canAccess) items.push({ value: "access" });
     if (mode !== "create" && canData) items.push({ value: "data" });
+    if (mode !== "create" && canData && recordingOn) {
+      items.push({ value: "change_log" });
+    }
     return items;
-  }, [canAccess, canData, mode]);
+  }, [canAccess, canData, mode, recordingOn]);
   const consoleTab = useConsoleTab(tabItems);
   const tab = parseEntityDetailTab(consoleTab.value);
   const setTab = consoleTab.setTab;
 
-  const [entity, setEntity] = useState<BusinessEntity | null>(null);
   const [versions, setVersions] = useState<EntityVersion[]>([]);
   const [current, setCurrent] = useState<EntityVersion | null>(null);
   const [loading, setLoading] = useState(mode !== "create");
@@ -715,6 +721,7 @@ export function EntityRecord(props: Props) {
         }
         showAccess={mode !== "create" && canAccess}
         showData={mode !== "create" && canData}
+        showChangeLog={mode !== "create" && canData && recordingOn}
         access={
           entityId ? (
             <EntityAccessTab entityId={entityId} canPreviewRows={canData} />
@@ -728,6 +735,15 @@ export function EntityRecord(props: Props) {
                 entity.ever_published && entity.current_version?.table_name == null
               )}
               active={tab === "data"}
+            />
+          ) : null
+        }
+        changeLog={
+          entityId ? (
+            <EntityChangeLogTab
+              entityId={entityId}
+              active={tab === "change_log"}
+              formatInstant={formatInstant}
             />
           ) : null
         }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Response, status
@@ -10,15 +11,32 @@ from fastapi.responses import JSONResponse
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord, get_user_store
 from backend.core.pagination import ENTITY_LIST, PageParams, page_params
+from backend.core.time import parse_instant
 from backend.entity.attribute_type import resolve
+from backend.entity.change_log import (
+    CHANGE_LOG_PAGE_LIMIT,
+    SOURCE_USER,
+    ChangeLogEntry,
+    ChangeLogTable,
+    ensure_shared_relations,
+    read_change_log,
+    read_change_log_entry,
+)
+from backend.entity.ddl import ENTITY_DATA_SCHEMA, qualified_table
+from backend.entity.entity_db import get_entity_engine
+from backend.entity.errors import EntityNotFound, EntityRequestInvalid
 from backend.entity.jobs import enqueue_drop
 from backend.entity.publish import accept
 from backend.entity.records import AttributeRecord
+from backend.entity.reference_binding import business_key_attr
 from backend.entity.schemas.entities import (
     AttributeIn,
     BusinessEntityListResponse,
     BusinessEntityOut,
     BusinessEntityResponse,
+    ChangeLogDetailOut,
+    ChangeLogEntryOut,
+    ChangeLogPageOut,
     ClassificationOut,
     EntityBulkTagsRequest,
     EntityBulkTagsResponse,
@@ -34,6 +52,7 @@ from backend.entity.schemas.entities import (
 )
 from backend.entity.service import (
     add_entity_tags,
+    change_log_on_entity_database,
     classify_entity,
     create_entity,
     delete_entity,
@@ -48,6 +67,8 @@ from backend.entity.service import (
     remove_entity_tags,
     replace_entity_tags,
 )
+from backend.entity.store import get_entity_store
+from backend.entity.table_name import physical_table_name, published_attributes
 from backend.jobs.api import get_schedule_name_store, present_jobs
 from backend.jobs.store import JobRecord
 
@@ -146,6 +167,140 @@ def http_get_entity(
     return BusinessEntityResponse(
         entity=BusinessEntityOut.model_validate(get_entity(entity_id, user=user))
     )
+
+
+@router.get("/entities/{entity_id}/change-log", response_model=ChangeLogPageOut)
+def http_list_change_log(
+    entity_id: str,
+    before_sequence: int | None = Query(default=None, ge=1),
+    operation: Literal["insert", "update", "delete"] | None = None,
+    source: Literal["user", "channel_run", "unattributed"] | None = None,
+    subject: str | None = None,
+    row_identity: str | None = None,
+    occurred_from: str | None = None,
+    occurred_to: str | None = None,
+    user: UserRecord = Depends(require_permission("entity:data_read")),
+) -> ChangeLogPageOut:
+    tables = _change_log_tables(entity_id, user)
+    if not change_log_on_entity_database():
+        return ChangeLogPageOut(items=[], limit=CHANGE_LOG_PAGE_LIMIT, next_before_sequence=None)
+    with get_entity_engine().begin() as conn:
+        ensure_shared_relations(conn)
+        page = read_change_log(
+            conn,
+            entity_id,
+            tables,
+            before_sequence=before_sequence,
+            operation=operation,
+            source=source,
+            subject=_blank(subject),
+            row_identity=_blank(row_identity),
+            occurred_from=_bound(occurred_from),
+            occurred_to=_bound(occurred_to),
+        )
+    return ChangeLogPageOut(
+        items=[_change_log_item(entry, tables) for entry in page.items],
+        limit=page.limit,
+        next_before_sequence=page.next_before_sequence,
+    )
+
+
+@router.get(
+    "/entities/{entity_id}/change-log/{sequence}",
+    response_model=ChangeLogDetailOut,
+)
+def http_get_change_log_entry(
+    entity_id: str,
+    sequence: int,
+    user: UserRecord = Depends(require_permission("entity:data_read")),
+) -> ChangeLogDetailOut:
+    if sequence < 1:
+        raise EntityRequestInvalid("sequence must be at least 1")
+    tables = _change_log_tables(entity_id, user)
+    if not change_log_on_entity_database():
+        raise EntityNotFound("Change log entry not found")
+    with get_entity_engine().begin() as conn:
+        ensure_shared_relations(conn)
+        entry = read_change_log_entry(conn, entity_id, tables, sequence)
+    if entry is None:
+        raise EntityNotFound("Change log entry not found")
+    item = _change_log_item(entry, tables)
+    return ChangeLogDetailOut(
+        **item.model_dump(),
+        before=entry.before,
+        after=entry.after,
+    )
+
+
+def _change_log_tables(entity_id: str, user: UserRecord) -> list[ChangeLogTable]:
+    """Physical tables of this entity. Missing or invisible entity is not found."""
+    get_entity(entity_id, user=user)
+    entity = get_entity_store().get_entity(entity_id)
+    assert entity is not None
+    tables: list[ChangeLogTable] = []
+    for version in get_entity_store().list_all_versions(entity_id):
+        name = physical_table_name(version, entity.table_name)
+        if name is None:
+            continue
+        attributes = tuple(published_attributes(version))
+        key = business_key_attr(attributes)
+        tables.append(
+            ChangeLogTable(
+                physical_table=qualified_table(ENTITY_DATA_SCHEMA, name),
+                attributes=attributes,
+                reference_snapshots=dict(version.reference_snapshots),
+                business_key=None if key is None else key.name,
+            )
+        )
+    return tables
+
+
+def _change_log_item(entry: ChangeLogEntry, tables: list[ChangeLogTable]) -> ChangeLogEntryOut:
+    image = entry.after if entry.after is not None else entry.before
+    row: dict[str, Any] = {} if image is None else image
+    key_name = next(
+        (table.business_key for table in tables if table.physical_table == entry.physical_table),
+        None,
+    )
+    row_id = row.get("row_id")
+    return ChangeLogEntryOut(
+        sequence=entry.sequence,
+        occurred_at=entry.occurred_at,
+        operation=entry.operation,
+        row_id=None if row_id is None else int(row_id),
+        business_key=None if key_name is None else row.get(key_name),
+        physical_table=entry.physical_table,
+        source=entry.source,
+        subject=entry.subject,
+        subject_label=_subject_label(entry.source, entry.subject),
+    )
+
+
+def _subject_label(source: str | None, subject: str | None) -> str | None:
+    if source is None or subject is None:
+        return None
+    if source == SOURCE_USER:
+        found = get_user_store().get_by_id(subject)
+        if found is None:
+            return subject
+        return found.display_name
+    return subject
+
+
+def _blank(value: str | None) -> str | None:
+    if value is None or value == "":
+        return None
+    return value
+
+
+def _bound(value: str | None) -> datetime | None:
+    cleaned = _blank(value)
+    if cleaned is None:
+        return None
+    try:
+        return parse_instant(cleaned)
+    except ValueError as exc:
+        raise EntityRequestInvalid("occurred_at bound must be an Instant") from exc
 
 
 @router.put(

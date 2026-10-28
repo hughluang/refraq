@@ -18,7 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from backend.entity.attribute_type import resolve
-from backend.entity.data.values import decode_row
+from backend.entity.data.values import decode_row, reference_value_attr
 from backend.entity.ddl import ENTITY_DATA_SCHEMA, ENTITY_OWNER_ROLE, ident, qualified_table
 from backend.entity.records import AttributeRecord
 
@@ -30,14 +30,19 @@ __all__ = [
     "SOURCE_GUC",
     "SOURCE_USER",
     "SUBJECT_GUC",
+    "CHANGE_LOG_PAGE_LIMIT",
     "ChangeLogEffective",
     "ChangeLogEntry",
+    "ChangeLogPage",
+    "ChangeLogTable",
     "delete_entries",
     "delete_entries_before",
     "ensure_shared_relations",
     "install_triggers",
     "list_effectives",
     "list_entries",
+    "read_change_log",
+    "read_change_log_entry",
     "read_effective",
     "remove_triggers",
     "write_effective",
@@ -50,6 +55,8 @@ SOURCE_GUC = "refraq.change_log_source"
 SUBJECT_GUC = "refraq.change_log_subject"
 SOURCE_USER = "user"
 SOURCE_CHANNEL_RUN = "channel_run"
+SOURCE_UNATTRIBUTED = "unattributed"
+CHANGE_LOG_PAGE_LIMIT = 50
 
 _APPEND_FUNCTION = "append_change"
 _CHANGED_FUNCTION = "changed_columns"
@@ -79,6 +86,29 @@ class ChangeLogEffective:
     recording: bool
     retention_days: int | None
     applied_version_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ChangeLogTable:
+    """Decode target for one physical table's entries.
+
+    ``physical_table`` is the quoted qualified name stored on the entry.
+    ``business_key`` is that version's Business Key attribute, or none.
+    """
+
+    physical_table: str
+    attributes: Sequence[AttributeRecord]
+    reference_snapshots: Mapping[str, Any]
+    business_key: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ChangeLogPage:
+    """One sequence page. ``next_before_sequence`` is null on a short page."""
+
+    items: list[ChangeLogEntry]
+    limit: int
+    next_before_sequence: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,6 +362,154 @@ def list_entries(
     return entries
 
 
+def read_change_log(
+    conn: Connection,
+    entity_id: str,
+    tables: Sequence[ChangeLogTable],
+    *,
+    before_sequence: int | None = None,
+    operation: str | None = None,
+    source: str | None = None,
+    subject: str | None = None,
+    row_identity: str | None = None,
+    occurred_from: datetime | None = None,
+    occurred_to: datetime | None = None,
+) -> ChangeLogPage:
+    """Matching entries, newest sequence first, at most one sequence page.
+
+    ``before_sequence`` is an exclusive upper bound. ``next_before_sequence``
+    is the smallest sequence on a full page and null when the page is short.
+    A missing time bound does not constrain that side. ``source``
+    ``unattributed`` matches a null source. ``row_identity`` matches ``row_id``
+    or that table's Business Key exactly.
+    """
+    entity_id = _entity_id(entity_id)
+    clauses = ["entity_id = :entity_id"]
+    params: dict[str, Any] = {
+        "entity_id": entity_id,
+        "lim": CHANGE_LOG_PAGE_LIMIT,
+    }
+    if before_sequence is not None:
+        clauses.append("seq < :before_sequence")
+        params["before_sequence"] = before_sequence
+    if operation is not None:
+        clauses.append("operation = :operation")
+        params["operation"] = operation
+    if source == SOURCE_UNATTRIBUTED:
+        clauses.append("source IS NULL")
+    elif source is not None:
+        clauses.append("source = :source")
+        params["source"] = source
+    if subject is not None:
+        clauses.append("subject = :subject")
+        params["subject"] = subject
+    if occurred_from is not None:
+        clauses.append("occurred_at >= :occurred_from")
+        params["occurred_from"] = occurred_from
+    if occurred_to is not None:
+        clauses.append("occurred_at <= :occurred_to")
+        params["occurred_to"] = occurred_to
+    if row_identity is not None:
+        identity_sql, identity_params = _row_identity_sql(tables, row_identity)
+        clauses.append(identity_sql)
+        params.update(identity_params)
+    rows = conn.execute(
+        text(
+            "SELECT entity_id, physical_table, operation, seq, occurred_at, "
+            "source, subject, image "
+            f"FROM {_entry_table()} "
+            f"WHERE {' AND '.join(clauses)} "
+            "ORDER BY seq DESC "
+            "LIMIT :lim"
+        ),
+        params,
+    ).mappings()
+    items = [_entry_from_row(conn, row, tables) for row in rows]
+    next_before = (
+        items[-1].sequence if len(items) == CHANGE_LOG_PAGE_LIMIT else None
+    )
+    return ChangeLogPage(
+        items=items,
+        limit=CHANGE_LOG_PAGE_LIMIT,
+        next_before_sequence=next_before,
+    )
+
+
+def read_change_log_entry(
+    conn: Connection,
+    entity_id: str,
+    tables: Sequence[ChangeLogTable],
+    sequence: int,
+) -> ChangeLogEntry | None:
+    """One entry by sequence, with the rebuilt physical images."""
+    entity_id = _entity_id(entity_id)
+    row = conn.execute(
+        text(
+            "SELECT entity_id, physical_table, operation, seq, occurred_at, "
+            "source, subject, image "
+            f"FROM {_entry_table()} "
+            "WHERE entity_id = :entity_id AND seq = :seq"
+        ),
+        {"entity_id": entity_id, "seq": sequence},
+    ).mappings().one_or_none()
+    if row is None:
+        return None
+    return _entry_from_row(conn, row, tables)
+
+
+def _entry_from_row(
+    conn: Connection,
+    row: Mapping[str, Any],
+    tables: Sequence[ChangeLogTable],
+) -> ChangeLogEntry:
+    physical = str(row["physical_table"])
+    target = _target_for(physical, tables)
+    before_raw, after_raw = _rebuild(str(row["operation"]), _image_dict(row["image"]))
+    return ChangeLogEntry(
+        entity_id=str(row["entity_id"]),
+        physical_table=physical,
+        operation=str(row["operation"]),
+        sequence=int(row["seq"]),
+        occurred_at=row["occurred_at"],
+        source=None if row["source"] is None else str(row["source"]),
+        subject=None if row["subject"] is None else str(row["subject"]),
+        before=_decode_image(conn, before_raw, target.attributes, target),
+        after=_decode_image(conn, after_raw, target.attributes, target),
+    )
+
+
+def _target_for(physical: str, tables: Sequence[ChangeLogTable]) -> _ImageTarget:
+    for table in tables:
+        if table.physical_table == physical:
+            target = _ImageTarget(table.attributes)
+            target.head.reference_snapshots = dict(table.reference_snapshots)
+            return target
+    raise ValueError(f"change-log physical table is not loaded: {physical}")
+
+
+def _row_identity_sql(
+    tables: Sequence[ChangeLogTable], identity: str
+) -> tuple[str, dict[str, Any]]:
+    params: dict[str, Any] = {"row_identity": identity}
+    parts = [
+        "COALESCE(image->'after'->>'row_id', image->'before'->>'row_id') "
+        "= :row_identity"
+    ]
+    for index, table in enumerate(tables):
+        if not table.business_key:
+            continue
+        key = f"bk{index}"
+        table_key = f"pt{index}"
+        params[key] = table.business_key
+        params[table_key] = table.physical_table
+        parts.append(
+            f"(physical_table = :{table_key} AND "
+            f"COALESCE(image->'after'->>:{key}, image->'before'->>:{key}) "
+            "= :row_identity)"
+        )
+    return "(" + " OR ".join(parts) + ")", params
+
+
 def _create_shared_objects(conn: Connection) -> None:
     """Tables and the trigger function. The schema already exists and is owned."""
     schema = ident(CHANGE_LOG_SCHEMA)
@@ -499,6 +677,17 @@ def _rebuild(
     return before, after
 
 
+def _physical_cast(attr: AttributeRecord, target: _ImageTarget) -> str:
+    """Column cast for one stored image value.
+
+    A reference column uses the version's snapshot. Without that snapshot
+    the decode raises ``EntityNotServing``, the same as a serving read.
+    """
+    if attr.type == "reference":
+        attr = reference_value_attr(attr, target)  # type: ignore[arg-type]
+    return resolve(attr.type).physical_sql(attr)
+
+
 def _decode_image(
     conn: Connection,
     image: dict[str, Any] | None,
@@ -515,7 +704,7 @@ def _decode_image(
     for index, attr in enumerate(attributes):
         key = f"k{index}"
         params[key] = attr.name
-        physical = resolve(attr.type).physical_sql(attr)
+        physical = _physical_cast(attr, target)
         selects.append(
             f"CAST((CAST(:img AS jsonb) ->> :{key}) AS {physical}) "
             f"AS {ident(attr.name)}"

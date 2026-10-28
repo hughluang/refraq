@@ -108,6 +108,33 @@ export type EffectiveChangeLog = {
   retention_days: number | null;
 };
 
+export type ChangeLogOperation = "insert" | "update" | "delete";
+
+export type ChangeLogSource = "user" | "channel_run";
+
+export type ChangeLogEntrySummary = {
+  sequence: number;
+  occurred_at: string;
+  operation: ChangeLogOperation;
+  row_id: number | null;
+  business_key: string | number | null;
+  physical_table: string;
+  source: ChangeLogSource | null;
+  subject: string | null;
+  subject_label: string | null;
+};
+
+export type ChangeLogPage = {
+  items: ChangeLogEntrySummary[];
+  limit: number;
+  next_before_sequence: number | null;
+};
+
+export type ChangeLogEntryDetail = ChangeLogEntrySummary & {
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+};
+
 export type BusinessEntity = {
   id: string;
   table_name: string;
@@ -117,6 +144,7 @@ export type BusinessEntity = {
   ever_published: boolean;
   current_version: CurrentVersionSummary | null;
   effective_change_log?: EffectiveChangeLog | null;
+  change_log_recording?: boolean;
   inbound_references?: InboundReference[];
   tags: EntityTag[];
   tag_revision: number;

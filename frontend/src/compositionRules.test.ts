@@ -68,6 +68,11 @@ const STATIC_TABLES: Record<string, { roots: number; reason: string }> = {
     roots: 1,
     reason: "The version attribute snapshot is a read-only dump of one version's columns.",
   },
+  "features/entities/EntityChangeLogTab.tsx": {
+    roots: 1,
+    reason:
+      "The change log is a sequence page with no total and no page jump, so it is not an Offset Page on ListTable.",
+  },
 };
 
 const COLOR_LITERAL =

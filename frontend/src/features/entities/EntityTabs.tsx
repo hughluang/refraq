@@ -17,8 +17,10 @@ type Props = {
   versions: ReactNode;
   access?: ReactNode;
   data?: ReactNode;
+  changeLog?: ReactNode;
   showAccess?: boolean;
   showData?: boolean;
+  showChangeLog?: boolean;
   children: (slots: { list: ReactNode; panels: ReactNode }) => ReactNode;
 };
 
@@ -30,8 +32,10 @@ export function EntityTabs({
   versions,
   access,
   data,
+  changeLog,
   showAccess = false,
   showData = false,
+  showChangeLog = false,
   children,
 }: Props) {
   const t = useTranslate();
@@ -45,6 +49,13 @@ export function EntityTabs({
   }
   if (showData) {
     tabs.push({ value: "data", label: t("entities.tabs.data"), panel: data });
+  }
+  if (showChangeLog) {
+    tabs.push({
+      value: "change_log",
+      label: t("entities.tabs.changeLog"),
+      panel: changeLog,
+    });
   }
 
   return (
