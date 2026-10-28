@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document defines the HTTP contract for the site-wide **Global Variable** list and manual delete. Node reads and writes are not HTTP; they run inside a **Channel Run**.
+This document defines the HTTP contract for the site-wide **Global Variable** list and manual delete. Node reads and writes are not HTTP; they run inside a **Channel Run**. A **Channel Variable** is a separate resource (`docs/api-contracts-data-channel.md`).
 
 Related boundaries:
 
@@ -60,8 +60,10 @@ Permission: `channel:write`. Success is `204` with no body. The delete is a **Ma
 | 404 | `CHANNEL_VARIABLE_NOT_FOUND` | No live value has this name |
 | 422 | `CHANNEL_VARIABLE_NAME_INVALID` | The name does not match the name rule |
 
+The 422 and 404 rows apply to a `{name}` bound as one path segment. A URL whose decoded path contains `/` in the name position is not this operation; an unmatched route is `HTTP_NOT_FOUND`. A trailing slash resolves to the collection, which does not allow `DELETE`, and that is `HTTP_METHOD_NOT_ALLOWED`.
+
 ## 5. Non-Goals
 
 1. Creating or editing a value over HTTP. Nodes write values.
-2. A per-channel namespace.
+2. A per-channel namespace on this site-wide resource. A **Channel Variable** is a separate resource.
 3. Background deletion of expired rows.

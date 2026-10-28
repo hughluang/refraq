@@ -149,7 +149,7 @@ Import the leaf module that owns the symbol. Do not add a pure re-export facade.
 
 ### `channel` published modules
 
-`channel` is the **Data Channel** product domain (`docs/business-data-channel.md`). It owns channel definitions, drafts, **Channel Version**s, the activation switch, validation, the node type catalog, the execution engine, the expression evaluator and code sandbox, **Dataset Reference**s as claim checks (the registry and the lifecycle), the entity writer, **Checkpoint**s, run records, **Global Variable**s, schedule sync, and the `channel_run` Job kind. It does not own the Job table, the Scheduled Task table, Entity Tables, dataset tables (`backend.entity.datasets`), the entity Change Log, or the catalog.
+`channel` is the **Data Channel** product domain (`docs/business-data-channel.md`). It owns channel definitions, drafts, **Channel Version**s, the activation switch, validation, the node type catalog, the execution engine, the expression evaluator and code sandbox, **Dataset Reference**s as claim checks (the registry and the lifecycle), the entity writer, **Checkpoint**s, run records, **Global Variable**s, **Channel Variable**s, **Run Variable**s, schedule sync, and the `channel_run` Job kind. The two durable variable kinds share one store. A **Run Variable** lives on that execution. It does not own the Job table, the Scheduled Task table, Entity Tables, dataset tables (`backend.entity.datasets`), the entity Change Log, or the catalog.
 
 | Module | Published for |
 |--------|----------------|

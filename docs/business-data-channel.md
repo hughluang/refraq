@@ -2,7 +2,7 @@
 
 ## 1. Scope
 
-This document defines the **Data Channel** product domain: a user-orchestrated, versioned data workflow that reads from **Entity Table**s, **Source Mirror**s, **Change Log**s, and **Source**s, reshapes items, and writes rows into one or more Entity Tables. It defines the definition and its versions, the activation switch, the graph and its node families, write semantics and the match key, **Checkpoint**s, **Channel Run** semantics, triggers and the role of the **Scheduled Task**, **Global Variable**s, the unattended-first principle, authorization, and audit.
+This document defines the **Data Channel** product domain: a user-orchestrated, versioned data workflow that reads from **Entity Table**s, **Source Mirror**s, **Change Log**s, and **Source**s, reshapes items, and writes rows into one or more Entity Tables. It defines the definition and its versions, the activation switch, the graph and its node families, write semantics and the match key, **Checkpoint**s, **Channel Run** semantics, triggers and the role of the **Scheduled Task**, **Global Variable**s, **Channel Variable**s, **Run Variable**s, the unattended-first principle, authorization, and audit.
 
 It states the boundary rules of **Source Mirror**s and **Change Log**s that workflows rely on (§9), the **Webhook** resource an `action.webhook` node calls (§4.3), and the **Email Account** an `action.email` node uses (§4.3). It does not define the HTTP shapes (`docs/api-contracts-data-channel.md`, `docs/api-contracts-webhooks.md`, `docs/api-contracts-email-accounts.md`), the CDC deployment, the mirror state machine and structure change policy in detail, or the Console canvas layout. Those are outside this document.
 
@@ -114,7 +114,7 @@ A Data Channel carries an `active` switch that lives outside versions.
 
 ### 3.7 Delete
 
-Deleting a Data Channel withdraws its Scheduled Task rows by `owner_ref` (`docs/business-scheduled-tasks.md`), which cancels unfinished Jobs those rows minted, and requests cancel of the channel's other unfinished Channel Runs. Historical Jobs remain. The channel's checkpoints and run records are removed with it, and the datasets of those runs are removed with the records. Deleting a channel does not delete rows it wrote into Entity Tables. A successful delete also removes that channel's **Tag** assignments. A refused delete leaves them.
+Deleting a Data Channel withdraws its Scheduled Task rows by `owner_ref` (`docs/business-scheduled-tasks.md`), which cancels unfinished Jobs those rows minted, and requests cancel of the channel's other unfinished Channel Runs. Historical Jobs remain. The channel's checkpoints, run records, and **Channel Variable**s are removed with it, and the datasets of those runs are removed with the records. Deleting a channel does not delete rows it wrote into Entity Tables, and it does not delete **Global Variable**s. A successful delete also removes that channel's **Tag** assignments. A refused delete leaves them.
 
 ### 3.8 Tags
 
@@ -140,7 +140,7 @@ The Channel list shows each channel's Tags. Repeatable `tag_id` keeps channels t
 - After each round, an Until measures `iterations` the same way. Above 16 MiB (16777216 bytes) the Until fails with `CHANNEL_ITERATION_VOLUME_EXCEEDED`. The error message is `Until iteration output exceeds 16 MiB.`
 - A node's **output** is the JSON value its execute function returns: an object, a list, or a scalar. Binary values are not supported. The node type declares the output's coarse type and, when the configuration allows it, a refined JSON Schema. The run record stores that output as §6.9 states. A successful output that does not match a schema that states a type fails the node. A schema that states no type, including `{}`, matches any JSON value (§4.2).
 - A **template field** is one configuration string. The node type declares which fields are templates and the declared value type of each result. `{{ }}` marks one Python expression; `\{{` is a literal `{{`. After trimming, a field that is exactly one `{{ expression }}` yields that expression's Python value. Any other text, including text with no `{{ }}`, is concatenation: each expression is evaluated, converted to text, and joined. Concatenated `None` becomes an empty string. A bare `None` is not a string. Joined text is the result when the declared type is string; otherwise it is parsed once as JSON. The result must already match the declared type. The only conversion of a Python value is into a declared string. A mismatch fails the node. Expressions evaluate in one sandbox subprocess reused for the run: no network, an allow-listed import set, and time and memory limits. The only workflow name in scope is `self`. Objects in `self` are dicts: a key is also an attribute, and the key wins when it shares a name with a dict method. Arrays are lists. `dict(row)`, `{**row}`, `row.get("x")`, and a comprehension over `self.<ref>.output.rows` are usable, and the value that leaves the sandbox is JSON.
-- `self.<ref>.output` is that node's output. `self.nodes["<node name>"].output` is the same value. `self.channel` carries `id`, `name`, `description`, `active`, and `settings` (`run_timeout_sec`, `run_retry_limit`, `error_channel_id`). `self.run` carries `id`, `target` (`draft` or `published`), `version`, `draft_revision`, `trigger_kind`, `started_at`, and `triggered_by` (`id`, `name`). `self.platform` carries `site_name`, `schedule_timezone`, `now`, and `parameters` (the current **System Parameter** values), all read-only. The validate response publishes the JSON Schema of these three objects (`docs/api-contracts-data-channel.md`). Global Variable values are not in `self`; a node reads and writes them. Credentials and other channels' run data are never in `self`.
+- `self.<ref>.output` is that node's output. `self.nodes["<node name>"].output` is the same value. `self.channel` carries `id`, `name`, `description`, `active`, and `settings` (`run_timeout_sec`, `run_retry_limit`, `error_channel_id`). `self.run` carries `id`, `target` (`draft` or `published`), `version`, `draft_revision`, `trigger_kind`, `started_at`, and `triggered_by` (`id`, `name`). `self.platform` carries `site_name`, `schedule_timezone`, `now`, and `parameters` (the current **System Parameter** values), all read-only. The validate response publishes the JSON Schema of these three objects (`docs/api-contracts-data-channel.md`). **Global Variable**, **Channel Variable**, and **Run Variable** values are not in `self`; a node reads and writes them. Credentials and other channels' run data are never in `self`.
 - Naming a node that did not run, or a path that does not resolve, fails the node that holds the expression.
 - A **Template Preview** evaluates one template field of a graph against one recorded **Channel Run** of the same channel, for one scope of container rounds. The run's recorded Expression Context and the upstream values selected by the **Node Sample** binding go into a fresh sandbox, and the result is converted to the declared value type as at run time. The graph may differ from the one the run executed; nodes match by id, and the template names them by their current `ref` and name. A template that validation rejects fails the preview with that problem. An expression or conversion failure is the error the node would record. A named node for which the binding has no value, or a context the run did not record, is reported missing rather than failed. A Template Preview executes no node, reads no Source, and writes nothing. An omitted scope uses the Node Sample default.
 - A **Node Sample** is the one reading of a recorded Channel Run that states, for one node and one scope, the upstream values that node read and the output it produced. The node settings panel, a Template Preview, and completion all use it (§12). It executes no node, reads no Source, and writes nothing. It does not make a run safe and it does not suppress writes: a node's output is recorded only by a Channel Run that reached that node.
@@ -180,7 +180,7 @@ Port names are lower snake case. `main` is the primary input or output port. It 
 | Read | SQL, live Source query, Read Mirror, Read Changes | Run a SQL statement, read a guarded Source query, or read mirror and change rows |
 | Transform | Set fields, If, Filter, Merge, Deduplicate, Code | Reshape, route, or drop items |
 | Volume | For, Until, Dataset Query, Materialize, Batch Read | Iterate a list, repeat a body until a condition, and move a large result by a **Dataset Reference** |
-| State | Global Variable get, set, delete, set-if-absent, compare-and-set | Cross-workflow shared state (§8) |
+| State | Variable get, set, delete, set-if-absent, compare-and-set | A site value, a channel value, or a value for this run (§8) |
 | Write | Write Entity | Upsert, create, update, or delete Entity Table rows (§5) |
 | Action | Webhook, Email | POST one JSON body to a saved **Webhook**, or send one plain-text message through a saved **Email Account** (§4.3) |
 
@@ -440,15 +440,34 @@ Data Channel's background duties run as hidden, `locked`, `undeletable`, `store_
 
 Run data retention is seeded. Its key is `channel_run_record_retention`, its name is `Purge channel run records`, its interval is one hour, and its task is `backend.channel.tasks.purge_run_records`. Each pass deletes a channel run record whose Job is terminal (`succeeded`, `failed`, or `cancelled`) and whose `created_at` is older than `channel_run_record_retention_days`, and with that record its node executions, its container rounds, and its datasets. The same pass deletes a dataset whose `expires_at` is set and due, and drops a dataset table that has no registry row. It does not purge a dataset whose `expires_at` is null. Jobs stay.
 
-## 8. Global Variables
+## 8. Variables
 
-A **Global Variable** is a named JSON value in one site-wide namespace shared by every Data Channel.
+One node type reads or writes one named JSON value. `scope` selects the namespace: `site`, `channel`, or `run`. An omitted `scope` is `site`. A value other than those three fails the node. Validate and publish report `CHANNEL_NODE_CONFIG_INVALID`. An already saved draft fails at execution with `CHANNEL_NODE_FAILED`.
+
+A name matches `^[A-Za-z0-9_.:-]{1,128}$`. A value is at most 64 KiB of JSON. An oversize write fails the node execution. The same name in two scopes is two values. Saving a node that writes a variable requires `channel:write`. Values are not in `self`.
+
+### 8.1 Global Variable
+
+A **Global Variable** is a named JSON value in one site-wide namespace shared by every Data Channel. `scope` is `site`.
 
 - Operations: get, set, delete, set-if-absent, and compare-and-set. Set, set-if-absent, and compare-and-set accept an optional expiry. Set-if-absent and compare-and-set are atomic.
-- A name matches `^[A-Za-z0-9_.:-]{1,128}$`. A value is at most 64 KiB of JSON. An oversize write fails the node execution.
 - A write takes effect immediately, not at run success, and is not rolled back when the run fails.
 - An expired value is absent on the next read or conditional write. Nothing sweeps expired rows.
-- Saving a node that writes a variable requires `channel:write`. The Console lists live values and allows a manual delete, recorded as a **Management Audit Event**. The contract is `docs/api-contracts-global-variables.md`.
+- The Console lists live values and allows a manual delete, recorded as a **Management Audit Event**. The contract is `docs/api-contracts-global-variables.md`.
+
+### 8.2 Channel Variable
+
+A **Channel Variable** is a named JSON value owned by one Data Channel. `scope` is `channel`. Draft runs and published runs of that channel see the same value. Another channel does not.
+
+The operations, size cap, immediate write, expiry, and atomic conditional writes are the same as a **Global Variable**. The name is unique within the channel, not within the site. An expired value is absent on the next read or conditional write. Nothing sweeps expired rows.
+
+The Console lists that channel's live values on the channel record and allows a manual delete, recorded as a **Management Audit Event**. Deleting the channel deletes its Channel Variables. HTTP does not create or edit a value. The contract is `docs/api-contracts-data-channel.md`.
+
+### 8.3 Run Variable
+
+A **Run Variable** is a named JSON value in the memory of one **Channel Run**. `scope` is `run`. Another run does not see it. A retry is a new run and starts empty. Container rounds of the same run share the value. The value is not stored and is not part of the run record. When the process is lost, the value is gone.
+
+The operations are get, set, delete, set-if-absent, and compare-and-set. There is no expiry. A configured expiry fails the node. The settings panel does not collect an expiry when scope is run. A non-null `ttl_sec` on that scope becomes null when the editor loads the draft and when the scope changes to run. Validate, publish, and execution still reject a non-null expiry. The Console has no list of these values.
 
 ## 9. Source Mirrors And Change Logs
 
@@ -487,8 +506,8 @@ All keys are `platform`-scoped.
 
 | Permission | Grants |
 | --- | --- |
-| `channel:read` | Read channels, drafts, versions, run lists, and run records, including the execution list, container rounds of a container execution, and paging dataset rows of a run record; read **Source Mirror** data through read nodes and records |
-| `channel:write` | Create, edit, save drafts, validate, publish, and delete channels; replace the channel's **Tag**s, including an inline Tag name; Template Preview and **Node Sample** against a run record; Global Variable writes; on-demand runs (target `draft` or `published`, with an optional stop node) and rerun; cancel a `channel_run` Job; reference an existing **Webhook** from an `action.webhook` node; reference an existing **Email Account** from an `action.email` node. Inline Tag creation does not require `tag:write` |
+| `channel:read` | Read channels, drafts, versions, run lists, and run records, including the execution list, container rounds of a container execution, and paging dataset rows of a run record; read **Channel Variable**s; read **Source Mirror** data through read nodes and records |
+| `channel:write` | Create, edit, save drafts, validate, publish, and delete channels; replace the channel's **Tag**s, including an inline Tag name; Template Preview and **Node Sample** against a run record; **Global Variable**, **Channel Variable**, and **Run Variable** writes, including a manual delete of a Global Variable or a Channel Variable; on-demand runs (target `draft` or `published`, with an optional stop node) and rerun; cancel a `channel_run` Job; reference an existing **Webhook** from an `action.webhook` node; reference an existing **Email Account** from an `action.email` node. Inline Tag creation does not require `tag:write` |
 | `channel:code_write` | Author a Code node. Required in addition to `channel:write` |
 | `channel:source_query` | Author a live Source query node. Required in addition to `channel:write`. Does not grant `query:run` |
 | `webhook:read` | List and read **Webhook**s. Controls the Console Module |
@@ -505,7 +524,7 @@ Channel schedule rows are locked, so `jobs:run` only observes them.
 
 ## 12. Management Console
 
-The Data Channel editor is a record authoring surface (`docs/ui-console-record-form.md`): create, show, and edit share one layout, and node configuration panels follow the record-form conventions. The canvas edits the draft. The channel page shows the activation switch, the version list, and the run list. The Console names a problem by the node's display name, and by the two endpoint names when the problem names an edge. It validates the graph on screen and has no separate validate action. Where the module mounts in Console Navigation is outside this document.
+The Data Channel editor is a record authoring surface (`docs/ui-console-record-form.md`): create, show, and edit share one layout, and node configuration panels follow the record-form conventions. The canvas edits the draft. The channel page shows the activation switch, the version list, the run list, and that channel's **Channel Variable**s. The Console names a problem by the node's display name, and by the two endpoint names when the problem names an edge. It validates the graph on screen and has no separate validate action. Where the module mounts in Console Navigation is outside this document.
 
 The channel list shows each row's Tags and filters by Tag and by activation. The Tag control searches the Tag vocabulary as the operator types and does not create a Tag. Each selected id is sent as `tag_id`. Choosing no Tag omits that parameter. The activation control opens unset, so the opening request does not send `active` and inactive channels stay visible. The operator can choose active only or inactive only, and can clear that choice so the request omits `active` again. An operator who can read Channels can search and select Tags without `tag:read`.
 
@@ -540,7 +559,7 @@ While the channel's latest draft **Channel Run** has not ended `succeeded`, `fai
 
 ## 13. Management Audit
 
-Persist a **Management Audit Event** for: channel create, identity edit, draft save, publish, activation change, delete, manual run enqueue, rerun enqueue, Global Variable manual delete, Webhook create, update, delete, and test, Email Account create, update, delete, and test, and every Source Mirror operation. A committed **Tag**-set change writes one event with resource type `channel`, action `tags.replace`, and the resulting Tag ids. An inline Tag create also writes the Tag create event. A replacement that does not change the set writes neither. A Tag change does not write a draft-save event. Each event records actor, **Instant**, resource, action, and result.
+Persist a **Management Audit Event** for: channel create, identity edit, draft save, publish, activation change, delete, manual run enqueue, rerun enqueue, Global Variable manual delete, Channel Variable manual delete, Webhook create, update, delete, and test, Email Account create, update, delete, and test, and every Source Mirror operation. A Channel Variable manual delete uses resource type `channel_owned_variable`, resource id `{channel_id}/{name}`, and action `channel.owned_variable_delete`. A committed **Tag**-set change writes one event with resource type `channel`, action `tags.replace`, and the resulting Tag ids. An inline Tag create also writes the Tag create event. A replacement that does not change the set writes neither. A Tag change does not write a draft-save event. Each event records actor, **Instant**, resource, action, and result.
 
 ## 14. Non-Goals
 

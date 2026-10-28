@@ -413,6 +413,30 @@ def test_global_variable_writes_are_atomic(channel_client: TestClient) -> None:
     assert store.apply(operation="get", name="counter").value == {"n": 80}
 
 
+def test_channel_variable_writes_are_atomic(channel_client: TestClient) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from backend.channel.variables import get_variable_store
+
+    created = channel_client.post("/channels", json={"name": "Material", "description": None})
+    assert created.status_code == 201, created.text
+    channel_id = created.json()["channel"]["id"]
+    store = get_variable_store()
+
+    def claim(owner: int) -> bool:
+        return store.apply(
+            operation="set_if_absent",
+            name="once",
+            value={"owner": owner},
+            channel_id=channel_id,
+        ).applied
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        winners = list(pool.map(claim, range(8)))
+    assert winners.count(True) == 1
+    assert store.apply(operation="get", name="once").found is False
+
+
 def _string_attr(name: str, *, business_key: bool = False) -> dict:
     return {
         "name": name,

@@ -494,6 +494,20 @@ def test_global_variable_list_and_delete(client: TestClient) -> None:
 
     saved = get_variable_store().apply(operation="set", name="lease", value={"held": True})
     assert saved.applied is True
+    bad_name = client.delete("/channel-variables/not a name")
+    assert_problem(
+        bad_name,
+        status=422,
+        code="CHANNEL_VARIABLE_NAME_INVALID",
+        detail="Global Variable name is invalid",
+    )
+    missing_value = client.delete("/channel-variables/absent")
+    assert_problem(
+        missing_value,
+        status=404,
+        code="CHANNEL_VARIABLE_NOT_FOUND",
+        detail="Global Variable not found",
+    )
     listed = client.get("/channel-variables")
     assert listed.status_code == 200, listed.text
     assert listed.json()["items"][0]["name"] == "lease"
@@ -502,6 +516,75 @@ def test_global_variable_list_and_delete(client: TestClient) -> None:
     assert client.get("/channel-variables").json()["items"] == []
     events, _cursor = get_audit_store().list_events(limit=20)
     assert any(event.action == "channel.variable_delete" for event in events)
+
+
+def test_channel_variable_http(client: TestClient) -> None:
+    from backend.channel.variables import get_variable_store
+
+    created = client.post("/channels", json={"name": "Material", "description": None})
+    assert created.status_code == 201, created.text
+    channel_id = created.json()["channel"]["id"]
+    other = client.post("/channels", json={"name": "Other", "description": None})
+    assert other.status_code == 201, other.text
+    other_id = other.json()["channel"]["id"]
+    store = get_variable_store()
+    store.apply(operation="set", name="lease", value={"held": True})
+    store.apply(operation="set", name="cursor", value=1, channel_id=channel_id)
+    store.apply(operation="set", name="cursor", value=2, channel_id=other_id)
+
+    site = client.get("/channel-variables")
+    assert site.status_code == 200, site.text
+    assert [item["name"] for item in site.json()["items"]] == ["lease"]
+
+    missing = client.get("/channels/chn_missing/variables")
+    assert_problem(missing, status=404, code="CHANNEL_NOT_FOUND")
+    bad_name = client.delete(f"/channels/{channel_id}/variables/not a name")
+    assert_problem(
+        bad_name,
+        status=422,
+        code="CHANNEL_VARIABLE_NAME_INVALID",
+        detail="Channel Variable name is invalid",
+    )
+    absent_channel = client.delete("/channels/chn_missing/variables/cursor")
+    assert_problem(absent_channel, status=404, code="CHANNEL_NOT_FOUND")
+    before, _cursor = get_audit_store().list_events(limit=50)
+    owned_before = [
+        event for event in before if event.action == "channel.owned_variable_delete"
+    ]
+    absent = client.delete(f"/channels/{channel_id}/variables/missing")
+    assert_problem(
+        absent,
+        status=404,
+        code="CHANNEL_VARIABLE_NOT_FOUND",
+        detail="Channel Variable not found",
+    )
+    after_miss, _cursor = get_audit_store().list_events(limit=50)
+    assert [
+        event for event in after_miss if event.action == "channel.owned_variable_delete"
+    ] == owned_before
+
+    listed = client.get(f"/channels/{channel_id}/variables")
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["items"][0]["name"] == "cursor"
+    assert listed.json()["items"][0]["value"] == 1
+    removed = client.delete(f"/channels/{channel_id}/variables/cursor")
+    assert removed.status_code == 204
+    assert client.get(f"/channels/{channel_id}/variables").json()["items"] == []
+    events, _cursor = get_audit_store().list_events(limit=50)
+    deleted = [
+        event for event in events if event.action == "channel.owned_variable_delete"
+    ]
+    assert deleted[-1].resource_type == "channel_owned_variable"
+    assert deleted[-1].resource_id == f"{channel_id}/cursor"
+    assert deleted[-1].detail == {"channel_id": channel_id, "name": "cursor"}
+    assert store.apply(operation="get", name="cursor", channel_id=other_id).value == 2
+    assert store.apply(operation="get", name="lease").found is True
+
+    gone = client.delete(f"/channels/{channel_id}")
+    assert gone.status_code == 204
+    assert store.apply(operation="get", name="lease").found is True
+    assert store.apply(operation="get", name="cursor", channel_id=other_id).value == 2
+    assert store.list_live(limit=50, offset=0, channel_id=channel_id)[1] == 0
 
 
 def _guarded_graph(type_id: str, config: dict, *, trigger_name: str = "Run manually") -> dict:

@@ -200,7 +200,7 @@ Responsibilities:
 - **Webhook** catalog and the `action.webhook` node that POSTs to one saved endpoint
 - **Email Account** catalog and the `action.email` node that sends one plain-text message through one saved SMTP account
 - Schedule sync of Scheduled nodes to `channel_run` **Scheduled Task** rows, and the `channel_run` schedule projection adapter
-- **Global Variable** store
+- **Global Variable**, **Channel Variable**, and **Run Variable** values. The two durable kinds share one variable store. A **Run Variable** lives on that **Channel Run**'s execution.
 - `channel/parameters.py` (Data Channel-owned System Parameter specs)
 - Domain use-case HTTP under `channel/routers/` and shapes under `channel/schemas/`; own Celery task and kind dispatch (`channel/tasks.py`), discovered by `worker`
 - Published API in `docs/backend-layout.md` §3

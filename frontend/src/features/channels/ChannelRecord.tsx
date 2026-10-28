@@ -45,7 +45,7 @@ import { StatusBadge } from "@/components/display/StatusBadge";
 import { presentChannelActive, presentJobStatus } from "@/components/display/statusTone";
 import { ConfirmActionModal } from "@/components/feedback/ConfirmActionModal";
 import { useConsoleMutation } from "@/components/feedback/useConsoleMutation";
-import { AdjustmentsIcon, ListIcon, VersionsIcon } from "@/components/icons";
+import { AdjustmentsIcon, ListIcon, VariableIcon, VersionsIcon } from "@/components/icons";
 import { NumberField } from "@/components/form/NumberField";
 import { SelectField } from "@/components/form/SelectField";
 import { TextareaField } from "@/components/form/TextareaField";
@@ -82,6 +82,7 @@ import {
 import { isTerminalRun, recordedKey } from "@/features/channels/runSession";
 import type { ChannelTemplatePreview } from "@/features/channels/TemplateRunPreview";
 import { ChannelRuns } from "@/features/channels/ChannelRuns";
+import { ChannelVariables } from "@/features/channels/ChannelVariables";
 import { ChannelVersions } from "@/features/channels/ChannelVersions";
 import type { ExpressionContext, Graph, GraphProblem, RefinedPort } from "@/features/channels/types";
 import {
@@ -273,7 +274,7 @@ function ChannelExisting({
   const [loadError, setLoadError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
-  const [panel, setPanel] = useState<"versions" | "runs" | null>(null);
+  const [panel, setPanel] = useState<"versions" | "runs" | "variables" | null>(null);
   const [preview, setPreview] = useState<Confirmation | null>(null);
   const [publishJobId, setPublishJobId] = useState<string | null>(null);
   const [publishRevision, setPublishRevision] = useState(1);
@@ -682,7 +683,7 @@ function ChannelExisting({
   const versionLabel = channel.latest_version
     ? `v${channel.latest_version.number}`
     : t("channels.versions.unpublished");
-  const togglePanel = (next: "versions" | "runs") => {
+  const togglePanel = (next: "versions" | "runs" | "variables") => {
     setPanel((current) => (current === next ? null : next));
   };
   const loadErrorChannels = () => {
@@ -843,6 +844,17 @@ function ChannelExisting({
               onClick={() => togglePanel("runs")}
             >
               {t("channels.tabs.runs")}
+            </Button>
+            <Button
+              variant="subtle"
+              size="compact-sm"
+              color="gray"
+              disabled={busy}
+              aria-expanded={panel === "variables"}
+              leftSection={<VariableIcon size={14} />}
+              onClick={() => togglePanel("variables")}
+            >
+              {t("channels.tabs.variables")}
             </Button>
             <Button
               variant="subtle"
@@ -1287,6 +1299,20 @@ function ChannelExisting({
         title={t("channels.tabs.runs")}
       >
         {panel === "runs" ? <ChannelRuns channelId={channelId} /> : null}
+      </Drawer>
+      <Drawer
+        opened={panel === "variables"}
+        onClose={() => setPanel(null)}
+        position="right"
+        size="xl"
+        withinPortal={false}
+        withOverlay={false}
+        lockScroll={false}
+        trapFocus={false}
+        zIndex={20}
+        title={t("channels.tabs.variables")}
+      >
+        {panel === "variables" ? <ChannelVariables channelId={channelId} /> : null}
       </Drawer>
     </Box>
     </Box>

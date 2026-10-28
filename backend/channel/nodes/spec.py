@@ -90,6 +90,9 @@ class EngineHooks(Protocol):
     @property
     def schedule(self) -> Mapping[str, Any]: ...
 
+    @property
+    def run_variables(self) -> dict[str, Any]: ...
+
 
 Execute = Callable[[Mapping[str, Any], EngineHooks], NodeResult]
 Refine = Callable[

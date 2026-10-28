@@ -21,6 +21,7 @@ from backend.channel.ids import new_channel_id
 from backend.channel.nodes import list_node_types
 from backend.channel.nodes.spec import Problem
 from backend.channel.references import ChannelReferenceResolver
+from backend.channel.run_store import get_run_store
 from backend.channel.schedules import (
     cancel_channel_jobs,
     owner_ref_for,
@@ -34,7 +35,7 @@ from backend.channel.store import (
     empty_graph,
     get_channel_store,
 )
-from backend.channel.run_store import get_run_store
+from backend.channel.variables import get_variable_store
 from backend.core.time import format_instant, utc_now
 from backend.jobs.store import get_job_store
 from backend.tags.api import (
@@ -350,6 +351,7 @@ def delete_channel(
 
     if not get_channel_store().delete(channel_id, after=_clear):
         raise ChannelNotFound()
+    get_variable_store().delete_for_channel(channel_id)
     _audit(
         actor_user_id=actor_user_id,
         actor_token_id=actor_token_id,

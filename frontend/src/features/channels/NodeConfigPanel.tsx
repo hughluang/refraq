@@ -23,6 +23,7 @@ import {
   emptyRow,
   fieldVisible,
   fieldsFromSchema,
+  nullForcedProperties,
   type FieldSpec,
   type SchemaObject,
 } from "@/features/channels/configSchemaForm";
@@ -243,13 +244,12 @@ export function NodeConfigPanel({
   };
 
   const setConfig = (key: string, value: unknown) => {
-    if (value === undefined) {
-      const next = { ...data.config };
-      delete next[key];
-      update({ config: next });
-      return;
-    }
-    update({ config: { ...data.config, [key]: value } });
+    const next = { ...data.config };
+    if (value === undefined) delete next[key];
+    else next[key] = value;
+    update({
+      config: schema ? nullForcedProperties(next, fieldsFromSchema(schema)) : next,
+    });
   };
 
   const allowsErrorOutput = spec?.outputs.some((port) => port.port === "error") ?? false;
@@ -1068,12 +1068,10 @@ function ListRow({
     onChange(
       rows.map((item, itemIndex) => {
         if (itemIndex !== index) return item;
-        if (next === undefined) {
-          const copy = { ...item };
-          delete copy[key];
-          return copy;
-        }
-        return { ...item, [key]: next };
+        const copy = { ...item };
+        if (next === undefined) delete copy[key];
+        else copy[key] = next;
+        return nullForcedProperties(copy, field.fields);
       }),
     );
   };

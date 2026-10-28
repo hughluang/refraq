@@ -377,6 +377,7 @@ class _RunHooks:
         self._run_version = run_version
         self._pinned = pinned
         self._inputs: dict[int, InputCapture] = {}
+        self.run_variables: dict[str, Any] = {}
 
     def evaluate(self, expression: str) -> Any:
         return self._sandbox.evaluate(expression)

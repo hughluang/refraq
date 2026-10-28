@@ -610,7 +610,7 @@ Avoid using the node id as the expression name, and a `ref` that is not an ident
 
 ### Expression Context
 
-The name `self` visible to a **Data Channel** template expression: node outputs by **Node Ref** or by node name, plus `self.channel`, `self.run`, and `self.platform`. `self.platform` includes the site name, the **Schedule Timezone**, the run start instant, and **System Parameter** values, all read-only. Global Variable values are read and written by a node, not by `self`. There is no current-row name.
+The name `self` visible to a **Data Channel** template expression: node outputs by **Node Ref** or by node name, plus `self.channel`, `self.run`, and `self.platform`. `self.platform` includes the site name, the **Schedule Timezone**, the run start instant, and **System Parameter** values, all read-only. **Global Variable**, **Channel Variable**, and **Run Variable** values are read and written by a node, not by `self`. There is no current-row name.
 Avoid `item` as an implicit current row, credentials in the context, and naming another channel's run data.
 
 ### Template Field
@@ -663,10 +663,20 @@ Avoid watermark, treating `last_run_at` or `scheduled_for` as a checkpoint, a pe
 A claim check. The value `{dataset_id, columns, count}` names a run-scoped table in the entity database and has no `relation`. The registry row is the only fact source. **Data Channel** owns the registry and the lifecycle. `backend.entity.datasets` creates, reads, and drops the table and does not own the registry. Only Dataset Query and Materialize produce one. Either producer may be a direct child of a container. One execution creates one dataset. Batch Read and Write Entity consume one.
 Avoid a `relation` on the value, rows traveling on an edge, a Read or SQL node producing one, temp table as a user concept, **Entity Table**, **Source Mirror**, an item list, and expiry with run-record retention as the only clock.
 
+### Channel Variable
+
+A named JSON value owned by one **Data Channel**. Draft runs and published runs of that channel see the same value. Nodes get, set, delete, set-if-absent with optional expiry, and compare-and-set on the same node type as a **Global Variable**; writes take effect immediately and are not rolled back with a run. Deleting the channel deletes these values.
+Avoid per-version state, another node type, and creating or editing a value over HTTP.
+
 ### Global Variable
 
 A named JSON value in one site-wide namespace shared by every **Data Channel**. Nodes get, set, delete, set-if-absent with optional expiry, and compare-and-set; writes take effect immediately and are not rolled back with a run. Values have a size cap. Authors build mutual exclusion from it.
 Avoid execution lock as a platform feature, **System Parameter**, per-version state, and values that vanish at run end.
+
+### Run Variable
+
+A named JSON value in the memory of one **Channel Run**. Nodes get, set, delete, set-if-absent, and compare-and-set on the same node type as a **Global Variable**. A retry starts empty. Container rounds of that run share the value. The value is not stored and is not part of the run record.
+Avoid an expiry, a stored row, a **Checkpoint**, and a value in `self`.
 
 ### Source Mirror
 

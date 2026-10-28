@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document defines the HTTP contract for **Data Channel** definitions and runs: the node type catalog, channel create, read, edit, and delete, draft save, validate, publish with its confirmation list, **Channel Version** reads, the activation switch, on-demand runs, the run list, run detail, the execution list, one execution's stored output, container rounds of a container execution, a **Node Sample** of one node against a run, **Template Preview**, and dataset-row reads. Paths address a channel by opaque `id`.
+This document defines the HTTP contract for **Data Channel** definitions and runs: the node type catalog, channel create, read, edit, and delete, draft save, validate, publish with its confirmation list, **Channel Version** reads, the activation switch, on-demand runs, the run list, run detail, the execution list, one execution's stored output, container rounds of a container execution, a **Node Sample** of one node against a run, **Template Preview**, dataset-row reads, and the **Channel Variable** list and manual delete. Paths address a channel by opaque `id`.
 
 **Source Mirror**s are not defined here. **Webhook** HTTP is `docs/api-contracts-webhooks.md`. **Email Account** HTTP is `docs/api-contracts-email-accounts.md`. Global Variable HTTP is `docs/api-contracts-global-variables.md`.
 
@@ -200,15 +200,16 @@ Scheduled trigger configuration (`trigger.scheduled`):
 | `interval_seconds` | Integer seconds from 1 to 252460800, or `null` |
 | `start_at` | Optional Instant, or `null` |
 
-Global Variable configuration (`state.variable`):
+Variable configuration (`state.variable`):
 
 | Field | Rule |
 | --- | --- |
+| `scope` | `site`, `channel`, or `run`. Omitted is `site`. `site` is a **Global Variable**, `channel` is a **Channel Variable**, and `run` is a **Run Variable** |
 | `operation` | `get`, `set`, `delete`, `set_if_absent`, or `compare_and_set` |
 | `name` | A string template. The result matches `^[A-Za-z0-9_.:-]{1,128}$` |
 | `value` | A JSON template for `set`, `set_if_absent`, and `compare_and_set` |
 | `expected` | A JSON template for `compare_and_set` |
-| `ttl_sec` | Optional positive integer seconds on a write, or `null` |
+| `ttl_sec` | Optional positive integer seconds on a `site` or `channel` write, or `null`. A non-null value with `scope` `run` is `CHANNEL_NODE_CONFIG_INVALID` |
 
 Manual trigger configuration (`trigger.manual`):
 
@@ -521,6 +522,8 @@ On `succeeded` only:
 | `POST` | `/channels/tags/add` | `channel:write` | Add Tags to the named channels |
 | `POST` | `/channels/tags/remove` | `channel:write` | Remove Tags from the named channels |
 | `DELETE` | `/channels/{id}` | `channel:write` | Delete the channel |
+| `GET` | `/channels/{id}/variables` | `channel:read` | List the channel's **Channel Variable**s (**Offset Page**) |
+| `DELETE` | `/channels/{id}/variables/{name}` | `channel:write` | Delete one live **Channel Variable** |
 | `GET` | `/channels/{id}/draft` | `channel:read` | Read the draft graph |
 | `PUT` | `/channels/{id}/draft` | `channel:write` | Replace the draft graph |
 | `POST` | `/channels/{id}/draft/validate` | `channel:write` | Validate a graph without writing it |
@@ -621,7 +624,7 @@ The call is allowed while a draft run is queued or running, and while the channe
 
 ### 5.5 `DELETE /channels/{id}`
 
-`204`. Withdraws schedule rows whose `owner_ref` is `channel:{id}`, requests cancel of the channel's other unfinished runs, and removes the channel, its draft, its versions, its checkpoints, its run records, and its Tag assignments. A refused delete leaves the assignments. Historical Jobs remain. Rows already written to Entity Tables stay.
+`204`. Withdraws schedule rows whose `owner_ref` is `channel:{id}`, requests cancel of the channel's other unfinished runs, and removes the channel, its draft, its versions, its checkpoints, its run records, its **Channel Variable**s, and its Tag assignments. A refused delete leaves the assignments. Historical Jobs remain. Rows already written to Entity Tables stay. **Global Variable**s stay.
 
 ### 5.6 `GET` and `PUT /channels/{id}/draft`
 
@@ -950,13 +953,34 @@ Query: `limit` (default 50, max 200), `offset` (default 0). Requires `channel:re
 
 `step_preview` is the recorded step with each list cut to its first 100 elements. `step_truncated` and `step_totals` follow §5.17. A For step is `{current, index, count}`. A Batch Read step is `{rows, index, count, total}`, and `rows` keeps its first 100 elements with the original length in `step_totals`. An Until step is `{index}` when the round starts, and gains `until` (`{value}` or `{error: {code, message}}`) after the condition is evaluated. A round that stops before that evaluation has no `until` key. `previous` is not on the step. `status_counts` counts the executions of the container's direct children in that round (`container_seq` equal to `seq` and the same `round`) by status; it is `{}` for a round with no child execution. Unknown `job_id` for this channel, or an unknown `seq`, is `404 CHANNEL_RUN_NOT_FOUND`. A `seq` that exists and is not a For, Batch Read, or Until execution is `422 REQUEST_INVALID`.
 
+### 5.21 `GET /channels/{id}/variables` and `DELETE /channels/{id}/variables/{name}`
+
+`GET` permission is `channel:read`. Default `limit` 50, max 200. Items are ordered by `name`. An expired value is omitted. The body is an **Offset Page** of:
+
+```json
+{
+  "name": "cursor",
+  "value": { "at": "2026-10-12T00:00:00Z" },
+  "expires_at": null,
+  "updated_at": "2026-10-12T00:00:00Z"
+}
+```
+
+`name` matches `^[A-Za-z0-9_.:-]{1,128}$`. `value` is JSON, at most 64 KiB encoded. `expires_at` is `null` when the value does not expire. `updated_at` is the Instant of the last write.
+
+`DELETE` permission is `channel:write`. Success is `204` with no body. HTTP does not create or edit a value.
+
+Check order: a name that does not match the name rule is `422 CHANNEL_VARIABLE_NAME_INVALID`; else a missing channel is `404 CHANNEL_NOT_FOUND` (the list does not return an empty page); else a delete of a name with no live value is `404 CHANNEL_VARIABLE_NOT_FOUND` and writes no audit event. That order applies to a `{name}` bound as one path segment. A URL whose decoded path contains `/` in the name position is not this operation; an unmatched route is `HTTP_NOT_FOUND`. A trailing slash resolves to the collection, which does not allow `DELETE`, and that is `HTTP_METHOD_NOT_ALLOWED`. A successful delete is a **Management Audit Event** with action `channel.owned_variable_delete`, resource type `channel_owned_variable`, resource id `{channel_id}/{name}`, and detail `{ "channel_id", "name" }`.
+
 ## 6. Errors
 
 ### 6.1 HTTP Problem Codes
 
 | Code | HTTP | When |
 | --- | --- | --- |
-| `CHANNEL_NOT_FOUND` | 404 | No Data Channel for this id. A bulk Tag add or remove lists every such id in `subjects` as `{ "kind": "channel", "id" }` |
+| `CHANNEL_NOT_FOUND` | 404 | No Data Channel for this id. A bulk Tag add or remove lists every such id in `subjects` as `{ "kind": "channel", "id" }`. A **Channel Variable** list or delete of a missing channel uses this code and does not return an empty page |
+| `CHANNEL_VARIABLE_NAME_INVALID` | 422 | A **Channel Variable** name does not match the name rule |
+| `CHANNEL_VARIABLE_NOT_FOUND` | 404 | A **Channel Variable** delete names no live value. No audit event is written |
 | `CHANNEL_VERSION_NOT_FOUND` | 404 | No version with this number on the channel |
 | `CHANNEL_DRAFT_CONFLICT` | 409 | `base_revision` or `draft_revision` is not the stored draft revision |
 | `CHANNEL_GRAPH_INVALID` | 422 | Publish or an on-demand run whose scope has a validation error; the body carries `problems` |

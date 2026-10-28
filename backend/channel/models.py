@@ -106,6 +106,20 @@ class ChannelVariableRow(Base):
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
 
 
+class ChannelOwnedVariableRow(Base):
+    __tablename__ = "channel_owned_variables"
+
+    channel_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("channels.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    value: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+
+
 class ChannelNodeExecutionRow(Base):
     __tablename__ = "channel_node_executions"
 

@@ -11,6 +11,7 @@ from backend.admin.audit import persist_audit_event
 from backend.admin.deps import get_actor_token_id, require_permission
 from backend.admin.user_store import UserRecord
 from backend.channel.errors import ChannelVariableNameInvalid, ChannelVariableNotFound
+from backend.channel.service import get_channel
 from backend.channel.variables import get_variable_store, valid_name
 from backend.core.pagination import OffsetPage, PageParams, page_params
 from backend.core.time import Instant
@@ -69,5 +70,55 @@ def delete_variable(
         action="channel.variable_delete",
         result="success",
         detail={"name": name},
+    )
+    return Response(status_code=204)
+
+
+@router.get("/channels/{channel_id}/variables", response_model=ChannelVariableListResponse)
+def list_channel_variables(
+    channel_id: str,
+    _actor: UserRecord = Depends(require_permission("channel:read")),
+    page: PageParams = Depends(page_params(default_limit=50, max_limit=200)),
+) -> ChannelVariableListResponse:
+    get_channel(channel_id)
+    rows, total = get_variable_store().list_live(
+        limit=page.limit, offset=page.offset, channel_id=channel_id
+    )
+    return ChannelVariableListResponse(
+        items=[
+            ChannelVariableOut(
+                name=row.name,
+                value=row.value,
+                expires_at=row.expires_at,
+                updated_at=row.updated_at,
+            )
+            for row in rows
+        ],
+        total=total,
+        limit=page.limit,
+        offset=page.offset,
+    )
+
+
+@router.delete("/channels/{channel_id}/variables/{name}", status_code=204)
+def delete_channel_variable(
+    channel_id: str,
+    name: str,
+    actor: UserRecord = Depends(require_permission("channel:write")),
+    actor_token_id: str | None = Depends(get_actor_token_id),
+) -> Response:
+    if not valid_name(name):
+        raise ChannelVariableNameInvalid("Channel Variable name is invalid")
+    get_channel(channel_id)
+    if not get_variable_store().delete(name, channel_id=channel_id):
+        raise ChannelVariableNotFound("Channel Variable not found")
+    persist_audit_event(
+        actor_user_id=actor.id,
+        actor_token_id=actor_token_id,
+        resource_type="channel_owned_variable",
+        resource_id=f"{channel_id}/{name}",
+        action="channel.owned_variable_delete",
+        result="success",
+        detail={"channel_id": channel_id, "name": name},
     )
     return Response(status_code=204)

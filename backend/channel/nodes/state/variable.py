@@ -13,7 +13,13 @@ from backend.channel.nodes.spec import (
     NodeType,
     OutputView,
 )
-from backend.channel.variables import VALUE_MAX_BYTES, get_variable_store, valid_name, value_size
+from backend.channel.variables import (
+    VALUE_MAX_BYTES,
+    apply_records,
+    get_variable_store,
+    valid_name,
+    value_size,
+)
 from backend.core.time import format_instant
 
 __all__ = ["NODE_TYPE"]
@@ -43,8 +49,30 @@ def _refine(
     }
 
 
+def _scope(config: Mapping[str, Any]) -> str | None:
+    if "scope" not in config:
+        return "site"
+    raw = config["scope"]
+    if raw in {"site", "channel", "run"}:
+        return str(raw)
+    return None
+
+
 def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
     config = node["config"]
+    scope = _scope(config)
+    if scope is None:
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_NODE_FAILED",
+            error_message="Variable scope is invalid",
+        )
+    if scope == "run" and config.get("ttl_sec") is not None:
+        return NodeResult(
+            status="failed",
+            error_code="CHANNEL_NODE_FAILED",
+            error_message="Variable expiry is not valid for this run",
+        )
     operation = str(config.get("operation") or "")
     rendered, error = render_field(
         hooks, config.get("name"), {"type": "string"}, path="name"
@@ -78,13 +106,24 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
         if error is not None:
             return error
     ttl_sec = config.get("ttl_sec") if writes else None
-    result = get_variable_store().apply(
-        operation=operation,
-        name=name,
-        value=value,
-        expected=expected,
-        ttl_sec=ttl_sec,
-    )
+    if scope == "run":
+        result = apply_records(
+            hooks.run_variables,
+            operation=operation,
+            name=name,
+            value=value,
+            expected=expected,
+            ttl_sec=ttl_sec,
+        )
+    else:
+        result = get_variable_store().apply(
+            operation=operation,
+            name=name,
+            value=value,
+            expected=expected,
+            ttl_sec=ttl_sec,
+            channel_id=hooks.channel_id if scope == "channel" else None,
+        )
     expires = format_instant(result.expires_at) if result.expires_at is not None else None
     return NodeResult(
         status="succeeded",
@@ -99,12 +138,13 @@ def _execute(node: Mapping[str, Any], hooks: EngineHooks) -> NodeResult:
 NODE_TYPE = NodeType(
     type_id="state.variable",
     family="state",
-    label="Global variable",
-    summary="Reads or writes one site-wide named JSON value.",
+    label="Variable",
+    summary="Reads or writes one named JSON value for the site, one channel, or this run.",
     description=(
-        "Gets, sets, deletes, sets if absent, or compares and sets a Global Variable. "
-        "A write takes effect immediately and is not rolled back when the run fails. "
-        "An optional expiry lets a lease release itself."
+        "An omitted scope is the site. "
+        "A channel value belongs to that channel, and a draft run and a published run see the same value. "
+        "A write is visible immediately and is not rolled back when the run fails. "
+        "A run value has no expiry and lives only for this execution."
     ),
     trigger=False,
     inputs=(MAIN_INPUT,),
@@ -113,6 +153,13 @@ NODE_TYPE = NodeType(
         "type": "object",
         "additionalProperties": False,
         "properties": {
+            "scope": {
+                "type": "string",
+                "enum": ["site", "channel", "run"],
+                "default": "site",
+                "title": "Scope",
+                "description": "site, channel, or run. Omitted is site.",
+            },
             "operation": {
                 "type": "string",
                 "enum": ["get", "set", "delete", "set_if_absent", "compare_and_set"],
@@ -146,6 +193,15 @@ NODE_TYPE = NodeType(
             },
         },
         "required": ["operation", "name"],
+        "allOf": [
+            {
+                "if": {
+                    "properties": {"scope": {"const": "run"}},
+                    "required": ["scope"],
+                },
+                "then": {"properties": {"ttl_sec": {"type": "null"}}},
+            }
+        ],
     },
     output_view=OutputView(kind="record"),
     execute=_execute,

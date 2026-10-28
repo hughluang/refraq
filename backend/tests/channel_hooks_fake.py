@@ -45,6 +45,7 @@ class FakeHooks:
         self.statuses: list[tuple[str, str]] = []
         self.starts: list[tuple[str, int | None, int | None]] = []
         self.cancel_after: str | None = None
+        self.run_variables: dict[str, Any] = {}
 
     def cancelled(self) -> bool:
         return bool(self.cancel_after and self.cancel_after in self.order)

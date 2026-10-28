@@ -4,6 +4,7 @@ import {
   defaultConfig,
   fieldVisible,
   fieldsFromSchema,
+  nullForcedProperties,
   omitUnsetIntegers,
   type SchemaObject,
 } from "@/features/channels/configSchemaForm";
@@ -389,6 +390,14 @@ describe("reshape config schemas", () => {
     expect(fieldVisible(key, { mode: "by_position" })).toBe(false);
     expect(fieldVisible(join, { mode: "by_position" })).toBe(true);
   });
+
+  it("hides a property the schema forces to null and keeps it when that if does not match", () => {
+    const ttl = fieldsFromSchema(VARIABLE).find((field) => field.key === "ttl_sec") ?? {};
+    expect(fieldVisible(ttl, { scope: "run" })).toBe(false);
+    expect(fieldVisible(ttl, { scope: "site" })).toBe(true);
+    expect(fieldVisible(ttl, { scope: "channel" })).toBe(true);
+    expect(fieldVisible(ttl, {})).toBe(true);
+  });
 });
 
 describe("code and source query config", () => {
@@ -437,4 +446,40 @@ describe("omitUnsetIntegers", () => {
       ),
     ).toEqual({ interval_seconds: null, sql: "select 1" });
   });
+
+  it("writes null for a run expiry and leaves a site or omitted scope alone", () => {
+    const fields = fieldsFromSchema(VARIABLE);
+    expect(nullForcedProperties({ scope: "run", ttl_sec: 5 }, fields)).toEqual({
+      scope: "run",
+      ttl_sec: null,
+    });
+    expect(nullForcedProperties({ scope: "run" }, fields)).toEqual({ scope: "run" });
+    expect(nullForcedProperties({ scope: "site", ttl_sec: 5 }, fields)).toEqual({
+      scope: "site",
+      ttl_sec: 5,
+    });
+    expect(nullForcedProperties({ ttl_sec: 5 }, fields)).toEqual({ ttl_sec: 5 });
+    expect(omitUnsetIntegers({ scope: "run", ttl_sec: 5, name: "step" }, VARIABLE)).toEqual({
+      scope: "run",
+      ttl_sec: null,
+      name: "step",
+    });
+  });
 });
+
+const VARIABLE: SchemaObject = {
+  type: "object",
+  required: ["operation", "name"],
+  properties: {
+    scope: { type: "string", enum: ["site", "channel", "run"], default: "site" },
+    operation: { type: "string" },
+    name: { type: "string" },
+    ttl_sec: { type: ["integer", "null"], minimum: 1 },
+  },
+  allOf: [
+    {
+      if: { properties: { scope: { const: "run" } }, required: ["scope"] },
+      then: { properties: { ttl_sec: { type: "null" } } },
+    },
+  ],
+};

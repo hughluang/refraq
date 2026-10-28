@@ -4,6 +4,7 @@ import {
   connectionAllowed,
   flowFromGraph,
   graphFromFlow,
+  graphWithoutUnsetIntegers,
   insertableTypes,
   newGraphId,
   outputTargetTypes,
@@ -194,6 +195,61 @@ const CATALOG: ConnectionCatalogItem[] = [
     outputs: [{ port: "main" }, { port: "error" }],
   },
 ];
+
+describe("graphWithoutUnsetIntegers", () => {
+  it("clears a stored run expiry when the draft enters the editor", () => {
+    const graph: Graph = {
+      nodes: [
+        {
+          ...node("nd_var", "state.variable", "Step"),
+          config: { scope: "run", ttl_sec: 5, operation: "set", name: "step" },
+        },
+        {
+          ...node("nd_site", "state.variable", "Lease"),
+          config: { scope: "site", ttl_sec: 5, operation: "set", name: "lease" },
+        },
+      ],
+      edges: [],
+      settings: { run_timeout_sec: null, error_channel_id: null },
+    };
+    const next = graphWithoutUnsetIntegers(graph, [
+      {
+        type: "state.variable",
+        config_schema: {
+          type: "object",
+          properties: {
+            scope: { type: "string", enum: ["site", "channel", "run"] },
+            ttl_sec: { type: ["integer", "null"], minimum: 1 },
+          },
+          allOf: [
+            {
+              if: { properties: { scope: { const: "run" } }, required: ["scope"] },
+              then: { properties: { ttl_sec: { type: "null" } } },
+            },
+          ],
+        },
+      },
+    ]);
+    expect(next.nodes[0]?.config).toEqual({
+      scope: "run",
+      ttl_sec: null,
+      operation: "set",
+      name: "step",
+    });
+    expect(next.nodes[1]?.config).toEqual({
+      scope: "site",
+      ttl_sec: 5,
+      operation: "set",
+      name: "lease",
+    });
+    expect(graph.nodes[0]?.config).toEqual({
+      scope: "run",
+      ttl_sec: 5,
+      operation: "set",
+      name: "step",
+    });
+  });
+});
 
 describe("connectionAllowed", () => {
   const chain = {

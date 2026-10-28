@@ -314,6 +314,28 @@ export function previewTemplate(
   });
 }
 
+export type ChannelVariable = {
+  name: string;
+  value: unknown;
+  expires_at: string | null;
+  updated_at: string;
+};
+
+export function listChannelVariables(
+  id: string,
+  params?: { limit?: number; offset?: number },
+) {
+  return apiClient<OffsetPage<ChannelVariable>>(
+    `/channels/${id}/variables${querySuffix(params)}`,
+  );
+}
+
+export function deleteChannelVariable(id: string, name: string) {
+  return apiClient<void>(`/channels/${id}/variables/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+}
+
 export function listVersions(
   id: string,
   params?: { limit?: number; offset?: number },

@@ -18,8 +18,14 @@ export type SchemaObject = {
   "x-refraq-template"?: SchemaObject | { from: "entity_attribute" };
 };
 
-/** Show a field only while a sibling enum holds one of `values`. */
-export type FieldWhen = { kind: "equals"; key: string; values: readonly string[] };
+/**
+ * `equals`: show the field only while a sibling holds one of `values`.
+ * `nullWhile`: hide the field while an `if` forces its value to null.
+ * `present` means that `if` requires the sibling, so a missing sibling does not match.
+ */
+export type FieldWhen =
+  | { kind: "equals"; key: string; values: readonly string[] }
+  | { kind: "nullWhile"; key: string; values: readonly string[]; present: boolean };
 
 export type FieldSpec = (
   | { kind: "string"; key: string; required: boolean; nullable: boolean }
@@ -77,9 +83,28 @@ export function fieldVisible(
 ): boolean {
   const when = field.when;
   if (!when) return true;
+  if (when.kind === "nullWhile") return !nullWhileMatches(when, data);
   const current = data[when.key];
   const text = typeof current === "string" ? current : "";
   return when.values.includes(text);
+}
+
+/** Write null for a property whose schema branch forces null. Absent stays absent. */
+export function nullForcedProperties(
+  config: Record<string, unknown>,
+  fields: readonly { key: string; when?: FieldWhen }[],
+): Record<string, unknown> {
+  let next = config;
+  for (const field of fields) {
+    const when = field.when;
+    if (when?.kind !== "nullWhile" || !nullWhileMatches(when, next)) continue;
+    if (!Object.prototype.hasOwnProperty.call(next, field.key) || next[field.key] === null) {
+      continue;
+    }
+    if (next === config) next = { ...config };
+    next[field.key] = null;
+  }
+  return next;
 }
 
 export function defaultConfig(schema: SchemaObject): Record<string, unknown> {
@@ -95,8 +120,9 @@ export function omitUnsetIntegers(
   config: Record<string, unknown>,
   schema: SchemaObject,
 ): Record<string, unknown> {
-  const next = { ...config };
-  for (const field of fieldsFromSchema(schema)) {
+  const fields = fieldsFromSchema(schema);
+  const next = { ...nullForcedProperties(config, fields) };
+  for (const field of fields) {
     if (field.kind === "integer" && !field.nullable && next[field.key] === null) {
       delete next[field.key];
     }
@@ -197,6 +223,7 @@ function arrayField(key: string, schema: SchemaObject, required: boolean): Field
 
 /**
  * A property that an `if`/`then` adds to `required` is shown only while that `if` matches.
+ * A property that the same `then` forces to null is hidden while that `if` matches.
  */
 function visibilityGates(schema: SchemaObject): Map<string, FieldWhen> {
   const gates = new Map<string, FieldWhen>();
@@ -215,8 +242,23 @@ function visibilityGates(schema: SchemaObject): Map<string, FieldWhen> {
       if (prop === control || baseRequired.has(prop) || gates.has(prop)) continue;
       gates.set(prop, { kind: "equals", key: control, values });
     }
+    const present = (test.required ?? []).includes(control);
+    for (const [prop, forced] of Object.entries(clause.then?.properties ?? {})) {
+      if (forced.type !== "null") continue;
+      if (prop === control || baseRequired.has(prop) || gates.has(prop)) continue;
+      gates.set(prop, { kind: "nullWhile", key: control, values, present });
+    }
   }
   return gates;
+}
+
+function nullWhileMatches(
+  when: Extract<FieldWhen, { kind: "nullWhile" }>,
+  data: Record<string, unknown>,
+): boolean {
+  const current = data[when.key];
+  if (typeof current !== "string") return !when.present;
+  return when.values.includes(current);
 }
 
 function ruleValues(rule: SchemaObject): string[] | null {
