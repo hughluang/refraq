@@ -5,7 +5,13 @@ from __future__ import annotations
 from celery import shared_task
 
 from backend.channel.tasks import seal_dataset_expiry
-from backend.entity.tasks import ACCESS_LOG_SCHEDULE_KEY, purge_expired_access_logs
+from backend.entity.tasks import (
+    ACCESS_LOG_SCHEDULE_KEY,
+    CHANGE_LOG_SCHEDULE_KEY,
+    CHANGE_LOG_TASK_NAME,
+    purge_expired_access_logs,
+    purge_expired_change_logs,
+)
 from backend.jobs.store import get_job_store, reap_stuck_running_jobs
 from backend.worker.due import consume_due_tick
 from backend.worker.models import REAPER_SCHEDULE_KEY
@@ -30,3 +36,11 @@ def purge_access_logs() -> dict[str, int]:
     if record is not None:
         consume_due_tick(record.id)
     return {"deleted": purge_expired_access_logs()}
+
+
+@shared_task(name=CHANGE_LOG_TASK_NAME)
+def purge_change_logs() -> dict[str, int]:
+    record = get_schedule_store().get_by_key(CHANGE_LOG_SCHEDULE_KEY)
+    if record is not None:
+        consume_due_tick(record.id)
+    return {"deleted": purge_expired_change_logs()}

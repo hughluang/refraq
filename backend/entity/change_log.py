@@ -36,6 +36,7 @@ __all__ = [
     "delete_entries_before",
     "ensure_shared_relations",
     "install_triggers",
+    "list_effectives",
     "list_entries",
     "read_effective",
     "remove_triggers",
@@ -141,6 +142,31 @@ def ensure_shared_relations(conn: Connection) -> None:
             conn.exec_driver_sql("RELEASE SAVEPOINT change_log_ensure")
     finally:
         conn.exec_driver_sql("RESET ROLE")
+
+
+def list_effectives(conn: Connection) -> list[ChangeLogEffective]:
+    """Return every effective row. The caller decides which ones to apply."""
+    rows = conn.execute(
+        text(
+            "SELECT entity_id, recording, retention_days, applied_version_id "
+            f"FROM {_effective_table()}"
+        )
+    ).mappings()
+    return [
+        ChangeLogEffective(
+            entity_id=str(row["entity_id"]),
+            recording=bool(row["recording"]),
+            retention_days=(
+                None if row["retention_days"] is None else int(row["retention_days"])
+            ),
+            applied_version_id=(
+                None
+                if row["applied_version_id"] is None
+                else str(row["applied_version_id"])
+            ),
+        )
+        for row in rows
+    ]
 
 
 def read_effective(conn: Connection, entity_id: str) -> ChangeLogEffective | None:

@@ -201,12 +201,17 @@ def test_system_schedules_excluded_and_immutable(client: TestClient) -> None:
     assert visible[0]["deletable"] is False
     site_id = visible[0]["id"]
 
+    assert "entity_change_log_retention" not in {item["key"] for item in visible}
+
     debug_list = client.get("/schedules?hidden=true")
     assert debug_list.status_code == 200
     items = debug_list.json()["items"]
-    reaper_rows = [item for item in items if item["work_kind"] is None]
-    assert len(reaper_rows) == 1
-    reaper_id = reaper_rows[0]["id"]
+    reaper = next(item for item in items if item["key"] == REAPER_SCHEDULE_KEY)
+    reaper_id = reaper["id"]
+    sweep = next(
+        item for item in items if item["key"] == "entity_change_log_retention"
+    )
+    sweep_id = sweep["id"]
 
     stored = get_schedule_store().get_by_key(REAPER_SCHEDULE_KEY)
     assert stored is not None
@@ -215,6 +220,20 @@ def test_system_schedules_excluded_and_immutable(client: TestClient) -> None:
     assert stored.undeletable is True
     assert stored.store_only is True
 
+    sweep_stored = get_schedule_store().get_by_key("entity_change_log_retention")
+    assert sweep_stored is not None
+    assert sweep_stored.hidden is True
+    assert sweep_stored.locked is True
+    assert sweep_stored.undeletable is True
+    assert sweep_stored.store_only is True
+    assert sweep_stored.enabled is True
+    assert sweep_stored.interval_seconds == 86400
+    assert sweep_stored.cron is None
+    assert sweep_stored.args_json == []
+    assert sweep_stored.kwargs_json == {}
+    assert sweep_stored.owner_ref is None
+    assert sweep_stored.task_name == "backend.worker.tasks.purge_change_logs"
+
     patch = client.patch(f"/schedules/{reaper_id}", json={"enabled": False})
     assert patch.status_code == 409
     assert patch.json()["code"] == "SCHEDULE_SYSTEM_IMMUTABLE"
@@ -222,6 +241,23 @@ def test_system_schedules_excluded_and_immutable(client: TestClient) -> None:
     delete = client.delete(f"/schedules/{reaper_id}")
     assert delete.status_code == 409
     assert delete.json()["code"] == "SCHEDULE_UNDELETABLE"
+
+    sweep_patch = client.patch(f"/schedules/{sweep_id}", json={"enabled": False})
+    assert sweep_patch.status_code == 409
+    assert sweep_patch.json()["code"] == "SCHEDULE_SYSTEM_IMMUTABLE"
+
+    sweep_delete = client.delete(f"/schedules/{sweep_id}")
+    assert sweep_delete.status_code == 409
+    assert sweep_delete.json()["code"] == "SCHEDULE_UNDELETABLE"
+
+    from dataclasses import replace
+
+    get_schedule_store().upsert(replace(sweep_stored, interval_seconds=10))
+    ensure_system_schedules()
+    kept = get_schedule_store().get_by_key("entity_change_log_retention")
+    assert kept is not None
+    assert kept.interval_seconds == 10
+    assert kept.id == sweep_stored.id
 
     site_delete = client.delete(f"/schedules/{site_id}")
     assert site_delete.status_code == 409
